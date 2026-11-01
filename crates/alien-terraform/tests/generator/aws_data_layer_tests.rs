@@ -117,7 +117,7 @@ mock_provider "aws" {
   mock_data "aws_caller_identity" { defaults = { account_id = "123456789012" } }
   mock_data "aws_region" { defaults = { region = "us-east-1" } }
   mock_resource "aws_kms_key" {
-    defaults = { arn = "arn:aws:kms:us-east-1:123456789012:key/selected", id = "selected" }
+    defaults = { arn = "arn:aws:kms:us-east-1:123456789012:key/33333333-3333-4333-8333-333333333333", id = "selected" }
   }
   mock_resource "aws_iam_policy" {
     defaults = { arn = "arn:aws:iam::123456789012:policy/mock" }
@@ -132,13 +132,13 @@ variables {
 run "storage_and_workload_use_the_selected_key" {
   command = apply
   assert {
-    condition = one(one(aws_s3_bucket_server_side_encryption_configuration.data.rule).apply_server_side_encryption_by_default).kms_master_key_id == "arn:aws:kms:us-east-1:123456789012:key/selected"
+    condition = one(one(aws_s3_bucket_server_side_encryption_configuration.data.rule).apply_server_side_encryption_by_default).kms_master_key_id == "arn:aws:kms:us-east-1:123456789012:key/33333333-3333-4333-8333-333333333333"
     error_message = "Bucket encryption must select the intended key ARN"
   }
   assert {
     condition = alltrue([for action in ["kms:GenerateDataKey", "kms:Decrypt"] : anytrue(flatten([
       for document in output.qualification_policy_documents : [
-        for statement in jsondecode(document).Statement : statement.Effect == "Allow" && contains(try(tolist(statement.Action), [statement.Action]), action) && contains(try(tolist(statement.Resource), [statement.Resource]), "arn:aws:kms:us-east-1:123456789012:key/selected")
+        for statement in jsondecode(document).Statement : statement.Effect == "Allow" && contains(try(tolist(statement.Action), [statement.Action]), action) && contains(try(tolist(statement.Resource), [statement.Resource]), "arn:aws:kms:us-east-1:123456789012:key/33333333-3333-4333-8333-333333333333")
       ]
     ]))])
     error_message = "The workload must receive encryption and decryption grants for the selected key"
@@ -615,7 +615,7 @@ variables {
   name = "key-test"
   token = "test"
   region = "us-east-1"
-  customer_key_existing_key = { arn = "arn:aws:kms:us-east-1:123456789012:key/first" }
+  customer_key_existing_key = { arn = "arn:aws:kms:us-east-1:123456789012:key/11111111-1111-4111-8111-111111111111" }
 }
 run "use_existing_key" {
   command = apply
@@ -630,7 +630,7 @@ run "preserve_key" {
 run "refuse_key_replacement" {
   command = plan
   variables {
-    customer_key_existing_key = { arn = "arn:aws:kms:us-east-1:123456789012:key/second" }
+    customer_key_existing_key = { arn = "arn:aws:kms:us-east-1:123456789012:key/22222222-2222-4222-8222-222222222222" }
   }
   expect_failures = [terraform_data.customer_key_key_identity]
 }
@@ -690,7 +690,7 @@ run "enabled_existing_key" {
   command = plan
   variables {
     input_key_enabled = true
-    customer_key_existing_key = { arn = "arn:aws:kms:us-east-1:123456789012:key/first" }
+    customer_key_existing_key = { arn = "arn:aws:kms:us-east-1:123456789012:key/11111111-1111-4111-8111-111111111111" }
   }
   assert {
     condition = length(aws_kms_key.customer_key) == 0 && terraform_data.customer_key_key_identity[0].input == var.customer_key_existing_key.arn
@@ -701,7 +701,7 @@ run "disabled_existing_key" {
   command = plan
   variables {
     input_key_enabled = false
-    customer_key_existing_key = { arn = "arn:aws:kms:us-east-1:123456789012:key/first" }
+    customer_key_existing_key = { arn = "arn:aws:kms:us-east-1:123456789012:key/11111111-1111-4111-8111-111111111111" }
   }
   assert {
     condition = length(aws_kms_key.customer_key) == 0 && length(terraform_data.customer_key_key_identity) == 0

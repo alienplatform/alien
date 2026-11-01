@@ -17,10 +17,24 @@ use hcl::{
     structure::Block,
 };
 
-/// A KMS key ARN in this deployment's account and region, in any AWS partition; aliases are not
-/// immutable, so they are refused. The IAM size check bounds a resource attribute that a
-/// `can(regex(KMS_KEY_ARN_PATTERN, self.<attribute>))` postcondition admits as a KMS key ARN.
-pub const KMS_KEY_ARN_PATTERN: &str = "^arn:aws[a-z-]*:kms:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:key/[a-zA-Z0-9-]+$";
+/// The AWS partitions, as the AWS SDKs' `partitions.json` lists them.
+pub(crate) const AWS_PARTITIONS: [&str; 8] = [
+    "aws",
+    "aws-cn",
+    "aws-us-gov",
+    "aws-iso",
+    "aws-iso-b",
+    "aws-iso-e",
+    "aws-iso-f",
+    "aws-eusc",
+];
+
+/// A KMS key ARN in this deployment's account and region, in a known AWS partition, naming the
+/// key by its ID: a lowercase UUID, or `mrk-` and 32 hex digits for a multi-Region key. Aliases
+/// are not immutable, so they are refused. The IAM size check bounds a resource attribute that
+/// a `can(regex(KMS_KEY_ARN_PATTERN, self.<attribute>))` postcondition admits as a KMS key ARN,
+/// at the longest partition and key ID this admits.
+pub const KMS_KEY_ARN_PATTERN: &str = "^arn:(aws|aws-cn|aws-us-gov|aws-iso|aws-iso-b|aws-iso-e|aws-iso-f|aws-eusc):kms:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:key/(mrk-[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$";
 
 /// Suffix of a variable naming a customer key connection, an object whose `deployment_id` is
 /// the deployment holding the customer's key.

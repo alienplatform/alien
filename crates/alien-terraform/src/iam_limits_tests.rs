@@ -4,7 +4,7 @@ use crate::{
     emitter::TfFragment,
     emitters::aws::{
         helpers::{iam_managed_policy_name_template, iam_role_name_template, jsonencode},
-        key::{customer_key_connection_validation, KMS_KEY_ARN_PATTERN},
+        key::{customer_key_connection_validation, AWS_PARTITIONS, KMS_KEY_ARN_PATTERN},
     },
     expr, TerraformOptions, TerraformTarget, TfRegistry,
 };
@@ -365,6 +365,67 @@ fn an_interpolation_without_a_known_bound_fails_the_render() {
             format!("{error:?}").contains("Cannot bound the size of"),
             "{resource}: {error:?}"
         );
+    }
+}
+
+/// Every ARN the KMS key postcondition admits, in any partition and either key ID form, fits the
+/// size check's bound at the longest region and account, and the longest one meets it.
+#[test]
+fn every_kms_key_arn_the_postcondition_admits_fits_its_bound() {
+    assert_eq!(
+        AWS_PARTITIONS
+            .iter()
+            .max_by_key(|partition| partition.len()),
+        Some(&LONGEST_PARTITION)
+    );
+    let partitions = regex::Regex::new(r"^\^arn:\(([a-z|-]+)\):kms:")
+        .unwrap()
+        .captures(KMS_KEY_ARN_PATTERN)
+        .expect("the pattern names its partitions")[1]
+        .split('|')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(partitions, AWS_PARTITIONS);
+
+    let lengths = DeploymentLengths::longest();
+    let region = "r".repeat(lengths.region);
+    let account = "1".repeat(lengths.account_id);
+    let pattern = regex::Regex::new(
+        &KMS_KEY_ARN_PATTERN
+            .replace("${data.aws_region.current.region}", &region)
+            .replace("${data.aws_caller_identity.current.account_id}", &account),
+    )
+    .unwrap();
+    let bound =
+        Module::new(&[], &IndexMap::new(), &[], lengths).kms_key_arn_chars(LONGEST_PARTITION.len());
+    let arn =
+        |partition: &str, key: &str| format!("arn:{partition}:kms:{region}:{account}:key/{key}");
+    let keys = [
+        "0123abcd-45ef-6789-abcd-ef0123456789".to_string(),
+        format!("mrk-{}", "0123456789abcdef".repeat(2)),
+    ];
+    let mut longest = 0;
+    for partition in AWS_PARTITIONS {
+        for key in &keys {
+            let arn = arn(partition, key);
+            assert!(pattern.is_match(&arn), "{arn}");
+            assert!(arn.len() <= bound, "{arn} is longer than {bound}");
+            longest = longest.max(arn.len());
+        }
+    }
+    assert_eq!(longest, bound);
+
+    for refused in [
+        arn("aws-unknown", &keys[0]),
+        arn("aws", "alias/data"),
+        arn("aws", &keys[0].to_uppercase()),
+        arn("aws", &keys[0][1..]),
+        arn("aws", &format!("{}0", keys[0])),
+        arn("aws", &format!("mrk-{}", "0".repeat(31))),
+        arn("aws", &format!("MRK-{}", "0".repeat(32))),
+        format!("{} ", arn("aws", &keys[0])),
+    ] {
+        assert!(!pattern.is_match(&refused), "{refused}");
     }
 }
 

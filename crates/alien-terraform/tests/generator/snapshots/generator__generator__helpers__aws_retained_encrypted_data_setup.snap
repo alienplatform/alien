@@ -758,7 +758,7 @@ resource "terraform_data" "key_key_identity" {
     }
 
     postcondition {
-      condition     = can(regex("^arn:aws[a-z-]*:kms:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:key/[a-zA-Z0-9-]+$", self.output))
+      condition     = can(regex("^arn:(aws|aws-cn|aws-us-gov|aws-iso|aws-iso-b|aws-iso-e|aws-iso-f|aws-eusc):kms:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:key/(mrk-[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$", self.output))
       error_message = "The key must be an immutable KMS key ARN in this deployment's AWS account and region. Aliases are not supported."
     }
   }

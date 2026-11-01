@@ -292,7 +292,7 @@ struct Module<'a> {
 
 /// Locals may reference locals; deeper chains than this are a cycle.
 const MAX_LOCAL_DEPTH: usize = 32;
-/// The longest AWS partition name.
+/// The longest AWS partition name, of `AWS_PARTITIONS`.
 const LONGEST_PARTITION: &str = "aws-us-gov";
 /// Characters of a UUID.
 const UUID: usize = 36;
