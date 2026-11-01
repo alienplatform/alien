@@ -201,3 +201,55 @@ fn unconditional_deployer_default_keeps_existing_chart() {
     *schema = serde_json::to_string_pretty(&value).unwrap();
     super::helpers::snapshot_chart("unconditional_deployer_default", &chart);
 }
+
+/// `releaseSigning` turns on protected mode with the pinned keys and project,
+/// and the chart refuses settings protected mode can't honor.
+#[test]
+fn release_signing_pins_keys_and_project_for_the_operator() {
+    let chart = render(
+        &Stack::new("sample-agent".to_string()).build(),
+        StackSettings::default(),
+    );
+    let base = "management:\n  token: ax_bootstrap\n  url: https://manager.example.test\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+    let first = "ecdsa-p256:MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE";
+    let second = "ecdsa-p256:MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAF";
+
+    let unprotected = test_utils::helm_template(&chart.files, Some(base));
+    unprotected.assert_ok("default values");
+    let env = operator_env(&unprotected.stdout);
+    assert!(!env.contains_key("OPERATOR_RELEASE_SIGNING_PUBLIC_KEYS"));
+    assert!(!env.contains_key("OPERATOR_RELEASE_SIGNING_PROJECT"));
+
+    let protected_values = format!(
+        "{base}releaseSigning:\n  publicKeys:\n    - {first}\n    - {second}\n  project: shop\n"
+    );
+    let protected = test_utils::helm_template(&chart.files, Some(&protected_values));
+    protected.assert_ok("protected mode");
+    let env = operator_env(&protected.stdout);
+    assert_eq!(
+        env.get("OPERATOR_RELEASE_SIGNING_PUBLIC_KEYS"),
+        Some(&format!("{first},{second}"))
+    );
+    assert_eq!(
+        env.get("OPERATOR_RELEASE_SIGNING_PROJECT")
+            .map(String::as_str),
+        Some("shop")
+    );
+
+    let refused = |values: String, reason: &str| {
+        let run = test_utils::helm_template(&chart.files, Some(&values));
+        if matches!(run.status, test_utils::LinterStatus::Skipped(_)) {
+            return;
+        }
+        assert!(!run.is_ok(), "{reason}: must be refused");
+        assert!(run.stderr.contains(reason), "{}", run.stderr);
+    };
+    refused(
+        format!("{base}releaseSigning:\n  publicKeys:\n    - {first}\n"),
+        "releaseSigning.project is required",
+    );
+    refused(
+        format!("{base}releaseSigning:\n  publicKeys:\n    - ed25519:AAAA\n  project: shop\n"),
+        "publicKeys",
+    );
+}

@@ -181,6 +181,16 @@ tunnel:
   # false closes the tunnel; nothing else changes.
   enabled: true
 
+releaseSigning:
+  # Protected mode. When set, the Operator runs only releases signed by one of
+  # these public keys (ecdsa-p256:...) for this project, and refuses the rest
+  # of what the manager could change: environment variables, bindings, debug
+  # sessions, access requests, operations plugins and dynamic containers. Get
+  # the key and project from the developer through a channel you trust, not
+  # from the manager. Deployer inputs come only from inputValues.
+  publicKeys: []
+  project: ""
+
 clusterBootstrap:
   metricsServer:
     enabled: false
@@ -792,6 +802,22 @@ postgres: {}
           "type": "string"
         },
         "type": "object"
+      },
+      "type": "object"
+    },
+    "releaseSigning": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "publicKeys": {
+          "items": {
+            "pattern": "^ecdsa-p256:[A-Za-z0-9+/=]+$",
+            "type": "string"
+          },
+          "type": "array"
+        }
       },
       "type": "object"
     },
@@ -1915,6 +1941,19 @@ spec:
             {{- if dig "selfUpdate" true .Values.runtime.image }}
             - name: OPERATOR_SELF_UPDATE_DEPLOYMENT
               value: {{ include "deployment.fullname" . | quote }}
+            {{- end }}
+            {{- $releaseSigning := default dict .Values.releaseSigning }}
+            {{- if $releaseSigning.publicKeys }}
+            {{- if not $releaseSigning.project }}
+              {{- fail "releaseSigning.project is required with releaseSigning.publicKeys" }}
+            {{- end }}
+            {{- if dig "enabled" false (default dict .Values.remoteOperator) }}
+              {{- fail "releaseSigning runs only signed releases; it can't be combined with remoteOperator.enabled" }}
+            {{- end }}
+            - name: OPERATOR_RELEASE_SIGNING_PUBLIC_KEYS
+              value: {{ join "," $releaseSigning.publicKeys | quote }}
+            - name: OPERATOR_RELEASE_SIGNING_PROJECT
+              value: {{ $releaseSigning.project | quote }}
             {{- end }}
             - name: OTLP_PORT
               value: {{ .Values.runtime.api.port | quote }}
