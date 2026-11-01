@@ -145,7 +145,7 @@ pub(crate) fn consolidate_role_policies(
         locals.clone(),
     );
     let lengths = DeploymentLengths::longest();
-    let graph = DependencyGraph::new(per_resource);
+    let graph = DependencyGraph::new(per_resource, locals);
     let bins = acyclic_bins(&graph, &grants, &groups);
 
     // Attachments that now carry each former grant, and every new attachment of each role.
@@ -184,12 +184,19 @@ pub(crate) fn consolidate_role_policies(
             .into_iter()
             .map(|statements| {
                 let document = document(statements);
-                let hash = content_hash(&document)?;
-                let label = format!("{base}_{hash}");
+                let mut hash = content_hash(&document, None)?;
+                let mut label = format!("{base}_{hash}");
+                if labels_in_use.contains(&label) {
+                    // One document in two bins of a role: grants on resources that share it,
+                    // kept apart by dependency order. The bin's first former grant, an address
+                    // that never changes, tells them apart.
+                    hash = content_hash(&document, Some(&grants[bin.grants[0]].address))?;
+                    label = format!("{base}_{hash}");
+                }
                 if !labels_in_use.insert(label.clone()) {
                     return Err(AlienError::new(ErrorData::GenericError {
                         message: format!(
-                            "Two managed policies of role '{}' would both be aws_iam_policy.{label}: their documents are identical or their content hashes collide",
+                            "Two managed policies of role '{}' would both be aws_iam_policy.{label}: their documents are identical and so are their first grants, or their content hashes collide",
                             group.role
                         ),
                     }));
@@ -372,7 +379,12 @@ struct DependencyGraph {
 }
 
 impl DependencyGraph {
-    fn new(per_resource: &IndexMap<String, TfFragment>) -> Self {
+    /// Resources, data sources and locals, each pointing at what its body references. A local
+    /// is a node of its own, so a reference through one is an edge like a direct one.
+    fn new(
+        per_resource: &IndexMap<String, TfFragment>,
+        locals: &IndexMap<String, Expression>,
+    ) -> Self {
         let rendered: Vec<(String, String)> = per_resource
             .values()
             .flat_map(|fragment| fragment.resource_blocks.iter().chain(&fragment.data_blocks))
@@ -380,6 +392,11 @@ impl DependencyGraph {
                 let address = block_address_text(block)?;
                 Some((address, hcl::format::to_string(&block.body).ok()?))
             })
+            .chain(
+                locals
+                    .iter()
+                    .map(|(name, value)| (format!("local.{name}"), value.to_string())),
+            )
             .collect();
         let edges = rendered
             .iter()
@@ -665,13 +682,19 @@ fn create_before_destroy() -> Structure {
 }
 
 /// Eight hex characters of the SHA-256 of a policy document as rendered.
-fn content_hash(document: &Expression) -> Result<String> {
-    let rendered = hcl::format::to_string(document)
+/// Hash of a managed policy's document, and of the former grant that tells it apart from an
+/// identical document of the same role.
+fn content_hash(document: &Expression, distinguished_by: Option<&str>) -> Result<String> {
+    let mut rendered = hcl::format::to_string(document)
         .into_alien_error()
         .context(ErrorData::TemplateSerializationFailed {
             format: "Terraform IAM policy".into(),
             reason: "Failed to render a managed policy document".into(),
         })?;
+    if let Some(grant) = distinguished_by {
+        rendered.push('\n');
+        rendered.push_str(grant);
+    }
     let digest = Sha256::digest(rendered.as_bytes());
     Ok(digest[..4]
         .iter()

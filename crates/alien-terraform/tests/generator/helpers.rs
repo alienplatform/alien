@@ -5,7 +5,11 @@
 //! `=== <path> ===` separators. Snapshots stay reviewable as a unit, the
 //! way a security team would actually read the module.
 
-use alien_core::{Stack, StackInputDefinition, StackSettings};
+use alien_core::{
+    AwsManagementConfig, DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings,
+    ManagementConfig, Stack, StackInputDefinition, StackSettings, StackState,
+};
+use alien_preflights::runner::PreflightRunner;
 use alien_terraform::{
     generate_terraform_module, ModuleFiles, TerraformOptions, TerraformTarget, TfRegistry,
 };
@@ -14,6 +18,43 @@ use indexmap::IndexMap;
 #[allow(dead_code)]
 #[path = "../../src/test_utils.rs"]
 pub(super) mod test_utils;
+
+/// The stack as `alien render --target aws` prepares it: template preflights, then mutations
+/// against a configuration without a deployment.
+pub async fn prepare_for_render(stack: Stack) -> Stack {
+    prepare_for_target(stack, TerraformTarget::Aws).await
+}
+
+/// The stack as `alien render --format terraform --target <target>` prepares it, on the target's
+/// deployment platform: Kubernetes, on its cloud, for a managed Kubernetes target.
+pub async fn prepare_for_target(mut stack: Stack, target: TerraformTarget) -> Stack {
+    let platform = target.deployment_platform();
+    alien_core::remove_off_platform_gated_resources(&mut stack, platform, None);
+    let runner = PreflightRunner::new();
+    runner
+        .run_template_preflights(&stack, platform)
+        .await
+        .expect("template preflights pass");
+    let config = DeploymentConfig::builder()
+        .deployment_name(stack.id().to_string())
+        .stack_settings(StackSettings::default())
+        .management_config(ManagementConfig::Aws(AwsManagementConfig {
+            managing_role_arn: "rendered-from-template-parameter".to_string(),
+        }))
+        .environment_variables(EnvironmentVariablesSnapshot {
+            variables: Vec::new(),
+            hash: "empty".to_string(),
+            created_at: "1970-01-01T00:00:00Z".to_string(),
+        })
+        .allow_frozen_changes(false)
+        .external_bindings(ExternalBindings::default())
+        .maybe_base_platform(target.base_platform())
+        .build();
+    runner
+        .apply_mutations(stack, &StackState::new(platform), &config)
+        .await
+        .expect("template mutations apply")
+}
 
 /// A boolean deployer input, the shape `.enabled(input)` gates on.
 pub fn gate_input(id: &str, label: &str, description: &str) -> StackInputDefinition {

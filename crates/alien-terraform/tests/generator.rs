@@ -17,6 +17,7 @@ mod generator {
     pub mod aws_compute_tests;
     pub mod aws_data_layer_tests;
     pub mod aws_full_stack_tests;
+    pub mod aws_iam_coverage_tests;
     pub mod aws_identity_tests;
     pub mod aws_role_policy_upgrade_tests;
     pub mod aws_workload_grant_parity_tests;

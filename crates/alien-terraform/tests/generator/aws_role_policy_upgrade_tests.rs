@@ -8,14 +8,9 @@
 
 use super::helpers::{
     assert_leaves_runtime_role_policies_alone, assert_terraform_valid, linter_files,
-    role_policy_documents, INERT_POLICY,
+    prepare_for_render, role_policy_documents, INERT_POLICY,
 };
-use alien_core::{
-    import::EmitContext, AwsManagementConfig, ComputeCluster, DeploymentConfig,
-    EnvironmentVariablesSnapshot, ExternalBindings, ManagementConfig, Platform, Postgres, Stack,
-    StackSettings, StackState,
-};
-use alien_preflights::runner::PreflightRunner;
+use alien_core::{import::EmitContext, ComputeCluster, Platform, Postgres, Stack, StackSettings};
 use alien_terraform::{
     block::{attr, data_block, resource_block},
     emitters::aws::helpers::{
@@ -56,33 +51,7 @@ impl TfEmitter for NoComputeCluster {
 
 /// The stack prepared as `alien render` prepares it.
 async fn prepared_stack() -> Stack {
-    prepare(serde_json::from_str(STACK).expect("the fixture is a stack")).await
-}
-
-async fn prepare(stack: Stack) -> Stack {
-    let runner = PreflightRunner::new();
-    runner
-        .run_template_preflights(&stack, Platform::Aws)
-        .await
-        .expect("template preflights pass");
-    let config = DeploymentConfig::builder()
-        .deployment_name(stack.id().to_string())
-        .stack_settings(StackSettings::default())
-        .management_config(ManagementConfig::Aws(AwsManagementConfig {
-            managing_role_arn: "rendered-from-template-parameter".to_string(),
-        }))
-        .environment_variables(EnvironmentVariablesSnapshot {
-            variables: Vec::new(),
-            hash: "empty".to_string(),
-            created_at: "1970-01-01T00:00:00Z".to_string(),
-        })
-        .allow_frozen_changes(false)
-        .external_bindings(ExternalBindings::default())
-        .build();
-    runner
-        .apply_mutations(stack, &StackState::new(Platform::Aws), &config)
-        .await
-        .expect("template mutations apply")
+    prepare_for_render(serde_json::from_str(STACK).expect("the fixture is a stack")).await
 }
 
 /// A former inline grant: its address, policy name and role label.
@@ -861,7 +830,7 @@ async fn a_grant_added_early_leaves_the_installed_policies_alone() {
     let first = render(&before, &registry);
 
     // The next release names one more bucket for the workload, before every other resource.
-    let after = prepare(stack_with_archive()).await;
+    let after = prepare_for_render(stack_with_archive()).await;
     let second = render(&after, &registry);
 
     let dir = module_dir(&first);
@@ -1005,7 +974,7 @@ async fn a_managed_policy_no_longer_needed_goes_after_its_replacements() {
     }
     let registry = container_registry(NoComputeCluster);
     let without = render(&prepared_stack().await, &registry);
-    let with = render(&prepare(stack_with_archive()).await, &registry);
+    let with = render(&prepare_for_render(stack_with_archive()).await, &registry);
 
     let dir = module_dir(&with);
     let fresh = plan(dir.path(), "with.tfplan");
@@ -1669,7 +1638,7 @@ async fn a_grant_on_an_rds_master_secret_renders_and_evaluates_to_the_secret_arn
             enabled_when: None,
         },
     );
-    let stack = prepare(source).await;
+    let stack = prepare_for_render(source).await;
     let mut registry = container_registry(NoComputeCluster);
     registry.register(Postgres::RESOURCE_TYPE, Platform::Aws, DatabaseSecretReader);
     let module = render(&stack, &registry);

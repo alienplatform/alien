@@ -235,7 +235,7 @@ fn grants_that_reach_each_other_are_not_folded() {
             ]
         );
     }
-    assert!(!DependencyGraph::new(&per_resource).has_cycle());
+    assert!(!DependencyGraph::new(&per_resource, &IndexMap::new()).has_cycle());
 }
 
 /// A grant behind a gate moves into managed policies behind the same gate.
@@ -426,39 +426,83 @@ fn an_unchanged_policy_keeps_its_address_wherever_it_lands() {
 }
 
 /// Two managed policies of one role at one address cannot both exist, so the render fails.
+/// Two grants of one role with the same document, kept apart (here by their gates), become two
+/// managed policies. The first keeps the address its document gives it; the second's address
+/// also follows its first former grant, so each stays put while its own grants do.
 #[test]
-fn identical_managed_policies_on_one_role_fail_the_render() {
+fn identical_managed_policies_on_one_role_get_their_own_addresses() {
     let same = vec![statement("A", "Allow", &["s3:GetObject"], &["*"])];
+    let on = grant(
+        "app_on",
+        "app",
+        same.clone(),
+        vec![attr("count", expr::raw("var.jobs ? 1 : 0"))],
+    );
+    let off = grant(
+        "app_off",
+        "app",
+        same,
+        vec![attr("count", expr::raw("var.jobs ? 0 : 1"))],
+    );
+    let mut alone = fragments(vec![("identity", vec![role("app"), on.clone()])]);
+    consolidate(&mut alone);
+    let [first] = policies(&alone, "app_jobs_setup").try_into().unwrap();
+
+    let mut both = fragments(vec![("identity", vec![role("app"), on, off])]);
+    consolidate(&mut both);
+    let labels = policies(&both, "app_jobs_setup");
+    assert_eq!(labels.len(), 2, "{labels:?}");
+    assert_eq!(labels[0], first);
+    assert_ne!(labels[1], first);
+    for (label, count) in labels.iter().zip(["var.jobs ? 1 : 0", "var.jobs ? 0 : 1"]) {
+        let policy = block(&both, &format!("aws_iam_policy.{label}"));
+        assert_eq!(attribute(policy, "count").unwrap().to_string(), count);
+    }
+}
+
+/// A reference through a local reaches what the local names: a grant whose document names a
+/// local over the bucket, and a grant the bucket waits for, are never folded.
+#[test]
+fn grants_that_reach_each_other_through_a_local_are_not_folded() {
     let mut per_resource = fragments(vec![(
         "identity",
         vec![
             role("app"),
             grant(
-                "app_on",
+                "app_first",
                 "app",
-                same.clone(),
-                vec![attr("count", expr::raw("var.jobs ? 1 : 0"))],
+                vec![statement("A", "Allow", &["s3:GetObject"], &["*"])],
+                vec![],
             ),
             grant(
-                "app_off",
+                "app_second",
                 "app",
-                same,
-                vec![attr("count", expr::raw("var.jobs ? 0 : 1"))],
+                vec![statement(
+                    "B",
+                    "Allow",
+                    &["s3:PutObject"],
+                    &["${local.data_bucket.arn}"],
+                )],
+                vec![],
+            ),
+            resource_block(
+                "aws_s3_bucket",
+                "data",
+                [attr(
+                    "depends_on",
+                    Expression::Array(vec![expr::traversal(["aws_iam_role_policy", "app_first"])]),
+                )],
             ),
         ],
     )]);
-    let error = consolidate_role_policies(
-        &mut per_resource,
-        &IndexMap::new(),
-        &mut GatedAddresses::default(),
-    )
-    .expect_err("the two policies share an address");
-    assert!(
-        error.to_string().contains(
-            "Two managed policies of role 'app' would both be aws_iam_policy.app_jobs_setup_"
-        ),
-        "{error}"
-    );
+    let locals = IndexMap::from([(
+        "data_bucket".to_string(),
+        expr::raw("{ arn = aws_s3_bucket.data.arn }"),
+    )]);
+    consolidate_role_policies(&mut per_resource, &locals, &mut GatedAddresses::default()).unwrap();
+    let policies = policies(&per_resource, "app_setup");
+    assert_eq!(policies.len(), 2, "{policies:?}");
+    assert!(!DependencyGraph::new(&per_resource, &locals).has_cycle());
 }
 
 /// The (effect, action, resource, condition) pairs a list of statements grants or denies.
