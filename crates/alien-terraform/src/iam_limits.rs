@@ -505,7 +505,8 @@ impl<'a> Module<'a> {
             // An RDS-managed master user secret of a cluster:
             // `arn:<partition>:secretsmanager:<region>:<account>:secret:rds!cluster-<UUID>-<6>`.
             // RDS names the secret `rds!cluster-<UUID>`; Secrets Manager appends `-` and six
-            // random characters to every secret's ARN.
+            // random characters to every secret's ARN. The format is observed from the AWS
+            // docs and their examples, not a documented contract.
             ("data", ["aws_rds_cluster", _, "master_user_secret", "secret_arn"]) => Ok("arn:"
                 .len()
                 + LONGEST_PARTITION.len()
