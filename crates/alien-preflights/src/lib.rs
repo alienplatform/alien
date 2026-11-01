@@ -575,6 +575,11 @@ impl PreflightRegistry {
         self.mutations.push(mutation);
     }
 
+    /// Keep only the mutations `keep` accepts, in their order.
+    pub fn retain_mutations(&mut self, mut keep: impl FnMut(&dyn StackMutation) -> bool) {
+        self.mutations.retain(|mutation| keep(mutation.as_ref()));
+    }
+
     /// Get compile-time checks that should run for the given stack and platform
     pub fn get_compile_time_checks(
         &self,

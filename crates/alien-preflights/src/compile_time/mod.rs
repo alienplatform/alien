@@ -2,6 +2,7 @@
 //! These checks can run during build time for early error detection.
 
 pub mod allowed_user_resources;
+pub mod aws_permissions_boundary_size;
 pub mod capacity_group_profile;
 pub mod compute_pool_data_disk;
 pub mod container_lifecycle;

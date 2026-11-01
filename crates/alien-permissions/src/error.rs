@@ -8,12 +8,19 @@ pub enum ErrorData {
     /// The generated boundary exceeds the AWS managed-policy size limit.
     #[error(
         code = "PERMISSIONS_BOUNDARY_TOO_LARGE",
-        message = "AWS permissions boundary is {size} characters; the limit is {limit}. Reduce custom runtime permissions before rerunning setup.",
+        message = "AWS permissions boundary is {size} characters; the limit is {limit}. Largest contributors: {largest_contributors}. Reduce custom runtime permissions, especially grants on resources outside the stack's prefix.",
         retryable = "false",
         internal = "false",
         http_status_code = 400
     )]
-    PermissionsBoundaryTooLarge { size: usize, limit: usize },
+    PermissionsBoundaryTooLarge {
+        /// Minified size of the rendered document
+        size: usize,
+        /// IAM's managed-policy size limit
+        limit: usize,
+        /// The grant sources adding the most characters, each with an example resource
+        largest_contributors: String,
+    },
 
     /// An operation requests permissions outside its reviewed capability or installer scope.
     #[error(

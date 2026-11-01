@@ -10,6 +10,12 @@ use crate::{
 
 /// Validate a setup boundary using maximum input lengths and distinct provider key IDs.
 pub fn validate_aws_boundary_size(stack: &Stack) -> Result<()> {
+    render_sized_boundary(stack)?;
+    Ok(())
+}
+
+/// Render the boundary with the longest deployment names setup allows.
+fn render_sized_boundary(stack: &Stack) -> Result<serde_json::Value> {
     let base = PermissionContext::new()
         .with_stack_prefix("s".repeat(40))
         .with_aws_region("r".repeat(16))
@@ -39,8 +45,7 @@ pub fn validate_aws_boundary_size(stack: &Stack) -> Result<()> {
                 "r".repeat(16)
             )))
         })
-    })?;
-    Ok(())
+    })
 }
 
 /// Resolve a boundary grant's resource scope. The callback supplies recorded names or
@@ -116,6 +121,29 @@ mod tests {
         ServiceAccount, Storage, Vault, Worker, WorkerCode,
     };
     use serde_json::json;
+
+    /// Characters of the boundary every AWS stack renders, whatever its resources: the scoped
+    /// and ownership Allows, the runtime catalog statements outside the stack prefix, and the
+    /// Denies. A stack's own grants outside its prefix, exact key ARNs and exempted Denies must
+    /// fit in the rest of IAM's 6,144-character limit, so growing this part shrinks the room of
+    /// every stack. It is today's size: a catalog change that grows it needs this budget
+    /// raised, deliberately, in review.
+    const STACK_INDEPENDENT_BUDGET: usize = 5_060;
+
+    #[test]
+    fn stack_independent_boundary_stays_within_its_budget() {
+        let boundary = render_sized_boundary(&Stack::new("empty".to_string()).build()).unwrap();
+        let size = boundary
+            .to_string()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .count();
+        assert!(
+            size <= STACK_INDEPENDENT_BUDGET,
+            "the stack-independent boundary is {size} characters, over its \
+             {STACK_INDEPENDENT_BUDGET}-character budget"
+        );
+    }
 
     #[test]
     fn scopes_use_one_naming_rule_for_setup_and_recorded_resources() {
