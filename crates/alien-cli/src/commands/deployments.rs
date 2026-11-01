@@ -493,12 +493,12 @@ pub enum DeploymentsCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Change machine counts, machine type, or quota warning overrides of a deployment
+    /// Change machine counts or quota warning overrides of a deployment
     ///
     /// Pass --machines for a fixed pool, or --min and --max for an autoscaling
     /// pool; switching between them changes the pool's mode. Other pools and
-    /// settings stay as they are. Adding or removing pools, or changing their
-    /// placement, needs a new setup.
+    /// settings stay as they are. Machine types, placement, and the set of
+    /// pools are chosen during setup; change them by running setup again.
     SetCompute {
         /// Deployment ID, or <deployment-group-name>/<deployment-name>
         id: String,
@@ -518,10 +518,6 @@ pub enum DeploymentsCmd {
         /// Maximum machine count for an autoscaling pool
         #[arg(long)]
         max: Option<u32>,
-
-        /// Provider machine type, such as m6i.large
-        #[arg(long)]
-        machine: Option<String>,
 
         /// Downgrade a quota failure to a visible warning (repeatable; replaces the saved list)
         #[arg(
@@ -1275,7 +1271,6 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             machines,
             min,
             max,
-            machine,
             quota_warning_overrides,
             clear_quota_warning_overrides,
             json,
@@ -1294,7 +1289,6 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                         machines,
                         min,
                         max,
-                        machine,
                     },
                     quota_warning_overrides,
                 },

@@ -18,22 +18,20 @@ use crate::interaction::{ConfirmationMode, InteractionMode};
 use crate::output::{print_json, prompt_confirm};
 use crate::ui::{command, dim_label, make_table, print_table, success_line};
 
-/// A requested change to one machine pool. Unset fields keep the pool's current value.
+/// A requested change to one machine pool's size. Unset fields keep the pool's
+/// current value. Machine type and placement are chosen during setup and can't
+/// be changed here.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct PoolChange {
     pub pool: Option<String>,
     pub machines: Option<u32>,
     pub min: Option<u32>,
     pub max: Option<u32>,
-    pub machine: Option<String>,
 }
 
 impl PoolChange {
     fn is_empty(&self) -> bool {
-        self.machines.is_none()
-            && self.min.is_none()
-            && self.max.is_none()
-            && self.machine.is_none()
+        self.machines.is_none() && self.min.is_none() && self.max.is_none()
     }
 }
 
@@ -117,8 +115,8 @@ fn select_pool(compute: &ComputeSettings, requested: Option<&str>) -> Result<Str
 /// the full compute settings to send.
 ///
 /// A compute update replaces the whole pool map, so every other pool is sent
-/// back unchanged. The pool's failure-domain placement is kept: it is fixed
-/// once machines exist.
+/// back unchanged. The pool's machine type and failure-domain placement are
+/// kept: the API accepts only count and mode changes here.
 pub(crate) fn apply_pool_change(
     current: Option<&ComputeSettings>,
     change: &PoolChange,
@@ -126,7 +124,7 @@ pub(crate) fn apply_pool_change(
     let mut compute = current.cloned().unwrap_or_default();
     let pool_id = select_pool(&compute, change.pool.as_deref())?;
     let selection = compute.pools[&pool_id].clone();
-    let (current_machine, failure_domains) = match &selection {
+    let (machine, failure_domains) = match &selection {
         ComputePoolSelection::Fixed {
             machine,
             failure_domains,
@@ -138,7 +136,6 @@ pub(crate) fn apply_pool_change(
             ..
         } => (machine.clone(), failure_domains.clone()),
     };
-    let machine = change.machine.clone().or(current_machine);
     let invalid = |field: &str, message: String| {
         AlienError::new(ErrorData::ValidationError {
             field: field.to_string(),
@@ -249,7 +246,7 @@ pub(crate) async fn set_compute_task(
     if change.pool.is_empty() && change.quota_warning_overrides.is_none() {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "compute".to_string(),
-            message: "Nothing to change. Pass --machines, --min/--max, --machine, \
+            message: "Nothing to change. Pass --machines, --min/--max, \
                       --quota-warning-override, or --clear-quota-warning-overrides."
                 .to_string(),
         }));
@@ -257,7 +254,7 @@ pub(crate) async fn set_compute_task(
     if change.pool.is_empty() && change.pool.pool.is_some() {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "pool".to_string(),
-            message: "--pool needs --machines, --min/--max, or --machine.".to_string(),
+            message: "--pool needs --machines or --min/--max.".to_string(),
         }));
     }
 
@@ -302,11 +299,7 @@ pub(crate) async fn set_compute_task(
     if json {
         return print_json(&response);
     }
-    let outcome = serde_json::to_value(&response.outcome)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_string))
-        .unwrap_or_default();
-    if outcome == "unchanged" {
+    if response.outcome.to_string() == "unchanged" {
         println!("Compute is already set to these values. Nothing to update.");
         return Ok(());
     }
@@ -1157,7 +1150,6 @@ mod tests {
             Some(&autoscale),
             &PoolChange {
                 max: Some(10),
-                machine: Some("m6i.large".into()),
                 ..PoolChange::default()
             },
         )
@@ -1167,7 +1159,7 @@ mod tests {
             ComputePoolSelection::Autoscale {
                 min: 1,
                 max: 10,
-                machine: Some("m6i.large".into()),
+                machine: Some("t3.medium".into()),
                 failure_domains,
             }
         );
