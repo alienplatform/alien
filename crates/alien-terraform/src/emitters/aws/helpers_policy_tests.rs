@@ -157,11 +157,9 @@ fn bounded_catalog_chunks_preserve_conditions_and_fit_the_attachment_budget() {
         actual.extend(policy["Statement"].as_array().unwrap().iter().cloned());
     }
     assert!((2..=20).contains(&policy_count));
-    crate::iam_limits::validate_role_policy_limits(&indexmap::IndexMap::from([(
-        "management".to_string(),
-        fragment,
-    )]))
-    .unwrap();
+    crate::iam_limits::RenderedModule::new(fragment.resource_blocks, indexmap::IndexMap::new())
+        .check()
+        .unwrap();
     assert_eq!(actual, *expected["Statement"].as_array().unwrap());
     let writes: Vec<_> = actual
         .iter()
