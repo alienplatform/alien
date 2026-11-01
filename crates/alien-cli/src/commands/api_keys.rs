@@ -3,14 +3,15 @@ use std::num::NonZeroU64;
 use alien_error::{Context, IntoAlienError};
 use alien_platform_api::types::{
     CreateApiKeyRequest, CreateApiKeyRequestDescription, ProjectRole, ProjectScope,
-    ProjectScopeType, Scope,
+    ProjectScopeType, Scope, UpdateApiKeyRequest,
 };
 use alien_platform_api::SdkResultExt as _;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
-use crate::output::print_json;
+use crate::interaction::{ConfirmationMode, InteractionMode};
+use crate::output::{print_json, prompt_confirm};
 use crate::ui::{dim_label, make_table, print_table, success_line};
 
 #[derive(Parser, Debug, Clone)]
@@ -21,6 +22,8 @@ use crate::ui::{dim_label, make_table, print_table, success_line};
     alien api-keys create --for encryption-gateway --json
     alien api-keys list
     alien api-keys get key_abc123
+    alien api-keys disable key_abc123
+    alien api-keys enable key_abc123
     alien api-keys revoke key_abc123 --yes"
 )]
 pub struct ApiKeysArgs {
@@ -57,6 +60,15 @@ pub enum ApiKeysCommand {
     /// Show API-key metadata without its secret
     #[command(visible_aliases = ["describe", "show"])]
     Get { id: String },
+    /// Stop accepting an API key until it is enabled again
+    Disable {
+        id: String,
+        /// Skip the confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Accept a disabled API key again
+    Enable { id: String },
     /// Revoke an API key
     #[command(visible_alias = "delete")]
     Revoke {
@@ -173,13 +185,7 @@ pub async fn api_keys_task(args: ApiKeysArgs, ctx: ExecutionMode) -> Result<()> 
                         key.description.unwrap_or_else(|| "-".to_string()),
                         key.role,
                         key.key_prefix,
-                        if key.revoked_at.is_some() {
-                            "revoked".to_string()
-                        } else if key.enabled {
-                            "active".to_string()
-                        } else {
-                            "disabled".to_string()
-                        },
+                        key_status(key.revoked_at.is_some(), key.enabled).to_string(),
                         key.id.as_str().to_string(),
                     ]);
                 }
@@ -208,13 +214,28 @@ pub async fn api_keys_task(args: ApiKeysArgs, ctx: ExecutionMode) -> Result<()> 
                 println!(
                     "{} {}",
                     dim_label("Status"),
-                    if response.revoked_at.is_some() {
-                        "revoked"
-                    } else {
-                        "active"
-                    }
+                    key_status(response.revoked_at.is_some(), response.enabled)
                 );
             }
+        }
+        ApiKeysCommand::Disable { id, yes } => {
+            let confirmation = InteractionMode::current(args.json).confirmation_mode(
+                yes,
+                "Disabling an API key makes every request that uses it fail and needs confirmation. Re-run with `--yes`.",
+            )?;
+            if matches!(confirmation, ConfirmationMode::Prompt)
+                && !prompt_confirm(
+                    &format!("Disable API key {id}? Requests that use it fail until it is enabled again."),
+                    false,
+                )?
+            {
+                println!("{}", dim_label("Nothing changed."));
+                return Ok(());
+            }
+            set_api_key_enabled(&client, &workspace, &id, false, args.json).await?;
+        }
+        ApiKeysCommand::Enable { id } => {
+            set_api_key_enabled(&client, &workspace, &id, true, args.json).await?;
         }
         ApiKeysCommand::Revoke { id, yes } => {
             if !yes {
@@ -242,6 +263,54 @@ pub async fn api_keys_task(args: ApiKeysArgs, ctx: ExecutionMode) -> Result<()> 
             }
         }
     }
+    Ok(())
+}
+
+fn key_status(revoked: bool, enabled: bool) -> &'static str {
+    if revoked {
+        "revoked"
+    } else if enabled {
+        "active"
+    } else {
+        "disabled"
+    }
+}
+
+async fn set_api_key_enabled(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    id: &str,
+    enabled: bool,
+    json: bool,
+) -> Result<()> {
+    let action = if enabled { "enable" } else { "disable" };
+    let response = client
+        .update_api_key()
+        .id(id)
+        .workspace(workspace)
+        .body(UpdateApiKeyRequest {
+            enabled: Some(enabled),
+            ..UpdateApiKeyRequest::default()
+        })
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("Failed to {action} API key {id}"),
+            url: None,
+        })?
+        .into_inner();
+    if json {
+        return print_json(&response);
+    }
+    println!(
+        "{}",
+        success_line(&format!(
+            "API key {} is {}.",
+            response.id.as_str(),
+            key_status(response.revoked_at.is_some(), response.enabled)
+        ))
+    );
     Ok(())
 }
 

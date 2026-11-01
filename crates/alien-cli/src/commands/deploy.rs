@@ -511,7 +511,7 @@ fn collect_raw_input_values(
     Ok(values)
 }
 
-fn parse_raw_stack_input_value(value: &str) -> serde_json::Value {
+pub(crate) fn parse_raw_stack_input_value(value: &str) -> serde_json::Value {
     match serde_json::from_str::<Vec<String>>(value) {
         Ok(values) => {
             serde_json::Value::Array(values.into_iter().map(serde_json::Value::String).collect())
@@ -565,7 +565,7 @@ fn to_sdk_stack_input_values(
         .collect()
 }
 
-fn parse_stack_input_arg(input: &str, flag: &str) -> Result<(String, String)> {
+pub(crate) fn parse_stack_input_arg(input: &str, flag: &str) -> Result<(String, String)> {
     let Some((id, value)) = input.split_once('=') else {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: flag.trim_start_matches("--").to_string(),
@@ -1241,6 +1241,22 @@ async fn create_machines_join_token(
     normalize_machines_join_token_response(response)
 }
 
+/// Returns the token a host passes to `join`. The API returns an `aj1_` token
+/// that already carries the control plane URL and cluster ID; a raw token is
+/// wrapped with them the same way `alien deploy --machines` does.
+pub(crate) fn host_join_token(
+    join_token: &str,
+    control_plane_url: &str,
+    cluster_id: &str,
+) -> Result<String> {
+    normalize_machines_join_token_response(MachinesJoinTokenResponse {
+        join_token: join_token.to_string(),
+        control_plane_url: Some(control_plane_url.to_string()),
+        cluster_id: Some(cluster_id.to_string()),
+        capacity_groups: None,
+    })
+}
+
 fn normalize_machines_join_token_response(response: MachinesJoinTokenResponse) -> Result<String> {
     let join_token = response.join_token.trim();
     if join_token.is_empty() {
@@ -1301,7 +1317,7 @@ fn validate_machines_control_plane_url(value: &str) -> Result<()> {
     Ok(())
 }
 
-fn machines_join_command(
+pub(crate) fn machines_join_command(
     cli_name: &str,
     install_script_url: Option<&str>,
     join_token: &str,

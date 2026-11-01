@@ -1,4 +1,4 @@
-//! Platform package inspection and artifact download commands.
+//! Platform package inspection, rebuild, and artifact download commands.
 
 use std::path::{Path, PathBuf};
 
@@ -9,9 +9,19 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
+use crate::interaction::{ConfirmationMode, InteractionMode};
+use crate::output::prompt_confirm;
 
 #[derive(Parser, Debug, Clone)]
-#[command(about = "List, inspect, and download project packages")]
+#[command(
+    about = "List, inspect, rebuild, and download project packages",
+    after_help = "EXAMPLES:
+    alien packages list --status failed
+    alien packages get pkg_abc123
+    alien packages rebuild
+    alien packages cancel pkg_abc123
+    alien packages download pkg_abc123 --artifact linux-x64"
+)]
 pub struct PackagesArgs {
     #[command(subcommand)]
     pub action: PackagesAction,
@@ -45,6 +55,23 @@ pub enum PackagesAction {
     Get {
         /// Package ID.
         id: String,
+    },
+    /// Build the project's packages again from its package settings.
+    ///
+    /// Pending and building packages are cancelled and replaced by new
+    /// versions. Use it when a build failed for a reason that is now fixed.
+    Rebuild {
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Cancel a pending or building package.
+    Cancel {
+        /// Package ID.
+        id: String,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
     },
     /// Download an artifact from a ready package.
     Download {
@@ -164,6 +191,86 @@ pub async fn packages_task(args: PackagesArgs, ctx: ExecutionMode) -> Result<()>
                 }
             }
         }
+        PackagesAction::Rebuild { yes } => {
+            let confirmation = InteractionMode::current(args.json).confirmation_mode(
+                yes,
+                "Rebuilding cancels the project's pending and building packages and needs confirmation. Re-run with `--yes`.",
+            )?;
+            if matches!(confirmation, ConfirmationMode::Prompt)
+                && !prompt_confirm(
+                    "Rebuild every package? Pending and building packages are cancelled.",
+                    false,
+                )?
+            {
+                println!("Nothing changed.");
+                return Ok(());
+            }
+            let url = package_api_url(&auth.base_url, "/v1/packages/rebuild", &workspace)?;
+            let response = send_json(
+                &auth,
+                reqwest::Method::POST,
+                url,
+                Some(&serde_json::json!({ "project": project })),
+                "rebuilding packages",
+            )
+            .await?;
+            if args.json {
+                print_json(&response)?;
+            } else {
+                let created = response
+                    .get("packagesCreated")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::ApiRequestFailed {
+                            message: "The rebuild response has no packagesCreated count"
+                                .to_string(),
+                            url: None,
+                        })
+                    })?;
+                if created == 0 {
+                    println!("This project has no package settings, so nothing was built.");
+                } else {
+                    println!("Started {created} package build(s).");
+                    println!("Follow them with: alien packages list");
+                }
+            }
+        }
+        PackagesAction::Cancel { id, yes } => {
+            let confirmation = InteractionMode::current(args.json).confirmation_mode(
+                yes,
+                "Cancelling a package build needs confirmation. Re-run with `--yes`.",
+            )?;
+            if matches!(confirmation, ConfirmationMode::Prompt)
+                && !prompt_confirm(&format!("Cancel package {id}?"), false)?
+            {
+                println!("Nothing changed.");
+                return Ok(());
+            }
+            let url = package_api_url(
+                &auth.base_url,
+                &format!("/v1/packages/{}/cancel", urlencoding::encode(&id)),
+                &workspace,
+            )?;
+            let package = send_json(
+                &auth,
+                reqwest::Method::POST,
+                url,
+                None,
+                "cancelling package",
+            )
+            .await?;
+            if args.json {
+                print_json(&package)?;
+            } else {
+                println!(
+                    "Package {} ({} {}) is {}.",
+                    string_field(&package, "id"),
+                    string_field(&package, "type"),
+                    string_field(&package, "version"),
+                    string_field(&package, "status")
+                );
+            }
+        }
         PackagesAction::Download {
             id,
             artifact,
@@ -201,16 +308,29 @@ async fn get_json(
     url: reqwest::Url,
     operation: &str,
 ) -> Result<Value> {
-    let response = auth
-        .reqwest_client()
-        .get(url.clone())
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: operation.to_string(),
-            url: Some(url.to_string()),
-        })?;
+    send_json(auth, reqwest::Method::GET, url, None, operation).await
+}
+
+async fn send_json(
+    auth: &crate::auth::AuthHttp,
+    method: reqwest::Method,
+    url: reqwest::Url,
+    body: Option<&Value>,
+    operation: &str,
+) -> Result<Value> {
+    let mut request = auth.reqwest_client().request(method, url.clone());
+    if let Some(body) = body {
+        request = request.json(body);
+    }
+    let response =
+        request
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: operation.to_string(),
+                url: Some(url.to_string()),
+            })?;
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();

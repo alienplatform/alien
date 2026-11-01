@@ -35,7 +35,9 @@ const OPEN_STRING_ENUM_SCHEMAS: &[(&str, &str)] = &[
 /// Keep this list explicit: adding a Platform API call should require a review
 /// of the compiler input it brings into the always-enabled CLI graph.
 pub const REQUIRED_OPERATION_IDS: &[&str] = &[
+    "approveAccessRequest",
     "cancelDeploymentVolumeRestore",
+    "cancelMachinesMachineDrain",
     "configureProjectBuckets",
     "configureProjectDeployments",
     "configureProjectKeys",
@@ -51,6 +53,7 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "createDeploymentGroupToken",
     "createDeploymentToken",
     "createDeploymentVolumeRestore",
+    "createMachinesJoinToken",
     "createProject",
     "createRelease",
     "createReleaseChannel",
@@ -58,9 +61,12 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "createSetupLink",
     "createWorkspace",
     "deleteDeployment",
+    "deleteDeploymentGroup",
     "deleteManager",
     "deleteProject",
     "deleteReleaseChannel",
+    "denyAccessRequest",
+    "drainMachinesMachine",
     "ensureDeploymentGroupByExternalId",
     "ensureProjectSandboxBaseImageRepository",
     "generateManagerBindingToken",
@@ -73,6 +79,7 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "getDeploymentGroup",
     "getDeploymentGroupByExternalId",
     "getDeploymentInfo",
+    "getDeploymentInputs",
     "getDeploymentUpdateOperation",
     "getManager",
     "getProject",
@@ -97,6 +104,7 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "listEvents",
     "listDeploymentMachines",
     "listDeploymentVolumeRestores",
+    "listMachinesJoinTokens",
     "listManagerEvents",
     "listManagers",
     "listMemberships",
@@ -107,12 +115,21 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "pinDeploymentRelease",
     "promoteRelease",
     "redeployDeployment",
+    "removeMachinesMachine",
+    "requestDeploymentCheck",
     "resolve",
     "retryDeployment",
     "revokeAPIKey",
     "revokeAccessRequest",
+    "revokeMachinesJoinToken",
+    "rotateMachinesJoinToken",
     "setDeploymentGroupExternalId",
     "setDeploymentReleaseChannel",
+    "updateAPIKey",
+    "updateDeploymentCompute",
+    "updateDeploymentEnvironmentVariables",
+    "updateDeploymentGroup",
+    "updateDeploymentInputs",
     // Only the OAuth mode/client credentials request is added for portal writes;
     // appearance uses JSON to preserve unknown server fields.
     "updateProjectGcpOAuthProvider",
@@ -191,7 +208,7 @@ pub fn filter_openapi(document: &Value, required_operation_ids: &[&str]) -> Resu
         "components".to_string(),
         reachable_components(document, &filtered)?,
     );
-    preserve_secret_presence(&mut filtered)?;
+    preserve_empty_array_presence(&mut filtered)?;
     normalize_binding_unions(&mut filtered)?;
     open_string_enums(&mut filtered)?;
     deduplicate_anonymous_schemas(
@@ -496,7 +513,7 @@ pub fn normalize_openapi(document: &Value) -> Result<Value, String> {
         .as_object()
         .ok_or_else(|| "OpenAPI document must be a JSON object".to_string())?
         .clone();
-    preserve_secret_presence(&mut root)?;
+    preserve_empty_array_presence(&mut root)?;
     normalize_binding_unions(&mut root)?;
     open_string_enums(&mut root)?;
     canonicalize_nullable_enums(&mut root);
@@ -553,21 +570,41 @@ fn normalize_optional_response_bodies(document: &mut Map<String, Value>) {
     }
 }
 
-// A native Vec avoids typify's intrinsic empty-array default for this optional
-// field, yielding Option<Vec<String>> without changing the canonical API schema.
-fn preserve_secret_presence(document: &mut Map<String, Value>) -> Result<(), String> {
-    let Some(config) = document
+/// Optional string arrays where an empty list means something different from an
+/// absent field. Typify gives such a field an empty-array default and leaves it
+/// out when empty; a native Vec yields `Option<Vec<String>>` instead, so `[]`
+/// reaches the wire, without changing the canonical API schema.
+const PRESENCE_PRESERVING_STRING_ARRAYS: &[(&str, &str)] = &[
+    // Stored secret IDs: empty means "none stored", absent means "unknown".
+    ("DeploymentConfig", "storedSecretInputIds"),
+    // Quota warning overrides: empty clears them, absent keeps them.
+    ("UpdateDeploymentComputeRequest", "quotaWarningOverrides"),
+];
+
+fn preserve_empty_array_presence(document: &mut Map<String, Value>) -> Result<(), String> {
+    for (schema_name, field_name) in PRESENCE_PRESERVING_STRING_ARRAYS {
+        preserve_array_presence(document, schema_name, field_name)?;
+    }
+    Ok(())
+}
+
+fn preserve_array_presence(
+    document: &mut Map<String, Value>,
+    schema_name: &str,
+    field_name: &str,
+) -> Result<(), String> {
+    let Some(schema) = document
         .get_mut("components")
         .and_then(|components| components.get_mut("schemas"))
-        .and_then(|schemas| schemas.get_mut("DeploymentConfig"))
+        .and_then(|schemas| schemas.get_mut(schema_name))
     else {
         return Ok(());
     };
-    let required = config
+    let required = schema
         .get("required")
         .and_then(Value::as_array)
-        .is_some_and(|fields| fields.iter().any(|field| field == "storedSecretInputIds"));
-    let Some(field) = config.pointer_mut("/properties/storedSecretInputIds") else {
+        .is_some_and(|fields| fields.iter().any(|field| field == field_name));
+    let Some(field) = schema.pointer_mut(&format!("/properties/{field_name}")) else {
         return Ok(());
     };
     let valid = !required
@@ -582,7 +619,9 @@ fn preserve_secret_presence(document: &mut Map<String, Value>) -> Result<(), Str
                 .all(|key| matches!(key.as_str(), "type" | "items" | "description" | "nullable"))
         });
     if !valid {
-        return Err("DeploymentConfig.storedSecretInputIds must remain an optional unconstrained nonnullable string array".to_string());
+        return Err(format!(
+            "{schema_name}.{field_name} must remain an optional unconstrained nonnullable string array"
+        ));
     }
     field.as_object_mut().unwrap().insert("x-rust-type".to_string(), serde_json::json!({
         "crate": "std", "version": "*", "path": "std::vec::Vec", "parameters": [{"type": "string"}]

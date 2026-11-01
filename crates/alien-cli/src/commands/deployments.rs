@@ -2,6 +2,7 @@ use std::future::Future;
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
+use crate::commands::deployment_actions;
 use crate::commands::destroy::{kept_deployer_secrets, print_kept_deployer_secrets};
 use crate::commands::event_display::{print_event_table, EventDisplayRow};
 use crate::deployment_tracking::DeploymentTracker;
@@ -97,6 +98,10 @@ pub enum MonitoringMode {
     alien deployments events production/api
     alien deployments wait production/api --for ready --timeout 10m
     alien deployments machines production/api --json
+    alien deployments set-compute production/api --machines 3
+    alien deployments set-inputs production/api --input region=eu-west-1
+    alien deployments drain-machine production/api <machine-id>
+    alien deployments join-tokens create production/api
     alien deployments untrack my-sandbox
 
 RELATED COMMANDS:
@@ -132,7 +137,15 @@ impl DeploymentsArgs {
                 | DeploymentsCmd::Pin { json: true, .. }
                 | DeploymentsCmd::SetChannel { json: true, .. }
                 | DeploymentsCmd::SetDomains { json: true, .. }
-        )
+                | DeploymentsCmd::DrainMachine { json: true, .. }
+                | DeploymentsCmd::CancelMachineDrain { json: true, .. }
+                | DeploymentsCmd::RemoveMachine { json: true, .. }
+                | DeploymentsCmd::SetCompute { json: true, .. }
+                | DeploymentsCmd::SetEnv { json: true, .. }
+                | DeploymentsCmd::Inputs { json: true, .. }
+                | DeploymentsCmd::SetInputs { json: true, .. }
+                | DeploymentsCmd::Check { json: true, .. }
+        ) || matches!(&self.cmd, DeploymentsCmd::JoinTokens { cmd } if cmd.json())
     }
 }
 
@@ -290,6 +303,70 @@ pub enum DeploymentsCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Drain a machine so its workloads move to other machines
+    ///
+    /// The machine stops taking new work and its replicas are rescheduled.
+    /// Undo it with `alien deployments cancel-machine-drain`.
+    DrainMachine {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+
+        /// Machine ID, as shown by `alien deployments machines`
+        machine_id: String,
+
+        /// Report the drain as overdue if it hasn't finished after this long, such as 30m
+        #[arg(long, value_parser = parse_wait_duration)]
+        deadline: Option<Duration>,
+
+        /// Stop the machine's replicas without waiting for healthy replacements
+        #[arg(long)]
+        force: bool,
+
+        /// Skip the confirmation prompt for --force
+        #[arg(long)]
+        yes: bool,
+
+        /// Print the result as machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Cancel a machine drain so the machine takes work again
+    CancelMachineDrain {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+
+        /// Machine ID, as shown by `alien deployments machines`
+        machine_id: String,
+
+        /// Print the result as machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove a machine from a deployment
+    ///
+    /// Drain the machine first so its workloads move. A removed machine can't
+    /// rejoin with its old identity.
+    RemoveMachine {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+
+        /// Machine ID, as shown by `alien deployments machines`
+        machine_id: String,
+
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+
+        /// Print the result as machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// List, create, rotate, and revoke tokens that join hosts to a Machines deployment
+    #[command(name = "join-tokens", visible_alias = "join-token")]
+    JoinTokens {
+        #[command(subcommand)]
+        cmd: JoinTokensCmd,
+    },
     /// Show container volumes, their latest snapshots and restores
     Volumes {
         /// Deployment ID, or <deployment-group-name>/<deployment-name>
@@ -420,6 +497,139 @@ pub enum DeploymentsCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Change machine counts, machine type, or quota warning overrides of a deployment
+    ///
+    /// Pass --machines for a fixed pool, or --min and --max for an autoscaling
+    /// pool; switching between them changes the pool's mode. The update
+    /// replaces the deployment's whole pool map with the saved pools plus this
+    /// change, so other pools are sent back as they were read. Container CPU
+    /// and memory settings are not sent and stay as they are. Adding or
+    /// removing pools, or changing their placement, needs a new setup.
+    SetCompute {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+
+        /// Pool to change (required when the deployment has more than one)
+        #[arg(long)]
+        pool: Option<String>,
+
+        /// Fixed number of machines
+        #[arg(long, conflicts_with_all = ["min", "max"])]
+        machines: Option<u32>,
+
+        /// Minimum machine count for an autoscaling pool
+        #[arg(long)]
+        min: Option<u32>,
+
+        /// Maximum machine count for an autoscaling pool
+        #[arg(long)]
+        max: Option<u32>,
+
+        /// Provider machine type, such as m6i.large. It must keep the pool's
+        /// CPU architecture; the pool's machines are replaced to apply it.
+        #[arg(long)]
+        machine: Option<String>,
+
+        /// Downgrade a quota failure to a visible warning (repeatable; replaces the saved list)
+        #[arg(
+            long = "quota-warning-override",
+            conflicts_with = "clear_quota_warning_overrides"
+        )]
+        quota_warning_overrides: Vec<String>,
+
+        /// Remove all saved quota warning overrides
+        #[arg(long)]
+        clear_quota_warning_overrides: bool,
+
+        /// Skip the confirmation prompt when scaling a pool to 0 machines
+        #[arg(long)]
+        yes: bool,
+
+        /// Print the update result as machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Replace the environment variables of a deployment
+    ///
+    /// The variables you pass become the full set: any variable not listed is
+    /// removed. Variables backed by stack inputs are kept; change those with
+    /// `alien deployments set-inputs`.
+    SetEnv {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+
+        /// Plain environment variables in KEY=VALUE format (can be used multiple times)
+        #[arg(long)]
+        env: Vec<String>,
+
+        /// Secret environment variables in KEY=VALUE format (can be used multiple times)
+        #[arg(long)]
+        secret: Vec<String>,
+
+        /// Plain environment variables with target resources in KEY=VALUE:pattern1,pattern2 format (can be used multiple times)
+        #[arg(long)]
+        env_targeted: Vec<String>,
+
+        /// Secret environment variables with target resources in KEY=VALUE:pattern1,pattern2 format (can be used multiple times)
+        #[arg(long)]
+        secret_targeted: Vec<String>,
+
+        /// Remove every environment variable
+        #[arg(long, conflicts_with_all = ["env", "secret", "env_targeted", "secret_targeted"])]
+        clear: bool,
+
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+
+        /// Print the result as machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show a deployment's stack inputs and their current values
+    Inputs {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Change stack inputs of a deployment
+    ///
+    /// Values are read as in `alien deploy`: a JSON array of strings is a
+    /// list, and anything else is text that Alien converts to the type the
+    /// input declares (a number, true or false, or a comma-separated list).
+    /// Inputs you don't pass keep their saved values.
+    SetInputs {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+
+        /// Input value in ID=VALUE format (can be used multiple times)
+        #[arg(long = "input")]
+        inputs: Vec<String>,
+
+        /// Secret input value in ID=VALUE format, sent as text (can be used multiple times)
+        #[arg(long = "secret-input")]
+        secret_inputs: Vec<String>,
+
+        /// Input to reset to its default (can be used multiple times)
+        #[arg(long)]
+        clear: Vec<String>,
+
+        /// Print the saved inputs as machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Ask the manager to check the deployment's health now
+    Check {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+
+        /// Print the result as machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Change the channel followed by an unpinned deployment
     SetChannel {
         /// Deployment ID
@@ -445,6 +655,69 @@ pub enum DeploymentsCmd {
         /// Deployment name, as passed to `alien deploy --name`
         name: String,
     },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum JoinTokensCmd {
+    /// List a deployment's join tokens
+    #[command(visible_alias = "ls")]
+    List {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a join token. Existing tokens keep working.
+    Create {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+
+        /// Print the token and join details as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Revoke every join token and create a new one
+    Rotate {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+
+        /// Print the token and join details as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Revoke one join token. Hosts that already joined keep running.
+    Revoke {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+
+        /// Token ID, as shown by `alien deployments join-tokens list`
+        token_id: String,
+
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+
+        /// Print the result as machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+impl JoinTokensCmd {
+    fn json(&self) -> bool {
+        match self {
+            Self::List { json, .. }
+            | Self::Create { json, .. }
+            | Self::Rotate { json, .. }
+            | Self::Revoke { json, .. } => *json,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -1013,7 +1286,285 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             let workspace_name = ctx.resolve_platform_workspace_context(!json).await?.name;
             token_deployment_task(&client, &workspace_name, &id, json).await
         }
+        DeploymentsCmd::SetCompute {
+            id,
+            pool,
+            machines,
+            min,
+            max,
+            machine,
+            quota_warning_overrides,
+            clear_quota_warning_overrides,
+            yes,
+            json,
+        } => {
+            let confirmation = if machines == Some(0) {
+                InteractionMode::current(json).confirmation_mode(
+                    yes,
+                    "Scaling a pool to 0 machines stops its workloads and needs confirmation. Re-run with `--yes`.",
+                )?
+            } else {
+                ConfirmationMode::Skip
+            };
+            let target = resolve_platform_target(&ctx, &id, json, "Compute changes").await?;
+            let quota_warning_overrides = (clear_quota_warning_overrides
+                || !quota_warning_overrides.is_empty())
+            .then_some(quota_warning_overrides);
+            deployment_actions::set_compute_task(
+                &target.client,
+                &target.workspace,
+                &target.deployment,
+                deployment_actions::ComputeChange {
+                    pool: deployment_actions::PoolChange {
+                        pool,
+                        machines,
+                        min,
+                        max,
+                        machine,
+                    },
+                    quota_warning_overrides,
+                },
+                confirmation,
+                json,
+            )
+            .await
+        }
+        DeploymentsCmd::SetEnv {
+            id,
+            env,
+            secret,
+            env_targeted,
+            secret_targeted,
+            clear,
+            yes,
+            json,
+        } => {
+            let variables =
+                build_environment_variables(env, secret, env_targeted, secret_targeted)?;
+            if variables.is_empty() && !clear {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "env".to_string(),
+                    message: "Pass the full set of variables with --env/--secret, or --clear to remove them all.".to_string(),
+                }));
+            }
+            let confirmation = InteractionMode::current(json).confirmation_mode(
+                yes,
+                "Replacing environment variables removes any variable not listed and needs confirmation. Re-run with `--yes`.",
+            )?;
+            let target =
+                resolve_platform_target(&ctx, &id, json, "Environment variable changes").await?;
+            deployment_actions::set_environment_variables_task(
+                &target.client,
+                &target.workspace,
+                &target.deployment,
+                variables,
+                confirmation,
+                json,
+            )
+            .await
+        }
+        DeploymentsCmd::Inputs { id, json } => {
+            let target = resolve_platform_target(&ctx, &id, json, "Stack inputs").await?;
+            deployment_actions::inputs_task(
+                &target.client,
+                &target.workspace,
+                target.deployment.id.as_str(),
+                json,
+            )
+            .await
+        }
+        DeploymentsCmd::SetInputs {
+            id,
+            inputs,
+            secret_inputs,
+            clear,
+            json,
+        } => {
+            let target = resolve_platform_target(&ctx, &id, json, "Stack input changes").await?;
+            deployment_actions::set_inputs_task(
+                &target.client,
+                &target.workspace,
+                target.deployment.id.as_str(),
+                deployment_actions::InputChanges {
+                    inputs,
+                    secret_inputs,
+                    clear,
+                },
+                json,
+            )
+            .await
+        }
+        DeploymentsCmd::Check { id, json } => {
+            let target = resolve_platform_target(&ctx, &id, json, "Health checks").await?;
+            deployment_actions::check_task(
+                &target.client,
+                &target.workspace,
+                target.deployment.id.as_str(),
+                json,
+            )
+            .await
+        }
+        DeploymentsCmd::DrainMachine {
+            id,
+            machine_id,
+            deadline,
+            force,
+            yes,
+            json,
+        } => {
+            let confirmation = if force {
+                InteractionMode::current(json).confirmation_mode(
+                    yes,
+                    "A forced drain stops the machine's replicas without waiting for replacements and needs confirmation. Re-run with `--yes`.",
+                )?
+            } else {
+                ConfirmationMode::Skip
+            };
+            let target = resolve_platform_target(&ctx, &id, json, "Machine drains").await?;
+            deployment_actions::drain_machine_task(
+                &target.client,
+                &target.workspace,
+                target.deployment.id.as_str(),
+                &machine_id,
+                deadline,
+                force,
+                confirmation,
+                json,
+            )
+            .await
+        }
+        DeploymentsCmd::CancelMachineDrain {
+            id,
+            machine_id,
+            json,
+        } => {
+            let target = resolve_platform_target(&ctx, &id, json, "Machine drains").await?;
+            deployment_actions::cancel_machine_drain_task(
+                &target.client,
+                &target.workspace,
+                target.deployment.id.as_str(),
+                &machine_id,
+                json,
+            )
+            .await
+        }
+        DeploymentsCmd::RemoveMachine {
+            id,
+            machine_id,
+            yes,
+            json,
+        } => {
+            let confirmation = InteractionMode::current(json).confirmation_mode(
+                yes,
+                "Removing a machine needs confirmation. Re-run with `--yes`.",
+            )?;
+            let target = resolve_platform_target(&ctx, &id, json, "Machine removal").await?;
+            deployment_actions::remove_machine_task(
+                &target.client,
+                &target.workspace,
+                target.deployment.id.as_str(),
+                &machine_id,
+                confirmation,
+                json,
+            )
+            .await
+        }
+        DeploymentsCmd::JoinTokens { cmd } => join_tokens_task(&ctx, cmd).await,
         DeploymentsCmd::Untrack { name } => untrack_deployment_task(&name),
+    }
+}
+
+/// A Platform deployment resolved for a command that changes it.
+struct PlatformTarget {
+    workspace: String,
+    client: alien_platform_api::Client,
+    deployment: DeploymentDetailResponse,
+}
+
+async fn resolve_platform_target(
+    ctx: &ExecutionMode,
+    reference: &str,
+    json: bool,
+    action: &str,
+) -> Result<PlatformTarget> {
+    if !ctx.is_platform() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "command".to_string(),
+            message: format!("{action} are available on Alien Platform deployments."),
+        }));
+    }
+    let workspace = ctx.resolve_workspace_with_bootstrap(!json).await?;
+    let client = ctx.sdk_client().await?;
+    let deployment = crate::platform_deployment_resolver::resolve(
+        ctx, &client, &workspace, reference, None, !json,
+    )
+    .await?;
+    Ok(PlatformTarget {
+        workspace,
+        client,
+        deployment,
+    })
+}
+
+async fn join_tokens_task(ctx: &ExecutionMode, cmd: JoinTokensCmd) -> Result<()> {
+    const ACTION: &str = "Machine join tokens";
+    match cmd {
+        JoinTokensCmd::List { id, json } => {
+            let target = resolve_platform_target(ctx, &id, json, ACTION).await?;
+            deployment_actions::list_join_tokens_task(
+                &target.client,
+                &target.workspace,
+                target.deployment.id.as_str(),
+                json,
+            )
+            .await
+        }
+        JoinTokensCmd::Create { id, json } => {
+            let target = resolve_platform_target(ctx, &id, json, ACTION).await?;
+            deployment_actions::create_join_token_task(
+                &target.client,
+                &target.workspace,
+                target.deployment.id.as_str(),
+                json,
+            )
+            .await
+        }
+        JoinTokensCmd::Rotate { id, yes, json } => {
+            let confirmation = InteractionMode::current(json).confirmation_mode(
+                yes,
+                "Rotating join tokens revokes every existing token and needs confirmation. Re-run with `--yes`.",
+            )?;
+            let target = resolve_platform_target(ctx, &id, json, ACTION).await?;
+            deployment_actions::rotate_join_token_task(
+                &target.client,
+                &target.workspace,
+                target.deployment.id.as_str(),
+                confirmation,
+                json,
+            )
+            .await
+        }
+        JoinTokensCmd::Revoke {
+            id,
+            token_id,
+            yes,
+            json,
+        } => {
+            let confirmation = InteractionMode::current(json).confirmation_mode(
+                yes,
+                "Revoking a join token needs confirmation. Re-run with `--yes`.",
+            )?;
+            let target = resolve_platform_target(ctx, &id, json, ACTION).await?;
+            deployment_actions::revoke_join_token_task(
+                &target.client,
+                &target.workspace,
+                target.deployment.id.as_str(),
+                &token_id,
+                confirmation,
+                json,
+            )
+            .await
+        }
     }
 }
 
@@ -3162,166 +3713,12 @@ async fn create_deployment_task(
         }
     };
 
-    let mut variables: Vec<alien_platform_api::types::EnvironmentVariableConfig> = Vec::new();
-
-    for env_str in env_vars {
-        let (key, value) = parse_env_var(&env_str).ok_or_else(|| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "env".to_string(),
-                message: format!("Invalid format for --env: '{}'. Use KEY=VALUE", env_str),
-            })
-        })?;
-
-        let name = alien_platform_api::types::EnvironmentVariableConfigName::try_from(key)
-            .into_alien_error()
-            .context(ErrorData::ValidationError {
-                field: "env".to_string(),
-                message: format!(
-                    "Invalid variable name in --env: '{}'. Must match pattern ^[A-Z_][A-Z0-9_]*$",
-                    env_str
-                ),
-            })?;
-
-        let value = alien_platform_api::types::EnvironmentVariableConfigValue::try_from(value)
-            .into_alien_error()
-            .context(ErrorData::ValidationError {
-                field: "env".to_string(),
-                message: format!(
-                    "Invalid variable value in --env: '{}'. Must not exceed 10000 characters",
-                    env_str
-                ),
-            })?;
-
-        variables.push(alien_platform_api::types::EnvironmentVariableConfig {
-            name,
-            value,
-            type_: alien_platform_api::types::EnvironmentVariableType::Plain,
-            target_resources: None,
-        });
-    }
-
-    for secret_str in secret_vars {
-        let (key, value) = parse_env_var(&secret_str).ok_or_else(|| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "secret".to_string(),
-                message: format!(
-                    "Invalid format for --secret: '{}'. Use KEY=VALUE",
-                    secret_str
-                ),
-            })
-        })?;
-
-        let name = alien_platform_api::types::EnvironmentVariableConfigName::try_from(key)
-            .into_alien_error()
-            .context(ErrorData::ValidationError {
-                field: "secret".to_string(),
-                message: format!("Invalid variable name in --secret: '{}'. Must match pattern ^[A-Z_][A-Z0-9_]*$", secret_str),
-            })?;
-
-        let value = alien_platform_api::types::EnvironmentVariableConfigValue::try_from(value)
-            .into_alien_error()
-            .context(ErrorData::ValidationError {
-                field: "secret".to_string(),
-                message: format!(
-                    "Invalid variable value in --secret: '{}'. Must not exceed 10000 characters",
-                    secret_str
-                ),
-            })?;
-
-        variables.push(alien_platform_api::types::EnvironmentVariableConfig {
-            name,
-            value,
-            type_: alien_platform_api::types::EnvironmentVariableType::Secret,
-            target_resources: None,
-        });
-    }
-
-    for env_targeted_str in env_targeted_vars {
-        let (key, value, patterns) =
-            parse_targeted_env_var(&env_targeted_str).ok_or_else(|| {
-                AlienError::new(ErrorData::ValidationError {
-                    field: "env-targeted".to_string(),
-                    message: format!(
-                        "Invalid format for --env-targeted: '{}'. Use KEY=VALUE:pattern1,pattern2",
-                        env_targeted_str
-                    ),
-                })
-            })?;
-
-        let name = alien_platform_api::types::EnvironmentVariableConfigName::try_from(key)
-            .into_alien_error()
-            .context(ErrorData::ValidationError {
-                field: "env-targeted".to_string(),
-                message: format!("Invalid variable name in --env-targeted: '{}'. Must match pattern ^[A-Z_][A-Z0-9_]*$", env_targeted_str),
-            })?;
-
-        let value = alien_platform_api::types::EnvironmentVariableConfigValue::try_from(value)
-            .into_alien_error()
-            .context(ErrorData::ValidationError {
-                field: "env-targeted".to_string(),
-                message: format!("Invalid variable value in --env-targeted: '{}'. Must not exceed 10000 characters", env_targeted_str),
-            })?;
-
-        let target_resources: Vec<alien_platform_api::types::EnvironmentVariableConfigTargetResourcesItem> = patterns
-            .into_iter()
-            .map(|p| {
-                alien_platform_api::types::EnvironmentVariableConfigTargetResourcesItem::try_from(p)
-                    .into_alien_error()
-                    .context(ErrorData::ValidationError {
-                        field: "env-targeted".to_string(),
-                        message: format!("Invalid target resource pattern in --env-targeted: '{}'. Must match pattern ^[a-zA-Z0-9_-]+(\\*)?$", env_targeted_str),
-                    })
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        variables.push(alien_platform_api::types::EnvironmentVariableConfig {
-            name,
-            value,
-            type_: alien_platform_api::types::EnvironmentVariableType::Plain,
-            target_resources: Some(target_resources),
-        });
-    }
-
-    for secret_targeted_str in secret_targeted_vars {
-        let (key, value, patterns) = parse_targeted_env_var(&secret_targeted_str)
-            .ok_or_else(|| AlienError::new(ErrorData::ValidationError {
-                field: "secret-targeted".to_string(),
-                message: format!("Invalid format for --secret-targeted: '{}'. Use KEY=VALUE:pattern1,pattern2", secret_targeted_str),
-            }))?;
-
-        let name = alien_platform_api::types::EnvironmentVariableConfigName::try_from(key)
-            .into_alien_error()
-            .context(ErrorData::ValidationError {
-                field: "secret-targeted".to_string(),
-                message: format!("Invalid variable name in --secret-targeted: '{}'. Must match pattern ^[A-Z_][A-Z0-9_]*$", secret_targeted_str),
-            })?;
-
-        let value = alien_platform_api::types::EnvironmentVariableConfigValue::try_from(value)
-            .into_alien_error()
-            .context(ErrorData::ValidationError {
-                field: "secret-targeted".to_string(),
-                message: format!("Invalid variable value in --secret-targeted: '{}'. Must not exceed 10000 characters", secret_targeted_str),
-            })?;
-
-        let target_resources: Vec<alien_platform_api::types::EnvironmentVariableConfigTargetResourcesItem> = patterns
-            .into_iter()
-            .map(|p| {
-                alien_platform_api::types::EnvironmentVariableConfigTargetResourcesItem::try_from(p)
-                    .into_alien_error()
-                    .context(ErrorData::ValidationError {
-                        field: "secret-targeted".to_string(),
-                        message: format!("Invalid target resource pattern in --secret-targeted: '{}'. Must match pattern ^[a-zA-Z0-9_-]+(\\*)?$", secret_targeted_str),
-                    })
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        variables.push(alien_platform_api::types::EnvironmentVariableConfig {
-            name,
-            value,
-            type_: alien_platform_api::types::EnvironmentVariableType::Secret,
-            target_resources: Some(target_resources),
-        });
-    }
+    let variables = build_environment_variables(
+        env_vars,
+        secret_vars,
+        env_targeted_vars,
+        secret_targeted_vars,
+    )?;
 
     let network_settings =
         network::parse_network_settings(network_args, platform_str).map_err(|e| {
@@ -3647,6 +4044,177 @@ async fn token_deployment_task(
     eprintln!("(deployment: {})", token_response.deployment_id);
 
     Ok(())
+}
+
+/// Parses `--env`, `--secret`, `--env-targeted`, and `--secret-targeted` values.
+pub(crate) fn build_environment_variables(
+    env_vars: Vec<String>,
+    secret_vars: Vec<String>,
+    env_targeted_vars: Vec<String>,
+    secret_targeted_vars: Vec<String>,
+) -> Result<Vec<alien_platform_api::types::EnvironmentVariableConfig>> {
+    let mut variables: Vec<alien_platform_api::types::EnvironmentVariableConfig> = Vec::new();
+
+    for env_str in env_vars {
+        let (key, value) = parse_env_var(&env_str).ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "env".to_string(),
+                message: format!("Invalid format for --env: '{}'. Use KEY=VALUE", env_str),
+            })
+        })?;
+
+        let name = alien_platform_api::types::EnvironmentVariableConfigName::try_from(key)
+            .into_alien_error()
+            .context(ErrorData::ValidationError {
+                field: "env".to_string(),
+                message: format!(
+                    "Invalid variable name in --env: '{}'. Must match pattern ^[A-Z_][A-Z0-9_]*$",
+                    env_str
+                ),
+            })?;
+
+        let value = alien_platform_api::types::EnvironmentVariableConfigValue::try_from(value)
+            .into_alien_error()
+            .context(ErrorData::ValidationError {
+                field: "env".to_string(),
+                message: format!(
+                    "Invalid variable value in --env: '{}'. Must not exceed 10000 characters",
+                    env_str
+                ),
+            })?;
+
+        variables.push(alien_platform_api::types::EnvironmentVariableConfig {
+            name,
+            value,
+            type_: alien_platform_api::types::EnvironmentVariableType::Plain,
+            target_resources: None,
+        });
+    }
+
+    for secret_str in secret_vars {
+        let (key, value) = parse_env_var(&secret_str).ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "secret".to_string(),
+                message: format!(
+                    "Invalid format for --secret: '{}'. Use KEY=VALUE",
+                    secret_str
+                ),
+            })
+        })?;
+
+        let name = alien_platform_api::types::EnvironmentVariableConfigName::try_from(key)
+            .into_alien_error()
+            .context(ErrorData::ValidationError {
+                field: "secret".to_string(),
+                message: format!("Invalid variable name in --secret: '{}'. Must match pattern ^[A-Z_][A-Z0-9_]*$", secret_str),
+            })?;
+
+        let value = alien_platform_api::types::EnvironmentVariableConfigValue::try_from(value)
+            .into_alien_error()
+            .context(ErrorData::ValidationError {
+                field: "secret".to_string(),
+                message: format!(
+                    "Invalid variable value in --secret: '{}'. Must not exceed 10000 characters",
+                    secret_str
+                ),
+            })?;
+
+        variables.push(alien_platform_api::types::EnvironmentVariableConfig {
+            name,
+            value,
+            type_: alien_platform_api::types::EnvironmentVariableType::Secret,
+            target_resources: None,
+        });
+    }
+
+    for env_targeted_str in env_targeted_vars {
+        let (key, value, patterns) =
+            parse_targeted_env_var(&env_targeted_str).ok_or_else(|| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: "env-targeted".to_string(),
+                    message: format!(
+                        "Invalid format for --env-targeted: '{}'. Use KEY=VALUE:pattern1,pattern2",
+                        env_targeted_str
+                    ),
+                })
+            })?;
+
+        let name = alien_platform_api::types::EnvironmentVariableConfigName::try_from(key)
+            .into_alien_error()
+            .context(ErrorData::ValidationError {
+                field: "env-targeted".to_string(),
+                message: format!("Invalid variable name in --env-targeted: '{}'. Must match pattern ^[A-Z_][A-Z0-9_]*$", env_targeted_str),
+            })?;
+
+        let value = alien_platform_api::types::EnvironmentVariableConfigValue::try_from(value)
+            .into_alien_error()
+            .context(ErrorData::ValidationError {
+                field: "env-targeted".to_string(),
+                message: format!("Invalid variable value in --env-targeted: '{}'. Must not exceed 10000 characters", env_targeted_str),
+            })?;
+
+        let target_resources: Vec<alien_platform_api::types::EnvironmentVariableConfigTargetResourcesItem> = patterns
+            .into_iter()
+            .map(|p| {
+                alien_platform_api::types::EnvironmentVariableConfigTargetResourcesItem::try_from(p)
+                    .into_alien_error()
+                    .context(ErrorData::ValidationError {
+                        field: "env-targeted".to_string(),
+                        message: format!("Invalid target resource pattern in --env-targeted: '{}'. Must match pattern ^[a-zA-Z0-9_-]+(\\*)?$", env_targeted_str),
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        variables.push(alien_platform_api::types::EnvironmentVariableConfig {
+            name,
+            value,
+            type_: alien_platform_api::types::EnvironmentVariableType::Plain,
+            target_resources: Some(target_resources),
+        });
+    }
+
+    for secret_targeted_str in secret_targeted_vars {
+        let (key, value, patterns) = parse_targeted_env_var(&secret_targeted_str)
+            .ok_or_else(|| AlienError::new(ErrorData::ValidationError {
+                field: "secret-targeted".to_string(),
+                message: format!("Invalid format for --secret-targeted: '{}'. Use KEY=VALUE:pattern1,pattern2", secret_targeted_str),
+            }))?;
+
+        let name = alien_platform_api::types::EnvironmentVariableConfigName::try_from(key)
+            .into_alien_error()
+            .context(ErrorData::ValidationError {
+                field: "secret-targeted".to_string(),
+                message: format!("Invalid variable name in --secret-targeted: '{}'. Must match pattern ^[A-Z_][A-Z0-9_]*$", secret_targeted_str),
+            })?;
+
+        let value = alien_platform_api::types::EnvironmentVariableConfigValue::try_from(value)
+            .into_alien_error()
+            .context(ErrorData::ValidationError {
+                field: "secret-targeted".to_string(),
+                message: format!("Invalid variable value in --secret-targeted: '{}'. Must not exceed 10000 characters", secret_targeted_str),
+            })?;
+
+        let target_resources: Vec<alien_platform_api::types::EnvironmentVariableConfigTargetResourcesItem> = patterns
+            .into_iter()
+            .map(|p| {
+                alien_platform_api::types::EnvironmentVariableConfigTargetResourcesItem::try_from(p)
+                    .into_alien_error()
+                    .context(ErrorData::ValidationError {
+                        field: "secret-targeted".to_string(),
+                        message: format!("Invalid target resource pattern in --secret-targeted: '{}'. Must match pattern ^[a-zA-Z0-9_-]+(\\*)?$", secret_targeted_str),
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        variables.push(alien_platform_api::types::EnvironmentVariableConfig {
+            name,
+            value,
+            type_: alien_platform_api::types::EnvironmentVariableType::Secret,
+            target_resources: Some(target_resources),
+        });
+    }
+
+    Ok(variables)
 }
 
 // ---------------------------------------------------------------------------

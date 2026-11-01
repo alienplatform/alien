@@ -928,49 +928,70 @@ fn dereference(value: &Value, document: &Value, depth: usize) -> Value {
 }
 
 #[test]
-fn secret_presence_native_type_is_narrow_and_constraint_checked_in_both_modes() {
+fn presence_preserving_arrays_get_native_type_and_constraint_checks_in_both_modes() {
     let document = json!({
         "openapi": "3.0.3", "info": {"title": "test", "version": "1"},
-        "paths": {"/config": {"get": {"operationId": "config", "responses": {"200": {
-            "description": "config", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DeploymentConfig"}}}
-        }}}}},
-        "components": {"schemas": {"DeploymentConfig": {
-            "type": "object", "properties": {
-                "storedSecretInputIds": {"type": "array", "items": {"type": "string"}},
-                "otherIds": {"type": "array", "items": {"type": "string"}}
+        "paths": {
+            "/config": {"get": {"operationId": "config", "responses": {"200": {
+                "description": "config", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DeploymentConfig"}}}
+            }}}},
+            "/compute": {"patch": {"operationId": "compute", "requestBody": {"content": {"application/json": {
+                "schema": {"$ref": "#/components/schemas/UpdateDeploymentComputeRequest"}
+            }}}, "responses": {"204": {"description": "updated"}}}}
+        },
+        "components": {"schemas": {
+            "DeploymentConfig": {
+                "type": "object", "properties": {
+                    "storedSecretInputIds": {"type": "array", "items": {"type": "string"}},
+                    "otherIds": {"type": "array", "items": {"type": "string"}}
+                }
+            },
+            "UpdateDeploymentComputeRequest": {
+                "type": "object", "properties": {
+                    "quotaWarningOverrides": {"type": "array", "items": {"type": "string"}, "description": "overrides"}
+                }
             }
-        }}}
+        }}
     });
+    let native = json!({"crate": "std", "version": "*", "path": "std::vec::Vec", "parameters": [{"type": "string"}]});
     for full in [false, true] {
         let normalize = |value: &Value| {
             if full {
                 openapi_filter::normalize_openapi(value)
             } else {
-                openapi_filter::filter_openapi(value, &["config"])
+                openapi_filter::filter_openapi(value, &["config", "compute"])
             }
         };
         let normalized = normalize(&document).unwrap();
-        let property = "/components/schemas/DeploymentConfig/properties/storedSecretInputIds";
-        let mut expected = document.pointer(property).unwrap().clone();
-        expected["x-rust-type"] = json!({"crate": "std", "version": "*", "path": "std::vec::Vec", "parameters": [{"type": "string"}]});
-        assert_eq!(normalized.pointer(property), Some(&expected));
         assert_eq!(
             normalized.pointer("/components/schemas/DeploymentConfig/properties/otherIds"),
             document.pointer("/components/schemas/DeploymentConfig/properties/otherIds")
         );
-        for (key, constraint) in [
-            ("minItems", json!(1)),
-            ("nullable", json!(true)),
-            ("uniqueItems", json!(true)),
+        for (schema, field) in [
+            ("DeploymentConfig", "storedSecretInputIds"),
+            ("UpdateDeploymentComputeRequest", "quotaWarningOverrides"),
         ] {
-            let mut constrained = document.clone();
-            constrained.pointer_mut(property).unwrap()[key] = constraint;
-            assert!(normalize(&constrained).is_err(), "{key}");
+            let property = format!("/components/schemas/{schema}/properties/{field}");
+            let mut expected = document.pointer(&property).unwrap().clone();
+            expected["x-rust-type"] = native.clone();
+            assert_eq!(
+                normalized.pointer(&property),
+                Some(&expected),
+                "{schema}.{field}"
+            );
+            for (key, constraint) in [
+                ("minItems", json!(1)),
+                ("nullable", json!(true)),
+                ("uniqueItems", json!(true)),
+            ] {
+                let mut constrained = document.clone();
+                constrained.pointer_mut(&property).unwrap()[key] = constraint;
+                assert!(normalize(&constrained).is_err(), "{schema}.{field} {key}");
+            }
+            let mut required = document.clone();
+            required["components"]["schemas"][schema]["required"] = json!([field]);
+            assert!(normalize(&required).is_err(), "{schema}.{field} required");
         }
-        let mut required = document.clone();
-        required["components"]["schemas"]["DeploymentConfig"]["required"] =
-            json!(["storedSecretInputIds"]);
-        assert!(normalize(&required).is_err());
     }
 }
 

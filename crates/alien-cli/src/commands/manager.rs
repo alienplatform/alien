@@ -110,6 +110,37 @@ pub enum ManagersCmd {
         #[arg(long)]
         open: bool,
     },
+    /// Update a private manager to the latest manager release, or to a specific one
+    Update {
+        /// Manager ID
+        id: String,
+
+        /// Manager release ID (rel_...). Omit to use the latest release.
+        #[arg(long)]
+        release: Option<String>,
+
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Run a private manager's provisioning again, for example after it failed
+    Provision {
+        /// Manager ID
+        id: String,
+    },
+    /// Serve a private manager's API on a workspace domain, or go back to its generated URL
+    SetDomain {
+        /// Manager ID
+        id: String,
+
+        /// Domain ID (dom_...), as shown by `alien domains ls`
+        #[arg(long, required_unless_present = "clear", conflicts_with = "clear")]
+        domain: Option<String>,
+
+        /// Remove the custom domain
+        #[arg(long)]
+        clear: bool,
+    },
     /// Cancel an incomplete private-manager setup
     Cancel {
         /// Manager ID
@@ -376,6 +407,9 @@ pub async fn managers_task(args: ManagersArgs, ctx: ExecutionMode) -> Result<()>
         ManagersCmd::Delete { yes, .. } => {
             confirmation_mode(*yes, args.json, "delete")?;
         }
+        ManagersCmd::Update { yes, .. } => {
+            confirmation_mode(*yes, args.json, "update")?;
+        }
         _ => {}
     }
 
@@ -445,6 +479,36 @@ pub async fn managers_task(args: ManagersArgs, ctx: ExecutionMode) -> Result<()>
                 args.json,
             )
             .await?;
+        }
+        ManagersCmd::Update { id, release, yes } => {
+            let mode = confirmation_mode(yes, args.json, "update")?;
+            if matches!(mode, ConfirmationMode::Prompt)
+                && !prompt_confirm(
+                    &format!(
+                        "Update manager {id} to {}?",
+                        release
+                            .as_deref()
+                            .map_or("the latest manager release".to_string(), |release| format!(
+                                "release {release}"
+                            ))
+                    ),
+                    false,
+                )?
+            {
+                println!("Nothing changed.");
+                return Ok(());
+            }
+            update_manager_task(&auth, &workspace, &id, release.as_deref(), args.json).await?;
+        }
+        ManagersCmd::Provision { id } => {
+            provision_manager_task(&auth, &workspace, &id, args.json).await?;
+        }
+        ManagersCmd::SetDomain {
+            id,
+            domain,
+            clear: _,
+        } => {
+            set_manager_domain_task(&auth, &workspace, &id, domain.as_deref(), args.json).await?;
         }
         ManagersCmd::Cancel { id, yes } => {
             cancel_manager_task(&auth, &workspace, &id, yes, args.json).await?;
@@ -602,6 +666,147 @@ async fn retry_manager_task(
             render_retry_deployment_output(&output, json)
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct ManagerActionResponse {
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateManagerBody<'a> {
+    release_id: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagerDomainBindingBody<'a> {
+    domain_id: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagerActionOutput {
+    id: String,
+    action: &'static str,
+    message: String,
+}
+
+fn render_manager_action(output: &ManagerActionOutput, json: bool) -> Result<()> {
+    if json {
+        return print_json(output);
+    }
+    println!("{}", output.message);
+    println!(
+        "Follow it with: alien managers status {} --watch",
+        output.id
+    );
+    Ok(())
+}
+
+async fn update_manager_task(
+    auth: &AuthHttp,
+    workspace: &str,
+    manager_id: &str,
+    release_id: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    validate_manager_id(manager_id)?;
+    let url = api_url(
+        &auth.base_url,
+        &format!("/v1/managers/{manager_id}/update"),
+        workspace,
+        None,
+    )?;
+    let response: ManagerActionResponse = send_json(
+        auth,
+        Method::POST,
+        url,
+        Some(&UpdateManagerBody { release_id }),
+    )
+    .await?;
+    render_manager_action(
+        &ManagerActionOutput {
+            id: manager_id.to_string(),
+            action: "update",
+            message: response.message,
+        },
+        json,
+    )
+}
+
+async fn provision_manager_task(
+    auth: &AuthHttp,
+    workspace: &str,
+    manager_id: &str,
+    json: bool,
+) -> Result<()> {
+    validate_manager_id(manager_id)?;
+    let url = api_url(
+        &auth.base_url,
+        &format!("/v1/managers/{manager_id}/provision"),
+        workspace,
+        None,
+    )?;
+    let response: ManagerActionResponse =
+        send_json::<(), _>(auth, Method::POST, url, None::<&()>).await?;
+    render_manager_action(
+        &ManagerActionOutput {
+            id: manager_id.to_string(),
+            action: "provision",
+            message: response.message,
+        },
+        json,
+    )
+}
+
+async fn set_manager_domain_task(
+    auth: &AuthHttp,
+    workspace: &str,
+    manager_id: &str,
+    domain_id: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    validate_manager_id(manager_id)?;
+    let url = api_url(
+        &auth.base_url,
+        &format!("/v1/managers/{manager_id}/domain-binding"),
+        workspace,
+        None,
+    )?;
+    let response: serde_json::Value = send_json(
+        auth,
+        Method::PUT,
+        url,
+        Some(&ManagerDomainBindingBody { domain_id }),
+    )
+    .await?;
+    if json {
+        return print_json(&response);
+    }
+    match response
+        .get("managerDomainBinding")
+        .filter(|binding| !binding.is_null())
+    {
+        Some(binding) => {
+            let field = |name: &str| {
+                binding
+                    .get(name)
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("-")
+                    .to_string()
+            };
+            println!("Manager {manager_id} now uses {}.", field("hostname"));
+            println!("Status: {}", field("status"));
+            println!(
+                "Check progress with: alien domains get {}",
+                field("domainId")
+            );
+        }
+        None => println!("Manager {manager_id} no longer uses a custom domain."),
+    }
+    Ok(())
 }
 
 async fn list_managers_task(
