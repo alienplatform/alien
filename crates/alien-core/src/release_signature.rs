@@ -27,8 +27,8 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{ErrorData, Result};
 use crate::{
-    Container, ContainerCode, Daemon, DaemonCode, Platform, Sandbox, SandboxCode, SignedRelease,
-    Stack, Worker, WorkerCode,
+    Container, ContainerCode, Daemon, DaemonCode, Platform, Resource, Sandbox, SandboxCode,
+    SignedRelease, Stack, Worker, WorkerCode,
 };
 use alien_error::AlienError;
 
@@ -333,6 +333,86 @@ impl VerifiedRelease {
         }
         Ok(())
     }
+}
+
+/// The image a resource runs, for the resource types that run one.
+pub fn code_image(resource: &Resource) -> Option<&str> {
+    if let Some(container) = resource.downcast_ref::<Container>() {
+        match &container.code {
+            ContainerCode::Image { image } => Some(image),
+            ContainerCode::Source { .. } => None,
+        }
+    } else if let Some(worker) = resource.downcast_ref::<Worker>() {
+        match &worker.code {
+            WorkerCode::Image { image } => Some(image),
+            WorkerCode::Source { .. } => None,
+        }
+    } else if let Some(daemon) = resource.downcast_ref::<Daemon>() {
+        match &daemon.code {
+            DaemonCode::Image { image } => Some(image),
+            DaemonCode::Source { .. } => None,
+        }
+    } else if let Some(sandbox) = resource.downcast_ref::<Sandbox>() {
+        match &sandbox.code {
+            SandboxCode::Image { image, .. } => Some(image),
+            SandboxCode::Source { .. } => None,
+        }
+    } else {
+        None
+    }
+}
+
+/// Mutable access to the image [`code_image`] returns.
+pub fn code_image_mut(resource: &mut Resource) -> Option<&mut String> {
+    // Test the type before borrowing mutably: returning a borrow out of an
+    // `if let` chain of `downcast_mut` calls doesn't pass the stable borrow
+    // checker.
+    if resource.downcast_ref::<Container>().is_some() {
+        match &mut resource.downcast_mut::<Container>()?.code {
+            ContainerCode::Image { image } => Some(image),
+            ContainerCode::Source { .. } => None,
+        }
+    } else if resource.downcast_ref::<Worker>().is_some() {
+        match &mut resource.downcast_mut::<Worker>()?.code {
+            WorkerCode::Image { image } => Some(image),
+            WorkerCode::Source { .. } => None,
+        }
+    } else if resource.downcast_ref::<Daemon>().is_some() {
+        match &mut resource.downcast_mut::<Daemon>()?.code {
+            DaemonCode::Image { image } => Some(image),
+            DaemonCode::Source { .. } => None,
+        }
+    } else if resource.downcast_ref::<Sandbox>().is_some() {
+        match &mut resource.downcast_mut::<Sandbox>()?.code {
+            SandboxCode::Image { image, .. } => Some(image),
+            SandboxCode::Source { .. } => None,
+        }
+    } else {
+        None
+    }
+}
+
+/// `signed` with each image moved to where `carried` says the same resource's
+/// image is, when both name the same digest. A carrier may serve an image from
+/// another registry (a manager's pull proxy, a site's own registry), but only
+/// the bytes the developer signed.
+pub fn relocate_images(signed: &Stack, carried: &Stack) -> Stack {
+    let mut relocated = signed.clone();
+    for (id, entry) in relocated.resources_mut() {
+        let Some(location) = carried
+            .resources
+            .get(id)
+            .and_then(|carried| code_image(&carried.config))
+        else {
+            continue;
+        };
+        if let Some(image) = code_image_mut(&mut entry.config) {
+            if image_digest(image).is_some() && image_digest(image) == image_digest(location) {
+                *image = location.to_string();
+            }
+        }
+    }
+    relocated
 }
 
 /// The `sha256:<hex>` digest an image reference is pinned to, if it is.
@@ -755,6 +835,31 @@ mod tests {
             changed.check_newer_than(applied.sequence, &applied.payload_sha256),
             Err(ReleaseRejection::ReusedSequence(applied.sequence))
         );
+    }
+
+    #[test]
+    fn a_carrier_may_move_an_image_but_not_change_it() {
+        let signed = statement(&pinned()).stack;
+        let moved = format!("site-registry.local:5000/shop/api@{DIGEST}");
+        let swapped = format!(
+            "site-registry.local:5000/shop/api@sha256:{}",
+            "e".repeat(64)
+        );
+        let carried = |image: &str| statement(image).stack;
+
+        let relocated = relocate_images(&signed, &carried(&moved));
+        assert_eq!(
+            code_image(&relocated.resources["api"].config),
+            Some(moved.as_str())
+        );
+        for other in [swapped.as_str(), "site-registry.local:5000/shop/api:v1"] {
+            let relocated = relocate_images(&signed, &carried(other));
+            assert_eq!(
+                code_image(&relocated.resources["api"].config),
+                Some(pinned().as_str()),
+                "{other} must not replace the signed image"
+            );
+        }
     }
 
     #[test]

@@ -7,7 +7,7 @@ use crate::ui::{command, contextual_heading, dim_label, success_line};
 use crate::{ErrorData, Result};
 use alien_build::{settings::PushSettings, ImageDestinations};
 use alien_core::release_signature::{
-    image_digest, ReleaseSigningKey, ReleaseStatement, TrustedKeys, STATEMENT_TYPE,
+    code_image_mut, image_digest, ReleaseSigningKey, ReleaseStatement, TrustedKeys, STATEMENT_TYPE,
 };
 use alien_core::{
     alien_event, is_deployer_secret_input, AlienEvent, Container, ContainerCode, Daemon,
@@ -2397,27 +2397,7 @@ async fn push_stack_with_cache(
 /// `repository@sha256:<digest>`. Images already pinned are kept as they are.
 async fn pin_stack_images(stack: &mut Stack, options: &dockdash::PushOptions) -> Result<()> {
     for (resource_id, entry) in stack.resources_mut() {
-        let image = if let Some(container) = entry.config.downcast_mut::<Container>() {
-            match &mut container.code {
-                ContainerCode::Image { image } => image,
-                ContainerCode::Source { .. } => continue,
-            }
-        } else if let Some(worker) = entry.config.downcast_mut::<Worker>() {
-            match &mut worker.code {
-                WorkerCode::Image { image } => image,
-                WorkerCode::Source { .. } => continue,
-            }
-        } else if let Some(daemon) = entry.config.downcast_mut::<Daemon>() {
-            match &mut daemon.code {
-                DaemonCode::Image { image } => image,
-                DaemonCode::Source { .. } => continue,
-            }
-        } else if let Some(sandbox) = entry.config.downcast_mut::<Sandbox>() {
-            match &mut sandbox.code {
-                SandboxCode::Image { image, .. } => image,
-                SandboxCode::Source { .. } => continue,
-            }
-        } else {
+        let Some(image) = code_image_mut(&mut entry.config) else {
             continue;
         };
         if image_digest(image).is_some() {
