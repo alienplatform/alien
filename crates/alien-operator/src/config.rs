@@ -152,6 +152,16 @@ pub struct OperatorConfig {
 
     /// Optional shell command override for Local runtime debug shells.
     pub local_debug_shell_command: Option<String>,
+
+    /// Protected mode: the keys and project this installation pinned. When
+    /// set, the Operator runs only releases those keys signed; see
+    /// [`crate::protected`].
+    pub release_signing: Option<crate::protected::ReleaseSigning>,
+
+    /// Values this installation supplies for deployer inputs. Protected mode
+    /// uses these, never the manager's, for inputs a deployer provides.
+    #[builder(default)]
+    pub stack_input_values: serde_json::Map<String, serde_json::Value>,
 }
 
 impl OperatorConfig {
@@ -169,6 +179,11 @@ impl OperatorConfig {
             self.operator_permission.as_deref(),
             Some("observe" | "diagnostics" | "remediation")
         )
+    }
+
+    /// Whether this Operator runs only signed releases.
+    pub fn is_protected(&self) -> bool {
+        self.release_signing.is_some()
     }
 
     /// Check if running in airgapped mode (no sync configuration)

@@ -2089,6 +2089,64 @@ impl OperatorDb {
         Ok(())
     }
 
+    /// The newest signed release this protected Operator accepted.
+    pub async fn get_accepted_release(&self) -> Result<Option<crate::protected::AcceptedRelease>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT value FROM state WHERE key = 'accepted_release'", ())
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query accepted_release".to_string(),
+            })?;
+        let Some(row) = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch accepted_release row".to_string(),
+            })?
+        else {
+            return Ok(None);
+        };
+        let value: String = row
+            .get(0)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to read accepted_release".to_string(),
+            })?;
+        serde_json::from_str(&value)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to parse accepted_release".to_string(),
+            })
+            .map(Some)
+    }
+
+    /// Record `accepted` as the newest signed release this Operator accepted.
+    pub async fn set_accepted_release(
+        &self,
+        accepted: &crate::protected::AcceptedRelease,
+    ) -> Result<()> {
+        let value = serde_json::to_string(accepted).into_alien_error().context(
+            ErrorData::DatabaseError {
+                message: "Failed to encode accepted_release".to_string(),
+            },
+        )?;
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES ('accepted_release', ?, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (value,),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to set accepted_release".to_string(),
+        })?;
+        Ok(())
+    }
+
     /// Manager URL to open tunnel connections to, from the last sync.
     /// `None` when the manager does not accept tunnels.
     pub async fn get_tunnel_url(&self) -> Result<Option<String>> {

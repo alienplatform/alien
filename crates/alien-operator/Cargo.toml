@@ -17,7 +17,7 @@ path = "src/main.rs"
 [dependencies]
 lognorm = { workspace = true }
 # Alien crates
-alien-core = { workspace = true }
+alien-core = { workspace = true, features = ["release-signature"] }
 alien-error = { workspace = true }
 alien-deployment = { workspace = true }
 alien-infra = { workspace = true, features = ["all-platforms", "local"] }
@@ -43,6 +43,7 @@ aegis = { workspace = true }
 
 # Serialization
 serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
 serde_json = { workspace = true }
 
 # CLI & Logging

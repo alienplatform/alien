@@ -18,7 +18,7 @@ use alien_core::{
     DeploymentStatus, ObservedInventoryBatch, Platform,
 };
 use alien_deployment::run_observe_pass;
-use alien_error::{Context, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use chrono::Utc;
 use reqwest::Client;
 use std::sync::Arc;
@@ -318,18 +318,24 @@ async fn sync_with_manager(
         ),
         None => None,
     };
-    let dynamic_reports =
-        if dynamic_containers_capability(&state.config).state == OperatorCapabilityState::Granted {
-            match super::dynamic_containers::reconcile_saved(state, &deployment_id).await {
-                Ok(reports) => reports,
-                Err(error) => {
-                    error!(error = %error, "Dynamic container reconciliation failed");
-                    None
-                }
+    let dynamic_reports = if dynamic_containers_capability(&state.config).state
+        == OperatorCapabilityState::Granted
+    {
+        match super::dynamic_containers::reconcile_saved(state, &deployment_id).await {
+            Ok(reports) => reports,
+            Err(error) => {
+                error!(error = %error, "Dynamic container reconciliation failed");
+                None
             }
-        } else {
-            None
-        };
+        }
+    } else {
+        if dynamic_containers_removed_by_protection(&state.config) {
+            if let Err(error) = super::dynamic_containers::remove_all(state, &deployment_id).await {
+                error!(error = %error, "Failed to remove dynamic containers in protected mode");
+            }
+        }
+        None
+    };
 
     // Propose a protocol-only upgrade through the manager first. The deployment
     // loop cannot persist or execute the upgrade locally until its acknowledgement.
@@ -504,7 +510,23 @@ async fn sync_with_manager(
     let mut state_hydrated = false;
     if let Some(manager_state) = sync_response.current_state {
         let local_state = state.db.get_deployment_state().await?;
-        if local_state
+        if state.config.is_protected() {
+            // The manager's copy of the state can carry releases and prepared
+            // stacks; a protected Operator keeps its own and takes only the
+            // manager's control signals.
+            // A first sync seeds the resource prefix the chart named its
+            // workloads with, which is what registration gave the manager.
+            if local_state.is_none() {
+                seed_local_deployment_state(state).await?;
+            }
+            if let Some(mut local_state) = state.db.get_deployment_state().await? {
+                if apply_manager_control_signals(&mut local_state, &manager_state) {
+                    state.db.set_deployment_state(&local_state).await?;
+                    state_hydrated = true;
+                    info!("Applied deployment control signals from manager");
+                }
+            }
+        } else if local_state
             .as_ref()
             .is_none_or(is_uninitialized_deployment_state)
         {
@@ -523,6 +545,11 @@ async fn sync_with_manager(
             debug!("Manager returned deployment state, but local state is already initialized");
         }
     }
+
+    let durable_target = match durable_target {
+        Some(target) => protect_target(state, &target).await?,
+        None => None,
+    };
 
     // Check if there's a new target
     let has_update = durable_target.is_some();
@@ -577,6 +604,117 @@ async fn sync_with_manager(
 
     secret_refresh?;
     Ok(has_update || state_hydrated)
+}
+
+/// Start an empty deployment state with the resource prefix this installation
+/// was given, when the Operator has no state yet.
+pub(crate) async fn seed_local_deployment_state(state: &OperatorState) -> crate::error::Result<()> {
+    if state.db.get_deployment_state().await?.is_some() {
+        return Ok(());
+    }
+    let Some(prefix) = &state.config.resource_prefix else {
+        return Ok(());
+    };
+    state
+        .db
+        .set_deployment_state(&alien_core::DeploymentState {
+            platform: state.config.platform,
+            status: alien_core::DeploymentStatus::Pending,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(alien_core::StackState::with_resource_prefix(
+                state.config.platform,
+                prefix.clone(),
+            )),
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::deployment_protocol_version_for_platform(
+                state.config.platform,
+                state.config.base_platform,
+            ),
+        })
+        .await
+}
+
+/// The target this Operator may store for `target`. Unprotected, that is
+/// `target` itself. Protected, it is the verified release with a configuration
+/// rebuilt from what the installation allows (see [`crate::protected`]), and
+/// `None` when the target is refused: nothing is changed, and the refusal is
+/// logged. Sync and air-gapped bundles both deliver targets through here.
+pub(crate) async fn protect_target(
+    state: &OperatorState,
+    target: &alien_core::sync::TargetDeployment,
+) -> crate::error::Result<Option<alien_core::sync::TargetDeployment>> {
+    let Some(signing) = &state.config.release_signing else {
+        return Ok(Some(target.clone()));
+    };
+    let accepted = state.db.get_accepted_release().await?;
+    let release_id = target
+        .release_info
+        .release_id
+        .as_deref()
+        .unwrap_or_default();
+    match signing.protect_target(
+        state.config.platform,
+        &state.config.stack_input_values,
+        accepted.as_ref(),
+        target,
+    ) {
+        Ok((protected, verified)) => {
+            if accepted.as_ref().map(|accepted| accepted.sequence) != Some(verified.sequence) {
+                info!(
+                    release_id,
+                    sequence = verified.sequence,
+                    key = %verified.key_fingerprint,
+                    manager_supplied_inputs = ?crate::protected::manager_supplied_inputs(&verified.stack),
+                    "Protected mode: accepted signed release. Values for these developer inputs come from the manager"
+                );
+            }
+            state
+                .db
+                .set_accepted_release(&crate::protected::AcceptedRelease::from(&verified))
+                .await?;
+            Ok(Some(protected))
+        }
+        Err(refusal) => {
+            error!(
+                release_id,
+                reason = %refusal,
+                "Protected mode: refused the target; nothing was changed"
+            );
+            record_refusal(state, &refusal).await?;
+            Ok(None)
+        }
+    }
+}
+
+/// Report a refused target the way a failed update is reported, so the
+/// manager stops offering it and a newer release can roll out. Only an idle
+/// or already failed deployment changes; the cluster is not touched.
+async fn record_refusal(
+    state: &OperatorState,
+    refusal: &crate::protected::Refusal,
+) -> crate::error::Result<()> {
+    let Some(mut deployment_state) = state.db.get_deployment_state().await? else {
+        return Ok(());
+    };
+    deployment_state.status = match deployment_state.status {
+        DeploymentStatus::Running => DeploymentStatus::UpdateFailed,
+        DeploymentStatus::Pending => DeploymentStatus::ProvisioningFailed,
+        // Keep the failure, with this refusal as its reason.
+        status @ (DeploymentStatus::UpdateFailed | DeploymentStatus::ProvisioningFailed) => status,
+        _ => return Ok(()),
+    };
+    deployment_state.error = Some(
+        AlienError::new(crate::error::ErrorData::ReleaseRefused {
+            reason: refusal.to_string(),
+        })
+        .into_generic(),
+    );
+    deployment_state.retry_requested = false;
+    state.db.set_deployment_state(&deployment_state).await
 }
 
 /// Make `target_deployment` the Operator's target: record the release as the
@@ -856,9 +994,12 @@ fn reported_operations_config(
 }
 
 fn dynamic_containers_capability(config: &OperatorConfig) -> OperatorCapabilityReport {
+    // A dynamic container is an image, command and environment the manager
+    // chooses, which no signed release names.
     let granted = config.platform == Platform::Kubernetes
         && config.namespace.is_some()
-        && config.dynamic_containers;
+        && config.dynamic_containers
+        && !config.is_protected();
     OperatorCapabilityReport {
         key: "dynamic-containers-v1".to_string(),
         state: if granted {
@@ -868,6 +1009,15 @@ fn dynamic_containers_capability(config: &OperatorConfig) -> OperatorCapabilityR
         },
         detail: None,
     }
+}
+
+/// An installation that allows dynamic containers and turns on protected mode
+/// still has the access to remove the ones it ran before.
+fn dynamic_containers_removed_by_protection(config: &OperatorConfig) -> bool {
+    config.platform == Platform::Kubernetes
+        && config.namespace.is_some()
+        && config.dynamic_containers
+        && config.is_protected()
 }
 
 fn operation_command_address_capability(
@@ -953,6 +1103,51 @@ fn apply_manager_control_state(
     }
 
     protocol_changed || policy_changed
+}
+
+/// The manager's control signals, without its copy of releases or resource
+/// state: a retry request, a delete command, the deletion policy, the protocol
+/// version and terminal setup statuses. Each can stop or remove the
+/// deployment, none can change what it runs.
+fn apply_manager_control_signals(
+    local_state: &mut alien_core::DeploymentState,
+    manager_state: &alien_core::DeploymentState,
+) -> bool {
+    let accepts_protocol = alien_core::accepts_deployment_protocol_report(
+        local_state.protocol_version,
+        manager_state.protocol_version,
+    );
+    let mut changed = false;
+    if accepts_protocol && manager_state.protocol_version > local_state.protocol_version {
+        local_state.protocol_version = manager_state.protocol_version;
+        changed = true;
+    }
+    changed |= apply_manager_deletion_policy(local_state, manager_state);
+    let terminal = accepts_protocol
+        && matches!(
+            manager_state.status,
+            alien_core::DeploymentStatus::RetentionRequired
+                | alien_core::DeploymentStatus::Retained
+                | alien_core::DeploymentStatus::TeardownRequired
+                | alien_core::DeploymentStatus::TeardownFailed
+                | alien_core::DeploymentStatus::Deleted
+        );
+    if (terminal || manager_state_is_delete_command(manager_state))
+        && !local_state_is_delete_or_deleted(local_state)
+        && local_state.status != manager_state.status
+    {
+        local_state.status = manager_state.status;
+        local_state.retry_requested = manager_state.retry_requested;
+        return true;
+    }
+    if manager_state.retry_requested
+        && !local_state.retry_requested
+        && local_state.status.is_failed()
+    {
+        local_state.retry_requested = true;
+        changed = true;
+    }
+    changed
 }
 
 /// The manager authorizes the deletion policy. The operator keeps its own resource
@@ -2806,5 +3001,85 @@ mod tests {
             &manager_state
         ));
         assert_eq!(local_state.status, DeploymentStatus::Deleting);
+    }
+
+    /// A refused target is reported as a failed update so the manager stops
+    /// offering it, and nothing else about the deployment changes.
+    #[tokio::test]
+    async fn a_refused_target_is_reported_as_a_failed_update() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let key =
+            alien_core::release_signature::ReleaseSigningKey::from_secret_bytes(&[7; 32]).unwrap();
+        let installed = ReleaseInfo {
+            release_id: Some("rel_installed".into()),
+            version: None,
+            description: None,
+            stack: Stack::new("shop".into()).build(),
+            signed: None,
+        };
+        let running = DeploymentState {
+            platform: Platform::Kubernetes,
+            status: DeploymentStatus::Running,
+            current_release: Some(installed.clone()),
+            target_release: Some(installed.clone()),
+            stack_state: Some(alien_core::StackState::with_resource_prefix(
+                Platform::Kubernetes,
+                "shop".into(),
+            )),
+            environment_info: None,
+            runtime_metadata: None,
+            error: None,
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        db.set_deployment_state(&running).await.unwrap();
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(data_dir.path().to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .release_signing(crate::protected::ReleaseSigning {
+                    keys: alien_core::release_signature::TrustedKeys::parse(&[key.public_key()])
+                        .unwrap(),
+                    project: "shop".into(),
+                })
+                .build(),
+            db,
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let unsigned = alien_core::sync::TargetDeployment {
+            release_info: ReleaseInfo {
+                release_id: Some("rel_unsigned".into()),
+                ..installed.clone()
+            },
+            config: alien_core::DeploymentConfig::builder()
+                .stack_settings(Default::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .allow_frozen_changes(false)
+                .external_bindings(Default::default())
+                .build(),
+        };
+
+        assert!(super::protect_target(&state, &unsigned)
+            .await
+            .unwrap()
+            .is_none());
+        let reported = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(reported.status, DeploymentStatus::UpdateFailed);
+        assert_eq!(reported.error.unwrap().code, "RELEASE_REFUSED");
+        assert_eq!(reported.current_release, Some(installed.clone()));
+        assert_eq!(reported.target_release, Some(installed));
     }
 }

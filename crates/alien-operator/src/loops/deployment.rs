@@ -270,6 +270,21 @@ pub(crate) async fn run_deployment_continuously(
         LoopOperation::Deploy
     };
 
+    // Protected: whatever wrote the stored target, deploy it only if it is
+    // still exactly the signed release. Deleting needs no signature.
+    if let Some(signing) = &state.config.release_signing {
+        if operation == LoopOperation::Deploy {
+            if let Err(refusal) = signing.verify_release(current.platform, target_release) {
+                error!(
+                    release_id = %target_release_id,
+                    reason = %refusal,
+                    "Protected mode: refused to deploy the stored target; nothing was changed"
+                );
+                return Ok((0, Duration::ZERO));
+            }
+        }
+    }
+
     // Get deployment ID (used for logging in runner)
     let deployment_id = state
         .db

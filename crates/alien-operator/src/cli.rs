@@ -198,6 +198,19 @@ pub struct Args {
     #[arg(long, env = "OPERATOR_SELF_UPDATE_DEPLOYMENT")]
     pub self_update_deployment: Option<String>,
 
+    /// Protected mode: public keys (`ecdsa-p256:<base64>`, comma-separated)
+    /// whose signed releases this Operator runs. Nothing else runs.
+    #[arg(
+        long,
+        env = "OPERATOR_RELEASE_SIGNING_PUBLIC_KEYS",
+        value_delimiter = ','
+    )]
+    pub release_signing_public_keys: Vec<String>,
+
+    /// Protected mode: the project signed releases must name.
+    #[arg(long, env = "OPERATOR_RELEASE_SIGNING_PROJECT")]
+    pub release_signing_project: Option<String>,
+
     /// Air-gapped: Secret that bundles write deployment targets into.
     #[arg(long, env = "AIRGAP_TARGET_SECRET")]
     pub airgap_target_secret: Option<String>,
@@ -704,6 +717,10 @@ async fn run_operator_cli(
         "chart default bindings",
     )?;
     let operations = parse_operator_operations(args.operations)?;
+    let release_signing = release_signing(
+        &args.release_signing_public_keys,
+        args.release_signing_project,
+    )?;
 
     let operator_config = OperatorConfig::builder()
         .platform(args.platform)
@@ -750,6 +767,8 @@ async fn run_operator_cli(
         .maybe_airgap_target_secret(args.airgap_target_secret)
         .maybe_airgap_status_secret(args.airgap_status_secret)
         .maybe_local_debug_shell_command(args.local_debug_shell_command)
+        .maybe_release_signing(release_signing)
+        .stack_input_values(stack_input_values.clone())
         .build();
 
     let cancel = CancellationToken::new();
@@ -869,6 +888,34 @@ fn observe_only_initial_state(
             platform,
             base_platform,
         ),
+    }
+}
+
+/// Protected mode is on when keys are pinned; it needs the project too.
+fn release_signing(
+    public_keys: &[String],
+    project: Option<String>,
+) -> Result<Option<crate::protected::ReleaseSigning>> {
+    let public_keys: Vec<&str> = public_keys
+        .iter()
+        .map(|key| key.trim())
+        .filter(|key| !key.is_empty())
+        .collect();
+    let project = project.filter(|project| !project.trim().is_empty());
+    match (public_keys.is_empty(), project) {
+        (true, None) => Ok(None),
+        (false, Some(project)) => Ok(Some(crate::protected::ReleaseSigning {
+            keys: alien_core::release_signature::TrustedKeys::parse(&public_keys).context(
+                ErrorData::ConfigurationError {
+                    message: "OPERATOR_RELEASE_SIGNING_PUBLIC_KEYS holds an invalid key"
+                        .to_string(),
+                },
+            )?,
+            project,
+        })),
+        _ => Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Protected mode needs both OPERATOR_RELEASE_SIGNING_PUBLIC_KEYS and OPERATOR_RELEASE_SIGNING_PROJECT".to_string(),
+        })),
     }
 }
 

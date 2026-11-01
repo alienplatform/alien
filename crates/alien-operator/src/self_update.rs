@@ -8,7 +8,7 @@
 
 use alien_error::{AlienError, Context};
 use alien_k8s_clients::{KubernetesClient, KubernetesClientConfig, KubernetesClientConfigExt};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     error::{ErrorData, Result},
@@ -56,6 +56,23 @@ pub async fn apply(state: &OperatorState, target_image: &str) -> Result<()> {
         .ok_or_else(|| AlienError::new(failed("no 'operator' container")))?;
     if container.image.as_deref() == Some(target_image) {
         return Ok(());
+    }
+    // Protected, the Operator moves only to the image its newest accepted
+    // release signed: the manager chooses when, not what.
+    if state.config.is_protected() {
+        let signed = state
+            .db
+            .get_accepted_release()
+            .await?
+            .and_then(|accepted| accepted.operator_image);
+        if signed.as_deref() != Some(target_image) {
+            warn!(
+                image = target_image,
+                signed = signed.as_deref().unwrap_or("none"),
+                "Protected mode: refused to update the Operator to an image no accepted release signed"
+            );
+            return Ok(());
+        }
     }
     let current = container.image.clone().unwrap_or_default();
     container.image = Some(target_image.to_string());
