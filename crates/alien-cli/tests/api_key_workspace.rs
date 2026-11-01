@@ -100,14 +100,15 @@ fn api_key_commands_discover_workspace_and_explicit_workspace_still_works() {
                 then.status(200).json_body(
                     json!({"accessToken":"test-query-token", "expiresIn":3600,
                     "tokenType":"Bearer", "managerUrl":api.base_url(), "databaseId":"db_test",
-                    "controlPlaneUrl":api.url("/v1")}),
+                    "controlPlaneUrl":api.url("/v1"), "deepstoreToken":"test-deepstore-token"}),
                 );
             });
             let splits = api.mock(|when, then| {
                 when.method(GET)
                     .path("/v1/databases/db_test/splits")
-                    .header("authorization", "Bearer test-query-token");
-                then.status(200).json_body(json!({"splits":[]}));
+                    .header("authorization", "Bearer test-deepstore-token");
+                then.status(200)
+                    .json_body(json!({"splits":[], "snapshotExpiresAt":4_102_444_800_000_u64}));
             });
             let search = api.mock(|when, then| {
                 when.method(POST)
@@ -156,7 +157,8 @@ fn api_key_commands_discover_workspace_and_explicit_workspace_still_works() {
             project.assert_hits(1);
             list.assert_hits(usize::from(operation == "list"));
             revoke.assert_hits(usize::from(operation == "revoke"));
-            token.assert_hits(if operation == "logs" { 2 } else { 0 });
+            // One token response serves the manager and the control plane.
+            token.assert_hits(usize::from(operation == "logs"));
             splits.assert_hits(usize::from(operation == "logs"));
             search.assert_hits(usize::from(operation == "logs"));
         }

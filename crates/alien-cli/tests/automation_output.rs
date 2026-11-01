@@ -122,15 +122,19 @@ fn json_logs_suppress_the_cross_workspace_notice_and_search_once() {
     server.mock(|when, then| {
         when.method(POST).path(format!("/v1/managers/{MANAGER}/token"));
         then.json_body(json!({"accessToken":"test-token","expiresIn":3600,"tokenType":"Bearer",
-            "managerUrl":server.base_url(),"databaseId":"db_test","controlPlaneUrl":server.url("/v1")}));
+            "managerUrl":server.base_url(),"databaseId":"db_test","controlPlaneUrl":server.url("/v1"),
+            "deepstoreToken":"test-deepstore-token"}));
     });
     server.mock(|when, then| {
-        when.method(GET).path("/v1/databases/db_test/splits");
-        then.json_body(json!({"splits":[]}));
+        when.method(GET)
+            .path("/v1/databases/db_test/splits")
+            .header("authorization", "Bearer test-deepstore-token");
+        then.json_body(json!({"splits":[], "snapshotExpiresAt":4_102_444_800_000_u64}));
     });
     let search = server.mock(|when, then| {
         when.method(POST)
             .path("/v1/logs/search")
+            .header("authorization", "Bearer test-token")
             .json_body_partial(json!({"max_hits":7}).to_string());
         then.json_body(json!({"num_hits":0,"hits":[],"elapsed_time_micros":1,"errors":[]}));
     });

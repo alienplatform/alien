@@ -1,7 +1,7 @@
 use std::collections::{HashSet, VecDeque};
 use std::convert::TryFrom;
 use std::io::{self, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -10,6 +10,7 @@ use chrono::{DateTime, Duration, NaiveDate, Utc};
 use clap::{Parser, ValueEnum};
 use console::style;
 use deepstore_client::{DeepstoreClient, DeepstoreError, SearchParams};
+use futures::future::BoxFuture;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -259,28 +260,35 @@ pub async fn logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()> {
         })
     })?;
 
+    let deepstore_token = token.deepstore_token.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "Manager {} did not return a Deepstore control plane token.",
+                target.manager_id
+            ),
+        })
+    })?;
+
     let shared_client = Arc::new(platform_client);
-    let provider_workspace = workspace.clone();
-    let provider_manager = target.manager_id.clone();
-    let provider_project = target.project_id.clone();
+    let token_source = LogsTokenSource {
+        client: shared_client,
+        workspace: workspace.clone(),
+        manager_id: target.manager_id.clone(),
+        project: target.project_id.clone(),
+    };
+    // The manager gets the manager token; the Deepstore control plane gets
+    // its own token. Both providers start with the tokens fetched above.
     let deepstore = DeepstoreClient::builder()
         .control_plane_url(control_plane_url)
         .auth_proxy_url(token.manager_url)
-        .query_token_provider(move || {
-            let client = Arc::clone(&shared_client);
-            let workspace = provider_workspace.clone();
-            let manager_id = provider_manager.clone();
-            let project = provider_project.clone();
-            async move {
-                let token =
-                    generate_logs_token(&client, &workspace, &manager_id, project.as_deref())
-                        .await
-                        .map_err(|error| {
-                            deepstore_client::DeepstoreError::Authentication(error.to_string())
-                        })?;
-                Ok(token.access_token)
-            }
-        })
+        .query_token_provider(
+            token_source
+                .clone()
+                .provider(token.access_token, |response| Some(response.access_token)),
+        )
+        .control_plane_token_provider(
+            token_source.provider(deepstore_token, |response| response.deepstore_token),
+        )
         .build()
         .map_err(|error| {
             AlienError::new(ErrorData::ConfigurationError {
@@ -694,6 +702,51 @@ async fn generate_logs_token(
             url: None,
         })
         .map(|response| response.into_inner())
+}
+
+/// Mints log tokens for one manager and project.
+#[derive(Clone)]
+struct LogsTokenSource {
+    client: Arc<alien_platform_api::Client>,
+    workspace: String,
+    manager_id: String,
+    project: Option<String>,
+}
+
+impl LogsTokenSource {
+    /// A token provider that returns `initial` first, then picks its token
+    /// from a freshly minted response each time the client needs a new one.
+    fn provider(
+        self,
+        initial: String,
+        pick: fn(types::GenerateManagerTokenResponse) -> Option<String>,
+    ) -> impl Fn() -> BoxFuture<'static, deepstore_client::Result<String>> + Send + Sync + 'static
+    {
+        let initial = Arc::new(Mutex::new(Some(initial)));
+        move || {
+            let source = self.clone();
+            let initial = initial.lock().expect("token seed lock").take();
+            Box::pin(async move {
+                if let Some(token) = initial {
+                    return Ok(token);
+                }
+                let response = generate_logs_token(
+                    &source.client,
+                    &source.workspace,
+                    &source.manager_id,
+                    source.project.as_deref(),
+                )
+                .await
+                .map_err(|error| DeepstoreError::Authentication(error.to_string()))?;
+                pick(response).ok_or_else(|| {
+                    DeepstoreError::Authentication(format!(
+                        "Manager {} did not return a Deepstore control plane token.",
+                        source.manager_id
+                    ))
+                })
+            })
+        }
+    }
 }
 
 async fn fetch_logs(
@@ -1250,7 +1303,8 @@ mod tests {
                 when.method(GET)
                     .path("/v1/databases/db_test/splits")
                     .header("authorization", "Bearer test-query-token");
-                then.status(200).json_body(json!({"splits": []}));
+                then.status(200)
+                    .json_body(json!({"splits": [], "snapshotExpiresAt": 4_102_444_800_000_u64}));
             })
             .await;
         let search = server
