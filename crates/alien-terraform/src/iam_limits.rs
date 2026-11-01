@@ -9,7 +9,8 @@
 
 use crate::{
     emitters::aws::key::{
-        customer_key_connection_condition, CUSTOMER_KEY_CONNECTION_SUFFIX, KMS_KEY_ARN_PATTERN,
+        customer_key_connection_condition, AWS_PARTITIONS, CUSTOMER_KEY_CONNECTION_SUFFIX,
+        KMS_KEY_ARN_PATTERN,
     },
     expr, ModuleFiles,
 };
@@ -292,8 +293,8 @@ struct Module<'a> {
 
 /// Locals may reference locals; deeper chains than this are a cycle.
 const MAX_LOCAL_DEPTH: usize = 32;
-/// The longest AWS partition name, of `AWS_PARTITIONS`.
-const LONGEST_PARTITION: &str = "aws-us-gov";
+/// The longest AWS partition name.
+const LONGEST_PARTITION: &str = longest(&AWS_PARTITIONS);
 /// Characters of a UUID.
 const UUID: usize = 36;
 /// Characters of a KMS key ID, a UUID or a multi-Region `mrk-` ID of the same length.
@@ -302,6 +303,18 @@ const KMS_KEY_ID: usize = UUID;
 const SECRET_ARN_SUFFIX: usize = 6;
 /// EKS's limit on cluster names.
 const EKS_CLUSTER_NAME: usize = 100;
+
+const fn longest(names: &[&'static str]) -> &'static str {
+    let mut longest = names[0];
+    let mut index = 1;
+    while index < names.len() {
+        if names[index].len() > longest.len() {
+            longest = names[index];
+        }
+        index += 1;
+    }
+    longest
+}
 
 impl<'a> Module<'a> {
     fn new(

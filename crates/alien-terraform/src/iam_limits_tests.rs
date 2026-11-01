@@ -372,12 +372,7 @@ fn an_interpolation_without_a_known_bound_fails_the_render() {
 /// size check's bound at the longest region and account, and the longest one meets it.
 #[test]
 fn every_kms_key_arn_the_postcondition_admits_fits_its_bound() {
-    assert_eq!(
-        AWS_PARTITIONS
-            .iter()
-            .max_by_key(|partition| partition.len()),
-        Some(&LONGEST_PARTITION)
-    );
+    assert_eq!(LONGEST_PARTITION, "aws-us-gov");
     let partitions = regex::Regex::new(r"^\^arn:\(([a-z|-]+)\):kms:")
         .unwrap()
         .captures(KMS_KEY_ARN_PATTERN)
@@ -504,7 +499,7 @@ fn a_deployment_id_is_bounded_only_by_its_connection_validation() {
                 inline_policy(
                     "grant",
                     "execution",
-                    document(expr::template(&format!(
+                    document(expr::template(format!(
                         "customer-key:${{var.{reference}.deployment_id}}"
                     ))),
                 ),
