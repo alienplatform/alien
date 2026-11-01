@@ -1301,7 +1301,7 @@ fn validate_machines_control_plane_url(value: &str) -> Result<()> {
     Ok(())
 }
 
-fn machines_join_command(
+pub(crate) fn machines_join_command(
     cli_name: &str,
     install_script_url: Option<&str>,
     join_token: &str,

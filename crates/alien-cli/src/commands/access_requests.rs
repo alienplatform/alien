@@ -1,17 +1,18 @@
-//! CLI commands for access requests — a complete, non-Slack path to REQUEST
-//! time-boxed operation and/or remote-debugging access. Someone other than
-//! the requester approves: on Kubernetes the customer, in-cluster via `kubectl
-//! patch` on the grant custom resource; elsewhere a workspace member other
-//! than the requester. There is deliberately no CLI action that approves a
-//! request.
+//! CLI commands for access requests — a complete, non-Slack path to request
+//! time-boxed operation and/or remote-debugging access, and to approve or deny
+//! it. Someone other than the requester decides: on Kubernetes the customer,
+//! in-cluster via `kubectl patch` on the grant custom resource; elsewhere a
+//! workspace member other than the requester, signed in as themselves
+//! (`approve` / `deny`). The server enforces who may decide.
 
 use std::fmt::Display;
 use std::time::Duration;
 
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::types::{
-    AccessRequestStatus, CreateAccessRequest, CreateAccessRequestMaxRisk,
-    CreateAccessRequestRequestedExpiresAt, DebugGrantTool, RevokeAccessRequest,
+    AccessRequestStatus, ApproveAccessRequestBody, CreateAccessRequest, CreateAccessRequestMaxRisk,
+    CreateAccessRequestRequestedExpiresAt, DebugGrantTool, DenyAccessRequestBody,
+    RevokeAccessRequest,
 };
 use alien_platform_api::SdkResultExt as _;
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -37,8 +38,8 @@ remote-debugging session for kubectl, aws, gcloud, or az. Combine --operation an
 the request applies to both at once.
 
 Someone other than the requester approves: on Kubernetes the customer, in-cluster with
-kubectl; otherwise a workspace member other than the requester. There is no command here
-that approves a request.
+kubectl; otherwise a workspace member other than the requester, with `approve` or `deny`.
+Deciding needs a signed-in workspace member; API keys can't approve or deny.
 
 Revoking a request withdraws the grant immediately: operations still waiting to be
 dispatched fail, open debug sessions stop, and the request can no longer be approved.
@@ -67,6 +68,10 @@ EXAMPLES:
     # Review a request, then wait for the customer to approve it
     alien access-requests get ar_123
     alien access-requests wait ar_123
+
+    # Decide on someone else's request
+    alien access-requests approve ar_123 --duration 30m
+    alien access-requests deny ar_123
 
     # Withdraw a grant that is no longer needed
     alien access-requests revoke ar_123 --reason 'incident resolved'
@@ -144,6 +149,17 @@ pub enum AccessRequestsAction {
         #[arg(long, default_value = "3600")]
         timeout: u64,
     },
+    /// Approve someone else's queued access request.
+    Approve {
+        id: String,
+
+        /// How long the approval lasts, e.g. 30m, 2h. It never runs past the
+        /// deadline the requester asked for. Defaults to the longest allowed.
+        #[arg(long)]
+        duration: Option<String>,
+    },
+    /// Deny someone else's queued access request.
+    Deny { id: String },
     /// Revoke an access request: pending operations fail and open debug sessions stop.
     Revoke {
         id: String,
@@ -200,10 +216,112 @@ pub async fn access_requests_task(args: AccessRequestsArgs, ctx: ExecutionMode) 
         AccessRequestsAction::Wait { id, timeout } => {
             wait_task(&sdk_client, &workspace, &id, timeout, args.json).await
         }
+        AccessRequestsAction::Approve { id, duration } => {
+            approve_task(&sdk_client, &workspace, &id, duration.as_deref(), args.json).await
+        }
+        AccessRequestsAction::Deny { id } => {
+            deny_task(&sdk_client, &workspace, &id, args.json).await
+        }
         AccessRequestsAction::Revoke { id, reason } => {
             revoke_task(&sdk_client, &workspace, &id, reason.as_deref(), args.json).await
         }
     }
+}
+
+/// Recorded with the decision so the audit trail shows where it was made.
+const DECISION_METHOD: &str = "cli";
+
+fn approved_for_minutes(duration: Option<&str>) -> Result<Option<u64>> {
+    let Some(duration) = duration else {
+        return Ok(None);
+    };
+    let seconds = parse_duration_seconds(duration)?;
+    if seconds == 0 {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "duration".to_string(),
+            message: "duration must be at least 1m".to_string(),
+        }));
+    }
+    // The API takes whole minutes; round up so `--duration 90s` isn't cut to 1m.
+    Ok(Some(seconds.div_ceil(60)))
+}
+
+async fn approve_task(
+    sdk_client: &alien_platform_api::Client,
+    workspace: &str,
+    id: &str,
+    duration: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let body: ApproveAccessRequestBody = serde_json::from_value(serde_json::json!({
+        "method": DECISION_METHOD,
+        "approvedForMinutes": approved_for_minutes(duration)?,
+    }))
+    .into_alien_error()
+    .context(ErrorData::ValidationError {
+        field: "duration".to_string(),
+        message: "Invalid approval duration".to_string(),
+    })?;
+    let request = sdk_client
+        .approve_access_request()
+        .id(id)
+        .workspace(workspace)
+        .body(body)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("approving access request '{id}'"),
+            url: None,
+        })?
+        .into_inner();
+
+    if json {
+        return print_json(&request);
+    }
+    println!("Access request approved: {}", request.id);
+    println!("{} {}", dim_label("Title"), request.title);
+    println!("{} {}", dim_label("Status"), request.status);
+    if let Some(approved_until) = request.approved_until.as_ref() {
+        println!("{} {approved_until}", dim_label("Approved until"));
+    }
+    Ok(())
+}
+
+async fn deny_task(
+    sdk_client: &alien_platform_api::Client,
+    workspace: &str,
+    id: &str,
+    json: bool,
+) -> Result<()> {
+    let body: DenyAccessRequestBody =
+        serde_json::from_value(serde_json::json!({ "method": DECISION_METHOD }))
+            .into_alien_error()
+            .context(ErrorData::ValidationError {
+                field: "id".to_string(),
+                message: "Invalid deny request".to_string(),
+            })?;
+    let request = sdk_client
+        .deny_access_request()
+        .id(id)
+        .workspace(workspace)
+        .body(body)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("denying access request '{id}'"),
+            url: None,
+        })?
+        .into_inner();
+
+    if json {
+        return print_json(&request);
+    }
+    println!("Access request denied: {}", request.id);
+    println!("{} {}", dim_label("Title"), request.title);
+    println!("{} {}", dim_label("Status"), request.status);
+    Ok(())
 }
 
 struct CreateTaskOptions<'a> {

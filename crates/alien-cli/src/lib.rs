@@ -242,16 +242,16 @@ pub enum Commands {
     #[command(alias = "operation")]
     Operations(OperationsArgs),
 
-    /// Request time-boxed operation access
+    /// Request, approve, and deny time-boxed operation access
     #[cfg(feature = "platform")]
     #[command(name = "access-requests", alias = "access-request")]
     AccessRequests(AccessRequestsArgs),
 
-    /// List, inspect, and download project packages
+    /// List, inspect, rebuild, and download project packages
     #[cfg(feature = "platform")]
     Packages(PackagesArgs),
 
-    /// List and inspect project deployment groups
+    /// List, inspect, and change project deployment groups
     #[cfg(feature = "platform")]
     #[command(name = "deployment-groups", visible_aliases = ["customers", "customer"])]
     DeploymentGroups(CustomersArgs),
@@ -260,7 +260,7 @@ pub enum Commands {
     #[cfg(feature = "platform")]
     Domains(DomainsArgs),
 
-    /// Create, inspect, and revoke API keys
+    /// Create, inspect, disable, and revoke API keys
     #[cfg(feature = "platform")]
     #[command(name = "api-keys", visible_alias = "apikeys")]
     ApiKeys(ApiKeysArgs),
