@@ -1,0 +1,183 @@
+{
+  "id": "container-stack",
+  "permissions": {
+    "profiles": {
+      "execution": {
+        "*": [
+          "storage/data-read",
+          "storage/data-write",
+          "build/execute",
+          "artifact-registry/pull",
+          "artifact-registry/push",
+          "artifact-registry/provision",
+          "vault/data-read",
+          "vault/data-write",
+          "kv/data-read",
+          "kv/data-write",
+          "queue/data-read",
+          "queue/data-write",
+          "worker/execute"
+        ]
+      },
+      "build-execution": {
+        "*": [
+          "build/logs-and-artifacts"
+        ]
+      }
+    }
+  },
+  "resources": {
+    "alien-test-storage": {
+      "config": {
+        "id": "alien-test-storage",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "build": {
+      "config": {
+        "id": "build",
+        "type": "build",
+        "environment": {},
+        "links": [],
+        "permissions": "build-execution"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "registry": {
+      "config": {
+        "id": "registry",
+        "type": "artifact-registry"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "test-vault": {
+      "config": {
+        "id": "test-vault",
+        "type": "vault"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "kv": {
+      "config": {
+        "id": "kv",
+        "type": "kv"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "queue": {
+      "config": {
+        "id": "queue",
+        "type": "queue"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "api": {
+      "config": {
+        "id": "api",
+        "type": "container",
+        "code": {
+          "image": "x:latest",
+          "type": "image"
+        },
+        "commandsEnabled": true,
+        "cpu": {
+          "desired": "0.25",
+          "min": "0.25"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [
+          {
+            "id": "alien-test-storage",
+            "type": "storage"
+          },
+          {
+            "id": "build",
+            "type": "build"
+          },
+          {
+            "id": "registry",
+            "type": "artifact-registry"
+          },
+          {
+            "id": "test-vault",
+            "type": "vault"
+          },
+          {
+            "id": "kv",
+            "type": "kv"
+          },
+          {
+            "id": "queue",
+            "type": "queue"
+          }
+        ],
+        "memory": {
+          "desired": "256Mi",
+          "min": "256Mi"
+        },
+        "permissions": "execution",
+        "ports": [
+          {
+            "port": 8080
+          }
+        ],
+        "publicEndpoints": [
+          {
+            "name": "api",
+            "port": 8080,
+            "protocol": "http",
+            "wildcardSubdomains": false
+          }
+        ],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "worker": {
+      "config": {
+        "id": "worker",
+        "type": "container",
+        "code": {
+          "image": "x:latest",
+          "type": "image"
+        },
+        "commandsEnabled": true,
+        "cpu": {
+          "desired": "0.25",
+          "min": "0.25"
+        },
+        "environment": {},
+        "kubernetesSecretMounts": [],
+        "links": [
+          {
+            "id": "kv",
+            "type": "kv"
+          }
+        ],
+        "memory": {
+          "desired": "256Mi",
+          "min": "256Mi"
+        },
+        "permissions": "execution",
+        "ports": [],
+        "publicEndpoints": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  }
+}

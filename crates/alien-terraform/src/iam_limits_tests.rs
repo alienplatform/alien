@@ -8,9 +8,8 @@ use crate::{
     expr, TerraformOptions, TerraformTarget, TfRegistry,
 };
 use alien_core::{
-    ArtifactRegistry, AwsManagementConfig, Build, DeploymentConfig, EnvironmentVariablesSnapshot,
-    ExternalBindings, Kv, ManagementConfig, PermissionProfile, PermissionsConfig, Platform, Queue,
-    ResourceLifecycle, SetupConfigurationProfile, Stack, StackSettings, StackState, Storage, Vault,
+    AwsManagementConfig, DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings,
+    ManagementConfig, Platform, SetupConfigurationProfile, Stack, StackSettings, StackState,
 };
 use alien_preflights::runner::PreflightRunner;
 
@@ -449,58 +448,40 @@ fn generated_managed_policy_chunks_obey_the_quotas() {
     }
 }
 
-/// The stack of the AWS container end-to-end app as measured in IAM: one profile granted
-/// storage, vault, kv and queue data access, the artifact-registry sets and worker execution
-/// stack-wide, and a Build using it. Its resources are named like the app's.
+/// The stack of the AWS container end-to-end app whose execution role IAM rejected: Frozen
+/// storage, build (profile `build-execution`), artifact registry, vault, kv and queue, and two
+/// Live containers using profile `execution`, which holds every data set, the build and
+/// artifact-registry sets and worker execution stack-wide. Evaluated from its `alien.ts` as the
+/// e2e harness does.
 fn e2e_container_stack() -> Stack {
-    Stack::new("alien-ts-stack".to_string())
-        .permissions(PermissionsConfig::new().with_profile(
-            "execution",
-            PermissionProfile::new().resource(
-                "*",
-                [
-                    "storage/data-read",
-                    "storage/data-write",
-                    "vault/data-read",
-                    "vault/data-write",
-                    "kv/data-read",
-                    "kv/data-write",
-                    "queue/data-read",
-                    "queue/data-write",
-                    "artifact-registry/provision",
-                    "artifact-registry/push",
-                    "artifact-registry/pull",
-                    "worker/execute",
-                ],
-            ),
-        ))
-        .add(
-            Storage::new("alien-test-storage".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        )
-        .add(
-            Vault::new("test-vault".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        )
-        .add(
-            Kv::new("alien-kv".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        )
-        .add(
-            Queue::new("alien-queue".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        )
-        .add(
-            ArtifactRegistry::new("registry".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        )
-        .add(
-            Build::new("builder".to_string())
-                .permissions("execution".to_string())
-                .build(),
-            ResourceLifecycle::Frozen,
-        )
-        .build()
+    serde_json::from_str(include_str!(
+        "../tests/fixtures/aws-container-e2e-stack.json"
+    ))
+    .expect("the fixture is a stack")
+}
+
+/// Setup creates no compute cluster in Terraform: compute-cluster emitters come from composed
+/// CLIs. This one emits nothing, so the rest of the module renders as `alien render` would.
+struct NoComputeCluster;
+
+impl crate::TfEmitter for NoComputeCluster {
+    fn emit(&self, _ctx: &alien_core::import::EmitContext<'_>) -> Result<TfFragment> {
+        Ok(TfFragment::default())
+    }
+
+    fn emit_import_ref(&self, _ctx: &alien_core::import::EmitContext<'_>) -> Result<Expression> {
+        Ok(expr::object(Vec::<(&str, Expression)>::new()))
+    }
+}
+
+fn container_registry() -> TfRegistry {
+    let mut registry = TfRegistry::built_in();
+    registry.register(
+        alien_core::ComputeCluster::RESOURCE_TYPE,
+        Platform::Aws,
+        NoComputeCluster,
+    );
+    registry
 }
 
 /// Prepares the stack as `alien render` does: template preflights, then mutations against a
@@ -551,7 +532,7 @@ fn options(registry: &TfRegistry) -> TerraformOptions<'_> {
 #[tokio::test]
 async fn sizes_the_e2e_execution_role_as_iam_counts_it() {
     let stack = prepare_for_render(e2e_container_stack()).await;
-    let registry = TfRegistry::built_in();
+    let registry = container_registry();
     let module = crate::generator::render_terraform_module(
         &stack,
         TerraformTarget::Aws,
