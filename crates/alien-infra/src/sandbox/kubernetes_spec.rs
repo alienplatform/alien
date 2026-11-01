@@ -69,7 +69,7 @@ pub(crate) fn sandbox_pod_with_labels(
     deployment_labels: BTreeMap<String, String>,
 ) -> Pod {
     let image = match &sandbox.code {
-        SandboxCode::Image { image } => image.clone(),
+        SandboxCode::Image { image, .. } => image.clone(),
         // `validate_for_platform` refuses Source off AWS and Kubernetes preflights against this
         // platform, so this is unreachable. Empty rather than a panic: the API server rejects a
         // pod with no image at create, failing an operator loudly without taking it down.
@@ -258,6 +258,7 @@ mod tests {
         Sandbox::new("agent".to_string())
             .code(SandboxCode::Image {
                 image: "ubuntu:24.04".to_string(),
+                bundled_from: None,
             })
             .limits(SandboxLimits {
                 cpu: "1".to_string(),

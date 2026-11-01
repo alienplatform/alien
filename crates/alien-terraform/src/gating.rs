@@ -222,12 +222,8 @@ pub(crate) fn rewrite_expression(expression: &mut Expression, gated: &GatedAddre
                 return;
             };
             if root.as_str() == "ephemeral" {
-                if let [
-                    TraversalOperator::GetAttr(provider),
-                    TraversalOperator::GetAttr(label),
-                    TraversalOperator::GetAttr(_),
-                    ..,
-                ] = traversal.operators.as_slice()
+                if let [TraversalOperator::GetAttr(provider), TraversalOperator::GetAttr(label), TraversalOperator::GetAttr(_), ..] =
+                    traversal.operators.as_slice()
                 {
                     if gated.contains(&format!("ephemeral.{provider}"), label.as_str()) {
                         traversal

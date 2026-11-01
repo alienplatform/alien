@@ -7,7 +7,10 @@
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{AzureSandboxImage, Platform, Sandbox, SandboxEgress, Stack};
+use alien_core::{
+    parse_ecr_image_repository, AzureSandboxImage, Platform, ResourceLifecycle, Sandbox,
+    SandboxCode, SandboxEgress, Stack,
+};
 
 /// Ensures every Sandbox can be delivered by the platform it targets.
 pub struct SandboxPlatformSupportCheck;
@@ -27,8 +30,30 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
     async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult> {
         let errors: Vec<String> = stack
             .resources()
-            .filter_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
-            .filter_map(|sandbox| {
+            .filter_map(|(_, entry)| {
+                entry
+                    .config
+                    .downcast_ref::<Sandbox>()
+                    .map(|sandbox| (sandbox, entry.lifecycle))
+            })
+            .filter_map(|(sandbox, lifecycle)| {
+                // Setup builds a Frozen image once, from a bundle that must already exist. Only a
+                // Live sandbox's controller renders one for an image in the vendor's registry, and
+                // setup cannot grant that registry without knowing its account.
+                if platform == Platform::Aws
+                    && lifecycle == ResourceLifecycle::Frozen
+                    && match &sandbox.code {
+                        SandboxCode::Source { .. } => true,
+                        SandboxCode::Image { image, .. } => parse_ecr_image_repository(image).is_ok(),
+                    }
+                {
+                    return Some(format!(
+                        "Sandbox '{}': a Frozen AWS sandbox is built by setup from a published \
+                         bundle or a public image, and this one is built from source or a private \
+                         registry; declare it Live",
+                        sandbox.id()
+                    ));
+                }
                 // Internet deployment prepares its gateway after these checks. Use the
                 // planned boundary here; deployment prerequisites require the actual gateway.
                 if platform == Platform::Aws && sandbox.image_user == Some(0)
@@ -125,6 +150,7 @@ mod tests {
                 // A bare name, because Azure takes a catalog entry rather than a reference and
                 // these cases are about egress and limits rather than about the image.
                 image: "ubuntu".to_string(),
+                bundled_from: None,
             })
             .egress(egress)
             .lifecycle(SandboxLifecyclePolicy {
@@ -314,5 +340,48 @@ mod tests {
             inputs: vec![],
         };
         assert!(!SandboxPlatformSupportCheck.should_run(&stack, Platform::Aws));
+    }
+
+    /// Setup builds a Frozen image before any controller can render a bundle, so a Frozen AWS
+    /// sandbox must name a published bundle or a public image; the same image is fine when Live.
+    #[tokio::test]
+    async fn a_frozen_aws_sandbox_from_a_private_registry_must_be_live() {
+        let with_image = |image: &str| {
+            let mut sandbox = sandbox("agents", None, SandboxEgress::Allow);
+            sandbox.code = SandboxCode::Image {
+                image: image.to_string(),
+                bundled_from: None,
+            };
+            stack_with(sandbox)
+        };
+        let private = "123456789012.dkr.ecr.us-east-1.amazonaws.com/acme/agents@sha256:aaaa";
+
+        let frozen = SandboxPlatformSupportCheck
+            .check(&with_image(private), Platform::Aws)
+            .await
+            .unwrap();
+        assert!(!frozen.success);
+        assert!(
+            frozen.errors[0].contains("declare it Live"),
+            "{:?}",
+            frozen.errors
+        );
+
+        let mut live = with_image(private);
+        live.resources["agents"].lifecycle = ResourceLifecycle::Live;
+        for (stack, platform) in [
+            (live, Platform::Aws),
+            (
+                with_image("s3://publisher/sandbox-bundle/v1/bundle.zip"),
+                Platform::Aws,
+            ),
+            (with_image(private), Platform::Gcp),
+        ] {
+            let result = SandboxPlatformSupportCheck
+                .check(&stack, platform)
+                .await
+                .unwrap();
+            assert!(result.success, "{platform}: {:?}", result.errors);
+        }
     }
 }

@@ -25,6 +25,14 @@ pub fn sandbox_build_role_name(resource_prefix: &str, sandbox_id: &str) -> Strin
     format!("{resource_prefix}-{sandbox_id}-build")
 }
 
+/// The key prefix every bundle is written under, in a deployment's own bucket and in a published
+/// store alike.
+pub const SANDBOX_BUNDLE_KEY_PREFIX: &str = "sandbox-bundle";
+
+/// The Storage a deployment's Live AWS sandboxes render their bundles into. One per deployment,
+/// shared by its sandboxes; each writes under its own key prefix.
+pub const SANDBOX_BUNDLE_STORAGE_ID: &str = "sandbox-bundles";
+
 /// The ARN of [`sandbox_build_role_name`] at the root path, where the role is created.
 pub fn sandbox_build_role_arn(
     partition: &str,
@@ -113,6 +121,11 @@ pub struct SandboxBuildRole<'a> {
     runtime_built: bool,
     /// The sandbox's `privateBaseImage`; a `{region}` token in its host resolves to `region`.
     private_base_image: Option<&'a str>,
+    /// A Live sandbox whose controller renders its bundle into the deployment's bundle Storage.
+    /// The role then reads that Storage through its `storage/data-read` grant, and this policy
+    /// only pulls the image the bundle names.
+    #[builder(default)]
+    renders_bundle: bool,
 }
 
 impl SandboxBuildRole<'_> {
@@ -122,6 +135,9 @@ impl SandboxBuildRole<'_> {
     /// A Frozen image is built once from the named object; a runtime rebuild reads a new key under
     /// the same stable prefix, so a Live role reads the prefix and is refused when there is none.
     pub fn policy(&self) -> Result<SandboxBuildPolicy> {
+        if self.renders_bundle {
+            return Ok(self.image_pull_policy());
+        }
         let path = self.bundle_path()?;
         let (bucket, key) = path
             .split_once('/')
@@ -170,21 +186,38 @@ impl SandboxBuildRole<'_> {
                 ],
                 repository.arn(partition, self.region),
             ));
-            // A private base comes from another account's registry; one in this account would let the
-            // build read this account's own repositories. The templates cannot know the account when
-            // they render, so a Deny refuses it on every path.
-            statement.push(SandboxBuildStatement {
-                sid: Some("DenySameAccountImagePull".to_string()),
-                effect: IamEffect::Deny,
-                action: actions(&["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]),
-                resource: format!("arn:{partition}:ecr:*:{}:repository/*", self.account_id),
-            });
+            statement.push(deny_same_account_image_pull(partition, self.account_id));
         }
 
         Ok(SandboxBuildPolicy {
             version: IAM_POLICY_VERSION.to_string(),
             statement,
         })
+    }
+
+    /// Pull the image a rendered bundle names, from another account's registry.
+    ///
+    /// The image is the release's, in the vendor's registry, and the registry's repository policy
+    /// decides which accounts may pull it. Granting every other account's repositories here keeps
+    /// the registry's location out of setup, so moving it needs no setup rerun.
+    fn image_pull_policy(&self) -> SandboxBuildPolicy {
+        let partition = self.partition;
+        SandboxBuildPolicy {
+            version: IAM_POLICY_VERSION.to_string(),
+            statement: vec![
+                allow(
+                    "AuthorizeSandboxImagePull",
+                    &["ecr:GetAuthorizationToken"],
+                    "*".to_string(),
+                ),
+                allow(
+                    "PullSandboxImage",
+                    &["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+                    format!("arn:{partition}:ecr:*:*:repository/*"),
+                ),
+                deny_same_account_image_pull(partition, self.account_id),
+            ],
+        }
     }
 
     /// Lambda, and only on behalf of this account: AWS's confused-deputy guidance for the role.
@@ -232,6 +265,18 @@ fn allow(sid: &str, action: &[&str], resource: String) -> SandboxBuildStatement 
         effect: IamEffect::Allow,
         action: actions(action),
         resource,
+    }
+}
+
+/// The image comes from another account's registry; one in this account would let the build read
+/// this account's own repositories. The templates cannot know the account when they render, so a
+/// Deny refuses it on every path.
+fn deny_same_account_image_pull(partition: &str, account_id: &str) -> SandboxBuildStatement {
+    SandboxBuildStatement {
+        sid: Some("DenySameAccountImagePull".to_string()),
+        effect: IamEffect::Deny,
+        action: actions(&["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]),
+        resource: format!("arn:{partition}:ecr:*:{account_id}:repository/*"),
     }
 }
 

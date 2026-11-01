@@ -201,6 +201,7 @@ mod tests {
         let sandbox = Sandbox::new("agent-sbx".to_string())
             .code(SandboxCode::Image {
                 image: "ubuntu".to_string(),
+                bundled_from: None,
             })
             .limits(SandboxLimits {
                 cpu: "1".to_string(),

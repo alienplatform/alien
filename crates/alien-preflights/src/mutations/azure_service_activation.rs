@@ -256,6 +256,7 @@ mod tests {
         let sandbox = alien_core::Sandbox::new("agent-sbx".to_string())
             .code(alien_core::SandboxCode::Image {
                 image: "ubuntu".to_string(),
+                bundled_from: None,
             })
             .egress(alien_core::SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {

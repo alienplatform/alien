@@ -16,6 +16,7 @@ fn released_supervisor_policies_keep_their_startup_meaning() {
         let mut sandbox = Sandbox::new("legacy".into())
             .code(SandboxCode::Image {
                 image: "ubuntu".into(),
+                bundled_from: None,
             })
             .egress(expected.clone())
             .lifecycle(SandboxLifecyclePolicy {
@@ -40,6 +41,7 @@ fn runtime_defaults_do_not_become_the_startup_network_floor() {
     let mut sandbox = Sandbox::new("box".into())
         .code(SandboxCode::Image {
             image: "ubuntu".into(),
+            bundled_from: None,
         })
         .egress(SandboxEgress::Internet)
         .lifecycle(SandboxLifecyclePolicy {

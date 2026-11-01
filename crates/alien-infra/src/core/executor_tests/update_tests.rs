@@ -208,6 +208,7 @@ fn live_sandbox_entry() -> alien_core::ResourceEntry {
     let sandbox = alien_core::Sandbox::new("agents".to_string())
         .code(alien_core::SandboxCode::Image {
             image: "s3://example-artifacts/agents/bundle.zip".to_string(),
+            bundled_from: None,
         })
         .egress(alien_core::SandboxEgress::Internet)
         .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -349,6 +350,7 @@ async fn imported_continuation_leaves_cloud_sandbox_builds_to_runtime() -> Resul
                 alien_core::Sandbox::new("agents".to_string())
                     .code(alien_core::SandboxCode::Image {
                         image: "docker.io/library/python:3.12".into(),
+                        bundled_from: None,
                     })
                     .egress(alien_core::SandboxEgress::Internet)
                     .lifecycle(alien_core::SandboxLifecyclePolicy {

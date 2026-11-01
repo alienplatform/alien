@@ -95,6 +95,7 @@ mod tests {
             Sandbox::new(id.to_string())
                 .code(SandboxCode::Image {
                     image: "us-central1-docker.pkg.dev/p/r/agent:1".to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {

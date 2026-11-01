@@ -1673,7 +1673,7 @@ fn extract_repo_names(
             // Only a registry image on this host, the rule the controller sends credentials by: a
             // public image, catalog name or `s3://` bundle is never pulled here.
             match &sandbox.code {
-                SandboxCode::Image { image } => match classify_azure_sandbox_image(image) {
+                SandboxCode::Image { image, .. } => match classify_azure_sandbox_image(image) {
                     Some(AzureSandboxImage::Registry(reference))
                         if reference
                             .split_once('/')
@@ -2406,6 +2406,7 @@ mod tests {
             Sandbox::new(id.to_string())
                 .code(SandboxCode::Image {
                     image: image.to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::Internet)
                 .lifecycle(SandboxLifecyclePolicy {
@@ -2445,6 +2446,7 @@ mod tests {
         let sandbox = Sandbox::new("agents".to_string())
             .code(SandboxCode::Image {
                 image: "manager.example.com/artifacts/prj_other:sandbox-v1".to_string(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {

@@ -370,6 +370,7 @@ mod tests {
         let sandbox = Sandbox::new("agent".to_string())
             .code(SandboxCode::Image {
                 image: "registry.example.com/session:1".to_string(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::None)
             .lifecycle(SandboxLifecyclePolicy {

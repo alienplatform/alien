@@ -115,6 +115,7 @@ mod tests {
                 Sandbox::new("worker-sbx".to_string())
                     .code(SandboxCode::Image {
                         image: "python:3.12".to_string(),
+                        bundled_from: None,
                     })
                     .egress(SandboxEgress::None)
                     .lifecycle(SandboxLifecyclePolicy {
@@ -177,6 +178,7 @@ mod tests {
                 Sandbox::new("worker-sbx".to_string())
                     .code(SandboxCode::Image {
                         image: "python:3.12".to_string(),
+                        bundled_from: None,
                     })
                     .egress(SandboxEgress::None)
                     .lifecycle(SandboxLifecyclePolicy {

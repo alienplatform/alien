@@ -13,7 +13,7 @@ use alien_core::{
     },
     Network, NetworkSettings, PermissionProfile, RemoteBindings, ResourceLifecycle, Sandbox,
     SandboxCode, SandboxEgress, SandboxLifecyclePolicy, SandboxPrivilegedSupervisor,
-    ServiceAccount, Stack, StackSettings, Worker, WorkerCode,
+    ServiceAccount, SetupManagement, Stack, StackSettings, Worker, WorkerCode,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -31,6 +31,7 @@ fn sandbox_fixture_with(egress: SandboxEgress, image: &str) -> Sandbox {
     Sandbox::new("agents".to_string())
         .code(SandboxCode::Image {
             image: image.to_string(),
+            bundled_from: None,
         })
         .egress(egress)
         .lifecycle(SandboxLifecyclePolicy {
@@ -2221,4 +2222,149 @@ fn an_execute_only_profile_cannot_start_sessions() {
         granted.keys().map(String::as_str).collect::<Vec<_>>(),
         vec!["lambda:CreateMicrovmAuthToken", "lambda:GetMicrovm"],
     );
+}
+
+/// Every IAM statement the template declares, with the logical id of the resource it is in.
+fn iam_statements(template: &alien_cloudformation::CfTemplate) -> Vec<(String, Value)> {
+    fn collect(id: &str, value: &Value, out: &mut Vec<(String, Value)>) {
+        match value {
+            Value::Object(map) => {
+                if let Some(Value::Array(statements)) = map.get("Statement") {
+                    out.extend(statements.iter().map(|s| (id.to_string(), s.clone())));
+                }
+                map.values().for_each(|v| collect(id, v, out));
+            }
+            Value::Array(items) => items.iter().for_each(|v| collect(id, v, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for (id, resource) in &template.resources {
+        collect(
+            id,
+            &serde_json::to_value(resource).expect("serializes"),
+            &mut out,
+        );
+    }
+    out
+}
+
+fn actions(statement: &Value) -> Vec<String> {
+    match &statement["Action"] {
+        Value::String(action) => vec![action.clone()],
+        Value::Array(actions) => actions
+            .iter()
+            .filter_map(|a| a.as_str().map(str::to_string))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A Live sandbox released as a container image gets the deployment's bundle bucket under both
+/// setup-management modes; the template passes cfn-lint, and its guards hold: only the management
+/// role may write bundles, management writes them under `sandbox-bundle/` only, a workload's
+/// stack-wide provision grant cannot rewrite the bucket's policy, and the bucket is not retained.
+#[tokio::test]
+async fn the_bundle_bucket_and_its_guards_render_under_both_setup_modes() {
+    for mode in [SetupManagement::Manual, SetupManagement::Automatic] {
+        let settings = StackSettings {
+            setup_management: mode,
+            ..StackSettings::default()
+        };
+        let stack = Stack::new("acme-bundles".to_string())
+            .add(
+                sandbox_fixture_with(
+                    SandboxEgress::Allow,
+                    "210987654321.dkr.ecr.us-east-1.amazonaws.com/acme/agents@sha256:f00d",
+                ),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                Worker::new("api".to_string())
+                    .code(WorkerCode::Image {
+                        image: "210987654321.dkr.ecr.us-east-1.amazonaws.com/acme/api:1".into(),
+                    })
+                    .permissions("execution".to_string())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .permission(
+                "execution",
+                PermissionProfile::new().resource("*", ["storage/data-write", "storage/provision"]),
+            )
+            .build();
+        let stack =
+            super::aws_sandbox_gateway_tests::prepare_for_setup_template(stack, &settings).await;
+        let (template, _yaml) = render_built_ins_template(
+            &stack,
+            settings,
+            custom_resource_registration(),
+            CloudFormationTarget::Aws,
+            "aws",
+            &format!("bundle bucket ({mode:?})"),
+        );
+
+        let statements = iam_statements(&template);
+        if mode == SetupManagement::Manual {
+            // Setup creates the bucket and its policy; under automatic management the runtime
+            // creates both, as management.
+            assert!(
+                template.resources.contains_key("SandboxBundles"),
+                "the bundle bucket renders"
+            );
+            let guard = statements
+                .iter()
+                .find(|(_, s)| s["Sid"] == "OnlyManagementWritesBundles")
+                .expect("the bucket policy guards writes");
+            assert_eq!(guard.0, "SandboxBundlesBucketPolicy");
+            assert_eq!(guard.1["Effect"], "Deny");
+            assert_eq!(
+                guard.1["Condition"]["ArnNotEquals"]["aws:PrincipalArn"],
+                serde_json::json!({ "Fn::GetAtt": ["ManagementRole", "Arn"] }),
+                "the one writer is the role the controller signs in as"
+            );
+        }
+
+        let management_writes: Vec<_> = statements
+            .iter()
+            .filter(|(id, s)| {
+                id.starts_with("Management")
+                    && s["Effect"] == "Allow"
+                    && actions(s).iter().any(|a| a == "s3:PutObject")
+            })
+            .collect();
+        assert!(
+            !management_writes.is_empty(),
+            "{mode:?}: management may write bundles"
+        );
+        for (_, statement) in &management_writes {
+            let resources = statement["Resource"].to_string();
+            assert!(
+                resources.contains("sandbox-bundles") && resources.contains("/sandbox-bundle/*"),
+                "{mode:?}: management writes only bundle keys: {statement}"
+            );
+        }
+
+        // The workload's stack-wide provision grant comes with a Deny on the bundle bucket's policy.
+        // Under automatic management the runtime writes that role, so it is not in the template.
+        if mode == SetupManagement::Manual {
+            assert!(
+                statements.iter().any(|(id, s)| {
+                    id.starts_with("ExecutionSa")
+                        && s["Effect"] == "Deny"
+                        && actions(s).iter().any(|a| a == "s3:PutBucketPolicy")
+                        && s["Resource"].to_string().contains("-sandbox-bundles*")
+                }),
+                "stack-wide provision cannot rewrite the bundle bucket's policy"
+            );
+        }
+        assert!(
+            !statements.iter().any(|(id, s)| {
+                id.starts_with("Management")
+                    && s["Effect"] == "Deny"
+                    && actions(s).iter().any(|a| a == "s3:PutBucketPolicy")
+            }),
+            "{mode:?}: management keeps setting the bundle bucket's policy"
+        );
+    }
 }

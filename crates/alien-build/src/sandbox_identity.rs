@@ -424,6 +424,7 @@ mod tests {
         let sandbox = alien_core::Sandbox::new("boot".into())
             .code(alien_core::SandboxCode::Image {
                 image: "unused".into(),
+                bundled_from: None,
             })
             .egress(alien_core::SandboxEgress::None)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -588,6 +589,7 @@ mod tests {
                 let mut sandbox = Sandbox::new("identity".into())
                     .code(SandboxCode::Image {
                         image: "docker.io/library/ubuntu:24.04".into(),
+                        bundled_from: None,
                     })
                     .egress(egress)
                     .lifecycle(SandboxLifecyclePolicy {

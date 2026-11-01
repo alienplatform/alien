@@ -13,10 +13,12 @@ use crate::{
     },
     expr,
 };
+use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
 use alien_core::{
-    LifecycleRule, PermissionProfile, PermissionSetReference, RemoteStackManagement, Result,
-    ServiceAccount, Storage, import::EmitContext,
+    import::EmitContext, ErrorData, LifecycleRule, PermissionProfile, PermissionSetReference,
+    RemoteStackManagement, Result, ServiceAccount, Storage,
 };
+use alien_error::AlienError;
 use alien_permissions::BindingTarget;
 use hcl::{
     expr::Expression,
@@ -44,7 +46,11 @@ impl TfEmitter for AwsStorageEmitter {
         fragment
             .resource_blocks
             .push(public_access_block(label, !storage.public_read));
-        fragment.resource_blocks.push(bucket_policy(label, storage));
+        fragment.resource_blocks.push(bucket_policy(
+            label,
+            storage,
+            sandbox_bundle_writer(ctx, storage),
+        ));
 
         if !storage.cors_allowed_origins.is_empty() {
             fragment
@@ -136,16 +142,19 @@ fn emit_storage_key_iam(
 }
 
 fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> Block {
+    // Sandbox bundles are build inputs the controller renders again and deletes with each sandbox,
+    // so their bucket goes with the deployment instead of outliving it.
+    let bundles = storage.id() == SANDBOX_BUNDLE_STORAGE_ID;
     resource_block(
         "aws_s3_bucket",
         label,
         [
             attr("bucket", resource_prefix_template(storage.id())),
-            attr("force_destroy", Expression::Bool(false)),
+            attr("force_destroy", Expression::Bool(bundles)),
             attr("tags", tags(ctx, "storage")),
             nested(block(
                 "lifecycle",
-                [attr("prevent_destroy", Expression::Bool(true))],
+                [attr("prevent_destroy", Expression::Bool(!bundles))],
             )),
         ],
     )
@@ -205,7 +214,17 @@ fn public_access_block(label: &str, block_public: bool) -> Block {
     )
 }
 
-fn bucket_policy(label: &str, storage: &Storage) -> Block {
+/// The one principal that may write sandbox bundles: the management role the controller runs as.
+/// A bundle is what the next image is built from, so a workload able to write one could choose
+/// what a sandbox runs; its grants reach this bucket like any other of the stack's.
+fn sandbox_bundle_writer(ctx: &EmitContext<'_>, storage: &Storage) -> Option<Expression> {
+    (storage.id() == SANDBOX_BUNDLE_STORAGE_ID)
+        .then(|| remote_stack_management_label(ctx))
+        .flatten()
+        .map(|label| expr::traversal(["aws_iam_role", label, "arn"]))
+}
+
+fn bucket_policy(label: &str, storage: &Storage, bundle_writer: Option<Expression>) -> Block {
     let objects_arn = || expr::raw(format!("\"${{{}}}/*\"", bucket_path(label, "arn")));
 
     let mut statements = vec![expr::object([
@@ -242,6 +261,33 @@ fn bucket_policy(label: &str, storage: &Storage) -> Block {
             ("Principal", Expression::String("*".to_string())),
             ("Action", Expression::String("s3:GetObject".to_string())),
             ("Resource", objects_arn()),
+        ]));
+    }
+
+    if let Some(writer) = bundle_writer {
+        // An explicit Deny outranks every same-account Allow, including stack-wide grants. Only
+        // writes are held back: a delete can fail a build but not change what it builds, and
+        // setup teardown empties the bucket.
+        statements.push(expr::object([
+            (
+                "Sid",
+                Expression::String("OnlyManagementWritesBundles".to_string()),
+            ),
+            ("Effect", Expression::String("Deny".to_string())),
+            ("Principal", Expression::String("*".to_string())),
+            (
+                "Action",
+                Expression::Array(vec![
+                    Expression::String("s3:PutObject".to_string()),
+                    Expression::String("s3:PutObjectAcl".to_string()),
+                    Expression::String("s3:PutObjectTagging".to_string()),
+                ]),
+            ),
+            ("Resource", objects_arn()),
+            (
+                "Condition",
+                expr::object([("ArnNotEquals", expr::object([("aws:PrincipalArn", writer)]))]),
+            ),
         ]));
     }
 
@@ -383,10 +429,48 @@ fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &st
     Ok(())
 }
 
+/// `storage/data-read` on the deployment's sandbox bundle Storage, for the build role labelled
+/// `role_label` of a sandbox that renders its bundle there. The sandbox emits it, because it owns
+/// the role and depends on the Storage; emitted with the Storage it would close a dependency
+/// cycle.
+pub(crate) fn emit_sandbox_bundle_read(
+    ctx: &EmitContext<'_>,
+    fragment: &mut TfFragment,
+    role_label: &str,
+) -> Result<()> {
+    let storage_label = ctx.name_for(SANDBOX_BUNDLE_STORAGE_ID).ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: format!("missing Terraform label for resource '{SANDBOX_BUNDLE_STORAGE_ID}'"),
+        })
+    })?;
+    let read = alien_permissions::get_permission_set("storage/data-read").ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: "permission set 'storage/data-read' is not defined".to_string(),
+        })
+    })?;
+    let context = stack_permission_context(ctx)
+        .with_resource_name(format!("${{{}}}", bucket_path(storage_label, "bucket")));
+    emit_iam_role_policy_for_target_with_label(
+        fragment,
+        role_label,
+        read,
+        &format!("{role_label}_sandbox_bundle_read"),
+        "sandbox-bundle-read",
+        &context,
+        BindingTarget::Resource,
+    )
+}
+
 fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<PermissionSetReference>)> {
     let mut owners = Vec::new();
     for (profile_name, profile) in ctx.stack.permission_profiles() {
-        let refs = storage_permission_refs(profile, ctx.resource_id);
+        // A workload's stack-wide sets do not reach the sandbox bundle Storage: its bundles decide
+        // what a sandbox runs, and only management writes them.
+        let refs = storage_permission_refs(
+            profile,
+            ctx.resource_id,
+            ctx.resource_id != SANDBOX_BUNDLE_STORAGE_ID,
+        );
         if refs.is_empty() {
             continue;
         }
@@ -398,7 +482,7 @@ fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<Permissi
     }
 
     if let Some(profile) = ctx.stack.management().profile() {
-        let refs = storage_permission_refs(profile, ctx.resource_id);
+        let refs = storage_permission_refs(profile, ctx.resource_id, true);
         if !refs.is_empty() {
             if let Some(label) = remote_stack_management_label(ctx) {
                 owners.push((label.to_string(), refs));
@@ -421,6 +505,7 @@ fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<Permissi
 fn storage_permission_refs(
     profile: &PermissionProfile,
     resource_id: &str,
+    stack_wide: bool,
 ) -> Vec<PermissionSetReference> {
     let mut refs = Vec::new();
     let mut seen_ids = std::collections::HashSet::new();
@@ -433,7 +518,7 @@ fn storage_permission_refs(
         }
     }
 
-    if let Some(wildcard_refs) = profile.0.get("*") {
+    if let Some(wildcard_refs) = profile.0.get("*").filter(|_| stack_wide) {
         for permission_ref in wildcard_refs
             .iter()
             .filter(|permission_ref| permission_ref.id().starts_with("storage/"))

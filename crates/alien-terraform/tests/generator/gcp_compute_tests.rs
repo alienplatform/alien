@@ -188,6 +188,7 @@ fn gcp_sandbox_stack(lifecycle: ResourceLifecycle) -> Stack {
             Sandbox::new("agents".to_string())
                 .code(SandboxCode::Image {
                     image: "python:3.12".to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {
@@ -298,6 +299,7 @@ fn a_gcp_remote_sandbox_grants_the_access_identity_its_own_engine_and_nothing_wi
             Sandbox::new("agents".to_string())
                 .code(SandboxCode::Image {
                     image: "python:3.12".to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::Allow)
                 .lifecycle(SandboxLifecyclePolicy {
@@ -434,6 +436,7 @@ fn a_frozen_gcp_sandbox_manager_gets_template_verbs_on_its_engine_only() {
             Sandbox::new("agents".to_string())
                 .code(SandboxCode::Image {
                     image: "python:3.12".to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {
@@ -534,6 +537,7 @@ fn a_gcp_remote_sandbox_management_role_heartbeats_without_reaching_a_session() 
             Sandbox::new("agents".to_string())
                 .code(SandboxCode::Image {
                     image: "python:3.12".to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::Allow)
                 .lifecycle(SandboxLifecyclePolicy {

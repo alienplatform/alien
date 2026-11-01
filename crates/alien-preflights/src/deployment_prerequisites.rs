@@ -1424,6 +1424,7 @@ mod tests {
         let sandbox = alien_core::Sandbox::new("boxes".into())
             .code(alien_core::SandboxCode::Image {
                 image: "s3://example/box.zip".into(),
+                bundled_from: None,
             })
             .egress(alien_core::SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -1466,6 +1467,7 @@ mod tests {
         let sandbox = alien_core::Sandbox::new("boxes".into())
             .code(alien_core::SandboxCode::Image {
                 image: "s3://example/box.zip".into(),
+                bundled_from: None,
             })
             .egress(alien_core::SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {

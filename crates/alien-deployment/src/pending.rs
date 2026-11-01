@@ -834,6 +834,7 @@ mod tests {
         let sandbox = alien_core::Sandbox::new("agents".to_string())
             .code(alien_core::SandboxCode::Image {
                 image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+                bundled_from: None,
             })
             .egress(alien_core::SandboxEgress::None)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -981,6 +982,7 @@ mod tests {
             let sandbox = alien_core::Sandbox::new("agents".to_string())
                 .code(alien_core::SandboxCode::Image {
                     image: "s3://bucket/sandbox-bundle/v1/bundle.zip".to_string(),
+                    bundled_from: None,
                 })
                 .private_base_image(
                     "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base:1".to_string(),

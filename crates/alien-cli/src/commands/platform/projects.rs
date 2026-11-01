@@ -1079,7 +1079,7 @@ fn sandbox_image(stack: &Stack) -> Result<String> {
         .resources()
         .find_map(
             |(_, entry)| match &entry.config.downcast_ref::<Sandbox>()?.code {
-                SandboxCode::Image { image } => Some(image.clone()),
+                SandboxCode::Image { image, .. } => Some(image.clone()),
                 SandboxCode::Source { .. } => None,
             },
         )
@@ -2402,15 +2402,18 @@ mod tests {
                     .tag()
             }
         };
-        assert_eq!(
+        // Every cloud layers its own agent contract onto the base, so none publishes the bare
+        // source hash and no two share a tag.
+        let plain = format!("remote-sandbox-src-{}", &source_hash[..16]);
+        let tags = [
             tag(Platform::Aws).await,
-            format!("remote-sandbox-src-{}", &source_hash[..16]),
-            "AWS publishes the base before bundle assembly"
-        );
-        for platform in [Platform::Gcp, Platform::Azure] {
-            assert_ne!(tag(platform).await, tag(Platform::Aws).await);
-        }
-        assert_ne!(tag(Platform::Gcp).await, tag(Platform::Azure).await);
+            tag(Platform::Gcp).await,
+            tag(Platform::Azure).await,
+        ];
+        assert!(tags.iter().all(|tag| *tag != plain), "{tags:?}");
+        assert_ne!(tags[0], tags[1]);
+        assert_ne!(tags[0], tags[2]);
+        assert_ne!(tags[1], tags[2]);
     }
 
     /// The configure endpoint accepts a GCP image only as the manager's host, then the GCP project,

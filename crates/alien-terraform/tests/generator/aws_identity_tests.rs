@@ -398,6 +398,7 @@ fn sandbox_fixture_with(egress: SandboxEgress, image: &str) -> Sandbox {
     Sandbox::new("agents".to_string())
         .code(SandboxCode::Image {
             image: image.to_string(),
+            bundled_from: None,
         })
         .egress(egress)
         .lifecycle(SandboxLifecyclePolicy {

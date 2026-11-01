@@ -586,6 +586,7 @@ mod tests {
         let sandbox = crate::Sandbox::new("agents".to_string())
             .code(crate::SandboxCode::Image {
                 image: "s3://alien-bundles/sandbox/bundle.zip".to_string(),
+                bundled_from: None,
             })
             .egress(crate::SandboxEgress::Allow)
             .lifecycle(crate::SandboxLifecyclePolicy {
@@ -912,6 +913,7 @@ mod tests {
         crate::Sandbox::new(id.to_string())
             .code(crate::SandboxCode::Image {
                 image: image.to_string(),
+                bundled_from: None,
             })
             .maybe_private_base_image(private_base_image.map(str::to_string))
             .egress(crate::SandboxEgress::None)

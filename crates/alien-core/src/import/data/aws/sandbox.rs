@@ -1,6 +1,7 @@
 use alien_error::AlienError;
 use serde::{Deserialize, Serialize};
 
+use crate::sandbox_setup_inputs::aws_sandbox_renders_bundle;
 use crate::{parse_bundle_uri, BundleUri, ErrorData, Result, Sandbox, SandboxCode, Stack};
 
 /// AWS Sandbox ImportData.
@@ -33,6 +34,8 @@ pub struct AwsSandboxImportData {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_role_arn: Option<String>,
     /// Bundle the controller builds the image from. Only a runtime-provisioned sandbox carries it.
+    /// Absent for a sandbox whose controller renders its own bundle into the deployment's bundle
+    /// Storage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bundle_uri: Option<String>,
     /// Egress network connectors. Deleting one while MicroVMs still reference it breaks their
@@ -74,14 +77,18 @@ impl AwsSandboxImportData {
                 reason,
             })
         };
-        let SandboxCode::Image { image } = &sandbox.code else {
+        let SandboxCode::Image { image, .. } = &sandbox.code else {
             return Err(refuse(
                 "an AWS sandbox is built from a prebuilt s3:// bundle, not from source".to_string(),
             ));
         };
-        let bundle_uri = match parse_bundle_uri(image).map_err(refuse)? {
-            BundleUri::Literal(uri) => uri.to_string(),
-            BundleUri::Regional { before, after } => format!("{before}{region}{after}"),
+        let bundle_uri = if aws_sandbox_renders_bundle(stack, &sandbox.id) {
+            None
+        } else {
+            Some(match parse_bundle_uri(image).map_err(refuse)? {
+                BundleUri::Literal(uri) => uri.to_string(),
+                BundleUri::Regional { before, after } => format!("{before}{region}{after}"),
+            })
         };
         let isolated = crate::sandbox_egress::sandbox_needs_connector(stack, sandbox);
         let egress_connector_arns = if isolated {
@@ -97,7 +104,7 @@ impl AwsSandboxImportData {
             image_arn: None,
             image_version: None,
             build_role_arn: Some(build_role_arn),
-            bundle_uri: Some(bundle_uri),
+            bundle_uri,
             egress_connector_arns,
             preview_ports: sandbox.preview_ports.clone(),
             allow_egress: !isolated,

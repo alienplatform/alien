@@ -17,6 +17,7 @@ use crate::{
     },
     template::{CfExpression, CfResource},
 };
+use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
 use alien_core::{
     import::EmitContext, ownership_policy_for_resource_type, Email, ErrorData, PermissionProfile,
     PermissionSetReference, RemoteStackManagement, Result, ServiceAccount, Storage,
@@ -169,6 +170,8 @@ impl CfEmitter for AwsStorageEmitter {
         }
 
         bucket.properties.insert("Tags".to_string(), tags(ctx));
+        // The sandbox bundle bucket is kept too. CloudFormation cannot empty a bucket, and one
+        // left holding a bundle (the stack deleted before the deployment) would fail the delete.
         bucket.retain_data();
 
         let mut policy = CfResource::new(
@@ -184,6 +187,7 @@ impl CfEmitter for AwsStorageEmitter {
                 bucket_id,
                 storage.public_read,
                 email_inbound_contribution(ctx).as_ref(),
+                sandbox_bundle_writer(ctx, storage).as_ref(),
             ),
         );
 
@@ -265,10 +269,21 @@ struct EmailInboundContribution {
     enabled_when: Option<String>,
 }
 
+/// The one principal that may write sandbox bundles: the management role the controller runs as.
+/// A bundle is what the next image is built from, so a workload able to write one could choose
+/// what a sandbox runs; its grants reach this bucket like any other of the stack's.
+fn sandbox_bundle_writer(ctx: &EmitContext<'_>, storage: &Storage) -> Option<CfExpression> {
+    (storage.id() == SANDBOX_BUNDLE_STORAGE_ID)
+        .then(|| remote_stack_management_role_id(ctx))
+        .flatten()
+        .map(|role_id| CfExpression::get_att(&role_id, "Arn"))
+}
+
 fn bucket_policy_document(
     bucket_id: &str,
     public_read: bool,
     ses_inbound: Option<&EmailInboundContribution>,
+    bundle_writer: Option<&CfExpression>,
 ) -> CfExpression {
     let bucket_arn = CfExpression::get_att(bucket_id, "Arn");
     let bucket_objects_arn =
@@ -299,6 +314,32 @@ fn bucket_policy_document(
             ("Principal", CfExpression::from("*")),
             ("Action", CfExpression::from("s3:GetObject")),
             ("Resource", bucket_objects_arn.clone()),
+        ]));
+    }
+
+    if let Some(writer) = bundle_writer {
+        // An explicit Deny outranks every same-account Allow, including stack-wide grants. Only
+        // writes are held back: a delete can fail a build but not change what it builds.
+        statements.push(CfExpression::object([
+            ("Sid", CfExpression::from("OnlyManagementWritesBundles")),
+            ("Effect", CfExpression::from("Deny")),
+            ("Principal", CfExpression::from("*")),
+            (
+                "Action",
+                CfExpression::list([
+                    CfExpression::from("s3:PutObject"),
+                    CfExpression::from("s3:PutObjectAcl"),
+                    CfExpression::from("s3:PutObjectTagging"),
+                ]),
+            ),
+            ("Resource", bucket_objects_arn.clone()),
+            (
+                "Condition",
+                CfExpression::object([(
+                    "ArnNotEquals",
+                    CfExpression::object([("aws:PrincipalArn", writer.clone())]),
+                )]),
+            ),
         ]));
     }
 
@@ -476,6 +517,80 @@ fn storage_iam_policies(
     Ok(resources)
 }
 
+/// `storage/data-read` on the deployment's sandbox bundle Storage, for the build role `role_id`
+/// of a sandbox that renders its bundle there. The sandbox emits it, because it owns the role and
+/// depends on the Storage; emitted with the Storage it would close a dependency cycle.
+pub(crate) fn sandbox_bundle_read_policy(
+    ctx: &EmitContext<'_>,
+    role_id: &str,
+) -> Result<CfResource> {
+    let bucket_id = ctx.name_for(SANDBOX_BUNDLE_STORAGE_ID).ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: format!(
+                "missing CloudFormation logical id for resource '{SANDBOX_BUNDLE_STORAGE_ID}'"
+            ),
+        })
+    })?;
+    let read = alien_permissions::get_permission_set("storage/data-read").ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: "permission set 'storage/data-read' is not defined".to_string(),
+        })
+    })?;
+    let context = stack_permission_context(ctx)
+        .with_resource_name(format!("${{AWS::StackName}}-{SANDBOX_BUNDLE_STORAGE_ID}"));
+    let policy = AwsCloudFormationPermissionsGenerator::new()
+        .generate_policy(read, BindingTarget::Resource, &context)
+        .context(ErrorData::GenericError {
+            message: "failed to generate the sandbox bundle read policy".to_string(),
+        })?;
+    let policy_value = serde_json::to_value(policy).into_alien_error().context(
+        ErrorData::TemplateSerializationFailed {
+            format: "CloudFormation IAM policy".to_string(),
+            reason: "Failed to serialize IAM policy".to_string(),
+        },
+    )?;
+    let CfExpression::Object(mut policy_object) = cf_from_json(policy_value)? else {
+        return Err(AlienError::new(ErrorData::TemplateSerializationFailed {
+            format: "CloudFormation IAM policy".to_string(),
+            reason: "policy did not serialize to a JSON object".to_string(),
+        }));
+    };
+    let statements = match policy_object.shift_remove("Statement") {
+        Some(CfExpression::List(statements)) => statements,
+        _ => Vec::new(),
+    };
+    let statements = statements
+        .into_iter()
+        .map(|statement| storage_policy_statement_for_bucket(statement, bucket_id))
+        .collect::<Vec<_>>();
+
+    let mut policy_resource = CfResource::new(
+        format!("{role_id}BundleRead"),
+        "AWS::IAM::Policy".to_string(),
+    );
+    policy_resource.properties.insert(
+        "PolicyName".to_string(),
+        CfExpression::from("sandbox-bundle-read"),
+    );
+    policy_resource.properties.insert(
+        "PolicyDocument".to_string(),
+        CfExpression::object([
+            ("Version", CfExpression::from("2012-10-17")),
+            (
+                "Statement",
+                CfExpression::list(uniquify_iam_statement_sids(statements)),
+            ),
+        ]),
+    );
+    policy_resource.properties.insert(
+        "Roles".to_string(),
+        CfExpression::list([CfExpression::ref_(role_id)]),
+    );
+    policy_resource.depends_on.push(bucket_id.to_string());
+    policy_resource.depends_on.push(role_id.to_string());
+    Ok(policy_resource)
+}
+
 fn storage_policy_statement_for_bucket(statement: CfExpression, bucket_id: &str) -> CfExpression {
     let CfExpression::Object(mut statement_object) = statement else {
         return statement;
@@ -522,7 +637,13 @@ fn storage_permission_owners(
 ) -> Vec<(usize, (String, Vec<PermissionSetReference>))> {
     let mut owners = Vec::new();
     for (profile_name, profile) in ctx.stack.permission_profiles() {
-        let refs = storage_permission_refs(profile, ctx.resource_id);
+        // A workload's stack-wide sets do not reach the sandbox bundle Storage: its bundles decide
+        // what a sandbox runs, and only management writes them.
+        let refs = storage_permission_refs(
+            profile,
+            ctx.resource_id,
+            ctx.resource_id != SANDBOX_BUNDLE_STORAGE_ID,
+        );
         if refs.is_empty() {
             continue;
         }
@@ -536,7 +657,7 @@ fn storage_permission_owners(
     }
 
     if let Some(profile) = ctx.stack.management().profile() {
-        let refs = storage_permission_refs(profile, ctx.resource_id);
+        let refs = storage_permission_refs(profile, ctx.resource_id, true);
         if !refs.is_empty() {
             if let Some(role_id) = remote_stack_management_role_id(ctx) {
                 owners.push((role_id, refs));
@@ -559,6 +680,7 @@ fn storage_permission_owners(
 fn storage_permission_refs(
     profile: &PermissionProfile,
     resource_id: &str,
+    stack_wide: bool,
 ) -> Vec<PermissionSetReference> {
     let mut refs = Vec::new();
     let mut seen_ids = std::collections::HashSet::new();
@@ -571,7 +693,7 @@ fn storage_permission_refs(
         }
     }
 
-    if let Some(wildcard_refs) = profile.0.get("*") {
+    if let Some(wildcard_refs) = profile.0.get("*").filter(|_| stack_wide) {
         for permission_ref in wildcard_refs
             .iter()
             .filter(|permission_ref| permission_ref.id().starts_with("storage/"))

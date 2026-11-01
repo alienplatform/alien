@@ -103,6 +103,7 @@ async fn a_failed_build_is_rebuilt_on_retry() {
             Sandbox::new("agents".to_string())
                 .code(SandboxCode::Image {
                     image: PYTHON.to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::Internet)
                 .lifecycle(SandboxLifecyclePolicy {

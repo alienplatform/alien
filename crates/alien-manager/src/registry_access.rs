@@ -548,8 +548,8 @@ fn legacy_shared_repository(
         stack.resources().any(|(_, entry)| {
             [SandboxImageSource::None, sandbox_image_source(*platform)]
                 .into_iter()
-                .filter_map(|source| resource_image_reference(entry, source))
-                .filter_map(image_repository_path)
+                .flat_map(|source| resource_image_references(entry, source))
+                .filter_map(|(image, _)| image_repository_path(image))
                 .any(|path| path.starts_with(&format!("{shared}/")))
         })
     };
@@ -734,7 +734,7 @@ pub async fn cleanup_deleted_registry_access(
         if !prefixes.current.is_empty() {
             let mut collect = |stack: &Stack| {
                 for (_, entry) in stack.resources() {
-                    if let Some(image) = resource_image_reference(entry, SandboxImageSource::None) {
+                    for (image, _) in resource_image_references(entry, SandboxImageSource::None) {
                         if let Some((_, repository)) = prefixes.repository_of(image, false) {
                             repo_ids.push(repository);
                         }
@@ -1003,7 +1003,7 @@ fn declares_sandbox(state: &DeploymentState) -> bool {
 /// remaining platforms have no cross-account grant path at all.
 fn sandbox_image_source(platform: Platform) -> SandboxImageSource {
     match platform {
-        Platform::Aws => SandboxImageSource::PrivateBaseImage,
+        Platform::Aws => SandboxImageSource::CodeOrPrivateBaseImage,
         Platform::Gcp => SandboxImageSource::Code,
         _ => SandboxImageSource::None,
     }
@@ -1012,36 +1012,56 @@ fn sandbox_image_source(platform: Platform) -> SandboxImageSource {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SandboxImageSource {
     None,
-    PrivateBaseImage,
+    /// AWS: the rendered bundle's `code.image`, and a published bundle's `privateBaseImage`.
+    CodeOrPrivateBaseImage,
     Code,
 }
 
-/// The image a resource pulls from Alien's registry, if it declares one.
+/// The images a resource pulls from the registry, each with whether it is the resource's own
+/// `code.image`, which a release records as the manager's proxy reference.
 ///
-/// A worker names it in `code.image`. An AWS sandbox's `code.image` is its S3 bundle URI and
-/// matches no repository prefix, so `privateBaseImage`, what its Dockerfile pulls, is the only
-/// field naming the repository its build needs opened.
-fn resource_image_reference(
+/// A worker names its image in `code.image`. An AWS sandbox's controller renders its bundle from
+/// `code.image` when that is a container image; a deployment whose setup granted a publisher's
+/// store builds from a published bundle `FROM` `privateBaseImage` instead, so a release carrying
+/// both needs both opened. A published `code.image` is an S3 URI and names no repository.
+fn resource_image_references(
     entry: &ResourceEntry,
     sandbox_source: SandboxImageSource,
-) -> Option<&str> {
+) -> Vec<(&str, bool)> {
     if let Some(worker) = entry.config.downcast_ref::<Worker>() {
         return match &worker.code {
-            WorkerCode::Image { image } => Some(image),
-            _ => None,
+            WorkerCode::Image { image } => vec![(image.as_str(), true)],
+            _ => Vec::new(),
         };
     }
-    if let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() {
-        return match sandbox_source {
-            SandboxImageSource::PrivateBaseImage => sandbox.private_base_image.as_deref(),
-            SandboxImageSource::Code => match &sandbox.code {
-                SandboxCode::Image { image } => Some(image),
-                _ => None,
-            },
-            SandboxImageSource::None => None,
-        };
+    let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() else {
+        return Vec::new();
+    };
+    let (code_image, bundled_from) = match &sandbox.code {
+        SandboxCode::Image {
+            image,
+            bundled_from,
+        } => (Some(image.as_str()), bundled_from.as_deref()),
+        SandboxCode::Source { .. } => (None, None),
+    };
+    match sandbox_source {
+        SandboxImageSource::None => Vec::new(),
+        SandboxImageSource::Code => code_image.map(|image| (image, true)).into_iter().collect(),
+        // A release that carries a publisher's bundle in `code.image` names the image it was built
+        // from in `bundledFrom`, which a deployment with its own bundle Storage renders from.
+        SandboxImageSource::CodeOrPrivateBaseImage => code_image
+            .filter(|image| !image.starts_with("s3://"))
+            .into_iter()
+            .chain(bundled_from)
+            .map(|image| (image, true))
+            .chain(
+                sandbox
+                    .private_base_image
+                    .as_deref()
+                    .map(|image| (image, false)),
+            )
+            .collect(),
     }
-    None
 }
 
 /// The repositories a sandbox in this project can be granted: its own under the current prefix,
@@ -1144,10 +1164,11 @@ fn collect_image_repositories(
     // under whichever prefix, current or legacy, the image was released.
     let prefix = prefixes.current.as_str();
     let mut collect = |stack: &Stack| {
-        for (id, entry) in stack.resources() {
-            let Some(image) = resource_image_reference(entry, sandbox_source) else {
-                continue;
-            };
+        for (id, entry, image, from_code) in stack.resources().flat_map(|(id, entry)| {
+            resource_image_references(entry, sandbox_source)
+                .into_iter()
+                .map(move |(image, from_code)| (id, entry, image, from_code))
+        }) {
             let is_sandbox = entry.config.downcast_ref::<Sandbox>().is_some();
             let Some((image_prefix, image_path)) = prefixes.repository_of(image, is_sandbox) else {
                 continue;
@@ -1175,8 +1196,7 @@ fn collect_image_repositories(
             };
             // The host too: the grant is written on this registry, so a same-path repository in
             // another account would be granted here and pulled from there.
-            let is_worker = entry.config.downcast_ref::<Worker>().is_some();
-            let proxy_image = (is_worker || sandbox_source == SandboxImageSource::Code)
+            let proxy_image = from_code
                 && proxy_url.is_some_and(|proxy| {
                     let host = alien_core::image_rewrite::strip_url_scheme(image)
                         .split_once('/')
@@ -1237,7 +1257,7 @@ fn has_registry_backed_image(state: &DeploymentState, platform: &Platform) -> bo
 fn stack_has_registry_backed_image(stack: &Stack, sandbox_source: SandboxImageSource) -> bool {
     stack
         .resources()
-        .any(|(_id, entry)| resource_image_reference(entry, sandbox_source).is_some())
+        .any(|(_id, entry)| !resource_image_references(entry, sandbox_source).is_empty())
 }
 
 fn repository_path_under_prefix(image: &str, prefix: &str) -> Option<String> {
@@ -2279,13 +2299,15 @@ mod tests {
         sandbox_stack_with_code(STORED_BUNDLE_URI, private_base_image)
     }
 
-    /// A GCP sandbox pulls `code.image` itself, so its own reference is what the grant reads.
+    /// A sandbox naming `code.image` directly: a GCP sandbox pulls it, and an AWS sandbox renders
+    /// its bundle from it.
     fn sandbox_stack_with_code(image: &str, private_base_image: Option<&str>) -> Stack {
         Stack::new("test-stack".to_string())
             .add(
                 Sandbox::new("agents".to_string())
                     .code(SandboxCode::Image {
                         image: image.to_string(),
+                        bundled_from: None,
                     })
                     .maybe_private_base_image(private_base_image.map(str::to_string))
                     .egress(SandboxEgress::Internet)
@@ -3163,6 +3185,7 @@ mod tests {
                 Sandbox::new("agents".to_string())
                     .code(SandboxCode::Image {
                         image: STORED_BUNDLE_URI.to_string(),
+                        bundled_from: None,
                     })
                     .private_base_image(
                         "123456789012.dkr.ecr.{region}.amazonaws.com/\
@@ -3208,6 +3231,7 @@ mod tests {
                 Sandbox::new("agents".to_string())
                     .code(SandboxCode::Image {
                         image: STORED_BUNDLE_URI.to_string(),
+                        bundled_from: None,
                     })
                     .private_base_image(
                         "123456789012.dkr.ecr.{region}.amazonaws.com/\
@@ -3355,6 +3379,46 @@ mod tests {
                 vec![repository]
             );
         }
+    }
+
+    /// A sandbox whose controller renders its own bundle builds `FROM` its released image, so
+    /// that image's repository is granted. A release that names a published bundle in
+    /// `code.image` keeps the released image in `bundledFrom`, granted the same, and its base
+    /// granted too, for the setups that still build from the published bundle.
+    #[test]
+    fn an_aws_sandbox_rendering_its_bundle_has_its_released_image_granted() {
+        let released = format!(
+            "{RENAMED_HOST}/sandbox-cache/artifacts-{PROJECT}@sha256:{}",
+            "a".repeat(64)
+        );
+        let state = aws_state_with_stack(sandbox_stack_with_code(&released, None));
+        assert_eq!(
+            repository_ids_for_access(&RenamedRegistry, &state, PROJECT),
+            vec![format!("sandbox-cache/artifacts-{PROJECT}")]
+        );
+
+        let base = format!("{RENAMED_HOST}/sandbox-acme/acme-artifacts-{PROJECT}:v1");
+        let mut published = sandbox_stack(Some(&base));
+        let mut sandbox = published.resources["agents"]
+            .config
+            .downcast_ref::<Sandbox>()
+            .expect("a sandbox")
+            .clone();
+        sandbox.code = SandboxCode::Image {
+            image: STORED_BUNDLE_URI.to_string(),
+            bundled_from: Some(released.clone()),
+        };
+        published.resources["agents"].config = alien_core::Resource::new(sandbox);
+        let state = aws_state_with_stack(published);
+        let mut granted = repository_ids_for_access(&RenamedRegistry, &state, PROJECT);
+        granted.sort();
+        assert_eq!(
+            granted,
+            vec![
+                format!("sandbox-acme/acme-artifacts-{PROJECT}"),
+                format!("sandbox-cache/artifacts-{PROJECT}"),
+            ]
+        );
     }
 
     #[test]

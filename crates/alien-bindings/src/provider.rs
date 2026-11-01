@@ -2264,6 +2264,7 @@ mod tests {
         let declared_as_default = alien_core::Sandbox::new("agent-sbx".to_string())
             .code(alien_core::SandboxCode::Image {
                 image: "ubuntu".to_string(),
+                bundled_from: None,
             })
             .limits(alien_core::SandboxLimits {
                 cpu: DEFAULT_AZURE_CPU.to_string(),

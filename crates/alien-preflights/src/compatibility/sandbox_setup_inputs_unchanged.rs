@@ -124,6 +124,7 @@ mod tests {
         let sandbox = Sandbox::new("agents".to_string())
             .code(SandboxCode::Image {
                 image: image.to_string(),
+                bundled_from: None,
             })
             .maybe_private_base_image(private_base_image.map(str::to_string))
             .egress(egress)

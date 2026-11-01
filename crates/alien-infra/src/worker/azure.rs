@@ -470,7 +470,14 @@ fn gone_unless_failed<T>(
 ) -> Result<()> {
     match result {
         Ok(_) => Ok(()),
-        Err(error) if matches!(error.error, Some(CloudClientErrorData::RemoteResourceNotFound { .. })) => Ok(()),
+        Err(error)
+            if matches!(
+                error.error,
+                Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+            ) =>
+        {
+            Ok(())
+        }
         Err(error) => Err(error.context(ErrorData::CloudPlatformError {
             message: message(),
             resource_id: Some(ctx.desired_config.id().to_string()),
@@ -6479,20 +6486,23 @@ mod tests {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut apps = MockContainerAppsApi::new();
         let seen = calls.clone();
-        apps.expect_delete_dapr_component().returning(move |_, _, name| {
-            if seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
-                Ok(OperationResult::LongRunning(LongRunningOperation {
-                    url: "https://management.azure.com/operations/dapr-delete".to_string(),
-                    retry_after: None,
-                    location_url: None,
-                }))
-            } else {
-                Err(AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
-                    resource_type: "Dapr component".to_string(),
-                    resource_name: name.to_string(),
-                }))
-            }
-        });
+        apps.expect_delete_dapr_component()
+            .returning(move |_, _, name| {
+                if seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    Ok(OperationResult::LongRunning(LongRunningOperation {
+                        url: "https://management.azure.com/operations/dapr-delete".to_string(),
+                        retry_after: None,
+                        location_url: None,
+                    }))
+                } else {
+                    Err(AlienError::new(
+                        CloudClientErrorData::RemoteResourceNotFound {
+                            resource_type: "Dapr component".to_string(),
+                            resource_name: name.to_string(),
+                        },
+                    ))
+                }
+            });
         let provider = setup_mock_service_provider(Arc::new(apps), None);
         let controller = AzureWorkerController {
             state: AzureWorkerState::DeletingCommandsInfrastructure,
@@ -6511,13 +6521,25 @@ mod tests {
 
         executor.step().await.expect("an unfinished delete waits");
         let state = executor.internal_state::<AzureWorkerController>().unwrap();
-        assert_eq!(state.state, AzureWorkerState::DeletingCommandsInfrastructure);
-        assert_eq!(state.commands_dapr_component.as_deref(), Some("commands-dapr"));
+        assert_eq!(
+            state.state,
+            AzureWorkerState::DeletingCommandsInfrastructure
+        );
+        assert_eq!(
+            state.commands_dapr_component.as_deref(),
+            Some("commands-dapr")
+        );
 
-        executor.step().await.expect("a gone component finishes the step");
+        executor
+            .step()
+            .await
+            .expect("a gone component finishes the step");
         let state = executor.internal_state::<AzureWorkerController>().unwrap();
         assert_eq!(state.commands_dapr_component, None);
-        assert_ne!(state.state, AzureWorkerState::DeletingCommandsInfrastructure);
+        assert_ne!(
+            state.state,
+            AzureWorkerState::DeletingCommandsInfrastructure
+        );
     }
 
     fn setup_mock_service_provider(
@@ -7739,7 +7761,9 @@ mod tests {
         use super::*;
         use crate::core::{serialize_controller, ResourceController};
         use crate::sandbox::{AzureSandboxController, AzureSandboxState};
-        use alien_core::{ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
+        use alien_core::{
+            ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
+        };
         use std::sync::Mutex;
 
         const OLD_IMAGE: &str = "registry.example.com/agent:1";
@@ -7750,6 +7774,7 @@ mod tests {
             Sandbox::new("sb".to_string())
                 .code(SandboxCode::Image {
                     image: image.to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {
@@ -7796,7 +7821,14 @@ mod tests {
             sandbox_controller: AzureSandboxController,
             previous: Option<Worker>,
         ) -> SingleControllerExecutor {
-            executor_for(linked_worker(), apps, controller, sandbox_controller, previous).await
+            executor_for(
+                linked_worker(),
+                apps,
+                controller,
+                sandbox_controller,
+                previous,
+            )
+            .await
         }
 
         async fn executor_for(
@@ -7922,7 +7954,10 @@ mod tests {
 
             executor.step().await.expect("the heartbeat runs");
             assert_eq!(
-                executor.internal_state::<AzureWorkerController>().unwrap().state,
+                executor
+                    .internal_state::<AzureWorkerController>()
+                    .unwrap()
+                    .state,
                 AzureWorkerState::RefreshingLinkedBindings
             );
             assert_eq!(
@@ -7930,9 +7965,15 @@ mod tests {
                 ResourceStatus::Updating,
                 "the planner must not start an update mid-refresh: updates begin only from Ready"
             );
-            executor.step().await.expect("the refresh applies the binding");
+            executor
+                .step()
+                .await
+                .expect("the refresh applies the binding");
             executor.step().await.expect("the refresh settles");
-            executor.step().await.expect("the refresh passes the readiness probe");
+            executor
+                .step()
+                .await
+                .expect("the refresh passes the readiness probe");
             let controller = executor.internal_state::<AzureWorkerController>().unwrap();
             assert_eq!(controller.state, AzureWorkerState::Ready);
             assert_eq!(executor.status(), ResourceStatus::Running);
@@ -7970,10 +8011,16 @@ mod tests {
             )
             .await;
 
-            executor.step().await.expect("the refreshed app is provisioned");
+            executor
+                .step()
+                .await
+                .expect("the refreshed app is provisioned");
             executor.step().await.expect("a failed probe is retried");
             assert_eq!(
-                executor.internal_state::<AzureWorkerController>().unwrap().state,
+                executor
+                    .internal_state::<AzureWorkerController>()
+                    .unwrap()
+                    .state,
                 AzureWorkerState::RefreshingLinkedBindingsReadinessProbe
             );
             assert_eq!(executor.status(), ResourceStatus::Updating);
@@ -7986,7 +8033,10 @@ mod tests {
             });
             executor.step().await.expect("the probe passes");
             assert_eq!(
-                executor.internal_state::<AzureWorkerController>().unwrap().state,
+                executor
+                    .internal_state::<AzureWorkerController>()
+                    .unwrap()
+                    .state,
                 AzureWorkerState::Ready
             );
             assert_eq!(executor.status(), ResourceStatus::Running);
@@ -8035,7 +8085,10 @@ mod tests {
                 .await;
                 executor.step().await.expect("the heartbeat runs");
                 assert_eq!(
-                    executor.internal_state::<AzureWorkerController>().unwrap().state,
+                    executor
+                        .internal_state::<AzureWorkerController>()
+                        .unwrap()
+                        .state,
                     AzureWorkerState::Ready
                 );
                 assert_eq!(executor.status(), ResourceStatus::Running);
@@ -8084,7 +8137,10 @@ mod tests {
             .await;
             executor.step().await.expect("the heartbeat runs");
             assert_eq!(
-                executor.internal_state::<AzureWorkerController>().unwrap().state,
+                executor
+                    .internal_state::<AzureWorkerController>()
+                    .unwrap()
+                    .state,
                 AzureWorkerState::Ready
             );
         }
@@ -8114,9 +8170,15 @@ mod tests {
                 Some(prepared_worker().await),
             )
             .await;
-            executor.step().await.expect("the update re-renders the binding");
+            executor
+                .step()
+                .await
+                .expect("the update re-renders the binding");
             assert_eq!(
-                executor.internal_state::<AzureWorkerController>().unwrap().state,
+                executor
+                    .internal_state::<AzureWorkerController>()
+                    .unwrap()
+                    .state,
                 AzureWorkerState::UpdatingContainerApp
             );
         }
@@ -8139,7 +8201,10 @@ mod tests {
             .await;
             executor.step().await.expect("the update runs");
             assert_eq!(
-                executor.internal_state::<AzureWorkerController>().unwrap().state,
+                executor
+                    .internal_state::<AzureWorkerController>()
+                    .unwrap()
+                    .state,
                 AzureWorkerState::UpdateRunningReadinessProbe
             );
         }

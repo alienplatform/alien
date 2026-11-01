@@ -41,6 +41,7 @@ async fn executor(image: &str) -> SingleControllerExecutor {
             Sandbox::new("agents".to_string())
                 .code(SandboxCode::Image {
                     image: image.to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::Internet)
                 .lifecycle(SandboxLifecyclePolicy {

@@ -1645,6 +1645,7 @@ mod setup_update_authorization_tests {
         let sandbox = alien_core::Sandbox::new("agents".to_string())
             .code(alien_core::SandboxCode::Image {
                 image: image.to_string(),
+                bundled_from: None,
             })
             .maybe_private_base_image(private_base_image.map(str::to_string))
             .egress(alien_core::SandboxEgress::Internet)

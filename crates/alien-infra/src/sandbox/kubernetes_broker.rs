@@ -568,6 +568,7 @@ mod tests {
         let sandbox = alien_core::Sandbox::new("sbx".into())
             .code(alien_core::SandboxCode::Image {
                 image: "python:3.13-slim".into(),
+                bundled_from: None,
             })
             .egress(alien_core::SandboxEgress::None)
             .lifecycle(alien_core::SandboxLifecyclePolicy {

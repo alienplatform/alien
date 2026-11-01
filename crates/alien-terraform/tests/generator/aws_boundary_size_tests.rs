@@ -143,6 +143,7 @@ fn stack() -> Stack {
             Sandbox::new("agents".to_string())
                 .code(SandboxCode::Image {
                     image: "s3://example-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::Internet)
                 .lifecycle(SandboxLifecyclePolicy {

@@ -53,7 +53,7 @@ fn last_segment(name: &str) -> &str {
 /// only at the next replace.
 fn template_identity(sandbox: &Sandbox) -> Result<(String, SandboxLimits, bool)> {
     let image = match &sandbox.code {
-        SandboxCode::Image { image } => image.clone(),
+        SandboxCode::Image { image, .. } => image.clone(),
         SandboxCode::Source { .. } => {
             return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: "the sandbox still has unbuilt source code. Run 'alien build' first"
@@ -785,6 +785,7 @@ mod tests {
         let builder = Sandbox::new("agent-sbx".to_string())
             .code(SandboxCode::Image {
                 image: image.to_string(),
+                bundled_from: None,
             })
             .egress(egress)
             .lifecycle(SandboxLifecyclePolicy {

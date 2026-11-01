@@ -1,5 +1,6 @@
 //! Importer for the AWS Sandbox.
 
+use alien_core::sandbox_setup_inputs::aws_sandbox_entry_renders_bundle;
 use alien_core::{
     import::{data::AwsSandboxImportData, ImportContext},
     ErrorData as CoreErrorData, Platform, ResourceLifecycle, ResourceStatus, Result, Sandbox,
@@ -97,12 +98,16 @@ impl ResourceImporter for AwsSandboxImporter {
             // Setup registered the build inputs; the controller builds the image once
             // the deployment loop steps it, which is why this imports Provisioning at the
             // create entry state rather than Running.
-            (None, None, None, Some(build_role_arn), Some(bundle_uri)) => {
+            // A sandbox that renders its bundle into the deployment's bundle Storage registers
+            // none; any other registers the bundle its build role was granted.
+            (None, None, None, Some(build_role_arn), bundle_uri)
+                if bundle_uri.is_some() != aws_sandbox_entry_renders_bundle(ctx.resource) =>
+            {
                 let controller = AwsSandboxController {
                     state: AwsSandboxState::CreatingImage,
                     build_role_arn: Some(build_role_arn),
-                    granted_bundle_uri: Some(bundle_uri.clone()),
-                    bundle_uri: Some(bundle_uri),
+                    granted_bundle_uri: bundle_uri.clone(),
+                    bundle_uri,
                     ..base
                 };
                 make_imported_state_with_status(controller, ctx, ResourceStatus::Provisioning)
@@ -288,6 +293,7 @@ mod tests {
                 Sandbox::new("agents".to_string())
                     .code(SandboxCode::Image {
                         image: "manager.example.com/alien-artifacts-proj:base".to_string(),
+                        bundled_from: None,
                     })
                     .egress(SandboxEgress::Internet)
                     .lifecycle(SandboxLifecyclePolicy {

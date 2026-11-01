@@ -154,6 +154,7 @@ mod tests {
         Sandbox::new(id.to_string())
             .code(SandboxCode::Image {
                 image: "s3://bucket/sandbox.zip".to_string(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {

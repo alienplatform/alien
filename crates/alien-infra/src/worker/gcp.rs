@@ -2410,11 +2410,12 @@ impl GcpWorkerController {
             .get_service(gcp_config.region.clone(), service_name.clone())
             .await
             .context(ErrorData::CloudPlatformError {
-                message: "Failed to get Cloud Run service for a linked binding refresh"
-                    .to_string(),
+                message: "Failed to get Cloud Run service for a linked binding refresh".to_string(),
                 resource_id: Some(cfg.id.clone()),
             })?;
-        let mut desired = self.build_cloud_run_service(&service_name, cfg, ctx).await?;
+        let mut desired = self
+            .build_cloud_run_service(&service_name, cfg, ctx)
+            .await?;
         desired.name = current.name;
         desired.etag = current.etag;
         let operation = client
@@ -6016,7 +6017,9 @@ impl GcpWorkerController {
                     ) => {}
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to delete storage notification topic '{topic_name}'"),
+                        message: format!(
+                            "Failed to delete storage notification topic '{topic_name}'"
+                        ),
                         resource_id: Some(worker_config.id.clone()),
                     }));
                 }
@@ -8696,7 +8699,9 @@ mod tests {
         use super::*;
         use crate::core::{serialize_controller, ResourceController};
         use crate::sandbox::{GcpAgentPlatformTemplateController, GcpAgentPlatformTemplateState};
-        use alien_core::{ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
+        use alien_core::{
+            ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
+        };
         use std::collections::HashMap;
         use std::sync::Mutex;
 
@@ -8706,6 +8711,7 @@ mod tests {
             Sandbox::new("sb".to_string())
                 .code(SandboxCode::Image {
                     image: "registry.example.com/agent:1".to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::Allow)
                 .lifecycle(SandboxLifecyclePolicy {
@@ -8745,7 +8751,14 @@ mod tests {
             sandbox_controller: GcpAgentPlatformTemplateController,
             previous: Option<Worker>,
         ) -> SingleControllerExecutor {
-            executor_for(linked_worker(), cloudrun, controller, sandbox_controller, previous).await
+            executor_for(
+                linked_worker(),
+                cloudrun,
+                controller,
+                sandbox_controller,
+                previous,
+            )
+            .await
         }
 
         async fn executor_for(
@@ -8822,7 +8835,10 @@ mod tests {
                 Some(previous),
             )
             .await;
-            executor.step().await.expect("the update renders the service");
+            executor
+                .step()
+                .await
+                .expect("the update renders the service");
             let mut service = captured
                 .lock()
                 .unwrap()
@@ -8869,7 +8885,10 @@ mod tests {
 
             executor.step().await.expect("the heartbeat runs");
             assert_eq!(
-                executor.internal_state::<GcpWorkerController>().unwrap().state,
+                executor
+                    .internal_state::<GcpWorkerController>()
+                    .unwrap()
+                    .state,
                 GcpWorkerState::RefreshingLinkedBindings
             );
             assert_eq!(
@@ -8877,9 +8896,15 @@ mod tests {
                 ResourceStatus::Updating,
                 "the planner must not start an update mid-refresh: updates begin only from Ready"
             );
-            executor.step().await.expect("the refresh patches the service");
+            executor
+                .step()
+                .await
+                .expect("the refresh patches the service");
             executor.step().await.expect("the refresh settles");
-            executor.step().await.expect("the refresh passes the readiness probe");
+            executor
+                .step()
+                .await
+                .expect("the refresh passes the readiness probe");
             let controller = executor.internal_state::<GcpWorkerController>().unwrap();
             assert_eq!(controller.state, GcpWorkerState::Ready);
             assert_eq!(controller.operation_name, None);
@@ -8920,10 +8945,16 @@ mod tests {
             )
             .await;
 
-            executor.step().await.expect("the refresh operation completes");
+            executor
+                .step()
+                .await
+                .expect("the refresh operation completes");
             executor.step().await.expect("a failed probe is retried");
             assert_eq!(
-                executor.internal_state::<GcpWorkerController>().unwrap().state,
+                executor
+                    .internal_state::<GcpWorkerController>()
+                    .unwrap()
+                    .state,
                 GcpWorkerState::RefreshingLinkedBindingsReadinessProbe
             );
             assert_eq!(executor.status(), ResourceStatus::Updating);
@@ -8936,7 +8967,10 @@ mod tests {
             });
             executor.step().await.expect("the probe passes");
             assert_eq!(
-                executor.internal_state::<GcpWorkerController>().unwrap().state,
+                executor
+                    .internal_state::<GcpWorkerController>()
+                    .unwrap()
+                    .state,
                 GcpWorkerState::Ready
             );
             assert_eq!(executor.status(), ResourceStatus::Running);
@@ -8988,9 +9022,15 @@ mod tests {
                 Some(prepared_worker().await),
             )
             .await;
-            executor.step().await.expect("the update re-renders the binding");
+            executor
+                .step()
+                .await
+                .expect("the update re-renders the binding");
             assert_eq!(
-                executor.internal_state::<GcpWorkerController>().unwrap().state,
+                executor
+                    .internal_state::<GcpWorkerController>()
+                    .unwrap()
+                    .state,
                 GcpWorkerState::UpdatingService
             );
         }
@@ -9013,7 +9053,10 @@ mod tests {
             .await;
             executor.step().await.expect("the update runs");
             assert_eq!(
-                executor.internal_state::<GcpWorkerController>().unwrap().state,
+                executor
+                    .internal_state::<GcpWorkerController>()
+                    .unwrap()
+                    .state,
                 GcpWorkerState::UpdateEnsuringPublicExposure
             );
         }

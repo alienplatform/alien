@@ -27,6 +27,7 @@ fn sandbox(id: &str) -> Sandbox {
     Sandbox::new(id.to_string())
         .code(SandboxCode::Image {
             image: "alpine:3.20".to_string(),
+            bundled_from: None,
         })
         .limits(SandboxLimits {
             cpu: "500m".to_string(),

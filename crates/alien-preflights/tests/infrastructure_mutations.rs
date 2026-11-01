@@ -364,6 +364,7 @@ async fn an_azure_sandbox_only_stack_depends_only_on_resources_it_defines() {
     let sandbox = alien_core::Sandbox::new("agent-sbx".to_string())
         .code(alien_core::SandboxCode::Image {
             image: "ubuntu".to_string(),
+            bundled_from: None,
         })
         .egress(alien_core::SandboxEgress::Allow)
         .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -715,6 +716,7 @@ async fn sandbox_consumers_get_signing_access_only_with_management_permissions()
         let sandbox = Sandbox::new("box".into())
             .code(SandboxCode::Image {
                 image: "example.invalid/sandbox:1".into(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {
@@ -829,7 +831,8 @@ async fn internet_sandbox_key_dependencies_respect_setup_ownership() {
         for (id, lifecycle) in [("a-first", first), ("z-last", last)] {
             let sandbox = Sandbox::new(id.into())
                 .code(SandboxCode::Image {
-                    image: "example.invalid/sandbox:1".into(),
+                    image: "s3://example-bundles/sandbox.zip".into(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::Internet)
                 .lifecycle(SandboxLifecyclePolicy {

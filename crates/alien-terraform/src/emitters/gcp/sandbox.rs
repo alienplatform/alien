@@ -312,6 +312,7 @@ mod tests {
             let sandbox = Sandbox::new("agents".to_string())
                 .code(SandboxCode::Image {
                     image: "ubuntu".to_string(),
+                    bundled_from: None,
                 })
                 .egress(egress)
                 .lifecycle(SandboxLifecyclePolicy {
@@ -399,12 +400,7 @@ mod tests {
         /// would hold no session access at all while `PERMISSIONS.md` still advertised the grant.
         #[test]
         fn the_engine_grant_references_the_created_engine() {
-            let stack = stack_with(
-                SandboxEgress::Allow,
-                None,
-                ResourceLifecycle::Frozen,
-                true,
-            );
+            let stack = stack_with(SandboxEgress::Allow, None, ResourceLifecycle::Frozen, true);
             let fragment = with_context(&stack, |ctx| {
                 GcpAgentPlatformSandboxEmitter
                     .emit(ctx)
@@ -436,12 +432,8 @@ mod tests {
             );
 
             // A sandbox nobody published gets no grant, whatever else the stack declares.
-            let unpublished = stack_with(
-                SandboxEgress::Allow,
-                None,
-                ResourceLifecycle::Frozen,
-                false,
-            );
+            let unpublished =
+                stack_with(SandboxEgress::Allow, None, ResourceLifecycle::Frozen, false);
             let fragment = with_context(&unpublished, |ctx| {
                 GcpAgentPlatformSandboxEmitter.emit(ctx).expect("renders")
             });
@@ -457,6 +449,7 @@ mod tests {
                 let sandbox = Sandbox::new("agents".to_string())
                     .code(SandboxCode::Image {
                         image: "ubuntu".to_string(),
+                        bundled_from: None,
                     })
                     .egress(SandboxEgress::Internet)
                     .lifecycle(SandboxLifecyclePolicy {

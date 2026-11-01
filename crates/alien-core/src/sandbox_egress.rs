@@ -325,6 +325,7 @@ mod tests {
         let sandbox = Sandbox::new("agents".to_string())
             .code(SandboxCode::Image {
                 image: "s3://acme/agents/bundle.zip".to_string(),
+                bundled_from: None,
             })
             .egress(egress.clone())
             .lifecycle(SandboxLifecyclePolicy {
