@@ -888,6 +888,47 @@ async fn statements_moving_between_managed_policies_are_never_dropped() {
             "{later} must wait for {earlier}:\n{graph}"
         );
     }
+
+    // Teardown of the installed release: the barrier goes first, then the attachments, then
+    // the policies and the role they attach.
+    write_module(dir.path(), &first);
+    terraform(
+        dir.path(),
+        &[
+            "plan",
+            "-destroy",
+            "-refresh=false",
+            "-input=false",
+            "-no-color",
+            "-lock=false",
+            "-out=destroy.tfplan",
+            "-var=name=e2e-upgrade",
+            "-var=token=synthetic-setup-token",
+            &format!("-var=resource_prefix={PREFIX}"),
+        ],
+    );
+    let graph = terraform(
+        dir.path(),
+        &["graph", "-type=apply", "-plan=destroy.tfplan"],
+    );
+    let attachment = "aws_iam_role_policy_attachment.execution_sa_setup_0_attachment (destroy)";
+    for (later, earlier) in [
+        (
+            attachment,
+            "terraform_data.execution_sa_setup_policies_barrier (destroy)",
+        ),
+        ("aws_iam_policy.execution_sa_setup_0 (destroy)", attachment),
+        ("aws_iam_role.execution_sa (destroy)", attachment),
+        (
+            "aws_iam_role.execution_sa (destroy)",
+            "aws_iam_role_policy.execution_sa_set_0 (destroy)",
+        ),
+    ] {
+        assert!(
+            graph_orders(&graph, earlier, later),
+            "{later} must wait for {earlier}:\n{graph}"
+        );
+    }
 }
 
 /// Whether `later` runs after `earlier` in a `terraform graph` DOT, whose edges point from a
