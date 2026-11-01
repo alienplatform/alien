@@ -120,6 +120,7 @@ pub async fn verify_rule_update(ctx: &mut TestContext) -> anyhow::Result<()> {
                 &prepared.rendered_stack,
                 alien_cloudformation::CloudFormationOptions {
                     registry: &registry,
+                    source_stack: &prepared.built_stack,
                     target: alien_cloudformation::CloudFormationTarget::Aws,
                     stack_settings: settings,
                     setup_target: "aws".into(),

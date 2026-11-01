@@ -140,6 +140,7 @@ fn aws_open_search_rejects_invalid_capacity_before_rendering() {
         &stack,
         alien_cloudformation::CloudFormationOptions {
             registry: &CfRegistry::built_in(),
+            source_stack: &stack,
             target: alien_cloudformation::CloudFormationTarget::Aws,
             stack_settings: StackSettings::default(),
             setup_target: "aws".to_string(),
@@ -204,6 +205,7 @@ fn aws_open_search_rejects_id_unusable_as_collection_name() {
             &stack,
             alien_cloudformation::CloudFormationOptions {
                 registry: &CfRegistry::built_in(),
+                source_stack: &stack,
                 target: alien_cloudformation::CloudFormationTarget::Aws,
                 stack_settings: StackSettings::default(),
                 setup_target: "aws".to_string(),

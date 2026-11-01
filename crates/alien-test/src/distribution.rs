@@ -1245,6 +1245,7 @@ async fn run_cloudformation_aws(
         &prepared.rendered_stack,
         alien_cloudformation::CloudFormationOptions {
             registry: &registry,
+            source_stack: &prepared.built_stack,
             target: alien_cloudformation::CloudFormationTarget::Aws,
             stack_settings,
             setup_target: "aws".to_string(),
@@ -1452,6 +1453,7 @@ async fn run_cloudformation_k8s(
             &cloudformation_stack,
             alien_cloudformation::CloudFormationOptions {
                 registry: &registry,
+                source_stack: &cloudformation_stack,
                 target: alien_cloudformation::CloudFormationTarget::Eks,
                 stack_settings,
                 setup_target: "eks".to_string(),
