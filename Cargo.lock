@@ -677,6 +677,7 @@ dependencies = [
  "libc",
  "lognorm",
  "nanoid",
+ "p256",
  "proptest",
  "psl",
  "regex",

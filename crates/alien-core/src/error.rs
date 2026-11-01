@@ -312,6 +312,32 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// A release signing key was rejected.
+    #[error(
+        code = "RELEASE_SIGNING_KEY_INVALID",
+        message = "Release signing key invalid: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    ReleaseSigningKeyInvalid {
+        /// Why the key was rejected
+        reason: String,
+    },
+
+    /// A release statement could not be built or signed.
+    #[error(
+        code = "RELEASE_STATEMENT_INVALID",
+        message = "Release statement invalid: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    ReleaseStatementInvalid {
+        /// Why the statement could not be built
+        reason: String,
+    },
+
     /// A sandbox capability was refused.
     #[error(
         code = "SANDBOX_CAPABILITY_REFUSED",
