@@ -140,10 +140,10 @@ fn aws_management_grants_for_a_gated_resource_carry_its_gate() {
             .find(|block| block.starts_with(prefix))
             .unwrap_or_else(|| panic!("{prefix} should render:\n{main}"))
     };
-    let gated_policy = block("aws_iam_policy\" \"management_input_jobs_enabled_setup_");
+    let gated_policy = block("aws_iam_policy\" \"management_input_jobs_enabled_");
     for gated in [
         gated_policy,
-        block("aws_iam_role_policy_attachment\" \"management_input_jobs_enabled_setup_"),
+        block("aws_iam_role_policy_attachment\" \"management_input_jobs_enabled_"),
         // The address the grant was installed under stays, gated, as a stub.
         block("aws_iam_role_policy\" \"management_input_jobs_enabled\""),
     ] {
@@ -216,7 +216,7 @@ fn management_grants_sharing_a_gate_get_unique_statement_ids() {
 
     let gated_policy = rendered
         .split("resource \"")
-        .find(|block| block.starts_with("aws_iam_policy\" \"management_input_jobs_enabled_setup_"))
+        .find(|block| block.starts_with("aws_iam_policy\" \"management_input_jobs_enabled_"))
         .unwrap_or_else(|| panic!("the gated management policy should render:\n{rendered}"));
 
     // Both workers' functions are granted; the two statements, equal but for their resources,
