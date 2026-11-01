@@ -1872,7 +1872,6 @@ mod setup_update_authorization_tests {
     }
 }
 
-/// Run stack checks that need no cloud access, logging each failure and warning.
 /// Checks that need the stack prepared as its setup packages prepare it, so they run only once
 /// the stack passed every other check. Like build-time checks, they apply to new releases and
 /// never to rendering a setup package for a stack released earlier.
@@ -1886,6 +1885,7 @@ async fn new_release_checks(stack: &Stack, platform: Platform) -> Result<()> {
     Ok(())
 }
 
+/// Run stack checks that need no cloud access, logging each failure and warning.
 async fn run_stack_checks(
     checks: Vec<&dyn CompileTimeCheck>,
     stack: &Stack,
