@@ -469,6 +469,7 @@ mod tests {
                 version: None,
                 description: None,
                 stack: Stack::new("site".into()).build(),
+                signed: None,
             },
             config: DeploymentConfig::builder()
                 .stack_settings(Default::default())

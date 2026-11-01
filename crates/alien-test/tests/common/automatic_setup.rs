@@ -239,6 +239,7 @@ async fn publish(
             channel: None,
             git_metadata: None,
             stack: serde_json::from_value(serde_json::json!({ (platform.as_str()): stack }))?,
+            signed_stacks: Default::default(),
         })
         .send()
         .await?

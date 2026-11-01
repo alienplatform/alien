@@ -1470,6 +1470,7 @@ mod tests {
             version: None,
             description: None,
             stack: stack.clone(),
+            signed: None,
         });
         state.stack_state = Some(alien_core::StackState::new(Platform::Test));
         state.runtime_metadata = Some(alien_core::RuntimeMetadata {
@@ -1558,6 +1559,7 @@ mod tests {
             version: None,
             description: None,
             stack: alien_core::Stack::new("test".to_string()).build(),
+            signed: None,
         });
         let result = crate::runner::run_step_loop(
             &mut state,

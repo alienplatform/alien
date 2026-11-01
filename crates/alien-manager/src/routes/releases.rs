@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
 
-use alien_core::{Platform, Stack};
+use alien_core::release_signature::{ReleaseStatement, STATEMENT_TYPE};
+use alien_core::{Platform, SignedRelease, Stack};
 use alien_preflights::compile_time::endpoint_host_label_conflicts;
 
 use crate::error::ErrorData;
@@ -65,6 +66,11 @@ pub struct CreateReleaseRequest {
     /// following the channel roll out to it.
     #[serde(default)]
     pub channel: Option<String>,
+    /// Signed statements keyed by platform, from `alien release` with a
+    /// signing key. Stored and returned exactly as received; deployments in
+    /// protected mode verify them and deploy only the stack they contain.
+    #[serde(default)]
+    pub signed_stacks: HashMap<Platform, SignedRelease>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,6 +90,9 @@ pub struct ReleaseResponse {
     pub workspace_id: String,
     pub project_id: String,
     pub stack: StackByPlatform,
+    /// Signed statements keyed by platform, exactly as they were created.
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub signed_stacks: HashMap<Platform, SignedRelease>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_metadata: Option<GitMetadataResponse>,
     pub created_at: String,
@@ -176,10 +185,48 @@ fn record_to_response(
         workspace_id: r.workspace_id.clone(),
         project_id: r.project_id.clone(),
         stack: sbp,
+        signed_stacks: r.signed_stacks.clone(),
         git_metadata,
         created_at: r.created_at.to_rfc3339(),
         setup_fingerprints: serde_json::Map::new(),
     })
+}
+
+/// Refuse a signed statement that doesn't describe the stack sent beside it,
+/// so the stack this manager shows is the one a protected deployment runs.
+/// This doesn't verify the signature: the manager holds no trusted keys, and a
+/// deployment verifies the statement itself.
+fn check_signed_stacks_match(
+    project_id: &str,
+    stacks: &HashMap<Platform, Stack>,
+    signed_stacks: &HashMap<Platform, SignedRelease>,
+) -> std::result::Result<(), alien_error::AlienError<ErrorData>> {
+    for (platform, signed) in signed_stacks {
+        let statement = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            signed.payload.trim(),
+        )
+        .ok()
+        .and_then(|payload| serde_json::from_slice::<ReleaseStatement>(&payload).ok())
+        .filter(|statement| statement.statement_type == STATEMENT_TYPE)
+        .ok_or_else(|| {
+            ErrorData::bad_request(format!(
+                "The signed statement for {platform} is not a release statement"
+            ))
+        })?;
+        if statement.platform != *platform || statement.project != project_id {
+            return Err(ErrorData::bad_request(format!(
+                "The signed statement for {platform} is for project '{}' on {}",
+                statement.project, statement.platform
+            )));
+        }
+        if stacks.get(platform) != Some(&statement.stack) {
+            return Err(ErrorData::bad_request(format!(
+                "The signed statement for {platform} doesn't match the {platform} stack in the request"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Parse all non-null platform stacks from the request.
@@ -298,6 +345,9 @@ async fn create_release(
     if let Err(e) = refuse_endpoint_host_label_conflicts(&stacks) {
         return e.into_response();
     }
+    if let Err(e) = check_signed_stacks_match(&req.project_id, &stacks, &req.signed_stacks) {
+        return e.into_response();
+    }
 
     let (git_sha, git_ref, git_msg) = match &req.git_metadata {
         Some(gm) => (
@@ -318,6 +368,7 @@ async fn create_release(
                 git_commit_sha: git_sha,
                 git_commit_ref: git_ref,
                 git_commit_message: git_msg,
+                signed_stacks: req.signed_stacks,
             },
         )
         .await
@@ -502,6 +553,74 @@ mod tests {
         aws["permissions"] = serde_json::json!({ "profiles": { "app": {} }, "management": "auto" });
         let stacks = parse_stacks_from_request(&stack_by_platform(aws)).map_err(|e| e.message)?;
         refuse_endpoint_host_label_conflicts(&stacks).map_err(|e| e.message)
+    }
+
+    fn signed_kubernetes_release(project: &str, stack: &Stack) -> HashMap<Platform, SignedRelease> {
+        let key =
+            alien_core::release_signature::ReleaseSigningKey::from_secret_bytes(&[5; 32]).unwrap();
+        let signed = key
+            .sign(&ReleaseStatement {
+                statement_type: STATEMENT_TYPE.to_string(),
+                project: project.to_string(),
+                platform: Platform::Kubernetes,
+                sequence: 1,
+                stack: stack.clone(),
+                operator_image: None,
+            })
+            .unwrap();
+        HashMap::from([(Platform::Kubernetes, signed)])
+    }
+
+    #[test]
+    fn a_signed_statement_must_describe_the_stack_beside_it() {
+        let stack = Stack::new("app".to_string()).build();
+        let stacks = HashMap::from([(Platform::Kubernetes, stack.clone())]);
+
+        check_signed_stacks_match(
+            "default",
+            &stacks,
+            &signed_kubernetes_release("default", &stack),
+        )
+        .expect("a matching statement is accepted");
+        check_signed_stacks_match("default", &stacks, &HashMap::new())
+            .expect("an unsigned release is accepted as before");
+
+        let other = Stack::new("other".to_string()).build();
+        let error = check_signed_stacks_match(
+            "default",
+            &stacks,
+            &signed_kubernetes_release("default", &other),
+        )
+        .expect_err("a statement for another stack is refused");
+        assert!(error.message.contains("doesn't match"), "{}", error.message);
+
+        let error = check_signed_stacks_match(
+            "default",
+            &stacks,
+            &signed_kubernetes_release("billing", &stack),
+        )
+        .expect_err("a statement for another project is refused");
+        assert!(
+            error.message.contains("project 'billing'"),
+            "{}",
+            error.message
+        );
+
+        let garbage = HashMap::from([(
+            Platform::Kubernetes,
+            SignedRelease {
+                payload: "not base64".to_string(),
+                signature: String::new(),
+            },
+        )]);
+        check_signed_stacks_match("default", &stacks, &garbage)
+            .expect_err("a payload that isn't a statement is refused");
+        check_signed_stacks_match(
+            "default",
+            &HashMap::new(),
+            &signed_kubernetes_release("default", &stack),
+        )
+        .expect_err("a statement for a platform the release doesn't carry is refused");
     }
 
     #[test]

@@ -27,8 +27,8 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{ErrorData, Result};
 use crate::{
-    Container, ContainerCode, Daemon, DaemonCode, Platform, Sandbox, SandboxCode, Stack, Worker,
-    WorkerCode,
+    Container, ContainerCode, Daemon, DaemonCode, Platform, Sandbox, SandboxCode, SignedRelease,
+    Stack, Worker, WorkerCode,
 };
 use alien_error::AlienError;
 
@@ -142,18 +142,6 @@ pub struct ReleaseStatement {
     /// Operator image a deployment may update itself to, pinned by digest.
     #[serde(default)]
     pub operator_image: Option<String>,
-}
-
-/// A signed release statement as it is stored and forwarded: the exact bytes
-/// that were signed and the signature over them.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SignedRelease {
-    /// Base64 of the statement's JSON bytes.
-    pub payload: String,
-    /// Base64 DER ECDSA P-256 signature over SHA-256 of the payload bytes.
-    pub signature: String,
 }
 
 /// A statement that passed verification.

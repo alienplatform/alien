@@ -452,6 +452,7 @@ mod tests {
             version: None,
             description: None,
             stack: stack.clone(),
+            signed: None,
         });
         assert!(!installed_compute_ready(&state, &stack));
         let mut resource = StackResourceState::new_pending(

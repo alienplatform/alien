@@ -657,6 +657,7 @@ pub async fn handle_updating(
                         message: "Pending prepared stack not found in runtime metadata".to_string(),
                     })
                 })?,
+                signed: None,
             });
             next.status = DeploymentStatus::UpdatePending;
             next.runtime_metadata = Some(runtime_metadata);
@@ -910,6 +911,7 @@ mod tests {
             version: None,
             description: None,
             stack,
+            signed: None,
         };
         let current = DeploymentState {
             status: DeploymentStatus::UpdatePending,
@@ -1074,6 +1076,7 @@ mod tests {
                 version: None,
                 description: None,
                 stack,
+                signed: None,
             }
         }
 

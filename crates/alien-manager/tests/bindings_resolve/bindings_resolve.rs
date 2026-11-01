@@ -330,6 +330,7 @@ async fn move_current_release(fixture: &Fixture, stack: Stack) {
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: None,
+                signed_stacks: Default::default(),
             },
         )
         .await
@@ -649,6 +650,7 @@ async fn a_data_resolve_is_refused_while_the_desired_release_publishes_a_sandbox
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: None,
+                signed_stacks: Default::default(),
             },
         )
         .await

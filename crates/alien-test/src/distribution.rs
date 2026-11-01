@@ -1172,6 +1172,7 @@ async fn create_release(
             git_metadata: None,
             project_id: "default".to_string(),
             channel: None,
+            signed_stacks: Default::default(),
         })
         .send()
         .await

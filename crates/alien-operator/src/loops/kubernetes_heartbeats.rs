@@ -274,6 +274,7 @@ mod tests {
             version: None,
             description: None,
             stack: alien_core::Stack::new("site".to_string()).build(),
+            signed: None,
         };
         let mut state: DeploymentState = serde_json::from_value(serde_json::json!({
             "platform": "kubernetes", "status": "running", "protocolVersion": 1,

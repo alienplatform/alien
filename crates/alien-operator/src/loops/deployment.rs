@@ -861,6 +861,7 @@ mod tests {
             version: None,
             description: None,
             stack: alien_core::Stack::new("observe".to_string()).build(),
+            signed: None,
         };
         let state = |status, target: &str| DeploymentState {
             platform: Platform::Test,
@@ -971,6 +972,7 @@ mod tests {
             version: None,
             description: None,
             stack: stack.clone(),
+            signed: None,
         };
         let current = DeploymentState {
             platform: Platform::Local,
@@ -1582,6 +1584,7 @@ mod tests {
             version: Some("1.0.0".into()),
             description: None,
             stack,
+            signed: None,
         };
         db.set_deployment_state(&DeploymentState {
             status: DeploymentStatus::Pending,
@@ -1702,6 +1705,7 @@ mod tests {
                 version: Some("1.0.0".into()),
                 description: None,
                 stack,
+                signed: None,
             }),
             stack_state: None,
             error: None,

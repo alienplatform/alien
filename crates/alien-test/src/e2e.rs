@@ -947,6 +947,7 @@ pub async fn deploy_test_app(
             git_metadata: None,
             project_id: "default".to_string(),
             channel: None,
+            signed_stacks: Default::default(),
         })
         .send()
         .await
@@ -1139,6 +1140,7 @@ pub async fn developer_setup(
             git_metadata: None,
             project_id: "default".to_string(),
             channel: None,
+            signed_stacks: Default::default(),
         })
         .send()
         .await

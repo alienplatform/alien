@@ -183,6 +183,7 @@ async fn fixture_with_site(delay: Duration, site: Site) -> Fixture {
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: None,
+                signed_stacks: Default::default(),
             },
         )
         .await

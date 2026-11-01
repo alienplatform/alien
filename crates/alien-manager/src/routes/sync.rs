@@ -1061,6 +1061,7 @@ mod tests {
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
+                    signed_stacks: Default::default(),
                 },
             )
             .await
@@ -1281,6 +1282,7 @@ mod tests {
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
+                    signed_stacks: Default::default(),
                 },
             )
             .await
@@ -2266,6 +2268,7 @@ mod tests {
             version: None,
             description: None,
             stack: Stack::new("test".to_string()).build(),
+            signed: None,
         });
         assert!(!agent_report_completes_claim(&deployment, &state));
 
@@ -3498,6 +3501,7 @@ pub(crate) async fn build_pull_target(
 
     Ok(TargetDeployment {
         release_info: ReleaseInfo {
+            signed: r.signed_stacks.get(&release_stack_platform).cloned(),
             release_id: Some(r.id),
             version: None,
             description: None,
@@ -3868,6 +3872,7 @@ fn release_info_from_record(
         version: None,
         description: None,
         stack: release.stacks.get(&release_stack_platform)?.clone(),
+        signed: release.signed_stacks.get(&release_stack_platform).cloned(),
     })
 }
 

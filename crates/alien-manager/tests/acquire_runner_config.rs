@@ -166,6 +166,7 @@ async fn deployment_with_queued_update(record_token: bool) -> Fixture {
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: None,
+                signed_stacks: Default::default(),
             },
         )
         .await

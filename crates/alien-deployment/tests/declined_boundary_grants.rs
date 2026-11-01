@@ -196,6 +196,7 @@ async fn release_update_keeps_a_declined_key_out_of_the_pending_boundary() {
         version: Some(version.into()),
         description: None,
         stack: declared(),
+        signed: None,
     };
     let current = DeploymentState {
         status: DeploymentStatus::UpdatePending,

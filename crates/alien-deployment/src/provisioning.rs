@@ -256,6 +256,7 @@ pub async fn handle_provisioning(
                 version: None,
                 description: None,
                 stack: target_stack,
+                signed: None,
             });
             next.status = DeploymentStatus::UpdatePending;
         } else {
@@ -522,6 +523,7 @@ mod tests {
                 version: None,
                 description: None,
                 stack: target.clone(),
+                signed: None,
             }),
             stack_state: Some(state),
             error: None,

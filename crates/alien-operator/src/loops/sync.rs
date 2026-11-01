@@ -300,6 +300,7 @@ async fn sync_with_manager(
                 version: Some(version),
                 description: None,
                 stack: alien_core::Stack::new("observed".to_string()).build(),
+                signed: None,
             });
         }
     }
@@ -1063,6 +1064,7 @@ mod tests {
             version: Some("1.0.0".to_string()),
             description: None,
             stack: Stack::new("test".to_string()).build(),
+            signed: None,
         };
         let mut state = DeploymentState {
             platform: Platform::Kubernetes,
@@ -1101,6 +1103,7 @@ mod tests {
             version: None,
             description: None,
             stack: Stack::new("corrected".into()).build(),
+            signed: None,
         };
         let mut state = DeploymentState {
             platform: Platform::Kubernetes,
@@ -1144,6 +1147,7 @@ mod tests {
             stack: Stack::new("corrected".into())
                 .add(storage, alien_core::ResourceLifecycle::Live)
                 .build(),
+            signed: None,
         };
         let mut state = DeploymentState {
             platform: Platform::Test,
@@ -1205,6 +1209,7 @@ mod tests {
             version: None,
             description: None,
             stack: Stack::new("corrected".to_string()).build(),
+            signed: None,
         };
         for status in [
             DeploymentStatus::UpdateFailed,
@@ -1703,6 +1708,7 @@ mod tests {
                     alien_core::ResourceLifecycle::Frozen,
                 )
                 .build(),
+            signed: None,
         };
         let config = alien_core::DeploymentConfig::builder()
             .stack_settings(Default::default())

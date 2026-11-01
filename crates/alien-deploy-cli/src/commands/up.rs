@@ -6536,6 +6536,7 @@ async fn fetch_setup_release(
         version: None,
         description: None,
         stack,
+        signed: None,
     })
 }
 
@@ -8373,6 +8374,7 @@ pub async fn push_deletion(
                         version: None,
                         description: None,
                         stack,
+                        signed: None,
                     })
             }
             Err(_) => None,

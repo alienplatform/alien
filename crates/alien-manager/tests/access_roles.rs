@@ -371,6 +371,7 @@ async fn vault_routes_refuse_deployer_values_and_preserve_shared_secrets() {
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: None,
+                signed_stacks: Default::default(),
             },
         )
         .await

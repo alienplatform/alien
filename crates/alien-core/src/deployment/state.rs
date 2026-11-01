@@ -459,6 +459,7 @@ mod tests {
             version: None,
             description: None,
             stack: empty_stack(),
+            signed: None,
         }
     }
 

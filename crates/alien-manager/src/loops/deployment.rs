@@ -814,6 +814,7 @@ impl DeploymentLoop {
                 version: None,
                 description: None,
                 stack,
+                signed: None,
             }),
             (Some(id), None) if Some(id.as_str()) == target_release_id => {
                 deployment_stack.as_ref().map(|stack| ReleaseInfo {
@@ -821,6 +822,7 @@ impl DeploymentLoop {
                     version: None,
                     description: None,
                     stack: stack.clone(),
+                    signed: None,
                 })
             }
             (Some(id), None) => self
@@ -831,6 +833,7 @@ impl DeploymentLoop {
                     version: None,
                     description: None,
                     stack,
+                    signed: None,
                 }),
         };
 
@@ -1392,6 +1395,7 @@ impl DeploymentLoop {
                 version: None,
                 description: None,
                 stack,
+                signed: None,
             });
             if is_current {
                 state.current_release = release;
@@ -1978,6 +1982,7 @@ fn state_from_record(
                     version: None,
                     description: None,
                     stack: stack.clone(),
+                    signed: None,
                 })
         }),
         target_release: deployment_stack.map(|stack| ReleaseInfo {
@@ -1985,6 +1990,7 @@ fn state_from_record(
             version: None,
             description: None,
             stack: stack.clone(),
+            signed: None,
         }),
         stack_state: deployment.stack_state.clone(),
         error: None,
@@ -2288,6 +2294,7 @@ mod tests {
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
+                    signed_stacks: Default::default(),
                 },
             )
             .await
@@ -2433,6 +2440,7 @@ mod tests {
                         git_commit_sha: None,
                         git_commit_ref: None,
                         git_commit_message: None,
+                        signed_stacks: Default::default(),
                     },
                 )
                 .await
@@ -2908,6 +2916,7 @@ mod tests {
                             git_commit_sha: None,
                             git_commit_ref: None,
                             git_commit_message: None,
+                            signed_stacks: Default::default(),
                         },
                     )
                     .await
@@ -4904,6 +4913,7 @@ mod tests {
                             git_commit_sha: None,
                             git_commit_ref: None,
                             git_commit_message: None,
+                            signed_stacks: Default::default(),
                         },
                     )
                     .await

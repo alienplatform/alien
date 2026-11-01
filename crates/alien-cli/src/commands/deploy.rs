@@ -3047,6 +3047,7 @@ fn target_release_from_json(
         version: None,
         description: None,
         stack,
+        signed: None,
     })
 }
 
@@ -4724,6 +4725,7 @@ mod tests {
                     release_id: Some(release_id),
                     version: None,
                     description: None,
+                    signed: None,
                 });
                 async move { release }
             })
@@ -5585,6 +5587,7 @@ max = 1
                         serde_json::json!({"id": "installed-stack", "resources": {}}),
                     )
                     .unwrap(),
+                    signed: None,
                 }),
                 // The real preparation refuses an installed state with no target.
                 target_release: None,

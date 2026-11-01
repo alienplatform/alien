@@ -2310,6 +2310,7 @@ mod tests {
             version: None,
             description: None,
             stack: alien_core::Stack::new("finish".to_string()).build(),
+            signed: None,
         };
         alien_core::DeploymentState {
             platform: alien_core::Platform::Test,

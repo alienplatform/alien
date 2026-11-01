@@ -665,6 +665,7 @@ async fn running_reconcile_cannot_erase_a_new_release_request() {
                         git_commit_sha: None,
                         git_commit_ref: None,
                         git_commit_message: None,
+                        signed_stacks: Default::default(),
                     },
                 )
                 .await
@@ -691,6 +692,7 @@ async fn running_reconcile_cannot_erase_a_new_release_request() {
             version: None,
             description: None,
             stack: Stack::new("old".to_string()).build(),
+            signed: None,
         });
         store.reconcile(&test_subject(), old.clone()).await.unwrap();
         // A heartbeat already holds the old Running state when a release arrives.
@@ -749,6 +751,7 @@ async fn new_release_reaches_failed_local_startup_without_changing_its_retry_pha
                         git_commit_sha: None,
                         git_commit_ref: None,
                         git_commit_message: None,
+                        signed_stacks: Default::default(),
                     },
                 )
                 .await
@@ -2176,6 +2179,7 @@ async fn create_and_get_release() {
                 git_commit_sha: Some("abc123".to_string()),
                 git_commit_ref: Some("refs/heads/main".to_string()),
                 git_commit_message: Some("Initial commit".to_string()),
+                signed_stacks: Default::default(),
             },
         )
         .await
@@ -2215,6 +2219,66 @@ async fn create_and_get_release() {
 /// while the reader interpreted it as legacy single-Stack format,
 /// breaking every fresh release.
 #[tokio::test]
+async fn signed_stacks_are_stored_exactly_as_received() {
+    let db = fresh_db().await;
+    let store = SqliteReleaseStore::new(db);
+    let subject = test_subject();
+    // Opaque to the store: it must not parse, re-encode or normalize them.
+    let signed = alien_core::SignedRelease {
+        payload: " eyJ0eXBlIjoiYWxpZW4tcmVsZWFzZS92MSJ9 ".to_string(),
+        signature: "MEUCIQ==".to_string(),
+    };
+
+    let created = store
+        .create_release(
+            &subject,
+            CreateReleaseParams {
+                project_id: "default".to_string(),
+                stacks: HashMap::from([(
+                    Platform::Kubernetes,
+                    alien_core::Stack::new("my-stack".to_string()).build(),
+                )]),
+                signed_stacks: HashMap::from([(Platform::Kubernetes, signed.clone())]),
+                git_commit_sha: None,
+                git_commit_ref: None,
+                git_commit_message: None,
+            },
+        )
+        .await
+        .unwrap();
+    let unsigned = store
+        .create_release(
+            &subject,
+            CreateReleaseParams {
+                project_id: "default".to_string(),
+                stacks: HashMap::from([(
+                    Platform::Kubernetes,
+                    alien_core::Stack::new("my-stack".to_string()).build(),
+                )]),
+                signed_stacks: HashMap::new(),
+                git_commit_sha: None,
+                git_commit_ref: None,
+                git_commit_message: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let fetched = store
+        .get_release(&subject, &created.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.signed_stacks[&Platform::Kubernetes], signed);
+    let fetched = store
+        .get_release(&subject, &unsigned.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(fetched.signed_stacks.is_empty());
+}
+
+#[tokio::test]
 async fn create_and_get_release_multi_platform() {
     let db = fresh_db().await;
     let store = SqliteReleaseStore::new(db);
@@ -2242,6 +2306,7 @@ async fn create_and_get_release_multi_platform() {
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: None,
+                signed_stacks: Default::default(),
             },
         )
         .await
@@ -2287,6 +2352,7 @@ async fn latest_release() {
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: Some("first".to_string()),
+                signed_stacks: Default::default(),
             },
         )
         .await
@@ -2307,6 +2373,7 @@ async fn latest_release() {
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: Some("second".to_string()),
+                signed_stacks: Default::default(),
             },
         )
         .await
@@ -2404,6 +2471,7 @@ async fn registry_with_release(
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: None,
+                signed_stacks: Default::default(),
             },
         )
         .await

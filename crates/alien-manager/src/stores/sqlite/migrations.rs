@@ -56,6 +56,8 @@ pub(crate) enum Releases {
     /// JSON-encoded `HashMap<Platform, Stack>`. A release targets one or
     /// more platforms; the JSON keys are the platform discriminators.
     Stack,
+    /// JSON-encoded `HashMap<Platform, SignedRelease>`, stored as received.
+    SignedStacks,
     GitCommitSha,
     GitCommitRef,
     GitCommitMessage,
@@ -197,6 +199,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
             .if_not_exists()
             .col(ColumnDef::new(Releases::Id).text().primary_key())
             .col(ColumnDef::new(Releases::Stack).text().not_null())
+            .col(ColumnDef::new(Releases::SignedStacks).text())
             .col(ColumnDef::new(Releases::GitCommitSha).text())
             .col(ColumnDef::new(Releases::GitCommitRef).text())
             .col(ColumnDef::new(Releases::GitCommitMessage).text())
@@ -348,6 +351,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         "ALTER TABLE deployments ADD COLUMN deployment_protocol_version INTEGER NOT NULL DEFAULT 1",
         "ALTER TABLE releases ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE releases ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
+        "ALTER TABLE releases ADD COLUMN signed_stacks TEXT",
         "ALTER TABLE deployment_groups ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE deployment_groups ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
         // Command target columns. Nullable — legacy rows written

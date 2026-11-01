@@ -21,7 +21,7 @@ impl SqliteReleaseStore {
 
     /// SELECT column order. Indexes in `parse_release` MUST line up with
     /// this array — keep the two in sync.
-    const RELEASE_COLUMNS: [Releases; 8] = [
+    const RELEASE_COLUMNS: [Releases; 9] = [
         Releases::Id,               // 0
         Releases::Stack,            // 1
         Releases::GitCommitSha,     // 2
@@ -30,6 +30,7 @@ impl SqliteReleaseStore {
         Releases::CreatedAt,        // 5
         Releases::WorkspaceId,      // 6
         Releases::ProjectId,        // 7
+        Releases::SignedStacks,     // 8
     ];
 
     fn parse_release(row: &turso::Row) -> Result<ReleaseRecord, AlienError> {
@@ -43,6 +44,7 @@ impl SqliteReleaseStore {
             created_at: p.datetime(5, "created_at")?,
             workspace_id: p.string(6, "workspace_id")?,
             project_id: p.string(7, "project_id")?,
+            signed_stacks: p.optional_json(8, "signed_stacks")?.unwrap_or_default(),
         })
     }
 }
@@ -65,6 +67,17 @@ impl ReleaseStore for SqliteReleaseStore {
             .context(GenericError {
                 message: "Failed to serialize stacks".to_string(),
             })?;
+        let signed_stacks_json = if params.signed_stacks.is_empty() {
+            None
+        } else {
+            Some(
+                serde_json::to_string(&params.signed_stacks)
+                    .into_alien_error()
+                    .context(GenericError {
+                        message: "Failed to serialize signed stacks".to_string(),
+                    })?,
+            )
+        };
 
         // The caller's `workspace_id` is always `"default"` for this
         // single-tenant store; we still propagate it from the subject
@@ -84,6 +97,7 @@ impl ReleaseStore for SqliteReleaseStore {
                 Releases::CreatedAt,
                 Releases::WorkspaceId,
                 Releases::ProjectId,
+                Releases::SignedStacks,
             ])
             .values_panic([
                 id.clone().into(),
@@ -94,6 +108,7 @@ impl ReleaseStore for SqliteReleaseStore {
                 now.to_rfc3339().into(),
                 workspace_id.clone().into(),
                 project_id.clone().into(),
+                signed_stacks_json.into(),
             ])
             .to_string(SqliteQueryBuilder);
 
@@ -104,6 +119,7 @@ impl ReleaseStore for SqliteReleaseStore {
             workspace_id,
             project_id,
             stacks: params.stacks,
+            signed_stacks: params.signed_stacks,
             git_commit_sha: params.git_commit_sha,
             git_commit_ref: params.git_commit_ref,
             git_commit_message: params.git_commit_message,

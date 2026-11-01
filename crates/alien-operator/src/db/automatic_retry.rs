@@ -181,6 +181,7 @@ mod tests {
                 version: None,
                 description: None,
                 stack: Stack::new("app".into()).build(),
+                signed: None,
             }),
             stack_state: Some(StackState::new(Platform::Kubernetes)),
             error: None,
