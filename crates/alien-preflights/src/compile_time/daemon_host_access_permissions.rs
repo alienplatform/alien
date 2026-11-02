@@ -205,7 +205,12 @@ mod tests {
 
             assert_eq!(
                 refused(&results),
-                vec!["privileged-sa", "host-network-sa", "host-pid-sa", "mount-sa"],
+                vec![
+                    "privileged-sa",
+                    "host-network-sa",
+                    "host-pid-sa",
+                    "mount-sa"
+                ],
                 "{platform}"
             );
             let other_failures: Vec<_> = results
@@ -237,7 +242,12 @@ mod tests {
 
         assert_eq!(
             refused(&validation_results(error)),
-            vec!["privileged-sa", "host-network-sa", "host-pid-sa", "mount-sa"]
+            vec![
+                "privileged-sa",
+                "host-network-sa",
+                "host-pid-sa",
+                "mount-sa"
+            ]
         );
     }
 
