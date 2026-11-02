@@ -1131,8 +1131,16 @@ fn materialize_selection_within(
         })
     })?;
     if group.instance_type.as_deref() != Some(machine) || group.profile.is_none() {
-        group.profile =
-            Some(spec.to_machine_profile_for_storage(requirements.max_ephemeral_storage_bytes));
+        // The machine supplies the hardware; the data disk is attached to it
+        // as declared.
+        let data_disk = group
+            .profile
+            .as_ref()
+            .and_then(|profile| profile.data_disk.clone());
+        let mut profile =
+            spec.to_machine_profile_for_storage(requirements.max_ephemeral_storage_bytes);
+        profile.data_disk = data_disk;
+        group.profile = Some(profile);
     }
     group.instance_type = Some(machine.to_string());
     group.min_size = selection.min_size();

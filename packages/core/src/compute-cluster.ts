@@ -33,6 +33,11 @@ export {
 export type ComputePoolRequirements = {
   cpu: number | string
   memory: string
+  /**
+   * Storage on the disk holding the operating system (default "20Gi"). On
+   * AWS, GCP and Azure it sizes each machine's root disk; a change replaces
+   * the machines one at a time without rerunning setup.
+   */
   ephemeralStorage?: string
   architecture?: "arm64" | "x86_64"
   nestedVirtualization?: boolean
@@ -43,9 +48,16 @@ export type ComputePoolRequirements = {
   /**
    * An additional empty block device each machine must provide, besides the
    * disk holding the operating system: no partitions, no filesystem, not
-   * mounted, and at least `size` (for example "50Gi"). Supported on machines
-   * deployments, where `join` refuses a host without one. Other platforms
-   * reject it because Alien does not attach the disk there.
+   * mounted, and at least `size` (for example "50Gi").
+   *
+   * On AWS, GCP and Azure, Alien attaches one new disk to every machine and
+   * deletes it with the machine: an encrypted gp3 EBS volume, a pd-balanced
+   * persistent disk (at least 10 GiB), or a Premium SSD managed disk at LUN 0.
+   * Sizes are rounded up to a whole GiB, up to 64 TiB on AWS and GCP and
+   * 32,767 GiB on Azure. Changing the size replaces the machines one at a
+   * time without rerunning setup. Data on the disk lasts only as long as its
+   * machine. On machines deployments, `join` refuses a host without one.
+   * Kubernetes rejects it because Alien does not attach disks to nodes.
    */
   dataDisk?: {
     size: string

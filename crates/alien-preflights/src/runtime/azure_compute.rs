@@ -107,6 +107,7 @@ fn demands_for(
             if current.is_some_and(|current| current.status == ResourceStatus::Running)
                 && previous.is_some_and(|old| {
                     old.instance_type == group.instance_type
+                        && !old.disks_differ(group)
                         && old.min_size == group.min_size
                         && old.max_size == group.max_size
                 })
@@ -155,7 +156,9 @@ fn demands_for(
                 current: current_count,
                 units: per_machine,
                 previous_units: old_units.as_ref().map_or(0.0, |(_, units)| *units),
-                replaces: previous.is_some_and(|old| old.instance_type != group.instance_type),
+                replaces: previous.is_some_and(|old| {
+                    old.instance_type != group.instance_type || old.disks_differ(group)
+                }),
                 shares_quota,
             };
             let demand = demands.entry(code.clone()).or_insert(QuotaDemand {
@@ -301,6 +304,7 @@ pub async fn check(
                     old.capacity_groups.iter().any(|previous| {
                         previous.group_id == group.group_id
                             && previous.instance_type == group.instance_type
+                            && !previous.disks_differ(group)
                             && previous.min_size == group.min_size
                             && previous.max_size == group.max_size
                             && old.selected_failure_domains.get(&group.group_id)
@@ -678,6 +682,44 @@ mod tests {
         state.resources.insert("cluster".into(), current);
         let skus = skus();
         assert!(demands(&old, &state, &skus).unwrap().is_empty());
+        // Same machine and bounds, a new data disk: machines are replaced one
+        // at a time, so the replacement needs quota while the old ones run.
+        let mut resized_disks = old.clone();
+        let entry = resized_disks.resources.get_mut("cluster").unwrap();
+        let mut cluster = entry
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .unwrap()
+            .clone();
+        cluster.capacity_groups[0].profile = Some(alien_core::MachineProfile {
+            cpu: "2".into(),
+            memory_bytes: 8 << 30,
+            ephemeral_storage_bytes: 20 << 30,
+            architecture: None,
+            gpu: None,
+            data_disk: Some(alien_core::DataDiskRequirement {
+                size_bytes: 30 << 30,
+            }),
+        });
+        entry.config = alien_core::Resource::new(cluster);
+        let maximum = demands(&resized_disks, &state, &skus).unwrap();
+        let immediate = demands_for(&resized_disks, &state, &skus, true).unwrap();
+        for metric in ["cores", "standardDSv5Family"] {
+            assert_eq!(
+                maximum[metric],
+                QuotaDemand {
+                    peak: 4.0,
+                    held: 4.0
+                }
+            );
+            assert_eq!(
+                immediate[metric],
+                QuotaDemand {
+                    peak: 6.0,
+                    held: 4.0
+                }
+            );
+        }
         let immediate = demands_for(&stack("Standard_D2s_v5", 3), &state, &skus, true).unwrap();
         for metric in ["cores", "standardDSv5Family"] {
             assert_eq!(

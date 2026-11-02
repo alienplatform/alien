@@ -53,8 +53,9 @@ pub struct MachineProfile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu: Option<GpuSpec>,
     /// Additional empty block device each machine must provide, besides the
-    /// disk holding the operating system. Supported on Machines, where
-    /// `join` refuses a host without such a device.
+    /// disk holding the operating system. On AWS, GCP and Azure the runtime
+    /// controller attaches one to every machine; on Machines, `join` refuses a
+    /// host without one. Kubernetes rejects it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_disk: Option<DataDiskRequirement>,
 }
@@ -199,10 +200,33 @@ impl CapacityGroup {
             .min(i32::MAX as u64) as i32
     }
 
-    /// AWS runtime data volume required by nested virtualization.
+    /// AWS second EBS volume: the declared data disk, or for a nested
+    /// virtualization pool without one, the volume such pools have always
+    /// received, sized from ephemeral storage.
     pub fn aws_runtime_data_volume_size_gib(&self) -> Option<i32> {
+        if let Some(size_gib) = self.data_disk_size_gib() {
+            return Some(size_gib.min(i32::MAX as u64) as i32);
+        }
         (self.nested_virtualization == Some(true))
             .then(|| self.aws_filesystem_size_gib().max(20).min(i32::MAX as u64) as i32)
+    }
+
+    /// Whether `other` asks for different disks than this group: another root
+    /// storage size or data disk. Runtime controllers replace machines for it.
+    pub fn disks_differ(&self, other: &CapacityGroup) -> bool {
+        let disks = |group: &CapacityGroup| {
+            group
+                .profile
+                .as_ref()
+                .map(|profile| (profile.ephemeral_storage_bytes, profile.data_disk.clone()))
+        };
+        disks(self) != disks(other)
+    }
+
+    /// Declared data disk size, rounded up to a whole GiB.
+    pub fn data_disk_size_gib(&self) -> Option<u64> {
+        let data_disk = self.profile.as_ref()?.data_disk.as_ref()?;
+        Some(data_disk.size_bytes.div_ceil(1024 * 1024 * 1024))
     }
 
     fn aws_filesystem_size_gib(&self) -> u64 {
@@ -520,6 +544,43 @@ mod tests {
             assert_eq!(group.aws_root_volume_size_gib(), root);
             assert_eq!(group.aws_runtime_data_volume_size_gib(), Some(data));
         }
+    }
+
+    #[test]
+    fn declared_data_disk_replaces_the_nested_virtualization_volume() {
+        let gib = 1024 * 1024 * 1024;
+        let group = |nested: Option<bool>, data_disk_bytes: u64| CapacityGroup {
+            group_id: "general".into(),
+            instance_type: None,
+            profile: Some(MachineProfile {
+                cpu: "4.0".into(),
+                memory_bytes: 8 * gib,
+                ephemeral_storage_bytes: 20 * gib,
+                architecture: None,
+                gpu: None,
+                data_disk: Some(DataDiskRequirement {
+                    size_bytes: data_disk_bytes,
+                }),
+            }),
+            min_size: 1,
+            max_size: 1,
+            scale_policy: None,
+            nested_virtualization: nested,
+        };
+        for nested in [None, Some(false), Some(true)] {
+            // Root keeps the ephemeral storage formula; the second volume is
+            // exactly the declared size, not the 25 GiB implicit volume.
+            assert_eq!(group(nested, 30 * gib).aws_root_volume_size_gib(), 37);
+            assert_eq!(
+                group(nested, 30 * gib).aws_runtime_data_volume_size_gib(),
+                Some(30)
+            );
+            assert_eq!(
+                group(nested, 30 * gib + 1).aws_runtime_data_volume_size_gib(),
+                Some(31)
+            );
+        }
+        assert_eq!(group(None, 512 * 1024 * 1024).data_disk_size_gib(), Some(1));
     }
 
     #[test]

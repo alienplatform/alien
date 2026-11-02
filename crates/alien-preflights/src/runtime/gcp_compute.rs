@@ -123,6 +123,7 @@ fn demands_for(
             if current.is_some_and(|current| current.status == ResourceStatus::Running)
                 && previous.is_some_and(|old| {
                     old.instance_type == group.instance_type
+                        && !old.disks_differ(group)
                         && old.min_size == group.min_size
                         && old.max_size == group.max_size
                 })
@@ -165,7 +166,9 @@ fn demands_for(
                 current: current_count,
                 units: per_machine,
                 previous_units: old_units.as_ref().map_or(0.0, |(_, units)| *units),
-                replaces: previous.is_some_and(|old| old.instance_type != group.instance_type),
+                replaces: previous.is_some_and(|old| {
+                    old.instance_type != group.instance_type || old.disks_differ(group)
+                }),
                 shares_quota,
             };
             let demand = demands.entry(code.clone()).or_insert(QuotaDemand {
@@ -455,6 +458,45 @@ mod tests {
         })).unwrap()));
         state.resources.insert("cluster".into(), current);
         assert!(demands(&old, &state, true).unwrap().is_empty());
+        // Same machine and bounds, a new data disk: the running machine is
+        // replaced, so the replacement needs quota while the old one runs.
+        let mut resized = old.clone();
+        let entry = resized.resources.get_mut("cluster").unwrap();
+        let mut cluster = entry
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .unwrap()
+            .clone();
+        cluster.capacity_groups[0].profile = Some(alien_core::MachineProfile {
+            cpu: "12".into(),
+            memory_bytes: 85 << 30,
+            ephemeral_storage_bytes: 20 << 30,
+            architecture: None,
+            gpu: None,
+            data_disk: Some(alien_core::DataDiskRequirement {
+                size_bytes: 30 << 30,
+            }),
+        });
+        entry.config = alien_core::Resource::new(cluster);
+        let mut unchanged_disks = old.clone();
+        unchanged_disks.resources.get_mut("cluster").unwrap().config =
+            resized.resources["cluster"].config.clone();
+        let mut installed = state.clone();
+        installed.resources.get_mut("cluster").unwrap().config =
+            resized.resources["cluster"].config.clone();
+        assert!(demands(&unchanged_disks, &installed, true)
+            .unwrap()
+            .is_empty());
+        let disk_change = demands(&resized, &state, true).unwrap();
+        for metric in ["NVIDIA_A100_GPUS", "GPUS_ALL_REGIONS"] {
+            assert_eq!(
+                disk_change[metric],
+                QuotaDemand {
+                    peak: 16.0,
+                    held: 8.0
+                }
+            );
+        }
         for metric in ["NVIDIA_A100_GPUS", "GPUS_ALL_REGIONS"] {
             assert_eq!(
                 demands(&new, &state, true).unwrap()[metric],
