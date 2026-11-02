@@ -25,6 +25,8 @@ pub(super) async fn validate_before_creation(
         "platform": resolved.platform,
         "setupMethod": "cli",
         "stackSettings": deployment_stack_settings_json(resolved, args)?,
+        // Validate the Release this deployment will install: the one on its channel.
+        "releaseChannel": args.channel,
     });
     if let Some(setup_item) = args.setup_item {
         body["setupItem"] = serde_json::Value::String(setup_item.api_name().to_string());
