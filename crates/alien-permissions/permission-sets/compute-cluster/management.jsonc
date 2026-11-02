@@ -171,6 +171,37 @@
           }
         }
       },
+      // A direct setup creates the ComputeCluster security group itself, tagged
+      // as runtime-owned. Switching an Auto Scaling group to a new launch template
+      // version, or creating a group for a new pool, runs the same RunInstances
+      // authorization check against that group. Referencing a group in a launch
+      // does not change its rules.
+      {
+        "label": "Use runtime compute security groups",
+        "grant": {
+          "actions": ["ec2:RunInstances"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
       {
         "grant": {
           "actions": ["ec2:RunInstances"]
