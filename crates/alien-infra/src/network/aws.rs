@@ -63,6 +63,9 @@ use tracing::{debug, info, warn};
 #[path = "aws_sandbox_setup.rs"]
 mod sandbox_setup;
 
+#[path = "aws_flow_logs.rs"]
+mod flow_logs;
+
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 
@@ -1112,6 +1115,10 @@ pub struct AwsNetworkController {
     /// Only direct setup owns these additional objects. Template imports leave this absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) sandbox_setup: Option<sandbox_setup::SandboxNetworkSetup>,
+    /// The VPC's flow log, its log group and its delivery role, as far as direct setup created
+    /// them. Template imports leave this absent: the template owns those objects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) flow_logs: Option<flow_logs::FlowLogSetup>,
 
     // Subnets
     #[serde(deserialize_with = "alien_core::network_ids::deserialize_ids")]
@@ -2991,7 +2998,9 @@ impl AwsNetworkController {
     fn nothing_deleted_yet(&self) -> bool {
         matches!(
             self.state,
-            AwsNetworkState::DeleteStart | AwsNetworkState::DeletingNatGateway
+            AwsNetworkState::DeleteStart
+                | AwsNetworkState::DeletingFlowLogs
+                | AwsNetworkState::DeletingNatGateway
         ) && !self.delete_removed_something
     }
 
@@ -4585,11 +4594,7 @@ impl AwsNetworkController {
         ) {
             debug!(sg_id = %sg_id, "Security group egress rule already exists");
             return Ok(HandlerAction::Continue {
-                state: if sandbox_setup::required(ctx)? {
-                    CreatingSandboxNetwork
-                } else {
-                    Ready
-                },
+                state: CreatingFlowLogs,
                 suggested_delay: None,
             });
         }
@@ -4623,15 +4628,53 @@ impl AwsNetworkController {
             }
         }
 
-        info!("Security group configured, network provisioning complete");
+        info!("Security group configured");
 
         Ok(HandlerAction::Continue {
-            state: if sandbox_setup::required(ctx)? {
-                CreatingSandboxNetwork
-            } else {
-                Ready
-            },
+            state: CreatingFlowLogs,
             suggested_delay: None,
+        })
+    }
+
+    #[handler(state = CreatingFlowLogs, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn creating_flow_logs(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        Ok(match self.reconcile_flow_log(ctx).await? {
+            flow_logs::FlowLogStep::Ready => HandlerAction::Continue {
+                state: if sandbox_setup::required(ctx)? {
+                    CreatingSandboxNetwork
+                } else {
+                    Ready
+                },
+                suggested_delay: None,
+            },
+            flow_logs::FlowLogStep::Again(delay) => HandlerAction::Stay {
+                max_times: None,
+                suggested_delay: Some(delay),
+            },
+        })
+    }
+
+    #[handler(state = UpdatingFlowLogs, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn updating_flow_logs(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        Ok(match self.reconcile_flow_log(ctx).await? {
+            flow_logs::FlowLogStep::Ready => HandlerAction::Continue {
+                state: if sandbox_setup::required(ctx)? {
+                    UpdatingSandboxNetwork
+                } else {
+                    Ready
+                },
+                suggested_delay: None,
+            },
+            flow_logs::FlowLogStep::Again(delay) => HandlerAction::Stay {
+                max_times: None,
+                suggested_delay: Some(delay),
+            },
         })
     }
 
@@ -4798,8 +4841,11 @@ impl AwsNetworkController {
             );
         }
 
+        // A VPC that direct setup created before flow logs existed gets one on a setup run.
         Ok(HandlerAction::Continue {
-            state: if sandbox_setup::required(ctx)? {
+            state: if self.flow_log_missing(ctx)? {
+                UpdatingFlowLogs
+            } else if sandbox_setup::required(ctx)? {
                 UpdatingSandboxNetwork
             } else {
                 Ready
@@ -4848,6 +4894,13 @@ impl AwsNetworkController {
         // the exact token of its create call, so the steps below delete it.
         self.recover_lost_creates(ctx, &config.id).await?;
 
+        if self.flow_logs.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: DeletingFlowLogs,
+                suggested_delay: None,
+            });
+        }
+
         // If no VPC was created, nothing to delete
         if self.vpc_id.is_none() {
             info!(network_id = %config.id, "No VPC created - nothing to delete");
@@ -4869,6 +4922,27 @@ impl AwsNetworkController {
     // delete step ends the whole delete, which would skip the remaining children. An ID
     // leaves state only once AWS reports the object deleted or missing. While AWS reports
     // it in use, the ID stays and the handler polls, then fails with the ID still recorded.
+
+    /// The flow log goes before the VPC; its role and log group go with it.
+    #[handler(
+        state = DeletingFlowLogs,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn deleting_flow_logs(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.delete_flow_log(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: if self.vpc_id.is_some() {
+                DeletingNatGateway
+            } else {
+                Deleted
+            },
+            suggested_delay: None,
+        })
+    }
 
     #[handler(
         state = DeletingNatGateway,
@@ -5716,16 +5790,15 @@ impl AwsNetworkController {
         // Direct setup creates the dedicated subnets when they are first needed. A setup run
         // after a refresh failed to verify them reconciles them, repairing a removed route or
         // association; a verified network schedules nothing, so setup can finish.
-        Ok(
-            ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+        Ok(self.flow_log_missing(ctx)?
+            || (ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
                 && (self.sandbox_network.is_none()
                     || (ctx.deployment_config.setup_run
                         && self
                             .sandbox_setup
                             .as_ref()
                             .is_some_and(|setup| setup.is_unverified())))
-                && sandbox_setup::required(ctx)?,
-        )
+                && sandbox_setup::required(ctx)?))
     }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
@@ -5762,6 +5835,7 @@ impl AwsNetworkController {
             egress_public_ips: vec!["203.0.113.10".to_string()],
             sandbox_network: None,
             sandbox_setup: None,
+            flow_logs: None,
             public_subnet_ids: (0..az_count)
                 .map(|i| format!("subnet-pub-{}-{}", vpc_id, i))
                 .collect(),
@@ -5821,6 +5895,7 @@ impl AwsNetworkController {
             egress_public_ips: Vec::new(),
             sandbox_network: None,
             sandbox_setup: None,
+            flow_logs: None,
             public_subnet_ids,
             private_subnet_ids: private_subnet_ids.clone(),
             public_route_table_id: None,
@@ -5872,10 +5947,12 @@ mod controller_state_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
+    use alien_aws_clients::cloudwatch_logs::MockCloudWatchLogsApi;
     use alien_aws_clients::ec2::{
-        CreateNatGatewayRequest, DescribeAddressesResponse, DescribeNetworkInterfacesResponse,
-        MockEc2Api,
+        CreateFlowLogsResponse, CreateNatGatewayRequest, DescribeAddressesResponse,
+        DescribeNetworkInterfacesResponse, FlowLogIdSet, MockEc2Api,
     };
+    use alien_aws_clients::iam::MockIamApi;
     use alien_aws_clients::service_quotas::{
         GetServiceQuotaResponse, MockServiceQuotasApi, ServiceQuota,
     };
@@ -9614,6 +9691,68 @@ mod controller_state_tests {
             log.lock().unwrap().push(id.to_string());
             Ok(())
         });
+        let flow_log_name = format!("{PREFIX}-{NETWORK_ID}-flow-logs");
+        let name = flow_log_name.clone();
+        ec2.expect_create_flow_logs()
+            .times(1)
+            .withf(move |request| {
+                request.resource_ids == ["vpc-1"]
+                    && request.resource_type == "VPC"
+                    && request.traffic_type == "ALL"
+                    && request.log_group_name == name
+                    && request.max_aggregation_interval == Some(600)
+            })
+            .returning(|_| {
+                Ok(CreateFlowLogsResponse {
+                    flow_log_id_set: Some(FlowLogIdSet {
+                        items: vec!["fl-1".to_string()],
+                    }),
+                    unsuccessful: None,
+                })
+            });
+        let log = deleted.clone();
+        ec2.expect_delete_flow_log().times(1).returning(move |id| {
+            log.lock().unwrap().push(id.to_string());
+            Ok(())
+        });
+        let mut logs = MockCloudWatchLogsApi::new();
+        logs.expect_create_log_group()
+            .times(1)
+            .returning(|_| Ok(()));
+        logs.expect_put_retention_policy()
+            .times(1)
+            .withf(|request| request.retention_in_days == 365)
+            .returning(|_| Ok(()));
+        let log = deleted.clone();
+        logs.expect_delete_log_group()
+            .times(1)
+            .returning(move |name| {
+                log.lock().unwrap().push(format!("log-group/{name}"));
+                Ok(())
+            });
+        let logs = Arc::new(logs);
+        let mut iam = MockIamApi::new();
+        iam.expect_create_role().times(1).returning(|request| {
+            Ok(parse(json!({ "CreateRoleResult": { "Role": {
+                "Path": "/",
+                "RoleName": request.role_name,
+                "RoleId": "AROAEXAMPLE",
+                "Arn": format!("arn:aws:iam::123456789012:role/{}", request.role_name),
+                "CreateDate": "2026-01-01T00:00:00Z"
+            } } })))
+        });
+        iam.expect_put_role_policy()
+            .times(1)
+            .returning(|_, _, _| Ok(()));
+        iam.expect_delete_role_policy()
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let log = deleted.clone();
+        iam.expect_delete_role().times(1).returning(move |name| {
+            log.lock().unwrap().push(format!("role/{name}"));
+            Ok(())
+        });
+        let iam = Arc::new(iam);
 
         let ec2 = Arc::new(ec2);
         let mut quotas = MockServiceQuotasApi::new();
@@ -9635,6 +9774,12 @@ mod controller_state_tests {
         provider
             .expect_get_aws_service_quotas_client()
             .returning(move |_| Ok(quotas.clone()));
+        provider
+            .expect_get_aws_logs_client()
+            .returning(move |_| Ok(logs.clone()));
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
         let mut executor = SingleControllerExecutor::builder()
             .resource(network(Some("10.0.0.0/16")))
             .controller(AwsNetworkController::default())
@@ -9665,6 +9810,10 @@ mod controller_state_tests {
         assert_eq!(ready.public_subnet_ids, ["subnet-0", "subnet-16"]);
         assert_eq!(ready.private_subnet_ids, ["subnet-128", "subnet-144"]);
         assert_eq!(ready.route_table_association_ids.len(), 4);
+        assert!(ready
+            .flow_logs
+            .as_ref()
+            .is_some_and(flow_logs::FlowLogSetup::is_complete));
 
         executor.delete().expect("delete transition");
         executor
@@ -9677,9 +9826,13 @@ mod controller_state_tests {
             Duration::from_secs(15),
             "delete",
         );
+        // The flow log goes first, while its VPC still exists.
         assert_eq!(
             *deleted.lock().unwrap(),
             [
+                "fl-1",
+                &format!("role/{flow_log_name}"),
+                &format!("log-group/{flow_log_name}"),
                 "nat-1",
                 "eipalloc-1",
                 "sg-1",
@@ -9696,6 +9849,7 @@ mod controller_state_tests {
         let state = controller(&executor);
         assert_eq!(state.vpc_id, None);
         assert!(state.route_table_association_ids.is_empty());
+        assert_eq!(state.flow_logs, None);
     }
     // ─────────────── CRASH AFTER AWS ACCEPTED A CREATE ───────────────
     //

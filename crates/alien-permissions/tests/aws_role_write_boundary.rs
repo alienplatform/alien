@@ -131,9 +131,11 @@ fn catalog_management_role_writes_require_boundary_and_ownership() {
     let context = common::create_test_context().with_aws_permissions_boundary_arn(BOUNDARY);
     let generator = AwsRuntimePermissionsGenerator::new();
     for id in list_permission_set_ids() {
-        if id == "remote-stack-management/provision" {
+        // Setup credentials only: automatic setup management never copies these to the
+        // management identity.
+        if id == "remote-stack-management/provision" || id.ends_with("/setup") {
             continue;
-        } // setup credentials only
+        }
         let set = get_permission_set(id).unwrap();
         let Some(entries) = &set.platforms.aws else {
             continue;

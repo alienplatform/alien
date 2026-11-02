@@ -60,6 +60,76 @@ fn setup_can_manage_its_boundary_and_read_only_the_exact_boundary() {
     }
 }
 
+/// Direct setup creates the role the flow logs service assumes for a created VPC without the
+/// management boundary, which does not allow log delivery. A bounded setup's role grants all
+/// require that boundary, so these come from the setup-only `network/setup` set, and reach only
+/// roles of this stack that carry its tags.
+#[test]
+fn setup_can_create_pass_and_delete_the_flow_log_role_of_its_own_stack() {
+    let context = common::create_test_context().with_aws_permissions_boundary_arn(BOUNDARY);
+    let setup = generate_aws_initial_setup_policy(&context)
+        .unwrap()
+        .statement;
+    let role = "arn:aws:iam::123456789012:role/my-stack-default-network-flow-logs";
+    let owned = |action: &'static str, resource: &str, tag_source: &str| {
+        Request::new(action, resource)
+            .with(format!("{tag_source}/deployment"), "my-stack")
+            .with(format!("{tag_source}/managed-by"), "runtime")
+    };
+
+    for action in ["iam:CreateRole", "iam:TagRole"] {
+        assert_eq!(
+            evaluate(&setup, &owned(action, role, "aws:RequestTag")),
+            Decision::Allowed,
+            "{action}"
+        );
+        assert_eq!(
+            evaluate(&setup, &Request::new(action, role)),
+            Decision::NotAllowed,
+            "{action} without this stack's tags"
+        );
+        assert_eq!(
+            evaluate(
+                &setup,
+                &owned(
+                    action,
+                    "arn:aws:iam::123456789012:role/other-stack-default-network-flow-logs",
+                    "aws:RequestTag"
+                )
+            ),
+            Decision::NotAllowed,
+            "{action} on another stack's role"
+        );
+    }
+    for action in [
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:DeleteRole",
+    ] {
+        assert_eq!(
+            evaluate(&setup, &owned(action, role, "aws:ResourceTag")),
+            Decision::Allowed,
+            "{action}"
+        );
+        assert_eq!(
+            evaluate(
+                &setup,
+                &Request::new(action, role).with("aws:ResourceTag/deployment", "other-stack")
+            ),
+            Decision::NotAllowed,
+            "{action} on a role another stack tagged"
+        );
+    }
+    assert_eq!(
+        evaluate(
+            &setup,
+            &Request::new("iam:PassRole", role)
+                .with("iam:PassedToService", "vpc-flow-logs.amazonaws.com")
+        ),
+        Decision::Allowed
+    );
+}
+
 #[test]
 fn node_cleanup_only_detaches_the_two_obsolete_policies_within_its_scope() {
     for (target, allowed_roles, denied_roles) in [

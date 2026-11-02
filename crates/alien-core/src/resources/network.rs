@@ -14,6 +14,10 @@ use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::fmt::Debug;
 
+/// Days the flow log records of a VPC that Alien creates on AWS are kept. Compliance checks
+/// expect one year of log retention.
+pub const AWS_VPC_FLOW_LOG_RETENTION_DAYS: i32 = 365;
+
 /// Represents cloud-agnostic networking infrastructure (VPC, VNet, subnets, etc.).
 ///
 /// This resource is **always auto-generated** by the NetworkMutation preflight based on

@@ -757,6 +757,56 @@ resource "aws_route_table_association" "kubernetes_private" {
   route_table_id = aws_route_table.kubernetes_private[0].id
 }
 
+resource "aws_cloudwatch_log_group" "kubernetes_flow_logs" {
+  count             = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  name              = "${local.resource_prefix}-kubernetes-flow-logs"
+  retention_in_days = 365
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "kubernetes"
+    "resource-type" = "kubernetes-cluster"
+  }
+}
+
+resource "aws_iam_role" "kubernetes_flow_logs" {
+  count              = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  name               = length(format("%s-%s", local.resource_prefix, "kubernetes-flow-logs")) <= 64 ? format("%s-%s", local.resource_prefix, "kubernetes-flow-logs") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "kubernetes-flow-logs"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "kubernetes-flow-logs")), 0, 8))
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "vpc-flow-logs.amazonaws.com" }, Action = "sts:AssumeRole", Condition = { StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }, ArnLike = { "aws:SourceArn" = "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:vpc-flow-log/*" } } }] })
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "kubernetes"
+    "resource-type" = "kubernetes-cluster"
+  }
+}
+
+resource "aws_iam_role_policy" "kubernetes_flow_logs" {
+  count  = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  name   = "flow-logs-delivery"
+  role   = aws_iam_role.kubernetes_flow_logs[0].id
+  policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
+  depends_on = [
+    aws_iam_role_policy_attachment.kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_5788ded6_attachment
+  ]
+}
+
+resource "aws_flow_log" "kubernetes" {
+  count                    = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  vpc_id                   = aws_vpc.kubernetes[0].id
+  traffic_type             = "ALL"
+  log_destination_type     = "cloud-watch-logs"
+  log_destination          = aws_cloudwatch_log_group.kubernetes_flow_logs[0].arn
+  iam_role_arn             = aws_iam_role.kubernetes_flow_logs[0].arn
+  max_aggregation_interval = 600
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "kubernetes"
+    "resource-type" = "kubernetes-cluster"
+  }
+}
+
 resource "aws_iam_role" "kubernetes_cluster" {
   count              = var.kubernetes_cluster_mode == "create" ? 1 : 0
   name               = "${local.resource_prefix}-kubernetes-eks"
@@ -856,6 +906,40 @@ resource "aws_iam_role_policy" "management_kubernetes_kubernetes-cluster-heartbe
   depends_on = [
     aws_iam_role_policy_attachment.management_setup_49a15168_attachment
   ]
+}
+
+resource "aws_iam_policy" "kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_5788ded6" {
+  count  = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  name   = length(format("%s-%s", local.resource_prefix, "kubernetes-flow-logs-0-kubernetes-cluster-mode-network-mode-6487e1ea-setup-5788ded6")) <= 128 ? format("%s-%s", local.resource_prefix, "kubernetes-flow-logs-0-kubernetes-cluster-mode-network-mode-6487e1ea-setup-5788ded6") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "kubernetes-flow-logs-0-kubernetes-cluster-mode-network-mode-6487e1ea-setup-5788ded6"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "kubernetes-flow-logs-0-kubernetes-cluster-mode-network-mode-6487e1ea-setup-5788ded6")), 0, 8))
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Action = ["logs:CreateLogStream", "logs:PutLogEvents", "logs:DescribeLogGroups", "logs:DescribeLogStreams"], Resource = ["arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:${local.resource_prefix}-kubernetes-flow-logs", "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:${local.resource_prefix}-kubernetes-flow-logs:*"] }] })
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_5788ded6_attachment" {
+  count      = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  role       = aws_iam_role.kubernetes_flow_logs[0].name
+  policy_arn = aws_iam_policy.kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_5788ded6[0].arn
+  depends_on = [
+    aws_iam_policy.kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_5788ded6
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "terraform_data" "kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_policies_barrier" {
+  count = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  triggers_replace = [
+    aws_iam_role_policy_attachment.kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_5788ded6_attachment[0].id
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 === management.tf ===
@@ -977,6 +1061,10 @@ resource "terraform_data" "deployment_registration" {
     aws_route_table.kubernetes_private,
     aws_route_table_association.kubernetes_public,
     aws_route_table_association.kubernetes_private,
+    aws_cloudwatch_log_group.kubernetes_flow_logs,
+    aws_iam_role.kubernetes_flow_logs,
+    aws_iam_role_policy.kubernetes_flow_logs,
+    aws_flow_log.kubernetes,
     aws_iam_role.kubernetes_cluster,
     aws_iam_role_policy_attachment.kubernetes_cluster,
     aws_iam_role.kubernetes_node,
@@ -986,6 +1074,9 @@ resource "terraform_data" "deployment_registration" {
     aws_eks_addon.kubernetes_kube_proxy,
     aws_eks_addon.kubernetes_coredns,
     aws_iam_role_policy.management_kubernetes_kubernetes-cluster-heartbeat_0,
+    aws_iam_policy.kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_5788ded6,
+    aws_iam_role_policy_attachment.kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_5788ded6_attachment,
+    terraform_data.kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_policies_barrier,
     aws_iam_role.management,
     aws_iam_policy.management_permissions_boundary,
     aws_iam_role_policy.management_self_read,

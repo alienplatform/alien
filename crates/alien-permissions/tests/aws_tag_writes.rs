@@ -78,6 +78,7 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                                     | "CreateNatGateway"
                                     | "AllocateAddress"
                                     | "CreateSecurityGroup"
+                                    | "CreateFlowLogs"
                                     | "CreateLaunchTemplate"
                                     | "RunInstances"
                                     | "CreateVolume"
@@ -117,6 +118,7 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                             "arn:aws:iam::${awsAccountId}:instance-profile/",
                             "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/",
                             "arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/",
+                            "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:",
                             "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:",
                             "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:",
                             "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/",
@@ -214,6 +216,7 @@ fn catalog_pass_role_grants_require_the_consuming_service() {
             "build/provision" => "codebuild.amazonaws.com",
             "compute-cluster/management" | "compute-cluster/provision" => "ec2.amazonaws.com",
             "container/provision" => "dlm.amazonaws.com",
+            "network/setup" => "vpc-flow-logs.amazonaws.com",
             _ => panic!("review the consuming service for {id}"),
         };
         // Render both binding scopes with the boundary selected: legacy grants must

@@ -66,6 +66,7 @@ impl ResourceImporter for AwsNetworkImporter {
             egress_public_ips: data.egress_public_ips,
             sandbox_network: data.sandbox_network,
             sandbox_setup: None,
+            flow_logs: None,
             public_subnet_ids: data.public_subnet_ids,
             private_subnet_ids: data.private_subnet_ids,
             public_route_table_id: data.public_route_table_id,

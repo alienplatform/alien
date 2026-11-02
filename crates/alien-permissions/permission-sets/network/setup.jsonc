@@ -1,0 +1,95 @@
+{
+  "id": "network/setup",
+  "description": "Allows setup to create and delete the role the VPC flow logs service assumes to write a created network's flow log",
+  // Setup credentials only. Creating a role and writing its policy cannot be limited to what
+  // the role may do, so these grants must never reach the management identity: automatic
+  // setup management copies only provision, management, heartbeat and telemetry sets to it.
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": ["iam:CreateRole", "iam:TagRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-flow-logs"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-flow-logs"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
+            "iam:GetRole",
+            "iam:PutRolePolicy",
+            "iam:DeleteRolePolicy",
+            "iam:DeleteRole"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-flow-logs"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-flow-logs"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["iam:PassRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-flow-logs"],
+            "condition": {
+              "StringEquals": {
+                "iam:PassedToService": "vpc-flow-logs.amazonaws.com"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-flow-logs"
+            ],
+            "condition": {
+              "StringEquals": {
+                "iam:PassedToService": "vpc-flow-logs.amazonaws.com"
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}
