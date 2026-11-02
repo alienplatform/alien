@@ -82,6 +82,7 @@ export async function getOrCreateDeploymentGroup(
     .where(eq(organizationMetadata.organizationId, organizationId))
     .limit(1)
 
+  // A row without a stored expiry predates the column, so its token's lifetime is unknown: renew it.
   if (
     metadata?.deploymentGroupId &&
     metadata.deploymentToken &&
