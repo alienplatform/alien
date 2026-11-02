@@ -139,6 +139,10 @@ export class Daemon extends ResourceBuilder {
    *
    * Use this only for daemons that intentionally need host-level access, such
    * as a privileged loader that installs or supervises a native host process.
+   *
+   * On AWS, GCP and Azure, host access (`privileged`, host network, host PID
+   * namespace or host mounts) can't be combined with `permissions`: such a
+   * daemon could use the machine's credentials, so the build refuses it.
    */
   public runtime(runtime: DaemonRuntime): this {
     this._config.runtime = runtime
@@ -223,7 +227,8 @@ export class Daemon extends ResourceBuilder {
   /**
    * Assigns a permission profile to this daemon. Without one, no workload cloud identity is created.
    * The profile defines the permissions granted to this daemon when interacting
-   * with other cloud resources.
+   * with other cloud resources. On AWS, GCP and Azure, a daemon with permissions
+   * must run without host access (see {@link runtime}).
    * @param permissions The permission profile name.
    * @returns The Daemon builder instance.
    */
