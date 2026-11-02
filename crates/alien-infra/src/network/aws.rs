@@ -4894,7 +4894,9 @@ impl AwsNetworkController {
         // the exact token of its create call, so the steps below delete it.
         self.recover_lost_creates(ctx, &config.id).await?;
 
-        if self.flow_logs.is_some() {
+        // A created VPC's flow log objects go first. They are looked up even without a record:
+        // an older binary that rewrote this state dropped it.
+        if self.vpc_id.is_some() || self.flow_logs.is_some() {
             return Ok(HandlerAction::Continue {
                 state: DeletingFlowLogs,
                 suggested_delay: None,
@@ -6036,16 +6038,33 @@ mod controller_state_tests {
         })
     }
 
+    /// The delete flow looks for the VPC's flow log, its role and its log group; these
+    /// networks have none.
     async fn executor(
-        ec2: MockEc2Api,
+        mut ec2: MockEc2Api,
         controller: AwsNetworkController,
         cidr: Option<&str>,
     ) -> SingleControllerExecutor {
+        ec2.expect_describe_flow_logs()
+            .returning(|_| Ok(parse(json!({}))));
         let ec2 = Arc::new(ec2);
+        let mut iam = MockIamApi::new();
+        iam.expect_get_role().returning(|_| Err(not_found()));
+        let iam = Arc::new(iam);
+        let mut logs = MockCloudWatchLogsApi::new();
+        logs.expect_list_tags_for_resource()
+            .returning(|_| Err(not_found()));
+        let logs = Arc::new(logs);
         let mut provider = MockPlatformServiceProvider::new();
         provider
             .expect_get_aws_ec2_client()
             .returning(move |_| Ok(ec2.clone()));
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_aws_logs_client()
+            .returning(move |_| Ok(logs.clone()));
         provider
             .expect_get_aws_service_quotas_client()
             .returning(|_| {
@@ -9710,11 +9729,16 @@ mod controller_state_tests {
                     unsuccessful: None,
                 })
             });
+        // Create looks for a flow log made earlier; delete looks for unrecorded ones.
+        ec2.expect_describe_flow_logs()
+            .times(2)
+            .returning(|_| Ok(parse(json!({}))));
         let log = deleted.clone();
         ec2.expect_delete_flow_log().times(1).returning(move |id| {
             log.lock().unwrap().push(id.to_string());
             Ok(())
         });
+        let owned = standard_resource_tags(PREFIX, NETWORK_ID);
         let mut logs = MockCloudWatchLogsApi::new();
         logs.expect_create_log_group()
             .times(1)
@@ -9723,6 +9747,10 @@ mod controller_state_tests {
             .times(1)
             .withf(|request| request.retention_in_days == 365)
             .returning(|_| Ok(()));
+        let tags = owned.clone();
+        logs.expect_list_tags_for_resource()
+            .times(1)
+            .returning(move |_| Ok(tags.clone()));
         let log = deleted.clone();
         logs.expect_delete_log_group()
             .times(1)
@@ -9744,6 +9772,20 @@ mod controller_state_tests {
         iam.expect_put_role_policy()
             .times(1)
             .returning(|_, _, _| Ok(()));
+        let tags: Vec<_> = owned
+            .iter()
+            .map(|(key, value)| json!({ "Key": key, "Value": value }))
+            .collect();
+        iam.expect_get_role().times(1).returning(move |name| {
+            Ok(parse(json!({ "GetRoleResult": { "Role": {
+                "Path": "/",
+                "RoleName": name,
+                "RoleId": "AROAEXAMPLE",
+                "Arn": format!("arn:aws:iam::123456789012:role/{name}"),
+                "CreateDate": "2026-01-01T00:00:00Z",
+                "Tags": { "member": tags.clone() }
+            } } })))
+        });
         iam.expect_delete_role_policy()
             .times(1)
             .returning(|_, _| Ok(()));

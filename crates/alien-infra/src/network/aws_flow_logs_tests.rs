@@ -4,7 +4,10 @@ use alien_aws_clients::cloudwatch_logs::MockCloudWatchLogsApi;
 use alien_aws_clients::ec2::{
     CreateFlowLogsResponse, DescribeFlowLogsResponse, FlowLog, FlowLogIdSet, FlowLogSet, MockEc2Api,
 };
-use alien_aws_clients::iam::{CreateRoleResponse, CreateRoleResult, MockIamApi, Role};
+use alien_aws_clients::iam::{
+    CreateRoleResponse, CreateRoleResult, GetRoleResponse, GetRoleResult, MockIamApi, Role,
+    Tag as IamTag, Tags as IamTags,
+};
 use alien_core::InitialSetupAuthority;
 use std::sync::{Arc, Mutex};
 
@@ -15,13 +18,20 @@ const NAME: &str = "test-net-flow-logs";
 /// What exists in the account, and every mutating call made.
 #[derive(Default)]
 struct Cloud {
-    log_groups: Vec<String>,
-    roles: Vec<String>,
+    /// Log groups and roles by name, with their tags.
+    log_groups: Vec<(String, HashMap<String, String>)>,
+    roles: Vec<(String, HashMap<String, String>)>,
     /// Flow logs by ID, with the client token that created each.
     flow_logs: Vec<(String, String)>,
     /// Creates to apply and then answer with an error, as a lost response.
     lose_flow_log_creates: usize,
+    /// Flow log lists that miss every flow log, as an eventually consistent read.
+    stale_flow_log_lists: usize,
     calls: Vec<String>,
+}
+
+fn ours() -> HashMap<String, String> {
+    standard_resource_tags(PREFIX, NETWORK_ID)
 }
 
 fn unavailable() -> AlienError<CloudClientErrorData> {
@@ -45,7 +55,7 @@ fn missing(kind: &str, name: &str) -> AlienError<CloudClientErrorData> {
     })
 }
 
-fn role(name: &str) -> Role {
+fn role(name: &str, tags: &HashMap<String, String>) -> Role {
     Role {
         path: "/".to_string(),
         role_name: name.to_string(),
@@ -56,9 +66,22 @@ fn role(name: &str) -> Role {
         description: None,
         max_session_duration: None,
         permissions_boundary: None,
-        tags: None,
+        tags: Some(IamTags {
+            member: tags
+                .iter()
+                .map(|(key, value)| IamTag {
+                    key: key.clone(),
+                    value: value.clone(),
+                })
+                .collect(),
+        }),
         role_last_used: None,
     }
+}
+
+fn empty<T: serde::de::DeserializeOwned>(
+) -> std::result::Result<T, AlienError<CloudClientErrorData>> {
+    Ok(serde_json::from_value(serde_json::json!({})).unwrap())
 }
 
 fn provider(cloud: &Arc<Mutex<Cloud>>) -> Arc<MockPlatformServiceProvider> {
@@ -69,11 +92,28 @@ fn provider(cloud: &Arc<Mutex<Cloud>>) -> Arc<MockPlatformServiceProvider> {
         cloud
             .calls
             .push(format!("CreateLogGroup {}", request.log_group_name));
-        if cloud.log_groups.contains(&request.log_group_name) {
+        if cloud
+            .log_groups
+            .iter()
+            .any(|(name, _)| *name == request.log_group_name)
+        {
             return Err(exists("LogGroup", &request.log_group_name));
         }
-        cloud.log_groups.push(request.log_group_name);
+        cloud
+            .log_groups
+            .push((request.log_group_name, request.tags.unwrap_or_default()));
         Ok(())
+    });
+    let c = cloud.clone();
+    logs.expect_list_tags_for_resource().returning(move |arn| {
+        let cloud = c.lock().unwrap();
+        let name = arn.rsplit_once(":log-group:").expect("log group ARN").1;
+        cloud
+            .log_groups
+            .iter()
+            .find(|(group, _)| group == name)
+            .map(|(_, tags)| tags.clone())
+            .ok_or_else(|| missing("LogGroup", name))
     });
     let c = cloud.clone();
     logs.expect_put_retention_policy()
@@ -89,7 +129,7 @@ fn provider(cloud: &Arc<Mutex<Cloud>>) -> Arc<MockPlatformServiceProvider> {
         let mut cloud = c.lock().unwrap();
         cloud.calls.push(format!("DeleteLogGroup {name}"));
         let before = cloud.log_groups.len();
-        cloud.log_groups.retain(|group| group != name);
+        cloud.log_groups.retain(|(group, _)| group != name);
         if cloud.log_groups.len() == before {
             return Err(missing("LogGroup", name));
         }
@@ -103,15 +143,38 @@ fn provider(cloud: &Arc<Mutex<Cloud>>) -> Arc<MockPlatformServiceProvider> {
         cloud
             .calls
             .push(format!("CreateRole {}", request.role_name));
-        if cloud.roles.contains(&request.role_name) {
+        if cloud
+            .roles
+            .iter()
+            .any(|(name, _)| *name == request.role_name)
+        {
             return Err(exists("Role", &request.role_name));
         }
-        cloud.roles.push(request.role_name.clone());
+        let tags: HashMap<String, String> = request
+            .tags
+            .iter()
+            .flatten()
+            .map(|tag| (tag.key.clone(), tag.value.clone()))
+            .collect();
+        let created = role(&request.role_name, &tags);
+        cloud.roles.push((request.role_name, tags));
         Ok(CreateRoleResponse {
-            create_role_result: CreateRoleResult {
-                role: role(&request.role_name),
-            },
+            create_role_result: CreateRoleResult { role: created },
         })
+    });
+    let c = cloud.clone();
+    iam.expect_get_role().returning(move |name| {
+        let cloud = c.lock().unwrap();
+        cloud
+            .roles
+            .iter()
+            .find(|(role_name, _)| role_name == name)
+            .map(|(role_name, tags)| GetRoleResponse {
+                get_role_result: GetRoleResult {
+                    role: role(role_name, tags),
+                },
+            })
+            .ok_or_else(|| missing("Role", name))
     });
     let c = cloud.clone();
     iam.expect_put_role_policy()
@@ -135,7 +198,7 @@ fn provider(cloud: &Arc<Mutex<Cloud>>) -> Arc<MockPlatformServiceProvider> {
     iam.expect_delete_role().returning(move |name| {
         let mut cloud = c.lock().unwrap();
         cloud.calls.push(format!("DeleteRole {name}"));
-        cloud.roles.retain(|role| role != name);
+        cloud.roles.retain(|(role, _)| role != name);
         Ok(())
     });
 
@@ -175,28 +238,44 @@ fn provider(cloud: &Arc<Mutex<Cloud>>) -> Arc<MockPlatformServiceProvider> {
         })
     });
     let c = cloud.clone();
-    ec2.expect_describe_flow_logs().returning(move |_| {
-        let cloud = c.lock().unwrap();
+    ec2.expect_describe_flow_logs().returning(move |request| {
+        let mut cloud = c.lock().unwrap();
+        let filter = |name: &str| {
+            request
+                .filters
+                .iter()
+                .flatten()
+                .find(|filter| filter.name == name)
+                .map(|filter| filter.values.clone())
+        };
+        assert_eq!(filter("resource-id"), Some(vec!["vpc-1".to_string()]));
+        assert_eq!(filter("log-group-name"), Some(vec![NAME.to_string()]));
+        assert_eq!(filter("tag:deployment"), Some(vec![PREFIX.to_string()]));
+        assert_eq!(filter("tag:managed-by"), Some(vec!["runtime".to_string()]));
+        let items = if cloud.stale_flow_log_lists > 0 {
+            cloud.stale_flow_log_lists -= 1;
+            Vec::new()
+        } else {
+            cloud
+                .flow_logs
+                .iter()
+                .map(|(id, _)| FlowLog {
+                    flow_log_id: Some(id.clone()),
+                    flow_log_status: Some("ACTIVE".to_string()),
+                    resource_id: Some("vpc-1".to_string()),
+                    traffic_type: Some("ALL".to_string()),
+                    log_destination_type: Some("cloud-watch-logs".to_string()),
+                    log_group_name: Some(NAME.to_string()),
+                    deliver_logs_permission_arn: None,
+                    deliver_logs_status: Some("SUCCESS".to_string()),
+                    deliver_logs_error_message: None,
+                    max_aggregation_interval: Some(600),
+                    tag_set: None,
+                })
+                .collect()
+        };
         Ok(DescribeFlowLogsResponse {
-            flow_log_set: Some(FlowLogSet {
-                items: cloud
-                    .flow_logs
-                    .iter()
-                    .map(|(id, _)| FlowLog {
-                        flow_log_id: Some(id.clone()),
-                        flow_log_status: Some("ACTIVE".to_string()),
-                        resource_id: Some("vpc-1".to_string()),
-                        traffic_type: Some("ALL".to_string()),
-                        log_destination_type: Some("cloud-watch-logs".to_string()),
-                        log_group_name: Some(NAME.to_string()),
-                        deliver_logs_permission_arn: None,
-                        deliver_logs_status: Some("SUCCESS".to_string()),
-                        deliver_logs_error_message: None,
-                        max_aggregation_interval: Some(600),
-                        tag_set: None,
-                    })
-                    .collect(),
-            }),
+            flow_log_set: Some(FlowLogSet { items }),
             next_token: None,
         })
     });
@@ -212,20 +291,15 @@ fn provider(cloud: &Arc<Mutex<Cloud>>) -> Arc<MockPlatformServiceProvider> {
         Ok(())
     });
     // The rest of a delete from a network with only its VPC recorded.
-    ec2.expect_describe_vpcs()
-        .returning(|_| Ok(serde_json::from_value(serde_json::json!({})).unwrap()));
+    ec2.expect_describe_vpcs().returning(|_| empty());
     ec2.expect_describe_network_interfaces()
-        .returning(|_| Ok(serde_json::from_value(serde_json::json!({})).unwrap()));
-    ec2.expect_describe_route_tables()
-        .returning(|_| Ok(serde_json::from_value(serde_json::json!({})).unwrap()));
+        .returning(|_| empty());
+    ec2.expect_describe_route_tables().returning(|_| empty());
     ec2.expect_describe_internet_gateways()
-        .returning(|_| Ok(serde_json::from_value(serde_json::json!({})).unwrap()));
-    ec2.expect_describe_subnets()
-        .returning(|_| Ok(serde_json::from_value(serde_json::json!({})).unwrap()));
-    ec2.expect_describe_security_groups()
-        .returning(|_| Ok(serde_json::from_value(serde_json::json!({})).unwrap()));
-    ec2.expect_describe_nat_gateways()
-        .returning(|_| Ok(serde_json::from_value(serde_json::json!({})).unwrap()));
+        .returning(|_| empty());
+    ec2.expect_describe_subnets().returning(|_| empty());
+    ec2.expect_describe_security_groups().returning(|_| empty());
+    ec2.expect_describe_nat_gateways().returning(|_| empty());
     let c = cloud.clone();
     ec2.expect_delete_vpc().returning(move |id| {
         c.lock().unwrap().calls.push(format!("DeleteVpc {id}"));
@@ -283,6 +357,13 @@ async fn executor(
         .expect("executor builds")
 }
 
+async fn direct_setup(
+    cloud: &Arc<Mutex<Cloud>>,
+    controller: AwsNetworkController,
+) -> SingleControllerExecutor {
+    executor(cloud, controller, InitialSetupAuthority::DirectSetup, false).await
+}
+
 fn flow_logs(executor: &SingleControllerExecutor) -> Option<FlowLogSetup> {
     executor
         .internal_state::<AwsNetworkController>()
@@ -294,13 +375,7 @@ fn flow_logs(executor: &SingleControllerExecutor) -> Option<FlowLogSetup> {
 #[tokio::test]
 async fn creates_the_log_group_then_the_role_then_the_flow_log_and_deletes_them_before_the_vpc() {
     let cloud = Arc::new(Mutex::new(Cloud::default()));
-    let mut executor = executor(
-        &cloud,
-        creating_flow_logs(),
-        InitialSetupAuthority::DirectSetup,
-        false,
-    )
-    .await;
+    let mut executor = direct_setup(&cloud, creating_flow_logs()).await;
 
     executor
         .run_until_terminal()
@@ -311,16 +386,21 @@ async fn creates_the_log_group_then_the_role_then_the_flow_log_and_deletes_them_
     assert_eq!(recorded.flow_log_id.as_deref(), Some("fl-1"));
     let token = recorded.create_token.clone().expect("token recorded");
     let role_arn = format!("arn:aws:iam::123456789012:role/{NAME}");
-    assert_eq!(
-        std::mem::take(&mut cloud.lock().unwrap().calls),
-        [
-            format!("CreateLogGroup {NAME}"),
-            format!("PutRetentionPolicy {NAME} 365"),
-            format!("CreateRole {NAME}"),
-            format!("PutRolePolicy {NAME} flow-logs-delivery"),
-            format!("CreateFlowLogs vpc-1 ALL {NAME} {role_arn} {token}"),
-        ]
-    );
+    {
+        let mut cloud = cloud.lock().unwrap();
+        assert_eq!(
+            std::mem::take(&mut cloud.calls),
+            [
+                format!("CreateLogGroup {NAME}"),
+                format!("PutRetentionPolicy {NAME} 365"),
+                format!("CreateRole {NAME}"),
+                format!("PutRolePolicy {NAME} flow-logs-delivery"),
+                format!("CreateFlowLogs vpc-1 ALL {NAME} {role_arn} {token}"),
+            ]
+        );
+        assert_eq!(cloud.log_groups, [(NAME.to_string(), ours())]);
+        assert_eq!(cloud.roles, [(NAME.to_string(), ours())]);
+    }
 
     executor.delete().expect("delete starts");
     executor
@@ -328,8 +408,9 @@ async fn creates_the_log_group_then_the_role_then_the_flow_log_and_deletes_them_
         .await
         .expect("delete finishes");
     assert_eq!(executor.status(), ResourceStatus::Deleted);
+    let cloud = cloud.lock().unwrap();
     assert_eq!(
-        cloud.lock().unwrap().calls,
+        cloud.calls,
         [
             "DeleteFlowLogs fl-1".to_string(),
             format!("DeleteRolePolicy {NAME} flow-logs-delivery"),
@@ -338,26 +419,21 @@ async fn creates_the_log_group_then_the_role_then_the_flow_log_and_deletes_them_
             "DeleteVpc vpc-1".to_string(),
         ]
     );
-    let cloud = cloud.lock().unwrap();
     assert!(cloud.log_groups.is_empty() && cloud.roles.is_empty() && cloud.flow_logs.is_empty());
     assert_eq!(flow_logs(&executor), None);
 }
 
-/// EC2 created the flow log but the response was lost. The retry repeats the call with the
-/// recorded token, which returns the same flow log instead of a second one.
+/// EC2 created the flow log but the response was lost, and the lists that follow do not show
+/// it yet. The retry repeats the call with the recorded token, which returns the same flow log
+/// instead of a second one.
 #[tokio::test]
 async fn a_lost_flow_log_create_is_repeated_with_its_token_and_makes_one_flow_log() {
     let cloud = Arc::new(Mutex::new(Cloud {
         lose_flow_log_creates: 1,
+        stale_flow_log_lists: 2,
         ..Default::default()
     }));
-    let mut executor = executor(
-        &cloud,
-        creating_flow_logs(),
-        InitialSetupAuthority::DirectSetup,
-        false,
-    )
-    .await;
+    let mut executor = direct_setup(&cloud, creating_flow_logs()).await;
 
     for _ in 0..3 {
         executor.step().await.expect("log group, role, policy");
@@ -387,26 +463,22 @@ async fn a_lost_flow_log_create_is_repeated_with_its_token_and_makes_one_flow_lo
     );
 }
 
-/// A log group with the derived name that setup did not create is refused, and the delete
-/// that follows leaves it alone.
+/// A log group with the derived name that a Terraform setup made (its tags say `setup`) is
+/// refused, and the delete that follows leaves it alone.
 #[tokio::test]
-async fn a_log_group_setup_did_not_create_is_refused_and_kept_on_delete() {
+async fn a_same_named_log_group_without_this_networks_tags_is_refused_and_kept_on_delete() {
+    let mut template_tags = ours();
+    template_tags.insert("managed-by".to_string(), "setup".to_string());
     let cloud = Arc::new(Mutex::new(Cloud {
-        log_groups: vec![NAME.to_string()],
+        log_groups: vec![(NAME.to_string(), template_tags.clone())],
         ..Default::default()
     }));
-    let mut executor = executor(
-        &cloud,
-        creating_flow_logs(),
-        InitialSetupAuthority::DirectSetup,
-        false,
-    )
-    .await;
+    let mut executor = direct_setup(&cloud, creating_flow_logs()).await;
 
     let error = executor
         .step()
         .await
-        .expect_err("an existing group is not adopted");
+        .expect_err("a group without this network's tags is not adopted");
     assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
 
     executor.delete().expect("delete starts");
@@ -416,7 +488,7 @@ async fn a_log_group_setup_did_not_create_is_refused_and_kept_on_delete() {
         .expect("delete finishes");
     assert_eq!(executor.status(), ResourceStatus::Deleted);
     let cloud = cloud.lock().unwrap();
-    assert_eq!(cloud.log_groups, [NAME]);
+    assert_eq!(cloud.log_groups, [(NAME.to_string(), template_tags)]);
     assert_eq!(
         cloud.calls,
         [
@@ -426,33 +498,61 @@ async fn a_log_group_setup_did_not_create_is_refused_and_kept_on_delete() {
     );
 }
 
-/// A create call that reached CloudWatch Logs before a failure leaves the group to this
-/// network: the retry takes the existing group as its own.
+/// Objects this network made earlier are taken over by name and tags, even when the state
+/// that recorded them is gone, as after an older binary rewrote it: no duplicate, no refusal,
+/// and a delete without any record still removes them.
 #[tokio::test]
-async fn a_log_group_from_an_earlier_create_call_is_taken_on_retry() {
+async fn objects_carrying_this_networks_tags_are_taken_over_without_a_record() {
     let cloud = Arc::new(Mutex::new(Cloud {
-        log_groups: vec![NAME.to_string()],
+        log_groups: vec![(NAME.to_string(), ours())],
+        roles: vec![(NAME.to_string(), ours())],
+        flow_logs: vec![("fl-7".to_string(), "earlier-token".to_string())],
         ..Default::default()
     }));
-    let mut controller = creating_flow_logs();
-    controller.flow_logs = Some(FlowLogSetup {
-        log_group_requested: true,
-        ..Default::default()
-    });
-    let mut executor = executor(
-        &cloud,
-        controller,
-        InitialSetupAuthority::DirectSetup,
-        false,
-    )
-    .await;
+    let mut executor = direct_setup(&cloud, creating_flow_logs()).await;
 
     executor
         .run_until_terminal()
         .await
         .expect("create finishes");
     assert_eq!(executor.status(), ResourceStatus::Running);
-    assert!(flow_logs(&executor).is_some_and(|setup| setup.is_complete()));
+    assert_eq!(
+        flow_logs(&executor).and_then(|setup| setup.flow_log_id),
+        Some("fl-7".to_string())
+    );
+    assert!(!cloud
+        .lock()
+        .unwrap()
+        .calls
+        .iter()
+        .any(|call| call.starts_with("CreateFlowLogs")));
+
+    // Lose the record, as an older binary rewriting the checkpoint would.
+    let mut forgotten = executor
+        .internal_state::<AwsNetworkController>()
+        .expect("network controller")
+        .clone();
+    forgotten.flow_logs = None;
+    cloud.lock().unwrap().calls.clear();
+    let mut executor = direct_setup(&cloud, forgotten).await;
+    executor.delete().expect("delete starts");
+    executor
+        .run_until_terminal()
+        .await
+        .expect("delete finishes");
+    assert_eq!(executor.status(), ResourceStatus::Deleted);
+    let cloud = cloud.lock().unwrap();
+    assert!(cloud.log_groups.is_empty() && cloud.roles.is_empty() && cloud.flow_logs.is_empty());
+    assert_eq!(
+        cloud.calls,
+        [
+            "DeleteFlowLogs fl-7".to_string(),
+            format!("DeleteRolePolicy {NAME} flow-logs-delivery"),
+            format!("DeleteRole {NAME}"),
+            format!("DeleteLogGroup {NAME}"),
+            "DeleteVpc vpc-1".to_string(),
+        ]
+    );
 }
 
 /// A VPC that direct setup created before flow logs existed gets one on the next setup run,

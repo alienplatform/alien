@@ -3,15 +3,18 @@
 //! group, and the flow log itself. The template setups render the same three objects.
 //!
 //! Each step makes at most one create call and records it before the next step. The log group
-//! and the role have names derived from the resource prefix; one that already exists is taken
-//! as this network's only when an earlier create call of this controller may have made it, so
-//! a foreign object is never adopted and later deleted. The flow log is created with a recorded
-//! idempotency token.
+//! and the role are named after the resource prefix and carry this network's tags. An object
+//! with that name belongs to this network only when it carries those tags: a setup run takes it
+//! over even when the state that recorded it was lost (an older binary that rewrites controller
+//! state drops fields it does not know), and an object made by anything else, such as a
+//! Terraform setup with the same prefix, is refused and never deleted. The flow log is found on
+//! the VPC by its log group and tags, and created with a recorded idempotency token.
 use super::*;
 use alien_aws_clients::cloudwatch_logs::{CreateLogGroupRequest, PutRetentionPolicyRequest};
 use alien_aws_clients::ec2::{CreateFlowLogsRequest, DescribeFlowLogsRequest};
 use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag};
-use alien_core::AWS_VPC_FLOW_LOG_RETENTION_DAYS;
+use alien_core::{ALIEN_MANAGED_BY_TAG_KEY, ALIEN_STACK_TAG_KEY, AWS_VPC_FLOW_LOG_RETENTION_DAYS};
+use std::collections::HashMap;
 
 const DELIVERY_POLICY_NAME: &str = "flow-logs-delivery";
 
@@ -26,15 +29,10 @@ const ROLE_PROPAGATION_DELAY: Duration = Duration::from_secs(10);
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct FlowLogSetup {
-    /// A `CreateLogGroup` call was made, so the group may exist.
-    #[serde(default)]
-    log_group_requested: bool,
-    /// The group exists and keeps records for a year.
+    /// The group exists, is this network's, and keeps records for a year.
     #[serde(default)]
     log_group_ready: bool,
-    /// A `CreateRole` call was made, so the role may exist.
-    #[serde(default)]
-    role_requested: bool,
+    /// The delivery role, once it exists and is this network's.
     #[serde(default)]
     role_arn: Option<String>,
     /// The role's delivery policy is in place.
@@ -67,6 +65,29 @@ pub(super) fn object_name(resource_prefix: &str, resource_id: &str) -> String {
     format!("{resource_prefix}-{resource_id}-flow-logs")
 }
 
+/// Whether `tags` include every tag this controller puts on what it creates for the network.
+fn owned<'a>(
+    tags: impl IntoIterator<Item = (&'a str, &'a str)>,
+    resource_prefix: &str,
+    resource_id: &str,
+) -> bool {
+    let tags: HashMap<&str, &str> = tags.into_iter().collect();
+    standard_resource_tags(resource_prefix, resource_id)
+        .iter()
+        .all(|(key, value)| tags.get(key.as_str()) == Some(&value.as_str()))
+}
+
+fn log_group_arn(
+    partition: &str,
+    aws_cfg: &alien_aws_clients::AwsClientConfig,
+    name: &str,
+) -> String {
+    format!(
+        "arn:{partition}:logs:{}:{}:log-group:{name}",
+        aws_cfg.region, aws_cfg.account_id
+    )
+}
+
 fn create_failed(resource_id: &str, message: String) -> ErrorData {
     ErrorData::CloudPlatformError {
         message,
@@ -74,10 +95,10 @@ fn create_failed(resource_id: &str, message: String) -> ErrorData {
     }
 }
 
-fn already_exists(resource_id: &str, object: String) -> AlienError<ErrorData> {
+fn not_owned(resource_id: &str, object: String) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::ResourceConfigInvalid {
         message: format!(
-            "{object} already exists and was not created by this network's setup. \
+            "{object} already exists and does not carry this network's tags. \
              Delete or rename it, then run setup again."
         ),
         resource_id: Some(resource_id.to_string()),
@@ -121,7 +142,7 @@ fn delivery_policy(log_group_arn: &str) -> String {
 
 impl AwsNetworkController {
     /// Whether a setup run should add the flow log to the VPC this controller created. Only
-    /// a direct setup holds the credentials that creates the role.
+    /// a direct setup holds the credentials that create the role.
     pub(super) fn flow_log_missing(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
         let config = ctx.desired_resource_config::<Network>()?;
         Ok(
@@ -151,8 +172,9 @@ impl AwsNetworkController {
             })
         })?;
         let aws_cfg = ctx.get_aws_config()?;
-        let name = object_name(ctx.resource_prefix, id);
-        let tags = standard_resource_tags(ctx.resource_prefix, id);
+        let partition = crate::sandbox::aws_partition(&aws_cfg.region);
+        let prefix = ctx.resource_prefix;
+        let name = object_name(prefix, id);
         let setup = self.flow_logs.get_or_insert_with(FlowLogSetup::default);
 
         if setup.flow_log_id.is_some() {
@@ -161,25 +183,33 @@ impl AwsNetworkController {
 
         if !setup.log_group_ready {
             let logs = ctx.service_provider.get_aws_logs_client(aws_cfg).await?;
-            let requested_before = setup.log_group_requested;
-            setup.log_group_requested = true;
             match logs
                 .create_log_group(
                     CreateLogGroupRequest::builder()
                         .log_group_name(name.clone())
-                        .tags(tags.clone().into_iter().collect())
+                        .tags(standard_resource_tags(prefix, id))
                         .build(),
                 )
                 .await
             {
                 Ok(()) => info!(log_group = %name, "Created VPC flow log group"),
-                Err(error) if is_conflict(&error) && requested_before => {
-                    info!(log_group = %name, "VPC flow log group already created")
-                }
                 Err(error) if is_conflict(&error) => {
-                    // Nothing of ours to delete: the group is someone else's.
-                    setup.log_group_requested = false;
-                    return Err(already_exists(id, format!("Log group '{name}'")));
+                    let tags = logs
+                        .list_tags_for_resource(&log_group_arn(partition, aws_cfg, &name))
+                        .await
+                        .context(create_failed(
+                            id,
+                            format!("Failed to read the tags of log group '{name}'"),
+                        ))?;
+                    if !owned(
+                        tags.iter()
+                            .map(|(key, value)| (key.as_str(), value.as_str())),
+                        prefix,
+                        id,
+                    ) {
+                        return Err(not_owned(id, format!("Log group '{name}'")));
+                    }
+                    info!(log_group = %name, "VPC flow log group already created");
                 }
                 Err(error) => {
                     return Err(error.context(create_failed(
@@ -203,11 +233,8 @@ impl AwsNetworkController {
             return Ok(AGAIN);
         }
 
-        let partition = crate::sandbox::aws_partition(&aws_cfg.region);
         if setup.role_arn.is_none() {
             let iam = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
-            let requested_before = setup.role_requested;
-            setup.role_requested = true;
             let role_arn = match iam
                 .create_role(
                     CreateRoleRequest::builder()
@@ -218,7 +245,8 @@ impl AwsNetworkController {
                             &aws_cfg.account_id,
                         ))
                         .tags(
-                            tags.into_iter()
+                            standard_resource_tags(prefix, id)
+                                .into_iter()
                                 .map(|(key, value)| CreateRoleTag { key, value })
                                 .collect(),
                         )
@@ -227,20 +255,25 @@ impl AwsNetworkController {
                 .await
             {
                 Ok(response) => response.create_role_result.role.arn,
-                Err(error) if is_conflict(&error) && requested_before => {
-                    iam.get_role(&name)
+                Err(error) if is_conflict(&error) => {
+                    let role = iam
+                        .get_role(&name)
                         .await
                         .context(create_failed(
                             id,
                             format!("Failed to read IAM role '{name}'"),
                         ))?
                         .get_role_result
-                        .role
-                        .arn
-                }
-                Err(error) if is_conflict(&error) => {
-                    setup.role_requested = false;
-                    return Err(already_exists(id, format!("IAM role '{name}'")));
+                        .role;
+                    let tags = role.tags.iter().flat_map(|tags| &tags.member);
+                    if !owned(
+                        tags.map(|tag| (tag.key.as_str(), tag.value.as_str())),
+                        prefix,
+                        id,
+                    ) {
+                        return Err(not_owned(id, format!("IAM role '{name}'")));
+                    }
+                    role.arn
                 }
                 Err(error) => {
                     return Err(error.context(create_failed(
@@ -256,14 +289,10 @@ impl AwsNetworkController {
 
         if !setup.role_policy_ready {
             let iam = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
-            let log_group_arn = format!(
-                "arn:{partition}:logs:{}:{}:log-group:{name}",
-                aws_cfg.region, aws_cfg.account_id
-            );
             iam.put_role_policy(
                 &name,
                 DELIVERY_POLICY_NAME,
-                &delivery_policy(&log_group_arn),
+                &delivery_policy(&log_group_arn(partition, aws_cfg, &name)),
             )
             .await
             .context(create_failed(
@@ -279,14 +308,46 @@ impl AwsNetworkController {
             .create_token
             .get_or_insert_with(new_create_attempt_token)
             .clone();
-        let ec2 = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+        // A flow log this network made earlier, whose ID was not recorded.
+        let flow_log_id = match self
+            .flow_log_ids(ctx, &vpc_id, &name, id)
+            .await?
+            .into_iter()
+            .next()
+        {
+            Some(existing) => existing,
+            None => {
+                self.create_flow_log(ctx, &vpc_id, &name, role_arn, token, id)
+                    .await?
+            }
+        };
+        info!(flow_log_id = %flow_log_id, vpc_id = %vpc_id, "VPC flow log in place");
+        if let Some(setup) = self.flow_logs.as_mut() {
+            setup.flow_log_id = Some(flow_log_id);
+        }
+        Ok(FlowLogStep::Ready)
+    }
+
+    async fn create_flow_log(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        vpc_id: &str,
+        name: &str,
+        role_arn: String,
+        token: String,
+        id: &str,
+    ) -> Result<String> {
+        let ec2 = ctx
+            .service_provider
+            .get_aws_ec2_client(ctx.get_aws_config()?)
+            .await?;
         let created = ec2
             .create_flow_logs(
                 CreateFlowLogsRequest::builder()
-                    .resource_ids(vec![vpc_id.clone()])
+                    .resource_ids(vec![vpc_id.to_string()])
                     .resource_type("VPC".to_string())
                     .traffic_type("ALL".to_string())
-                    .log_group_name(name.clone())
+                    .log_group_name(name.to_string())
                     .deliver_logs_permission_arn(role_arn)
                     .max_aggregation_interval(MAX_AGGREGATION_INTERVAL)
                     .tag_specifications(self.create_tags(ctx.resource_prefix, id, "vpc-flow-log"))
@@ -294,7 +355,7 @@ impl AwsNetworkController {
                     .build(),
             )
             .await;
-        let flow_log_id = match created {
+        match created {
             Ok(response) => response
                 .flow_log_id_set
                 .and_then(|set| set.items.into_iter().next())
@@ -303,10 +364,10 @@ impl AwsNetworkController {
                         id,
                         format!("CreateFlowLogs returned no flow log ID for VPC '{vpc_id}'"),
                     ))
-                })?,
-            // This VPC already sends to this network's group: a create whose response was lost.
+                }),
+            // The VPC already sends to this group: a flow log the lookup did not see yet.
             Err(error) if is_conflict(&error) => self
-                .flow_log_ids(ctx, &vpc_id, &name, id)
+                .flow_log_ids(ctx, vpc_id, name, id)
                 .await?
                 .into_iter()
                 .next()
@@ -315,22 +376,16 @@ impl AwsNetworkController {
                         id,
                         format!("Flow log of VPC '{vpc_id}' exists but could not be found"),
                     ))
-                })?,
-            Err(error) => {
-                return Err(error.context(create_failed(
-                    id,
-                    format!("Failed to create the flow log of VPC '{vpc_id}'"),
-                )))
-            }
-        };
-        info!(flow_log_id = %flow_log_id, vpc_id = %vpc_id, "Created VPC flow log");
-        if let Some(setup) = self.flow_logs.as_mut() {
-            setup.flow_log_id = Some(flow_log_id);
+                }),
+            Err(error) => Err(error.context(create_failed(
+                id,
+                format!("Failed to create the flow log of VPC '{vpc_id}'"),
+            ))),
         }
-        Ok(FlowLogStep::Ready)
     }
 
-    /// Flow logs of `vpc_id` that send to this network's log group.
+    /// This network's flow logs of `vpc_id`: those that send to its log group and carry its
+    /// tags.
     async fn flow_log_ids(
         &self,
         ctx: &ResourceControllerContext<'_>,
@@ -342,6 +397,10 @@ impl AwsNetworkController {
             .service_provider
             .get_aws_ec2_client(ctx.get_aws_config()?)
             .await?;
+        let filter = |name: String, value: &str| Filter {
+            name,
+            values: vec![value.to_string()],
+        };
         let mut ids = Vec::new();
         let mut next_token = None;
         loop {
@@ -349,14 +408,13 @@ impl AwsNetworkController {
                 .describe_flow_logs(
                     DescribeFlowLogsRequest::builder()
                         .filters(vec![
-                            Filter {
-                                name: "resource-id".to_string(),
-                                values: vec![vpc_id.to_string()],
-                            },
-                            Filter {
-                                name: "log-group-name".to_string(),
-                                values: vec![log_group_name.to_string()],
-                            },
+                            filter("resource-id".to_string(), vpc_id),
+                            filter("log-group-name".to_string(), log_group_name),
+                            filter(format!("tag:{ALIEN_STACK_TAG_KEY}"), ctx.resource_prefix),
+                            filter(
+                                format!("tag:{ALIEN_MANAGED_BY_TAG_KEY}"),
+                                alien_core::ALIEN_MANAGED_BY_TAG_VALUE,
+                            ),
                         ])
                         .maybe_next_token(next_token)
                         .build(),
@@ -380,36 +438,35 @@ impl AwsNetworkController {
         }
     }
 
-    /// Deletes the flow log, then the role, then the log group, recording each removal. The
-    /// flow log goes before the VPC. The log group goes with the network: its records were
-    /// about a VPC that no longer exists, and keeping it would make a later setup with the
-    /// same prefix find a group it did not create.
+    /// Deletes the flow log, then the role, then the log group, each only while it carries
+    /// this network's tags. The flow log goes before the VPC: deleting a VPC leaves its flow
+    /// log behind. The log group goes with the network: its records were about a VPC that no
+    /// longer exists, and keeping it would leave a billed group nothing owns.
     pub(super) async fn delete_flow_log(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<()> {
-        let Some(setup) = self.flow_logs.clone() else {
-            return Ok(());
-        };
         let config = ctx.desired_resource_config::<Network>()?;
         let id = config.id.as_str();
         let aws_cfg = ctx.get_aws_config()?;
-        let name = object_name(ctx.resource_prefix, id);
+        let partition = crate::sandbox::aws_partition(&aws_cfg.region);
+        let prefix = ctx.resource_prefix;
+        let name = object_name(prefix, id);
 
-        if setup.flow_log_id.is_some() || setup.create_token.is_some() {
-            let ids = match (&setup.flow_log_id, &self.vpc_id) {
-                (Some(flow_log_id), _) => vec![flow_log_id.clone()],
-                // A create whose response was lost: find it on the VPC.
-                (None, Some(vpc_id)) => self
-                    .denied_lookup(
-                        ctx,
-                        id,
-                        "VPC flow logs",
-                        self.flow_log_ids(ctx, vpc_id, &name, id).await.map(Some),
-                    )?
-                    .unwrap_or_default(),
-                (None, None) => Vec::new(),
-            };
+        if let Some(vpc_id) = self.vpc_id.clone() {
+            let mut ids = self
+                .denied_lookup(
+                    ctx,
+                    id,
+                    "VPC flow logs",
+                    self.flow_log_ids(ctx, &vpc_id, &name, id).await.map(Some),
+                )?
+                .unwrap_or_default();
+            if let Some(recorded) = self.flow_logs.as_ref().and_then(|s| s.flow_log_id.clone()) {
+                if !ids.contains(&recorded) {
+                    ids.push(recorded);
+                }
+            }
             let ec2 = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
             for flow_log_id in ids {
                 match ec2.delete_flow_log(&flow_log_id).await {
@@ -431,78 +488,124 @@ impl AwsNetworkController {
                         }))
                     }
                 }
+                self.delete_removed_something = true;
             }
-            self.delete_removed_something = true;
             if let Some(setup) = self.flow_logs.as_mut() {
                 setup.flow_log_id = None;
                 setup.create_token = None;
             }
         }
 
-        if setup.role_requested {
-            let iam = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
-            match iam.delete_role_policy(&name, DELIVERY_POLICY_NAME).await {
-                Ok(()) => {}
-                Err(error) if is_not_found(&error) => {}
-                Err(error) if is_access_denied(&error) => self.denied_delete(
-                    ctx,
-                    id,
-                    &format!("policy of IAM role '{name}'"),
-                    "iam:DeleteRolePolicy",
-                    error,
-                )?,
-                Err(error) => {
-                    return Err(error.context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to delete the policy of IAM role '{name}'"),
-                        resource_id: Some(id.to_string()),
-                    }))
-                }
+        let iam = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
+        let role = match iam.get_role(&name).await {
+            Ok(response) => Some(response.get_role_result.role),
+            Err(error) if is_not_found(&error) => None,
+            Err(error) if is_access_denied(&error) => {
+                self.denied_delete(ctx, id, &format!("IAM role '{name}'"), "iam:GetRole", error)?;
+                None
             }
-            match iam.delete_role(&name).await {
-                Ok(()) => info!(role = %name, "Deleted VPC flow log delivery role"),
-                Err(error) if is_not_found(&error) => {}
-                Err(error) if is_access_denied(&error) => self.denied_delete(
-                    ctx,
-                    id,
-                    &format!("IAM role '{name}'"),
-                    "iam:DeleteRole",
-                    error,
-                )?,
-                Err(error) => {
-                    return Err(error.context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to delete IAM role '{name}'"),
-                        resource_id: Some(id.to_string()),
-                    }))
-                }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to read IAM role '{name}'"),
+                    resource_id: Some(id.to_string()),
+                }))
             }
-            self.delete_removed_something = true;
-            if let Some(setup) = self.flow_logs.as_mut() {
-                setup.role_requested = false;
-                setup.role_arn = None;
-                setup.role_policy_ready = false;
+        };
+        if let Some(role) = role {
+            let tags = role.tags.iter().flat_map(|tags| &tags.member);
+            if owned(
+                tags.map(|tag| (tag.key.as_str(), tag.value.as_str())),
+                prefix,
+                id,
+            ) {
+                for (action, result) in [
+                    (
+                        "iam:DeleteRolePolicy",
+                        iam.delete_role_policy(&name, DELIVERY_POLICY_NAME).await,
+                    ),
+                    ("iam:DeleteRole", iam.delete_role(&name).await),
+                ] {
+                    match result {
+                        Ok(()) => {}
+                        Err(error) if is_not_found(&error) => {}
+                        Err(error) if is_access_denied(&error) => self.denied_delete(
+                            ctx,
+                            id,
+                            &format!("IAM role '{name}'"),
+                            action,
+                            error,
+                        )?,
+                        Err(error) => {
+                            return Err(error.context(ErrorData::CloudPlatformError {
+                                message: format!("Failed to delete IAM role '{name}' ({action})"),
+                                resource_id: Some(id.to_string()),
+                            }))
+                        }
+                    }
+                }
+                info!(role = %name, "Deleted VPC flow log delivery role");
+                self.delete_removed_something = true;
+            } else {
+                info!(role = %name, "IAM role does not carry this network's tags; left in place");
             }
         }
+        if let Some(setup) = self.flow_logs.as_mut() {
+            setup.role_arn = None;
+            setup.role_policy_ready = false;
+        }
 
-        if setup.log_group_requested {
-            let logs = ctx.service_provider.get_aws_logs_client(aws_cfg).await?;
-            match logs.delete_log_group(&name).await {
-                Ok(()) => info!(log_group = %name, "Deleted VPC flow log group"),
-                Err(error) if is_not_found(&error) => {}
-                Err(error) if is_access_denied(&error) => self.denied_delete(
+        let logs = ctx.service_provider.get_aws_logs_client(aws_cfg).await?;
+        let tags = match logs
+            .list_tags_for_resource(&log_group_arn(partition, aws_cfg, &name))
+            .await
+        {
+            Ok(tags) => Some(tags),
+            Err(error) if is_not_found(&error) => None,
+            Err(error) if is_access_denied(&error) => {
+                self.denied_delete(
                     ctx,
                     id,
                     &format!("log group '{name}'"),
-                    "logs:DeleteLogGroup",
+                    "logs:ListTagsForResource",
                     error,
-                )?,
-                Err(error) => {
-                    return Err(error.context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to delete log group '{name}'"),
-                        resource_id: Some(id.to_string()),
-                    }))
-                }
+                )?;
+                None
             }
-            self.delete_removed_something = true;
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to read the tags of log group '{name}'"),
+                    resource_id: Some(id.to_string()),
+                }))
+            }
+        };
+        if let Some(tags) = tags {
+            if owned(
+                tags.iter()
+                    .map(|(key, value)| (key.as_str(), value.as_str())),
+                prefix,
+                id,
+            ) {
+                match logs.delete_log_group(&name).await {
+                    Ok(()) => info!(log_group = %name, "Deleted VPC flow log group"),
+                    Err(error) if is_not_found(&error) => {}
+                    Err(error) if is_access_denied(&error) => self.denied_delete(
+                        ctx,
+                        id,
+                        &format!("log group '{name}'"),
+                        "logs:DeleteLogGroup",
+                        error,
+                    )?,
+                    Err(error) => {
+                        return Err(error.context(ErrorData::CloudPlatformError {
+                            message: format!("Failed to delete log group '{name}'"),
+                            resource_id: Some(id.to_string()),
+                        }))
+                    }
+                }
+                self.delete_removed_something = true;
+            } else {
+                info!(log_group = %name, "Log group does not carry this network's tags; left in place");
+            }
         }
 
         self.flow_logs = None;
