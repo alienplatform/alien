@@ -116,13 +116,15 @@ fn onboard_without_allow_is_refused_before_creating_a_link() {
     let server = MockServer::start();
     let link = mock_platform(&server, json!([]));
 
-    let output = run_onboard(&server, &["--json"]);
-
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("--allow is required when not running interactively"),
-        "{stderr}"
-    );
+    // With --json, and outside a terminal (the test's stdin is not one), nothing asks for it.
+    for args in [&["--json"][..], &[][..]] {
+        let output = run_onboard(&server, args);
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("Required with --json or outside a terminal: pass --allow"),
+            "{stderr}"
+        );
+    }
     link.assert_hits(0);
 }

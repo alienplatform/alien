@@ -1,6 +1,6 @@
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
-use crate::output::{can_prompt, print_json, prompt_text};
+use crate::output::{can_prompt, print_json, prompt_line, prompt_text};
 use crate::ui::{accent, command, contextual_heading, dim_label, success_line, FixedSteps};
 use alien_cli_common::SetupItem;
 use alien_core::{
@@ -38,7 +38,8 @@ pub struct OnboardArgs {
 
     /// Email address (jane@acme.com) or domain (@acme.com) that may open the setup link. Repeat for each.
     /// The link asks for the person's email and a code sent to it.
-    /// Platform setup links only; required unless --airgapped.
+    /// Platform setup links only. Asked for in a terminal; required with --json or outside a
+    /// terminal, unless --airgapped.
     #[arg(
         long = "allow",
         value_name = "EMAIL|@DOMAIN",
@@ -145,7 +146,12 @@ fn parse_allowed_answer(
 /// default: the list decides who can open the link.
 fn prompt_allowed() -> Result<Vec<CreateSetupLinkRequestAllowedItem>> {
     loop {
-        let answer = prompt_text("Who can open the link (emails or @domains)", None)?;
+        let Some(answer) = prompt_line("Who can open the link (emails or @domains)", None)? else {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "allow".to_string(),
+                message: "Input ended before anyone was named. Pass --allow with each email or domain that may open the setup link.".to_string(),
+            }));
+        };
         match parse_allowed_answer(&answer) {
             Ok(entries) => return Ok(entries),
             Err(reason) => eprintln!("{reason}"),
@@ -182,7 +188,7 @@ async fn onboard_platform(mut args: OnboardArgs, ctx: ExecutionMode, name: Strin
         if args.json || !can_prompt() {
             return Err(AlienError::new(ErrorData::ValidationError {
                 field: "allow".to_string(),
-                message: "--allow is required when not running interactively. Pass --allow with each email (jane@acme.com) or domain (@acme.com) that may open the setup link, or --airgapped for an environment that can't reach your manager.".to_string(),
+                message: "Required with --json or outside a terminal: pass --allow with each email (jane@acme.com) or domain (@acme.com) that may open the setup link, or --airgapped for an environment that can't reach your manager.".to_string(),
             }));
         }
         args.allowed = prompt_allowed()?;
@@ -1962,20 +1968,20 @@ fn customer_environment_name(display_name: &str) -> String {
 
 #[cfg(all(test, feature = "platform"))]
 mod tests {
+    use super::*;
+    use serde_json::json;
+
     #[test]
     fn reads_who_can_open_the_link_from_one_answer() {
-        let entries = super::parse_allowed_answer(" Jane@Acme.com, @acme.com;ops@partner.io ")
+        let entries = parse_allowed_answer(" Jane@Acme.com, @acme.com;ops@partner.io ")
             .expect("valid answer");
         let entries: Vec<&str> = entries.iter().map(|entry| entry.as_str()).collect();
         assert_eq!(entries, ["jane@acme.com", "@acme.com", "ops@partner.io"]);
 
-        let refused = super::parse_allowed_answer("jane@acme.com bob@acme").unwrap_err();
+        let refused = parse_allowed_answer("jane@acme.com bob@acme").unwrap_err();
         assert!(refused.starts_with("bob@acme: "), "{refused}");
-        assert!(super::parse_allowed_answer("  ").is_err());
+        assert!(parse_allowed_answer("  ").is_err());
     }
-
-    use super::*;
-    use serde_json::json;
 
     fn input(id: &str, kind: StackInputKind, required: bool) -> StackInputDefinition {
         StackInputDefinition {
