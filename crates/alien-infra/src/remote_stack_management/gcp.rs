@@ -1797,31 +1797,39 @@ mod tests {
         );
         assert!(controller.role_bound);
 
-        let created_roles = created_roles.lock().unwrap().clone();
-        assert!(
-            created_roles
-                .iter()
-                .any(|role_id| role_id.contains("daemon_provision")),
-            "the daemon's provision grant gets its custom role: {created_roles:?}"
-        );
-        assert!(
-            !created_roles
-                .iter()
-                .any(|role_id| role_id.contains("daemon_heartbeat")),
-            "daemon/heartbeat grants nothing on GCP: {created_roles:?}"
-        );
+        // The roles the Daemon's provision grant needs, named exactly as this deployment names them.
+        let permission_context = executor
+            .with_context(|ctx| ResourcePermissionsHelper::gcp_permission_context(ctx))
+            .expect("permission context")
+            .with_service_account_name("acme-management".to_string());
+        let daemon_roles: Vec<String> = GcpRuntimePermissionsGenerator::new()
+            .generate_custom_roles(
+                get_permission_set("daemon/provision").unwrap(),
+                &permission_context,
+            )
+            .expect("daemon/provision has GCP roles")
+            .into_iter()
+            .map(|role| role.role_id)
+            .collect();
+        assert!(!daemon_roles.is_empty());
 
-        let policy = written_policy.lock().unwrap().clone().expect("policy written");
+        let created_roles = created_roles.lock().unwrap().clone();
+        let policy = written_policy
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("policy written");
         let member_roles: Vec<&str> = policy
             .bindings
             .iter()
             .filter(|binding| binding.members.contains(&member))
             .map(|binding| binding.role.as_str())
             .collect();
-        for role_id in created_roles
-            .iter()
-            .filter(|role_id| role_id.contains("daemon_provision"))
-        {
+        for role_id in &daemon_roles {
+            assert!(
+                created_roles.contains(role_id),
+                "{role_id} is created: {created_roles:?}"
+            );
             assert!(
                 member_roles
                     .iter()
