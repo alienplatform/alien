@@ -821,11 +821,18 @@ impl GcpRemoteStackManagementController {
         let mut permission_sets = Vec::new();
 
         for permission_set_ref in global_permission_set_refs {
-            if let Some(permission_set) =
+            let Some(permission_set) =
                 permission_set_ref.resolve(|name| get_permission_set(name).cloned())
-            {
-                permission_sets.push(permission_set);
+            else {
+                continue;
+            };
+            // A set with no GCP block grants nothing on GCP (for example `daemon/heartbeat`:
+            // a daemon's health comes from its compute cluster, not a cloud API). The setup
+            // emitter and the AWS and Azure management controllers skip these sets too.
+            if permission_set.platforms.gcp.is_none() {
+                continue;
             }
+            permission_sets.push(permission_set);
         }
 
         Ok(permission_sets)
