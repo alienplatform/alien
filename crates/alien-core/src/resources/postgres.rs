@@ -192,8 +192,8 @@ pub const POSTGRES_ADMIN_USERNAME: &str = "app_admin";
 /// Cluster parameter group values for every Aurora PostgreSQL cluster, shared by the setup
 /// emitters and the runtime controller. Connections must use TLS, and pgaudit logs schema
 /// (`ddl`) and permission (`role`) changes. `shared_preload_libraries` keeps Aurora's default
-/// `pg_stat_statements` for families 14 to 18. It is a static parameter, so a running cluster
-/// loads pgaudit only after its next restart.
+/// `pg_stat_statements` for families 14 to 18. It is a static parameter, so a running writer
+/// loads pgaudit at its next restart or its next resume from auto-pause.
 pub const AURORA_CLUSTER_PARAMETERS: [(&str, &str); 3] = [
     ("rds.force_ssl", "1"),
     ("shared_preload_libraries", "pg_stat_statements,pgaudit"),
