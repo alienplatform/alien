@@ -1443,6 +1443,34 @@ pub(crate) fn setup_required_error(stack_state: &StackState) -> Option<AlienErro
     }))
 }
 
+/// Whether `stack_state` has failed resources and every one of them was interrupted by another
+/// resource's failure.
+///
+/// The failure that interrupted them is no longer recorded, so it has been repaired, and the
+/// interrupted resources can resume where they stopped.
+pub(crate) fn only_interrupted_failures(stack_state: &StackState) -> bool {
+    let mut failed = stack_state
+        .resources
+        .values()
+        .filter(|resource| {
+            matches!(
+                resource.status,
+                ResourceStatus::ProvisionFailed
+                    | ResourceStatus::UpdateFailed
+                    | ResourceStatus::DeleteFailed
+                    | ResourceStatus::RefreshFailed
+            )
+        })
+        .peekable();
+    failed.peek().is_some()
+        && failed.all(|resource| {
+            resource
+                .error
+                .as_ref()
+                .is_some_and(|error| error.code == "DEPLOYMENT_INTERRUPTED")
+        })
+}
+
 /// Creates an aggregated error from resource errors in a stack state.
 ///
 /// Collects errors from all failed resources. Resources that carry a
