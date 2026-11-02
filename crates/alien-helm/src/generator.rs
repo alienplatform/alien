@@ -4163,6 +4163,10 @@ airgapped:
   # Public key (ed25519:...) bundles must be signed with. Set by the first
   # `alien-deploy sync --trusted-key`, and checked on every later one.
   bundleSigningKey: ""
+  # With releaseSigning, the chart digest the site admin accepted
+  # (`alien-deploy sync --accept-chart`). A bundle with another chart keeps
+  # this one installed.
+  acceptedChart: ""
 
 tunnel:
   # Serve requests the control plane sends through the manager to the stack's
@@ -5068,7 +5072,8 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
       "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean" },
-        "bundleSigningKey": { "type": "string" }
+        "bundleSigningKey": { "type": "string" },
+        "acceptedChart": { "type": "string" }
       }
     },
     "tunnel": {

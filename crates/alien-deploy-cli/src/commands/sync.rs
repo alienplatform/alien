@@ -111,6 +111,10 @@ pub struct SyncArgs {
     /// The vendor's bundle key (`ed25519:...`). Needed for the first install.
     #[arg(long, env = "ALIEN_TRUSTED_KEY")]
     pub trusted_key: Option<String>,
+    /// With `releaseSigning` set, install this chart (`sha256:...`, as
+    /// `--dry-run` prints it). Without it, a new chart isn't installed.
+    #[arg(long)]
+    pub accept_chart: Option<String>,
     /// Show what would happen without installing or downloading anything
     #[arg(long)]
     pub dry_run: bool,
@@ -149,6 +153,10 @@ struct SiteState {
     /// trusts the key pinned in its install, not this one.
     #[serde(default)]
     bundle_key: Option<String>,
+    /// The site's values set `releaseSigning`. Written by the site; the
+    /// online side then carries no `alien-deploy` builds from the manager.
+    #[serde(default)]
+    protected: bool,
 
     // Online side.
     /// Image blobs the site reported having.
@@ -493,6 +501,18 @@ pub async fn rollback_command(args: RollbackArgs) -> Result<()> {
     let previous = rollback_candidate(&installed)?;
     let record = read_installed(previous)?;
     let namespace = settings.namespace(&record.stack_id);
+    // The Operator refuses an older signed release, and the saved chart is
+    // one the site may no longer accept.
+    if protected_site(
+        &site_values(&settings, &record.stack_id, &namespace)
+            .await?
+            .1,
+    ) {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "rollback".to_string(),
+            message: "releaseSigning is set, so this site runs only newer signed releases. Ask the vendor to release the previous version again".to_string(),
+        }));
+    }
     let trusted_key = pinned_key(&settings, &record.stack_id, &namespace)
         .await?
         .ok_or_else(|| {
@@ -558,6 +578,7 @@ pub async fn rollback_command(args: RollbackArgs) -> Result<()> {
         &trusted_key,
         &site.deployment_id,
         &site.name,
+        None,
         None,
     )
     .await?;
@@ -1320,11 +1341,22 @@ async fn download_update(
         .iter()
         .map(|image| source_access(image, false))
         .collect();
+    // The site pinned release signing keys, now or in its values.
+    let protected = site.protected
+        || protected_site(
+            &values
+                .iter()
+                .filter_map(|value| serde_json::to_value(value).ok())
+                .collect::<Vec<_>>(),
+        );
+    // A signed release names each image by the digest it was pushed with,
+    // often a multi-platform index, and a protected site runs only that
+    // digest. So it gets the whole index rather than one platform's manifest.
     let (mut exported, omitted) = airgap::export_images_for_architecture(
         &dir.join(airgap::OCI_DIR),
         &pulls,
         &skip,
-        architecture.as_deref(),
+        architecture.as_deref().filter(|_| !protected),
     )
     .await
     .map_err(|error| bundle_error(error, "copying images"))?;
@@ -1336,7 +1368,13 @@ async fn download_update(
         .map_err(|error| transfer_file_error(dir, error))?;
     std::fs::write(dir.join("site-selection.json"), selection)
         .map_err(|error| transfer_file_error(dir, error))?;
-    let tools = download_tools(dir, folder, &sources, &site.capabilities).await?;
+    // A protected site runs only the alien-deploy it got from the vendor, so
+    // the folder doesn't carry the builds the manager lists.
+    let tools = if protected {
+        Tools::Unavailable
+    } else {
+        download_tools(dir, folder, &sources, &site.capabilities).await?
+    };
 
     let sequence = chrono::Utc::now().timestamp_millis() as u64;
     let manifest = BundleManifest {
@@ -2994,6 +3032,17 @@ async fn install_pending(
             manifest.omitted_blobs.len()
         );
         println!("  Chart     {}", manifest.chart);
+        let (installed_chart, values) =
+            site_values(settings, &manifest.stack_id, &namespace).await?;
+        if protected_site(&values) {
+            let digest = chart_digest(&work.path().join(&manifest.chart), &manifest)?;
+            match decide_chart(&values, installed_chart, &digest, args.accept_chart.as_deref()) {
+                Ok(ChartDecision::Install(_)) => println!("  Chart     {digest} (accepted)"),
+                _ => println!(
+                    "  Chart     {digest} not accepted; the installed chart stays. Pass --accept-chart {digest} to install it."
+                ),
+            }
+        }
         print_chart_diff(
             settings,
             &manifest,
@@ -3018,6 +3067,21 @@ async fn install_pending(
         .await?
         .as_deref()
         == Some(fingerprint.as_str());
+    // Decided before anything reaches the site, so a refused chart pushes nothing.
+    let (installed_chart, values) = site_values(settings, &manifest.stack_id, &namespace).await?;
+    let protected = protected_site(&values);
+    site.protected = protected;
+    let chart = if resume {
+        None
+    } else {
+        let digest = chart_digest(&work.path().join(&manifest.chart), &manifest)?;
+        Some(decide_chart(
+            &values,
+            installed_chart,
+            &digest,
+            args.accept_chart.as_deref(),
+        )?)
+    };
     if resume {
         println!(
             "Update {} is already installed; resuming rollout.",
@@ -3071,19 +3135,27 @@ async fn install_pending(
         ),
         None => None,
     };
-    if !resume {
-        helm_upgrade(
-            settings,
-            &record,
-            &work.path().join(&manifest.chart),
-            &namespace,
-            pull_secret.as_deref(),
-            &trusted_key,
-            &site.deployment_id,
-            &site.name,
-            Some(&fingerprint),
-        )
-        .await?;
+    if let Some(chart) = chart {
+        match chart {
+            ChartDecision::Install(accepted) => {
+                helm_upgrade(
+                    settings,
+                    &record,
+                    &work.path().join(&manifest.chart),
+                    &namespace,
+                    pull_secret.as_deref(),
+                    &trusted_key,
+                    &site.deployment_id,
+                    &site.name,
+                    Some(&fingerprint),
+                    accepted.as_deref(),
+                )
+                .await?
+            }
+            ChartDecision::KeepInstalled(digest) => println!(
+                "The update carries a chart this site hasn't accepted ({digest}); keeping the installed chart and Operator. To install it, review `alien-deploy sync --dry-run` and pass --accept-chart {digest}."
+            ),
+        }
     }
     let mut machine = load_machine(&site.deployment_id)?;
     machine.deletion_inventory = None;
@@ -3162,7 +3234,11 @@ async fn install_pending(
             .into_alien_error()
             .context(config_error("removing the installed bundle"))?;
     }
-    copy_tools(work.path(), folder)?;
+    // A protected site runs only the alien-deploy it got from the vendor:
+    // builds in the bundle are signed by the manager alone.
+    if !protected {
+        copy_tools(work.path(), folder)?;
+    }
     println!(
         "Installed update {}. All services running.",
         manifest.release_id
@@ -4113,6 +4189,143 @@ fn resources(yaml: &str) -> std::collections::BTreeMap<String, String> {
 // --- Kubernetes helpers ------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
+/// What Helm may do with a bundle's chart.
+#[derive(Debug, PartialEq, Eq)]
+enum ChartDecision {
+    /// Install it, recording the accepted digest when the site is protected.
+    Install(Option<String>),
+    /// Protected site, chart not accepted: keep the installed chart and
+    /// hand over only the target.
+    KeepInstalled(String),
+}
+
+/// The chart and the images it runs, as one digest: the archive's sha256
+/// and each chart image's manifest digest by values key. Only the manager
+/// signs these, so a protected site installs them only once its admin
+/// accepted this digest.
+fn chart_digest(chart: &Path, manifest: &BundleManifest) -> Result<String> {
+    let archive = std::fs::read(chart)
+        .into_alien_error()
+        .context(config_error("reading the chart"))?;
+    let mut described = format!("chart sha256:{}\n", hex::encode(Sha256::digest(&archive)));
+    for (key, source) in &manifest.chart_images {
+        let image = manifest
+            .images
+            .iter()
+            .find(|image| &image.source == source)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: "bundle".to_string(),
+                    message: format!("The update doesn't carry {source} ({key})"),
+                })
+            })?;
+        described.push_str(&format!("{key} {}\n", image.digest));
+    }
+    Ok(format!(
+        "sha256:{}",
+        hex::encode(Sha256::digest(described.as_bytes()))
+    ))
+}
+
+/// The install's saved values (if it is installed), then the site's values
+/// files: the values Helm merges, in order, without chart defaults.
+async fn site_values(
+    settings: &SiteSide,
+    stack_id: &str,
+    namespace: &str,
+) -> Result<(bool, Vec<serde_json::Value>)> {
+    let saved = read_release_values(settings, stack_id, namespace, false).await?;
+    let installed = saved.is_some();
+    let mut values: Vec<serde_json::Value> = saved.into_iter().filter(|v| !v.is_null()).collect();
+    for path in &settings.values {
+        let bytes = std::fs::read(path)
+            .into_alien_error()
+            .context(config_error(format!(
+                "reading Helm values {}",
+                path.display()
+            )))?;
+        values.push(
+            serde_yaml::from_slice(&bytes)
+                .into_alien_error()
+                .context(config_error(format!(
+                    "parsing Helm values {}",
+                    path.display()
+                )))?,
+        );
+    }
+    Ok((installed, values))
+}
+
+/// The last value set for `section.key`, as Helm would merge it.
+fn merged_value<'a>(
+    values: &'a [serde_json::Value],
+    section: &str,
+    key: &str,
+) -> Option<&'a serde_json::Value> {
+    values
+        .iter()
+        .rev()
+        .find_map(|v| v.get(section).and_then(|s| s.get(key)))
+}
+
+/// Whether the customer's values turn on protected mode (`releaseSigning`).
+fn protected_site(values: &[serde_json::Value]) -> bool {
+    merged_value(values, "releaseSigning", "publicKeys")
+        .and_then(|keys| keys.as_array())
+        .is_some_and(|keys| !keys.is_empty())
+}
+
+/// A protected site's Operator runs only signed releases, but the chart
+/// decides which Operator runs and with which settings. So the chart is
+/// installed only if the site admin accepted its digest, now or before.
+fn decide_chart(
+    values: &[serde_json::Value],
+    installed: bool,
+    digest: &str,
+    accept: Option<&str>,
+) -> Result<ChartDecision> {
+    if !protected_site(values) {
+        return Ok(ChartDecision::Install(None));
+    }
+    let accepted = merged_value(values, "airgapped", "acceptedChart").and_then(|v| v.as_str());
+    if accepted == Some(digest) || accept == Some(digest) {
+        return Ok(ChartDecision::Install(Some(digest.to_string())));
+    }
+    if let Some(accept) = accept {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "accept-chart".to_string(),
+            message: format!("This update's chart is {digest}, not {accept}"),
+        }));
+    }
+    if !installed {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "accept-chart".to_string(),
+            message: format!(
+                "releaseSigning is set, so the chart must be accepted. Review it with --dry-run, confirm {digest} with the vendor, then pass --accept-chart {digest}"
+            ),
+        }));
+    }
+    Ok(ChartDecision::KeepInstalled(digest.to_string()))
+}
+
+/// The path of a chart image's values key, for the keys bundles may carry:
+/// the Operator's images and enabled databases' (`postgres.<id>.image`).
+fn chart_image_key(key: &str) -> Result<Vec<&str>> {
+    let parts: Vec<&str> = key.split('.').collect();
+    let database = matches!(parts.as_slice(), ["postgres", id, "image"]
+        if !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
+    if airgap::CHART_IMAGE_VALUES.contains(&key) || database {
+        Ok(parts)
+    } else {
+        Err(AlienError::new(ErrorData::ValidationError {
+            field: "bundle".to_string(),
+            message: format!(
+                "The update names a chart image under '{key}', which no chart image uses"
+            ),
+        }))
+    }
+}
+
 async fn helm_upgrade(
     settings: &SiteSide,
     record: &InstalledBundle,
@@ -4123,6 +4336,7 @@ async fn helm_upgrade(
     deployment_id: &str,
     deployment_name: &str,
     fingerprint: Option<&str>,
+    accepted_chart: Option<&str>,
 ) -> Result<()> {
     // Match --reset-then-reuse-values: new chart defaults, saved user values,
     // then the files supplied for this installation.
@@ -4178,6 +4392,37 @@ async fn helm_upgrade(
             }));
         }
     }
+    // What this install sets, as a values file passed after the site's own so
+    // it wins over them, as `--set` would. Names and images come from the
+    // bundle; in a file they stay strings, where `--set` would read a comma as
+    // another assignment.
+    let mut overrides = serde_json::json!({
+        "airgapped": {"enabled": true, "bundleSigningKey": trusted_key},
+        "management": {"deploymentId": deployment_id, "name": deployment_name},
+        // The Operator buffers container logs for the next report.
+        "logCollector": {"enabled": true, "mode": "podApi"},
+        "tunnel": {"enabled": false},
+    });
+    if let Some(digest) = accepted_chart {
+        overrides["airgapped"]["acceptedChart"] = digest.into();
+    }
+    for (key, image) in &record.chart_images {
+        let mut node = &mut overrides;
+        for part in chart_image_key(key)? {
+            node = &mut node[part];
+        }
+        node["repository"] = image.repository.clone().into();
+        node["tag"] = image.tag.clone().into();
+    }
+    overrides["runtime"]["image"]["pullWithManagementToken"] = false.into();
+    overrides["runtime"]["image"]["selfUpdate"] = false.into();
+    let overrides_file = tempfile::NamedTempFile::new()
+        .into_alien_error()
+        .context(config_error("creating the install's values file"))?;
+    std::fs::write(overrides_file.path(), overrides.to_string())
+        .into_alien_error()
+        .context(config_error("writing the install's values file"))?;
+
     let mut cmd = Command::new("helm");
     cmd.arg("upgrade")
         .arg("--install")
@@ -4187,35 +4432,9 @@ async fn helm_upgrade(
         .arg(namespace)
         .arg("--create-namespace")
         .arg("--reset-then-reuse-values")
-        .args(["--set", "airgapped.enabled=true"])
-        .args([
-            "--set-string",
-            &format!("management.deploymentId={deployment_id}"),
-        ])
-        .args([
-            "--set-string",
-            &format!("management.name={deployment_name}"),
-        ])
-        .args(["--set", "runtime.image.pullWithManagementToken=false"])
-        .args(["--set", "runtime.image.selfUpdate=false"])
-        // The Operator buffers container logs for the next report.
-        .args(["--set", "logCollector.enabled=true"])
-        .args(["--set-string", "logCollector.mode=podApi"])
-        .args(["--set", "tunnel.enabled=false"])
-        .args([
-            "--set-string",
-            &format!("airgapped.bundleSigningKey={trusted_key}"),
-        ])
         .args(["--wait", "--timeout", "300s"]);
     if let Some(fingerprint) = fingerprint {
         cmd.args(["--description", fingerprint]);
-    }
-    for (key, image) in &record.chart_images {
-        cmd.args([
-            "--set-string",
-            &format!("{key}.repository={}", image.repository),
-        ])
-        .args(["--set-string", &format!("{key}.tag={}", image.tag)]);
     }
     if let Some(secret) = pull_secret {
         cmd.args([
@@ -4226,6 +4445,7 @@ async fn helm_upgrade(
     for values in &settings.values {
         cmd.arg("-f").arg(values);
     }
+    cmd.arg("-f").arg(overrides_file.path());
     if let Some(context) = &settings.kube_context {
         cmd.arg("--kube-context").arg(context);
     }
@@ -4598,6 +4818,7 @@ mod tests {
             "dep_fixture",
             "fixture",
             None,
+            None,
         )
         .await;
         let installed = release_values(&settings, "app", &namespace).await.unwrap();
@@ -4636,6 +4857,7 @@ mod tests {
             "dep_fixture",
             "fixture",
             None,
+            None,
         )
         .await;
         let carried_values = release_values(&settings, "app", &namespace).await.unwrap();
@@ -4650,6 +4872,7 @@ mod tests {
             "fixture",
             "dep_fixture",
             "fixture",
+            None,
             None,
         )
         .await;
@@ -4666,6 +4889,7 @@ mod tests {
             "dep_fixture",
             "fixture",
             None,
+            None,
         )
         .await;
         std::fs::write(&values, "postgres:\n  database:\n    enabled: true\nstackSettings:\n  externalBindings:\n    database:\n      type: postgres\n      service: external\n").unwrap();
@@ -4678,6 +4902,7 @@ mod tests {
             "fixture",
             "dep_fixture",
             "fixture",
+            None,
             None,
         )
         .await;
@@ -4699,6 +4924,119 @@ mod tests {
         disabled.unwrap();
         external.unwrap();
     }
+    /// Strings from the bundle reach Helm as values, never as assignments: a
+    /// tag carrying `,releaseSigning...=` stays a tag.
+    #[tokio::test]
+    #[ignore = "requires Helm, kubectl and ALIEN_SYNC_TEST_CONTEXT for a disposable Kind cluster"]
+    async fn bundle_strings_cannot_assign_other_values() {
+        let context = std::env::var("ALIEN_SYNC_TEST_CONTEXT").expect("explicit test context");
+        let namespace = format!("sync-injection-{}", std::process::id());
+        let chart = tempfile::tempdir().unwrap();
+        std::fs::write(
+            chart.path().join("Chart.yaml"),
+            "apiVersion: v2\nname: app\nversion: 0.1.0\n",
+        )
+        .unwrap();
+        std::fs::write(chart.path().join("values.yaml"), "runtime:\n  image:\n    repository: registry.example.com/operator\n    tag: fixture\nreleaseSigning:\n  publicKeys: []\n  project: \"\"\n").unwrap();
+        let values = chart.path().join("site.yaml");
+        std::fs::write(
+            &values,
+            "releaseSigning:\n  publicKeys: [\"ecdsa-p256:customer\"]\n  project: shop\n",
+        )
+        .unwrap();
+        let mut package = Command::new("helm");
+        package
+            .arg("package")
+            .arg(chart.path())
+            .arg("--destination")
+            .arg(chart.path());
+        run(package, "packaging injection fixture").await.unwrap();
+        let settings = SiteSide {
+            registry: "registry.example.com/site".into(),
+            registry_credentials: None,
+            insecure_registry: false,
+            namespace: Some(namespace.clone()),
+            values: vec![values],
+            kube_context: Some(context),
+        };
+        let injected = "v1,releaseSigning.publicKeys[0]=ecdsa-p256:attacker@sha256:aa";
+        let record = InstalledBundle {
+            rollout_succeeded: false,
+            sequence: None,
+            target_hash: None,
+            configuration_revision: None,
+            release_id: "release".into(),
+            stack_id: "app".into(),
+            chart: "app-0.1.0.tgz".into(),
+            chart_images: BTreeMap::from([(
+                "runtime.image".into(),
+                SiteImage {
+                    repository: "registry.example.com/site/operator".into(),
+                    tag: injected.into(),
+                },
+            )]),
+            telemetry_ack: None,
+            inventory: BTreeSet::new(),
+            registry: Some(settings.registry.clone()),
+        };
+        let installed = helm_upgrade(
+            &settings,
+            &record,
+            &chart.path().join(&record.chart),
+            &namespace,
+            None,
+            "fixture",
+            "dep_fixture",
+            "site,releaseSigning.project=attacker",
+            None,
+            None,
+        )
+        .await;
+        let values = release_values(&settings, "app", &namespace).await;
+        let mut cleanup = kubectl(settings.kube_context.as_deref());
+        cleanup.args([
+            "delete",
+            "namespace",
+            &namespace,
+            "--ignore-not-found",
+            "--wait=true",
+        ]);
+        run(cleanup, "removing injection fixture").await.unwrap();
+        installed.unwrap();
+        let values = values.unwrap().unwrap();
+        assert_eq!(
+            values["releaseSigning"]["publicKeys"],
+            serde_json::json!(["ecdsa-p256:customer"])
+        );
+        assert_eq!(values["releaseSigning"]["project"], "shop");
+        assert_eq!(values["runtime"]["image"]["tag"], injected);
+        assert_eq!(
+            values["management"]["name"],
+            "site,releaseSigning.project=attacker"
+        );
+    }
+
+    #[test]
+    fn bundles_name_chart_images_only_under_image_keys() {
+        assert_eq!(
+            chart_image_key("runtime.image").unwrap(),
+            ["runtime", "image"]
+        );
+        assert_eq!(
+            chart_image_key("postgres.orders-db.image").unwrap(),
+            ["postgres", "orders-db", "image"]
+        );
+        for key in [
+            "releaseSigning",
+            "releaseSigning.publicKeys",
+            "postgres.a,b.image",
+            "postgres..image",
+            "runtime.image.tag",
+        ] {
+            assert!(chart_image_key(key).is_err(), "{key}");
+        }
+    }
+
     /// Rollback changes chart-owned data even if the subsequent rollout is interrupted.
     #[cfg(unix)]
     #[tokio::test]
@@ -4857,6 +5195,116 @@ stringData:
         assert!(
             after.deletion_inventory.is_none(),
             "rollback kept the previous deletion's object UIDs"
+        );
+    }
+
+    fn chart_manifest(operator_digest: &str) -> BundleManifest {
+        BundleManifest {
+            format_version: 1,
+            deployment_id: "dep".into(),
+            deployment_name: "site".into(),
+            release_id: "rel".into(),
+            sequence: 1,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            stack_id: "app".into(),
+            images: vec![airgap::BundleImage {
+                source: "vendor.example.com/operator:1.0".into(),
+                repository: "operator".into(),
+                tag: Some("1.0".into()),
+                digest: operator_digest.into(),
+                media_type: "application/vnd.oci.image.index.v1+json".into(),
+            }],
+            chart_images: BTreeMap::from([(
+                "runtime.image".into(),
+                "vendor.example.com/operator:1.0".into(),
+            )]),
+            chart: "app-1.0.0.tgz".into(),
+            files: BTreeMap::new(),
+            omitted_blobs: BTreeSet::new(),
+            telemetry_ack: None,
+            deletion_policy: None,
+        }
+    }
+
+    #[test]
+    fn chart_digest_changes_with_the_chart_or_an_image_it_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let chart = dir.path().join("app-1.0.0.tgz");
+        let digest_a = format!("sha256:{}", "a".repeat(64));
+        let digest_b = format!("sha256:{}", "b".repeat(64));
+        std::fs::write(&chart, b"chart one").unwrap();
+        let first = chart_digest(&chart, &chart_manifest(&digest_a)).unwrap();
+        assert!(first.starts_with("sha256:") && first.len() == 71, "{first}");
+        assert_eq!(
+            first,
+            chart_digest(&chart, &chart_manifest(&digest_a)).unwrap()
+        );
+        assert_ne!(
+            first,
+            chart_digest(&chart, &chart_manifest(&digest_b)).unwrap()
+        );
+        std::fs::write(&chart, b"chart two").unwrap();
+        assert_ne!(
+            first,
+            chart_digest(&chart, &chart_manifest(&digest_a)).unwrap()
+        );
+    }
+
+    #[test]
+    fn protected_sites_install_only_an_accepted_chart() {
+        let digest = "sha256:new";
+        let unprotected = [serde_json::json!({"airgapped": {"enabled": true}})];
+        assert_eq!(
+            decide_chart(&unprotected, true, digest, None).unwrap(),
+            ChartDecision::Install(None)
+        );
+        // Keys set in the saved values and cleared by a later values file
+        // turn protected mode off, as Helm merges them.
+        let cleared = [
+            serde_json::json!({"releaseSigning": {"publicKeys": ["ecdsa-p256:x"]}}),
+            serde_json::json!({"releaseSigning": {"publicKeys": []}}),
+        ];
+        assert_eq!(
+            decide_chart(&cleared, true, digest, None).unwrap(),
+            ChartDecision::Install(None)
+        );
+
+        let keys =
+            serde_json::json!({"releaseSigning": {"publicKeys": ["ecdsa-p256:x"], "project": "p"}});
+        let first = decide_chart(std::slice::from_ref(&keys), false, digest, None).unwrap_err();
+        assert_eq!(first.code, "VALIDATION_ERROR");
+        assert!(
+            first.to_string().contains("--accept-chart sha256:new"),
+            "{first}"
+        );
+        assert_eq!(
+            decide_chart(std::slice::from_ref(&keys), false, digest, Some(digest)).unwrap(),
+            ChartDecision::Install(Some(digest.into()))
+        );
+        let wrong = decide_chart(
+            std::slice::from_ref(&keys),
+            true,
+            digest,
+            Some("sha256:old"),
+        )
+        .unwrap_err();
+        assert!(wrong.to_string().contains("not sha256:old"), "{wrong}");
+
+        let accepted_old = [
+            keys.clone(),
+            serde_json::json!({"airgapped": {"acceptedChart": "sha256:old"}}),
+        ];
+        assert_eq!(
+            decide_chart(&accepted_old, true, digest, None).unwrap(),
+            ChartDecision::KeepInstalled(digest.into())
+        );
+        assert_eq!(
+            decide_chart(&accepted_old, true, "sha256:old", None).unwrap(),
+            ChartDecision::Install(Some("sha256:old".into()))
+        );
+        assert_eq!(
+            decide_chart(&accepted_old, true, digest, Some(digest)).unwrap(),
+            ChartDecision::Install(Some(digest.into()))
         );
     }
 
