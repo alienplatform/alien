@@ -401,6 +401,7 @@ impl PreflightRegistry {
             compile_time::MachinesContainerPublicEndpointsCheck,
         ));
         registry.add_build_time_check(Box::new(compile_time::MachinesDaemonPublicEndpointsCheck));
+        registry.add_build_time_check(Box::new(compile_time::DaemonHostAccessPermissionsCheck));
 
         registry.add_deployment_prerequisite_check(Box::new(
             deployment_prerequisites::SandboxEgressGatewayCheck,
