@@ -211,6 +211,18 @@ impl CapacityGroup {
             .then(|| self.aws_filesystem_size_gib().max(20).min(i32::MAX as u64) as i32)
     }
 
+    /// Whether `other` asks for different disks than this group: another root
+    /// storage size or data disk. Runtime controllers replace machines for it.
+    pub fn disks_differ(&self, other: &CapacityGroup) -> bool {
+        let disks = |group: &CapacityGroup| {
+            group
+                .profile
+                .as_ref()
+                .map(|profile| (profile.ephemeral_storage_bytes, profile.data_disk.clone()))
+        };
+        disks(self) != disks(other)
+    }
+
     /// Declared data disk size, rounded up to a whole GiB.
     pub fn data_disk_size_gib(&self) -> Option<u64> {
         let data_disk = self.profile.as_ref()?.data_disk.as_ref()?;
