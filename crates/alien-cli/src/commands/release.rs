@@ -7,7 +7,8 @@ use crate::ui::{command, contextual_heading, dim_label, success_line};
 use crate::{ErrorData, Result};
 use alien_build::{settings::PushSettings, ImageDestinations};
 use alien_core::release_signature::{
-    code_image_mut, image_digest, ReleaseSigningKey, ReleaseStatement, TrustedKeys, STATEMENT_TYPE,
+    code_image, code_image_mut, image_digest, ReleaseSigningKey, ReleaseStatement, TrustedKeys,
+    STATEMENT_TYPE,
 };
 use alien_core::{
     alien_event, is_deployer_secret_input, AlienEvent, Container, ContainerCode, Daemon,
@@ -1505,6 +1506,8 @@ async fn push_platform_stack(
     let push_failed = || ErrorData::ReleaseFailed {
         message: format!("Failed to push images for {} platform", platform.as_str()),
     };
+    // Signing checks each pushed image against the archives it was built into.
+    let built_for_pinning = pin_digests.then(|| built_stack.clone());
     let mut destinations =
         resolve_push_destinations(args, ctx, project_id, platform, &built_stack).await?;
     let first = push_stack_with_cache_to_destinations(
@@ -1548,8 +1551,8 @@ async fn push_platform_stack(
     };
     // Look digests up where the images were pushed, before any rewrite to the
     // host deployments pull from: the digest is the same on both.
-    if pin_digests {
-        pin_stack_images(&mut pushed, &destinations.settings.options).await?;
+    if let Some(built) = &built_for_pinning {
+        pin_stack_images(&mut pushed, built, &destinations.settings.options).await?;
     }
     if let Some(public_host) = destinations.public_registry_host {
         let push_host = destinations
@@ -2393,28 +2396,68 @@ async fn push_stack_with_cache(
     .await
 }
 
-/// Pin every image in `stack` to the digest the registry holds for it, as
-/// `repository@sha256:<digest>`. Images already pinned are kept as they are.
-async fn pin_stack_images(stack: &mut Stack, options: &dockdash::PushOptions) -> Result<()> {
-    for (resource_id, entry) in stack.resources_mut() {
+/// Pin every image in `pushed` to a digest, as `repository@sha256:<digest>`.
+/// An image built here gets the digest of what the registry holds, once it is
+/// checked to be the image in its local archives: a registry can't choose what
+/// gets signed. An image the release didn't build must already name a digest.
+async fn pin_stack_images(
+    pushed: &mut Stack,
+    built: &Stack,
+    options: &dockdash::PushOptions,
+) -> Result<()> {
+    for (resource_id, entry) in pushed.resources_mut() {
+        let failed = |image: &str, reason: &str| ErrorData::ReleaseFailed {
+            message: format!("Can't sign the image of '{resource_id}' ({image}): {reason}"),
+        };
+        if entry.config.downcast_ref::<Sandbox>().is_some() {
+            return Err(AlienError::new(failed(
+                "sandbox",
+                "signed releases don't support sandboxes yet; their image is assembled in the registry",
+            )));
+        }
         let Some(image) = code_image_mut(&mut entry.config) else {
             continue;
         };
-        if image_digest(image).is_some() {
+        let archives = built
+            .resources()
+            .find(|(id, _)| *id == resource_id)
+            .and_then(|(_, built)| code_image(&built.config))
+            .map(local_archives)
+            .unwrap_or_default();
+        if archives.is_empty() {
+            if image_digest(image).is_none() {
+                return Err(AlienError::new(failed(
+                    image,
+                    "it wasn't built by this release, so name it by digest (image@sha256:...)",
+                )));
+            }
             continue;
         }
-        let failed = |reason: &str| ErrorData::ReleaseFailed {
-            message: format!(
-                "Can't pin the image of '{resource_id}' ({image}) to a digest: {reason}"
-            ),
-        };
-        let digest = alien_build::registry::manifest_digest(image, options)
+        let digest = alien_build::registry::verified_digest(image, &archives, options)
             .await
-            .context(failed("the registry lookup failed"))?
-            .ok_or_else(|| AlienError::new(failed("the registry doesn't have it")))?;
+            .context(failed(image, "the pushed image doesn't check out"))?;
         *image = format!("{}@{digest}", image_repository(image));
     }
     Ok(())
+}
+
+/// The OCI archives in a built resource's local image directory, if `image` is one.
+fn local_archives(image: &str) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(image) else {
+        return Vec::new();
+    };
+    let mut archives: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.extension().is_some_and(|extension| extension == "tar")
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.contains(".oci."))
+        })
+        .collect();
+    archives.sort();
+    archives
 }
 
 /// `image` without its tag or digest. A `:` before the last `/` is a registry
@@ -4080,6 +4123,56 @@ mod tests {
             served, digest,
             "the pinned reference resolves to the pushed image"
         );
+    }
+
+    /// The registry can't vouch for an image this release didn't build, so
+    /// signing needs the developer to name it by digest.
+    #[tokio::test]
+    async fn signing_an_image_not_built_here_needs_its_digest() {
+        let (manager_url, _) = start_renaming_manager(|_| false).await;
+        let output = tempfile::tempdir().unwrap();
+        let ctx = ExecutionMode::Standalone {
+            server_url: manager_url.clone(),
+            api_key: "test-token".to_string(),
+        };
+        let args = ReleaseArgs::try_parse_from(["release"]).unwrap();
+        let stack_with = |image: &str| {
+            Stack::new("remote".to_string())
+                .add(
+                    test_container("web", image.to_string()),
+                    ResourceLifecycle::Live,
+                )
+                .build()
+        };
+        let push = |stack: Stack, sign: bool| {
+            let output_dir = output.path().to_path_buf();
+            let (args, ctx) = (&args, &ctx);
+            async move {
+                push_platform_stack(
+                    args,
+                    ctx,
+                    "prj_a",
+                    Platform::Kubernetes,
+                    stack,
+                    &output_dir,
+                    sign,
+                )
+                .await
+            }
+        };
+
+        let error = push(stack_with("registry.example.com/team/web:v1"), true)
+            .await
+            .expect_err("a tag the release didn't push can't be signed");
+        assert!(error.to_string().contains("name it by digest"), "{error}");
+
+        let pinned = format!("registry.example.com/team/web@sha256:{}", "a".repeat(64));
+        push(stack_with(&pinned), true)
+            .await
+            .expect("a digest the developer named is signed as is");
+        push(stack_with("registry.example.com/team/web:v1"), false)
+            .await
+            .expect("an unsigned release keeps accepting tags");
     }
 
     #[test]
