@@ -26,10 +26,12 @@ pub struct FrozenResourcesUnchangedCheck {
 }
 
 /// Setup owns the ComputeCluster identity and network boundary, but its
-/// registered runtime controller deliberately owns the fleet: capacity and, on
-/// AWS, GCP and Azure, the machine type within one CPU architecture. The compute mutation has
-/// already checked the new machine against the workloads and derived its
-/// profile, so the profile follows the machine. Changing groups, placement, or
+/// registered runtime controller deliberately owns the fleet: capacity, disk
+/// sizes and, on AWS, GCP and Azure, the machine type within one CPU
+/// architecture. The compute mutation has already checked the new machine
+/// against the workloads and derived its profile, so the profile follows the
+/// machine. Disk sizes are applied by replacing machines on AWS, GCP and Azure
+/// and checked when a host joins on Machines. Changing groups, placement, or
 /// networking still requires setup.
 fn runtime_managed_frozen_change(platform: Platform, old: &Resource, new: &Resource) -> bool {
     let (Some(old_cluster), Some(new_cluster)) = (
@@ -62,8 +64,30 @@ fn runtime_managed_frozen_change(platform: Platform, old: &Resource, new: &Resou
                 old_group.profile = new_group.profile.clone();
             }
         }
+        if runtime_disk_change(platform, old_group, new_group) {
+            old_group.profile = new_group.profile.clone();
+        }
     }
     normalized == *new_cluster
+}
+
+/// Whether the profiles differ only in disk sizes that the platform applies
+/// without setup.
+fn runtime_disk_change(platform: Platform, old: &CapacityGroup, new: &CapacityGroup) -> bool {
+    let (Some(old_profile), Some(new_profile)) = (&old.profile, &new.profile) else {
+        return false;
+    };
+    let mut resized = old_profile.clone();
+    resized.ephemeral_storage_bytes = new_profile.ephemeral_storage_bytes;
+    resized.data_disk = new_profile.data_disk.clone();
+    if resized != *new_profile || old.instance_type != new.instance_type {
+        return false;
+    }
+    match platform {
+        Platform::Aws | Platform::Gcp | Platform::Azure => validated_machine_profile(platform, new),
+        Platform::Machines => true,
+        Platform::Kubernetes | Platform::Local | Platform::Test => false,
+    }
 }
 
 fn validated_machine_profile(platform: Platform, group: &CapacityGroup) -> bool {
@@ -1223,6 +1247,126 @@ mod tests {
         );
         assert!(!machine_change(Platform::Aws, "m8i.unknown").await.success);
         assert!(!machine_change(Platform::Gcp, "m8i.4xlarge").await.success);
+    }
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    /// A pool as the compute mutation prepares it: the machine's profile with
+    /// the declared storage and data disk.
+    fn disk_cluster(
+        platform: Platform,
+        machine: Option<&str>,
+        ephemeral_gib: u64,
+        data_disk_gib: Option<u64>,
+    ) -> ComputeCluster {
+        let mut profile = match machine {
+            Some(machine) => find_instance_type(platform, machine)
+                .expect("catalog machine")
+                .to_machine_profile_for_storage(ephemeral_gib * GIB),
+            None => alien_core::MachineProfile {
+                cpu: "4".to_string(),
+                memory_bytes: 16 * GIB,
+                ephemeral_storage_bytes: ephemeral_gib * GIB,
+                architecture: None,
+                gpu: None,
+                data_disk: None,
+            },
+        };
+        profile.data_disk = data_disk_gib.map(|gib| alien_core::DataDiskRequirement {
+            size_bytes: gib * GIB,
+        });
+        ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "workers".to_string(),
+                instance_type: machine.map(str::to_string),
+                profile: Some(profile),
+                min_size: 2,
+                max_size: 2,
+                scale_policy: None,
+                nested_virtualization: Some(platform == Platform::Aws),
+            })
+            .build()
+    }
+
+    async fn disk_change(
+        platform: Platform,
+        old: ComputeCluster,
+        new: ComputeCluster,
+    ) -> CheckResult {
+        FrozenResourcesUnchangedCheck { platform }
+            .check(&compute_stack(old), &compute_stack(new))
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn disk_size_changes_do_not_need_setup_where_alien_applies_them() {
+        for (platform, machine) in [
+            (Platform::Aws, Some("m8i.2xlarge")),
+            (Platform::Gcp, Some("n2-standard-4")),
+            (Platform::Azure, Some("Standard_D4s_v5")),
+            (Platform::Machines, None),
+        ] {
+            let cluster = |ephemeral_gib, data_disk_gib| {
+                disk_cluster(platform, machine, ephemeral_gib, data_disk_gib)
+            };
+            for (old, new) in [
+                (cluster(20, None), cluster(20, Some(30))),
+                (cluster(20, Some(30)), cluster(20, Some(50))),
+                (cluster(20, Some(50)), cluster(20, None)),
+                (cluster(20, None), cluster(40, None)),
+                (cluster(40, Some(30)), cluster(20, Some(50))),
+            ] {
+                let result = disk_change(platform, old, new).await;
+                assert!(result.success, "{platform}: {:?}", result.errors);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn disk_size_changes_still_need_setup_on_kubernetes() {
+        let cluster = |data_disk_gib| disk_cluster(Platform::Kubernetes, None, 20, data_disk_gib);
+        let result = disk_change(Platform::Kubernetes, cluster(None), cluster(Some(30))).await;
+        assert!(!result.success);
+        assert!(
+            result.errors[0].contains("Rerun setup"),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    #[tokio::test]
+    async fn disk_size_change_does_not_carry_other_changes_past_setup() {
+        let old = disk_cluster(Platform::Aws, Some("m8i.2xlarge"), 20, None);
+
+        // A machine in another CPU architecture still needs setup with a disk change.
+        let mut cross_arch = disk_cluster(Platform::Aws, Some("c7g.xlarge"), 20, Some(30));
+        cross_arch.capacity_groups[0].nested_virtualization = Some(true);
+        let result = disk_change(Platform::Aws, old.clone(), cross_arch).await;
+        assert!(!result.success);
+        assert!(
+            result.errors[0].contains("changes machine from 'm8i.2xlarge' to 'c7g.xlarge'"),
+            "{:?}",
+            result.errors
+        );
+
+        // A machine in the same architecture is replaced with the new disks anyway.
+        let same_arch = disk_cluster(Platform::Aws, Some("m8i.4xlarge"), 40, Some(30));
+        let result = disk_change(Platform::Aws, old.clone(), same_arch).await;
+        assert!(result.success, "{:?}", result.errors);
+
+        // Hardware that does not follow from the machine is not a disk change.
+        let mut other_cpu = disk_cluster(Platform::Aws, Some("m8i.2xlarge"), 20, Some(30));
+        other_cpu.capacity_groups[0].profile.as_mut().unwrap().cpu = "16".to_string();
+        assert!(
+            !disk_change(Platform::Aws, old.clone(), other_cpu)
+                .await
+                .success
+        );
+
+        // Root storage the provider cannot create is not applied by the runtime.
+        let too_large = disk_cluster(Platform::Aws, Some("m8i.2xlarge"), 60 * 1024, None);
+        assert!(!disk_change(Platform::Aws, old, too_large).await.success);
     }
 
     #[tokio::test]

@@ -2,12 +2,27 @@ use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::{ComputeCluster, Platform, Stack};
 
+const GIB: u64 = 1024 * 1024 * 1024;
+
 /// Validates pools that require an additional empty disk on each machine.
 ///
-/// Only Machines checks the disk, when a host joins. Cloud platforms and
-/// Kubernetes cannot provide it, so declaring one there is an error instead of
-/// a requirement that silently goes unmet.
+/// On AWS, GCP and Azure the runtime controller attaches the disk, so a size
+/// the provider cannot create fails here, before any cloud resource exists.
+/// Machines checks the disk when a host joins. Kubernetes cannot provide it,
+/// so declaring one there is an error instead of a requirement that silently
+/// goes unmet.
 pub struct ComputePoolDataDiskCheck;
+
+/// Largest data disk each provider can create, in GiB: gp3 EBS volumes and
+/// pd-balanced persistent disks hold up to 64 TiB, Azure Premium SSD managed
+/// data disks up to 32,767 GiB.
+fn max_data_disk_gib(platform: Platform) -> Option<u64> {
+    match platform {
+        Platform::Aws | Platform::Gcp => Some(64 * 1024),
+        Platform::Azure => Some(32_767),
+        Platform::Machines | Platform::Kubernetes | Platform::Local | Platform::Test => None,
+    }
+}
 
 #[async_trait::async_trait]
 impl CompileTimeCheck for ComputePoolDataDiskCheck {
@@ -16,7 +31,7 @@ impl CompileTimeCheck for ComputePoolDataDiskCheck {
     }
 
     fn description(&self) -> &'static str {
-        "Compute pool data disks must have a size and are supported only on machines"
+        "Compute pool data disks must have a size the platform can provide"
     }
 
     fn should_run(&self, stack: &Stack, _platform: Platform) -> bool {
@@ -35,14 +50,20 @@ impl CompileTimeCheck for ComputePoolDataDiskCheck {
                 ));
             }
             match platform {
-                Platform::Machines => {}
+                Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Machines => {}
                 Platform::Local | Platform::Test => warnings.push(format!(
-                    "{pool} requires an additional empty disk on each machine. It is checked when a host joins a machines deployment, not on platform '{platform}'."
+                    "{pool} requires an additional empty disk on each machine. Platform '{platform}' does not provide or check one."
                 )),
-                Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Kubernetes => {
+                Platform::Kubernetes => errors.push(format!(
+                    "{pool} requires an additional empty disk on each machine, which Alien cannot attach to nodes on platform 'kubernetes'."
+                )),
+            }
+            if let Some(max_gib) = max_data_disk_gib(platform) {
+                let size_gib = size_bytes.div_ceil(GIB);
+                if size_gib > max_gib {
                     errors.push(format!(
-                        "{pool} requires an additional empty disk on each machine, which is supported only on platform 'machines'. Alien does not attach one on platform '{platform}'."
-                    ))
+                        "{pool}: requirements.dataDisk.size is {size_gib} GiB, but the largest data disk on platform '{platform}' is {max_gib} GiB."
+                    ));
                 }
             }
         }
@@ -76,8 +97,6 @@ mod tests {
     use super::*;
     use crate::runner::PreflightRunner;
     use alien_core::{CapacityGroup, DataDiskRequirement, MachineProfile, ResourceLifecycle};
-
-    const GIB: u64 = 1024 * 1024 * 1024;
 
     fn stack_with_data_disk(size_bytes: Option<u64>) -> Stack {
         let cluster = ComputeCluster::new("compute".to_string())
@@ -130,26 +149,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cloud_and_kubernetes_reject_a_data_disk() {
-        let stack = stack_with_data_disk(Some(50 * GIB));
-        for platform in [
-            Platform::Aws,
-            Platform::Gcp,
-            Platform::Azure,
-            Platform::Kubernetes,
+    async fn clouds_accept_sizes_up_to_the_provider_limit() {
+        for (platform, max_gib) in [
+            (Platform::Aws, 65_536),
+            (Platform::Gcp, 65_536),
+            (Platform::Azure, 32_767),
         ] {
-            let result = ComputePoolDataDiskCheck
-                .check(&stack, platform)
+            let at_limit = ComputePoolDataDiskCheck
+                .check(&stack_with_data_disk(Some(max_gib * GIB)), platform)
                 .await
                 .unwrap();
-            assert!(!result.success, "{platform} should reject a data disk");
+            assert!(at_limit.success, "{platform}: {:?}", at_limit.errors);
+
+            // One byte over rounds up to a GiB the provider cannot create.
+            let over = ComputePoolDataDiskCheck
+                .check(&stack_with_data_disk(Some(max_gib * GIB + 1)), platform)
+                .await
+                .unwrap();
+            assert!(!over.success, "{platform} should reject an over-limit disk");
             assert_eq!(
-                result.errors,
+                over.errors,
                 vec![format!(
-                    "ComputeCluster 'compute' pool 'general' requires an additional empty disk on each machine, which is supported only on platform 'machines'. Alien does not attach one on platform '{platform}'."
+                    "ComputeCluster 'compute' pool 'general': requirements.dataDisk.size is {} GiB, but the largest data disk on platform '{platform}' is {max_gib} GiB.",
+                    max_gib + 1
                 )]
             );
         }
+    }
+
+    #[tokio::test]
+    async fn kubernetes_rejects_a_data_disk() {
+        let result = ComputePoolDataDiskCheck
+            .check(&stack_with_data_disk(Some(50 * GIB)), Platform::Kubernetes)
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert_eq!(
+            result.errors,
+            vec!["ComputeCluster 'compute' pool 'general' requires an additional empty disk on each machine, which Alien cannot attach to nodes on platform 'kubernetes'."]
+        );
     }
 
     #[tokio::test]
@@ -161,24 +199,26 @@ mod tests {
             .unwrap();
         assert!(result.success);
         assert_eq!(result.warnings.len(), 1);
-        assert!(result.warnings[0].contains("not on platform 'local'"));
+        assert!(result.warnings[0].contains("Platform 'local' does not provide or check one"));
     }
 
     #[tokio::test]
-    async fn registered_build_checks_reject_a_data_disk_on_aws() {
+    async fn registered_build_checks_run_for_a_data_disk() {
         let without_disk = stack_with_data_disk(None);
         assert!(!ComputePoolDataDiskCheck.should_run(&without_disk, Platform::Aws));
 
         let with_disk = stack_with_data_disk(Some(50 * GIB));
-        let summary = PreflightRunner::new()
-            .run_compile_time_checks(&with_disk, Platform::Aws)
-            .await
-            .unwrap();
-        let result = summary
-            .results
-            .iter()
-            .find(|result| result.code.as_deref() == Some("COMPUTE_POOL_DATA_DISK_INVALID"))
-            .expect("the data disk check should run for a stack that declares one");
-        assert!(!result.success);
+        for (platform, success) in [(Platform::Aws, true), (Platform::Kubernetes, false)] {
+            let summary = PreflightRunner::new()
+                .run_compile_time_checks(&with_disk, platform)
+                .await
+                .unwrap();
+            let result = summary
+                .results
+                .iter()
+                .find(|result| result.code.as_deref() == Some("COMPUTE_POOL_DATA_DISK_INVALID"))
+                .expect("the data disk check should run for a stack that declares one");
+            assert_eq!(result.success, success, "{platform}: {:?}", result.errors);
+        }
     }
 }
