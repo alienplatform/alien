@@ -4990,14 +4990,17 @@ mod tests {
                     when.method(httpmock::Method::POST)
                         .path("/v1/deployment-info/prepare-stack")
                         .header("authorization", "Bearer test-group-token")
-                        .json_body_partial(r#"{"setupItem":"bucket"}"#);
+                        // Preparation must check the Release of the channel the
+                        // deployment will follow, not the default channel.
+                        .json_body_partial(r#"{"setupItem":"bucket","releaseChannel":"preview"}"#);
                     then.status(status).json_body(body);
                 })
                 .await;
             let plan = server
                 .mock_async(|when, then| {
                     when.method(httpmock::Method::POST)
-                        .path("/v1/deployment-info/compute-plan");
+                        .path("/v1/deployment-info/compute-plan")
+                        .json_body_partial(r#"{"releaseChannel":"preview"}"#);
                     then.status(503)
                         .json_body(serde_json::json!({"message":"Planner unavailable"}));
                 })
