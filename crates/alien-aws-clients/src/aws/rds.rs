@@ -32,7 +32,11 @@ pub trait RdsApi: Send + Sync + std::fmt::Debug {
         &self,
         name: &str,
     ) -> Result<Vec<DbClusterParameterGroup>>;
-    async fn require_tls(&self, parameter_group_name: &str) -> Result<()>;
+    async fn modify_db_cluster_parameter_group(
+        &self,
+        name: &str,
+        parameters: Vec<DbClusterParameter>,
+    ) -> Result<()>;
     async fn delete_db_cluster_parameter_group(&self, name: &str) -> Result<()>;
     async fn create_db_subnet_group(&self, request: CreateDbSubnetGroupRequest) -> Result<()>;
     async fn delete_db_subnet_group(&self, name: &str) -> Result<()>;
@@ -56,6 +60,15 @@ pub struct CreateDbClusterParameterGroupRequest {
     pub family: String,
     pub description: String,
     pub tags: HashMap<String, String>,
+}
+
+/// One parameter value for ModifyDBClusterParameterGroup.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DbClusterParameter {
+    pub name: String,
+    pub value: String,
+    /// `immediate` (dynamic parameters only) or `pending-reboot`.
+    pub apply_method: String,
 }
 
 #[derive(Debug, Clone)]
@@ -673,22 +686,20 @@ impl RdsApi for RdsClient {
         Ok(envelope.result.groups.members)
     }
 
-    async fn require_tls(&self, parameter_group_name: &str) -> Result<()> {
+    async fn modify_db_cluster_parameter_group(
+        &self,
+        name: &str,
+        parameters: Vec<DbClusterParameter>,
+    ) -> Result<()> {
         let mut form = base_form("ModifyDBClusterParameterGroup");
-        form.insert(
-            "DBClusterParameterGroupName".into(),
-            parameter_group_name.to_string(),
-        );
-        form.insert(
-            "Parameters.Parameter.1.ParameterName".into(),
-            "rds.force_ssl".into(),
-        );
-        form.insert("Parameters.Parameter.1.ParameterValue".into(), "1".into());
-        form.insert(
-            "Parameters.Parameter.1.ApplyMethod".into(),
-            "immediate".into(),
-        );
-        self.send_form_no_body(form, "ModifyDBClusterParameterGroup", parameter_group_name)
+        form.insert("DBClusterParameterGroupName".into(), name.to_string());
+        for (i, parameter) in parameters.into_iter().enumerate() {
+            let prefix = format!("Parameters.Parameter.{}", i + 1);
+            form.insert(format!("{prefix}.ParameterName"), parameter.name);
+            form.insert(format!("{prefix}.ParameterValue"), parameter.value);
+            form.insert(format!("{prefix}.ApplyMethod"), parameter.apply_method);
+        }
+        self.send_form_no_body(form, "ModifyDBClusterParameterGroup", name)
             .await
     }
 
