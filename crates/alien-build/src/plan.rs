@@ -298,19 +298,10 @@ fn resolved_compute_architecture(
         .filter_map(|(_, entry)| entry.config.downcast_ref::<ComputeCluster>())
         .flat_map(|cluster| cluster.capacity_groups.iter())
         .map(|group| {
-            let mut requirements = capacity_group_requirements(group);
             // Nested virtualization and GPU models can restrict the architecture
-            // even when the pool leaves it unspecified.
-            if requirements.architecture.is_none()
-                && (requirements.nested_virt || requirements.gpu.is_some())
-            {
-                for architecture in [Architecture::Arm64, Architecture::X86_64] {
-                    requirements.architecture = Some(architecture);
-                    if instance_catalog::select_instance_type(platform, &requirements).is_ok() {
-                        break;
-                    }
-                }
-            }
+            // even when the pool leaves it unspecified. The catalog resolves that
+            // the same way here as when deployment packages plan the pool.
+            let requirements = capacity_group_requirements(group);
             instance_catalog::select_instance_type(platform, &requirements)
                 .map_err(|message| {
                     AlienError::new(crate::error::ErrorData::BuildConfigInvalid {

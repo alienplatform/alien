@@ -2070,6 +2070,63 @@ mod tests {
         assert!(pool.errors.is_empty());
     }
 
+    /// The pool path deployment packages plan: a nested-virtualization pool that
+    /// leaves the architecture unset must resolve to the x86_64 machines AWS
+    /// offers for it, the same machine the image build resolves.
+    #[test]
+    fn nested_pool_without_architecture_plans_an_aws_machine() {
+        let mut stack = stack_with_container();
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: None,
+                profile: Some(MachineProfile {
+                    cpu: "4".to_string(),
+                    memory_bytes: 16 * 1024 * 1024 * 1024,
+                    ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
+                    architecture: None,
+                    gpu: None,
+                    data_disk: None,
+                }),
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: Some(true),
+            })
+            .build();
+        stack.resources.insert(
+            "compute".to_string(),
+            ResourceEntry {
+                config: Resource::new(cluster),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                display_name: None,
+                description: None,
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+
+        let plan = plan_compute(&stack, Platform::Aws, None).expect("plan should build");
+
+        let pool = plan.pools.first().expect("general pool should exist");
+        assert!(pool.errors.is_empty(), "{:?}", pool.errors);
+        let machine = pool
+            .selected
+            .machine()
+            .expect("AWS selection should include a machine");
+        let spec = instance_catalog::find_instance_type(Platform::Aws, machine)
+            .expect("selected machine should exist in the catalog");
+        assert!(spec.is_nested_virt_capable(), "{machine} is not nested-capable");
+        assert_eq!(spec.architecture, Architecture::X86_64);
+        assert!(!pool.machines.is_empty());
+        assert!(pool.machines.iter().all(|option| {
+            instance_catalog::find_instance_type(Platform::Aws, &option.machine).is_some_and(
+                |spec| spec.is_nested_virt_capable() && spec.architecture == Architecture::X86_64,
+            )
+        }));
+    }
+
     #[test]
     fn materialized_machine_profile_is_not_counted_as_workload_demand() {
         let mut stack = stack_with_container();

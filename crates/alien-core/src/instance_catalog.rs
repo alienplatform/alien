@@ -1414,6 +1414,40 @@ pub fn select_instance_type(
     platform: Platform,
     requirements: &WorkloadRequirements,
 ) -> Result<InstanceSelection, String> {
+    // An unset architecture accepts either one. Nested virtualization and GPU
+    // models can exist on only one architecture of a platform (AWS nested
+    // virtualization is x86_64 only), so try the platform default first and
+    // then the other architecture.
+    if requirements.architecture.is_none()
+        && (requirements.nested_virt || requirements.gpu.is_some())
+    {
+        if let Some(default) = default_architecture(platform) {
+            let other = match default {
+                Architecture::Arm64 => Architecture::X86_64,
+                Architecture::X86_64 => Architecture::Arm64,
+            };
+            let with_architecture = |architecture| WorkloadRequirements {
+                architecture: Some(architecture),
+                ..requirements.clone()
+            };
+            let selection = select_instance_type_for_architecture(
+                platform,
+                &with_architecture(default),
+            );
+            if selection.is_ok() {
+                return selection;
+            }
+            return select_instance_type_for_architecture(platform, &with_architecture(other))
+                .or(selection);
+        }
+    }
+    select_instance_type_for_architecture(platform, requirements)
+}
+
+fn select_instance_type_for_architecture(
+    platform: Platform,
+    requirements: &WorkloadRequirements,
+) -> Result<InstanceSelection, String> {
     let family = select_family(requirements);
     let family = if requirements.nested_virt && family == InstanceFamily::Burstable {
         InstanceFamily::GeneralPurpose
@@ -2035,6 +2069,39 @@ mod tests {
             assert!(spec.is_nested_virt_capable());
             assert_eq!(sel.profile.ephemeral_storage_bytes, 500 * GI);
         }
+    }
+
+    #[test]
+    fn unset_architecture_resolves_to_the_one_offering_nested_virtualization() {
+        let req = WorkloadRequirements {
+            total_cpu_at_desired: 2.0,
+            total_memory_bytes_at_desired: 4 * GI,
+            total_cpu_at_max: 2.0,
+            total_memory_bytes_at_max: 4 * GI,
+            max_cpu_per_container: 2.0,
+            max_memory_per_container: 4 * GI,
+            max_ephemeral_storage_bytes: 20 * GI,
+            gpu: None,
+            architecture: None,
+            nested_virt: true,
+        };
+
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let selection = select_instance_type(platform, &req)
+                .unwrap_or_else(|message| panic!("{platform}: {message}"));
+            let spec = find_instance_type(platform, selection.instance_type)
+                .expect("selected machine should exist in the catalog");
+            assert!(spec.is_nested_virt_capable(), "{platform}: {}", spec.name);
+            assert_eq!(spec.architecture, Architecture::X86_64, "{platform}");
+            assert_eq!(selection.profile.architecture, Some(Architecture::X86_64));
+        }
+
+        // An explicit architecture is a constraint, not a preference.
+        let arm = WorkloadRequirements {
+            architecture: Some(Architecture::Arm64),
+            ..req
+        };
+        assert!(select_instance_type(Platform::Aws, &arm).is_err());
     }
 
     #[test]
