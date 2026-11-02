@@ -1437,8 +1437,13 @@ pub fn select_instance_type(
             if selection.is_ok() {
                 return selection;
             }
+            // Report both reasons: the default architecture often lacks the
+            // feature entirely, while the other one says what to change.
             return select_instance_type_for_architecture(platform, &with_architecture(other))
-                .or(selection);
+                .map_err(|other_error| {
+                    let default_error = selection.err().unwrap_or_default();
+                    format!("{default:?}: {default_error}; {other:?}: {other_error}")
+                });
         }
     }
     select_instance_type_for_architecture(platform, requirements)
@@ -2095,6 +2100,22 @@ mod tests {
             assert_eq!(spec.architecture, Architecture::X86_64, "{platform}");
             assert_eq!(selection.profile.architecture, Some(Architecture::X86_64));
         }
+
+        // When neither architecture fits, the error says why for each, so a
+        // sizing problem is not reported as a missing architecture.
+        let oversized = WorkloadRequirements {
+            max_cpu_per_container: 1000.0,
+            total_cpu_at_desired: 1000.0,
+            total_cpu_at_max: 1000.0,
+            ..req.clone()
+        };
+        let message = select_instance_type(Platform::Aws, &oversized)
+            .expect_err("no AWS machine fits 1000 vCPU per replica");
+        assert!(message.starts_with("Arm64: architecture Arm64 is unavailable"), "{message}");
+        assert!(
+            message.contains("; X86_64: no aws machine can fit one replica"),
+            "{message}"
+        );
 
         // An explicit architecture is a constraint, not a preference.
         let arm = WorkloadRequirements {
