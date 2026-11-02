@@ -154,7 +154,11 @@ pub async fn handle_provisioning(
     // deployment back: any failure ends Provisioning in the step it happens, and a retry
     // resumes failures before it returns here. The setup ran, so resume those steps now
     // instead of failing again on the recorded failure and waiting for a manual retry.
-    if crate::helpers::setup_required_error(&stack_state).is_some() {
+    // The same holds for resources interrupted by a failure that setup has since repaired:
+    // with no failure of their own left, nothing would report why they stay failed.
+    if crate::helpers::setup_required_error(&stack_state).is_some()
+        || crate::helpers::only_interrupted_failures(&stack_state)
+    {
         let outcome = crate::helpers::resume_unchanged_failed_resources(
             &mut stack_state,
             &target_stack,
@@ -657,6 +661,94 @@ mod tests {
         );
         assert!(state.current_release.is_some());
         assert!(state.target_release.is_none());
+    }
+
+    /// An update that failed on `dependency` interrupted `dependent` mid-update. Returns the
+    /// checkpoint a setup run hands back: `dependency` repaired (or, with `dependency_repaired`
+    /// false, still failed), `dependent` still carrying the interruption.
+    async fn handed_back_after_interruption(dependency_repaired: bool) -> DeploymentState {
+        let mut target = stack(&["dependency", "dependent"]);
+        target.resources.get_mut("dependent").unwrap().dependencies =
+            vec![ResourceRef::new("storage".into(), "dependency")];
+        let mut checkpoint = installed(&target).await;
+
+        let dependent = checkpoint.resources.get_mut("dependent").unwrap();
+        let mut controller = dependent.get_internal_controller().unwrap().unwrap();
+        controller.transition_to_update().unwrap();
+        dependent.status = controller.get_status();
+        dependent.set_internal_controller(Some(controller)).unwrap();
+        assert_eq!(dependent.status, ResourceStatus::Updating);
+
+        if !dependency_repaired {
+            let dependency = checkpoint.resources.get_mut("dependency").unwrap();
+            let mut controller = dependency.get_internal_controller().unwrap().unwrap();
+            controller.transition_to_update().unwrap();
+            controller.transition_to_failure();
+            dependency.status = controller.get_status();
+            dependency.set_internal_controller(Some(controller)).unwrap();
+            dependency.error = Some(
+                AlienError::new(ErrorData::StackExecutionFailed {
+                    message: "denied".to_string(),
+                })
+                .into_generic(),
+            );
+            assert_eq!(dependency.status, ResourceStatus::UpdateFailed);
+        }
+        crate::helpers::interrupt_in_progress_resources(
+            &mut checkpoint,
+            &[("dependency", "storage")],
+            None,
+        )
+        .unwrap();
+        let dependent = &checkpoint.resources["dependent"];
+        assert_eq!(dependent.status, ResourceStatus::UpdateFailed);
+        assert_eq!(
+            dependent.error.as_ref().map(|error| error.code.as_str()),
+            Some("DEPLOYMENT_INTERRUPTED")
+        );
+
+        let mut state = provisioning(checkpoint, target.clone());
+        state.current_release = Some(ReleaseInfo {
+            release_id: Some("installed-release".to_string()),
+            version: None,
+            description: None,
+            stack: target,
+        });
+        state
+    }
+
+    #[tokio::test]
+    async fn provisioning_resumes_resources_interrupted_by_a_failure_setup_repaired() {
+        let mut state = handed_back_after_interruption(true).await;
+        for _ in 0..8 {
+            state = step(state).await;
+            assert_ne!(state.status, DeploymentStatus::UpdateFailed, "{:?}", state.error);
+            if state.status == DeploymentStatus::Running {
+                break;
+            }
+        }
+        assert_eq!(state.status, DeploymentStatus::Running);
+        assert!(state.error.is_none());
+        let dependent = &state.stack_state.as_ref().unwrap().resources["dependent"];
+        assert_eq!(dependent.status, ResourceStatus::Running);
+        assert!(dependent.error.is_none(), "{:?}", dependent.error);
+        assert_eq!(
+            state.current_release.unwrap().release_id.as_deref(),
+            Some("target-release")
+        );
+    }
+
+    #[tokio::test]
+    async fn provisioning_keeps_interrupted_resources_failed_while_their_cause_is_failed() {
+        let state = step(handed_back_after_interruption(false).await).await;
+        assert_eq!(state.status, DeploymentStatus::UpdateFailed);
+        let resources = &state.stack_state.unwrap().resources;
+        assert_eq!(resources["dependency"].status, ResourceStatus::UpdateFailed);
+        assert_eq!(resources["dependent"].status, ResourceStatus::UpdateFailed);
+        assert_eq!(
+            state.current_release.unwrap().release_id.as_deref(),
+            Some("installed-release")
+        );
     }
 
     #[tokio::test]
