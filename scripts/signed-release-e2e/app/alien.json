@@ -1,0 +1,73 @@
+{
+  "id": "signed-e2e",
+  "permissions": {
+    "profiles": {
+      "execution": {
+        "*": []
+      }
+    }
+  },
+  "inputs": [
+    {
+      "id": "logLevel",
+      "kind": "string",
+      "providedBy": ["developer"],
+      "required": false,
+      "label": "Log level",
+      "description": "Set by the developer for every deployment.",
+      "env": [
+        {
+          "name": "LOG_LEVEL",
+          "targetResources": ["app"]
+        }
+      ]
+    },
+    {
+      "id": "databaseUrl",
+      "kind": "string",
+      "providedBy": ["deployer"],
+      "required": false,
+      "label": "Database URL",
+      "description": "Set by the installer.",
+      "env": [
+        {
+          "name": "DATABASE_URL",
+          "targetResources": ["app"]
+        }
+      ]
+    }
+  ],
+  "resources": {
+    "app": {
+      "config": {
+        "id": "app",
+        "type": "container",
+        "code": {
+          "type": "source",
+          "src": ".",
+          "toolchain": {
+            "type": "docker",
+            "buildArgs": {
+              "MESSAGE": "release-1"
+            }
+          }
+        },
+        "cpu": {
+          "min": "0.05",
+          "desired": "0.05"
+        },
+        "memory": {
+          "min": "32Mi",
+          "desired": "32Mi"
+        },
+        "environment": {},
+        "links": [],
+        "permissions": "execution",
+        "ports": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  }
+}
