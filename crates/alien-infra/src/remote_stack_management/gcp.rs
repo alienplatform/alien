@@ -821,11 +821,18 @@ impl GcpRemoteStackManagementController {
         let mut permission_sets = Vec::new();
 
         for permission_set_ref in global_permission_set_refs {
-            if let Some(permission_set) =
+            let Some(permission_set) =
                 permission_set_ref.resolve(|name| get_permission_set(name).cloned())
-            {
-                permission_sets.push(permission_set);
+            else {
+                continue;
+            };
+            // A set with no GCP block grants nothing on GCP (for example `daemon/heartbeat`:
+            // a daemon's health comes from its compute cluster, not a cloud API). The setup
+            // emitter and the AWS and Azure management controllers skip these sets too.
+            if permission_set.platforms.gcp.is_none() {
+                continue;
             }
+            permission_sets.push(permission_set);
         }
 
         Ok(permission_sets)
@@ -1686,6 +1693,150 @@ mod tests {
         let deleted = delete_management_roles(prefix, controller, own.clone()).await;
 
         assert_eq!(deleted, role_names(&own));
+    }
+
+    /// A GCP stack with a Daemon gets `daemon/heartbeat` (no GCP grants) in its management
+    /// profile. Binding the management roles must skip it and still install the Daemon's
+    /// real GCP grants.
+    #[tokio::test]
+    async fn binding_roles_for_a_stack_with_a_daemon_skips_sets_without_gcp_grants() {
+        let created_roles = Arc::new(Mutex::new(Vec::<String>::new()));
+        let written_policy = Arc::new(Mutex::new(None::<IamPolicy>));
+
+        let mut iam = MockIamApi::new();
+        iam.expect_get_role().returning(|name| {
+            Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "role".to_string(),
+                    resource_name: name,
+                },
+            ))
+        });
+        let created = created_roles.clone();
+        iam.expect_create_role().returning(move |role_id, request| {
+            created.lock().unwrap().push(role_id);
+            Ok(request.role)
+        });
+        let iam = Arc::new(iam);
+
+        let mut resource_manager = MockResourceManagerApi::new();
+        resource_manager
+            .expect_get_project_iam_policy()
+            .returning(|_, _| {
+                Ok(IamPolicy::builder()
+                    .version(3)
+                    .etag("initial-revision".to_string())
+                    .bindings(Vec::new())
+                    .build())
+            });
+        let written = written_policy.clone();
+        resource_manager
+            .expect_set_project_iam_policy()
+            .times(1)
+            .returning(move |_, policy, _| {
+                *written.lock().unwrap() = Some(policy.clone());
+                Ok(policy)
+            });
+        let resource_manager = Arc::new(resource_manager);
+
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_gcp_resource_manager_client()
+            .returning(move |_| Ok(resource_manager.clone()));
+
+        let mut controller = ready_management_controller("acme");
+        controller.state = GcpRemoteStackManagementState::BindingRole;
+        controller.role_bound = false;
+        let member = format!(
+            "serviceAccount:{}",
+            controller.service_account_email.as_ref().unwrap()
+        );
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .controller(controller)
+            .platform(Platform::Gcp)
+            .resource_prefix("acme")
+            .with_stack_resource(
+                alien_core::Daemon::new("probe".to_string())
+                    .code(alien_core::DaemonCode::Image {
+                        image: "registry.example.com/probe:1".to_string(),
+                    })
+                    .build(),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .expect("executor builds");
+
+        // The preflights put the Daemon's sets into the profile: the bug's precondition.
+        let global_ids: Vec<String> = executor.with_context(|ctx| {
+            ctx.desired_stack.management().profile().expect("profile").0["*"]
+                .iter()
+                .map(|reference| reference.id().to_string())
+                .collect()
+        });
+        assert!(global_ids.iter().any(|id| id == "daemon/heartbeat"));
+        assert!(global_ids.iter().any(|id| id == "daemon/provision"));
+
+        executor
+            .step()
+            .await
+            .expect("binding roles succeeds for a stack with a daemon");
+
+        let controller = executor
+            .internal_state::<GcpRemoteStackManagementController>()
+            .unwrap();
+        assert_eq!(
+            controller.state,
+            GcpRemoteStackManagementState::GrantingFederation
+        );
+        assert!(controller.role_bound);
+
+        // The roles the Daemon's provision grant needs, named exactly as this deployment names them.
+        let permission_context = executor
+            .with_context(|ctx| ResourcePermissionsHelper::gcp_permission_context(ctx))
+            .expect("permission context")
+            .with_service_account_name("acme-management".to_string());
+        let daemon_roles: Vec<String> = GcpRuntimePermissionsGenerator::new()
+            .generate_custom_roles(
+                get_permission_set("daemon/provision").unwrap(),
+                &permission_context,
+            )
+            .expect("daemon/provision has GCP roles")
+            .into_iter()
+            .map(|role| role.role_id)
+            .collect();
+        assert!(!daemon_roles.is_empty());
+
+        let created_roles = created_roles.lock().unwrap().clone();
+        let policy = written_policy
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("policy written");
+        let member_roles: Vec<&str> = policy
+            .bindings
+            .iter()
+            .filter(|binding| binding.members.contains(&member))
+            .map(|binding| binding.role.as_str())
+            .collect();
+        for role_id in &daemon_roles {
+            assert!(
+                created_roles.contains(role_id),
+                "{role_id} is created: {created_roles:?}"
+            );
+            assert!(
+                member_roles
+                    .iter()
+                    .any(|role| role.ends_with(&format!("/roles/{role_id}"))),
+                "management is bound to {role_id}: {member_roles:?}"
+            );
+        }
     }
 
     fn test_permission_context() -> PermissionContext {
