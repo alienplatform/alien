@@ -120,6 +120,9 @@ fn onboard_without_allow_is_refused_before_creating_a_link() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Pass --allow"), "{stderr}");
+    assert!(
+        stderr.contains("--allow is required when not running interactively"),
+        "{stderr}"
+    );
     link.assert_hits(0);
 }

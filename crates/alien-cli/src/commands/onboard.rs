@@ -123,6 +123,36 @@ fn parse_allowed_entry(
         .map_err(|_| "Enter an email address (jane@acme.com) or a domain (@acme.com)".to_string())
 }
 
+/// Parses one answer to the "who can open the link" prompt: entries separated by spaces, commas
+/// or semicolons, each an email address or an @domain.
+fn parse_allowed_answer(
+    answer: &str,
+) -> std::result::Result<Vec<CreateSetupLinkRequestAllowedItem>, String> {
+    let entries = answer
+        .split(|c: char| c.is_whitespace() || c == ',' || c == ';')
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| parse_allowed_entry(entry).map_err(|reason| format!("{entry}: {reason}")))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if entries.is_empty() {
+        return Err(
+            "Enter at least one email address (jane@acme.com) or domain (@acme.com)".to_string(),
+        );
+    }
+    Ok(entries)
+}
+
+/// Asks who may open the setup link until the answer holds only valid entries. There is no
+/// default: the list decides who can open the link.
+fn prompt_allowed() -> Result<Vec<CreateSetupLinkRequestAllowedItem>> {
+    loop {
+        let answer = prompt_text("Who can open the link (emails or @domains)", None)?;
+        match parse_allowed_answer(&answer) {
+            Ok(entries) => return Ok(entries),
+            Err(reason) => eprintln!("{reason}"),
+        }
+    }
+}
+
 pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
     let name = if let Some(ref name) = args.name {
         name.clone()
@@ -145,14 +175,17 @@ pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
 
 /// Platform mode: use Platform API directly to get deployment link.
 #[cfg(feature = "platform")]
-async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -> Result<()> {
+async fn onboard_platform(mut args: OnboardArgs, ctx: ExecutionMode, name: String) -> Result<()> {
     use alien_platform_api::SdkResultExt;
 
     if args.allowed.is_empty() && !args.airgapped {
-        return Err(AlienError::new(ErrorData::ValidationError {
-            field: "allow".to_string(),
-            message: "Pass --allow with each email (jane@acme.com) or domain (@acme.com) that may open the setup link, or --airgapped for an environment that can't reach your manager.".to_string(),
-        }));
+        if args.json || !can_prompt() {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "allow".to_string(),
+                message: "--allow is required when not running interactively. Pass --allow with each email (jane@acme.com) or domain (@acme.com) that may open the setup link, or --airgapped for an environment that can't reach your manager.".to_string(),
+            }));
+        }
+        args.allowed = prompt_allowed()?;
     }
 
     let setup_environment_variables = platform_setup_environment_variables(
@@ -1929,6 +1962,18 @@ fn customer_environment_name(display_name: &str) -> String {
 
 #[cfg(all(test, feature = "platform"))]
 mod tests {
+    #[test]
+    fn reads_who_can_open_the_link_from_one_answer() {
+        let entries = super::parse_allowed_answer(" Jane@Acme.com, @acme.com;ops@partner.io ")
+            .expect("valid answer");
+        let entries: Vec<&str> = entries.iter().map(|entry| entry.as_str()).collect();
+        assert_eq!(entries, ["jane@acme.com", "@acme.com", "ops@partner.io"]);
+
+        let refused = super::parse_allowed_answer("jane@acme.com bob@acme").unwrap_err();
+        assert!(refused.starts_with("bob@acme: "), "{refused}");
+        assert!(super::parse_allowed_answer("  ").is_err());
+    }
+
     use super::*;
     use serde_json::json;
 
