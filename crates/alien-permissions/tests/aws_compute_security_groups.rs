@@ -46,7 +46,6 @@ fn management_policy(cloudformation: bool, binding: BindingTarget) -> AwsIamPoli
     let context = PermissionContext::new()
         .with_stack_prefix("stack-a")
         .with_resource_name("compute")
-        .with_resource_id("compute")
         .with_aws_account_id("123456789012")
         .with_aws_region("us-west-2");
     let set = get_permission_set("compute-cluster/management").expect("permission set exists");

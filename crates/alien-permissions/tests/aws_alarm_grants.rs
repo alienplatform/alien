@@ -11,12 +11,13 @@ const OWN_ALARM: &str = "arn:aws:cloudwatch:us-east-1:123456789012:alarm:acme-ap
 // "acme-prod" is another deployment whose name starts with "acme-".
 const OTHER_ALARM: &str = "arn:aws:cloudwatch:us-east-1:123456789012:alarm:acme-prod-api-cpu";
 
-/// A resource's permission context as the management role's resource-scoped grants build it:
-/// the resource name is the prefixed name, the resource id is not.
+/// A resource's permission context. Its resource bindings name the resource by the variable
+/// their set already uses: `${resourceId}` (container, daemon) or `${resourceName}`
+/// (compute cluster, Postgres), both the bare resource id.
 fn context_for(stack: &str, resource: &str) -> PermissionContext {
     PermissionContext::new()
         .with_stack_prefix(stack)
-        .with_resource_name(format!("{stack}-{resource}"))
+        .with_resource_name(resource)
         .with_resource_id(resource)
         .with_managing_account_id("123456789012")
         .with_aws_account_id("123456789012")
@@ -344,6 +345,43 @@ fn a_resource_reaches_only_its_own_alarms() {
                 decide(Request::new("cloudwatch:DeleteAlarms", alarm).resource_tags(&own_tag)),
                 expected,
                 "{id} delete {alarm}"
+            );
+        }
+    }
+}
+
+/// An Auto Scaling group's CPU alarm is named after the group (`<prefix>-<cluster id>-<group>`,
+/// plus `-<domain>` for a group per domain), so the cluster's resource binding covers it, and
+/// stack "a" never reaches stack "a-prod"'s group alarms.
+#[test]
+fn a_compute_cluster_reaches_only_its_own_group_alarms() {
+    let own_tag = [(ALIEN_STACK_TAG_KEY, "a")];
+    let alarm = |name: &str| format!("arn:aws:cloudwatch:us-east-1:123456789012:alarm:{name}");
+    for id in ["compute-cluster/management", "compute-cluster/provision"] {
+        let statements =
+            alarm_statements_for(id, BindingTarget::Resource, &context_for("a", "compute"));
+        let decide = |request: Request| evaluate(&statements, &request);
+        for (name, expected) in [
+            ("a-compute-general-cpu", Decision::Allowed),
+            ("a-compute-general-us-east-1a-cpu", Decision::Allowed),
+            ("a-prod-compute-general-cpu", Decision::NotAllowed),
+            ("a-compute2-general-cpu", Decision::NotAllowed),
+        ] {
+            assert_eq!(
+                decide(
+                    Request::new("cloudwatch:PutMetricAlarm", &alarm(name))
+                        .request_tags(&own_tag)
+                        .resource_tags(&own_tag)
+                ),
+                expected,
+                "{id} put {name}"
+            );
+            assert_eq!(
+                decide(
+                    Request::new("cloudwatch:DeleteAlarms", &alarm(name)).resource_tags(&own_tag)
+                ),
+                expected,
+                "{id} delete {name}"
             );
         }
     }
