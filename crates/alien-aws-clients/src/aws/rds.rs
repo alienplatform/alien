@@ -904,6 +904,22 @@ mod tests {
     }
 
     #[test]
+    fn modify_cluster_form_resizes_and_copies_tags_in_one_request() {
+        let form = modify_db_cluster_form(&ModifyDbClusterRequest {
+            identifier: "stack-db".into(),
+            engine_version: None,
+            max_capacity: Some(4.0),
+            master_user_password: None,
+        });
+        assert_eq!(form["Action"], "ModifyDBCluster");
+        assert_eq!(form["DBClusterIdentifier"], "stack-db");
+        assert_eq!(form["ServerlessV2ScalingConfiguration.MaxCapacity"], "4");
+        assert_eq!(form["ServerlessV2ScalingConfiguration.MinCapacity"], "0");
+        assert_eq!(form["CopyTagsToSnapshot"], "true");
+        assert_eq!(form["ApplyImmediately"], "true");
+    }
+
+    #[test]
     fn delete_cluster_skips_final_snapshot() {
         let form = delete_db_cluster_form(&DeleteDbClusterRequest {
             identifier: "stack-db".into(),
