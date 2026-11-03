@@ -16,12 +16,12 @@ const FIPS_POLICY: &str = "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04";
 const FIPS_POLICIES: [&str; 2] = [FIPS_POLICY, "ELBSecurityPolicy-TLS13-1-2-FIPS-PQ-2025-09"];
 const ACCOUNT_PREFIX: &str = "arn:aws:elasticloadbalancing:us-west-2:123456789012";
 
-fn resolve_cloudformation(value: Value) -> Value {
+fn resolve_cloudformation(value: Value, stack: &str) -> Value {
     if let Some(template) = value.get("Fn::Sub") {
         let mut text = template.as_str().expect("string substitution").to_owned();
         for (key, replacement) in [
             ("AWS::Partition", "aws"),
-            ("AWS::StackName", "stack-a"),
+            ("AWS::StackName", stack),
             ("AWS::Region", "us-west-2"),
             ("AWS::AccountId", "123456789012"),
         ] {
@@ -31,20 +31,32 @@ fn resolve_cloudformation(value: Value) -> Value {
         return Value::String(text);
     }
     match value {
-        Value::Array(values) => values.into_iter().map(resolve_cloudformation).collect(),
+        Value::Array(values) => values
+            .into_iter()
+            .map(|value| resolve_cloudformation(value, stack))
+            .collect(),
         Value::Object(values) => values
             .into_iter()
-            .map(|(key, value)| (key, resolve_cloudformation(value)))
+            .map(|(key, value)| (key, resolve_cloudformation(value, stack)))
             .collect(),
         other => other,
     }
 }
 
 fn policy(set: &str, binding: BindingTarget, cloudformation: bool) -> AwsIamPolicy {
+    stack_policy(set, binding, cloudformation, "stack-a")
+}
+
+fn stack_policy(
+    set: &str,
+    binding: BindingTarget,
+    cloudformation: bool,
+    stack: &str,
+) -> AwsIamPolicy {
     let context = PermissionContext::new()
-        .with_stack_prefix("stack-a")
+        .with_stack_prefix(stack)
         .with_resource_id("api")
-        .with_resource_name("stack-a-api")
+        .with_resource_name(format!("{stack}-api"))
         .with_aws_account_id("123456789012")
         .with_aws_region("us-west-2");
     let set = get_permission_set(set).unwrap();
@@ -54,6 +66,7 @@ fn policy(set: &str, binding: BindingTarget, cloudformation: bool) -> AwsIamPoli
             .unwrap();
         serde_json::from_value(resolve_cloudformation(
             serde_json::to_value(rendered).unwrap(),
+            stack,
         ))
         .unwrap()
     } else {
@@ -309,5 +322,91 @@ fn container_provision_reaches_compacted_load_balancer_names_by_tag() {
             decision,
             "{stack}: CreateListener"
         );
+    }
+}
+
+// Stack names and resource prefixes can be dash-prefixes of each other: "a-prod-api-alb" matches
+// "a-*". Stack "a" must reach its own load balancer, listener and security group, and none of
+// stack "a-prod"'s.
+#[rstest]
+#[case::container_provision("container/provision", true)]
+#[case::daemon_provision("daemon/provision", true)]
+#[case::container_management("container/management", false)]
+fn a_stack_cannot_reach_a_stack_whose_name_it_prefixes(
+    #[case] set: &str,
+    #[case] provisions: bool,
+) {
+    let tags = |stack: &'static str| {
+        [
+            (ALIEN_STACK_TAG_KEY, stack),
+            (ALIEN_RESOURCE_TAG_KEY, "api"),
+            (ALIEN_MANAGED_BY_TAG_KEY, "runtime"),
+        ]
+    };
+    let requests = |owner: &'static str| {
+        let alb = format!("{ACCOUNT_PREFIX}:loadbalancer/app/{owner}-api-alb/50dc6c495c0c9188");
+        let listener = format!(
+            "{ACCOUNT_PREFIX}:listener/app/{owner}-api-alb/50dc6c495c0c9188/0123456789abcdef"
+        );
+        let create = || {
+            Request::new("elasticloadbalancing:CreateListener", alb.clone())
+                .resource_tags(&tags(owner))
+                .request_tags(&tags("a"))
+        };
+        [
+            (
+                "HTTPS CreateListener",
+                provisions,
+                create()
+                    .with("elasticloadbalancing:ListenerProtocol", "HTTPS")
+                    .with("elasticloadbalancing:SecurityPolicy", FIPS_POLICY),
+            ),
+            (
+                "HTTP CreateListener",
+                provisions,
+                create().with("elasticloadbalancing:ListenerProtocol", "HTTP"),
+            ),
+            (
+                "ModifyListener",
+                true,
+                Request::new("elasticloadbalancing:ModifyListener", listener)
+                    .resource_tags(&tags(owner))
+                    .with("elasticloadbalancing:SecurityPolicy", FIPS_POLICY),
+            ),
+            (
+                "AuthorizeSecurityGroupIngress",
+                provisions,
+                Request::new(
+                    "ec2:AuthorizeSecurityGroupIngress",
+                    "arn:aws:ec2:us-west-2:123456789012:security-group/sg-0123456789abcdef0",
+                )
+                .resource_tags(&tags(owner)),
+            ),
+        ]
+    };
+    for cloudformation in [false, true] {
+        for binding in [BindingTarget::Stack, BindingTarget::Resource] {
+            let statements = stack_policy(set, binding, cloudformation, "a").statement;
+            let label = format!("{set} {binding:?} cloudformation={cloudformation}");
+            for (call, granted, request) in requests("a") {
+                let expected = if granted {
+                    Decision::Allowed
+                } else {
+                    Decision::NotAllowed
+                };
+                assert_eq!(
+                    evaluate(&statements, &request),
+                    expected,
+                    "{label}: {call} on stack a's own resource"
+                );
+            }
+            for (call, _, request) in requests("a-prod") {
+                assert_eq!(
+                    evaluate(&statements, &request),
+                    Decision::NotAllowed,
+                    "{label}: {call} on stack a-prod's resource"
+                );
+            }
+        }
     }
 }
