@@ -327,6 +327,43 @@ fn host_access_cannot_have_a_cloud_identity() {
 }
 
 #[test]
+fn gate_errors() {
+    let gate = |input: &str| {
+        format!("{DAEMON}enabled-when = \"withAgent\"\n\n[input.withAgent]\n{input}\n")
+    };
+    assert_at(
+        &format!("{DAEMON}enabled-when = \"withAgent\"\n"),
+        5,
+        16,
+        "unknown input 'withAgent'; declare it with an [input.withAgent] table",
+    );
+    assert_at(
+        &gate("kind = \"string\"\nprovided-by = \"deployer\"\ndescription = \"x\""),
+        5,
+        16,
+        "input 'withAgent' must be a boolean",
+    );
+    assert_at(
+        &gate("kind = \"boolean\"\ndescription = \"x\""),
+        5,
+        16,
+        "input 'withAgent' must be provided by the deployer",
+    );
+    assert_at(
+        &gate("kind = \"boolean\"\nprovided-by = \"deployer\"\nrequired = false"),
+        5,
+        16,
+        "input 'withAgent' must be required or have a `default`",
+    );
+    assert_at(
+        &format!("{DAEMON}platforms = [\"aws\"]\nenabled-when = \"withAgent\"\n"),
+        6,
+        16,
+        "set `platforms` or `enabled-when`, not both",
+    );
+}
+
+#[test]
 fn env_file_errors() {
     let dir = tempfile::tempdir().unwrap();
     let missing = reject_in(dir.path(), &format!("{DAEMON}env-file = \"app.env\"\n"));

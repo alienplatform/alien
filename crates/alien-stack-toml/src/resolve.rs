@@ -144,15 +144,14 @@ impl Resolver<'_> {
                 }),
                 storage.lifecycle.unwrap_or(ResourceLifecycle::Frozen),
             );
-            if let Some(scope) = storage.platforms {
-                resource.enabled_when = Some(inputs.add_platform_gate(
-                    self,
-                    &id,
-                    "storage bucket",
-                    scope,
-                    platforms.as_deref(),
-                )?);
-            }
+            resource.enabled_when = inputs.gate(
+                self,
+                &id,
+                "storage bucket",
+                storage.platforms,
+                storage.enabled_when,
+                platforms.as_deref(),
+            )?;
             resources.insert(id.into_inner(), resource);
         }
 
@@ -186,15 +185,14 @@ impl Resolver<'_> {
                 }
             }
             let mut resource = entry(Resource::new(daemon.config), daemon.lifecycle);
-            if let Some(scope) = daemon.scope {
-                resource.enabled_when = Some(inputs.add_platform_gate(
-                    self,
-                    &id,
-                    "daemon",
-                    scope,
-                    platforms.as_deref(),
-                )?);
-            }
+            resource.enabled_when = inputs.gate(
+                self,
+                &id,
+                "daemon",
+                daemon.scope,
+                daemon.enabled_when,
+                platforms.as_deref(),
+            )?;
             for (key, secret) in daemon.secrets {
                 inputs.add_secret(self, id.get_ref(), key, secret, platforms.as_deref())?;
             }
@@ -570,6 +568,7 @@ impl Resolver<'_> {
             config,
             lifecycle: daemon.lifecycle.unwrap_or(ResourceLifecycle::Live),
             scope: daemon.platforms,
+            enabled_when: daemon.enabled_when,
             secrets,
             identity_with_host_access,
         })
@@ -951,6 +950,8 @@ struct ResolvedDaemon {
     lifecycle: ResourceLifecycle,
     /// The daemon's own `platforms`, if it is scoped.
     scope: Option<Spanned<Vec<Platform>>>,
+    /// The boolean input gating the daemon, if it names one.
+    enabled_when: Option<Spanned<String>>,
     secrets: Vec<(Spanned<String>, Spanned<document::Secret>)>,
     /// Where `permissions` is set on a daemon that also has `host-access`.
     identity_with_host_access: Option<Range<usize>>,
@@ -966,6 +967,49 @@ struct Inputs {
 }
 
 impl Inputs {
+    /// The input that gates a resource: one synthesized from `platforms`, or a declared
+    /// boolean named by `enabled-when`.
+    fn gate(
+        &mut self,
+        resolver: &Resolver<'_>,
+        resource_id: &Spanned<String>,
+        what: &str,
+        scope: Option<Spanned<Vec<Platform>>>,
+        enabled_when: Option<Spanned<String>>,
+        stack_platforms: Option<&[Platform]>,
+    ) -> Result<Option<String>> {
+        match (scope, enabled_when) {
+            (None, None) => Ok(None),
+            (Some(scope), None) => self
+                .add_platform_gate(resolver, resource_id, what, scope, stack_platforms)
+                .map(Some),
+            (Some(_), Some(enabled_when)) => Err(resolver.error(
+                enabled_when.span(),
+                "set `platforms` or `enabled-when`, not both; scope the gating input with its own `platforms`",
+            )),
+            (None, Some(enabled_when)) => {
+                let id = enabled_when.get_ref();
+                let reason = match self.definitions.get(id) {
+                    None => Some(format!("unknown input '{id}'; declare it with an [input.{id}] table")),
+                    Some(input) if input.kind != StackInputKind::Boolean => {
+                        Some(format!("input '{id}' must be a boolean to decide whether the {what} exists"))
+                    }
+                    Some(input) if !input.provided_by.contains(&StackInputProvider::Deployer) => Some(format!(
+                        "input '{id}' must be provided by the deployer (`provided-by = \"deployer\"`); otherwise setup never asks and the {what} is always created"
+                    )),
+                    Some(input) if !input.required && input.default.is_none() => Some(format!(
+                        "input '{id}' must be required or have a `default`, so whether the {what} exists is always decided"
+                    )),
+                    Some(_) => None,
+                };
+                match reason {
+                    Some(reason) => Err(resolver.error(enabled_when.span(), reason)),
+                    None => Ok(Some(enabled_when.into_inner())),
+                }
+            }
+        }
+    }
+
     /// Scopes a resource to platforms with a deployer boolean that only exists there.
     fn add_platform_gate(
         &mut self,

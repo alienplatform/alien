@@ -153,6 +153,14 @@
           ],
           "description": "CPU cores reserved for the daemon. Defaults to 0.1."
         },
+        "enabled-when": {
+          "default": null,
+          "description": "Create this daemon only when this deployer-provided boolean `[input.<id>]` is true. Set this or `platforms`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "endpoints": {
           "additionalProperties": {
             "$ref": "#/definitions/Endpoint"
@@ -238,7 +246,7 @@
         },
         "platforms": {
           "default": null,
-          "description": "Create this daemon only on these platforms.",
+          "description": "Create this daemon only on these platforms. On them, the deployer may still decline it.",
           "items": {
             "$ref": "#/definitions/Platform"
           },
@@ -901,6 +909,14 @@
       "additionalProperties": false,
       "description": "An object storage bucket.",
       "properties": {
+        "enabled-when": {
+          "default": null,
+          "description": "Create this bucket only when this deployer-provided boolean `[input.<id>]` is true. Set this or `platforms`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "lifecycle": {
           "anyOf": [
             {
@@ -915,7 +931,7 @@
         },
         "platforms": {
           "default": null,
-          "description": "Create this bucket only on these platforms.",
+          "description": "Create this bucket only on these platforms. On them, the deployer may still decline it.",
           "items": {
             "$ref": "#/definitions/Platform"
           },
