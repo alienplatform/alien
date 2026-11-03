@@ -97,7 +97,7 @@ fn eks_overlay_use_default_network_emits_az_filtered_default_vpc_subnets() {
     // `subnet_ids` from the account's default VPC. This regression test
     // exercises the active branch the prior snapshot tests don't:
     //
-    //   - aws_vpc.<label>_default { default = true }
+    //   - aws_vpcs.<label>_default filtered by is-default
     //   - aws_availability_zones.<label>_eks_supported {
     //       exclude_zone_ids = var.unsupported_availability_zone_ids
     //     }
@@ -144,8 +144,8 @@ fn eks_overlay_use_default_network_emits_az_filtered_default_vpc_subnets() {
 
     // The default VPC + AZ-filtered subnet data sources must be present.
     assert!(
-        rendered.contains("data \"aws_vpc\" \"default_network_default\""),
-        "expected `data aws_vpc default_network_default` block, got:\n{}",
+        rendered.contains("data \"aws_vpcs\" \"default_network_default\""),
+        "expected `data aws_vpcs default_network_default` block, got:\n{}",
         rendered
     );
     assert!(

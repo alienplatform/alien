@@ -220,6 +220,23 @@ fn calls_on_another_stack() -> Vec<Request> {
                 .request_tags(&[("deployment", "my-stack")]),
         );
     }
+    // Creating a cluster or instance inside the other stack's subnet group, parameter group or
+    // cluster, with this stack's tags on the request.
+    for resource in [
+        format!("{RDS}:subgrp:my-stack-prod-db-subnets"),
+        cluster_pg.clone(),
+    ] {
+        calls.push(
+            Request::new("rds:CreateDBCluster", resource)
+                .resource_tags(OTHER_STACK_TAGS)
+                .request_tags(SETUP_TAGS),
+        );
+    }
+    calls.push(
+        Request::new("rds:CreateDBInstance", cluster.clone())
+            .resource_tags(OTHER_STACK_TAGS)
+            .request_tags(SETUP_TAGS),
+    );
     // Handing an own object to another stack, or releasing it.
     calls.push(
         Request::new(

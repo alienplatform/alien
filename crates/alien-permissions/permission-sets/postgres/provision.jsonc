@@ -121,20 +121,45 @@
       {
         // Every create path (runtime controller, CloudFormation, Terraform) tags the cluster, subnet
         // group and cluster parameter group with the stack tag in the create request, so creates
-        // bind on the request tag.
-        "label": "create-aurora-resources",
-        "description": "Create the Aurora cluster, subnet group and cluster parameter group.",
+        // bind on the request tag. CreateDBCluster is also authorized against the subnet group and
+        // parameter group it names; this statement covers only the cluster, so those must carry
+        // this stack's tag (manage-aurora-resources), whatever tags the request sends.
+        "label": "create-aurora-cluster",
+        "description": "Create the Aurora cluster.",
         "grant": {
-          "actions": [
-            "rds:CreateDBCluster",
-            "rds:CreateDBSubnetGroup",
-            "rds:CreateDBClusterParameterGroup"
-          ]
+          "actions": ["rds:CreateDBCluster"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "create-aurora-groups",
+        "description": "Create the Aurora subnet group and cluster parameter group.",
+        "grant": {
+          "actions": ["rds:CreateDBSubnetGroup", "rds:CreateDBClusterParameterGroup"]
         },
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*",
               "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-*",
               "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-*"
             ],
@@ -146,7 +171,6 @@
           },
           "resource": {
             "resources": [
-              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}",
               "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-${resourceName}-*",
               "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-${resourceName}-*"
             ],

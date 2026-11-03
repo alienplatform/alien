@@ -621,15 +621,20 @@ if __name__ == '__main__':
     main()
 
 === default_network.tf ===
-data "aws_vpc" "default_network_default" {
-  default = true
+data "aws_vpcs" "default_network_default" {
+  filter {
+    name = "is-default"
+    values = [
+      "true"
+    ]
+  }
 }
 
 data "aws_subnets" "default_network_default" {
   filter {
     name = "vpc-id"
     values = [
-      data.aws_vpc.default_network_default.id
+      data.aws_vpcs.default_network_default.ids[0]
     ]
   }
 }
