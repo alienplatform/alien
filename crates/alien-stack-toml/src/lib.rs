@@ -59,10 +59,32 @@ pub fn parse(text: &str, file_name: &str, base_dir: &Path) -> Result<Stack> {
 }
 
 /// The JSON schema of `alien.toml`, for editor completion (Taplo, Even Better TOML).
+///
+/// Object keys are sorted, so the schema is the same whether or not serde_json's
+/// `preserve_order` feature is enabled in the build.
 pub fn json_schema() -> serde_json::Value {
     let mut schema = schemars::schema_for!(Document);
     schema.schema.metadata().id = Some("https://alien.dev/schemas/alien.toml.json".to_string());
-    serde_json::to_value(schema).expect("a JSON schema serializes")
+    sort_keys(serde_json::to_value(schema).expect("a JSON schema serializes"))
+}
+
+fn sort_keys(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(object) => {
+            let mut entries: Vec<_> = object.into_iter().collect();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            serde_json::Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, sort_keys(value)))
+                    .collect(),
+            )
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(sort_keys).collect())
+        }
+        other => other,
+    }
 }
 
 /// The parser's message without its own location prefix; ours replaces it.
