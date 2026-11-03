@@ -4,6 +4,8 @@
   "platforms": {
     "aws": [
       {
+        "label": "kv-provision",
+        "description": "Create, read, update and delete this stack's DynamoDB tables.",
         "grant": {
           "actions": [
             "dynamodb:CreateTable",
@@ -14,8 +16,6 @@
             "dynamodb:UpdateTimeToLive",
             "dynamodb:DescribeTimeToLive",
             "dynamodb:DescribeContinuousBackups",
-            "dynamodb:UpdateContinuousBackups",
-            "dynamodb:TagResource",
             "dynamodb:ListTagsOfResource"
           ]
         },
@@ -25,6 +25,37 @@
           },
           "resource": {
             "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"]
+          }
+        }
+      },
+      {
+        // Another stack's name can start with this stack's prefix. Where the account evaluates
+        // DynamoDB tag conditions, these keep that stack's tables out of reach: no retagging them
+        // and no changing their backups. IfExists keeps the grant working, as name-only, in
+        // accounts that evaluate them as if no tags are present (DynamoDB ABAC off).
+        "label": "tag-and-back-up-dynamodb-tables",
+        "description": "Tag this stack's DynamoDB tables and turn on their point-in-time recovery.",
+        "grant": {
+          "actions": ["dynamodb:TagResource", "dynamodb:UpdateContinuousBackups"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-*"],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
           }
         }
       }

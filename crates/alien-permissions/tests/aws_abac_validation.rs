@@ -576,6 +576,9 @@ fn aws_wildcard_resources_are_read_only_or_conditioned_unless_documented() {
     );
 }
 
+/// DynamoDB evaluates tag conditions as if no tags are present in accounts where its ABAC is
+/// off. Only IfExists operators pass there, so a DynamoDB grant may narrow by tag but must not
+/// depend on tags.
 #[test]
 fn dynamodb_permissions_do_not_depend_on_abac() {
     let dynamodb_sets = [
@@ -602,11 +605,21 @@ fn dynamodb_permissions_do_not_depend_on_abac() {
             .into_iter()
             .flatten()
             {
-                if has_condition_key(binding, "aws:ResourceTag/${stackTag}")
-                    || has_condition_key(binding, "aws:RequestTag/${stackTag}")
-                {
+                let depends_on_tags =
+                    binding
+                        .condition
+                        .iter()
+                        .flatten()
+                        .any(|(operator, values)| {
+                            !operator.ends_with("IfExists")
+                                && values.keys().any(|key| {
+                                    key == "aws:ResourceTag/${stackTag}"
+                                        || key == "aws:RequestTag/${stackTag}"
+                                })
+                        });
+                if depends_on_tags {
                     failures.push(format!(
-                        "{permission_set_id} uses DynamoDB tag conditions; add an AWS account preflight before relying on DynamoDB ABAC"
+                        "{permission_set_id} needs DynamoDB tag conditions to hold; use an IfExists operator or add an AWS account preflight before relying on DynamoDB ABAC"
                     ));
                 }
             }

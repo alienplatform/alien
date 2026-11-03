@@ -39,8 +39,9 @@ const POINT_IN_TIME_RECOVERY_ATTEMPTS: u32 = 12;
 /// Outcome of asking DynamoDB to turn on point-in-time recovery.
 enum PointInTimeRecoveryOutcome {
     Enabled,
-    /// DynamoDB does not find the table, as it can briefly after the table becomes ACTIVE.
-    TableNotFound,
+    /// DynamoDB cannot turn it on yet. For a short time after a table becomes ACTIVE it
+    /// answers `TableNotFoundException` or `ContinuousBackupsUnavailableException`.
+    NotReady,
     /// IAM denied the call, with AWS's message. Management roles installed before this grant
     /// lack it until their next setup update.
     Denied(String),
@@ -281,13 +282,20 @@ impl AwsKvController {
         // A new table starts with point-in-time recovery off, so there is nothing to read first.
         // Whatever the outcome, the table works without it, and the Ready heartbeat turns it on
         // or reports why it cannot.
-        match turn_on_point_in_time_recovery(client.as_ref(), &table_name, &config.id).await? {
-            PointInTimeRecoveryOutcome::Enabled => {}
-            PointInTimeRecoveryOutcome::TableNotFound => {
+        match turn_on_point_in_time_recovery(client.as_ref(), &table_name, &config.id).await {
+            Ok(PointInTimeRecoveryOutcome::Enabled | PointInTimeRecoveryOutcome::Denied(_)) => {}
+            Err(e) => {
+                warn!(
+                    table_name=%table_name,
+                    error=%e,
+                    "Could not turn on point-in-time recovery; the heartbeat tries again"
+                );
+            }
+            Ok(PointInTimeRecoveryOutcome::NotReady) => {
                 if self._internal_stay_count.unwrap_or_default() + 1
                     < POINT_IN_TIME_RECOVERY_ATTEMPTS
                 {
-                    debug!(table_name=%table_name, "Table not visible to UpdateContinuousBackups yet");
+                    debug!(table_name=%table_name, "Table not ready for UpdateContinuousBackups yet");
                     return Ok(HandlerAction::Stay {
                         max_times: None,
                         suggested_delay: Some(Duration::from_secs(5)),
@@ -295,11 +303,10 @@ impl AwsKvController {
                 }
                 warn!(
                     table_name=%table_name,
-                    "DynamoDB still does not find the table for UpdateContinuousBackups; \
-                     the heartbeat turns on point-in-time recovery"
+                    "DynamoDB is still not ready to turn on point-in-time recovery; the \
+                     heartbeat turns it on"
                 );
             }
-            PointInTimeRecoveryOutcome::Denied(_) => {}
         }
 
         Ok(HandlerAction::Continue {
@@ -683,8 +690,8 @@ fn may_manage_table(ctx: &ResourceControllerContext<'_>, resource_id: &str) -> b
             .is_some_and(|entry| entry.lifecycle == ResourceLifecycle::Frozen)
 }
 
-/// Turns on point-in-time recovery. Errors other than a missing table or an IAM denial are
-/// returned with context.
+/// Turns on point-in-time recovery. Errors other than a table that is not ready yet or an IAM
+/// denial are returned with context.
 async fn turn_on_point_in_time_recovery(
     client: &dyn DynamoDbApi,
     table_name: &str,
@@ -714,9 +721,10 @@ async fn turn_on_point_in_time_recovery(
             if matches!(
                 e.error,
                 Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-            ) =>
+            ) || dynamodb_error_code(&e).as_deref()
+                == Some("ContinuousBackupsUnavailableException") =>
         {
-            Ok(PointInTimeRecoveryOutcome::TableNotFound)
+            Ok(PointInTimeRecoveryOutcome::NotReady)
         }
         Err(e) => match access_denied_message(&e) {
             Some(aws_message) => {
@@ -740,9 +748,9 @@ async fn turn_on_point_in_time_recovery(
 }
 
 /// Reads point-in-time recovery and turns it on when it is off and runtime manages the table.
-/// Returns a warning when it stays off; the next heartbeat tries again.
+/// Returns a warning when it stays off or cannot be read; the next heartbeat tries again.
 ///
-/// A failed read is an error: the read grant has been in the heartbeat permissions from the
+/// A denied read is an error: the read grant has been in the heartbeat permissions from the
 /// start, so every management role has it. Turning it on is the newer grant, so a failure there
 /// only warns and never fails the heartbeat.
 async fn reconcile_point_in_time_recovery(
@@ -757,29 +765,36 @@ async fn reconcile_point_in_time_recovery(
                 .table_name(table_name.to_string())
                 .build(),
         )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!(
-                "Failed to read point-in-time recovery status of DynamoDB table '{}'",
-                table_name
-            ),
-            resource_id: Some(resource_id.to_string()),
-        })?;
-    if status.point_in_time_recovery_enabled() {
-        return Ok(None);
-    }
+        .await;
 
-    let (reason, message) = if !may_manage_table(ctx, resource_id) {
-        (
+    let (reason, message) = match status {
+        Ok(status) if status.point_in_time_recovery_enabled() => return Ok(None),
+        Err(e) if access_denied_message(&e).is_some() => {
+            return Err(e.context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to read point-in-time recovery status of DynamoDB table '{}'",
+                    table_name
+                ),
+                resource_id: Some(resource_id.to_string()),
+            }))
+        }
+        Err(e) => (
+            HeartbeatCollectionIssueReason::CollectionFailed,
+            format!(
+                "Failed to read point-in-time recovery for DynamoDB table '{}'; the next \
+                 heartbeat tries again. {}",
+                table_name, e
+            ),
+        ),
+        Ok(_) if !may_manage_table(ctx, resource_id) => (
             HeartbeatCollectionIssueReason::NotInstalled,
             format!(
                 "Point-in-time recovery is off for DynamoDB table '{}'. Setup owns this table; \
                  run a setup update to turn it on.",
                 table_name
             ),
-        )
-    } else {
-        match turn_on_point_in_time_recovery(client, table_name, resource_id).await {
+        ),
+        Ok(_) => match turn_on_point_in_time_recovery(client, table_name, resource_id).await {
             Ok(PointInTimeRecoveryOutcome::Enabled) => return Ok(None),
             Ok(PointInTimeRecoveryOutcome::Denied(aws_message)) => (
                 HeartbeatCollectionIssueReason::Forbidden,
@@ -790,11 +805,11 @@ async fn reconcile_point_in_time_recovery(
                     table_name, aws_message
                 ),
             ),
-            Ok(PointInTimeRecoveryOutcome::TableNotFound) => (
+            Ok(PointInTimeRecoveryOutcome::NotReady) => (
                 HeartbeatCollectionIssueReason::CollectionFailed,
                 format!(
-                    "Point-in-time recovery is off for DynamoDB table '{}': DynamoDB does not \
-                     find the table yet. The next heartbeat tries again.",
+                    "Point-in-time recovery is off for DynamoDB table '{}': DynamoDB is not \
+                     ready to turn it on yet. The next heartbeat tries again.",
                     table_name
                 ),
             ),
@@ -806,7 +821,7 @@ async fn reconcile_point_in_time_recovery(
                     table_name, e
                 ),
             ),
-        }
+        },
     };
 
     Ok(Some(HeartbeatCollectionIssue {
@@ -817,10 +832,8 @@ async fn reconcile_point_in_time_recovery(
     }))
 }
 
-/// AWS's message when IAM denied the call. The client reports expired or unknown credentials
-/// as access denied too; those are not a missing grant, so this looks for DynamoDB's
-/// `AccessDeniedException` in the response body.
-fn access_denied_message(error: &AlienError<CloudClientErrorData>) -> Option<String> {
+/// DynamoDB's error code and message from the response body in the error chain.
+fn dynamodb_error(error: &AlienError<CloudClientErrorData>) -> Option<(String, Option<String>)> {
     let contexts = std::iter::once(error.context.as_ref()).chain(
         std::iter::successors(error.source.as_deref(), |source| source.source.as_deref())
             .map(|source| source.context.as_ref()),
@@ -829,17 +842,31 @@ fn access_denied_message(error: &AlienError<CloudClientErrorData>) -> Option<Str
         let body = context.get("http_response_text")?.as_str()?;
         let body: serde_json::Value = serde_json::from_str(body).ok()?;
         let code = body.get("__type")?.as_str()?;
-        if code.rsplit('#').next() != Some("AccessDeniedException") {
-            return None;
-        }
-        let message = body.get("Message").or_else(|| body.get("message"));
-        Some(
-            message
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("access denied")
-                .to_string(),
-        )
+        let message = body
+            .get("Message")
+            .or_else(|| body.get("message"))
+            .and_then(serde_json::Value::as_str);
+        Some((
+            code.rsplit('#').next().unwrap_or(code).to_string(),
+            message.map(str::to_string),
+        ))
     })
+}
+
+fn dynamodb_error_code(error: &AlienError<CloudClientErrorData>) -> Option<String> {
+    dynamodb_error(error).map(|(code, _)| code)
+}
+
+/// AWS's message when IAM denied the call. The client reports expired or unknown credentials
+/// as access denied too; those are not a missing grant, so this looks for DynamoDB's
+/// `AccessDeniedException` in the response body.
+fn access_denied_message(error: &AlienError<CloudClientErrorData>) -> Option<String> {
+    match dynamodb_error(error)? {
+        (code, message) if code == "AccessDeniedException" => {
+            Some(message.unwrap_or_else(|| "access denied".to_string()))
+        }
+        _ => None,
+    }
 }
 
 fn emit_aws_dynamodb_kv_heartbeat(
@@ -969,6 +996,8 @@ mod tests {
     const AWS_MESSAGE: &str = "User: arn:aws:sts::123456789012:assumed-role/test-management/session is not authorized to perform: dynamodb:UpdateContinuousBackups on resource: arn:aws:dynamodb:us-east-1:123456789012:table/test-cache because no identity-based policy allows the dynamodb:UpdateContinuousBackups action";
     const DESCRIBE_DENIED: &str = r#"{"__type":"com.amazon.coral.service#AccessDeniedException","Message":"User: arn:aws:sts::123456789012:assumed-role/test-management/session is not authorized to perform: dynamodb:DescribeContinuousBackups on resource: arn:aws:dynamodb:us-east-1:123456789012:table/test-cache because no identity-based policy allows the dynamodb:DescribeContinuousBackups action"}"#;
     const TABLE_NOT_FOUND: &str = r#"{"__type":"com.amazonaws.dynamodb.v20120810#TableNotFoundException","message":"Table not found: test-cache"}"#;
+    /// Seen live right after a table became ACTIVE.
+    const BACKUPS_BEING_ENABLED: &str = r#"{"__type":"com.amazonaws.dynamodb.v20120810#ContinuousBackupsUnavailableException","message":"Backups are being enabled for the table: test-cache. Please retry later"}"#;
     const EXPIRED_TOKEN: &str = r#"{"__type":"com.amazon.coral.service#ExpiredTokenException","message":"The security token included in the request is expired"}"#;
 
     /// The error the real DynamoDB client returns when DynamoDB answers `body` with HTTP 400.
@@ -1187,10 +1216,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_waits_while_a_new_table_is_not_found() {
+    async fn create_waits_while_a_new_table_is_not_ready() {
         let not_found = client_error("UpdateContinuousBackups", TABLE_NOT_FOUND).await;
+        let being_enabled = client_error("UpdateContinuousBackups", BACKUPS_BEING_ENABLED).await;
         let table = Arc::new(Mutex::new(Table {
-            update_errors: vec![not_found.clone(), not_found],
+            update_errors: vec![not_found, being_enabled],
             ..Default::default()
         }));
         let mut executor = executor(
@@ -1360,6 +1390,62 @@ mod tests {
             executor.status()
         );
         assert_eq!(table.lock().unwrap().updates, 0);
+    }
+
+    fn service_unavailable() -> AlienError<CloudClientErrorData> {
+        AlienError::new(CloudClientErrorData::RemoteServiceUnavailable {
+            message: "We encountered an internal error. Please try again.".to_string(),
+        })
+    }
+
+    #[tokio::test]
+    async fn failed_read_keeps_the_table_running_and_warns() {
+        let table = Arc::new(Mutex::new(Table {
+            describe_error: Some(service_unavailable()),
+            ..Default::default()
+        }));
+        let mut executor = executor(
+            AwsKvController::mock_ready(TABLE),
+            table.clone(),
+            ResourceLifecycle::Live,
+        )
+        .await;
+
+        let warning = heartbeat_warning(&mut executor).await.unwrap();
+        assert!(
+            warning.starts_with(
+                "CollectionFailed: Failed to read point-in-time recovery for DynamoDB table \
+                 'test-cache'; the next heartbeat tries again."
+            ),
+            "{warning}"
+        );
+        assert_eq!(table.lock().unwrap().updates, 0);
+
+        table.lock().unwrap().describe_error = None;
+        assert_eq!(heartbeat_warning(&mut executor).await, None);
+        assert!(table.lock().unwrap().point_in_time_recovery);
+    }
+
+    #[tokio::test]
+    async fn failed_create_call_does_not_fail_the_create() {
+        let table = Arc::new(Mutex::new(Table {
+            update_errors: vec![service_unavailable()],
+            ..Default::default()
+        }));
+        let mut executor = executor(
+            AwsKvController::default(),
+            table.clone(),
+            ResourceLifecycle::Live,
+        )
+        .await;
+
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert!(executor.outputs().is_some());
+        assert!(!table.lock().unwrap().point_in_time_recovery);
+
+        assert_eq!(heartbeat_warning(&mut executor).await, None);
+        assert!(table.lock().unwrap().point_in_time_recovery);
     }
 
     #[tokio::test]
