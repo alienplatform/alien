@@ -578,9 +578,11 @@ fn aws_wildcard_resources_are_read_only_or_conditioned_unless_documented() {
 
 /// DynamoDB evaluates tag conditions as if no tags are present in accounts where its ABAC is
 /// off. Only IfExists operators pass there, so a DynamoDB grant may narrow by tag but must not
-/// depend on tags.
+/// depend on tags, except for calls whose denial the controller reports as a warning.
 #[test]
 fn dynamodb_permissions_do_not_depend_on_abac() {
+    let denial_only_warns = ["dynamodb:UpdateContinuousBackups"];
+
     let dynamodb_sets = [
         "kv/heartbeat",
         "kv/management",
@@ -617,7 +619,13 @@ fn dynamodb_permissions_do_not_depend_on_abac() {
                                         || key == "aws:RequestTag/${stackTag}"
                                 })
                         });
-                if depends_on_tags {
+                let only_warns = permission
+                    .grant
+                    .actions
+                    .iter()
+                    .flatten()
+                    .all(|action| denial_only_warns.contains(&action.as_str()));
+                if depends_on_tags && !only_warns {
                     failures.push(format!(
                         "{permission_set_id} needs DynamoDB tag conditions to hold; use an IfExists operator or add an AWS account preflight before relying on DynamoDB ABAC"
                     ));

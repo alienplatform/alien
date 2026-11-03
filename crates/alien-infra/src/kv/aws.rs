@@ -53,11 +53,17 @@ pub struct PointInTimeRecoveryDenial {
     /// release that changes them retries.
     pub management_permissions_revision: Option<String>,
     /// When it was denied. A CloudFormation or Terraform setup update that installs the grant
-    /// does not reach the controller, so the table asks again once a day.
+    /// does not reach the controller, so the table asks again on the next update at least a day
+    /// later.
     pub denied_at: chrono::DateTime<Utc>,
+    /// Denied during a setup run. A setup run asks again only for denials from outside one:
+    /// within a setup run the grants stay the same, and a later setup run that changes them
+    /// changes the management permissions revision.
+    #[serde(default)]
+    pub in_setup_run: bool,
 }
 
-/// How long after a denial a table asks for an update again.
+/// How long after a denial the next update asks again.
 const POINT_IN_TIME_RECOVERY_DENIAL_RECHECK: chrono::TimeDelta = chrono::TimeDelta::hours(24);
 
 /// Times a table is polled, 10 s apart, while DynamoDB prepares point-in-time recovery.
@@ -463,6 +469,9 @@ impl AwsKvController {
     // ─────────────── UPDATE FLOW ──────────────────────────────
     // KV has no mutable fields. An update recovers RefreshFailed and turns on point-in-time
     // recovery when it is off, such as on tables created by earlier code.
+    //
+    // It does not read first: management roles from earlier releases lack the read grant when
+    // heartbeats are off, and turning it on is idempotent.
     #[flow_entry(Update, from = [Ready, RefreshFailed])]
     #[handler(
         state = UpdateStart,
@@ -470,8 +479,7 @@ impl AwsKvController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        let config = ctx.desired_resource_config::<Kv>()?;
-        if !may_manage_table(ctx, &config.id) || self.read_point_in_time_recovery(ctx).await? {
+        if !self.should_request_point_in_time_recovery(ctx)? {
             return Ok(HandlerAction::Continue {
                 state: Ready,
                 suggested_delay: None,
@@ -683,19 +691,8 @@ impl AwsKvController {
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
-    /// Tables runtime manages ask for an update while point-in-time recovery is off. After a
-    /// denial they wait for a setup run, a release that changes the management permissions, or
-    /// a day, so a role without the grant is not asked again on every deployment step.
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
-        if self.point_in_time_recovery_enabled || !may_manage_table(ctx, ctx.desired_config.id()) {
-            return Ok(false);
-        }
-        match &self.point_in_time_recovery_denial {
-            None => Ok(true),
-            Some(denial) => Ok(ctx.deployment_config.setup_run
-                || Utc::now() - denial.denied_at >= POINT_IN_TIME_RECOVERY_DENIAL_RECHECK
-                || management_permissions_revision(ctx)? != denial.management_permissions_revision),
-        }
+        self.should_request_point_in_time_recovery(ctx)
     }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
@@ -762,6 +759,25 @@ impl AwsKvController {
         }
     }
 
+    /// Tables runtime manages ask for point-in-time recovery while it is off. After a denial
+    /// they wait for a setup run that did not record it, a release that changes the management
+    /// permissions, or an update at least a day later, so a role without the grant is not asked
+    /// again on every deployment step.
+    fn should_request_point_in_time_recovery(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<bool> {
+        if self.point_in_time_recovery_enabled || !may_manage_table(ctx, ctx.desired_config.id()) {
+            return Ok(false);
+        }
+        match &self.point_in_time_recovery_denial {
+            None => Ok(true),
+            Some(denial) => Ok((ctx.deployment_config.setup_run && !denial.in_setup_run)
+                || Utc::now() - denial.denied_at >= POINT_IN_TIME_RECOVERY_DENIAL_RECHECK
+                || management_permissions_revision(ctx)? != denial.management_permissions_revision),
+        }
+    }
+
     fn table_name(&self, resource_id: &str) -> Result<String> {
         self.table_name.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -822,6 +838,7 @@ impl AwsKvController {
                         message,
                         management_permissions_revision: management_permissions_revision(ctx)?,
                         denied_at: Utc::now(),
+                        in_setup_run: ctx.deployment_config.setup_run,
                     });
                     Ok(PointInTimeRecoveryRequest::Denied)
                 }
@@ -1349,6 +1366,35 @@ mod tests {
             .clone()
     }
 
+    /// Whether a deployment step updates the table with its config unchanged. Only the
+    /// executor's plan asks `needs_update`; a Running deployment that only refreshes never does.
+    fn plans_update(executor: &SingleControllerExecutor) -> bool {
+        let (mut stack, client_config, deployment_config, authority) =
+            executor.with_context(|ctx| {
+                (
+                    ctx.desired_stack.clone(),
+                    ctx.client_config.clone(),
+                    ctx.deployment_config.clone(),
+                    ctx.initial_setup_authority,
+                )
+            });
+        // The test executor's management resource is a stand-in that a setup run would always
+        // update, and its update would carry the table along. Only the table's own answer counts.
+        stack
+            .resources
+            .get_mut("cache")
+            .unwrap()
+            .dependencies
+            .clear();
+        let stack_executor = crate::core::StackExecutor::builder(&stack, client_config)
+            .deployment_config(&deployment_config)
+            .initial_setup_authority(authority)
+            .build()
+            .unwrap();
+        let plan = stack_executor.plan(executor.stack_state()).unwrap();
+        plan.updates.contains_key("cache")
+    }
+
     /// What the deployment executor does when `needs_update` holds: an update to the same config.
     async fn update(executor: &mut SingleControllerExecutor) -> Result<()> {
         executor.update(Kv::new("cache".to_string()).build())?;
@@ -1371,7 +1417,7 @@ mod tests {
         assert_eq!(table.lock().unwrap().updates, 1);
         assert!(table.lock().unwrap().point_in_time_recovery);
         assert!(saved(&executor).point_in_time_recovery_enabled);
-        assert!(!executor.needs_update().unwrap());
+        assert!(!plans_update(&executor));
         assert_eq!(heartbeat_warning(&mut executor).await, None);
         assert_eq!(table.lock().unwrap().updates, 1);
     }
@@ -1457,7 +1503,7 @@ mod tests {
             Some(denied_warning())
         );
         assert_eq!(table.lock().unwrap().updates, 1);
-        assert!(!executor.needs_update().unwrap());
+        assert!(!plans_update(&executor));
     }
 
     #[tokio::test]
@@ -1470,7 +1516,7 @@ mod tests {
         )
         .await;
 
-        assert!(executor.needs_update().unwrap());
+        assert!(plans_update(&executor));
         // The heartbeat only reads.
         assert_eq!(
             heartbeat_warning(&mut executor).await.as_deref(),
@@ -1486,12 +1532,12 @@ mod tests {
         assert_eq!(executor.status(), ResourceStatus::Running);
         assert_eq!(table.lock().unwrap().updates, 1);
         assert!(table.lock().unwrap().point_in_time_recovery);
-        assert!(!executor.needs_update().unwrap());
+        assert!(!plans_update(&executor));
         assert_eq!(heartbeat_warning(&mut executor).await, None);
     }
 
     #[tokio::test]
-    async fn update_only_reads_when_point_in_time_recovery_is_already_on() {
+    async fn update_of_a_table_already_on_only_confirms_it() {
         let table = Arc::new(Mutex::new(Table {
             point_in_time_recovery: true,
             ..Default::default()
@@ -1503,12 +1549,74 @@ mod tests {
         )
         .await;
 
-        assert!(executor.needs_update().unwrap());
+        assert!(plans_update(&executor));
         update(&mut executor).await.unwrap();
 
         assert_eq!(executor.status(), ResourceStatus::Running);
-        assert_eq!(table.lock().unwrap().updates, 0);
-        assert!(!executor.needs_update().unwrap());
+        assert_eq!(table.lock().unwrap().updates, 1);
+        assert!(!plans_update(&executor));
+    }
+
+    /// Management roles from earlier releases may lack the read grant too when heartbeats are
+    /// off. The update never reads before asking.
+    #[tokio::test]
+    async fn previous_role_without_the_read_grant_keeps_the_table_running() {
+        let read_denied = client_error("DescribeContinuousBackups", DESCRIBE_DENIED).await;
+        let denied = client_error("UpdateContinuousBackups", ACCESS_DENIED).await;
+        let table = Arc::new(Mutex::new(Table {
+            update_errors: vec![denied],
+            describe_error: Some(read_denied),
+            ..Default::default()
+        }));
+        let mut executor = executor(
+            saved_by_previous_version(),
+            table.clone(),
+            ResourceLifecycle::Live,
+        )
+        .await;
+
+        assert!(plans_update(&executor));
+        update(&mut executor).await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(table.lock().unwrap().updates, 1);
+        let denial = saved(&executor).point_in_time_recovery_denial.unwrap();
+        assert_eq!(denial.message, AWS_MESSAGE);
+        assert!(!plans_update(&executor));
+    }
+
+    /// Every step of a setup run plans again. A denial from the same setup run is not asked
+    /// again, since its grants do not change within it.
+    #[tokio::test]
+    async fn a_setup_run_does_not_ask_again_for_its_own_denial() {
+        let denied = client_error("UpdateContinuousBackups", ACCESS_DENIED).await;
+        let table = Arc::new(Mutex::new(Table {
+            update_errors: vec![denied],
+            ..Default::default()
+        }));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(Kv::new("cache".to_string()).build())
+            .controller(saved_by_previous_version())
+            .platform(Platform::Aws)
+            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+            .setup_run(true)
+            .service_provider(provider(table.clone()))
+            .build()
+            .await
+            .unwrap();
+
+        assert!(plans_update(&executor));
+        update(&mut executor).await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert!(
+            saved(&executor)
+                .point_in_time_recovery_denial
+                .unwrap()
+                .in_setup_run
+        );
+        assert!(!plans_update(&executor));
+        assert_eq!(table.lock().unwrap().updates, 1);
     }
 
     #[tokio::test]
@@ -1525,7 +1633,7 @@ mod tests {
         )
         .await;
 
-        assert!(executor.needs_update().unwrap());
+        assert!(plans_update(&executor));
         update(&mut executor).await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
         assert_eq!(table.lock().unwrap().updates, 1);
@@ -1534,7 +1642,7 @@ mod tests {
             Some(denied_warning())
         );
         // After the denied update, the same config has nothing to do.
-        assert!(!executor.needs_update().unwrap());
+        assert!(!plans_update(&executor));
 
         // A setup run asks again, and the role now has the grant.
         let mut executor = SingleControllerExecutor::builder()
@@ -1547,13 +1655,13 @@ mod tests {
             .build()
             .await
             .unwrap();
-        assert!(executor.needs_update().unwrap());
+        assert!(plans_update(&executor));
         update(&mut executor).await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
         assert_eq!(table.lock().unwrap().updates, 2);
         assert!(table.lock().unwrap().point_in_time_recovery);
         assert_eq!(saved(&executor).point_in_time_recovery_denial, None);
-        assert!(!executor.needs_update().unwrap());
+        assert!(!plans_update(&executor));
 
         executor.delete().unwrap();
         executor.run_until_terminal().await.unwrap();
@@ -1568,16 +1676,18 @@ mod tests {
             message: AWS_MESSAGE.to_string(),
             management_permissions_revision: Some("earlier-release".to_string()),
             denied_at: Utc::now(),
+            in_setup_run: false,
         });
         let executor = executor(controller, table, ResourceLifecycle::Live).await;
 
-        assert!(executor.needs_update().unwrap());
+        assert!(plans_update(&executor));
     }
 
     /// A CloudFormation or Terraform setup update installs the grant without reaching the
-    /// controller, so a denied table asks again a day later, and then turns it on.
+    /// controller, so the next update at least a day after a denial asks again, and then turns
+    /// it on.
     #[tokio::test]
-    async fn a_denied_table_asks_again_a_day_later() {
+    async fn the_next_update_a_day_after_a_denial_asks_again() {
         let denied = client_error("UpdateContinuousBackups", ACCESS_DENIED).await;
         let table = Arc::new(Mutex::new(Table {
             update_errors: vec![denied],
@@ -1590,20 +1700,39 @@ mod tests {
         )
         .await;
         update(&mut first).await.unwrap();
-        assert!(!first.needs_update().unwrap());
+        assert!(!plans_update(&first));
 
-        let mut controller = saved(&first);
-        let denial = controller.point_in_time_recovery_denial.as_mut().unwrap();
-        denial.denied_at -= POINT_IN_TIME_RECOVERY_DENIAL_RECHECK;
-        let mut executor = executor(controller, table.clone(), ResourceLifecycle::Live).await;
+        let denied_before = |age: chrono::TimeDelta| {
+            let mut controller = saved(&first);
+            controller
+                .point_in_time_recovery_denial
+                .as_mut()
+                .unwrap()
+                .denied_at -= age;
+            controller
+        };
+        let earlier = executor(
+            denied_before(POINT_IN_TIME_RECOVERY_DENIAL_RECHECK - chrono::TimeDelta::minutes(5)),
+            table.clone(),
+            ResourceLifecycle::Live,
+        )
+        .await;
+        assert!(!plans_update(&earlier));
 
-        assert!(executor.needs_update().unwrap());
+        let mut executor = executor(
+            denied_before(POINT_IN_TIME_RECOVERY_DENIAL_RECHECK),
+            table.clone(),
+            ResourceLifecycle::Live,
+        )
+        .await;
+
+        assert!(plans_update(&executor));
         update(&mut executor).await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
         assert_eq!(table.lock().unwrap().updates, 2);
         assert!(table.lock().unwrap().point_in_time_recovery);
         assert_eq!(saved(&executor).point_in_time_recovery_denial, None);
-        assert!(!executor.needs_update().unwrap());
+        assert!(!plans_update(&executor));
     }
 
     #[tokio::test]
@@ -1715,7 +1844,7 @@ mod tests {
             "{warning}"
         );
         assert_eq!(table.lock().unwrap().updates, 0);
-        assert!(!executor.needs_update().unwrap());
+        assert!(!plans_update(&executor));
     }
 
     /// A direct setup owns a Frozen table too, but changes it only during a setup run.
@@ -1734,7 +1863,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            assert_eq!(executor.needs_update().unwrap(), setup_run);
+            assert_eq!(plans_update(&executor), setup_run);
         }
     }
 
@@ -1748,7 +1877,7 @@ mod tests {
         )
         .await;
 
-        assert!(!executor.needs_update().unwrap());
+        assert!(!plans_update(&executor));
         assert_eq!(
             heartbeat_warning(&mut executor).await.as_deref(),
             Some(
@@ -1756,7 +1885,7 @@ mod tests {
                  Setup owns this table; run a setup update to turn it on."
             )
         );
-        assert!(!executor.needs_update().unwrap());
+        assert!(!plans_update(&executor));
         update(&mut executor).await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
         assert_eq!(table.lock().unwrap().updates, 0);

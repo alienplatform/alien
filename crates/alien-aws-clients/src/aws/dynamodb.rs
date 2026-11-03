@@ -468,8 +468,7 @@ impl DynamoDbApi for DynamoDbClient {
                 ),
             },
         )?;
-        // A 4xx answer (denied, table not found) is final; the KV heartbeat calls this every
-        // cycle and retries on its own.
+        // A 4xx answer (denied, table not found) is final; the caller decides when to ask again.
         self.send_json_retrying_when(
             "DynamoDB_20120810.UpdateContinuousBackups",
             Some(body),
@@ -492,8 +491,7 @@ impl DynamoDbApi for DynamoDbClient {
                 ),
             },
         )?;
-        // A 4xx answer (denied, table not found) is final; the KV heartbeat calls this every
-        // cycle and retries on its own.
+        // A 4xx answer (denied, table not found) is final; the caller decides when to ask again.
         self.send_json_retrying_when(
             "DynamoDB_20120810.DescribeContinuousBackups",
             Some(body),

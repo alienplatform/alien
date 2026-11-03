@@ -21,15 +21,19 @@ const RESOURCE_TABLE: &str = "arn:aws:dynamodb:us-east-1:123456789012:table/my-s
 const PREFIX_SHARING_TABLE: &str =
     "arn:aws:dynamodb:us-east-1:123456789012:table/my-stack-prod-cache";
 
-fn kv_provision(target: BindingTarget) -> Vec<AwsIamStatement> {
+fn rendered(permission_set: &str, target: BindingTarget) -> Vec<AwsIamStatement> {
     AwsRuntimePermissionsGenerator::new()
         .generate_policy(
-            get_permission_set("kv/provision").unwrap(),
+            get_permission_set(permission_set).unwrap(),
             target,
             &common::create_test_context(),
         )
         .unwrap()
         .statement
+}
+
+fn kv_provision(target: BindingTarget) -> Vec<AwsIamStatement> {
+    rendered("kv/provision", target)
 }
 
 fn tagged(action: &'static str, table: &str, stack: Option<&str>) -> Request {
@@ -143,4 +147,46 @@ fn kv_provision_tags_new_tables_but_cannot_retag_another_stacks_table() {
         tag(STACK_TABLE, None, &[(ALIEN_STACK_TAG_KEY, "other-stack")]),
         Decision::NotAllowed
     );
+}
+
+// Stacks with automatic setup attach kv/management to the management role. It may change only
+// tables tagged for this stack: a stack whose name starts with this stack's prefix keeps its
+// backups, even where DynamoDB does not evaluate tag conditions (then the call is denied and
+// the controller warns).
+#[test]
+fn kv_management_turns_on_point_in_time_recovery_only_on_tables_tagged_for_the_stack() {
+    for (target, own_table) in [
+        (BindingTarget::Stack, STACK_TABLE),
+        (BindingTarget::Resource, RESOURCE_TABLE),
+    ] {
+        let statements = rendered("kv/management", target);
+        let update = |table: &str, stack: Option<&str>| {
+            evaluate(
+                &statements,
+                &tagged("dynamodb:UpdateContinuousBackups", table, stack),
+            )
+        };
+        assert_eq!(update(own_table, Some("my-stack")), Decision::Allowed);
+        assert_eq!(update(own_table, Some("other-stack")), Decision::NotAllowed);
+        assert_eq!(update(own_table, None), Decision::NotAllowed);
+        assert_eq!(
+            update(PREFIX_SHARING_TABLE, Some("my-stack-prod")),
+            Decision::NotAllowed
+        );
+        assert_eq!(
+            update(
+                "arn:aws:dynamodb:us-east-1:210987654321:table/my-stack-cache",
+                Some("my-stack")
+            ),
+            Decision::NotAllowed
+        );
+        // Reading stays bound by name.
+        assert_eq!(
+            evaluate(
+                &statements,
+                &tagged("dynamodb:DescribeContinuousBackups", own_table, None)
+            ),
+            Decision::Allowed
+        );
+    }
 }
