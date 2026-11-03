@@ -1,0 +1,689 @@
+{
+  "$id": "https://alien.dev/schemas/alien.toml.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "Architecture": {
+      "description": "CPU architecture.",
+      "enum": [
+        "arm64",
+        "x86_64"
+      ],
+      "type": "string"
+    },
+    "Autoscale": {
+      "additionalProperties": false,
+      "description": "Autoscaling bounds.",
+      "properties": {
+        "max": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Choice"
+            }
+          ],
+          "description": "Most machines: a number, or a range each deployment picks from."
+        },
+        "min": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Choice"
+            }
+          ],
+          "description": "Fewest machines: a number, or a range each deployment picks from."
+        }
+      },
+      "required": [
+        "max",
+        "min"
+      ],
+      "type": "object"
+    },
+    "Build": {
+      "additionalProperties": false,
+      "description": "How to build a daemon from source.",
+      "properties": {
+        "rust": {
+          "description": "Name of the Rust binary to build with Cargo.",
+          "type": "string"
+        },
+        "src": {
+          "default": null,
+          "description": "Source directory, relative to where `alien` runs. Defaults to \".\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "rust"
+      ],
+      "type": "object"
+    },
+    "Choice": {
+      "anyOf": [
+        {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        {
+          "$ref": "#/definitions/ChoiceRange"
+        }
+      ],
+      "description": "A count: one number, or a range a deployment picks from."
+    },
+    "ChoiceRange": {
+      "additionalProperties": false,
+      "description": "A range a deployment picks from; `default` applies when it does not pick.",
+      "properties": {
+        "default": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "min": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "default",
+        "max",
+        "min"
+      ],
+      "type": "object"
+    },
+    "Cpu": {
+      "anyOf": [
+        {
+          "format": "int64",
+          "type": "integer"
+        },
+        {
+          "format": "double",
+          "type": "number"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "CPU cores: a number such as 2 or 0.5, or a quantity string such as \"500m\"."
+    },
+    "Daemon": {
+      "additionalProperties": false,
+      "description": "A daemon: a long-running process on every machine of its pool.",
+      "properties": {
+        "build": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Build"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Build the daemon from source, for example `{ rust = \"acme-agent\" }`. Set this or `image`."
+        },
+        "command": {
+          "default": null,
+          "description": "Command to run instead of the image's default.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "cpu": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Cpu"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "CPU cores reserved for the daemon. Defaults to 0.1."
+        },
+        "endpoints": {
+          "additionalProperties": {
+            "$ref": "#/definitions/Endpoint"
+          },
+          "description": "Public HTTP endpoints, by name.",
+          "type": "object"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Environment variables. These win over `env-file`.",
+          "type": "object"
+        },
+        "env-file": {
+          "default": null,
+          "description": "A file of `KEY=value` lines, relative to alien.toml, read when the stack is loaded.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "health": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Health"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "HTTP health check."
+        },
+        "host-access": {
+          "default": false,
+          "description": "Full access to the host: privileged, the host's PID namespace and network, the host's `/` mounted at `/host`, running as root (uid 0).",
+          "type": "boolean"
+        },
+        "image": {
+          "default": null,
+          "description": "Run a prebuilt container image. Set this or `build`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lifecycle": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceLifecycle"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Who owns the daemon after setup. Defaults to \"live\" (each release updates it)."
+        },
+        "links": {
+          "default": [],
+          "description": "Resources this daemon uses, by ID.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "memory": {
+          "default": null,
+          "description": "Memory reserved for the daemon, for example \"4Gi\". Defaults to \"128Mi\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "platforms": {
+          "default": null,
+          "description": "Create this daemon only on these platforms.",
+          "items": {
+            "$ref": "#/definitions/Platform"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "pool": {
+          "default": null,
+          "description": "Pool to run on. Omit to run on every pool.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "secrets": {
+          "additionalProperties": {
+            "$ref": "#/definitions/Secret"
+          },
+          "description": "Secrets the developer provides, by environment variable name.",
+          "type": "object"
+        },
+        "stop-grace-period": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How long the daemon may take to stop on updates, drains and deletes: seconds, or a duration such as \"10m\" or \"24h\". At most 24 hours."
+        }
+      },
+      "type": "object"
+    },
+    "DataDisk": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/DataDiskRange"
+        }
+      ],
+      "description": "A data disk size: one size, or a range a deployment picks from."
+    },
+    "DataDiskRange": {
+      "additionalProperties": false,
+      "description": "Data disk sizes a deployment picks from, as quantities such as \"50Gi\" or \"1Ti\".",
+      "properties": {
+        "default": {
+          "type": "string"
+        },
+        "max": {
+          "type": "string"
+        },
+        "min": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "default",
+        "max",
+        "min"
+      ],
+      "type": "object"
+    },
+    "Duration": {
+      "anyOf": [
+        {
+          "format": "int64",
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "A duration: whole seconds, or a string such as \"90s\", \"10m\" or \"24h\"."
+    },
+    "Endpoint": {
+      "additionalProperties": false,
+      "description": "A public HTTP endpoint.",
+      "properties": {
+        "host": {
+          "default": null,
+          "description": "Host label under the deployment's domain. \"@\" is the domain itself. Defaults to the endpoint name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "port": {
+          "description": "Port the daemon serves on.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "wildcard": {
+          "default": false,
+          "description": "Also route every subdomain of the host label.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "port"
+      ],
+      "type": "object"
+    },
+    "Gpu": {
+      "additionalProperties": false,
+      "description": "A GPU requirement.",
+      "properties": {
+        "count": {
+          "description": "Number of GPUs per machine.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "type": {
+          "description": "GPU model, for example \"nvidia-l4\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "count",
+        "type"
+      ],
+      "type": "object"
+    },
+    "Health": {
+      "additionalProperties": false,
+      "description": "An HTTP health check.",
+      "properties": {
+        "failure-threshold": {
+          "default": null,
+          "description": "Consecutive failures before the daemon counts as unhealthy. Defaults to 3.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "method": {
+          "default": null,
+          "description": "HTTP method. Defaults to \"GET\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "default": null,
+          "description": "Path to check. Defaults to \"/health\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "port": {
+          "description": "Port to check.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "timeout": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How long one check may take: seconds, or a duration such as \"2s\". Defaults to 1 second."
+        }
+      },
+      "required": [
+        "port"
+      ],
+      "type": "object"
+    },
+    "Platform": {
+      "description": "Represents the target cloud platform.",
+      "enum": [
+        "aws",
+        "gcp",
+        "azure",
+        "kubernetes",
+        "machines",
+        "local"
+      ],
+      "type": "string"
+    },
+    "Pool": {
+      "additionalProperties": false,
+      "description": "A machine pool. On machines deployments the pool name is what `join --capacity-group` takes.",
+      "properties": {
+        "arch": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Architecture"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "CPU architecture of the machines."
+        },
+        "autoscale": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Autoscale"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Autoscale between a minimum and a maximum number of machines. Set this or `machines`."
+        },
+        "cpu": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Cpu"
+            }
+          ],
+          "description": "CPU cores each machine needs, for example 4."
+        },
+        "data-disk": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DataDisk"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "An extra empty block device each machine must provide: one size such as \"1Ti\", or a range each deployment picks from, `{ min = \"0Gi\", default = \"200Gi\", max = \"4Ti\" }`."
+        },
+        "disk": {
+          "default": null,
+          "description": "Size of the disk holding the operating system. Defaults to \"20Gi\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failure-domain-spread": {
+          "default": null,
+          "description": "How many failure domains (zones) the pool's machines spread across, 1 to 255.",
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "gpu": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Gpu"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A GPU each machine needs."
+        },
+        "machines": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Choice"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A fixed number of machines: `2`, or a range each deployment picks from, `{ min = 1, max = 5, default = 2 }`. Set this or `autoscale`."
+        },
+        "memory": {
+          "description": "Memory each machine needs, for example \"16Gi\".",
+          "type": "string"
+        },
+        "nested-virtualization": {
+          "default": null,
+          "description": "Whether machines must support nested virtualization (to run VMs inside them).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cpu",
+        "memory"
+      ],
+      "type": "object"
+    },
+    "ResourceLifecycle": {
+      "description": "Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.",
+      "oneOf": [
+        {
+          "description": "Frozen resources are owned by setup. Setup creates, updates, and deletes them. Alien may heartbeat them and may run explicit management operations when setup granted management permissions.",
+          "enum": [
+            "frozen"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Live resources are owned by Alien. Alien creates, updates, deletes, and replaces them after setup, so Live resources require provision permissions.",
+          "enum": [
+            "live"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "Secret": {
+      "additionalProperties": false,
+      "description": "A secret the developer provides; it reaches the daemon as an environment variable.",
+      "properties": {
+        "description": {
+          "default": null,
+          "description": "What the secret is for.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "default": null,
+          "description": "Shown where the value is asked for. Defaults to the variable name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "platforms": {
+          "default": null,
+          "description": "Ask for the secret only on these platforms.",
+          "items": {
+            "$ref": "#/definitions/Platform"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "required": {
+          "default": null,
+          "description": "Whether a deployment needs a value. Defaults to true.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Storage": {
+      "additionalProperties": false,
+      "description": "An object storage bucket.",
+      "properties": {
+        "lifecycle": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceLifecycle"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Who owns the bucket. Defaults to \"frozen\" (setup creates it)."
+        },
+        "platforms": {
+          "default": null,
+          "description": "Create this bucket only on these platforms.",
+          "items": {
+            "$ref": "#/definitions/Platform"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "public-read": {
+          "default": false,
+          "description": "Allow anyone to read objects without credentials.",
+          "type": "boolean"
+        },
+        "versioning": {
+          "default": false,
+          "description": "Keep previous versions of overwritten objects.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "description": "A stack written as `alien.toml`.\n\nIt describes the same resources as an `alien.ts` file and resolves to the same stack.",
+  "properties": {
+    "cluster": {
+      "default": null,
+      "description": "ID of the compute cluster that holds the pools. Defaults to \"compute\". Set it when moving an existing stack to alien.toml so its cluster keeps its ID.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "daemon": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Daemon"
+      },
+      "description": "Daemons: one process on every machine of their pool.",
+      "type": "object"
+    },
+    "name": {
+      "description": "Stack name. Letters, digits, hyphens and underscores, up to 128 characters.",
+      "type": "string"
+    },
+    "platforms": {
+      "default": null,
+      "description": "Platforms this stack can be deployed to. Omit to allow every platform.",
+      "items": {
+        "$ref": "#/definitions/Platform"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "pool": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Pool"
+      },
+      "description": "Machine pools: what hardware each pool's machines need and how many run.",
+      "type": "object"
+    },
+    "storage": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Storage"
+      },
+      "description": "Object storage buckets.",
+      "type": "object"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "title": "alien.toml",
+  "type": "object"
+}
