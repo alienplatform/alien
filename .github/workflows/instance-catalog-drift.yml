@@ -1,0 +1,66 @@
+name: Instance Catalog Drift
+
+# Regenerates the instance catalog from the clouds' machine APIs and fails when the committed
+# catalog no longer matches, for example when a provider corrects a size's memory or GPU. A
+# failed run is the alert: rerun the generator locally and commit the result.
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: Instance catalog matches the clouds
+    # GitHub's Ubuntu image ships the aws, gcloud and az CLIs the generator calls.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: e2e-tests
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.TEST_AWS_TARGET_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TEST_AWS_TARGET_SECRET_ACCESS_KEY }}
+    steps:
+      - name: Mask non-secret infrastructure identifiers
+        run: echo "::add-mask::${{ vars.TEST_GCP_TARGET_3_PROJECT_ID }}"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Sign in to the clouds
+        env:
+          # gcp-target-3 is the cloud tests' default GCP target.
+          GCP_PROJECT_ID: ${{ vars.TEST_GCP_TARGET_3_PROJECT_ID }}
+          GCP_SA_KEY: ${{ secrets.TEST_GCP_TARGET_3_SA_KEY }}
+          AZURE_CLIENT_ID: ${{ secrets.TEST_AZURE_TARGET_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.TEST_AZURE_TARGET_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.TEST_AZURE_TARGET_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.TEST_AZURE_TARGET_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          # Not a secret, so nothing masks it, and CLI errors print it into this public log.
+          account_id=$(aws sts get-caller-identity --query Account --output text)
+          echo "::add-mask::$account_id"
+
+          key_file="$RUNNER_TEMP/gcp-key.json"
+          printf '%s' "$GCP_SA_KEY" > "$key_file"
+          gcloud auth activate-service-account --key-file="$key_file"
+          # The generator lists GCP machine types in the CLI's current project.
+          gcloud config set project "$GCP_PROJECT_ID"
+
+          az login --service-principal --username "$AZURE_CLIENT_ID" \
+            --password "$AZURE_CLIENT_SECRET" --tenant "$AZURE_TENANT_ID" --output none
+          az account set --subscription "$AZURE_SUBSCRIPTION_ID"
+
+      - name: Regenerate the catalog
+        run: python3 scripts/instance-catalog/generate.py
+
+      - name: Compare with the committed catalog
+        run: |
+          if ! git diff --quiet; then
+            git diff --stat
+            git diff
+            echo "::error title=Instance catalog drift::the clouds no longer match the committed catalog; run python3 scripts/instance-catalog/generate.py and commit the result"
+            exit 1
+          fi

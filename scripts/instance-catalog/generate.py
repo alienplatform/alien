@@ -43,8 +43,11 @@ AWS_SIZE = r"(?:nano|micro|small|medium|large|\d*xlarge)"
 
 
 def run(command):
-    output = subprocess.run(command, check=True, capture_output=True, text=True).stdout
-    machines = json.loads(output)
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"{' '.join(command)} exited with {result.returncode}:\n"
+                           f"{result.stderr.strip()}")
+    machines = json.loads(result.stdout)
     if not machines:
         raise RuntimeError(f"{' '.join(command)} returned no machines")
     return machines
