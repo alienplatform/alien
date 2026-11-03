@@ -12,6 +12,7 @@ members = [
   "crates/alien-worker-runtime",
   "crates/alien-infra",
   "crates/alien-core",
+  "crates/alien-stack-toml",
   "crates/alien-build",
   "crates/alien-test-app",
   "crates/alien-macros",
@@ -96,6 +97,7 @@ alien-sdk = { path = "crates/alien-sdk", version = "3.3.57", default-features = 
 alien-worker-runtime = { path = "crates/alien-worker-runtime", version = "3.3.57", default-features = false }
 dockdash = { git = "https://github.com/alienplatform/dockdash", rev = "fd4f517312a56b329f3bdb08ff32685aeacd73b3" }
 alien-core = { path = "crates/alien-core", version = "3.3.57" }
+alien-stack-toml = { path = "crates/alien-stack-toml", version = "3.3.57" }
 alien-infra = { path = "crates/alien-infra", version = "3.3.57" }
 alien-build = { path = "crates/alien-build", version = "3.3.57" }
 alien-macros = { path = "crates/alien-macros", version = "3.3.57" }
