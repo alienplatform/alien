@@ -1,0 +1,272 @@
+mod iam_policy;
+
+use alien_core::{ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY};
+use alien_permissions::{
+    generators::{
+        AwsCloudFormationPermissionsGenerator, AwsIamPolicy, AwsRuntimePermissionsGenerator,
+    },
+    get_permission_set, BindingTarget, PermissionContext,
+};
+use iam_policy::{evaluate, Decision, Request};
+use rstest::rstest;
+use serde_json::Value;
+
+const FIPS_POLICY: &str = "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04";
+const ACCOUNT_PREFIX: &str = "arn:aws:elasticloadbalancing:us-west-2:123456789012";
+
+fn resolve_cloudformation(value: Value) -> Value {
+    if let Some(template) = value.get("Fn::Sub") {
+        let mut text = template.as_str().expect("string substitution").to_owned();
+        for (key, replacement) in [
+            ("AWS::Partition", "aws"),
+            ("AWS::StackName", "stack-a"),
+            ("AWS::Region", "us-west-2"),
+            ("AWS::AccountId", "123456789012"),
+        ] {
+            text = text.replace(&format!("${{{key}}}"), replacement);
+        }
+        assert!(!text.contains("${"), "unresolved substitution: {text}");
+        return Value::String(text);
+    }
+    match value {
+        Value::Array(values) => values.into_iter().map(resolve_cloudformation).collect(),
+        Value::Object(values) => values
+            .into_iter()
+            .map(|(key, value)| (key, resolve_cloudformation(value)))
+            .collect(),
+        other => other,
+    }
+}
+
+fn policy(set: &str, binding: BindingTarget, cloudformation: bool) -> AwsIamPolicy {
+    let context = PermissionContext::new()
+        .with_stack_prefix("stack-a")
+        .with_resource_id("api")
+        .with_resource_name("stack-a-api")
+        .with_aws_account_id("123456789012")
+        .with_aws_region("us-west-2");
+    let set = get_permission_set(set).unwrap();
+    if cloudformation {
+        let rendered = AwsCloudFormationPermissionsGenerator::new()
+            .generate_policy(set, binding, &context.with_stack_prefix(""))
+            .unwrap();
+        serde_json::from_value(resolve_cloudformation(
+            serde_json::to_value(rendered).unwrap(),
+        ))
+        .unwrap()
+    } else {
+        AwsRuntimePermissionsGenerator::new()
+            .generate_policy(set, binding, &context)
+            .unwrap()
+    }
+}
+
+fn tags(stack: &'static str) -> [(&'static str, &'static str); 3] {
+    [
+        (ALIEN_STACK_TAG_KEY, stack),
+        (ALIEN_RESOURCE_TAG_KEY, "api"),
+        (ALIEN_MANAGED_BY_TAG_KEY, "runtime"),
+    ]
+}
+
+/// A listener request as the controllers send it, on a load balancer or listener of `owner`.
+fn listener_request(action: &'static str, owner: &'static str, load_balancer: &str) -> Request {
+    let resource = match action {
+        "elasticloadbalancing:CreateListener" => format!("{ACCOUNT_PREFIX}:{load_balancer}"),
+        _ => format!(
+            "{ACCOUNT_PREFIX}:{}/0123456789abcdef",
+            load_balancer.replacen("loadbalancer/", "listener/", 1)
+        ),
+    };
+    let request = Request::new(action, resource).resource_tags(&tags(owner));
+    match action {
+        "elasticloadbalancing:CreateListener" => request.request_tags(&tags("stack-a")),
+        _ => request,
+    }
+}
+
+// AWS sets elasticloadbalancing:SecurityPolicy and ListenerProtocol only from the request, so
+// the requests below name them exactly where the controllers do: CreateListener names both
+// (TCP listeners name only the protocol), ModifyListener names only the TLS policy.
+#[rstest]
+#[case::container_provision("container/provision", true)]
+#[case::daemon_provision("daemon/provision", true)]
+#[case::container_management("container/management", false)]
+fn listener_writes_stay_on_this_stack_with_the_fips_policy_and_https(
+    #[case] set: &str,
+    #[case] creates_listeners: bool,
+) {
+    let alb = "loadbalancer/app/stack-a-api-alb/50dc6c495c0c9188";
+    let other_stack_alb = "loadbalancer/app/stack-b-api-alb/6d0ecf831eec9f09";
+    for cloudformation in [false, true] {
+        for binding in [BindingTarget::Stack, BindingTarget::Resource] {
+            let statements = policy(set, binding, cloudformation).statement;
+            let decide = |request: Request| evaluate(&statements, &request);
+            let label = format!("{set} {binding:?} cloudformation={cloudformation}");
+
+            let create = || listener_request("elasticloadbalancing:CreateListener", "stack-a", alb);
+            let created = if creates_listeners {
+                Decision::Allowed
+            } else {
+                Decision::NotAllowed
+            };
+            assert_eq!(
+                decide(
+                    create()
+                        .with("elasticloadbalancing:ListenerProtocol", "HTTPS")
+                        .with("elasticloadbalancing:SecurityPolicy", FIPS_POLICY)
+                ),
+                created,
+                "{label}: HTTPS listener with the FIPS policy on this stack's ALB"
+            );
+            assert_eq!(
+                decide(
+                    listener_request(
+                        "elasticloadbalancing:CreateListener",
+                        "stack-b",
+                        other_stack_alb
+                    )
+                    .with("elasticloadbalancing:ListenerProtocol", "HTTPS")
+                    .with("elasticloadbalancing:SecurityPolicy", FIPS_POLICY)
+                ),
+                Decision::NotAllowed,
+                "{label}: listener on another stack's ALB"
+            );
+            assert_eq!(
+                decide(
+                    create()
+                        .with("elasticloadbalancing:ListenerProtocol", "HTTPS")
+                        .with(
+                            "elasticloadbalancing:SecurityPolicy",
+                            "ELBSecurityPolicy-2016-08"
+                        )
+                ),
+                Decision::NotAllowed,
+                "{label}: HTTPS listener with a TLS 1.0 policy"
+            );
+            assert_eq!(
+                decide(create().with("elasticloadbalancing:ListenerProtocol", "HTTP")),
+                Decision::NotAllowed,
+                "{label}: plain HTTP listener"
+            );
+
+            let modify = || listener_request("elasticloadbalancing:ModifyListener", "stack-a", alb);
+            assert_eq!(
+                decide(modify().with("elasticloadbalancing:SecurityPolicy", FIPS_POLICY)),
+                Decision::Allowed,
+                "{label}: certificate rotation or TLS policy move"
+            );
+            assert_eq!(
+                decide(
+                    listener_request(
+                        "elasticloadbalancing:ModifyListener",
+                        "stack-b",
+                        other_stack_alb
+                    )
+                    .with("elasticloadbalancing:SecurityPolicy", FIPS_POLICY)
+                ),
+                Decision::NotAllowed,
+                "{label}: another stack's listener"
+            );
+            assert_eq!(
+                decide(modify().with(
+                    "elasticloadbalancing:SecurityPolicy",
+                    "ELBSecurityPolicy-2016-08"
+                )),
+                Decision::NotAllowed,
+                "{label}: TLS downgrade"
+            );
+            assert_eq!(
+                decide(modify().with("elasticloadbalancing:ListenerProtocol", "HTTP")),
+                Decision::NotAllowed,
+                "{label}: switch to plain HTTP"
+            );
+        }
+    }
+}
+
+#[test]
+fn container_nlb_tcp_listener_needs_no_tls_policy() {
+    let nlb = "loadbalancer/net/stack-a-api-nlb/50dc6c495c0c9188";
+    for binding in [BindingTarget::Stack, BindingTarget::Resource] {
+        let statements = policy("container/provision", binding, false).statement;
+        assert_eq!(
+            evaluate(
+                &statements,
+                &listener_request("elasticloadbalancing:CreateListener", "stack-a", nlb)
+                    .with("elasticloadbalancing:ListenerProtocol", "TCP")
+            ),
+            Decision::Allowed,
+            "{binding:?}"
+        );
+    }
+}
+
+// Long stack prefixes are compacted into a hashed load balancer name that no longer starts with
+// the prefix, so container/provision authorizes its load balancer writes by tag alone.
+#[test]
+fn container_provision_reaches_compacted_load_balancer_names_by_tag() {
+    let context = PermissionContext::new()
+        .with_stack_prefix("e2e-03-aws-terraform-tcp-f938d0b8fa")
+        .with_resource_id("tcp-service")
+        .with_resource_name("e2e-03-aws-terraform-tcp-f938d0b8fa-tcp-service")
+        .with_aws_account_id("123456789012")
+        .with_aws_region("us-west-2");
+    let statements = AwsRuntimePermissionsGenerator::new()
+        .generate_policy(
+            get_permission_set("container/provision").unwrap(),
+            BindingTarget::Resource,
+            &context,
+        )
+        .unwrap()
+        .statement;
+    let name = "e2e-03-aws-terrafo-1a2b3c4d-nlb";
+    for (stack, decision) in [
+        ("e2e-03-aws-terraform-tcp-f938d0b8fa", Decision::Allowed),
+        ("other-stack", Decision::NotAllowed),
+    ] {
+        let tags = [
+            (ALIEN_STACK_TAG_KEY, stack),
+            (ALIEN_RESOURCE_TAG_KEY, "tcp-service"),
+            (ALIEN_MANAGED_BY_TAG_KEY, "runtime"),
+        ];
+        for (action, resource) in [
+            (
+                "elasticloadbalancing:ModifyLoadBalancerAttributes",
+                format!("loadbalancer/net/{name}/50dc6c495c0c9188"),
+            ),
+            (
+                "elasticloadbalancing:ModifyTargetGroupAttributes",
+                format!("targetgroup/{name}/50dc6c495c0c9188"),
+            ),
+            (
+                "elasticloadbalancing:ModifyListener",
+                format!("listener/net/{name}/50dc6c495c0c9188/0123456789abcdef"),
+            ),
+        ] {
+            let request =
+                Request::new(action, format!("{ACCOUNT_PREFIX}:{resource}")).resource_tags(&tags);
+            assert_eq!(
+                evaluate(&statements, &request),
+                decision,
+                "{stack}: {action}"
+            );
+        }
+        let create = Request::new(
+            "elasticloadbalancing:CreateListener",
+            format!("{ACCOUNT_PREFIX}:loadbalancer/net/{name}/50dc6c495c0c9188"),
+        )
+        .resource_tags(&tags)
+        .request_tags(&[
+            (ALIEN_STACK_TAG_KEY, "e2e-03-aws-terraform-tcp-f938d0b8fa"),
+            (ALIEN_RESOURCE_TAG_KEY, "tcp-service"),
+            (ALIEN_MANAGED_BY_TAG_KEY, "runtime"),
+        ])
+        .with("elasticloadbalancing:ListenerProtocol", "TCP");
+        assert_eq!(
+            evaluate(&statements, &create),
+            decision,
+            "{stack}: CreateListener"
+        );
+    }
+}

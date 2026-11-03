@@ -24,6 +24,14 @@
           }
         }
       },
+      // Certificate rotation and TLS policy moves on this stack's HTTPS listeners. AWS checks
+      // neither the target group nor the certificate a listener names (no resource check and no
+      // condition key), so IAM cannot stop this role from pointing this stack's own listeners at
+      // any target group in the same account and VPC that no other load balancer uses, at a
+      // redirect to any URL or a fixed response, or at any ACM certificate of the same account
+      // and region or IAM server certificate of the account. IAM can bound the TLS policy and the
+      // protocol. AWS sets those keys only when the request names them, so they are checked if
+      // present: no TLS downgrade and no plain HTTP.
       {
         "grant": {
           "actions": ["elasticloadbalancing:ModifyListener"]
@@ -38,6 +46,10 @@
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
+              },
+              "StringEqualsIfExists": {
+                "elasticloadbalancing:SecurityPolicy": "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04",
+                "elasticloadbalancing:ListenerProtocol": "HTTPS"
               }
             }
           },
@@ -51,6 +63,10 @@
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceId}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
+              },
+              "StringEqualsIfExists": {
+                "elasticloadbalancing:SecurityPolicy": "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04",
+                "elasticloadbalancing:ListenerProtocol": "HTTPS"
               }
             }
           }
