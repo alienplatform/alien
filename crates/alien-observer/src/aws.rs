@@ -714,5 +714,16 @@ mod tests {
         ) -> alien_client_core::Result<ListMetricsResponse> {
             unreachable!("not called by mapping test")
         }
+
+        async fn put_metric_alarm(
+            &self,
+            _request: alien_aws_clients::cloudwatch::PutMetricAlarmRequest,
+        ) -> alien_client_core::Result<()> {
+            unreachable!("not called by mapping test")
+        }
+
+        async fn delete_alarms(&self, _alarm_names: Vec<String>) -> alien_client_core::Result<()> {
+            unreachable!("not called by mapping test")
+        }
     }
 }
