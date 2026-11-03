@@ -66,10 +66,7 @@
         "label": "enable-dynamodb-point-in-time-recovery",
         "description": "Read and turn on point-in-time recovery for this stack's DynamoDB tables.",
         "grant": {
-          "actions": [
-            "dynamodb:DescribeContinuousBackups",
-            "dynamodb:UpdateContinuousBackups"
-          ]
+          "actions": ["dynamodb:DescribeContinuousBackups", "dynamodb:UpdateContinuousBackups"]
         },
         "binding": {
           "stack": {
