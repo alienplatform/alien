@@ -1,0 +1,7 @@
+#:schema ../../../schema/alien.toml.json
+name = "acme-agent"
+platforms = ["machines"]
+
+[daemon.agent]
+build = { rust = "acme-agent" }
+health = { port = 8080, path = "/health" }

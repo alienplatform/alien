@@ -13,7 +13,8 @@ use crate::error::{ErrorData, Result};
 use crate::instance_catalog::Architecture;
 use crate::{
     CapacityGroup, CapacityGroupScalePolicy, ComputeChoiceRange, DataDiskRequirement,
-    DaemonRuntime, DaemonRuntimeMount, GpuSpec, MachineProfile, ResourceSpec,
+    DaemonRuntime, DaemonRuntimeMount, GpuSpec, MachineProfile, ResourceSpec, StackInputKind,
+    StackInputValidation,
 };
 use alien_error::AlienError;
 
@@ -407,6 +408,22 @@ pub fn failure_domain_spread(field: &str, spread: i64) -> Result<u8> {
         .ok()
         .filter(|spread| *spread >= 1)
         .ok_or_else(|| invalid(field, format!("must be an integer from 1 to 255, got {spread}")))
+}
+
+/// The validation block a stack input carries.
+///
+/// Every kind except boolean accepts constraints, and its definition carries a validation
+/// block even when no constraint is set (`{}`); a boolean carries none. This is the shape
+/// the TypeScript SDK has always produced, kept so a stack does not change when it moves
+/// between frontends.
+pub fn input_validation(
+    kind: &StackInputKind,
+    validation: StackInputValidation,
+) -> Option<StackInputValidation> {
+    match kind {
+        StackInputKind::Boolean => None,
+        _ => Some(validation),
+    }
 }
 
 #[cfg(test)]
