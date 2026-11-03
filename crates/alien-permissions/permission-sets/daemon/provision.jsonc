@@ -3,6 +3,98 @@
   "description": "Allows creating daemon infrastructure (cloud load balancers, public endpoint security groups, and certificates). Derived from cloud daemon controller API calls.",
   "platforms": {
     "aws": [
+      // Metric alarms on the daemon's load balancer. A new alarm must carry this deployment's
+      // tag, and an existing alarm may only be replaced, retagged or deleted while it carries
+      // that tag, so another deployment's alarm whose name shares the prefix stays out of
+      // reach. Alarm actions run as CloudWatch, not as this role, so no alarm may have any:
+      // cloudwatch:AlarmActions covers AlarmActions, OKActions and InsufficientDataActions.
+      {
+        "grant": {
+          "actions": ["cloudwatch:PutMetricAlarm"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-*"],
+            "condition": {
+              "Null": { "cloudwatch:AlarmActions": "true" },
+              "StringEquals": { "aws:RequestTag/${stackTag}": "${stackPrefix}" },
+              "StringEqualsIfExists": { "aws:ResourceTag/${stackTag}": "${stackPrefix}" }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-${resourceId}-*"
+            ],
+            "condition": {
+              "Null": { "cloudwatch:AlarmActions": "true" },
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}"
+              },
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}"
+              }
+            }
+          }
+        }
+      },
+      // TagResource on its own only retags an alarm that already carries this deployment's
+      // tag. Creating an alarm with tags doesn't need it to match, so an untagged alarm under
+      // the prefix can't be tagged into this deployment and then deleted.
+      {
+        "grant": {
+          "actions": ["cloudwatch:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-${resourceId}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["cloudwatch:DeleteAlarms"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": { "aws:ResourceTag/${stackTag}": "${stackPrefix}" }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-${resourceId}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}"
+              }
+            }
+          }
+        }
+      },
       {
         "label": "create-public-load-balancer",
         "description": "Create ALB resources for public daemon endpoints.",

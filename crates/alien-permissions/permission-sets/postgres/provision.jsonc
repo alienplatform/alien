@@ -3,6 +3,121 @@
   "description": "Allows provisioning and destroying Postgres databases",
   "platforms": {
     "aws": [
+      // Metric alarms on the database's writer instance. A new alarm must carry this deployment's
+      // tag, and an existing alarm may only be replaced, retagged or deleted while it carries
+      // that tag, so another deployment's alarm whose name shares the prefix stays out of
+      // reach. Alarm actions run as CloudWatch, not as this role, so no alarm may have any:
+      // cloudwatch:AlarmActions covers AlarmActions, OKActions and InsufficientDataActions.
+      {
+        "grant": {
+          "actions": ["cloudwatch:PutMetricAlarm"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-*"],
+            "condition": {
+              "Null": { "cloudwatch:AlarmActions": "true" },
+              "StringEquals": { "aws:RequestTag/${stackTag}": "${stackPrefix}" },
+              "StringEqualsIfExists": { "aws:ResourceTag/${stackTag}": "${stackPrefix}" }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "Null": { "cloudwatch:AlarmActions": "true" },
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}"
+              },
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      // TagResource on its own only retags an alarm that already carries this deployment's
+      // tag. Creating an alarm with tags doesn't need it to match, so an untagged alarm under
+      // the prefix can't be tagged into this deployment and then deleted.
+      {
+        "grant": {
+          "actions": ["cloudwatch:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["cloudwatch:DeleteAlarms"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": { "aws:ResourceTag/${stackTag}": "${stackPrefix}" }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      // The setup templates create a setup-owned cluster's writer alarms, and their alarm
+      // handlers read an alarm and its tags back. Reads never reach another deployment's alarm.
+      {
+        "grant": {
+          "actions": ["cloudwatch:DescribeAlarms", "cloudwatch:ListTagsForResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-*"],
+            "condition": {
+              "StringEqualsIfExists": { "aws:ResourceTag/${stackTag}": "${stackPrefix}" }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEqualsIfExists": { "aws:ResourceTag/${stackTag}": "${stackPrefix}" }
+            }
+          }
+        }
+      },
       {
         "label": "manage-aurora-cluster",
         "description": "Create, modify and delete the Aurora cluster, instances and subnet group.",

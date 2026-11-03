@@ -715,9 +715,14 @@ fn tag_absent_grants_are_reads_of_gone_objects() {
                     .condition
                     .as_ref()
                     .and_then(|conditions| conditions.get("Null"))
+                    // These request keys are not tags: their Null narrows the request.
                     .is_some_and(|keys| {
-                        keys.keys()
-                            .any(|key| key != "autoscaling:LaunchConfigurationName")
+                        keys.keys().any(|key| {
+                            !matches!(
+                                key.as_str(),
+                                "autoscaling:LaunchConfigurationName" | "cloudwatch:AlarmActions"
+                            )
+                        })
                     });
                 if !uses_null {
                     continue;

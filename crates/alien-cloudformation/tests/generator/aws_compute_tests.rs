@@ -96,6 +96,49 @@ fn aws_function_basic_lambda() {
     insta::assert_snapshot!("aws_function_basic", yaml);
 }
 
+/// A management grant on one Live compute cluster names the cluster's alarms by its id: the
+/// template's per-resource context carries the resource id and no resource name.
+#[test]
+fn aws_a_compute_cluster_management_grant_on_one_cluster_renders_its_alarm_grants() {
+    let stack = Stack::new("acme-cluster".to_string())
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().resource("compute", ["compute-cluster/management"]),
+        ))
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ComputeCluster::new("compute".to_string())
+                .capacity_group(CapacityGroup {
+                    group_id: "general".to_string(),
+                    instance_type: Some("m7g.large".to_string()),
+                    profile: None,
+                    min_size: 1,
+                    max_size: 3,
+                    scale_policy: None,
+                    nested_virtualization: None,
+                    data_disk_gib_range: None,
+                })
+                .build(),
+            ResourceLifecycle::Live,
+        )
+        .build();
+
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "aws_a_compute_cluster_management_grant_on_one_cluster",
+    );
+
+    assert!(yaml.contains("cloudwatch:PutMetricAlarm"), "{yaml}");
+    assert!(
+        yaml.contains(":alarm:${AWS::StackName}-compute-*"),
+        "the alarm grant names this cluster: {yaml}"
+    );
+}
+
 #[test]
 fn aws_remote_stack_management_skips_live_provision_sets() {
     let stack = Stack::new("acme-mgmt".to_string())

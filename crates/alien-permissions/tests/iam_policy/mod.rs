@@ -108,7 +108,7 @@ fn condition_holds(
     expected: &AwsConditionValue,
     actual: Option<&AwsConditionValue>,
 ) -> bool {
-    // An IfExists operator permits absent request keys, but still checks supplied values.
+    // An IfExists operator permits absent keys, but still checks supplied values.
     if let Some(operator) = operator.strip_suffix("IfExists") {
         return actual.is_none() || condition_holds(operator, expected, actual);
     }
