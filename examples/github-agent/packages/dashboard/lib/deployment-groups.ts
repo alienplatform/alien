@@ -1,3 +1,4 @@
+import { Alien } from "@alienplatform/platform-api"
 import { eq } from "drizzle-orm"
 import { alien, config } from "./config"
 import { db } from "./db"
@@ -13,13 +14,13 @@ async function createDeploymentToken(
   deploymentGroupId: string,
   organizationName: string,
 ): Promise<{ deploymentToken: string; deploymentTokenExpiresAt: Date }> {
-  const requestedExpiresAt = new Date(Date.now() + TOKEN_LIFETIME_MS)
+  const expiresAt = new Date(Date.now() + TOKEN_LIFETIME_MS)
   const tokenResponse = await alien.deploymentGroups.createDeploymentGroupToken({
     workspace: config.workspace,
     id: deploymentGroupId,
     createDeploymentGroupTokenRequest: {
       description: `Deployment token for ${organizationName}`,
-      expiresAt: requestedExpiresAt,
+      expiresAt,
     },
   })
 
@@ -28,12 +29,20 @@ async function createDeploymentToken(
   }
 
   // The API can shorten the lifetime to the expiry of the key that asked for the token, so
-  // store the expiry it returns. Client versions that do not expose it yet keep the request.
-  const { expiresAt } = tokenResponse as { expiresAt?: Date | string }
-  return {
-    deploymentToken: tokenResponse.token,
-    deploymentTokenExpiresAt: expiresAt ? new Date(expiresAt) : requestedExpiresAt,
+  // read the expiry the new key actually got.
+  const subject = await new Alien({
+    serverURL: config.alienApiUrl,
+    apiKey: tokenResponse.token,
+  }).auth.whoami()
+  if (subject.kind !== "serviceAccount") {
+    throw new Error("Failed to create deployment token: not an API key")
   }
+  const key = await alien.apiKeys.get({ id: subject.id })
+  if (!key.expiresAt) {
+    throw new Error("Failed to create deployment token: missing expiry")
+  }
+
+  return { deploymentToken: tokenResponse.token, deploymentTokenExpiresAt: key.expiresAt }
 }
 
 export async function createDeploymentGroupForOrganization(
