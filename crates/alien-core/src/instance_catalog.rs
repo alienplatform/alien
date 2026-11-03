@@ -119,7 +119,12 @@ pub struct CatalogGpu {
 pub struct InstanceTypeSpec {
     pub name: &'static str,
     pub platform: Platform,
+    /// The category the machine's series belongs to.
     pub family: InstanceFamily,
+    /// The provider series the machine belongs to (`m8i`, `n2-standard`, `Dsv5`).
+    pub series: &'static str,
+    /// How the series is shown to people choosing a machine.
+    pub label: &'static str,
     pub architecture: Architecture,
     /// vCPU count (hardware total)
     pub vcpu: u32,
@@ -129,6 +134,12 @@ pub struct InstanceTypeSpec {
     pub ephemeral_storage_bytes: u64,
     /// GPU specification (for GPU instances)
     pub gpu: Option<CatalogGpu>,
+    /// Whether the machine exposes nested virtualization (VT-x/EPT) to guest VMs.
+    pub nested_virt: bool,
+    /// Whether automatic selection may pick the machine. The set is fixed so that adding a
+    /// machine to the catalog never changes what an existing stack gets; any other machine is
+    /// used only when someone chooses it.
+    pub auto_select: bool,
 }
 
 impl InstanceTypeSpec {
@@ -146,29 +157,10 @@ impl InstanceTypeSpec {
 
     /// Whether this instance type supports nested virtualization.
     ///
-    /// Classify by documented provider families rather than adding a flag to
-    /// every catalog row. GCP still requires the instance template to opt in;
-    /// Azure exposes the capability automatically on supported VM sizes.
+    /// GCP still requires the instance template to opt in; Azure exposes the
+    /// capability automatically on supported VM sizes.
     pub fn is_nested_virt_capable(&self) -> bool {
-        match self.platform {
-            Platform::Aws => {
-                let name = self.name;
-                name.starts_with("m8i.")
-                    || name.starts_with("c8i.")
-                    || name.starts_with("r8i.")
-                    || name.starts_with("m8i-flex.")
-                    || name.starts_with("c8i-flex.")
-                    || name.starts_with("r8i-flex.")
-            }
-            Platform::Gcp => self.name.starts_with("n2-standard-"),
-            Platform::Azure => {
-                let name = self.name;
-                (name.starts_with("Standard_D") && name.ends_with("s_v5"))
-                    || (name.starts_with("Standard_E") && name.ends_with("s_v5"))
-                    || (name.starts_with("Standard_F") && name.ends_with("s_v2"))
-            }
-            _ => false,
-        }
+        self.nested_virt
     }
 
     /// Convert this catalog entry into a `MachineProfile` for use in `CapacityGroup`.
@@ -228,1084 +220,10 @@ pub fn max_configurable_ephemeral_storage_bytes(platform: Platform) -> Option<u6
     Some(max_requested_gib * GI)
 }
 
-/// The complete instance type catalog.
-///
-/// This is the single source of truth for instance type specifications.
-/// Update this array when adding support for new instance types.
-///
-/// NOTE: Ephemeral storage values for non-NVMe instances are conservative defaults
-/// (EBS-backed root volumes). Storage-optimized instances list their NVMe capacity.
-static CATALOG: &[InstanceTypeSpec] = &[
-    // =========================================================================
-    // AWS — ARM (Graviton) preferred for cost efficiency
-    // =========================================================================
-
-    // Burstable (t4g — ARM Graviton2)
-    InstanceTypeSpec {
-        name: "t4g.micro",
-        platform: Platform::Aws,
-        family: InstanceFamily::Burstable,
-        architecture: Architecture::Arm64,
-        vcpu: 2,
-        memory_bytes: 1 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "t4g.small",
-        platform: Platform::Aws,
-        family: InstanceFamily::Burstable,
-        architecture: Architecture::Arm64,
-        vcpu: 2,
-        memory_bytes: 2 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "t4g.medium",
-        platform: Platform::Aws,
-        family: InstanceFamily::Burstable,
-        architecture: Architecture::Arm64,
-        vcpu: 2,
-        memory_bytes: 4 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "t4g.large",
-        platform: Platform::Aws,
-        family: InstanceFamily::Burstable,
-        architecture: Architecture::Arm64,
-        vcpu: 2,
-        memory_bytes: 8 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "t3.xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::Burstable,
-        architecture: Architecture::X86_64,
-        vcpu: 4,
-        memory_bytes: 16 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "t4g.xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::Burstable,
-        architecture: Architecture::Arm64,
-        vcpu: 4,
-        memory_bytes: 16 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    // General Purpose (m7g — ARM Graviton3, up to 2xlarge / 8 vCPU)
-    InstanceTypeSpec {
-        name: "m7g.medium",
-        platform: Platform::Aws,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::Arm64,
-        vcpu: 1,
-        memory_bytes: 4 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "m7i.large",
-        platform: Platform::Aws,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::X86_64,
-        vcpu: 2,
-        memory_bytes: 8 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "m7g.large",
-        platform: Platform::Aws,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::Arm64,
-        vcpu: 2,
-        memory_bytes: 8 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    // 8th-gen Intel AWS families accept
-    // `CpuOptions.NestedVirtualization=enabled`. The catalog filter in
-    // `select_instance_type` includes these entries only when the
-    // workload requests nested virt, so ordinary workloads continue to
-    // pick the cost-efficient Graviton (m7g) above. The pairwise
-    // interleave keeps the per-family vCPU-non-decreasing invariant
-    // (see `test_catalog_instance_types_sorted_by_vcpu_within_family`).
-    InstanceTypeSpec {
-        name: "m8i.large",
-        platform: Platform::Aws,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::X86_64,
-        vcpu: 2,
-        memory_bytes: 8 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "m7i.xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::X86_64,
-        vcpu: 4,
-        memory_bytes: 16 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "m7g.xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::Arm64,
-        vcpu: 4,
-        memory_bytes: 16 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "m8i.xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::X86_64,
-        vcpu: 4,
-        memory_bytes: 16 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "m7i.2xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::X86_64,
-        vcpu: 8,
-        memory_bytes: 32 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "m7g.2xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::Arm64,
-        vcpu: 8,
-        memory_bytes: 32 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "m8i.2xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::X86_64,
-        vcpu: 8,
-        memory_bytes: 32 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "m7i.4xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::X86_64,
-        vcpu: 16,
-        memory_bytes: 64 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "m7g.4xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::Arm64,
-        vcpu: 16,
-        memory_bytes: 64 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "m8i.4xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::X86_64,
-        vcpu: 16,
-        memory_bytes: 64 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    // Compute Optimized (c7g — ARM Graviton3, c8g — ARM Graviton4)
-    InstanceTypeSpec {
-        name: "c7g.medium",
-        platform: Platform::Aws,
-        family: InstanceFamily::ComputeOptimized,
-        architecture: Architecture::Arm64,
-        vcpu: 1,
-        memory_bytes: 2 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "c8g.medium",
-        platform: Platform::Aws,
-        family: InstanceFamily::ComputeOptimized,
-        architecture: Architecture::Arm64,
-        vcpu: 1,
-        memory_bytes: 2 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "c7g.large",
-        platform: Platform::Aws,
-        family: InstanceFamily::ComputeOptimized,
-        architecture: Architecture::Arm64,
-        vcpu: 2,
-        memory_bytes: 4 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "c8g.large",
-        platform: Platform::Aws,
-        family: InstanceFamily::ComputeOptimized,
-        architecture: Architecture::Arm64,
-        vcpu: 2,
-        memory_bytes: 4 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "c8i.large",
-        platform: Platform::Aws,
-        family: InstanceFamily::ComputeOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 2,
-        memory_bytes: 4 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "c7g.xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::ComputeOptimized,
-        architecture: Architecture::Arm64,
-        vcpu: 4,
-        memory_bytes: 8 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "c8g.xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::ComputeOptimized,
-        architecture: Architecture::Arm64,
-        vcpu: 4,
-        memory_bytes: 8 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "c8i.xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::ComputeOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 4,
-        memory_bytes: 8 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "c7g.2xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::ComputeOptimized,
-        architecture: Architecture::Arm64,
-        vcpu: 8,
-        memory_bytes: 16 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "c8g.2xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::ComputeOptimized,
-        architecture: Architecture::Arm64,
-        vcpu: 8,
-        memory_bytes: 16 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "c8i.2xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::ComputeOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 8,
-        memory_bytes: 16 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "c7g.4xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::ComputeOptimized,
-        architecture: Architecture::Arm64,
-        vcpu: 16,
-        memory_bytes: 32 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "c8g.4xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::ComputeOptimized,
-        architecture: Architecture::Arm64,
-        vcpu: 16,
-        memory_bytes: 32 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "c8i.4xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::ComputeOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 16,
-        memory_bytes: 32 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    // Memory optimized — r7g (ARM), r6a and r7i (x86_64).
-    InstanceTypeSpec {
-        name: "r7g.medium",
-        platform: Platform::Aws,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::Arm64,
-        vcpu: 1,
-        memory_bytes: 8 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "r7g.large",
-        platform: Platform::Aws,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::Arm64,
-        vcpu: 2,
-        memory_bytes: 16 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "r6a.large",
-        platform: Platform::Aws,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 2,
-        memory_bytes: 16 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "r7i.large",
-        platform: Platform::Aws,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 2,
-        memory_bytes: 16 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "r7g.xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::Arm64,
-        vcpu: 4,
-        memory_bytes: 32 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "r6a.xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 4,
-        memory_bytes: 32 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "r7i.xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 4,
-        memory_bytes: 32 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "r7g.2xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::Arm64,
-        vcpu: 8,
-        memory_bytes: 64 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "r6a.2xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 8,
-        memory_bytes: 64 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "r7i.2xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 8,
-        memory_bytes: 64 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "r7g.4xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::Arm64,
-        vcpu: 16,
-        memory_bytes: 128 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "r6a.4xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 16,
-        memory_bytes: 128 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "r7i.4xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 16,
-        memory_bytes: 128 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    // Storage Optimized (i4i — x86_64, NVMe)
-    InstanceTypeSpec {
-        name: "i4i.xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::StorageOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 4,
-        memory_bytes: 32 * GI,
-        ephemeral_storage_bytes: 937 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "i4i.2xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::StorageOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 8,
-        memory_bytes: 64 * GI,
-        ephemeral_storage_bytes: 1875 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "i4i.4xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::StorageOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 16,
-        memory_bytes: 128 * GI,
-        ephemeral_storage_bytes: 3750 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "i4i.8xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::StorageOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 32,
-        memory_bytes: 256 * GI,
-        ephemeral_storage_bytes: 7500 * GI,
-        gpu: None,
-    },
-    // GPU — NVIDIA T4 (g5 — x86_64)
-    InstanceTypeSpec {
-        name: "g5.xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::GpuCompute,
-        architecture: Architecture::X86_64,
-        vcpu: 4,
-        memory_bytes: 16 * GI,
-        ephemeral_storage_bytes: 250 * GI,
-        gpu: Some(CatalogGpu {
-            gpu_type: "nvidia-t4",
-            count: 1,
-        }),
-    },
-    InstanceTypeSpec {
-        name: "g5.2xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::GpuCompute,
-        architecture: Architecture::X86_64,
-        vcpu: 8,
-        memory_bytes: 32 * GI,
-        ephemeral_storage_bytes: 450 * GI,
-        gpu: Some(CatalogGpu {
-            gpu_type: "nvidia-t4",
-            count: 1,
-        }),
-    },
-    // GPU — NVIDIA A100 (p4d — x86_64)
-    InstanceTypeSpec {
-        name: "p4d.24xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::GpuCompute,
-        architecture: Architecture::X86_64,
-        vcpu: 96,
-        memory_bytes: 1152 * GI,
-        ephemeral_storage_bytes: 8000 * GI,
-        gpu: Some(CatalogGpu {
-            gpu_type: "nvidia-a100",
-            count: 8,
-        }),
-    },
-    // GPU — NVIDIA H100 (p5 — x86_64)
-    InstanceTypeSpec {
-        name: "p5.48xlarge",
-        platform: Platform::Aws,
-        family: InstanceFamily::GpuCompute,
-        architecture: Architecture::X86_64,
-        vcpu: 192,
-        memory_bytes: 2048 * GI,
-        ephemeral_storage_bytes: 8000 * GI,
-        gpu: Some(CatalogGpu {
-            gpu_type: "nvidia-h100",
-            count: 8,
-        }),
-    },
-    // =========================================================================
-    // GCP
-    // =========================================================================
-
-    // Burstable (e2)
-    InstanceTypeSpec {
-        name: "e2-micro",
-        platform: Platform::Gcp,
-        family: InstanceFamily::Burstable,
-        architecture: Architecture::X86_64,
-        vcpu: 2,
-        memory_bytes: 1 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "e2-small",
-        platform: Platform::Gcp,
-        family: InstanceFamily::Burstable,
-        architecture: Architecture::X86_64,
-        vcpu: 2,
-        memory_bytes: 2 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "e2-medium",
-        platform: Platform::Gcp,
-        family: InstanceFamily::Burstable,
-        architecture: Architecture::X86_64,
-        vcpu: 2,
-        memory_bytes: 4 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    // General Purpose (n2-standard, up to 16 vCPU)
-    InstanceTypeSpec {
-        name: "n2-standard-2",
-        platform: Platform::Gcp,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::X86_64,
-        vcpu: 2,
-        memory_bytes: 8 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "n2-standard-4",
-        platform: Platform::Gcp,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::X86_64,
-        vcpu: 4,
-        memory_bytes: 16 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "n2-standard-8",
-        platform: Platform::Gcp,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::X86_64,
-        vcpu: 8,
-        memory_bytes: 32 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "n2-standard-16",
-        platform: Platform::Gcp,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::X86_64,
-        vcpu: 16,
-        memory_bytes: 64 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    // Compute Optimized (c3-standard, up to 8 vCPU)
-    InstanceTypeSpec {
-        name: "c3-standard-4",
-        platform: Platform::Gcp,
-        family: InstanceFamily::ComputeOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 4,
-        memory_bytes: 8 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "c3-standard-8",
-        platform: Platform::Gcp,
-        family: InstanceFamily::ComputeOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 8,
-        memory_bytes: 16 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    // Memory Optimized (n2-highmem, up to 8 vCPU)
-    InstanceTypeSpec {
-        name: "n2-highmem-2",
-        platform: Platform::Gcp,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 2,
-        memory_bytes: 16 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "n2-highmem-4",
-        platform: Platform::Gcp,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 4,
-        memory_bytes: 32 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "n2-highmem-8",
-        platform: Platform::Gcp,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 8,
-        memory_bytes: 64 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "n2-highmem-16",
-        platform: Platform::Gcp,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 16,
-        memory_bytes: 128 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "n2-highmem-32",
-        platform: Platform::Gcp,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 32,
-        memory_bytes: 256 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    // Storage Optimized (c3d-standard with local SSD)
-    InstanceTypeSpec {
-        name: "c3d-standard-8",
-        platform: Platform::Gcp,
-        family: InstanceFamily::StorageOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 8,
-        memory_bytes: 32 * GI,
-        ephemeral_storage_bytes: 480 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "c3d-standard-16",
-        platform: Platform::Gcp,
-        family: InstanceFamily::StorageOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 16,
-        memory_bytes: 64 * GI,
-        ephemeral_storage_bytes: 960 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "c3d-standard-30",
-        platform: Platform::Gcp,
-        family: InstanceFamily::StorageOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 30,
-        memory_bytes: 120 * GI,
-        ephemeral_storage_bytes: 1920 * GI,
-        gpu: None,
-    },
-    // GPU — NVIDIA T4 (n1-standard + T4)
-    InstanceTypeSpec {
-        name: "n1-standard-4-t4",
-        platform: Platform::Gcp,
-        family: InstanceFamily::GpuCompute,
-        architecture: Architecture::X86_64,
-        vcpu: 4,
-        memory_bytes: 15 * GI,
-        ephemeral_storage_bytes: 100 * GI,
-        gpu: Some(CatalogGpu {
-            gpu_type: "nvidia-t4",
-            count: 1,
-        }),
-    },
-    // GPU — NVIDIA A100 (a2-highgpu)
-    InstanceTypeSpec {
-        name: "a2-highgpu-1g",
-        platform: Platform::Gcp,
-        family: InstanceFamily::GpuCompute,
-        architecture: Architecture::X86_64,
-        vcpu: 12,
-        memory_bytes: 85 * GI,
-        ephemeral_storage_bytes: 100 * GI,
-        gpu: Some(CatalogGpu {
-            gpu_type: "nvidia-a100",
-            count: 1,
-        }),
-    },
-    InstanceTypeSpec {
-        name: "a2-highgpu-8g",
-        platform: Platform::Gcp,
-        family: InstanceFamily::GpuCompute,
-        architecture: Architecture::X86_64,
-        vcpu: 96,
-        memory_bytes: 1360 * GI,
-        ephemeral_storage_bytes: 100 * GI,
-        gpu: Some(CatalogGpu {
-            gpu_type: "nvidia-a100",
-            count: 8,
-        }),
-    },
-    // GPU — NVIDIA H100 (a3-highgpu)
-    InstanceTypeSpec {
-        name: "a3-highgpu-8g",
-        platform: Platform::Gcp,
-        family: InstanceFamily::GpuCompute,
-        architecture: Architecture::X86_64,
-        vcpu: 208,
-        memory_bytes: 1872 * GI,
-        ephemeral_storage_bytes: 100 * GI,
-        gpu: Some(CatalogGpu {
-            gpu_type: "nvidia-h100",
-            count: 8,
-        }),
-    },
-    // =========================================================================
-    // Azure
-    // =========================================================================
-
-    // Burstable (B-series v2)
-    InstanceTypeSpec {
-        name: "Standard_B1s",
-        platform: Platform::Azure,
-        family: InstanceFamily::Burstable,
-        architecture: Architecture::X86_64,
-        vcpu: 1,
-        memory_bytes: 1 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "Standard_B2s",
-        platform: Platform::Azure,
-        family: InstanceFamily::Burstable,
-        architecture: Architecture::X86_64,
-        vcpu: 2,
-        memory_bytes: 4 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "Standard_B2ms",
-        platform: Platform::Azure,
-        family: InstanceFamily::Burstable,
-        architecture: Architecture::X86_64,
-        vcpu: 2,
-        memory_bytes: 8 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "Standard_B4ms",
-        platform: Platform::Azure,
-        family: InstanceFamily::Burstable,
-        architecture: Architecture::X86_64,
-        vcpu: 4,
-        memory_bytes: 16 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    // General Purpose (Dsv4/Dsv5-series, up to 16 vCPU)
-    InstanceTypeSpec {
-        name: "Standard_D2s_v4",
-        platform: Platform::Azure,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::X86_64,
-        vcpu: 2,
-        memory_bytes: 8 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "Standard_D2s_v5",
-        platform: Platform::Azure,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::X86_64,
-        vcpu: 2,
-        memory_bytes: 8 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "Standard_D4s_v5",
-        platform: Platform::Azure,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::X86_64,
-        vcpu: 4,
-        memory_bytes: 16 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "Standard_D8s_v5",
-        platform: Platform::Azure,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::X86_64,
-        vcpu: 8,
-        memory_bytes: 32 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "Standard_D16s_v5",
-        platform: Platform::Azure,
-        family: InstanceFamily::GeneralPurpose,
-        architecture: Architecture::X86_64,
-        vcpu: 16,
-        memory_bytes: 64 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    // Compute Optimized (Fv2-series, up to 16 vCPU)
-    InstanceTypeSpec {
-        name: "Standard_F2s_v2",
-        platform: Platform::Azure,
-        family: InstanceFamily::ComputeOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 2,
-        memory_bytes: 4 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "Standard_F4s_v2",
-        platform: Platform::Azure,
-        family: InstanceFamily::ComputeOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 4,
-        memory_bytes: 8 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "Standard_F8s_v2",
-        platform: Platform::Azure,
-        family: InstanceFamily::ComputeOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 8,
-        memory_bytes: 16 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "Standard_F16s_v2",
-        platform: Platform::Azure,
-        family: InstanceFamily::ComputeOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 16,
-        memory_bytes: 32 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    // Memory Optimized (Ev5-series, up to 16 vCPU)
-    InstanceTypeSpec {
-        name: "Standard_E2s_v5",
-        platform: Platform::Azure,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 2,
-        memory_bytes: 16 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "Standard_E4s_v5",
-        platform: Platform::Azure,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 4,
-        memory_bytes: 32 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "Standard_E8s_v5",
-        platform: Platform::Azure,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 8,
-        memory_bytes: 64 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "Standard_E16s_v5",
-        platform: Platform::Azure,
-        family: InstanceFamily::MemoryOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 16,
-        memory_bytes: 128 * GI,
-        ephemeral_storage_bytes: 20 * GI,
-        gpu: None,
-    },
-    // Storage Optimized (Lsv3-series with NVMe)
-    InstanceTypeSpec {
-        name: "Standard_L8s_v3",
-        platform: Platform::Azure,
-        family: InstanceFamily::StorageOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 8,
-        memory_bytes: 64 * GI,
-        ephemeral_storage_bytes: 1788 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "Standard_L16s_v3",
-        platform: Platform::Azure,
-        family: InstanceFamily::StorageOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 16,
-        memory_bytes: 128 * GI,
-        ephemeral_storage_bytes: 3576 * GI,
-        gpu: None,
-    },
-    InstanceTypeSpec {
-        name: "Standard_L32s_v3",
-        platform: Platform::Azure,
-        family: InstanceFamily::StorageOptimized,
-        architecture: Architecture::X86_64,
-        vcpu: 32,
-        memory_bytes: 256 * GI,
-        ephemeral_storage_bytes: 7154 * GI,
-        gpu: None,
-    },
-    // GPU — NVIDIA T4 (NCasT4_v3-series)
-    InstanceTypeSpec {
-        name: "Standard_NC4as_T4_v3",
-        platform: Platform::Azure,
-        family: InstanceFamily::GpuCompute,
-        architecture: Architecture::X86_64,
-        vcpu: 4,
-        memory_bytes: 28 * GI,
-        ephemeral_storage_bytes: 176 * GI,
-        gpu: Some(CatalogGpu {
-            gpu_type: "nvidia-t4",
-            count: 1,
-        }),
-    },
-    // GPU — NVIDIA A100 (NC A100 v4-series)
-    InstanceTypeSpec {
-        name: "Standard_NC24ads_A100_v4",
-        platform: Platform::Azure,
-        family: InstanceFamily::GpuCompute,
-        architecture: Architecture::X86_64,
-        vcpu: 24,
-        memory_bytes: 220 * GI,
-        ephemeral_storage_bytes: 958 * GI,
-        gpu: Some(CatalogGpu {
-            gpu_type: "nvidia-a100",
-            count: 1,
-        }),
-    },
-    InstanceTypeSpec {
-        name: "Standard_NC96ads_A100_v4",
-        platform: Platform::Azure,
-        family: InstanceFamily::GpuCompute,
-        architecture: Architecture::X86_64,
-        vcpu: 96,
-        memory_bytes: 880 * GI,
-        ephemeral_storage_bytes: 3916 * GI,
-        gpu: Some(CatalogGpu {
-            gpu_type: "nvidia-a100",
-            count: 4,
-        }),
-    },
-    // GPU — NVIDIA H100 (ND H100 v5-series)
-    InstanceTypeSpec {
-        name: "Standard_ND96isr_H100_v5",
-        platform: Platform::Azure,
-        family: InstanceFamily::GpuCompute,
-        architecture: Architecture::X86_64,
-        vcpu: 96,
-        memory_bytes: 1900 * GI,
-        ephemeral_storage_bytes: 1000 * GI,
-        gpu: Some(CatalogGpu {
-            gpu_type: "nvidia-h100",
-            count: 8,
-        }),
-    },
-];
+/// The instance type catalog, generated from the clouds' machine APIs by
+/// `scripts/instance-catalog/generate.py` from `instance-catalog.toml`.
+mod catalog;
+use catalog::CATALOG;
 
 // ---------------------------------------------------------------------------
 // Catalog lookup
@@ -1482,7 +400,7 @@ fn select_instance_type_in_family(
 
     let candidates: Vec<&InstanceTypeSpec> = CATALOG
         .iter()
-        .filter(|spec| spec.platform == platform && spec.family == family)
+        .filter(|spec| spec.auto_select && spec.platform == platform && spec.family == family)
         .filter(|spec| {
             if requirements.nested_virt {
                 spec.is_nested_virt_capable()
@@ -1499,7 +417,8 @@ fn select_instance_type_in_family(
     // rejecting here made the fallback below unreachable.
     if candidates.is_empty() && family != InstanceFamily::StorageOptimized {
         let family_has_other_architecture = CATALOG.iter().any(|spec| {
-            spec.platform == platform
+            spec.auto_select
+                && spec.platform == platform
                 && spec.family == family
                 && if requirements.nested_virt {
                     spec.is_nested_virt_capable()
@@ -1555,7 +474,8 @@ fn select_instance_type_in_family(
             CATALOG
                 .iter()
                 .filter(|spec| {
-                    spec.platform == platform
+                    spec.auto_select
+                        && spec.platform == platform
                         && spec.family == InstanceFamily::GeneralPurpose
                         && spec.has_configurable_ephemeral_storage()
                         && max_configurable_ephemeral_storage_bytes(platform)
@@ -2577,7 +1497,28 @@ mod tests {
     }
 
     /// Matrix cases whose pick differs from the baseline on purpose, with the pick they get.
-    const ACCEPTED_PICK_CHANGES: &[(&str, &str)] = &[];
+    /// AWS reports an NVIDIA A10G on g5, so a T4 request has no AWS machine and an A10G
+    /// request gets g5.
+    #[rustfmt::skip]
+    const ACCEPTED_PICK_CHANGES: &[(&str, &str)] = &[
+        (
+            "aws default nested=false gpu-t4",
+            "error: Arm64: architecture Arm64 is unavailable for this workload on platform aws; \
+             X86_64: no instance type for GPU type 'nvidia-t4' x1 on platform aws",
+        ),
+        (
+            "aws default nested=false gpu-a10g",
+            "g5.xlarge min=1 max=1 memory=17179869184 storage=268435456000",
+        ),
+        (
+            "aws X86_64 nested=false gpu-t4",
+            "error: no instance type for GPU type 'nvidia-t4' x1 on platform aws",
+        ),
+        (
+            "aws X86_64 nested=false gpu-a10g",
+            "g5.xlarge min=1 max=1 memory=17179869184 storage=268435456000",
+        ),
+    ];
 
     /// Automatic picks, with the memory and disk they provision, are what existing stacks get
     /// on their next deploy, so a catalog change must leave them alone. The baseline holds the
@@ -2609,31 +1550,195 @@ mod tests {
         }
     }
 
+    type PinnedMachine = (
+        Platform,
+        &'static str,
+        u32,
+        u64,
+        u64,
+        Option<(&'static str, u32)>,
+        bool,
+    );
+
+    /// Machines existing stacks may run, with the vCPU, memory, disk, GPU and nested
+    /// virtualization they are planned with. Each must stay in the catalog with those values.
+    #[rustfmt::skip]
+    const PINNED_MACHINES: &[PinnedMachine] = &[
+        (Platform::Aws, "t4g.micro", 2, GI, 20 * GI, None, false),
+        (Platform::Aws, "t4g.small", 2, 2 * GI, 20 * GI, None, false),
+        (Platform::Aws, "t4g.medium", 2, 4 * GI, 20 * GI, None, false),
+        (Platform::Aws, "t4g.large", 2, 8 * GI, 20 * GI, None, false),
+        (Platform::Aws, "t3.xlarge", 4, 16 * GI, 20 * GI, None, false),
+        (Platform::Aws, "t4g.xlarge", 4, 16 * GI, 20 * GI, None, false),
+        (Platform::Aws, "m7g.medium", 1, 4 * GI, 20 * GI, None, false),
+        (Platform::Aws, "m7i.large", 2, 8 * GI, 20 * GI, None, false),
+        (Platform::Aws, "m7g.large", 2, 8 * GI, 20 * GI, None, false),
+        (Platform::Aws, "m8i.large", 2, 8 * GI, 20 * GI, None, true),
+        (Platform::Aws, "m7i.xlarge", 4, 16 * GI, 20 * GI, None, false),
+        (Platform::Aws, "m7g.xlarge", 4, 16 * GI, 20 * GI, None, false),
+        (Platform::Aws, "m8i.xlarge", 4, 16 * GI, 20 * GI, None, true),
+        (Platform::Aws, "m7i.2xlarge", 8, 32 * GI, 20 * GI, None, false),
+        (Platform::Aws, "m7g.2xlarge", 8, 32 * GI, 20 * GI, None, false),
+        (Platform::Aws, "m8i.2xlarge", 8, 32 * GI, 20 * GI, None, true),
+        (Platform::Aws, "m7i.4xlarge", 16, 64 * GI, 20 * GI, None, false),
+        (Platform::Aws, "m7g.4xlarge", 16, 64 * GI, 20 * GI, None, false),
+        (Platform::Aws, "m8i.4xlarge", 16, 64 * GI, 20 * GI, None, true),
+        (Platform::Aws, "c7g.medium", 1, 2 * GI, 20 * GI, None, false),
+        (Platform::Aws, "c8g.medium", 1, 2 * GI, 20 * GI, None, false),
+        (Platform::Aws, "c7g.large", 2, 4 * GI, 20 * GI, None, false),
+        (Platform::Aws, "c8g.large", 2, 4 * GI, 20 * GI, None, false),
+        (Platform::Aws, "c8i.large", 2, 4 * GI, 20 * GI, None, true),
+        (Platform::Aws, "c7g.xlarge", 4, 8 * GI, 20 * GI, None, false),
+        (Platform::Aws, "c8g.xlarge", 4, 8 * GI, 20 * GI, None, false),
+        (Platform::Aws, "c8i.xlarge", 4, 8 * GI, 20 * GI, None, true),
+        (Platform::Aws, "c7g.2xlarge", 8, 16 * GI, 20 * GI, None, false),
+        (Platform::Aws, "c8g.2xlarge", 8, 16 * GI, 20 * GI, None, false),
+        (Platform::Aws, "c8i.2xlarge", 8, 16 * GI, 20 * GI, None, true),
+        (Platform::Aws, "c7g.4xlarge", 16, 32 * GI, 20 * GI, None, false),
+        (Platform::Aws, "c8g.4xlarge", 16, 32 * GI, 20 * GI, None, false),
+        (Platform::Aws, "c8i.4xlarge", 16, 32 * GI, 20 * GI, None, true),
+        (Platform::Aws, "r7g.medium", 1, 8 * GI, 20 * GI, None, false),
+        (Platform::Aws, "r7g.large", 2, 16 * GI, 20 * GI, None, false),
+        (Platform::Aws, "r6a.large", 2, 16 * GI, 20 * GI, None, false),
+        (Platform::Aws, "r7i.large", 2, 16 * GI, 20 * GI, None, false),
+        (Platform::Aws, "r7g.xlarge", 4, 32 * GI, 20 * GI, None, false),
+        (Platform::Aws, "r6a.xlarge", 4, 32 * GI, 20 * GI, None, false),
+        (Platform::Aws, "r7i.xlarge", 4, 32 * GI, 20 * GI, None, false),
+        (Platform::Aws, "r7g.2xlarge", 8, 64 * GI, 20 * GI, None, false),
+        (Platform::Aws, "r6a.2xlarge", 8, 64 * GI, 20 * GI, None, false),
+        (Platform::Aws, "r7i.2xlarge", 8, 64 * GI, 20 * GI, None, false),
+        (Platform::Aws, "r7g.4xlarge", 16, 128 * GI, 20 * GI, None, false),
+        (Platform::Aws, "r6a.4xlarge", 16, 128 * GI, 20 * GI, None, false),
+        (Platform::Aws, "r7i.4xlarge", 16, 128 * GI, 20 * GI, None, false),
+        (Platform::Aws, "i4i.xlarge", 4, 32 * GI, 937 * GI, None, false),
+        (Platform::Aws, "i4i.2xlarge", 8, 64 * GI, 1875 * GI, None, false),
+        (Platform::Aws, "i4i.4xlarge", 16, 128 * GI, 3750 * GI, None, false),
+        (Platform::Aws, "i4i.8xlarge", 32, 256 * GI, 7500 * GI, None, false),
+        (Platform::Aws, "g5.xlarge", 4, 16 * GI, 250 * GI, Some(("nvidia-t4", 1)), false),
+        (Platform::Aws, "g5.2xlarge", 8, 32 * GI, 450 * GI, Some(("nvidia-t4", 1)), false),
+        (Platform::Aws, "p4d.24xlarge", 96, 1152 * GI, 8000 * GI, Some(("nvidia-a100", 8)), false),
+        (Platform::Aws, "p5.48xlarge", 192, 2048 * GI, 8000 * GI, Some(("nvidia-h100", 8)), false),
+        (Platform::Gcp, "e2-micro", 2, GI, 20 * GI, None, false),
+        (Platform::Gcp, "e2-small", 2, 2 * GI, 20 * GI, None, false),
+        (Platform::Gcp, "e2-medium", 2, 4 * GI, 20 * GI, None, false),
+        (Platform::Gcp, "n2-standard-2", 2, 8 * GI, 20 * GI, None, true),
+        (Platform::Gcp, "n2-standard-4", 4, 16 * GI, 20 * GI, None, true),
+        (Platform::Gcp, "n2-standard-8", 8, 32 * GI, 20 * GI, None, true),
+        (Platform::Gcp, "n2-standard-16", 16, 64 * GI, 20 * GI, None, true),
+        (Platform::Gcp, "c3-standard-4", 4, 8 * GI, 20 * GI, None, false),
+        (Platform::Gcp, "c3-standard-8", 8, 16 * GI, 20 * GI, None, false),
+        (Platform::Gcp, "n2-highmem-2", 2, 16 * GI, 20 * GI, None, false),
+        (Platform::Gcp, "n2-highmem-4", 4, 32 * GI, 20 * GI, None, false),
+        (Platform::Gcp, "n2-highmem-8", 8, 64 * GI, 20 * GI, None, false),
+        (Platform::Gcp, "n2-highmem-16", 16, 128 * GI, 20 * GI, None, false),
+        (Platform::Gcp, "n2-highmem-32", 32, 256 * GI, 20 * GI, None, false),
+        (Platform::Gcp, "c3d-standard-8", 8, 32 * GI, 480 * GI, None, false),
+        (Platform::Gcp, "c3d-standard-16", 16, 64 * GI, 960 * GI, None, false),
+        (Platform::Gcp, "c3d-standard-30", 30, 120 * GI, 1920 * GI, None, false),
+        (Platform::Gcp, "n1-standard-4-t4", 4, 15 * GI, 100 * GI, Some(("nvidia-t4", 1)), false),
+        (Platform::Gcp, "a2-highgpu-1g", 12, 85 * GI, 100 * GI, Some(("nvidia-a100", 1)), false),
+        (Platform::Gcp, "a2-highgpu-8g", 96, 1360 * GI, 100 * GI, Some(("nvidia-a100", 8)), false),
+        (Platform::Gcp, "a3-highgpu-8g", 208, 1872 * GI, 100 * GI, Some(("nvidia-h100", 8)), false),
+        (Platform::Azure, "Standard_B1s", 1, GI, 20 * GI, None, false),
+        (Platform::Azure, "Standard_B2s", 2, 4 * GI, 20 * GI, None, false),
+        (Platform::Azure, "Standard_B2ms", 2, 8 * GI, 20 * GI, None, false),
+        (Platform::Azure, "Standard_B4ms", 4, 16 * GI, 20 * GI, None, false),
+        (Platform::Azure, "Standard_D2s_v4", 2, 8 * GI, 20 * GI, None, false),
+        (Platform::Azure, "Standard_D2s_v5", 2, 8 * GI, 20 * GI, None, true),
+        (Platform::Azure, "Standard_D4s_v5", 4, 16 * GI, 20 * GI, None, true),
+        (Platform::Azure, "Standard_D8s_v5", 8, 32 * GI, 20 * GI, None, true),
+        (Platform::Azure, "Standard_D16s_v5", 16, 64 * GI, 20 * GI, None, true),
+        (Platform::Azure, "Standard_F2s_v2", 2, 4 * GI, 20 * GI, None, true),
+        (Platform::Azure, "Standard_F4s_v2", 4, 8 * GI, 20 * GI, None, true),
+        (Platform::Azure, "Standard_F8s_v2", 8, 16 * GI, 20 * GI, None, true),
+        (Platform::Azure, "Standard_F16s_v2", 16, 32 * GI, 20 * GI, None, true),
+        (Platform::Azure, "Standard_E2s_v5", 2, 16 * GI, 20 * GI, None, true),
+        (Platform::Azure, "Standard_E4s_v5", 4, 32 * GI, 20 * GI, None, true),
+        (Platform::Azure, "Standard_E8s_v5", 8, 64 * GI, 20 * GI, None, true),
+        (Platform::Azure, "Standard_E16s_v5", 16, 128 * GI, 20 * GI, None, true),
+        (Platform::Azure, "Standard_L8s_v3", 8, 64 * GI, 1788 * GI, None, false),
+        (Platform::Azure, "Standard_L16s_v3", 16, 128 * GI, 3576 * GI, None, false),
+        (Platform::Azure, "Standard_L32s_v3", 32, 256 * GI, 7154 * GI, None, false),
+        (Platform::Azure, "Standard_NC4as_T4_v3", 4, 28 * GI, 176 * GI, Some(("nvidia-t4", 1)), false),
+        (Platform::Azure, "Standard_NC24ads_A100_v4", 24, 220 * GI, 958 * GI, Some(("nvidia-a100", 1)), false),
+        (Platform::Azure, "Standard_NC96ads_A100_v4", 96, 880 * GI, 3916 * GI, Some(("nvidia-a100", 4)), false),
+        (Platform::Azure, "Standard_ND96isr_H100_v5", 96, 1900 * GI, 1000 * GI, Some(("nvidia-h100", 8)), false),
+    ];
+
+    /// Pinned machines whose GPU type the AWS API reports differently, with that type.
+    const GPU_TYPE_CORRECTIONS: &[(&str, &str)] =
+        &[("g5.xlarge", "nvidia-a10g"), ("g5.2xlarge", "nvidia-a10g")];
+
     #[test]
-    fn test_catalog_instance_types_sorted_by_vcpu_within_family() {
-        // Verify that within each (platform, family) group, vcpu is non-decreasing.
-        // This ensures our "min_by_key(vcpu)" logic works correctly.
-        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
-            let entries = catalog_for_platform(platform);
-            let mut by_family: std::collections::HashMap<_, Vec<_>> =
-                std::collections::HashMap::new();
-            for entry in entries {
-                by_family
-                    .entry(format!("{:?}", entry.family))
-                    .or_default()
-                    .push(entry);
-            }
-            for (family, instances) in &by_family {
-                for window in instances.windows(2) {
-                    assert!(
-                        window[0].vcpu <= window[1].vcpu,
-                        "catalog not sorted by vcpu for {platform}/{family}: {} ({}) > {} ({})",
-                        window[0].name,
-                        window[0].vcpu,
-                        window[1].name,
-                        window[1].vcpu
-                    );
-                }
+    fn every_pinned_machine_is_still_in_the_catalog_with_its_values() {
+        for &(platform, name, vcpu, memory_bytes, storage_bytes, gpu, nested_virt) in
+            PINNED_MACHINES
+        {
+            let spec = find_instance_type(platform, name)
+                .unwrap_or_else(|| panic!("{platform} machine {name} left the catalog"));
+            let gpu = gpu.map(|(gpu_type, count)| {
+                let corrected = GPU_TYPE_CORRECTIONS
+                    .iter()
+                    .find(|(corrected, _)| *corrected == name);
+                (corrected.map_or(gpu_type, |(_, gpu_type)| *gpu_type), count)
+            });
+            assert_eq!(
+                (
+                    spec.vcpu,
+                    spec.memory_bytes,
+                    spec.ephemeral_storage_bytes,
+                    spec.gpu.map(|gpu| (gpu.gpu_type, gpu.count)),
+                    spec.nested_virt,
+                ),
+                (vcpu, memory_bytes, storage_bytes, gpu, nested_virt),
+                "{platform} {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn automatic_selection_considers_exactly_the_pinned_machines() {
+        let pinned: std::collections::HashSet<_> = PINNED_MACHINES
+            .iter()
+            .map(|&(platform, name, ..)| (platform, name))
+            .collect();
+        let auto_select: std::collections::HashSet<_> = CATALOG
+            .iter()
+            .filter(|spec| spec.auto_select)
+            .map(|spec| (spec.platform, spec.name))
+            .collect();
+        assert_eq!(auto_select, pinned);
+    }
+
+    #[test]
+    fn catalog_lists_no_bare_metal_machine() {
+        for spec in CATALOG {
+            assert!(!spec.name.contains("metal"), "{}", spec.name);
+        }
+    }
+
+    /// The generator writes each series as one run of rows, smallest first.
+    #[test]
+    fn test_catalog_instance_types_sorted_by_vcpu_within_series() {
+        let mut finished = std::collections::HashSet::new();
+        for window in CATALOG.windows(2) {
+            let (previous, next) = (&window[0], &window[1]);
+            if (previous.platform, previous.series) == (next.platform, next.series) {
+                assert!(
+                    previous.vcpu <= next.vcpu,
+                    "{} ({}) before {} ({})",
+                    previous.name,
+                    previous.vcpu,
+                    next.name,
+                    next.vcpu
+                );
+            } else {
+                finished.insert((previous.platform, previous.series));
+                assert!(
+                    !finished.contains(&(next.platform, next.series)),
+                    "series {} is split",
+                    next.series
+                );
             }
         }
     }

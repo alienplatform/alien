@@ -1,0 +1,524 @@
+# Which machines the instance catalog lists. `scripts/instance-catalog/generate.py` reads this
+# file and the clouds' machine APIs and writes `src/instance_catalog/catalog.rs`. Every vCPU,
+# memory, local storage and GPU number there comes from the API, except the values a series
+# lists under `overrides`.
+#
+# Each `[[<platform>.series]]` entry is one series of a category:
+#   series         The series name machines are grouped by.
+#   category       The `InstanceFamily` it belongs to.
+#   label          The name people see for the series.
+#   pattern        A regex for the series' machine names, where `{n}` stands for a number and
+#                  `{size}` for an AWS size (`medium`, `large`, `2xlarge`, ...). Defaults to
+#                  `{series}.{size}` on AWS and `{series}-{n}` on GCP; Azure always sets it.
+#   from, to       The smallest and the largest machine to include, by vCPU then memory.
+#                  `to` defaults to the largest one. Bare-metal machines never match.
+#   sizes          Explicit machine names, in place of `pattern`, `from` and `to`.
+#   auto_select_to The largest machine automatic selection may pick; it may pick none of the
+#                  series without it. Automatic selection picks from a fixed set of machines, so
+#                  adding a series or a size never changes what an existing stack gets.
+#   nested_virt    Whether the series exposes nested virtualization, with the provider's page.
+#   overrides      Per machine name, values that replace the API's: `memory_gib`,
+#                  `ephemeral_storage_gib` and `nested_virt`. Only automatic picks use them,
+#                  where a stack that runs the machine must keep getting the same memory, disk
+#                  and nested-virtualization answer.
+#
+# Series order is the order a series appears in within its category, and the tie-break between
+# two machines of equal size in automatic selection.
+
+[aws]
+regions = ["us-east-1", "us-west-2"]
+
+[[aws.series]]
+series = "t4g"
+category = "Burstable"
+label = "Burstable · Graviton2"
+from = "t4g.micro"
+to = "t4g.2xlarge"
+auto_select_to = "t4g.xlarge"
+
+[[aws.series]]
+series = "t3"
+category = "Burstable"
+label = "Burstable · Intel"
+from = "t3.xlarge"
+to = "t3.2xlarge"
+auto_select_to = "t3.xlarge"
+
+[[aws.series]]
+series = "m7g"
+category = "GeneralPurpose"
+label = "General purpose · Graviton3"
+from = "m7g.medium"
+auto_select_to = "m7g.4xlarge"
+
+[[aws.series]]
+series = "m8g"
+category = "GeneralPurpose"
+label = "General purpose · Graviton4"
+from = "m8g.medium"
+
+[[aws.series]]
+series = "m7i"
+category = "GeneralPurpose"
+label = "General purpose · Intel · 7th gen"
+from = "m7i.large"
+auto_select_to = "m7i.4xlarge"
+# The API reports nested virtualization for m7i, but automatic selection keeps ordinary x86
+# workloads on m7i and nested ones on m8i; flagging it would move both picks.
+
+# https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/amazon-ec2-nested-virtualization.html
+[[aws.series]]
+series = "m8i"
+category = "GeneralPurpose"
+label = "General purpose · Intel · 8th gen"
+from = "m8i.large"
+to = "m8i.96xlarge"
+auto_select_to = "m8i.4xlarge"
+nested_virt = true
+
+[[aws.series]]
+series = "m8i-flex"
+category = "GeneralPurpose"
+label = "General purpose · Intel · 8th gen · Flex"
+from = "m8i-flex.large"
+to = "m8i-flex.16xlarge"
+nested_virt = true
+
+[[aws.series]]
+series = "m8a"
+category = "GeneralPurpose"
+label = "General purpose · AMD · 8th gen"
+from = "m8a.medium"
+
+[[aws.series]]
+series = "c7g"
+category = "ComputeOptimized"
+label = "Compute optimized · Graviton3"
+from = "c7g.medium"
+auto_select_to = "c7g.4xlarge"
+
+[[aws.series]]
+series = "c8g"
+category = "ComputeOptimized"
+label = "Compute optimized · Graviton4"
+from = "c8g.medium"
+auto_select_to = "c8g.4xlarge"
+
+[[aws.series]]
+series = "c8i"
+category = "ComputeOptimized"
+label = "Compute optimized · Intel · 8th gen"
+from = "c8i.large"
+to = "c8i.96xlarge"
+auto_select_to = "c8i.4xlarge"
+nested_virt = true
+
+[[aws.series]]
+series = "c8i-flex"
+category = "ComputeOptimized"
+label = "Compute optimized · Intel · 8th gen · Flex"
+from = "c8i-flex.large"
+to = "c8i-flex.16xlarge"
+nested_virt = true
+
+[[aws.series]]
+series = "c8a"
+category = "ComputeOptimized"
+label = "Compute optimized · AMD · 8th gen"
+from = "c8a.medium"
+
+[[aws.series]]
+series = "r7g"
+category = "MemoryOptimized"
+label = "Memory optimized · Graviton3"
+from = "r7g.medium"
+auto_select_to = "r7g.4xlarge"
+
+[[aws.series]]
+series = "r8g"
+category = "MemoryOptimized"
+label = "Memory optimized · Graviton4"
+from = "r8g.medium"
+
+[[aws.series]]
+series = "r6a"
+category = "MemoryOptimized"
+label = "Memory optimized · AMD · 6th gen"
+from = "r6a.large"
+auto_select_to = "r6a.4xlarge"
+
+[[aws.series]]
+series = "r7i"
+category = "MemoryOptimized"
+label = "Memory optimized · Intel · 7th gen"
+from = "r7i.large"
+auto_select_to = "r7i.4xlarge"
+# The API reports nested virtualization for r7i; it stays unflagged like m7i.
+
+[[aws.series]]
+series = "r8i"
+category = "MemoryOptimized"
+label = "Memory optimized · Intel · 8th gen"
+from = "r8i.large"
+to = "r8i.96xlarge"
+nested_virt = true
+
+[[aws.series]]
+series = "r8i-flex"
+category = "MemoryOptimized"
+label = "Memory optimized · Intel · 8th gen · Flex"
+from = "r8i-flex.large"
+to = "r8i-flex.16xlarge"
+nested_virt = true
+
+[[aws.series]]
+series = "r8a"
+category = "MemoryOptimized"
+label = "Memory optimized · AMD · 8th gen"
+from = "r8a.medium"
+
+[[aws.series]]
+series = "i4i"
+category = "StorageOptimized"
+label = "Storage optimized · Intel · 4th gen"
+from = "i4i.xlarge"
+auto_select_to = "i4i.8xlarge"
+
+[[aws.series]]
+series = "i7i"
+category = "StorageOptimized"
+label = "Storage optimized · Intel · 7th gen"
+from = "i7i.large"
+nested_virt = true
+
+[[aws.series]]
+series = "i8g"
+category = "StorageOptimized"
+label = "Storage optimized · Graviton4"
+from = "i8g.large"
+
+[[aws.series]]
+series = "g5"
+category = "GpuCompute"
+label = "GPU · NVIDIA A10G"
+sizes = ["g5.xlarge", "g5.2xlarge"]
+auto_select_to = "g5.2xlarge"
+
+[[aws.series]]
+series = "p4d"
+category = "GpuCompute"
+label = "GPU · NVIDIA A100"
+sizes = ["p4d.24xlarge"]
+auto_select_to = "p4d.24xlarge"
+
+[[aws.series]]
+series = "p5"
+category = "GpuCompute"
+label = "GPU · NVIDIA H100"
+sizes = ["p5.48xlarge"]
+auto_select_to = "p5.48xlarge"
+# The API reports 8 x 3800 GB of NVMe.
+overrides = { "p5.48xlarge" = { ephemeral_storage_gib = 8000 } }
+
+# Nested virtualization on GCP is any Intel series except E2 and the M (memory-optimized) series:
+# https://docs.cloud.google.com/compute/docs/instances/nested-virtualization/overview
+[gcp]
+zones = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
+
+[[gcp.series]]
+series = "e2"
+category = "Burstable"
+label = "Burstable · shared core"
+sizes = ["e2-micro", "e2-small", "e2-medium"]
+auto_select_to = "e2-medium"
+
+[[gcp.series]]
+series = "n2-standard"
+category = "GeneralPurpose"
+label = "General purpose · Intel · N2"
+from = "n2-standard-2"
+auto_select_to = "n2-standard-16"
+nested_virt = true
+
+[[gcp.series]]
+series = "n4-standard"
+category = "GeneralPurpose"
+label = "General purpose · Intel · N4"
+from = "n4-standard-2"
+nested_virt = true
+
+[[gcp.series]]
+series = "n4a-standard"
+category = "GeneralPurpose"
+label = "General purpose · Axion · N4A"
+from = "n4a-standard-1"
+
+[[gcp.series]]
+series = "c3-standard"
+category = "ComputeOptimized"
+label = "Compute optimized · Intel · C3"
+from = "c3-standard-4"
+auto_select_to = "c3-standard-8"
+nested_virt = true
+# The API reports twice this memory and Google allows nested virtualization on C3; these
+# values match what existing pools on these sizes are sized and validated with.
+[gcp.series.overrides."c3-standard-4"]
+memory_gib = 8
+nested_virt = false
+[gcp.series.overrides."c3-standard-8"]
+memory_gib = 16
+nested_virt = false
+
+[[gcp.series]]
+series = "c4-standard"
+category = "ComputeOptimized"
+label = "Compute optimized · Intel · C4"
+from = "c4-standard-2"
+nested_virt = true
+
+[[gcp.series]]
+series = "c4-highcpu"
+category = "ComputeOptimized"
+label = "Compute optimized · Intel · C4 high CPU"
+from = "c4-highcpu-2"
+nested_virt = true
+
+[[gcp.series]]
+series = "c4a-standard"
+category = "ComputeOptimized"
+label = "Compute optimized · Axion · C4A"
+from = "c4a-standard-1"
+
+[[gcp.series]]
+series = "c4a-highcpu"
+category = "ComputeOptimized"
+label = "Compute optimized · Axion · C4A high CPU"
+from = "c4a-highcpu-1"
+
+[[gcp.series]]
+series = "n4-highcpu"
+category = "ComputeOptimized"
+label = "Compute optimized · Intel · N4 high CPU"
+from = "n4-highcpu-2"
+nested_virt = true
+
+[[gcp.series]]
+series = "n4a-highcpu"
+category = "ComputeOptimized"
+label = "Compute optimized · Axion · N4A high CPU"
+from = "n4a-highcpu-1"
+
+[[gcp.series]]
+series = "n2-highmem"
+category = "MemoryOptimized"
+label = "Memory optimized · Intel · N2 high memory"
+from = "n2-highmem-2"
+auto_select_to = "n2-highmem-32"
+nested_virt = true
+# Google allows nested virtualization on N2; these sizes stay off, matching what existing
+# pools on them are validated with.
+[gcp.series.overrides."n2-highmem-2"]
+nested_virt = false
+[gcp.series.overrides."n2-highmem-4"]
+nested_virt = false
+[gcp.series.overrides."n2-highmem-8"]
+nested_virt = false
+[gcp.series.overrides."n2-highmem-16"]
+nested_virt = false
+[gcp.series.overrides."n2-highmem-32"]
+nested_virt = false
+
+[[gcp.series]]
+series = "n4-highmem"
+category = "MemoryOptimized"
+label = "Memory optimized · Intel · N4 high memory"
+from = "n4-highmem-2"
+nested_virt = true
+
+[[gcp.series]]
+series = "c4-highmem"
+category = "MemoryOptimized"
+label = "Memory optimized · Intel · C4 high memory"
+from = "c4-highmem-2"
+nested_virt = true
+
+[[gcp.series]]
+series = "c4a-highmem"
+category = "MemoryOptimized"
+label = "Memory optimized · Axion · C4A high memory"
+from = "c4a-highmem-1"
+
+[[gcp.series]]
+series = "n4a-highmem"
+category = "MemoryOptimized"
+label = "Memory optimized · Axion · N4A high memory"
+from = "n4a-highmem-1"
+
+[[gcp.series]]
+series = "c3d-standard"
+category = "StorageOptimized"
+label = "Storage optimized · AMD · C3D"
+sizes = ["c3d-standard-8", "c3d-standard-16", "c3d-standard-30"]
+auto_select_to = "c3d-standard-30"
+# These sizes have no local SSD (only the `-lssd` types do). The GCP controller sizes their
+# persistent boot disk from this number.
+[gcp.series.overrides."c3d-standard-8"]
+ephemeral_storage_gib = 480
+[gcp.series.overrides."c3d-standard-16"]
+ephemeral_storage_gib = 960
+[gcp.series.overrides."c3d-standard-30"]
+ephemeral_storage_gib = 1920
+
+# An N1 machine with one attached T4; GCP lists the GPU as an accelerator type, not a machine.
+[[gcp.series]]
+series = "n1-t4"
+category = "GpuCompute"
+label = "GPU · NVIDIA T4"
+sizes = ["n1-standard-4-t4"]
+machine = "n1-standard-4"
+attached_gpu = "nvidia-tesla-t4"
+auto_select_to = "n1-standard-4-t4"
+
+[[gcp.series]]
+series = "a2-highgpu"
+category = "GpuCompute"
+label = "GPU · NVIDIA A100"
+sizes = ["a2-highgpu-1g", "a2-highgpu-8g"]
+auto_select_to = "a2-highgpu-8g"
+# The API reports 680 GiB.
+overrides = { "a2-highgpu-8g" = { memory_gib = 1360 } }
+
+[[gcp.series]]
+series = "a3-highgpu"
+category = "GpuCompute"
+label = "GPU · NVIDIA H100"
+sizes = ["a3-highgpu-8g"]
+auto_select_to = "a3-highgpu-8g"
+# The API reports 16 bundled local SSDs.
+overrides = { "a3-highgpu-8g" = { ephemeral_storage_gib = 100 } }
+
+[azure]
+regions = ["eastus", "westus2"]
+
+[[azure.series]]
+series = "Bs"
+category = "Burstable"
+label = "Burstable · B"
+sizes = ["Standard_B1s", "Standard_B2s", "Standard_B2ms", "Standard_B4ms"]
+auto_select_to = "Standard_B4ms"
+
+# https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/general-purpose/dsv4-series says
+# nested virtualization is supported, but flagging it would move nested picks from
+# Standard_D2s_v5 to Standard_D2s_v4.
+[[azure.series]]
+series = "Dsv4"
+category = "GeneralPurpose"
+label = "General purpose · Intel · Dsv4"
+sizes = ["Standard_D2s_v4"]
+auto_select_to = "Standard_D2s_v4"
+
+# https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/general-purpose/dsv5-series
+[[azure.series]]
+series = "Dsv5"
+category = "GeneralPurpose"
+label = "General purpose · Intel · Dsv5"
+pattern = "Standard_D{n}s_v5"
+from = "Standard_D2s_v5"
+auto_select_to = "Standard_D16s_v5"
+nested_virt = true
+
+# https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/general-purpose/dsv6-series
+[[azure.series]]
+series = "Dsv6"
+category = "GeneralPurpose"
+label = "General purpose · Intel · Dsv6"
+pattern = "Standard_D{n}s_v6"
+from = "Standard_D2s_v6"
+nested_virt = true
+
+# https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/general-purpose/dasv6-series
+[[azure.series]]
+series = "Dasv6"
+category = "GeneralPurpose"
+label = "General purpose · AMD · Dasv6"
+pattern = "Standard_D{n}as_v6"
+from = "Standard_D2as_v6"
+nested_virt = true
+
+# https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/compute-optimized/fsv2-series
+[[azure.series]]
+series = "Fsv2"
+category = "ComputeOptimized"
+label = "Compute optimized · Intel · Fsv2"
+pattern = "Standard_F{n}s_v2"
+from = "Standard_F2s_v2"
+auto_select_to = "Standard_F16s_v2"
+nested_virt = true
+
+# https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/memory-optimized/esv5-series
+[[azure.series]]
+series = "Esv5"
+category = "MemoryOptimized"
+label = "Memory optimized · Intel · Esv5"
+pattern = "Standard_E{n}s_v5"
+from = "Standard_E2s_v5"
+auto_select_to = "Standard_E16s_v5"
+nested_virt = true
+
+# https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/memory-optimized/esv6-series
+[[azure.series]]
+series = "Esv6"
+category = "MemoryOptimized"
+label = "Memory optimized · Intel · Esv6"
+pattern = "Standard_E{n}s_v6"
+from = "Standard_E2s_v6"
+nested_virt = true
+
+# https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/storage-optimized/lsv3-series says
+# nested virtualization is supported, but flagging it would move nested storage-heavy picks
+# from a provider disk on Dsv5 to Lsv3.
+[[azure.series]]
+series = "Lsv3"
+category = "StorageOptimized"
+label = "Storage optimized · Intel · Lsv3"
+pattern = "Standard_L{n}s_v3"
+from = "Standard_L8s_v3"
+auto_select_to = "Standard_L32s_v3"
+[azure.series.overrides."Standard_L8s_v3"]
+ephemeral_storage_gib = 1788
+[azure.series.overrides."Standard_L16s_v3"]
+ephemeral_storage_gib = 3576
+[azure.series.overrides."Standard_L32s_v3"]
+ephemeral_storage_gib = 7154
+
+# Azure reports a GPU count but not its model, so the GPU type is named here.
+[[azure.series]]
+series = "NCasT4_v3"
+category = "GpuCompute"
+label = "GPU · NVIDIA T4"
+sizes = ["Standard_NC4as_T4_v3"]
+gpu_type = "nvidia-t4"
+auto_select_to = "Standard_NC4as_T4_v3"
+
+[[azure.series]]
+series = "NCads_A100_v4"
+category = "GpuCompute"
+label = "GPU · NVIDIA A100"
+sizes = ["Standard_NC24ads_A100_v4", "Standard_NC96ads_A100_v4"]
+gpu_type = "nvidia-a100"
+auto_select_to = "Standard_NC96ads_A100_v4"
+# The API reports NVMe of 894 and 3576 GiB; these values add the temp disk.
+[azure.series.overrides."Standard_NC24ads_A100_v4"]
+ephemeral_storage_gib = 958
+[azure.series.overrides."Standard_NC96ads_A100_v4"]
+ephemeral_storage_gib = 3916
+
+[[azure.series]]
+series = "NDisr_H100_v5"
+category = "GpuCompute"
+label = "GPU · NVIDIA H100"
+sizes = ["Standard_ND96isr_H100_v5"]
+gpu_type = "nvidia-h100"
+auto_select_to = "Standard_ND96isr_H100_v5"
+# The API reports 28610 GiB of NVMe, more than an Azure OS disk can hold.
+overrides = { "Standard_ND96isr_H100_v5" = { ephemeral_storage_gib = 1000 } }
