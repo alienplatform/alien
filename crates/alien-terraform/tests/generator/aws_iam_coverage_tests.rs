@@ -37,7 +37,16 @@ use alien_terraform::{
     },
     TerraformTarget, TfEmitter, TfFragment, TfRegistry,
 };
-use std::collections::BTreeSet;
+use std::{
+    collections::BTreeSet,
+    sync::atomic::{AtomicUsize, Ordering},
+};
+
+/// How many modules this test validates at once. Each validation starts its own Terraform and
+/// AWS provider processes, and starting every module at once overloads the CI runner until
+/// providers time out. `.config/nextest.toml` reserves this many test threads for the test, so
+/// keep the two equal.
+const VALIDATE_WORKERS: usize = 4;
 
 /// The fixtures, by the permission set families they hold: one per resource type, granted
 /// every set of its family, so each type is sized in the smallest stack that holds it.
@@ -319,9 +328,14 @@ async fn every_aws_emitter_renders_every_permission_set_it_supports() {
         missing.is_empty(),
         "these AWS emitters have no resource in the coverage fixture; add one: {missing:?}"
     );
+    let next = AtomicUsize::new(0);
     std::thread::scope(|scope| {
-        for (case, module) in &modules {
-            scope.spawn(move || assert_terraform_valid(module, case));
+        for _ in 0..VALIDATE_WORKERS {
+            scope.spawn(|| {
+                while let Some((case, module)) = modules.get(next.fetch_add(1, Ordering::Relaxed)) {
+                    assert_terraform_valid(module, case);
+                }
+            });
         }
     });
 }
