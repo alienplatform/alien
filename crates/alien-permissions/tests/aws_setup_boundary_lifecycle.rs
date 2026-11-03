@@ -120,14 +120,43 @@ fn setup_can_create_pass_and_delete_the_flow_log_role_of_its_own_stack() {
             "{action} on a role another stack tagged"
         );
     }
+    // A role that already carries ownership tags, such as a Terraform setup's, is not retagged
+    // into this network's.
     assert_eq!(
         evaluate(
             &setup,
-            &Request::new("iam:PassRole", role)
+            &owned("iam:TagRole", role, "aws:RequestTag")
+                .with("aws:ResourceTag/deployment", "my-stack")
+                .with("aws:ResourceTag/managed-by", "setup")
+        ),
+        Decision::NotAllowed,
+        "iam:TagRole on a role that already has ownership tags"
+    );
+    let pass = |role: &str| {
+        Request::new("iam:PassRole", role)
+            .with("iam:PassedToService", "vpc-flow-logs.amazonaws.com")
+    };
+    assert_eq!(
+        evaluate(
+            &setup,
+            &owned("iam:PassRole", role, "iam:ResourceTag")
                 .with("iam:PassedToService", "vpc-flow-logs.amazonaws.com")
         ),
         Decision::Allowed
     );
+    for (request, case) in [
+        (pass(role), "an untagged role"),
+        (
+            pass(role).with("iam:ResourceTag/deployment", "my-stack-prod"),
+            "a role tagged for another stack",
+        ),
+    ] {
+        assert_eq!(
+            evaluate(&setup, &request),
+            Decision::NotAllowed,
+            "iam:PassRole to {case}"
+        );
+    }
 }
 
 /// Creating the flow log group with its tags authorizes the tagging actions, but a group that

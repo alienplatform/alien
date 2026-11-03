@@ -160,7 +160,7 @@
       },
       {
         "grant": {
-          "actions": ["iam:CreateRole", "iam:TagRole"]
+          "actions": ["iam:CreateRole"]
         },
         "binding": {
           "stack": {
@@ -169,6 +169,29 @@
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // CreateRole with tags also authorizes TagRole, and IAM checks it with the new role's
+      // tags as its resource tags. IfExists keeps that working while a role that carries
+      // another deployment's or a template setup's tags cannot be retagged into this network's.
+      {
+        "grant": {
+          "actions": ["iam:TagRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-flow-logs"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              },
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
           }
@@ -190,6 +213,8 @@
           }
         }
       },
+      // CreateFlowLogs checks PassRole without aws:ResourceTag in the request context, so the
+      // role's tags are matched with IAM's own iam:ResourceTag key.
       {
         "grant": {
           "actions": ["iam:PassRole"]
@@ -199,7 +224,9 @@
             "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-flow-logs"],
             "condition": {
               "StringEquals": {
-                "iam:PassedToService": "vpc-flow-logs.amazonaws.com"
+                "iam:PassedToService": "vpc-flow-logs.amazonaws.com",
+                "iam:ResourceTag/${stackTag}": "${stackPrefix}",
+                "iam:ResourceTag/${managedByTag}": "runtime"
               }
             }
           }

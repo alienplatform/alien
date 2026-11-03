@@ -258,10 +258,25 @@ fn catalog_pass_role_grants_require_the_consuming_service() {
                     Some(service),
                     "{id} / {target}"
                 );
+                // The role's own tags, where the grant requires them; this checks the service.
+                let role_tags = statement
+                    .condition
+                    .as_ref()
+                    .and_then(|condition| condition.get("StringEquals"))
+                    .into_iter()
+                    .flatten()
+                    .filter(|(key, _)| {
+                        key.starts_with("aws:ResourceTag/") || key.starts_with("iam:ResourceTag/")
+                    })
+                    .filter_map(|(key, value)| Some((key.clone(), value.as_string()?.to_string())))
+                    .collect::<Vec<_>>();
                 for resource in &statement.resource {
                     let role = resource.replace('*', "example");
                     for candidate in [service, "unrelated.amazonaws.com", ""] {
-                        let request = Request::new("iam:PassRole", &role);
+                        let request = role_tags.iter().fold(
+                            Request::new("iam:PassRole", &role),
+                            |request, (key, value)| request.with(key.clone(), value.clone()),
+                        );
                         let request = if candidate.is_empty() {
                             request
                         } else {
