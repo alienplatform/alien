@@ -5,7 +5,8 @@
 //! response "lost" (the call takes effect, the controller sees an error). Every scenario uses
 //! its own resource prefix, ends with a leak check over everything tagged with that prefix
 //! (VPCs, subnets, internet gateways, NAT gateways, Elastic IPs, route tables, security
-//! groups), and always sweeps what is left, even when an assertion failed.
+//! groups, flow logs) and the flow log's role and log group named after it, and always sweeps
+//! what is left, even when an assertion failed.
 //!
 //! Ignored by default: it creates billed resources (NAT gateways bill hourly; each run keeps
 //! them for a few minutes). It needs an account with room for 2 VPCs and 1 Elastic IP in the
@@ -28,7 +29,9 @@ use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use alien_aws_clients::cloudwatch_logs::{CloudWatchLogsApi, CloudWatchLogsClient};
 use alien_aws_clients::ec2::*;
+use alien_aws_clients::iam::{IamApi, IamClient};
 use alien_client_core::{ErrorData as ClientErrorData, Result as ClientResult};
 use alien_core::{
     sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID, standard_resource_tags, AwsClientConfig,
@@ -37,7 +40,7 @@ use alien_core::{
     ALIEN_STACK_TAG_KEY,
 };
 use alien_error::AlienError;
-use alien_infra::controller_test::SingleControllerExecutor;
+use alien_infra::controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder};
 use alien_infra::{AwsNetworkController, MockPlatformServiceProvider, ResourceController};
 use async_trait::async_trait;
 use futures::FutureExt;
@@ -269,6 +272,9 @@ faulty_ec2_api! {
     delete_launch_template(request: DeleteLaunchTemplateRequest) -> DeleteLaunchTemplateResponse;
     describe_launch_templates(request: DescribeLaunchTemplatesRequest) -> DescribeLaunchTemplatesResponse;
     get_console_output(instance_id: String) -> GetConsoleOutputResponse;
+    create_flow_logs(request: CreateFlowLogsRequest) -> CreateFlowLogsResponse;
+    describe_flow_logs(request: DescribeFlowLogsRequest) -> DescribeFlowLogsResponse;
+    delete_flow_log(flow_log_id: &str) -> ();
 }
 
 // ─────────────── live environment ─────────────────────────────
@@ -315,6 +321,20 @@ fn live_ec2(config: AwsClientConfig) -> Arc<dyn Ec2Api> {
     ))
 }
 
+fn live_iam(config: AwsClientConfig) -> Arc<dyn IamApi> {
+    Arc::new(IamClient::new(
+        live_http_client(),
+        alien_aws_clients::AwsCredentialProvider::from_config_sync(config),
+    ))
+}
+
+fn live_logs(config: AwsClientConfig) -> Arc<dyn CloudWatchLogsApi> {
+    Arc::new(CloudWatchLogsClient::new(
+        live_http_client(),
+        alien_aws_clients::AwsCredentialProvider::from_config_sync(config),
+    ))
+}
+
 fn live_quotas(
     config: AwsClientConfig,
 ) -> Arc<dyn alien_aws_clients::service_quotas::ServiceQuotasApi> {
@@ -328,6 +348,8 @@ struct Live {
     prefix: String,
     started: Instant,
     real: Arc<dyn Ec2Api>,
+    iam: Arc<dyn IamApi>,
+    logs: Arc<dyn CloudWatchLogsApi>,
     faulty: Arc<FaultyEc2>,
     executor: SingleControllerExecutor,
 }
@@ -344,13 +366,79 @@ impl Live {
     }
 
     async fn build(scenario: &str, cidr: &str, internet_sandbox: bool) -> Self {
+        let prefix = scenario_prefix(scenario);
+        let mut live =
+            Self::with_controller(&prefix, cidr, AwsNetworkController::default(), |builder| {
+                if internet_sandbox {
+                    builder
+                        .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+                        .with_stack_resource(sandbox_gateway(), ResourceLifecycle::Live)
+                } else {
+                    builder
+                }
+            })
+            .await;
+        live.started = Instant::now();
+        println!("== scenario {scenario}: prefix {prefix}, cidr {cidr}");
+        live
+    }
+
+    /// A network whose VPC a direct setup created before VPC flow logs existed: a bare VPC
+    /// with this network's tags, recorded on a Ready controller with no flow log state, under
+    /// a setup run. Needs no Elastic IP.
+    async fn with_vpc_created_before_flow_logs(scenario: &str, cidr: &str) -> Self {
+        let prefix = scenario_prefix(scenario);
+        let real = live_ec2(aws_config());
+        let vpc_id = real
+            .create_vpc(
+                CreateVpcRequest::builder()
+                    .cidr_block(cidr.to_string())
+                    .tag_specifications(vec![TagSpecification {
+                        resource_type: "vpc".to_string(),
+                        tags: standard_resource_tags(&prefix, NETWORK_ID)
+                            .into_iter()
+                            .map(|(key, value)| Tag { key, value })
+                            .collect(),
+                    }])
+                    .build(),
+            )
+            .await
+            .expect("create the earlier VPC")
+            .vpc
+            .and_then(|vpc| vpc.vpc_id)
+            .expect("VPC ID");
+        let controller: AwsNetworkController = serde_json::from_value(serde_json::json!({
+            "state": "ready",
+            "vpcId": vpc_id,
+            "cidrBlock": cidr,
+            "publicSubnetIds": [],
+            "privateSubnetIds": [],
+            "routeTableAssociationIds": [],
+            "availabilityZones": [],
+            "isByoVpc": false
+        }))
+        .expect("checkpoint of the previous version loads");
+        let live = Self::with_controller(&prefix, cidr, controller, |builder| {
+            builder
+                .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+                .setup_run(true)
+        })
+        .await;
+        println!("== scenario {scenario}: prefix {prefix}, cidr {cidr}, VPC {vpc_id}");
+        live
+    }
+
+    async fn with_controller(
+        prefix: &str,
+        cidr: &str,
+        controller: AwsNetworkController,
+        configure: impl FnOnce(SingleControllerExecutorBuilder) -> SingleControllerExecutorBuilder,
+    ) -> Self {
         let config = aws_config();
-        let suffix = &uuid::Uuid::new_v4().simple().to_string()[..6];
-        let base =
-            std::env::var("ALIEN_AWS_NETWORK_LIVE_PREFIX").unwrap_or_else(|_| "alnet".to_string());
-        let prefix = format!("{base}-{scenario}-{suffix}");
         let real = live_ec2(config.clone());
         let quotas = live_quotas(config.clone());
+        let iam = live_iam(config.clone());
+        let logs = live_logs(config.clone());
         let faulty = Arc::new(FaultyEc2::new(real.clone()));
         let ec2: Arc<dyn Ec2Api> = faulty.clone();
 
@@ -361,31 +449,29 @@ impl Live {
         provider
             .expect_get_aws_service_quotas_client()
             .returning(move |_| Ok(quotas.clone()));
+        let provider_iam = iam.clone();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(provider_iam.clone()));
+        let provider_logs = logs.clone();
+        provider
+            .expect_get_aws_logs_client()
+            .returning(move |_| Ok(provider_logs.clone()));
 
-        let network = Network::new(NETWORK_ID.to_string())
-            .settings(NetworkSettings::Create {
-                cidr: Some(cidr.to_string()),
-                availability_zones: 2,
-            })
-            .build();
-        let mut builder = SingleControllerExecutor::builder()
-            .resource(network)
-            .controller(AwsNetworkController::default())
+        let builder = SingleControllerExecutor::builder()
+            .resource(network(cidr))
+            .controller(controller)
             .platform(Platform::Aws)
             .client_config(ClientConfig::Aws(Box::new(config)))
             .service_provider(Arc::new(provider))
-            .resource_prefix(prefix.clone());
-        if internet_sandbox {
-            builder = builder
-                .initial_setup_authority(InitialSetupAuthority::DirectSetup)
-                .with_stack_resource(sandbox_gateway(), ResourceLifecycle::Live);
-        }
-        let executor = builder.build().await.expect("executor builds");
-        println!("== scenario {scenario}: prefix {prefix}, cidr {cidr}");
+            .resource_prefix(prefix.to_string());
+        let executor = configure(builder).build().await.expect("executor builds");
         Self {
-            prefix,
+            prefix: prefix.to_string(),
             started: Instant::now(),
             real,
+            iam,
+            logs,
             faulty,
             executor,
         }
@@ -526,6 +612,77 @@ impl Live {
     async fn inventory(&self) -> Inventory {
         inventory(self.real.as_ref(), &self.prefix).await
     }
+
+    /// The flow log's role and log group, which carry no EC2 tags: found by name.
+    async fn flow_log_delivery(&self) -> Vec<String> {
+        flow_log_delivery(self.iam.as_ref(), self.logs.as_ref(), &self.prefix, false).await
+    }
+}
+
+fn scenario_prefix(scenario: &str) -> String {
+    let suffix = &uuid::Uuid::new_v4().simple().to_string()[..6];
+    let base =
+        std::env::var("ALIEN_AWS_NETWORK_LIVE_PREFIX").unwrap_or_else(|_| "alnet".to_string());
+    format!("{base}-{scenario}-{suffix}")
+}
+
+fn network(cidr: &str) -> Network {
+    Network::new(NETWORK_ID.to_string())
+        .settings(NetworkSettings::Create {
+            cidr: Some(cidr.to_string()),
+            availability_zones: 2,
+        })
+        .build()
+}
+
+/// The role and log group named for `prefix`'s flow log that exist, deleted first when
+/// `delete` is set.
+async fn flow_log_delivery(
+    iam: &dyn IamApi,
+    logs: &dyn CloudWatchLogsApi,
+    prefix: &str,
+    delete: bool,
+) -> Vec<String> {
+    let name = format!("{prefix}-{NETWORK_ID}-flow-logs");
+    let mut found = Vec::new();
+    if iam.get_role(&name).await.is_ok() {
+        found.push(format!("role/{name}"));
+        if delete {
+            if let Err(error) = iam.delete_role_policy(&name, "flow-logs-delivery").await {
+                println!(
+                    "  sweep: delete role policy {name}: {}",
+                    describe_error(&error)
+                );
+            }
+            if let Err(error) = iam.delete_role(&name).await {
+                println!("  sweep: delete role {name}: {}", describe_error(&error));
+            }
+        }
+    }
+    // The client has no describe call. Deleting a missing group, or setting a group's retention
+    // to the value setup gives it, tells whether it exists.
+    if delete {
+        match logs.delete_log_group(&name).await {
+            Ok(()) => found.push(format!("log-group/{name}")),
+            Err(error) if error.code == "REMOTE_RESOURCE_NOT_FOUND" => {}
+            Err(error) => println!(
+                "  sweep: delete log group {name}: {}",
+                describe_error(&error)
+            ),
+        }
+    } else if logs
+        .put_retention_policy(
+            alien_aws_clients::cloudwatch_logs::PutRetentionPolicyRequest::builder()
+                .log_group_name(name.clone())
+                .retention_in_days(alien_core::AWS_VPC_FLOW_LOG.retention_in_days)
+                .build(),
+        )
+        .await
+        .is_ok()
+    {
+        found.push(format!("log-group/{name}"));
+    }
+    found
 }
 
 // ─────────────── inventory and sweep ──────────────────────────
@@ -533,6 +690,7 @@ impl Live {
 /// Everything carrying `deployment=<prefix>`; NAT gateways in `deleted` are left out.
 #[derive(Debug, Default)]
 struct Inventory {
+    flow_logs: Vec<String>,
     vpcs: Vec<String>,
     subnets: Vec<String>,
     internet_gateways: Vec<String>,
@@ -545,7 +703,8 @@ struct Inventory {
 
 impl Inventory {
     fn is_empty(&self) -> bool {
-        self.vpcs.is_empty()
+        self.flow_logs.is_empty()
+            && self.vpcs.is_empty()
             && self.subnets.is_empty()
             && self.internet_gateways.is_empty()
             && self.nat_gateways.is_empty()
@@ -572,6 +731,14 @@ fn tagged(tags: Option<&TagSet>, key: &str, value: &str) -> bool {
 }
 
 async fn inventory(ec2: &dyn Ec2Api, prefix: &str) -> Inventory {
+    let flow_logs = ec2
+        .describe_flow_logs(
+            DescribeFlowLogsRequest::builder()
+                .filters(prefix_filter(prefix))
+                .build(),
+        )
+        .await
+        .expect("describe flow logs");
     let vpcs = ec2
         .describe_vpcs(
             DescribeVpcsRequest::builder()
@@ -631,6 +798,13 @@ async fn inventory(ec2: &dyn Ec2Api, prefix: &str) -> Inventory {
         .expect("describe security groups");
 
     Inventory {
+        flow_logs: flow_logs
+            .flow_log_set
+            .map(|set| set.items)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|flow_log| flow_log.flow_log_id)
+            .collect(),
         vpcs: vpcs
             .vpc_set
             .map(|set| set.items)
@@ -700,6 +874,14 @@ async fn sweep(ec2: &dyn Ec2Api, prefix: &str) -> Inventory {
         return found;
     }
     println!("  sweep {prefix}: found {found:?}");
+    for flow_log in &found.flow_logs {
+        if let Err(error) = ec2.delete_flow_log(flow_log).await {
+            println!(
+                "  sweep: delete flow log {flow_log}: {}",
+                describe_error(&error)
+            );
+        }
+    }
     for (nat, _) in &found.nat_gateways {
         if let Err(error) = ec2.delete_nat_gateway(nat).await {
             println!("  sweep: delete NAT {nat}: {}", describe_error(&error));
@@ -794,24 +976,27 @@ where
 {
     let prefix = live.prefix.clone();
     let real = live.real.clone();
+    let (iam, logs) = (live.iam.clone(), live.logs.clone());
     let started = live.started;
     let outcome = AssertUnwindSafe(body(live)).catch_unwind().await;
     let leftovers = sweep(real.as_ref(), &prefix).await;
+    let leftover_delivery = flow_log_delivery(iam.as_ref(), logs.as_ref(), &prefix, true).await;
     let remaining = inventory(real.as_ref(), &prefix).await;
+    let remaining_delivery = flow_log_delivery(iam.as_ref(), logs.as_ref(), &prefix, false).await;
     println!(
         "== scenario {name} finished in {:.1}s",
         started.elapsed().as_secs_f64()
     );
     assert!(
-        remaining.is_empty(),
-        "{prefix}: the sweep could not delete {remaining:?}; delete them by hand"
+        remaining.is_empty() && remaining_delivery.is_empty(),
+        "{prefix}: the sweep could not delete {remaining:?} {remaining_delivery:?}; delete them by hand"
     );
     match outcome {
         Err(panic) => std::panic::resume_unwind(panic),
         Ok(live) => {
             assert!(
-                leftovers.is_empty(),
-                "{prefix}: the controller's delete leaked {leftovers:?}"
+                leftovers.is_empty() && leftover_delivery.is_empty(),
+                "{prefix}: the controller's delete leaked {leftovers:?} {leftover_delivery:?}"
             );
             print_summary(&live);
         }
@@ -838,6 +1023,7 @@ fn assert_full_network(inventory: &Inventory) {
     assert_eq!(inventory.elastic_ips.len(), 1, "{inventory:?}");
     assert_eq!(inventory.route_tables.len(), 2, "{inventory:?}");
     assert_eq!(inventory.security_groups.len(), 1, "{inventory:?}");
+    assert_eq!(inventory.flow_logs.len(), 1, "{inventory:?}");
 }
 
 fn assert_recorded_matches(live: &Live, inventory: &Inventory) {
@@ -874,6 +1060,8 @@ fn assert_recorded_matches(live: &Live, inventory: &Inventory) {
 async fn assert_nothing_left(live: &Live) {
     let left = live.inventory().await;
     assert!(left.is_empty(), "left after delete: {left:?}");
+    let delivery = live.flow_log_delivery().await;
+    assert!(delivery.is_empty(), "left after delete: {delivery:?}");
 }
 
 // ─────────────── scenarios ────────────────────────────────────
@@ -1688,6 +1876,76 @@ async fn direct_sandbox_network_survives_a_lost_subnet_create_and_repairs_route_
                 "{connector} is back on the connector table"
             );
         }
+
+        live.delete_to_deleted().await;
+        assert_nothing_left(&live).await;
+        live
+    })
+    .await;
+}
+
+/// A VPC that direct setup created before VPC flow logs existed gets its flow log on the next
+/// setup run, the flow logs service delivers to the log group, and the delete removes the flow
+/// log, its role and its log group before the VPC. Creates no NAT gateway, so it needs no
+/// Elastic IP.
+#[tokio::test]
+#[ignore = "creates billed AWS resources; needs ALIEN_AWS_NETWORK_LIVE_TEST=1"]
+async fn a_setup_run_adds_the_flow_log_to_an_earlier_vpc_and_delete_removes_it() {
+    let live = Live::with_vpc_created_before_flow_logs("flowlog", "10.235.0.0/16").await;
+    run_scenario("flowlog", live, |mut live| async move {
+        assert!(live.executor.needs_update().expect("needs_update"));
+        live.executor
+            .update(network("10.235.0.0/16"))
+            .expect("update starts");
+        let errors = live
+            .drive_retrying("setup run", Duration::from_secs(15), |live| {
+                live.executor.status() == ResourceStatus::Running
+            })
+            .await;
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(!live.executor.needs_update().expect("needs_update"));
+
+        let controller = live.controller();
+        let vpc_id = controller["vpcId"].as_str().expect("VPC").to_string();
+        let flow_log_id = controller["flowLogs"]["flowLogId"]
+            .as_str()
+            .expect("flow log recorded")
+            .to_string();
+        let name = format!("{}-{NETWORK_ID}-flow-logs", live.prefix);
+        let described = live
+            .real
+            .describe_flow_logs(
+                DescribeFlowLogsRequest::builder()
+                    .flow_log_ids(vec![flow_log_id.clone()])
+                    .build(),
+            )
+            .await
+            .expect("describe flow log")
+            .flow_log_set
+            .map(|set| set.items)
+            .unwrap_or_default();
+        assert_eq!(described.len(), 1, "{described:?}");
+        let flow_log = &described[0];
+        assert_eq!(flow_log.resource_id.as_deref(), Some(vpc_id.as_str()));
+        assert_eq!(flow_log.flow_log_status.as_deref(), Some("ACTIVE"));
+        assert_eq!(flow_log.traffic_type.as_deref(), Some("ALL"));
+        assert_eq!(flow_log.log_group_name.as_deref(), Some(name.as_str()));
+        assert_eq!(flow_log.max_aggregation_interval, Some(600));
+        assert!(
+            flow_log
+                .deliver_logs_permission_arn
+                .as_deref()
+                .is_some_and(|arn| arn.ends_with(&format!(":role/{name}"))),
+            "{flow_log:?}"
+        );
+        assert!(
+            tagged(flow_log.tag_set.as_ref(), ALIEN_STACK_TAG_KEY, &live.prefix),
+            "{flow_log:?}"
+        );
+        assert_eq!(
+            live.flow_log_delivery().await,
+            [format!("role/{name}"), format!("log-group/{name}")]
+        );
 
         live.delete_to_deleted().await;
         assert_nothing_left(&live).await;

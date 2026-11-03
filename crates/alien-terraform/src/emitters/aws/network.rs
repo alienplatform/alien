@@ -11,7 +11,8 @@
 //!   generator's per-target variables list).
 //! * `Create` — full topology: VPC, public + private subnets across N
 //!   AZs (`for_each = data.aws_availability_zones`), IGW, NAT gateway,
-//!   route tables, default routes, subnet associations, security group.
+//!   route tables, default routes, subnet associations, security group,
+//!   and the VPC's flow log.
 
 use crate::{
     block::{attr, resource_block},
@@ -539,6 +540,16 @@ fn create_topology(
             attr("tags", tags(ctx, "network")),
         ],
     ));
+
+    fragment
+        .resource_blocks
+        .extend(crate::emitters::aws::flow_logs::blocks(
+            label,
+            ctx.resource_id,
+            "var.network_mode == \"create-new\" ? 1 : 0",
+            expr::raw(format!("aws_vpc.{label}[0].id")),
+            tags(ctx, "network"),
+        ));
 
     if has_sandboxes(ctx) {
         let one = || {

@@ -242,6 +242,21 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
     async fn create_tags(&self, request: CreateTagsRequest) -> Result<()>;
     async fn delete_tags(&self, request: DeleteTagsRequest) -> Result<()>;
 
+    // Flow Log Operations
+    /// Creates flow logs that publish to a CloudWatch Logs group. EC2 answers a flow log it
+    /// could not create with a successful response listing it as unsuccessful; that is
+    /// returned as an error.
+    async fn create_flow_logs(
+        &self,
+        request: CreateFlowLogsRequest,
+    ) -> Result<CreateFlowLogsResponse>;
+    async fn describe_flow_logs(
+        &self,
+        request: DescribeFlowLogsRequest,
+    ) -> Result<DescribeFlowLogsResponse>;
+    /// Deletes one flow log. A flow log that does not exist is a `RemoteResourceNotFound`.
+    async fn delete_flow_log(&self, flow_log_id: &str) -> Result<()>;
+
     // Launch Template Operations
     async fn create_launch_template(
         &self,
@@ -447,6 +462,28 @@ impl Ec2Client {
         }
     }
 
+    /// The first item a flow log call reports as unsuccessful, mapped like an error response
+    /// with its code.
+    fn fail_on_unsuccessful(
+        unsuccessful: Option<&UnsuccessfulItemSet>,
+        resource: &str,
+    ) -> Result<()> {
+        let Some(item) = unsuccessful.and_then(|set| set.items.first()) else {
+            return Ok(());
+        };
+        let resource = item.resource_id.as_deref().unwrap_or(resource);
+        let code = item.error.code.as_deref().unwrap_or_default();
+        let message = item.error.message.clone().unwrap_or_default();
+        Err(alien_error::AlienError::new(Self::map_ec2_error_code(
+            StatusCode::BAD_REQUEST,
+            code,
+            format!("{code}: {message}"),
+            resource,
+            &message,
+            None,
+        )))
+    }
+
     fn map_ec2_error(
         status: StatusCode,
         body: &str,
@@ -520,9 +557,27 @@ impl Ec2Client {
             }
         };
 
-        // Map EC2 error codes to our error types
-        // Reference: https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html
-        Some(match code.as_str() {
+        Some(Self::map_ec2_error_code(
+            status,
+            &code,
+            message,
+            resource,
+            body,
+            request_body,
+        ))
+    }
+
+    /// Map an EC2 error code to our error types.
+    /// Reference: https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html
+    fn map_ec2_error_code(
+        status: StatusCode,
+        code: &str,
+        message: String,
+        resource: &str,
+        body: &str,
+        request_body: Option<&str>,
+    ) -> ErrorData {
+        match code {
             // Access / Auth errors
             "AuthFailure" | "UnauthorizedOperation" | "Blocked" => ErrorData::RemoteAccessDenied {
                 resource_type: "EC2 Resource".into(),
@@ -553,6 +608,15 @@ impl Ec2Client {
                     resource_name: resource.into(),
                 }
             }
+            "InvalidFlowLogId.NotFound" => ErrorData::RemoteResourceNotFound {
+                resource_type: "FlowLog".into(),
+                resource_name: resource.into(),
+            },
+            "FlowLogAlreadyExists" => ErrorData::RemoteResourceConflict {
+                message,
+                resource_type: "FlowLog".into(),
+                resource_name: resource.into(),
+            },
             "InvalidNatGatewayID.NotFound" | "NatGatewayNotFound" => {
                 ErrorData::RemoteResourceNotFound {
                     resource_type: "NatGateway".into(),
@@ -729,7 +793,7 @@ impl Ec2Client {
                     http_request_text: request_body.map(|s| s.to_string()),
                 },
             },
-        })
+        }
     }
 
     /// Add filter parameters to the form data.
@@ -2062,6 +2126,82 @@ impl Ec2Api for Ec2Client {
         form_data.insert("SnapshotId".to_string(), snapshot_id.to_string());
         self.send_form_no_body(form_data, "DeleteSnapshot", snapshot_id)
             .await
+    }
+
+    // ---------------------------------------------------------------------------
+    // Flow Log Operations
+    // ---------------------------------------------------------------------------
+
+    async fn create_flow_logs(
+        &self,
+        request: CreateFlowLogsRequest,
+    ) -> Result<CreateFlowLogsResponse> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "CreateFlowLogs".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        for (i, resource_id) in request.resource_ids.iter().enumerate() {
+            form_data.insert(format!("ResourceId.{}", i + 1), resource_id.clone());
+        }
+        form_data.insert("ResourceType".to_string(), request.resource_type.clone());
+        form_data.insert("TrafficType".to_string(), request.traffic_type.clone());
+        form_data.insert(
+            "LogDestinationType".to_string(),
+            "cloud-watch-logs".to_string(),
+        );
+        form_data.insert("LogGroupName".to_string(), request.log_group_name.clone());
+        form_data.insert(
+            "DeliverLogsPermissionArn".to_string(),
+            request.deliver_logs_permission_arn.clone(),
+        );
+        if let Some(interval) = request.max_aggregation_interval {
+            form_data.insert("MaxAggregationInterval".to_string(), interval.to_string());
+        }
+        if let Some(tag_specs) = &request.tag_specifications {
+            Self::add_tag_specifications(&mut form_data, tag_specs);
+        }
+        form_data.insert("ClientToken".to_string(), request.client_token.clone());
+
+        let resource = request.resource_ids.join(",");
+        let response: CreateFlowLogsResponse = self
+            .send_form(form_data, "CreateFlowLogs", &resource)
+            .await?;
+        Self::fail_on_unsuccessful(response.unsuccessful.as_ref(), &resource)?;
+        Ok(response)
+    }
+
+    async fn describe_flow_logs(
+        &self,
+        request: DescribeFlowLogsRequest,
+    ) -> Result<DescribeFlowLogsResponse> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "DescribeFlowLogs".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        if let Some(flow_log_ids) = &request.flow_log_ids {
+            for (i, flow_log_id) in flow_log_ids.iter().enumerate() {
+                form_data.insert(format!("FlowLogId.{}", i + 1), flow_log_id.clone());
+            }
+        }
+        if let Some(filters) = &request.filters {
+            Self::add_filters(&mut form_data, filters);
+        }
+        if let Some(next_token) = &request.next_token {
+            form_data.insert("NextToken".to_string(), next_token.clone());
+        }
+
+        self.send_form(form_data, "DescribeFlowLogs", "FlowLog")
+            .await
+    }
+
+    async fn delete_flow_log(&self, flow_log_id: &str) -> Result<()> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "DeleteFlowLogs".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        form_data.insert("FlowLogId.1".to_string(), flow_log_id.to_string());
+
+        let response: DeleteFlowLogsResponse = self
+            .send_form(form_data, "DeleteFlowLogs", flow_log_id)
+            .await?;
+        Self::fail_on_unsuccessful(response.unsuccessful.as_ref(), flow_log_id)
     }
 
     // ---------------------------------------------------------------------------
@@ -4114,6 +4254,121 @@ pub struct Snapshot {
     pub tag_set: Option<TagSet>,
 }
 
+// ---------------------------------------------------------------------------
+// Flow Log Request/Response Types
+// ---------------------------------------------------------------------------
+
+/// Request to create flow logs that publish to a CloudWatch Logs group.
+#[derive(Debug, Clone, Serialize, Builder)]
+pub struct CreateFlowLogsRequest {
+    /// The VPCs, subnets or network interfaces to log.
+    pub resource_ids: Vec<String>,
+    /// The type of the resources: `VPC`, `Subnet` or `NetworkInterface`.
+    pub resource_type: String,
+    /// `ACCEPT`, `REJECT` or `ALL`.
+    pub traffic_type: String,
+    /// The CloudWatch Logs group the records go to.
+    pub log_group_name: String,
+    /// The IAM role the flow logs service assumes to write to the log group.
+    pub deliver_logs_permission_arn: String,
+    /// Seconds a flow is aggregated into one record: 60 or 600 (the default).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_aggregation_interval: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag_specifications: Option<Vec<TagSpecification>>,
+    /// Idempotency token (up to 64 ASCII characters). Repeating a request with the same
+    /// token returns the flow logs the first request created instead of new ones.
+    pub client_token: String,
+}
+
+/// Response from creating flow logs.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateFlowLogsResponse {
+    pub flow_log_id_set: Option<FlowLogIdSet>,
+    pub unsuccessful: Option<UnsuccessfulItemSet>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FlowLogIdSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<String>,
+}
+
+/// Resources a flow log call could not act on, each with the error EC2 gave for it.
+#[derive(Debug, Deserialize)]
+pub struct UnsuccessfulItemSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<UnsuccessfulItem>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnsuccessfulItem {
+    pub error: UnsuccessfulItemError,
+    pub resource_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnsuccessfulItemError {
+    pub code: Option<String>,
+    pub message: Option<String>,
+}
+
+/// Request to describe flow logs.
+#[derive(Debug, Clone, Serialize, Builder, Default)]
+pub struct DescribeFlowLogsRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flow_log_ids: Option<Vec<String>>,
+    /// For example `resource-id`, `log-group-name` or `tag:<key>`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<Vec<Filter>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_token: Option<String>,
+}
+
+/// Response from describing flow logs.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DescribeFlowLogsResponse {
+    pub flow_log_set: Option<FlowLogSet>,
+    pub next_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FlowLogSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<FlowLog>,
+}
+
+/// A flow log.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowLog {
+    pub flow_log_id: Option<String>,
+    /// `ACTIVE` once created.
+    pub flow_log_status: Option<String>,
+    pub resource_id: Option<String>,
+    pub traffic_type: Option<String>,
+    pub log_destination_type: Option<String>,
+    pub log_group_name: Option<String>,
+    pub deliver_logs_permission_arn: Option<String>,
+    /// `SUCCESS`, or `FAILED` when the flow logs service cannot publish.
+    pub deliver_logs_status: Option<String>,
+    pub deliver_logs_error_message: Option<String>,
+    pub max_aggregation_interval: Option<u32>,
+    #[serde(rename = "tagSet")]
+    pub tag_set: Option<TagSet>,
+}
+
+/// Response from deleting flow logs.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteFlowLogsResponse {
+    unsuccessful: Option<UnsuccessfulItemSet>,
+}
+
 /// Request to add or overwrite tags on EC2 resources.
 #[derive(Debug, Clone, Serialize, Builder)]
 pub struct CreateTagsRequest {
@@ -5016,6 +5271,133 @@ mod tests {
     }
 
     /// Transient failures are still sent again.
+    /// EC2 answers a flow log it could not create, or a missing one it was asked to delete, with
+    /// HTTP 200 and an `unsuccessful` item. Those must reach the caller as errors.
+    #[tokio::test]
+    async fn flow_log_calls_report_unsuccessful_items_as_errors() {
+        let server = MockServer::start_async().await;
+        let create = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .body_contains("Action=CreateFlowLogs")
+                    .body_contains("ResourceId.1=vpc-a")
+                    .body_contains("LogDestinationType=cloud-watch-logs")
+                    .body_contains("ClientToken=token-1");
+                then.status(200).body(
+                    "<CreateFlowLogsResponse><clientToken>token-1</clientToken><flowLogIdSet/>\
+                     <unsuccessful><item><error><code>FlowLogAlreadyExists</code>\
+                     <message>Error. There is an existing Flow Log with the same configuration and log destination.</message>\
+                     </error><resourceId>vpc-a</resourceId></item></unsuccessful></CreateFlowLogsResponse>",
+                );
+            })
+            .await;
+        let delete = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .body_contains("Action=DeleteFlowLogs")
+                    .body_contains("FlowLogId.1=fl-gone");
+                then.status(200).body(
+                    "<DeleteFlowLogsResponse><unsuccessful><item><error>\
+                     <code>InvalidFlowLogId.NotFound</code><message>Unknown flow log</message>\
+                     </error><resourceId>fl-gone</resourceId></item></unsuccessful></DeleteFlowLogsResponse>",
+                );
+            })
+            .await;
+        let client = client(&server);
+
+        let error = client
+            .create_flow_logs(
+                CreateFlowLogsRequest::builder()
+                    .resource_ids(vec!["vpc-a".to_string()])
+                    .resource_type("VPC".to_string())
+                    .traffic_type("ALL".to_string())
+                    .log_group_name("group".to_string())
+                    .deliver_logs_permission_arn("arn:aws:iam::123456789012:role/r".to_string())
+                    .client_token("token-1".to_string())
+                    .build(),
+            )
+            .await
+            .expect_err("an unsuccessful item fails the create");
+        assert!(matches!(
+            error.error,
+            Some(ErrorData::RemoteResourceConflict { ref resource_type, ref resource_name, .. })
+                if resource_type == "FlowLog" && resource_name == "vpc-a"
+        ));
+        let error = client
+            .delete_flow_log("fl-gone")
+            .await
+            .expect_err("a missing flow log is not deleted");
+        assert!(matches!(
+            error.error,
+            Some(ErrorData::RemoteResourceNotFound { ref resource_name, .. }) if resource_name == "fl-gone"
+        ));
+        create.assert_hits_async(1).await;
+        delete.assert_hits_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn created_and_described_flow_logs_are_read() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).body_contains("Action=CreateFlowLogs");
+                then.status(200).body(
+                    "<CreateFlowLogsResponse><flowLogIdSet><item>fl-1</item></flowLogIdSet>\
+                     <unsuccessful/></CreateFlowLogsResponse>",
+                );
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .body_contains("Action=DescribeFlowLogs")
+                    .body_contains("Filter.1.Name=resource-id");
+                then.status(200).body(
+                    "<DescribeFlowLogsResponse><flowLogSet><item><flowLogId>fl-1</flowLogId>\
+                     <flowLogStatus>ACTIVE</flowLogStatus><resourceId>vpc-a</resourceId>\
+                     <trafficType>ALL</trafficType><logDestinationType>cloud-watch-logs</logDestinationType>\
+                     <logGroupName>group</logGroupName><deliverLogsStatus>SUCCESS</deliverLogsStatus>\
+                     <maxAggregationInterval>600</maxAggregationInterval>\
+                     <tagSet><item><key>deployment</key><value>p</value></item></tagSet>\
+                     </item></flowLogSet></DescribeFlowLogsResponse>",
+                );
+            })
+            .await;
+        let client = client(&server);
+
+        let created = client
+            .create_flow_logs(
+                CreateFlowLogsRequest::builder()
+                    .resource_ids(vec!["vpc-a".to_string()])
+                    .resource_type("VPC".to_string())
+                    .traffic_type("ALL".to_string())
+                    .log_group_name("group".to_string())
+                    .deliver_logs_permission_arn("arn:aws:iam::123456789012:role/r".to_string())
+                    .client_token("token-1".to_string())
+                    .build(),
+            )
+            .await
+            .expect("created");
+        assert_eq!(created.flow_log_id_set.unwrap().items, ["fl-1"]);
+        let described = client
+            .describe_flow_logs(
+                DescribeFlowLogsRequest::builder()
+                    .filters(vec![Filter {
+                        name: "resource-id".to_string(),
+                        values: vec!["vpc-a".to_string()],
+                    }])
+                    .build(),
+            )
+            .await
+            .expect("described");
+        let flow_log = &described.flow_log_set.unwrap().items[0];
+        assert_eq!(flow_log.flow_log_id.as_deref(), Some("fl-1"));
+        assert_eq!(flow_log.log_group_name.as_deref(), Some("group"));
+        assert_eq!(flow_log.deliver_logs_status.as_deref(), Some("SUCCESS"));
+        assert_eq!(flow_log.max_aggregation_interval, Some(600));
+        assert_eq!(flow_log.tag_set.as_ref().unwrap().items[0].value, "p");
+    }
+
     #[tokio::test]
     async fn a_delete_that_hits_an_unavailable_service_is_sent_again() {
         let server = MockServer::start_async().await;

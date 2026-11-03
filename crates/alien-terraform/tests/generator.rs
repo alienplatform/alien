@@ -16,6 +16,7 @@ mod generator {
     pub mod aws_bucket_lifecycle_parity_tests;
     pub mod aws_compute_tests;
     pub mod aws_data_layer_tests;
+    pub mod aws_flow_log_parity_tests;
     pub mod aws_full_stack_tests;
     pub mod aws_iam_coverage_tests;
     pub mod aws_identity_tests;

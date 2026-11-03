@@ -10,6 +10,7 @@ pub mod artifact_registry;
 pub mod build;
 mod eks_availability_zones;
 pub mod email;
+mod flow_logs;
 pub mod helpers;
 pub mod key;
 pub mod kubernetes_cluster;

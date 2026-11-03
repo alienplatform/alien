@@ -457,6 +457,15 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 ],
             ),
         ]);
+            fragment
+                .resource_blocks
+                .extend(crate::emitters::aws::flow_logs::blocks(
+                    label,
+                    ctx.resource_id,
+                    "var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"create-new\" ? 1 : 0",
+                    expr::raw(format!("aws_vpc.{label}[0].id")),
+                    crate::emitters::aws::helpers::tags(ctx, "kubernetes-cluster"),
+                ));
         }
         fragment.resource_blocks.extend([
             resource_block(
