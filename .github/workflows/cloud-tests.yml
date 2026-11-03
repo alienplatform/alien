@@ -255,7 +255,7 @@ jobs:
           - name: azure-clients
             test_cmd: depot cargo nextest run -p alien-azure-clients
           - name: bindings
-            test_cmd: depot cargo nextest run -p alien-bindings
+            test_cmd: depot cargo nextest run -p alien-bindings --features local-artifact-registry
           - name: manager-proxy
             test_cmd: depot cargo nextest run -p alien-manager --test registry_proxy_cloud_test
     runs-on: depot-ubuntu-24.04-arm-8

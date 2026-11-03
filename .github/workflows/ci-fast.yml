@@ -648,6 +648,18 @@ jobs:
       - name: Check every package and target
         run: cargo check --workspace --all-targets --features alien-manager/openapi,alien-bindings/platform-sdk --locked
 
+      # The workspace check above unifies features, so alien-bindings is always built
+      # with `local-artifact-registry` there (alien-local turns it on). Check alien-sdk
+      # alone so its default features (`local` without the OCI client) keep compiling,
+      # and fail if jwt (RUSTSEC-2016-0007, pulled in by oci-client) comes back.
+      - name: Check alien-sdk default features
+        run: |
+          cargo check --locked -p alien-sdk
+          if cargo tree --locked -p alien-sdk -e normal,build --target all --prefix none --format '{p}' | grep -E '^(jwt|oci-client) '; then
+            echo "::error::alien-sdk default features must not depend on oci-client or jwt"
+            exit 1
+          fi
+
   worker-integration:
     name: Worker integration
     needs: [pr-conventions, changes]

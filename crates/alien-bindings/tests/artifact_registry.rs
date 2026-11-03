@@ -64,7 +64,7 @@ impl AsyncTestContext for LocalProviderArtifactRegistryTestContext {
         let temp_dir = tempfile::tempdir()
             .expect("Failed to create temp dir for local artifact registry test");
 
-        #[cfg(all(feature = "local", unix))]
+        #[cfg(all(feature = "local-artifact-registry", unix))]
         {
             // Start a container registry for testing (no auth, matching production behavior)
             use container_registry::ContainerRegistry;
@@ -120,13 +120,13 @@ impl AsyncTestContext for LocalProviderArtifactRegistryTestContext {
                 _registry_handle: registry_handle,
             }
         }
-        #[cfg(all(feature = "local", not(unix)))]
+        #[cfg(all(feature = "local-artifact-registry", not(unix)))]
         {
             panic!("Local artifact registry tests require Unix because container-registry uses symlinks");
         }
-        #[cfg(not(feature = "local"))]
+        #[cfg(not(feature = "local-artifact-registry"))]
         {
-            panic!("Local feature is required for LocalProviderArtifactRegistryTestContext");
+            panic!("The local-artifact-registry feature is required for LocalProviderArtifactRegistryTestContext");
         }
     }
 
@@ -509,12 +509,17 @@ async fn wait_for_repository_ready(
 }
 
 #[rstest]
-#[cfg_attr(feature = "local", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
+#[cfg_attr(feature = "local-artifact-registry", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderArtifactRegistryTestContext::setup().await))]
 // #[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderArtifactRegistryTestContext::setup().await))]
-#[cfg(any(feature = "local", feature = "aws", feature = "azure", feature = "gcp"))]
+#[cfg(any(
+    feature = "local-artifact-registry",
+    feature = "aws",
+    feature = "azure",
+    feature = "gcp"
+))]
 #[tokio::test]
 async fn test_create_repository_and_get_status(#[case] ctx: impl ArtifactRegistryTestContext) {
     let artifact_registry = ctx.get_artifact_registry().await;
@@ -578,12 +583,17 @@ async fn test_create_repository_and_get_status(#[case] ctx: impl ArtifactRegistr
 }
 
 #[rstest]
-#[cfg_attr(feature = "local", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
+#[cfg_attr(feature = "local-artifact-registry", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderArtifactRegistryTestContext::setup().await))]
 // #[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderArtifactRegistryTestContext::setup().await))]
-#[cfg(any(feature = "local", feature = "aws", feature = "azure", feature = "gcp"))]
+#[cfg(any(
+    feature = "local-artifact-registry",
+    feature = "aws",
+    feature = "azure",
+    feature = "gcp"
+))]
 #[tokio::test]
 async fn test_add_remove_cross_account_access(#[case] ctx: impl ArtifactRegistryTestContext) {
     let artifact_registry = ctx.get_artifact_registry().await;
@@ -1130,13 +1140,13 @@ async fn test_add_remove_cross_account_access(#[case] ctx: impl ArtifactRegistry
 }
 
 #[rstest]
-#[cfg_attr(feature = "local", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
+#[cfg_attr(feature = "local-artifact-registry", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
 // TODO (CRITICAL): Enable AWS test (need to create pull/push roles)
 // #[cfg_attr(feature = "aws", case::aws(AwsProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderArtifactRegistryTestContext::setup().await))]
 // #[cfg_attr(feature = "gcp", case::gcp(GcpProviderArtifactRegistryTestContext::setup().await))]
 // #[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderArtifactRegistryTestContext::setup().await))]
-#[cfg(any(feature = "local", feature = "azure"))]
+#[cfg(any(feature = "local-artifact-registry", feature = "azure"))]
 #[tokio::test]
 async fn test_generate_credentials(#[case] ctx: impl ArtifactRegistryTestContext) {
     let artifact_registry = ctx.get_artifact_registry().await;
@@ -1188,12 +1198,17 @@ async fn test_generate_credentials(#[case] ctx: impl ArtifactRegistryTestContext
 }
 
 #[rstest]
-#[cfg_attr(feature = "local", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
+#[cfg_attr(feature = "local-artifact-registry", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderArtifactRegistryTestContext::setup().await))]
 // #[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderArtifactRegistryTestContext::setup().await))]
-#[cfg(any(feature = "local", feature = "aws", feature = "azure", feature = "gcp"))]
+#[cfg(any(
+    feature = "local-artifact-registry",
+    feature = "aws",
+    feature = "azure",
+    feature = "gcp"
+))]
 #[tokio::test]
 async fn test_delete_repository(#[case] ctx: impl ArtifactRegistryTestContext) {
     let artifact_registry = ctx.get_artifact_registry().await;
@@ -1243,12 +1258,17 @@ async fn test_delete_repository(#[case] ctx: impl ArtifactRegistryTestContext) {
 }
 
 #[rstest]
-#[cfg_attr(feature = "local", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
+#[cfg_attr(feature = "local-artifact-registry", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderArtifactRegistryTestContext::setup().await))]
 // #[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderArtifactRegistryTestContext::setup().await))]
-#[cfg(any(feature = "local", feature = "aws", feature = "azure", feature = "gcp"))]
+#[cfg(any(
+    feature = "local-artifact-registry",
+    feature = "aws",
+    feature = "azure",
+    feature = "gcp"
+))]
 #[tokio::test]
 async fn test_full_repository_lifecycle(#[case] ctx: impl ArtifactRegistryTestContext) {
     let artifact_registry = ctx.get_artifact_registry().await;
@@ -1417,12 +1437,17 @@ async fn test_full_repository_lifecycle(#[case] ctx: impl ArtifactRegistryTestCo
 }
 
 #[rstest]
-#[cfg_attr(feature = "local", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
+#[cfg_attr(feature = "local-artifact-registry", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderArtifactRegistryTestContext::setup().await))]
 // #[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderArtifactRegistryTestContext::setup().await))]
-#[cfg(any(feature = "local", feature = "aws", feature = "azure", feature = "gcp"))]
+#[cfg(any(
+    feature = "local-artifact-registry",
+    feature = "aws",
+    feature = "azure",
+    feature = "gcp"
+))]
 #[tokio::test]
 async fn test_get_nonexistent_repository_returns_404(
     #[case] ctx: impl ArtifactRegistryTestContext,
