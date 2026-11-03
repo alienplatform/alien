@@ -888,18 +888,21 @@ mod tests {
     };
     use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
     use alien_core::{
+        import::{data::AwsBuildImportData, ImportContext},
         standard_resource_tags, Build, BuildHeartbeatData, BuildOutputs, HeartbeatCollectionIssue,
-        HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, Platform, ResourceHeartbeatData,
-        ResourceStatus,
+        HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, Platform, Resource, ResourceEntry,
+        ResourceHeartbeatData, ResourceLifecycle, ResourceStatus, StackSettings,
     };
     use alien_error::AlienError;
     use rstest::rstest;
 
-    use crate::build::{fixtures::*, AwsBuildController, AwsBuildState};
+    use crate::build::{fixtures::*, AwsBuildController, AwsBuildImporter, AwsBuildState};
     use crate::core::{
         controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
         MockPlatformServiceProvider, PlatformServiceProvider,
     };
+    use crate::import::ResourceImporter;
+    use crate::StackResourceStateExt;
 
     fn create_successful_project_response(project_name: &str) -> CreateProjectResponse {
         CreateProjectResponse {
@@ -1599,5 +1602,56 @@ mod tests {
             *calls.lock().unwrap(),
             vec!["PutRetentionPolicy /aws/codebuild/test-basic-build 365".to_string()]
         );
+    }
+
+    /// A build that CloudFormation or Terraform created and setup imported has the group the
+    /// template declares, so its heartbeat does not warn.
+    #[tokio::test]
+    async fn an_imported_build_does_not_warn() {
+        let entry = ResourceEntry {
+            config: Resource::new(basic_build()),
+            lifecycle: ResourceLifecycle::Frozen,
+            dependencies: Vec::new(),
+            display_name: None,
+            description: None,
+            remote_access: false,
+            enabled_when: None,
+        };
+        let settings = StackSettings::default();
+        let imported = AwsBuildImporter
+            .import(
+                AwsBuildImportData {
+                    project_name: "test-basic-build".to_string(),
+                    project_arn: project_arn("test-basic-build"),
+                    build_env_vars: HashMap::new(),
+                },
+                &ImportContext {
+                    resource_id: "basic-build",
+                    platform: Platform::Aws,
+                    region: "us-east-1",
+                    stack_settings: &settings,
+                    management_config: None,
+                    resource: &entry,
+                },
+            )
+            .unwrap();
+        let controller = imported
+            .get_internal_controller()
+            .unwrap()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<AwsBuildController>()
+            .unwrap()
+            .clone();
+
+        let projects = projects_with(&[(
+            "test-basic-build",
+            standard_resource_tags("test", "basic-build"),
+        )]);
+        let mut executor = executor_with(basic_build(), controller, &projects, false).await;
+        executor.step().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(collection_issues(&executor), vec![]);
     }
 }

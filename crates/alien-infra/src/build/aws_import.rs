@@ -2,7 +2,7 @@
 
 use alien_core::{
     import::{data::AwsBuildImportData, ImportContext},
-    Result, StackResourceState,
+    Result, StackResourceState, AWS_LOG_RETENTION_DAYS,
 };
 
 use crate::build::{AwsBuildController, AwsBuildState};
@@ -26,8 +26,8 @@ impl ResourceImporter for AwsBuildImporter {
             project_arn: Some(data.project_arn),
             project_name: Some(data.project_name),
             build_env_vars: Some(data.build_env_vars),
-            // The heartbeat warns until a setup update sets the log group's retention.
-            log_retention_days: None,
+            // The template that created the project declares its log group with this retention.
+            log_retention_days: Some(AWS_LOG_RETENTION_DAYS),
             log_group_denied_action: None,
             _internal_stay_count: None,
         };
