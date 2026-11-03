@@ -439,38 +439,6 @@
         }
       },
       {
-        // CloudFormation and Terraform read the group's current values when they create or
-        // update it, to work out which values to change, and reset a value that a template no
-        // longer sets (also on rollback). Limited to groups tagged for this stack, so a stack
-        // whose name starts with this prefix is not reachable.
-        "label": "update-cluster-parameters",
-        "description": "Read and reset values of the Aurora cluster parameter group.",
-        "grant": {
-          "actions": ["rds:DescribeDBClusterParameters", "rds:ResetDBClusterParameterGroup"]
-        },
-        "binding": {
-          "stack": {
-            "resources": ["arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-*"],
-            "condition": {
-              "StringEquals": {
-                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
-              }
-            }
-          },
-          "resource": {
-            "resources": [
-              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-${resourceName}-*"
-            ],
-            "condition": {
-              "StringEquals": {
-                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${resourceTag}": "${resourceName}"
-              }
-            }
-          }
-        }
-      },
-      {
         // RDS creates this account-level role on the first cluster. The role is
         // shared across stacks, so restrict both its exact ARN and service.
         "label": "create-rds-service-linked-role",
