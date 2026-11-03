@@ -121,8 +121,8 @@ fn setup_can_create_pass_and_delete_the_flow_log_role_of_its_own_stack() {
             "{action} on a role another stack tagged"
         );
     }
-    // A role that already carries ownership tags, such as a Terraform setup's, is not retagged
-    // into this network's.
+    // A CloudFormation or Terraform setup of this stack tags its role managed-by=setup and runs
+    // with the same setup policy, so that role stays reachable. Another stack's role does not.
     assert_eq!(
         evaluate(
             &setup,
@@ -130,8 +130,28 @@ fn setup_can_create_pass_and_delete_the_flow_log_role_of_its_own_stack() {
                 .with("aws:ResourceTag/deployment", "my-stack")
                 .with("aws:ResourceTag/managed-by", "setup")
         ),
+        Decision::Allowed,
+        "iam:TagRole on this stack's template setup role"
+    );
+    assert_eq!(
+        evaluate(
+            &setup,
+            &owned("iam:TagRole", role, "aws:RequestTag")
+                .with("aws:ResourceTag/deployment", "other-stack")
+                .with("aws:ResourceTag/managed-by", "setup")
+        ),
         Decision::NotAllowed,
-        "iam:TagRole on a role that already has ownership tags"
+        "iam:TagRole on a role another stack tagged"
+    );
+    assert_eq!(
+        evaluate(
+            &setup,
+            &owned("iam:TagRole", role, "aws:RequestTag")
+                .with("aws:ResourceTag/deployment", "my-stack")
+                .with("aws:ResourceTag/managed-by", "foreign")
+        ),
+        Decision::NotAllowed,
+        "iam:TagRole on a role with another managed-by value"
     );
     let pass = |role: &str| {
         Request::new("iam:PassRole", role)
@@ -160,9 +180,9 @@ fn setup_can_create_pass_and_delete_the_flow_log_role_of_its_own_stack() {
     }
 }
 
-/// Creating the flow log group with its tags authorizes the tagging actions, but a group that
-/// already carries ownership tags, such as one a Terraform setup made, cannot be retagged into
-/// this network's and then deleted.
+/// Creating the flow log group with its tags authorizes the tagging actions. A CloudFormation or
+/// Terraform setup of this stack tags its group managed-by=setup and runs with the same setup
+/// policy, so it can tag and delete that group; a group another stack tagged stays out of reach.
 #[test]
 fn setup_tags_only_the_flow_log_group_it_creates() {
     let setup = generate_aws_initial_setup_policy(&common::create_test_context())
@@ -190,23 +210,48 @@ fn setup_tags_only_the_flow_log_group_it_creates() {
             evaluate(
                 &setup,
                 &tagging(action)
-                    .with("aws:ResourceTag/deployment", "my-stack")
+                    .with("aws:ResourceTag/deployment", "my-stack-prod")
                     .with("aws:ResourceTag/managed-by", "setup")
             ),
             Decision::NotAllowed,
-            "{action} on a group that already has ownership tags"
+            "{action} on a group another stack tagged"
         );
     }
-    assert_eq!(
-        evaluate(
-            &setup,
-            &Request::new("logs:DeleteLogGroup", group)
-                .with("aws:ResourceTag/deployment", "my-stack")
-                .with("aws:ResourceTag/managed-by", "setup")
+    let delete = |tags: &[(&str, &str)]| {
+        tags.iter().fold(
+            Request::new("logs:DeleteLogGroup", group),
+            |request, (key, value)| request.with(format!("aws:ResourceTag/{key}"), *value),
+        )
+    };
+    for (tags, decision, case) in [
+        (
+            &[("deployment", "my-stack"), ("managed-by", "setup")][..],
+            Decision::Allowed,
+            "this stack's template setup group",
         ),
-        Decision::NotAllowed,
-        "a template setup's group"
-    );
+        (
+            &[("deployment", "my-stack-prod"), ("managed-by", "setup")][..],
+            Decision::NotAllowed,
+            "a group another stack tagged",
+        ),
+        (&[][..], Decision::NotAllowed, "an untagged group"),
+        (
+            &[("deployment", "my-stack")][..],
+            Decision::NotAllowed,
+            "a group without a managed-by tag",
+        ),
+        (
+            &[("deployment", "my-stack"), ("managed-by", "foreign")][..],
+            Decision::NotAllowed,
+            "a group with another managed-by value",
+        ),
+    ] {
+        assert_eq!(
+            evaluate(&setup, &delete(tags)),
+            decision,
+            "logs:DeleteLogGroup on {case}"
+        );
+    }
 }
 
 #[test]
