@@ -1,6 +1,5 @@
 ---
 source: crates/alien-cloudformation/tests/generator/aws_full_stack_tests.rs
-assertion_line: 138
 expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
@@ -1653,6 +1652,22 @@ Resources:
     DependsOn:
     - MailboxBucketPolicy
     - MailerEventsTopicPolicy
+  MailerRuleSetActivatorLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName:
+        Fn::Sub: /aws/lambda/${AWS::StackName}-mailer-rule-set-activator
+      RetentionInDays: 365
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: mailer
+      - Key: resource-type
+        Value: email
   MailerRuleSetActivatorRole:
     Type: AWS::IAM::Role
     Properties:
@@ -1675,14 +1690,19 @@ Resources:
             Resource: '*'
           - Effect: Allow
             Action:
-            - logs:CreateLogGroup
             - logs:CreateLogStream
             - logs:PutLogEvents
             Resource:
-              Fn::Sub: arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
+            - Fn::Sub: arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${MailerRuleSetActivatorLogs}
+            - Fn::GetAtt:
+              - MailerRuleSetActivatorLogs
+              - Arn
   MailerRuleSetActivatorFunction:
     Type: AWS::Lambda::Function
     Properties:
+      LoggingConfig:
+        LogGroup:
+          Ref: MailerRuleSetActivatorLogs
       Runtime: python3.13
       Handler: index.handler
       Role:
@@ -1897,7 +1917,7 @@ Resources:
     Properties:
       LogGroupName:
         Fn::Sub: /aws/codebuild/${AWS::StackName}-builder
-      RetentionInDays: 30
+      RetentionInDays: 365
     DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
   Builder:
@@ -2579,6 +2599,7 @@ Resources:
     - MailerEventsQueuePolicy
     - MailerRuleSet
     - MailerInboundRule
+    - MailerRuleSetActivatorLogs
     - MailerRuleSetActivatorRole
     - MailerRuleSetActivatorFunction
     - MailerRuleSetActivation

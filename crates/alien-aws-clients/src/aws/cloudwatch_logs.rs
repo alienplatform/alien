@@ -59,6 +59,8 @@ pub struct PutRetentionPolicyRequest {
 struct CloudWatchLogsErrorResponse {
     #[serde(rename = "__type")]
     type_field: Option<String>,
+    /// AccessDeniedException spells it `Message`; the other errors `message`.
+    #[serde(alias = "Message")]
     message: Option<String>,
 }
 
@@ -127,20 +129,22 @@ impl CloudWatchLogsClient {
             Err(error) => {
                 let mapped = match &error.error {
                     Some(ErrorData::HttpResponseError {
+                        http_status,
                         http_response_text: Some(text),
                         ..
-                    }) => Self::map_error(text, log_group_name),
+                    }) => Self::map_error(text, log_group_name, *http_status),
                     _ => None,
                 };
-                match mapped {
-                    Some(mapped) => Err(error.context(mapped)),
-                    None => Err(error),
-                }
+                Err(mapped
+                    .into_iter()
+                    .flatten()
+                    .fold(error, |error, layer| error.context(layer)))
             }
         }
     }
 
-    fn map_error(body: &str, log_group_name: &str) -> Option<ErrorData> {
+    /// The errors to wrap the HTTP error in, innermost first.
+    fn map_error(body: &str, log_group_name: &str, http_status: u16) -> Option<Vec<ErrorData>> {
         let parsed: CloudWatchLogsErrorResponse = serde_json::from_str(body).ok()?;
         let code = parsed.type_field?;
         let code = code.rsplit('#').next().unwrap_or(&code).to_string();
@@ -151,7 +155,7 @@ impl CloudWatchLogsClient {
                 log_group_name.to_string(),
             )
         };
-        Some(match code.as_str() {
+        let mapped = match code.as_str() {
             "ResourceAlreadyExistsException" => {
                 let (resource_type, resource_name) = resource();
                 ErrorData::RemoteResourceConflict {
@@ -167,12 +171,21 @@ impl CloudWatchLogsClient {
                     resource_name,
                 }
             }
+            // AWS's message names the denied action and the caller, which a warning can show.
             "AccessDeniedException" => {
                 let (resource_type, resource_name) = resource();
-                ErrorData::RemoteAccessDenied {
-                    resource_type,
-                    resource_name,
-                }
+                return Some(vec![
+                    ErrorData::RemoteRequestRejected {
+                        service: "CloudWatch Logs".to_string(),
+                        http_status,
+                        provider_code: code,
+                        message,
+                    },
+                    ErrorData::RemoteAccessDenied {
+                        resource_type,
+                        resource_name,
+                    },
+                ]);
             }
             "ThrottlingException" => ErrorData::RateLimitExceeded { message },
             "LimitExceededException" => ErrorData::QuotaExceeded { message },
@@ -182,7 +195,8 @@ impl CloudWatchLogsClient {
                 field_name: None,
             },
             _ => return None,
-        })
+        };
+        Some(vec![mapped])
     }
 }
 
@@ -295,6 +309,50 @@ mod tests {
 
         create.assert_hits_async(1).await;
         retention.assert_hits_async(1).await;
+    }
+
+    /// A response recorded from AWS for a role without the grant (account id replaced).
+    const RECORDED_ACCESS_DENIED: &str = r#"{"__type":"AccessDeniedException","Message":"User: arn:aws:sts::123456789012:assumed-role/app-management/session is not authorized to perform: logs:CreateLogGroup on resource: arn:aws:logs:us-east-1:123456789012:log-group:/aws/lambda/app-api because no identity-based policy allows the logs:CreateLogGroup action"}"#;
+
+    #[tokio::test]
+    async fn a_denied_call_keeps_the_aws_message() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("x-amz-target", "Logs_20140328.CreateLogGroup");
+                then.status(400).body(RECORDED_ACCESS_DENIED);
+            })
+            .await;
+
+        let error = client(&server)
+            .create_log_group(
+                CreateLogGroupRequest::builder()
+                    .log_group_name("/aws/lambda/app-api".to_string())
+                    .build(),
+            )
+            .await
+            .expect_err("denied");
+
+        assert!(
+            matches!(
+                error.error,
+                Some(ErrorData::RemoteAccessDenied { ref resource_name, .. })
+                    if resource_name == "/aws/lambda/app-api"
+            ),
+            "{error:?}"
+        );
+        let rejection = error.source.as_deref().expect("the AWS rejection");
+        assert_eq!(rejection.code, "REMOTE_REQUEST_REJECTED");
+        assert!(!rejection.internal);
+        assert_eq!(
+            rejection.message,
+            "CloudWatch Logs rejected the request (AccessDeniedException): User: \
+             arn:aws:sts::123456789012:assumed-role/app-management/session is not authorized to \
+             perform: logs:CreateLogGroup on resource: \
+             arn:aws:logs:us-east-1:123456789012:log-group:/aws/lambda/app-api because no \
+             identity-based policy allows the logs:CreateLogGroup action"
+        );
     }
 
     #[tokio::test]

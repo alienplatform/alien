@@ -8,7 +8,7 @@ use crate::{
     },
     template::{CfExpression, CfResource},
 };
-use alien_core::{import::EmitContext, Build, ComputeType, Result};
+use alien_core::{import::EmitContext, Build, ComputeType, Result, AWS_LOG_RETENTION_DAYS};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsBuildEmitter;
@@ -32,9 +32,10 @@ impl CfEmitter for AwsBuildEmitter {
             "LogGroupName".to_string(),
             CfExpression::sub(format!("/aws/codebuild/${{AWS::StackName}}-{}", build.id)),
         );
-        log_group
-            .properties
-            .insert("RetentionInDays".to_string(), CfExpression::Integer(30));
+        log_group.properties.insert(
+            "RetentionInDays".to_string(),
+            CfExpression::Integer(AWS_LOG_RETENTION_DAYS.into()),
+        );
         log_group.retain_data();
 
         let mut project = CfResource::new(

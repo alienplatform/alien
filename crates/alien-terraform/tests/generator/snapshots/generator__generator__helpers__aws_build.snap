@@ -469,7 +469,7 @@ resource "aws_iam_role_policy" "builder_role_logs" {
 
 resource "aws_cloudwatch_log_group" "builder_logs" {
   name              = "/aws/codebuild/${local.resource_prefix}-builder"
-  retention_in_days = 30
+  retention_in_days = 365
   tags = {
     "managed-by"    = "setup"
     deployment      = local.resource_prefix

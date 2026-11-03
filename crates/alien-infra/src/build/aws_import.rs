@@ -26,6 +26,9 @@ impl ResourceImporter for AwsBuildImporter {
             project_arn: Some(data.project_arn),
             project_name: Some(data.project_name),
             build_env_vars: Some(data.build_env_vars),
+            // The setup template declares the log group and its retention.
+            log_retention_days: None,
+            log_group_untagged: false,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

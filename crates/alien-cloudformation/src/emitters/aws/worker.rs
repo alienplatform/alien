@@ -25,7 +25,7 @@ use alien_core::{
     render_runtime_environment_plan, validate_runtime_environment_user_map,
     worker_runtime_environment_contract, ErrorData, NetworkSettings, Platform, Result,
     RuntimeEnvironmentBindingEntry, RuntimeEnvironmentBindingSource, RuntimeEnvironmentRenderer,
-    RuntimeEnvironmentValue, Storage, Worker, WorkerCode, WorkerTrigger,
+    RuntimeEnvironmentValue, Storage, Worker, WorkerCode, WorkerTrigger, AWS_LOG_RETENTION_DAYS,
 };
 use alien_error::AlienError;
 use indexmap::IndexMap;
@@ -72,9 +72,10 @@ impl CfEmitter for AwsWorkerEmitter {
             "LogGroupName".to_string(),
             CfExpression::sub(format!("/aws/lambda/${{AWS::StackName}}-{}", function.id)),
         );
-        log_group
-            .properties
-            .insert("RetentionInDays".to_string(), CfExpression::Integer(30));
+        log_group.properties.insert(
+            "RetentionInDays".to_string(),
+            CfExpression::Integer(AWS_LOG_RETENTION_DAYS.into()),
+        );
         log_group.retain_data();
 
         let mut lambda =
