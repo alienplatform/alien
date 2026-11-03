@@ -44,6 +44,7 @@
       // another load balancer uses stay out of reach.
       // IAM can bound the TLS policy and the protocol. A create must name both: an HTTPS
       // listener created without a policy gets ELBSecurityPolicy-2016-08, which allows TLS 1.0.
+      // Both FIPS policies accept TLS 1.2 and 1.3 only; the PQ one adds post-quantum key exchange.
       // IAM cannot see a listener's actions, so an HTTP listener that only redirects to HTTPS
       // would need HTTP allowed here, and with it any HTTP listener.
       {
@@ -62,7 +63,10 @@
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${managedByTag}": "runtime",
                 "elasticloadbalancing:ListenerProtocol": "HTTPS",
-                "elasticloadbalancing:SecurityPolicy": "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04"
+                "elasticloadbalancing:SecurityPolicy": [
+                  "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04",
+                  "ELBSecurityPolicy-TLS13-1-2-FIPS-PQ-2025-09"
+                ]
               }
             }
           },
@@ -79,7 +83,10 @@
                 "aws:RequestTag/${resourceTag}": "${resourceId}",
                 "aws:RequestTag/${managedByTag}": "runtime",
                 "elasticloadbalancing:ListenerProtocol": "HTTPS",
-                "elasticloadbalancing:SecurityPolicy": "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04"
+                "elasticloadbalancing:SecurityPolicy": [
+                  "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04",
+                  "ELBSecurityPolicy-TLS13-1-2-FIPS-PQ-2025-09"
+                ]
               }
             }
           }
@@ -218,7 +225,10 @@
                 "aws:ResourceTag/${managedByTag}": "runtime"
               },
               "StringEqualsIfExists": {
-                "elasticloadbalancing:SecurityPolicy": "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04",
+                "elasticloadbalancing:SecurityPolicy": [
+                  "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04",
+                  "ELBSecurityPolicy-TLS13-1-2-FIPS-PQ-2025-09"
+                ],
                 "elasticloadbalancing:ListenerProtocol": "HTTPS"
               }
             }
@@ -235,7 +245,10 @@
                 "aws:ResourceTag/${managedByTag}": "runtime"
               },
               "StringEqualsIfExists": {
-                "elasticloadbalancing:SecurityPolicy": "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04",
+                "elasticloadbalancing:SecurityPolicy": [
+                  "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04",
+                  "ELBSecurityPolicy-TLS13-1-2-FIPS-PQ-2025-09"
+                ],
                 "elasticloadbalancing:ListenerProtocol": "HTTPS"
               }
             }

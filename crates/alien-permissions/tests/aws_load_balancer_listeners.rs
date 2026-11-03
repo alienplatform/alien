@@ -12,6 +12,8 @@ use rstest::rstest;
 use serde_json::Value;
 
 const FIPS_POLICY: &str = "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04";
+/// Both FIPS policies a listener may use; the second adds post-quantum key exchange.
+const FIPS_POLICIES: [&str; 2] = [FIPS_POLICY, "ELBSecurityPolicy-TLS13-1-2-FIPS-PQ-2025-09"];
 const ACCOUNT_PREFIX: &str = "arn:aws:elasticloadbalancing:us-west-2:123456789012";
 
 fn resolve_cloudformation(value: Value) -> Value {
@@ -110,15 +112,17 @@ fn listener_writes_stay_on_this_stack_with_the_fips_policy_and_https(
             } else {
                 Decision::NotAllowed
             };
-            assert_eq!(
-                decide(
-                    create()
-                        .with("elasticloadbalancing:ListenerProtocol", "HTTPS")
-                        .with("elasticloadbalancing:SecurityPolicy", FIPS_POLICY)
-                ),
-                created,
-                "{label}: HTTPS listener with the FIPS policy on this stack's ALB"
-            );
+            for fips_policy in FIPS_POLICIES {
+                assert_eq!(
+                    decide(
+                        create()
+                            .with("elasticloadbalancing:ListenerProtocol", "HTTPS")
+                            .with("elasticloadbalancing:SecurityPolicy", fips_policy)
+                    ),
+                    created,
+                    "{label}: HTTPS listener with {fips_policy} on this stack's ALB"
+                );
+            }
             assert_eq!(
                 decide(
                     listener_request(
@@ -156,11 +160,13 @@ fn listener_writes_stay_on_this_stack_with_the_fips_policy_and_https(
             );
 
             let modify = || listener_request("elasticloadbalancing:ModifyListener", "stack-a", alb);
-            assert_eq!(
-                decide(modify().with("elasticloadbalancing:SecurityPolicy", FIPS_POLICY)),
-                Decision::Allowed,
-                "{label}: certificate rotation or TLS policy move"
-            );
+            for fips_policy in FIPS_POLICIES {
+                assert_eq!(
+                    decide(modify().with("elasticloadbalancing:SecurityPolicy", fips_policy)),
+                    Decision::Allowed,
+                    "{label}: certificate rotation or TLS policy move to {fips_policy}"
+                );
+            }
             assert_eq!(
                 decide(
                     listener_request(
