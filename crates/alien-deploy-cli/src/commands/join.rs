@@ -91,7 +91,7 @@ pub struct JoinArgs {
     #[arg(long)]
     pub zone: Option<String>,
 
-    /// Network interface Horizond should advertise, or "auto" to clear an override.
+    /// Network interface the machine agent should advertise, or "auto" to clear an override.
     #[arg(long)]
     pub network_interface: Option<String>,
 
@@ -107,7 +107,7 @@ pub struct JoinArgs {
     #[arg(long)]
     pub bundle_url: Option<String>,
 
-    /// Control plane API URL for the machine service.
+    /// Control plane API URL the machine agent connects to.
     #[arg(long)]
     pub control_plane_url: Option<String>,
 
