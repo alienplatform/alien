@@ -80,7 +80,8 @@
       },
       {
         // CloudFormation resolves the cluster's {{resolve:secretsmanager:...}} master password
-        // with the caller's credentials. Only the stack's own tagged secret can be read.
+        // with the caller's credentials. Only the stack's own tagged credentials secret can be
+        // read; tag-connection-secret keeps another stack's secret from being retagged first.
         "label": "resolve-master-password",
         "description": "Read the setup-created master password while CloudFormation creates or updates the cluster.",
         "grant": {
@@ -89,7 +90,7 @@
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*-credentials-*"
             ],
             "condition": {
               "StringEquals": {

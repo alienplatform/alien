@@ -301,6 +301,15 @@ fn calls_on_another_stack() -> Vec<Request> {
             .resource_tags(&[("aws:rds:primaryDBClusterArn", account_cluster.as_str())])
             .request_tags(&[("deployment", "my-stack")]),
     );
+    // Retagging the other stack's password secret, then reading it.
+    calls.push(
+        Request::new(
+            "secretsmanager:TagResource",
+            format!("{SECRETS}:my-stack-prod-db-credentials-AbCdEf"),
+        )
+        .resource_tags(OTHER_STACK_TAGS)
+        .request_tags(&[("deployment", "my-stack")]),
+    );
     calls.push(
         Request::new(
             "secretsmanager:GetSecretValue",

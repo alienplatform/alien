@@ -476,8 +476,7 @@
           "actions": [
             "secretsmanager:CreateSecret",
             "secretsmanager:DeleteSecret",
-            "secretsmanager:PutSecretValue",
-            "secretsmanager:TagResource"
+            "secretsmanager:PutSecretValue"
           ]
         },
         "binding": {
@@ -490,6 +489,43 @@
             "resources": [
               "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"
             ]
+          }
+        }
+      },
+      {
+        // Creating the secret with tags is also authorized as TagResource on the new, untagged
+        // secret, so the existing-tag check is IfExists. A secret tagged for another stack cannot
+        // be retagged, so a stack named `app` cannot claim `app-prod`'s password secret and then
+        // read it through a grant bound to the stack tag.
+        "label": "tag-connection-secret",
+        "description": "Tag the generated connection-password secret.",
+        "grant": {
+          "actions": ["secretsmanager:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}"
+              }
+            }
           }
         }
       },
