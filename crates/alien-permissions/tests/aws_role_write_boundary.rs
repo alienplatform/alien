@@ -126,14 +126,17 @@ fn role_writes_require_boundary_and_ownership_only_for_bounded_setups() {
     }
 }
 
+/// Sets only setup credentials hold.
+const SETUP_ONLY_SETS: [&str; 2] = ["remote-stack-management/provision", "network/setup"];
+
 #[test]
 fn catalog_management_role_writes_require_boundary_and_ownership() {
     let context = common::create_test_context().with_aws_permissions_boundary_arn(BOUNDARY);
     let generator = AwsRuntimePermissionsGenerator::new();
     for id in list_permission_set_ids() {
         // Setup credentials only: automatic setup management never copies these to the
-        // management identity.
-        if id == "remote-stack-management/provision" || id.ends_with("/setup") {
+        // management identity. Listed by name, so a new set is checked until it is added here.
+        if SETUP_ONLY_SETS.contains(&id) {
             continue;
         }
         let set = get_permission_set(id).unwrap();

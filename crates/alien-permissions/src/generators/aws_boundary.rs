@@ -1767,6 +1767,7 @@ mod tests {
             "storage/telemetry",
             "guard/example",
             "sandbox/protect-setup-roles",
+            "network/setup",
             "remote-stack-management/execute",
             "observe/logs",
             "experimental/aws-opensearch/provision",
