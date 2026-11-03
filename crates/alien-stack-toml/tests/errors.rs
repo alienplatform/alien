@@ -226,6 +226,69 @@ fn scope_secret_and_endpoint_errors() {
 }
 
 #[test]
+fn input_errors() {
+    let input = |body: &str| format!("{DAEMON}\n[input.region]\n{body}\n");
+    assert_at(
+        &input("kind = \"string\"\nlabel = \"Region\""),
+        6,
+        8,
+        "a required input needs a `description`",
+    );
+    assert_at(
+        &input("kind = \"integer\"\nrequired = false\ndefault = 1.5"),
+        9,
+        11,
+        "1.5 is not a whole number",
+    );
+    assert_at(
+        &input("kind = \"boolean\"\nrequired = false\ndefault = \"yes\""),
+        9,
+        11,
+        "expected a boolean",
+    );
+    assert_at(
+        &input("kind = \"number\"\nrequired = false\nmin-length = 2"),
+        9,
+        14,
+        "`min-length` applies to string and secret inputs only",
+    );
+    assert_at(
+        &input("kind = \"enum\"\nrequired = false"),
+        6,
+        8,
+        "an enum input needs `values`",
+    );
+    assert_at(
+        &input(
+            "kind = \"string\"\nrequired = false\nenv = { name = \"REGION\", targets = [\"api\"] }",
+        ),
+        9,
+        7,
+        "unknown resource 'api' in `targets`",
+    );
+    assert_at(
+        &input("kind = \"string\"\nrequired = false\nenv = \"region\""),
+        9,
+        7,
+        "'region' must be an environment variable name",
+    );
+    assert_at(
+        &format!("{DAEMON}\n[input.REGION]\nkind = \"string\"\nrequired = false\n"),
+        6,
+        8,
+        "input ID 'REGION' must",
+    );
+    assert_at(
+        &format!(
+            "{DAEMON}\n[input.apiKey]\nkind = \"string\"\nrequired = false\n\n[daemon.agent.secrets]\nAPI_KEY = {{}}\n"
+        ),
+        11,
+        1,
+        "clashes with the input 'apiKey'",
+    );
+}
+
+#[test]
 fn env_file_errors() {
     let dir = tempfile::tempdir().unwrap();
     let missing = reject_in(dir.path(), &format!("{DAEMON}env-file = \"app.env\"\n"));

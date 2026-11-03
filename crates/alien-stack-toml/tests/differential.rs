@@ -33,7 +33,10 @@ fn toml_stacks_match_their_typescript_equivalents() {
         .iter()
         .map(|fixture| fixture.file_name().unwrap().to_string_lossy().into_owned())
         .collect();
-    assert_eq!(names, ["minimal", "pools-and-scopes", "sandbox-runtime"]);
+    assert_eq!(
+        names,
+        ["inputs", "minimal", "pools-and-scopes", "sandbox-runtime"]
+    );
 
     for fixture in fixtures {
         let toml_stack = alien_stack_toml::load(&fixture.join("alien.toml"))

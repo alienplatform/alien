@@ -93,9 +93,7 @@ fn unquote(value: &str) -> std::result::Result<String, String> {
                 Some('\\') => result.push('\\'),
                 Some('n') => result.push('\n'),
                 Some(other) => {
-                    return Err(format!(
-                        "unknown escape '\\{other}'; use \\\", \\\\ or \\n"
-                    ))
+                    return Err(format!("unknown escape '\\{other}'; use \\\", \\\\ or \\n"))
                 }
                 None => break,
             },
@@ -155,9 +153,19 @@ mod tests {
         let cases = [
             ("A=1\nnot a pair\n", 2, 1, "expected KEY=value"),
             ("A=1\n  9X=1\n", 2, 3, "'9X' is not a variable name"),
-            ("A=1\nB = \"open\n", 2, 5, "unterminated double-quoted value"),
+            (
+                "A=1\nB = \"open\n",
+                2,
+                5,
+                "unterminated double-quoted value",
+            ),
             ("A=1\nB='x\n", 2, 3, "unterminated single-quoted value"),
-            ("A=\"x\" y\n", 1, 3, "unexpected text after the closing quote"),
+            (
+                "A=\"x\" y\n",
+                1,
+                3,
+                "unexpected text after the closing quote",
+            ),
             ("A=\"\\t\"\n", 1, 3, "unknown escape"),
             ("A=1\nA=2\n", 2, 1, "'A' is set more than once"),
         ];

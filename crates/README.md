@@ -54,6 +54,7 @@ Custom HTTP clients that talk directly to cloud APIs using `reqwest` with per-cl
 | Crate | Description |
 |-------|-------------|
 | [alien-cli](./alien-cli/) | Developer CLI — `alien dev`, `alien build`, `alien release`, `alien deploy`, `alien serve` |
+| [alien-stack-toml](./alien-stack-toml/) | `alien.toml` — a declarative stack file the CLI resolves to the same stack as `alien.ts`, with line-and-column errors and an editor schema |
 | [alien-cli-common](./alien-cli-common/) | Shared CLI utilities (networking, TUI) used by both CLIs |
 | [alien-deploy-cli](./alien-deploy-cli/) | Deployment CLI for customer admins — `alien-deploy deploy/destroy/status/list/operator` |
 

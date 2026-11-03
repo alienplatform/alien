@@ -34,11 +34,12 @@ use source::SourceFile;
 
 /// Loads the stack in the `alien.toml` file at `path`.
 pub fn load(path: &Path) -> Result<Stack> {
-    let text = std::fs::read_to_string(path)
-        .into_alien_error()
-        .context(ErrorData::FileUnreadable {
-            file: path.display().to_string(),
-        })?;
+    let text =
+        std::fs::read_to_string(path)
+            .into_alien_error()
+            .context(ErrorData::FileUnreadable {
+                file: path.display().to_string(),
+            })?;
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
     parse(&text, &path.display().to_string(), base_dir)
 }
@@ -52,9 +53,8 @@ pub fn parse(text: &str, file_name: &str, base_dir: &Path) -> Result<Stack> {
         name: file_name.to_string(),
         text,
     };
-    let document: Document = toml::from_str(text).map_err(|error| {
-        file.error(error.span().unwrap_or(0..0), toml_message(&error))
-    })?;
+    let document: Document = toml::from_str(text)
+        .map_err(|error| file.error(error.span().unwrap_or(0..0), toml_message(&error)))?;
     resolve::resolve(document, &file, base_dir)
 }
 
@@ -69,4 +69,3 @@ pub fn json_schema() -> serde_json::Value {
 fn toml_message(error: &toml::de::Error) -> String {
     error.message().trim_end().to_string()
 }
-
