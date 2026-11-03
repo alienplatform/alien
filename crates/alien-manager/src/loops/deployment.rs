@@ -1123,6 +1123,7 @@ impl DeploymentLoop {
                         alien_core::HorizonClusterConfig {
                             cluster_id,
                             management_token: token,
+                            horizon_machine_image: None,
                         },
                     );
                     config.compute_backend = Some(alien_core::ComputeBackend::Horizon(

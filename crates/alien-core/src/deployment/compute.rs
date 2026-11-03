@@ -18,6 +18,12 @@ pub struct HorizonClusterConfig {
     /// Management token for API access (hm_...)
     /// Used by alien-deployment controllers to create/update containers
     pub management_token: String,
+
+    /// Machine image this cluster's machines run. When set, it replaces
+    /// [`HorizonConfig::horizon_machine_image`] for this cluster only, so one
+    /// cluster can stay on the image it runs while others move to a newer one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub horizon_machine_image: Option<HorizonMachineImage>,
 }
 
 /// Horizon machine image architecture.
@@ -160,6 +166,17 @@ pub struct HorizonConfig {
     pub clusters: HashMap<String, HorizonClusterConfig>,
 }
 
+impl HorizonConfig {
+    /// The machine image for the cluster of the ComputeCluster resource
+    /// `resource_id`: its own image when it has one, otherwise the catalog's.
+    pub fn machine_image_for(&self, resource_id: &str) -> Option<&HorizonMachineImage> {
+        self.clusters
+            .get(resource_id)
+            .and_then(|cluster| cluster.horizon_machine_image.as_ref())
+            .or(self.horizon_machine_image.as_ref())
+    }
+}
+
 /// Compute backend for Container and Worker resources.
 ///
 /// Determines how compute workloads are orchestrated on cloud platforms.
@@ -181,7 +198,11 @@ pub enum ComputeBackend {
 mod tests {
     use serde_json::{json, Value};
 
-    use super::{HorizonMachineImage, HorizondArtifact};
+    use std::collections::HashMap;
+
+    use serde::Deserialize;
+
+    use super::{HorizonClusterConfig, HorizonConfig, HorizonMachineImage, HorizondArtifact};
 
     fn legacy_catalog() -> Value {
         json!({
@@ -268,5 +289,119 @@ mod tests {
                 assert!(serde_json::from_value::<HorizonMachineImage>(catalog).is_err());
             }
         }
+    }
+
+    fn catalog_version(version: &str) -> Value {
+        let mut catalog = legacy_catalog();
+        catalog["machineImageVersion"] = json!(version);
+        catalog
+    }
+
+    #[test]
+    fn cluster_without_its_own_machine_image_reads_as_before() {
+        let config: HorizonConfig = serde_json::from_value(json!({
+            "url": "https://horizon.example.com",
+            "horizonMachineImage": catalog_version("2"),
+            "clusters": {
+                "compute": { "clusterId": "cluster-1", "managementToken": "hm_test" }
+            }
+        }))
+        .expect("a config written before the field existed must deserialize");
+
+        assert_eq!(config.clusters["compute"].horizon_machine_image, None);
+        assert_eq!(
+            config
+                .machine_image_for("compute")
+                .map(|image| image.machine_image_version.as_str()),
+            Some("2")
+        );
+        // Writing it back adds nothing, so readers that predate the field see the same document.
+        let written = serde_json::to_value(&config.clusters["compute"]).unwrap();
+        assert_eq!(
+            written,
+            json!({ "clusterId": "cluster-1", "managementToken": "hm_test" })
+        );
+    }
+
+    #[test]
+    fn each_cluster_uses_its_own_machine_image_when_it_has_one() {
+        let config: HorizonConfig = serde_json::from_value(json!({
+            "url": "https://horizon.example.com",
+            "horizonMachineImage": catalog_version("2"),
+            "clusters": {
+                "held": {
+                    "clusterId": "cluster-1",
+                    "managementToken": "hm_test",
+                    "horizonMachineImage": catalog_version("1")
+                },
+                "moving": { "clusterId": "cluster-2", "managementToken": "hm_test" }
+            }
+        }))
+        .unwrap();
+
+        let version = |resource_id| {
+            config
+                .machine_image_for(resource_id)
+                .map(|image| image.machine_image_version.clone())
+        };
+        assert_eq!(version("held").as_deref(), Some("1"));
+        assert_eq!(version("moving").as_deref(), Some("2"));
+        assert_eq!(version("unknown").as_deref(), Some("2"));
+    }
+
+    /// The cluster and catalog types as they were before clusters could carry their own image.
+    /// Nothing on the path from the deployment config to a cluster rejects unknown fields, so an
+    /// older reader keeps working when a newer writer sets the image.
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    struct PreviousHorizonClusterConfig {
+        cluster_id: String,
+        management_token: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PreviousHorizonConfig {
+        #[allow(dead_code)]
+        url: String,
+        #[serde(default)]
+        horizon_machine_image: Option<HorizonMachineImage>,
+        clusters: HashMap<String, PreviousHorizonClusterConfig>,
+    }
+
+    #[test]
+    fn readers_that_predate_cluster_machine_images_ignore_them() {
+        let config = HorizonConfig {
+            url: "https://horizon.example.com".to_string(),
+            horizon_machine_image: Some(serde_json::from_value(catalog_version("2")).unwrap()),
+            clusters: HashMap::from([(
+                "compute".to_string(),
+                HorizonClusterConfig {
+                    cluster_id: "cluster-1".to_string(),
+                    management_token: "hm_test".to_string(),
+                    horizon_machine_image: Some(
+                        serde_json::from_value(catalog_version("1")).unwrap(),
+                    ),
+                },
+            )]),
+        };
+        let written = serde_json::to_value(&config).unwrap();
+        assert!(written["clusters"]["compute"]["horizonMachineImage"].is_object());
+
+        let previous: PreviousHorizonConfig = serde_json::from_value(written)
+            .expect("an older reader must accept a cluster that carries its own image");
+        assert_eq!(
+            previous.clusters["compute"],
+            PreviousHorizonClusterConfig {
+                cluster_id: "cluster-1".to_string(),
+                management_token: "hm_test".to_string(),
+            }
+        );
+        assert_eq!(
+            previous
+                .horizon_machine_image
+                .map(|image| image.machine_image_version),
+            Some("2".to_string())
+        );
     }
 }
