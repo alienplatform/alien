@@ -2492,6 +2492,123 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// Workload shapes for the auto-selection matrix: name, CPU and memory per replica,
+    /// desired and max replicas, ephemeral storage, GPU type and count.
+    type SelectionShape = (
+        &'static str,
+        f64,
+        u64,
+        u32,
+        u32,
+        u64,
+        Option<(&'static str, u32)>,
+    );
+
+    #[rustfmt::skip]
+    const SELECTION_SHAPES: &[SelectionShape] = &[
+        ("tiny", 0.25, 512 * MI, 1, 1, 0, None),
+        ("burstable", 1.0, 2 * GI, 1, 1, 10 * GI, None),
+        ("burstable-big-memory", 0.5, 8 * GI, 1, 1, 0, None),
+        ("small", 1.0, 2 * GI, 2, 4, 10 * GI, None),
+        ("medium", 4.0, 8 * GI, 1, 1, 10 * GI, None),
+        ("general", 2.0, 8 * GI, 4, 10, 20 * GI, None),
+        ("many-replicas", 2.0, 4 * GI, 35, 35, 20 * GI, None),
+        ("large-replica", 12.0, 48 * GI, 1, 2, 20 * GI, None),
+        ("huge-replica", 60.0, 240 * GI, 1, 1, 20 * GI, None),
+        ("memory-heavy", 4.0, 60 * GI, 2, 4, 20 * GI, None),
+        ("storage-300g", 2.0, 8 * GI, 2, 2, 300 * GI, None),
+        ("storage-1t", 4.0, 16 * GI, 2, 4, 1000 * GI, None),
+        ("storage-2t", 4.0, 16 * GI, 2, 4, 2000 * GI, None),
+        ("storage-8t", 2.0, 8 * GI, 2, 2, 8000 * GI, None),
+        ("storage-100t", 2.0, 8 * GI, 1, 1, 100 * TI, None),
+        ("gpu-t4", 2.0, 8 * GI, 1, 1, 10 * GI, Some(("nvidia-t4", 1))),
+        ("gpu-a10g", 2.0, 8 * GI, 1, 1, 10 * GI, Some(("nvidia-a10g", 1))),
+        ("gpu-a100", 4.0, 16 * GI, 1, 1, 10 * GI, Some(("nvidia-a100", 1))),
+        ("gpu-a100x8", 16.0, 128 * GI, 1, 1, 10 * GI, Some(("nvidia-a100", 8))),
+        ("gpu-h100x8", 16.0, 128 * GI, 1, 1, 10 * GI, Some(("nvidia-h100", 8))),
+    ];
+
+    /// One line per case: what `select_instance_type` picks for every platform, architecture,
+    /// nested-virtualization setting and workload shape above.
+    fn render_selection_matrix() -> String {
+        let mut table = String::new();
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            for architecture in [None, Some(Architecture::Arm64), Some(Architecture::X86_64)] {
+                for nested_virt in [false, true] {
+                    for &(shape, cpu, memory, desired, max, storage, gpu) in SELECTION_SHAPES {
+                        let requirements = WorkloadRequirements {
+                            total_cpu_at_desired: cpu * desired as f64,
+                            total_memory_bytes_at_desired: memory * desired as u64,
+                            total_cpu_at_max: cpu * max as f64,
+                            total_memory_bytes_at_max: memory * max as u64,
+                            max_cpu_per_container: cpu,
+                            max_memory_per_container: memory,
+                            max_ephemeral_storage_bytes: storage,
+                            gpu: gpu.map(|(gpu_type, count)| GpuSpec {
+                                gpu_type: gpu_type.to_string(),
+                                count,
+                            }),
+                            architecture,
+                            nested_virt,
+                        };
+                        let pick = match select_instance_type(platform, &requirements) {
+                            Ok(selection) => format!(
+                                "{} min={} max={} memory={} storage={}",
+                                selection.instance_type,
+                                selection.min_machines,
+                                selection.max_machines,
+                                selection.profile.memory_bytes,
+                                selection.profile.ephemeral_storage_bytes
+                            ),
+                            Err(error) => format!("error: {error}"),
+                        };
+                        let architecture = architecture
+                            .map_or("default".to_string(), |architecture| {
+                                format!("{architecture:?}")
+                            });
+                        table.push_str(&format!(
+                            "{platform} {architecture} nested={nested_virt} {shape} -> {pick}\n"
+                        ));
+                    }
+                }
+            }
+        }
+        table
+    }
+
+    /// Matrix cases whose pick differs from the baseline on purpose, with the pick they get.
+    const ACCEPTED_PICK_CHANGES: &[(&str, &str)] = &[];
+
+    /// Automatic picks, with the memory and disk they provision, are what existing stacks get
+    /// on their next deploy, so a catalog change must leave them alone. The baseline holds the
+    /// picks every case gets; only the cases in `ACCEPTED_PICK_CHANGES` may differ.
+    #[test]
+    fn automatic_picks_match_the_baseline_except_accepted_changes() {
+        let baseline = include_str!("instance_catalog/auto_selection_baseline.txt");
+        let rendered = render_selection_matrix();
+        assert_eq!(baseline.lines().count(), rendered.lines().count());
+        fn split(line: &str) -> (&str, &str) {
+            line.split_once(" -> ").unwrap_or((line, ""))
+        }
+        for (before, now) in baseline.lines().zip(rendered.lines()) {
+            let ((case, _), (now_case, pick)) = (split(before), split(now));
+            assert_eq!(case, now_case);
+            match ACCEPTED_PICK_CHANGES
+                .iter()
+                .find(|(accepted, _)| *accepted == case)
+            {
+                Some((_, accepted_pick)) => {
+                    assert_ne!(
+                        before, now,
+                        "{case} no longer changes; drop it from the list"
+                    );
+                    assert_eq!(pick, *accepted_pick, "{case}");
+                }
+                None => assert_eq!(before, now, "automatic pick changed"),
+            }
+        }
+    }
+
     #[test]
     fn test_catalog_instance_types_sorted_by_vcpu_within_family() {
         // Verify that within each (platform, family) group, vcpu is non-decreasing.
