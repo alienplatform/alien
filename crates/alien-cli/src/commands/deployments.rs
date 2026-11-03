@@ -525,7 +525,7 @@ pub enum DeploymentsCmd {
         #[arg(long)]
         max: Option<u32>,
 
-        /// Provider machine type, such as m6i.large. It must keep the pool's
+        /// Provider machine type, such as m7i.large. It must keep the pool's
         /// CPU architecture; the pool's machines are replaced to apply it.
         #[arg(long)]
         machine: Option<String>,
