@@ -193,9 +193,12 @@
           }
         }
       },
+      // CreateLogGroup with tags also authorizes the tagging actions. They are limited to a
+      // group without this stack's tag, which is the group being created: a group that already
+      // carries ownership tags, such as one a template setup made, cannot be retagged.
       {
         "grant": {
-          "actions": ["logs:CreateLogGroup", "logs:TagResource"]
+          "actions": ["logs:CreateLogGroup"]
         },
         "binding": {
           "stack": {
@@ -206,6 +209,27 @@
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["logs:TagResource", "logs:TagLogGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:${stackPrefix}-*-flow-logs"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              },
+              "Null": {
+                "aws:ResourceTag/${stackTag}": "true"
               }
             }
           }

@@ -805,6 +805,9 @@ resource "aws_flow_log" "kubernetes" {
     resource        = "kubernetes"
     "resource-type" = "kubernetes-cluster"
   }
+  depends_on = [
+    aws_iam_role_policy_attachment.kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_5788ded6_attachment
+  ]
 }
 
 resource "aws_iam_role" "kubernetes_cluster" {

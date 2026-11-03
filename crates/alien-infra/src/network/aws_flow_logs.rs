@@ -14,6 +14,7 @@ use alien_aws_clients::cloudwatch_logs::{CreateLogGroupRequest, PutRetentionPoli
 use alien_aws_clients::ec2::{CreateFlowLogsRequest, DescribeFlowLogsRequest};
 use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag};
 use alien_core::{ALIEN_MANAGED_BY_TAG_KEY, ALIEN_STACK_TAG_KEY, AWS_VPC_FLOW_LOG_RETENTION_DAYS};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 const DELIVERY_POLICY_NAME: &str = "flow-logs-delivery";
@@ -43,13 +44,22 @@ pub(crate) struct FlowLogSetup {
     create_token: Option<String>,
     #[serde(default)]
     flow_log_id: Option<String>,
+    /// The flow logs service reported delivering to the group.
+    #[serde(default)]
+    delivering: bool,
+    /// Reads of the flow log that did not report a delivery result yet.
+    #[serde(default)]
+    delivery_checks: u32,
 }
 
 impl FlowLogSetup {
     pub(super) fn is_complete(&self) -> bool {
-        self.flow_log_id.is_some()
+        self.flow_log_id.is_some() && self.delivering
     }
 }
+
+/// How many reads a new flow log gets to report its delivery result, 5 s apart.
+const DELIVERY_CHECKS: u32 = 12;
 
 /// Where creating the flow log got to.
 pub(super) enum FlowLogStep {
@@ -60,9 +70,39 @@ pub(super) enum FlowLogStep {
 
 const AGAIN: FlowLogStep = FlowLogStep::Again(Duration::from_secs(1));
 
-/// The name of the log group and of the role.
-pub(super) fn object_name(resource_prefix: &str, resource_id: &str) -> String {
+/// The name of the log group.
+pub(super) fn log_group_name(resource_prefix: &str, resource_id: &str) -> String {
     format!("{resource_prefix}-{resource_id}-flow-logs")
+}
+
+/// The name of the delivery role. IAM caps role names at 64 characters; a name that would be
+/// longer replaces the resource ID with a hash of it, keeping the prefix and the suffix the
+/// setup permissions name.
+pub(super) fn role_name(resource_prefix: &str, resource_id: &str) -> String {
+    const IAM_ROLE_NAME_MAX_LEN: usize = 64;
+    let name = log_group_name(resource_prefix, resource_id);
+    if name.len() <= IAM_ROLE_NAME_MAX_LEN {
+        return name;
+    }
+    let hash: String = Sha256::digest(resource_id.as_bytes())[..4]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("{resource_prefix}-{hash}-flow-logs")
+}
+
+/// A delete AWS refused. The object stays recorded and the delete fails: completing it would
+/// leave the object behind with nothing that remembers it.
+fn denied(
+    resource_id: &str,
+    object: &str,
+    action: &str,
+    error: AlienError<CloudClientErrorData>,
+) -> AlienError<ErrorData> {
+    error.context(ErrorData::CloudPlatformError {
+        message: format!("Access denied deleting {object} ({action})"),
+        resource_id: Some(resource_id.to_string()),
+    })
 }
 
 /// Whether `tags` include every tag this controller puts on what it creates for the network.
@@ -174,11 +214,15 @@ impl AwsNetworkController {
         let aws_cfg = ctx.get_aws_config()?;
         let partition = crate::sandbox::aws_partition(&aws_cfg.region);
         let prefix = ctx.resource_prefix;
-        let name = object_name(prefix, id);
+        let name = log_group_name(prefix, id);
+        let role = role_name(prefix, id);
         let setup = self.flow_logs.get_or_insert_with(FlowLogSetup::default);
 
-        if setup.flow_log_id.is_some() {
+        if setup.is_complete() {
             return Ok(FlowLogStep::Ready);
+        }
+        if setup.flow_log_id.is_some() {
+            return self.check_delivery(ctx, id).await;
         }
 
         if !setup.log_group_ready {
@@ -238,7 +282,7 @@ impl AwsNetworkController {
             let role_arn = match iam
                 .create_role(
                     CreateRoleRequest::builder()
-                        .role_name(name.clone())
+                        .role_name(role.clone())
                         .assume_role_policy_document(trust_policy(
                             partition,
                             &aws_cfg.region,
@@ -256,29 +300,29 @@ impl AwsNetworkController {
             {
                 Ok(response) => response.create_role_result.role.arn,
                 Err(error) if is_conflict(&error) => {
-                    let role = iam
-                        .get_role(&name)
+                    let existing = iam
+                        .get_role(&role)
                         .await
                         .context(create_failed(
                             id,
-                            format!("Failed to read IAM role '{name}'"),
+                            format!("Failed to read IAM role '{role}'"),
                         ))?
                         .get_role_result
                         .role;
-                    let tags = role.tags.iter().flat_map(|tags| &tags.member);
+                    let tags = existing.tags.iter().flat_map(|tags| &tags.member);
                     if !owned(
                         tags.map(|tag| (tag.key.as_str(), tag.value.as_str())),
                         prefix,
                         id,
                     ) {
-                        return Err(not_owned(id, format!("IAM role '{name}'")));
+                        return Err(not_owned(id, format!("IAM role '{role}'")));
                     }
-                    role.arn
+                    existing.arn
                 }
                 Err(error) => {
                     return Err(error.context(create_failed(
                         id,
-                        format!("Failed to create IAM role '{name}'"),
+                        format!("Failed to create IAM role '{role}'"),
                     )))
                 }
             };
@@ -290,14 +334,14 @@ impl AwsNetworkController {
         if !setup.role_policy_ready {
             let iam = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
             iam.put_role_policy(
-                &name,
+                &role,
                 DELIVERY_POLICY_NAME,
                 &delivery_policy(&log_group_arn(partition, aws_cfg, &name)),
             )
             .await
             .context(create_failed(
                 id,
-                format!("Failed to set the policy of IAM role '{name}'"),
+                format!("Failed to set the policy of IAM role '{role}'"),
             ))?;
             setup.role_policy_ready = true;
             return Ok(FlowLogStep::Again(ROLE_PROPAGATION_DELAY));
@@ -324,8 +368,83 @@ impl AwsNetworkController {
         info!(flow_log_id = %flow_log_id, vpc_id = %vpc_id, "VPC flow log in place");
         if let Some(setup) = self.flow_logs.as_mut() {
             setup.flow_log_id = Some(flow_log_id);
+            setup.delivery_checks = 0;
         }
-        Ok(FlowLogStep::Ready)
+        Ok(AGAIN)
+    }
+
+    /// Reads the recorded flow log until the flow logs service reports delivering to the group.
+    /// A failed delivery, such as a role the service cannot use yet, deletes the flow log and
+    /// fails the step; the retry writes the role's policy again and creates a new flow log.
+    async fn check_delivery(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        id: &str,
+    ) -> Result<FlowLogStep> {
+        let setup = self.flow_logs.as_mut().expect("flow log recorded");
+        let flow_log_id = setup.flow_log_id.clone().expect("flow log recorded");
+        let ec2 = ctx
+            .service_provider
+            .get_aws_ec2_client(ctx.get_aws_config()?)
+            .await?;
+        let flow_log = ec2
+            .describe_flow_logs(
+                DescribeFlowLogsRequest::builder()
+                    .flow_log_ids(vec![flow_log_id.clone()])
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to read flow log '{flow_log_id}'"),
+                resource_id: Some(id.to_string()),
+            })?
+            .flow_log_set
+            .into_iter()
+            .flat_map(|set| set.items)
+            .find(|flow_log| flow_log.flow_log_id.as_deref() == Some(flow_log_id.as_str()));
+        let Some(flow_log) = flow_log else {
+            // Gone: create it again.
+            setup.flow_log_id = None;
+            setup.create_token = None;
+            return Ok(AGAIN);
+        };
+        match flow_log.deliver_logs_status.as_deref() {
+            Some("SUCCESS") => {
+                setup.delivering = true;
+                Ok(FlowLogStep::Ready)
+            }
+            Some("FAILED") => {
+                let reason = flow_log
+                    .deliver_logs_error_message
+                    .unwrap_or_else(|| "no reason given".to_string());
+                ec2.delete_flow_log(&flow_log_id)
+                    .await
+                    .or_else(|error| if is_not_found(&error) { Ok(()) } else { Err(error) })
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to delete flow log '{flow_log_id}' that cannot deliver"),
+                        resource_id: Some(id.to_string()),
+                    })?;
+                setup.flow_log_id = None;
+                setup.create_token = None;
+                setup.role_policy_ready = false;
+                Err(AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Flow log '{flow_log_id}' could not deliver to its log group ({reason}); it was deleted and is created again on retry"
+                    ),
+                    resource_id: Some(id.to_string()),
+                }))
+            }
+            _ if setup.delivery_checks < DELIVERY_CHECKS => {
+                setup.delivery_checks += 1;
+                Ok(FlowLogStep::Again(Duration::from_secs(5)))
+            }
+            status => Err(AlienError::new(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Flow log '{flow_log_id}' reported no delivery result after {DELIVERY_CHECKS} reads (status {status:?})"
+                ),
+                resource_id: Some(id.to_string()),
+            })),
+        }
     }
 
     async fn create_flow_log(
@@ -451,17 +570,11 @@ impl AwsNetworkController {
         let aws_cfg = ctx.get_aws_config()?;
         let partition = crate::sandbox::aws_partition(&aws_cfg.region);
         let prefix = ctx.resource_prefix;
-        let name = object_name(prefix, id);
+        let name = log_group_name(prefix, id);
+        let role_name = role_name(prefix, id);
 
         if let Some(vpc_id) = self.vpc_id.clone() {
-            let mut ids = self
-                .denied_lookup(
-                    ctx,
-                    id,
-                    "VPC flow logs",
-                    self.flow_log_ids(ctx, &vpc_id, &name, id).await.map(Some),
-                )?
-                .unwrap_or_default();
+            let mut ids = self.flow_log_ids(ctx, &vpc_id, &name, id).await?;
             if let Some(recorded) = self.flow_logs.as_ref().and_then(|s| s.flow_log_id.clone()) {
                 if !ids.contains(&recorded) {
                     ids.push(recorded);
@@ -474,13 +587,14 @@ impl AwsNetworkController {
                     Err(error) if is_not_found(&error) => {
                         info!(flow_log_id = %flow_log_id, "VPC flow log already deleted")
                     }
-                    Err(error) if is_access_denied(&error) => self.denied_delete(
-                        ctx,
-                        id,
-                        &format!("flow log '{flow_log_id}'"),
-                        "ec2:DeleteFlowLogs",
-                        error,
-                    )?,
+                    Err(error) if is_access_denied(&error) => {
+                        return Err(denied(
+                            id,
+                            &format!("flow log '{flow_log_id}'"),
+                            "ec2:DeleteFlowLogs",
+                            error,
+                        ))
+                    }
                     Err(error) => {
                         return Err(error.context(ErrorData::CloudPlatformError {
                             message: format!("Failed to delete flow log '{flow_log_id}'"),
@@ -497,16 +611,20 @@ impl AwsNetworkController {
         }
 
         let iam = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
-        let role = match iam.get_role(&name).await {
+        let role = match iam.get_role(&role_name).await {
             Ok(response) => Some(response.get_role_result.role),
             Err(error) if is_not_found(&error) => None,
             Err(error) if is_access_denied(&error) => {
-                self.denied_delete(ctx, id, &format!("IAM role '{name}'"), "iam:GetRole", error)?;
-                None
+                return Err(denied(
+                    id,
+                    &format!("IAM role '{role_name}'"),
+                    "iam:GetRole",
+                    error,
+                ))
             }
             Err(error) => {
                 return Err(error.context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to read IAM role '{name}'"),
+                    message: format!("Failed to read IAM role '{role_name}'"),
                     resource_id: Some(id.to_string()),
                 }))
             }
@@ -518,35 +636,34 @@ impl AwsNetworkController {
                 prefix,
                 id,
             ) {
-                for (action, result) in [
-                    (
-                        "iam:DeleteRolePolicy",
-                        iam.delete_role_policy(&name, DELIVERY_POLICY_NAME).await,
-                    ),
-                    ("iam:DeleteRole", iam.delete_role(&name).await),
-                ] {
-                    match result {
-                        Ok(()) => {}
-                        Err(error) if is_not_found(&error) => {}
-                        Err(error) if is_access_denied(&error) => self.denied_delete(
-                            ctx,
-                            id,
-                            &format!("IAM role '{name}'"),
-                            action,
-                            error,
-                        )?,
-                        Err(error) => {
-                            return Err(error.context(ErrorData::CloudPlatformError {
-                                message: format!("Failed to delete IAM role '{name}' ({action})"),
-                                resource_id: Some(id.to_string()),
-                            }))
-                        }
-                    }
-                }
-                info!(role = %name, "Deleted VPC flow log delivery role");
+                let deleted = |action: &'static str,
+                               result: std::result::Result<
+                    (),
+                    AlienError<CloudClientErrorData>,
+                >| match result {
+                    Ok(()) => Ok(()),
+                    Err(error) if is_not_found(&error) => Ok(()),
+                    Err(error) if is_access_denied(&error) => Err(denied(
+                        id,
+                        &format!("IAM role '{role_name}'"),
+                        action,
+                        error,
+                    )),
+                    Err(error) => Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to delete IAM role '{role_name}' ({action})"),
+                        resource_id: Some(id.to_string()),
+                    })),
+                };
+                deleted(
+                    "iam:DeleteRolePolicy",
+                    iam.delete_role_policy(&role_name, DELIVERY_POLICY_NAME)
+                        .await,
+                )?;
+                deleted("iam:DeleteRole", iam.delete_role(&role_name).await)?;
+                info!(role = %role_name, "Deleted VPC flow log delivery role");
                 self.delete_removed_something = true;
             } else {
-                info!(role = %name, "IAM role does not carry this network's tags; left in place");
+                info!(role = %role_name, "IAM role does not carry this network's tags; left in place");
             }
         }
         if let Some(setup) = self.flow_logs.as_mut() {
@@ -562,14 +679,12 @@ impl AwsNetworkController {
             Ok(tags) => Some(tags),
             Err(error) if is_not_found(&error) => None,
             Err(error) if is_access_denied(&error) => {
-                self.denied_delete(
-                    ctx,
+                return Err(denied(
                     id,
                     &format!("log group '{name}'"),
                     "logs:ListTagsForResource",
                     error,
-                )?;
-                None
+                ))
             }
             Err(error) => {
                 return Err(error.context(ErrorData::CloudPlatformError {
@@ -588,13 +703,14 @@ impl AwsNetworkController {
                 match logs.delete_log_group(&name).await {
                     Ok(()) => info!(log_group = %name, "Deleted VPC flow log group"),
                     Err(error) if is_not_found(&error) => {}
-                    Err(error) if is_access_denied(&error) => self.denied_delete(
-                        ctx,
-                        id,
-                        &format!("log group '{name}'"),
-                        "logs:DeleteLogGroup",
-                        error,
-                    )?,
+                    Err(error) if is_access_denied(&error) => {
+                        return Err(denied(
+                            id,
+                            &format!("log group '{name}'"),
+                            "logs:DeleteLogGroup",
+                            error,
+                        ))
+                    }
                     Err(error) => {
                         return Err(error.context(ErrorData::CloudPlatformError {
                             message: format!("Failed to delete log group '{name}'"),

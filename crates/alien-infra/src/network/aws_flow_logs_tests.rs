@@ -27,7 +27,18 @@ struct Cloud {
     lose_flow_log_creates: usize,
     /// Flow log lists that miss every flow log, as an eventually consistent read.
     stale_flow_log_lists: usize,
+    /// Delivery results reported for reads of a flow log, oldest first; then `SUCCESS`.
+    delivery: Vec<&'static str>,
+    /// IAM and CloudWatch Logs refuse deletes.
+    deny_deletes: bool,
     calls: Vec<String>,
+}
+
+fn denied_error() -> AlienError<CloudClientErrorData> {
+    AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+        resource_type: "flow log delivery".to_string(),
+        resource_name: NAME.to_string(),
+    })
 }
 
 fn ours() -> HashMap<String, String> {
@@ -128,6 +139,9 @@ fn provider(cloud: &Arc<Mutex<Cloud>>) -> Arc<MockPlatformServiceProvider> {
     logs.expect_delete_log_group().returning(move |name| {
         let mut cloud = c.lock().unwrap();
         cloud.calls.push(format!("DeleteLogGroup {name}"));
+        if cloud.deny_deletes {
+            return Err(denied_error());
+        }
         let before = cloud.log_groups.len();
         cloud.log_groups.retain(|(group, _)| group != name);
         if cloud.log_groups.len() == before {
@@ -188,16 +202,22 @@ fn provider(cloud: &Arc<Mutex<Cloud>>) -> Arc<MockPlatformServiceProvider> {
     let c = cloud.clone();
     iam.expect_delete_role_policy()
         .returning(move |role_name, policy_name| {
-            c.lock()
-                .unwrap()
+            let mut cloud = c.lock().unwrap();
+            cloud
                 .calls
                 .push(format!("DeleteRolePolicy {role_name} {policy_name}"));
+            if cloud.deny_deletes {
+                return Err(denied_error());
+            }
             Ok(())
         });
     let c = cloud.clone();
     iam.expect_delete_role().returning(move |name| {
         let mut cloud = c.lock().unwrap();
         cloud.calls.push(format!("DeleteRole {name}"));
+        if cloud.deny_deletes {
+            return Err(denied_error());
+        }
         cloud.roles.retain(|(role, _)| role != name);
         Ok(())
     });
@@ -240,6 +260,37 @@ fn provider(cloud: &Arc<Mutex<Cloud>>) -> Arc<MockPlatformServiceProvider> {
     let c = cloud.clone();
     ec2.expect_describe_flow_logs().returning(move |request| {
         let mut cloud = c.lock().unwrap();
+        let flow_log = |id: &str, delivery: &str| FlowLog {
+            flow_log_id: Some(id.to_string()),
+            flow_log_status: Some("ACTIVE".to_string()),
+            resource_id: Some("vpc-1".to_string()),
+            traffic_type: Some("ALL".to_string()),
+            log_destination_type: Some("cloud-watch-logs".to_string()),
+            log_group_name: Some(NAME.to_string()),
+            deliver_logs_permission_arn: None,
+            deliver_logs_status: Some(delivery.to_string()),
+            deliver_logs_error_message: (delivery == "FAILED").then(|| "Access error".to_string()),
+            max_aggregation_interval: Some(600),
+            tag_set: None,
+        };
+        // A read of the recorded flow log, checking its delivery.
+        if let Some(ids) = &request.flow_log_ids {
+            let delivery = if cloud.delivery.is_empty() {
+                "SUCCESS"
+            } else {
+                cloud.delivery.remove(0)
+            };
+            let items = cloud
+                .flow_logs
+                .iter()
+                .filter(|(id, _)| ids.contains(id))
+                .map(|(id, _)| flow_log(id, delivery))
+                .collect();
+            return Ok(DescribeFlowLogsResponse {
+                flow_log_set: Some(FlowLogSet { items }),
+                next_token: None,
+            });
+        }
         let filter = |name: &str| {
             request
                 .filters
@@ -259,19 +310,7 @@ fn provider(cloud: &Arc<Mutex<Cloud>>) -> Arc<MockPlatformServiceProvider> {
             cloud
                 .flow_logs
                 .iter()
-                .map(|(id, _)| FlowLog {
-                    flow_log_id: Some(id.clone()),
-                    flow_log_status: Some("ACTIVE".to_string()),
-                    resource_id: Some("vpc-1".to_string()),
-                    traffic_type: Some("ALL".to_string()),
-                    log_destination_type: Some("cloud-watch-logs".to_string()),
-                    log_group_name: Some(NAME.to_string()),
-                    deliver_logs_permission_arn: None,
-                    deliver_logs_status: Some("SUCCESS".to_string()),
-                    deliver_logs_error_message: None,
-                    max_aggregation_interval: Some(600),
-                    tag_set: None,
-                })
+                .map(|(id, _)| flow_log(id, "SUCCESS"))
                 .collect()
         };
         Ok(DescribeFlowLogsResponse {
@@ -600,4 +639,100 @@ async fn a_setup_run_adds_the_flow_log_to_a_vpc_direct_setup_created_before() {
     assert!(flow_logs(&executor).is_some_and(|setup| setup.is_complete()));
     assert_eq!(cloud.lock().unwrap().flow_logs.len(), 1);
     assert!(!executor.needs_update().expect("needs_update"));
+}
+
+/// AWS created the flow log, but its service cannot deliver with the role yet. The flow log is
+/// deleted and the step fails; the retry writes the role's policy again and creates a new one.
+#[tokio::test]
+async fn a_flow_log_that_cannot_deliver_is_replaced() {
+    let cloud = Arc::new(Mutex::new(Cloud {
+        delivery: vec!["FAILED"],
+        ..Default::default()
+    }));
+    let mut executor = direct_setup(&cloud, creating_flow_logs()).await;
+
+    for _ in 0..4 {
+        executor
+            .step()
+            .await
+            .expect("log group, role, policy, flow log");
+    }
+    let error = executor
+        .step()
+        .await
+        .expect_err("a failed delivery fails the step");
+    assert!(error.message.contains("could not deliver"), "{error:?}");
+    assert!(cloud.lock().unwrap().flow_logs.is_empty());
+    executor
+        .run_until_terminal()
+        .await
+        .expect("the retry finishes");
+
+    assert_eq!(executor.status(), ResourceStatus::Running);
+    let setup = flow_logs(&executor).expect("recorded");
+    assert!(setup.is_complete());
+    assert_eq!(setup.flow_log_id.as_deref(), Some("fl-1"));
+    let cloud = cloud.lock().unwrap();
+    let calls: Vec<_> = cloud
+        .calls
+        .iter()
+        .filter(|call| !call.starts_with("CreateLogGroup") && !call.starts_with("PutRetention"))
+        .map(|call| call.split_whitespace().next().unwrap())
+        .collect();
+    assert_eq!(
+        calls,
+        [
+            "CreateRole",
+            "PutRolePolicy",
+            "CreateFlowLogs",
+            "DeleteFlowLogs",
+            "PutRolePolicy",
+            "CreateFlowLogs",
+        ]
+    );
+    assert_eq!(cloud.flow_logs.len(), 1);
+}
+
+/// A teardown whose role or log group delete is refused fails with the network still
+/// recorded, instead of completing and leaving the objects behind unremembered.
+#[tokio::test]
+async fn a_refused_delete_fails_the_teardown_and_keeps_the_record() {
+    let cloud = Arc::new(Mutex::new(Cloud::default()));
+    let mut executor = direct_setup(&cloud, creating_flow_logs()).await;
+    executor
+        .run_until_terminal()
+        .await
+        .expect("create finishes");
+    cloud.lock().unwrap().deny_deletes = true;
+
+    executor.delete().expect("delete starts");
+    let error = executor
+        .run_until_terminal()
+        .await
+        .expect_err("a refused delete fails");
+    assert!(error.message.contains("Access denied"), "{error:?}");
+    let controller = executor
+        .internal_state::<AwsNetworkController>()
+        .expect("network controller");
+    assert_eq!(controller.vpc_id.as_deref(), Some("vpc-1"));
+    assert!(controller.flow_logs.is_some());
+    let cloud = cloud.lock().unwrap();
+    assert_eq!(cloud.roles.len(), 1);
+    assert_eq!(cloud.log_groups.len(), 1);
+    assert!(!cloud.calls.iter().any(|call| call.starts_with("DeleteVpc")));
+}
+
+/// The longest resource prefix setup accepts still gives a role name IAM takes, with the
+/// prefix and suffix the setup permissions name.
+#[test]
+fn a_long_role_name_keeps_the_prefix_and_suffix_within_iams_limit() {
+    let prefix = "a".repeat(40);
+    let name = role_name(&prefix, "default-network");
+    assert!(name.len() <= 64, "{name}");
+    assert!(
+        name.starts_with(&format!("{prefix}-")) && name.ends_with("-flow-logs"),
+        "{name}"
+    );
+    assert_ne!(name, role_name(&prefix, "other-network"));
+    assert_eq!(role_name("test", "net"), "test-net-flow-logs");
 }

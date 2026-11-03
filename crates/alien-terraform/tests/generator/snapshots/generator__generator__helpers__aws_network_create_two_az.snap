@@ -716,6 +716,9 @@ resource "aws_flow_log" "default_network" {
     resource        = "default-network"
     "resource-type" = "network"
   }
+  depends_on = [
+    aws_iam_role_policy_attachment.default_network_flow_logs_0_network_mode_0f3fc614_setup_0a1e77f4_attachment
+  ]
 }
 
 resource "aws_iam_policy" "default_network_flow_logs_0_network_mode_0f3fc614_setup_0a1e77f4" {

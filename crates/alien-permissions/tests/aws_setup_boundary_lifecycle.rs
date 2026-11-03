@@ -130,6 +130,55 @@ fn setup_can_create_pass_and_delete_the_flow_log_role_of_its_own_stack() {
     );
 }
 
+/// Creating the flow log group with its tags authorizes the tagging actions, but a group that
+/// already carries ownership tags, such as one a Terraform setup made, cannot be retagged into
+/// this network's and then deleted.
+#[test]
+fn setup_tags_only_the_flow_log_group_it_creates() {
+    let setup = generate_aws_initial_setup_policy(&common::create_test_context())
+        .unwrap()
+        .statement;
+    let group = "arn:aws:logs:us-east-1:123456789012:log-group:my-stack-default-network-flow-logs";
+    let tagging = |action: &'static str| {
+        Request::new(action, group)
+            .with("aws:RequestTag/deployment", "my-stack")
+            .with("aws:RequestTag/managed-by", "runtime")
+    };
+    for action in [
+        "logs:CreateLogGroup",
+        "logs:TagResource",
+        "logs:TagLogGroup",
+    ] {
+        assert_eq!(
+            evaluate(&setup, &tagging(action)),
+            Decision::Allowed,
+            "{action} on the group being created"
+        );
+    }
+    for action in ["logs:TagResource", "logs:TagLogGroup"] {
+        assert_eq!(
+            evaluate(
+                &setup,
+                &tagging(action)
+                    .with("aws:ResourceTag/deployment", "my-stack")
+                    .with("aws:ResourceTag/managed-by", "setup")
+            ),
+            Decision::NotAllowed,
+            "{action} on a group that already has ownership tags"
+        );
+    }
+    assert_eq!(
+        evaluate(
+            &setup,
+            &Request::new("logs:DeleteLogGroup", group)
+                .with("aws:ResourceTag/deployment", "my-stack")
+                .with("aws:ResourceTag/managed-by", "setup")
+        ),
+        Decision::NotAllowed,
+        "a template setup's group"
+    );
+}
+
 #[test]
 fn node_cleanup_only_detaches_the_two_obsolete_policies_within_its_scope() {
     for (target, allowed_roles, denied_roles) in [

@@ -106,6 +106,14 @@ pub(crate) fn blocks(
                     Expression::Number(hcl::Number::from(600i64)),
                 ),
                 attr("tags", tags),
+                // Created after the role can write to the group, destroyed before it no longer can.
+                attr(
+                    "depends_on",
+                    Expression::Array(vec![expr::traversal([
+                        "aws_iam_role_policy",
+                        flow_logs_label.as_str(),
+                    ])]),
+                ),
             ],
         ),
     ]

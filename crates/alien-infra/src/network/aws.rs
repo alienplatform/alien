@@ -9729,10 +9729,20 @@ mod controller_state_tests {
                     unsuccessful: None,
                 })
             });
-        // Create looks for a flow log made earlier; delete looks for unrecorded ones.
+        // Create looks for a flow log made earlier and then reads the new one's delivery;
+        // delete looks for unrecorded ones.
         ec2.expect_describe_flow_logs()
-            .times(2)
-            .returning(|_| Ok(parse(json!({}))));
+            .times(3)
+            .returning(|request| {
+                Ok(parse(if request.flow_log_ids.is_some() {
+                    json!({ "flowLogSet": { "item": [{
+                        "flowLogId": "fl-1",
+                        "deliverLogsStatus": "SUCCESS"
+                    }] } })
+                } else {
+                    json!({})
+                }))
+            });
         let log = deleted.clone();
         ec2.expect_delete_flow_log().times(1).returning(move |id| {
             log.lock().unwrap().push(id.to_string());
