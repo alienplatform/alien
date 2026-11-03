@@ -1745,6 +1745,9 @@ async fn deploy_task_with_environment(
                                 setup_method: None,
                                 setup_metadata: None,
                                 setup_handoff: ::std::default::Default::default(),
+                                cloud_account_id: None,
+                                region: None,
+                                dedicated_account: None,
                             })
                             .send()
                             .await

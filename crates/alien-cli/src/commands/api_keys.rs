@@ -120,6 +120,7 @@ pub async fn api_keys_task(args: ApiKeysArgs, ctx: ExecutionMode) -> Result<()> 
                     description,
                     expires_at: None,
                     scope: Scope::ProjectScope(ProjectScope {
+                        additional_roles: Vec::new(),
                         project_id,
                         role: purpose.role(),
                         type_: ProjectScopeType::Project,
