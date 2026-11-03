@@ -2,9 +2,11 @@ use std::{collections::HashMap, time::Duration};
 use tracing::{debug, info, warn};
 
 use crate::core::{
-    aws_ownership::is_tagged_as_ours, EnvironmentVariableBuilder, ResourceControllerContext,
+    aws_ownership::is_tagged_as_ours, aws_tag_scoped::is_remote_access_denied,
+    EnvironmentVariableBuilder, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
+use alien_aws_clients::cloudwatch_logs::{CreateLogGroupRequest, PutRetentionPolicyRequest};
 use alien_aws_clients::codebuild::{
     BatchGetProjectsRequest, CloudWatchLogsConfig, CodeBuildApi, CreateProjectRequest,
     DeleteProjectRequest, EnvironmentVariable, LogsConfig, Project, ProjectArtifacts,
@@ -13,9 +15,10 @@ use alien_aws_clients::codebuild::{
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     standard_resource_tags, AwsCodeBuildHeartbeatData, Build, BuildHeartbeatData,
-    BuildHeartbeatStatus, BuildOutputs, HeartbeatBackend, ObservedHealth, Platform,
+    BuildHeartbeatStatus, BuildOutputs, HeartbeatBackend, HeartbeatCollectionIssue,
+    HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceRef,
-    ResourceStatus,
+    ResourceStatus, ALIEN_STACK_TAG_KEY, AWS_LOG_RETENTION_DAYS,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -105,6 +108,13 @@ pub struct AwsBuildController {
     pub(crate) project_name: Option<String>,
     /// The computed environment variables for this build.
     pub(crate) build_env_vars: Option<HashMap<String, String>>,
+    /// Retention in days setup last set on the project's log group. Projects from earlier
+    /// code have none, and their heartbeat warns until a setup update sets it.
+    #[serde(default)]
+    pub(crate) log_retention_days: Option<i32>,
+    /// The log action setup was denied the last time it set up the project's log group.
+    #[serde(default)]
+    pub(crate) log_group_denied_action: Option<String>,
 }
 
 #[controller]
@@ -186,6 +196,9 @@ phases:
             .image_pull_credentials_type("SERVICE_ROLE".to_string())
             .environment_variables(environment_variables)
             .build();
+
+        self.ensure_log_group(ctx, &aws_project_name, &cfg.id)
+            .await?;
 
         let request = CreateProjectRequest::builder()
             .name(aws_project_name.clone())
@@ -350,7 +363,12 @@ phases:
                 }
             }
 
-            emit_aws_build_heartbeat(ctx, &config.id, project);
+            emit_aws_build_heartbeat(
+                ctx,
+                &config.id,
+                project,
+                self.log_retention_issue(ctx.resource_prefix, project_name),
+            );
         }
 
         debug!(name = %config.id, "Heartbeat check passed");
@@ -463,6 +481,9 @@ phases:
             .service_role(role_arn)
             .description(format!("Runtime build project: {}", current_config.id))
             .build();
+
+        self.ensure_log_group(ctx, &aws_project_name, &current_config.id)
+            .await?;
 
         client
             .update_project(update_request)
@@ -622,6 +643,121 @@ impl AwsBuildController {
             .map(|s| s.to_string())
     }
 
+    /// Creates the project's log group, `/aws/codebuild/<project name>`, tagged for this
+    /// deployment and with its retention period. Otherwise CodeBuild creates it on the first
+    /// build and keeps its logs forever. Only direct setup runs this, on create and on update;
+    /// a CloudFormation or Terraform setup declares the same group itself.
+    ///
+    /// The grant binds both calls to the deployment tag, so a group with the name taken by
+    /// another deployment, or one CodeBuild created untagged before, is refused, as is
+    /// everything under a setup policy rendered before the grant. Neither fails the build: the
+    /// denied action is recorded, the heartbeat reports it, and CodeBuild keeps logging to the
+    /// group as before.
+    ///
+    /// To verify against AWS: run a direct setup with a build, then
+    /// `aws logs describe-log-groups --log-group-name-prefix /aws/codebuild/<prefix>-<build>`
+    /// shows `retentionInDays` 365 before the first build.
+    async fn ensure_log_group(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        project_name: &str,
+        resource_id: &str,
+    ) -> Result<()> {
+        let logs = ctx
+            .service_provider
+            .get_aws_logs_client(ctx.get_aws_config()?)
+            .await?;
+        let log_group_name = format!("/aws/codebuild/{project_name}");
+
+        match logs
+            .create_log_group(
+                CreateLogGroupRequest::builder()
+                    .log_group_name(log_group_name.clone())
+                    .tags(standard_resource_tags(ctx.resource_prefix, resource_id))
+                    .build(),
+            )
+            .await
+        {
+            Ok(()) => info!(log_group = %log_group_name, "Created build log group"),
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(CloudClientErrorData::RemoteResourceConflict { .. })
+                ) =>
+            {
+                info!(log_group = %log_group_name, "Build log group already exists")
+            }
+            Err(error) if is_remote_access_denied(&error) => {
+                warn!(
+                    log_group = %log_group_name,
+                    "Not allowed to create the build log group; CodeBuild creates it without a retention period. Run a setup update to grant logs:CreateLogGroup."
+                );
+                self.log_group_denied_action = Some("logs:CreateLogGroup".to_string());
+                return Ok(());
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to create log group '{log_group_name}'"),
+                    resource_id: Some(resource_id.to_string()),
+                }))
+            }
+        }
+
+        match logs
+            .put_retention_policy(
+                PutRetentionPolicyRequest::builder()
+                    .log_group_name(log_group_name.clone())
+                    .retention_in_days(AWS_LOG_RETENTION_DAYS)
+                    .build(),
+            )
+            .await
+        {
+            Ok(()) => {
+                self.log_retention_days = Some(AWS_LOG_RETENTION_DAYS);
+                self.log_group_denied_action = None;
+                Ok(())
+            }
+            Err(error) if is_remote_access_denied(&error) => {
+                warn!(
+                    log_group = %log_group_name,
+                    "Not allowed to set the build log group's retention; its logs are not kept for the required period. Run a setup update to grant logs:PutRetentionPolicy, after tagging a group CodeBuild created for this deployment."
+                );
+                self.log_group_denied_action = Some("logs:PutRetentionPolicy".to_string());
+                Ok(())
+            }
+            Err(error) => Err(error.context(ErrorData::CloudPlatformError {
+                message: format!("Failed to set the retention of log group '{log_group_name}'"),
+                resource_id: Some(resource_id.to_string()),
+            })),
+        }
+    }
+
+    /// The warning the heartbeat carries while the project's log group may not keep logs for
+    /// the retention period.
+    fn log_retention_issue(
+        &self,
+        stack_prefix: &str,
+        project_name: &str,
+    ) -> Option<HeartbeatCollectionIssue> {
+        if self.log_retention_days == Some(AWS_LOG_RETENTION_DAYS) {
+            return None;
+        }
+        let reason = match &self.log_group_denied_action {
+            Some(action) => format!("setup was not allowed to call {action}"),
+            None => "it was created before setup set its retention".to_string(),
+        };
+        Some(HeartbeatCollectionIssue {
+            source: "log-retention".to_string(),
+            reason: HeartbeatCollectionIssueReason::Forbidden,
+            severity: HeartbeatIssueSeverity::Warning,
+            message: format!(
+                "Log group '/aws/codebuild/{project_name}' may not keep logs for \
+                 {AWS_LOG_RETENTION_DAYS} days: {reason}. Run a setup update to fix it. If \
+                 CodeBuild created the group, tag it {ALIEN_STACK_TAG_KEY}={stack_prefix} first."
+            ),
+        })
+    }
+
     fn finish_delete(&mut self) -> AwsBuildHandlerAction {
         self.project_arn = None;
         self.project_name = None;
@@ -657,6 +793,8 @@ impl AwsBuildController {
             )),
             project_name: Some(project_name.to_string()),
             build_env_vars: Some(HashMap::new()),
+            log_retention_days: Some(AWS_LOG_RETENTION_DAYS),
+            log_group_denied_action: None,
             _internal_stay_count: None,
         }
     }
@@ -666,6 +804,7 @@ fn emit_aws_build_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
     project: &Project,
+    log_retention_issue: Option<HeartbeatCollectionIssue>,
 ) {
     let environment = project.environment.as_ref();
     let artifacts = project.artifacts.as_ref();
@@ -694,7 +833,7 @@ fn emit_aws_build_heartbeat(
                     )),
                     stale: false,
                     partial: false,
-                    collection_issues: vec![],
+                    collection_issues: log_retention_issue.into_iter().collect(),
                 },
                 project_name,
                 project_arn: project.arn.clone(),
@@ -738,15 +877,21 @@ mod tests {
     //! See `crate::core::controller_test` for a comprehensive guide on testing infrastructure controllers.
 
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
+    use alien_aws_clients::cloudwatch_logs::MockCloudWatchLogsApi;
     use alien_aws_clients::codebuild::{
         BatchGetProjectsResponse, CreateProjectRequest, CreateProjectResponse,
         DeleteProjectResponse, MockCodeBuildApi, Project, Tag, UpdateProjectRequest,
         UpdateProjectResponse,
     };
     use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
-    use alien_core::{standard_resource_tags, Build, BuildOutputs, Platform, ResourceStatus};
+    use alien_core::{
+        standard_resource_tags, Build, BuildHeartbeatData, BuildOutputs, HeartbeatCollectionIssue,
+        HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, Platform, ResourceHeartbeatData,
+        ResourceStatus,
+    };
     use alien_error::AlienError;
     use rstest::rstest;
 
@@ -822,13 +967,61 @@ mod tests {
     fn setup_mock_service_provider(
         mock_codebuild: Arc<MockCodeBuildApi>,
     ) -> Arc<MockPlatformServiceProvider> {
+        setup_mock_service_provider_with_logs(mock_codebuild, fake_logs(Calls::default(), true))
+    }
+
+    fn setup_mock_service_provider_with_logs(
+        mock_codebuild: Arc<MockCodeBuildApi>,
+        mock_logs: Arc<MockCloudWatchLogsApi>,
+    ) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
 
         mock_provider
             .expect_get_aws_codebuild_client()
             .returning(move |_| Ok(mock_codebuild.clone()));
+        mock_provider
+            .expect_get_aws_logs_client()
+            .returning(move |_| Ok(mock_logs.clone()));
 
         Arc::new(mock_provider)
+    }
+
+    type Calls = Arc<Mutex<Vec<String>>>;
+
+    /// CloudWatch Logs that records each call. While `granted` is false, every call is denied,
+    /// as for a setup policy rendered before the log group grant.
+    fn fake_logs(calls: Calls, granted: bool) -> Arc<MockCloudWatchLogsApi> {
+        let mut logs = MockCloudWatchLogsApi::new();
+        let recorded = calls.clone();
+        logs.expect_create_log_group().returning(move |request| {
+            let tags = request.tags.unwrap_or_default();
+            recorded.lock().unwrap().push(format!(
+                "CreateLogGroup {} deployment={}",
+                request.log_group_name,
+                tags.get("deployment").map(String::as_str).unwrap_or("-")
+            ));
+            access(granted, request.log_group_name)
+        });
+        logs.expect_put_retention_policy()
+            .returning(move |request| {
+                calls.lock().unwrap().push(format!(
+                    "PutRetentionPolicy {} {}",
+                    request.log_group_name, request.retention_in_days
+                ));
+                access(granted, request.log_group_name)
+            });
+        Arc::new(logs)
+    }
+
+    fn access(granted: bool, log_group_name: String) -> CloudClientResult<()> {
+        if granted {
+            Ok(())
+        } else {
+            Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+                resource_type: "CloudWatch Logs log group".to_string(),
+                resource_name: log_group_name,
+            }))
+        }
     }
 
     // ─────────────── CREATE AND DELETE FLOW TESTS ────────────────────
@@ -1022,14 +1215,31 @@ mod tests {
         projects: &FakeProjects,
         lose_create_response: bool,
     ) -> SingleControllerExecutor {
+        executor_with_logs(
+            build,
+            controller,
+            projects,
+            lose_create_response,
+            fake_logs(Calls::default(), true),
+        )
+        .await
+    }
+
+    async fn executor_with_logs(
+        build: Build,
+        controller: AwsBuildController,
+        projects: &FakeProjects,
+        lose_create_response: bool,
+        logs: Arc<MockCloudWatchLogsApi>,
+    ) -> SingleControllerExecutor {
         SingleControllerExecutor::builder()
             .resource(build)
             .controller(controller)
             .platform(Platform::Aws)
-            .service_provider(setup_mock_service_provider(Arc::new(fake_codebuild(
-                projects.clone(),
-                lose_create_response,
-            ))))
+            .service_provider(setup_mock_service_provider_with_logs(
+                Arc::new(fake_codebuild(projects.clone(), lose_create_response)),
+                logs,
+            ))
             .with_test_dependencies()
             .build()
             .await
@@ -1118,6 +1328,8 @@ mod tests {
             project_arn: None,
             project_name: None,
             build_env_vars: Some(HashMap::new()),
+            log_retention_days: None,
+            log_group_denied_action: None,
             _internal_stay_count: None,
         };
         let mut executor = executor_with(basic_build(), controller, &projects, false).await;
@@ -1172,6 +1384,8 @@ mod tests {
             project_arn: None,
             project_name: None,
             build_env_vars: None,
+            log_retention_days: None,
+            log_group_denied_action: None,
             _internal_stay_count: None,
         };
         let mut executor = executor_with(basic_build(), controller, &projects, false).await;
@@ -1206,6 +1420,179 @@ mod tests {
         assert_eq!(
             *projects.lock().unwrap(),
             HashMap::from([("test-basic-build".to_string(), handmade_tags())])
+        );
+    }
+
+    fn collection_issues(executor: &SingleControllerExecutor) -> Vec<HeartbeatCollectionIssue> {
+        let [heartbeat] = executor.last_heartbeats() else {
+            panic!("one heartbeat per step: {:?}", executor.last_heartbeats());
+        };
+        match &heartbeat.data {
+            ResourceHeartbeatData::Build(BuildHeartbeatData::AwsCodeBuild(data)) => {
+                data.status.collection_issues.clone()
+            }
+            other => panic!("unexpected heartbeat data {other:?}"),
+        }
+    }
+
+    /// The project's log group exists, tagged for this deployment, with 365 days before
+    /// CodeBuild would create it on the first build without a retention period.
+    #[tokio::test]
+    async fn create_makes_the_project_log_group_with_365_days() {
+        let projects = projects_with(&[]);
+        let calls = Calls::default();
+        let mut executor = executor_with_logs(
+            basic_build(),
+            AwsBuildController::default(),
+            &projects,
+            false,
+            fake_logs(calls.clone(), true),
+        )
+        .await;
+
+        executor.run_until_terminal().await.unwrap();
+        executor.step().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                "CreateLogGroup /aws/codebuild/test-basic-build deployment=test".to_string(),
+                "PutRetentionPolicy /aws/codebuild/test-basic-build 365".to_string(),
+            ]
+        );
+        assert_eq!(collection_issues(&executor), vec![]);
+    }
+
+    /// A setup policy rendered before the log group grant still creates the build, and the
+    /// heartbeat names the missing action instead of skipping it quietly.
+    #[tokio::test]
+    async fn a_setup_policy_without_the_grant_creates_the_build_and_warns() {
+        let projects = projects_with(&[]);
+        let mut executor = executor_with_logs(
+            basic_build(),
+            AwsBuildController::default(),
+            &projects,
+            false,
+            fake_logs(Calls::default(), false),
+        )
+        .await;
+
+        executor.run_until_terminal().await.unwrap();
+        executor.step().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert!(projects.lock().unwrap().contains_key("test-basic-build"));
+        assert_eq!(
+            collection_issues(&executor),
+            vec![HeartbeatCollectionIssue {
+                source: "log-retention".to_string(),
+                reason: HeartbeatCollectionIssueReason::Forbidden,
+                severity: HeartbeatIssueSeverity::Warning,
+                message: retention_warning("setup was not allowed to call logs:CreateLogGroup"),
+            }]
+        );
+    }
+
+    fn retention_warning(reason: &str) -> String {
+        format!(
+            "Log group '/aws/codebuild/test-basic-build' may not keep logs for 365 days: \
+             {reason}. Run a setup update to fix it. If CodeBuild created the group, tag it \
+             deployment=test first."
+        )
+    }
+
+    /// CloudWatch Logs where CodeBuild already created the project's group. Setting its
+    /// retention is allowed only once `tagged` is set, as the tag-bound grant decides.
+    fn existing_group_logs(calls: Calls, tagged: Arc<AtomicBool>) -> Arc<MockCloudWatchLogsApi> {
+        let mut logs = MockCloudWatchLogsApi::new();
+        logs.expect_create_log_group().returning(|request| {
+            Err(AlienError::new(
+                CloudClientErrorData::RemoteResourceConflict {
+                    resource_type: "CloudWatch Logs log group".to_string(),
+                    resource_name: request.log_group_name,
+                    message: "The specified log group already exists".to_string(),
+                },
+            ))
+        });
+        logs.expect_put_retention_policy()
+            .returning(move |request| {
+                calls.lock().unwrap().push(format!(
+                    "PutRetentionPolicy {} {}",
+                    request.log_group_name, request.retention_in_days
+                ));
+                access(tagged.load(Ordering::SeqCst), request.log_group_name)
+            });
+        Arc::new(logs)
+    }
+
+    /// A build saved by earlier code warns on Ready without calling CloudWatch Logs, which the
+    /// management role has no grant for. A setup update sets the retention once the group
+    /// carries the deployment tag, and the warning clears.
+    #[tokio::test]
+    async fn a_build_from_earlier_code_warns_until_a_setup_update_sets_its_retention() {
+        let mut saved =
+            serde_json::to_value(AwsBuildController::mock_ready("test-basic-build")).unwrap();
+        let object = saved.as_object_mut().unwrap();
+        object.remove("logRetentionDays");
+        object.remove("logGroupDeniedAction");
+        let saved: AwsBuildController = serde_json::from_value(saved).unwrap();
+
+        let projects = projects_with(&[(
+            "test-basic-build",
+            standard_resource_tags("test", "basic-build"),
+        )]);
+        let mut codebuild = fake_codebuild(projects.clone(), false);
+        codebuild
+            .expect_update_project()
+            .returning(|request| Ok(create_successful_update_response(&request.name)));
+        let calls = Calls::default();
+        let tagged = Arc::new(AtomicBool::new(false));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(basic_build())
+            .controller(saved)
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider_with_logs(
+                Arc::new(codebuild),
+                existing_group_logs(calls.clone(), tagged.clone()),
+            ))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor.step().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(
+            collection_issues(&executor)[0].message,
+            retention_warning("it was created before setup set its retention")
+        );
+        assert!(calls.lock().unwrap().is_empty());
+
+        // The group CodeBuild created is untagged, so the update is refused the retention
+        // call and still succeeds.
+        let mut updated = basic_build();
+        updated.environment = HashMap::from([("STAGE".to_string(), "one".to_string())]);
+        executor.update(updated.clone()).unwrap();
+        executor.run_until_terminal().await.unwrap();
+        executor.step().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(
+            collection_issues(&executor)[0].message,
+            retention_warning("setup was not allowed to call logs:PutRetentionPolicy")
+        );
+
+        // Tagged for this deployment, the next setup update sets 365 days.
+        tagged.store(true, Ordering::SeqCst);
+        updated.environment = HashMap::from([("STAGE".to_string(), "two".to_string())]);
+        executor.update(updated).unwrap();
+        executor.run_until_terminal().await.unwrap();
+        executor.step().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(collection_issues(&executor), vec![]);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec!["PutRetentionPolicy /aws/codebuild/test-basic-build 365".to_string(); 2]
         );
     }
 }

@@ -5,6 +5,7 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider,
+    AWS_LOG_RETENTION_DAYS,
 };
 
 pub(crate) const LOOKUP_ID: &str = "EksAvailabilityZones";
@@ -43,8 +44,10 @@ pub(crate) fn resources(ctx: &EmitContext<'_>, count: CfExpression) -> Vec<CfRes
         "LogGroupName".to_string(),
         CfExpression::sub("/aws/lambda/${AWS::StackName}-eks-az"),
     );
-    logs.properties
-        .insert("RetentionInDays".to_string(), CfExpression::from(14u8));
+    logs.properties.insert(
+        "RetentionInDays".to_string(),
+        CfExpression::Integer(AWS_LOG_RETENTION_DAYS.into()),
+    );
     let mut role = CfResource::new(
         "EksAvailabilityZonesRole".to_string(),
         "AWS::IAM::Role".to_string(),

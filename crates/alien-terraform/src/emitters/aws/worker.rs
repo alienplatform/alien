@@ -16,6 +16,7 @@ use crate::{
 use alien_core::{
     crontab_to_eventbridge::crontab_to_eventbridge, import::EmitContext, ErrorData,
     NetworkSettings, Platform, Result, Storage, Worker, WorkerCode, WorkerTrigger,
+    AWS_LOG_RETENTION_DAYS,
 };
 use alien_error::AlienError;
 use hcl::expr::Expression;
@@ -96,7 +97,7 @@ impl TfEmitter for AwsWorkerEmitter {
                 ),
                 attr(
                     "retention_in_days",
-                    Expression::Number(hcl::Number::from(30i64)),
+                    Expression::Number(hcl::Number::from(AWS_LOG_RETENTION_DAYS)),
                 ),
                 attr("tags", tags(ctx, "worker")),
             ],

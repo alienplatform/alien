@@ -113,7 +113,7 @@ Resources:
     Properties:
       LogGroupName:
         Fn::Sub: /aws/codebuild/${AWS::StackName}-builder
-      RetentionInDays: 30
+      RetentionInDays: 365
     DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
   Builder:

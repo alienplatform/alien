@@ -27,6 +27,89 @@
         }
       },
       {
+        // Direct setup creates a build project's log group, so it gets a retention period
+        // instead of the never-expiring group CodeBuild creates on the first build. Every
+        // statement here also requires the deployment tag: another deployment's name can
+        // start with this one's prefix. Creating a group with tags also authorizes
+        // logs:TagResource, which may only tag a group already carrying this deployment's tag
+        // (on create, the tags in the request), so it cannot claim an untagged group.
+        "label": "create-build-log-groups",
+        "description": "Create the CloudWatch log groups of this application's build projects, tagged for this deployment.",
+        "grant": {
+          "actions": ["logs:CreateLogGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "tag-build-log-groups",
+        "description": "Tag this deployment's build log groups when creating them.",
+        "grant": {
+          "actions": ["logs:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "set-build-log-retention",
+        "description": "Set how long this deployment's build log groups keep logs.",
+        "grant": {
+          "actions": ["logs:PutRetentionPolicy"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          }
+        }
+      },
+      {
         "label": "bounded-role-pass",
         "grant": {
           "actions": ["iam:PassRole"]

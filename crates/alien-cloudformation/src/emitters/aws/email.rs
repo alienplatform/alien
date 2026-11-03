@@ -37,7 +37,7 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, ownership_policy_for_resource_type, Email, ErrorData, Queue, ResourceRef,
-    ResourceType, Result, Storage,
+    ResourceType, Result, Storage, AWS_LOG_RETENTION_DAYS,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
@@ -508,6 +508,7 @@ fn inbound_resources(
     let rule_set_id = format!("{logical_id}RuleSet");
     let activator_role_id = format!("{logical_id}RuleSetActivatorRole");
     let activator_function_id = format!("{logical_id}RuleSetActivatorFunction");
+    let activator_logs_id = format!("{logical_id}RuleSetActivatorLogs");
     let activation_id = format!("{logical_id}RuleSetActivation");
 
     let mut rule_set = CfResource::new(rule_set_id.clone(), "AWS::SES::ReceiptRuleSet".to_string());
@@ -609,17 +610,11 @@ fn inbound_resources(
                                 (
                                     "Action",
                                     CfExpression::list([
-                                        CfExpression::from("logs:CreateLogGroup"),
                                         CfExpression::from("logs:CreateLogStream"),
                                         CfExpression::from("logs:PutLogEvents"),
                                     ]),
                                 ),
-                                (
-                                    "Resource",
-                                    CfExpression::sub(
-                                        "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*",
-                                    ),
-                                ),
+                                ("Resource", CfExpression::get_att(&activator_logs_id, "Arn")),
                             ]),
                         ]),
                     ),
@@ -628,9 +623,32 @@ fn inbound_resources(
         ])]),
     );
 
+    // Lambda would otherwise create `/aws/lambda/<function name>` on first invoke, with no
+    // retention. That group already exists on stacks created before this one was declared, and
+    // CloudFormation cannot create a group whose name is taken, so the function logs to a new
+    // group of its own instead. Untagged like the template's other log groups, so a setup
+    // update does not need logs:TagResource.
+    let mut activator_logs =
+        CfResource::new(activator_logs_id.clone(), "AWS::Logs::LogGroup".to_string());
+    activator_logs.properties.insert(
+        "LogGroupName".to_string(),
+        CfExpression::sub(format!(
+            "/aws/lambda/${{AWS::StackName}}-{}-rule-set-activator",
+            email.id()
+        )),
+    );
+    activator_logs.properties.insert(
+        "RetentionInDays".to_string(),
+        CfExpression::Integer(AWS_LOG_RETENTION_DAYS.into()),
+    );
+
     let mut activator_function = CfResource::new(
         activator_function_id.clone(),
         "AWS::Lambda::Function".to_string(),
+    );
+    activator_function.properties.insert(
+        "LoggingConfig".to_string(),
+        CfExpression::object([("LogGroup", CfExpression::ref_(&activator_logs_id))]),
     );
     activator_function
         .properties
@@ -674,6 +692,7 @@ fn inbound_resources(
     vec![
         rule_set,
         rule,
+        activator_logs,
         activator_role,
         activator_function,
         activation,

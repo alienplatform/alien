@@ -1,6 +1,5 @@
 ---
 source: crates/alien-cloudformation/tests/generator/aws_email_tests.rs
-assertion_line: 221
 expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
@@ -558,6 +557,12 @@ Resources:
     DependsOn:
     - MailboxBucketPolicy
     - MailerEventsTopicPolicy
+  MailerRuleSetActivatorLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName:
+        Fn::Sub: /aws/lambda/${AWS::StackName}-mailer-rule-set-activator
+      RetentionInDays: 365
   MailerRuleSetActivatorRole:
     Type: AWS::IAM::Role
     Properties:
@@ -580,14 +585,18 @@ Resources:
             Resource: '*'
           - Effect: Allow
             Action:
-            - logs:CreateLogGroup
             - logs:CreateLogStream
             - logs:PutLogEvents
             Resource:
-              Fn::Sub: arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
+              Fn::GetAtt:
+              - MailerRuleSetActivatorLogs
+              - Arn
   MailerRuleSetActivatorFunction:
     Type: AWS::Lambda::Function
     Properties:
+      LoggingConfig:
+        LogGroup:
+          Ref: MailerRuleSetActivatorLogs
       Runtime: python3.13
       Handler: index.handler
       Role:

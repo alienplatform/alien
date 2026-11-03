@@ -9,7 +9,7 @@ use crate::{
     },
     expr,
 };
-use alien_core::{import::EmitContext, Build, ComputeType, Result};
+use alien_core::{import::EmitContext, Build, ComputeType, Result, AWS_LOG_RETENTION_DAYS};
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -70,7 +70,7 @@ impl TfEmitter for AwsBuildEmitter {
                 ),
                 attr(
                     "retention_in_days",
-                    Expression::Number(hcl::Number::from(30i64)),
+                    Expression::Number(hcl::Number::from(AWS_LOG_RETENTION_DAYS)),
                 ),
                 attr("tags", tags(ctx, "build")),
             ],

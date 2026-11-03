@@ -58,6 +58,9 @@ pub use resource::*;
 mod ownership;
 pub use ownership::*;
 
+mod log_retention;
+pub use log_retention::*;
+
 mod gateability;
 pub use gateability::*;
 

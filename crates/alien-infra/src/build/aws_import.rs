@@ -26,6 +26,9 @@ impl ResourceImporter for AwsBuildImporter {
             project_arn: Some(data.project_arn),
             project_name: Some(data.project_name),
             build_env_vars: Some(data.build_env_vars),
+            // The heartbeat warns until a setup update sets the log group's retention.
+            log_retention_days: None,
+            log_group_denied_action: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

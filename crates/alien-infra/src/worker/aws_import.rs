@@ -74,6 +74,9 @@ impl ResourceImporter for AwsWorkerImporter {
             delete_removed_something: false,
             vpc_eni_wait_started_at: None,
             wait_for_lambda_started_at: None,
+            // Ready sets the log group's retention on the first heartbeat.
+            log_retention_days: None,
+            log_group_denied_action: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

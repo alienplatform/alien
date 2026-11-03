@@ -47,9 +47,11 @@ use alien_aws_clients::s3::{LambdaFunctionConfiguration, NotificationConfigurati
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     standard_resource_tags, AwsLambdaWorkerHeartbeatData, CertificateStatus, DnsRecordStatus,
-    HeartbeatBackend, Network, NetworkSettings, ObservedHealth, Platform, ProviderLifecycleState,
-    ResourceDefinition, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceRef,
-    ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs, WorkloadHeartbeatStatus,
+    HeartbeatBackend, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason,
+    HeartbeatIssueSeverity, Network, NetworkSettings, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceDefinition, ResourceHeartbeat, ResourceHeartbeatData,
+    ResourceOutputs, ResourceRef, ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs,
+    WorkloadHeartbeatStatus, AWS_LOG_RETENTION_DAYS,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -152,10 +154,6 @@ fn lambda_progress(config: &FunctionConfiguration) -> LambdaProgress {
         )),
     }
 }
-
-/// Days a worker's CloudWatch log group keeps events. Matches the log group
-/// the CloudFormation template declares for the same worker.
-const LAMBDA_LOG_RETENTION_DAYS: i32 = 30;
 
 /// Generates the full, prefixed AWS resource name.
 fn get_aws_worker_name(prefix: &str, name: &str) -> String {
@@ -731,6 +729,15 @@ pub struct AwsWorkerController {
     /// it), so a retry gets a full window.
     #[serde(default)]
     pub(crate) wait_for_lambda_started_at: Option<chrono::DateTime<Utc>>,
+    /// Retention in days last set on the worker's log group. Workers whose group got a
+    /// different value (from earlier code, or none because the role was not allowed) differ
+    /// from `AWS_LOG_RETENTION_DAYS`, and Ready sets it.
+    #[serde(default)]
+    pub(crate) log_retention_days: Option<i32>,
+    /// The log action the management role was denied the last time it set up the log group,
+    /// reported in the heartbeat until a later attempt succeeds.
+    #[serde(default)]
+    pub(crate) log_group_denied_action: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -753,11 +760,30 @@ struct DomainInfo {
     uses_custom_domain: bool,
 }
 
+/// The warning a worker's heartbeat carries while the management role cannot give the
+/// worker's log group its retention period.
+fn log_retention_issue(
+    aws_worker_name: &str,
+    denied_action: Option<&str>,
+) -> Option<HeartbeatCollectionIssue> {
+    denied_action.map(|action| HeartbeatCollectionIssue {
+        source: "log-retention".to_string(),
+        reason: HeartbeatCollectionIssueReason::Forbidden,
+        severity: HeartbeatIssueSeverity::Warning,
+        message: format!(
+            "The management role is not allowed to call {action} on log group \
+             '/aws/lambda/{aws_worker_name}', so its logs are not kept for \
+             {AWS_LOG_RETENTION_DAYS} days. Run a setup update to grant it."
+        ),
+    })
+}
+
 fn emit_aws_lambda_worker_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     worker_config: &Worker,
     aws_worker_name: &str,
     function_info: &FunctionConfiguration,
+    log_retention_issue: Option<HeartbeatCollectionIssue>,
 ) {
     ctx.emit_heartbeat(ResourceHeartbeat {
         deployment_id: None,
@@ -774,7 +800,7 @@ fn emit_aws_lambda_worker_heartbeat(
                     message: Some(format!("AWS Lambda function '{aws_worker_name}' is active")),
                     stale: false,
                     partial: false,
-                    collection_issues: vec![],
+                    collection_issues: log_retention_issue.into_iter().collect(),
                 },
                 function_name: function_info
                     .function_name
@@ -968,7 +994,8 @@ impl AwsWorkerController {
         };
         function_tags.insert(CREATE_ATTEMPT_TAG.to_string(), create_token);
 
-        Self::ensure_log_group(ctx, aws_cfg, &aws_worker_name, &cfg.id).await?;
+        self.ensure_log_group(ctx, aws_cfg, &aws_worker_name, &cfg.id)
+            .await?;
 
         let request = CreateFunctionRequest::builder()
             .function_name(aws_worker_name.clone())
@@ -2847,7 +2874,32 @@ impl AwsWorkerController {
             }));
         }
 
-        emit_aws_lambda_worker_heartbeat(ctx, &worker_config, &aws_worker_name, &function_info);
+        // Sets the retention of a group made by earlier code or under a role that was denied.
+        if self.log_retention_days != Some(AWS_LOG_RETENTION_DAYS)
+            && (self.log_group_denied_action.is_none()
+                || log_retention_retry_due(&aws_worker_name, Utc::now()))
+        {
+            // The retention period does not affect whether the worker serves, so a failure
+            // here is retried on the next heartbeat instead of failing it.
+            if let Err(error) = self
+                .ensure_log_group(ctx, aws_cfg, &aws_worker_name, &worker_config.id)
+                .await
+            {
+                warn!(
+                    worker = %worker_config.id,
+                    code = %error.code,
+                    "Could not set the worker log group's retention; the next heartbeat retries"
+                );
+            }
+        }
+
+        emit_aws_lambda_worker_heartbeat(
+            ctx,
+            &worker_config,
+            &aws_worker_name,
+            &function_info,
+            log_retention_issue(&aws_worker_name, self.log_group_denied_action.as_deref()),
+        );
 
         self.renew_certificate(ctx).await?;
 
@@ -2994,7 +3046,7 @@ impl AwsWorkerController {
         // A worker created while the management role could not manage its
         // log group gets the retention period once setup grants it.
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
-        Self::ensure_log_group(
+        self.ensure_log_group(
             ctx,
             ctx.get_aws_config()?,
             &aws_worker_name,
@@ -5274,15 +5326,17 @@ impl AwsWorkerController {
     /// expire on their own.
     ///
     /// The management role's permissions are fixed at setup, and a setup that
-    /// predates these log permissions lacks them. Access denied therefore only
-    /// warns: the worker is still created, and Lambda creates the group on
-    /// first invoke without a retention period. Re-running setup grants them,
-    /// and the worker's next update sets the retention period.
+    /// predates these log permissions lacks them. Access denied therefore does
+    /// not fail the worker: it is recorded in `log_group_denied_action`, which
+    /// the heartbeat reports as a warning, and Lambda creates the group on first
+    /// invoke without a retention period. Once a setup update grants them, Ready
+    /// sets the retention period.
     ///
     /// To verify against AWS: deploy an AWS worker with the push model, run
     /// `aws logs describe-log-groups --log-group-name-prefix /aws/lambda/<prefix>-<worker>`
-    /// and check `retentionInDays` is 30 before the first invocation.
+    /// and check `retentionInDays` is 365 before the first invocation.
     async fn ensure_log_group(
+        &mut self,
         ctx: &ResourceControllerContext<'_>,
         aws_cfg: &alien_aws_clients::AwsClientConfig,
         function_name: &str,
@@ -5306,8 +5360,9 @@ impl AwsWorkerController {
             Err(error) if is_remote_access_denied(&error) => {
                 warn!(
                     log_group = %log_group_name,
-                    "Not allowed to create the worker log group; Lambda creates it on first invoke without a retention period. Re-run setup to grant logs:CreateLogGroup."
+                    "Not allowed to create the worker log group; Lambda creates it on first invoke without a retention period. Run a setup update to grant logs:CreateLogGroup."
                 );
+                self.log_group_denied_action = Some("logs:CreateLogGroup".to_string());
                 return Ok(());
             }
             Err(error) => {
@@ -5322,17 +5377,22 @@ impl AwsWorkerController {
             .put_retention_policy(
                 PutRetentionPolicyRequest::builder()
                     .log_group_name(log_group_name.clone())
-                    .retention_in_days(LAMBDA_LOG_RETENTION_DAYS)
+                    .retention_in_days(AWS_LOG_RETENTION_DAYS)
                     .build(),
             )
             .await
         {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.log_retention_days = Some(AWS_LOG_RETENTION_DAYS);
+                self.log_group_denied_action = None;
+                Ok(())
+            }
             Err(error) if is_remote_access_denied(&error) => {
                 warn!(
                     log_group = %log_group_name,
-                    "Not allowed to set the worker log group's retention; its logs do not expire. Re-run setup to grant logs:PutRetentionPolicy."
+                    "Not allowed to set the worker log group's retention; its logs are not kept for the required period. Run a setup update to grant logs:PutRetentionPolicy."
                 );
+                self.log_group_denied_action = Some("logs:PutRetentionPolicy".to_string());
                 Ok(())
             }
             Err(error) => Err(error.context(ErrorData::CloudPlatformError {
@@ -5896,6 +5956,8 @@ impl AwsWorkerController {
             delete_removed_something: false,
             vpc_eni_wait_started_at: None,
             wait_for_lambda_started_at: None,
+            log_retention_days: Some(AWS_LOG_RETENTION_DAYS),
+            log_group_denied_action: None,
             _internal_stay_count: None,
         }
     }
@@ -5926,6 +5988,19 @@ fn binding_check_due(worker_name: &str, now: chrono::DateTime<Utc>) -> bool {
     binding_window_open(worker_name, now)
 }
 
+/// Whether a worker whose role was denied its log group calls retries them now: in the same
+/// slot as the linked-binding comparison, about every 330 s, so a role without the grant does
+/// not log a denial in CloudTrail on every heartbeat.
+fn log_retention_retry_due(worker_name: &str, now: chrono::DateTime<Utc>) -> bool {
+    #[cfg(test)]
+    {
+        let _ = (worker_name, now);
+        tests::FORCED_LOG_RETENTION_RETRY.with(|forced| forced.get())
+    }
+    #[cfg(not(test))]
+    binding_window_open(worker_name, now)
+}
+
 fn binding_window_open(worker_name: &str, now: chrono::DateTime<Utc>) -> bool {
     let offset = worker_name.bytes().fold(0i64, |hash, byte| {
         (hash * 31 + i64::from(byte)) % LINKED_BINDING_CHECK_SLOTS
@@ -5942,6 +6017,9 @@ mod tests {
     thread_local! {
         /// Forces the linked-binding comparison window open or closed in tests.
         pub(super) static FORCED_BINDING_CHECK: std::cell::Cell<bool> =
+            const { std::cell::Cell::new(false) };
+        /// Forces the retry of denied log group calls open or closed in tests.
+        pub(super) static FORCED_LOG_RETENTION_RETRY: std::cell::Cell<bool> =
             const { std::cell::Cell::new(false) };
     }
 
@@ -7086,7 +7164,7 @@ mod tests {
             *calls.lock().unwrap(),
             vec![
                 format!("CreateLogGroup /aws/lambda/{worker_name}"),
-                format!("PutRetentionPolicy /aws/lambda/{worker_name} 30"),
+                format!("PutRetentionPolicy /aws/lambda/{worker_name} 365"),
             ]
         );
     }
@@ -8418,7 +8496,7 @@ mod tests {
             *calls.lock().unwrap(),
             vec![
                 format!("CreateLogGroup /aws/lambda/{worker_name}"),
-                format!("PutRetentionPolicy /aws/lambda/{worker_name} 30"),
+                format!("PutRetentionPolicy /aws/lambda/{worker_name} 365"),
                 "CreateFunction".to_string(),
             ]
         );
@@ -8476,7 +8554,7 @@ mod tests {
         assert_eq!(
             *calls.lock().unwrap(),
             vec![
-                "PutRetentionPolicy 30".to_string(),
+                "PutRetentionPolicy 365".to_string(),
                 "CreateFunction".to_string()
             ]
         );
@@ -10939,6 +11017,7 @@ mod tests {
                 ),
                 certificate_arn: Some(imported_certificate_arn(1)),
                 certificate_issued_at: Some("2023-01-01T00:00:00Z".to_string()),
+                log_retention_days: Some(alien_core::AWS_LOG_RETENTION_DAYS),
                 ..Default::default()
             })
             .platform(Platform::Aws)
@@ -11584,6 +11663,193 @@ mod tests {
                     .unwrap()
                     .state,
                 AwsWorkerState::UpdateConfigWaitForActive
+            );
+        }
+    }
+
+    /// Workers created by earlier code keep the log group they have. Ready gives it the
+    /// retention period once, and a role without the grant leaves a visible warning instead
+    /// of failing the worker.
+    mod log_retention_reconcile {
+        use super::*;
+        use alien_core::{
+            HeartbeatCollectionIssue, HeartbeatCollectionIssueReason, HeartbeatIssueSeverity,
+            ResourceHeartbeatData, WorkerHeartbeatData,
+        };
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        const LOG_GROUP: &str = "/aws/lambda/test-basic-func";
+
+        /// A Ready controller as the previous version saved it, before it recorded the
+        /// retention it set.
+        fn saved_by_previous_version() -> AwsWorkerController {
+            let mut value =
+                serde_json::to_value(AwsWorkerController::mock_ready("basic-func")).unwrap();
+            let object = value.as_object_mut().unwrap();
+            object.remove("logRetentionDays");
+            object.remove("logGroupDeniedAction");
+            serde_json::from_value(value).unwrap()
+        }
+
+        /// CloudWatch Logs where the group exists already, as Lambda or earlier code made it.
+        /// Retention calls are recorded and succeed only while `granted` is set.
+        fn existing_group(calls: Calls, granted: Arc<AtomicBool>) -> MockCloudWatchLogsApi {
+            let mut logs = MockCloudWatchLogsApi::new();
+            let recorded = calls.clone();
+            logs.expect_create_log_group().returning(move |request| {
+                record(
+                    &recorded,
+                    &format!("CreateLogGroup {}", request.log_group_name),
+                );
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        resource_type: "CloudWatch Logs log group".to_string(),
+                        resource_name: request.log_group_name,
+                        message: "The specified log group already exists".to_string(),
+                    },
+                ))
+            });
+            logs.expect_put_retention_policy()
+                .returning(move |request| {
+                    record(
+                        &calls,
+                        &format!(
+                            "PutRetentionPolicy {} {}",
+                            request.log_group_name, request.retention_in_days
+                        ),
+                    );
+                    if granted.load(Ordering::SeqCst) {
+                        Ok(())
+                    } else {
+                        log_group_access_denied(request.log_group_name)
+                    }
+                });
+            logs
+        }
+
+        async fn ready_executor(logs: MockCloudWatchLogsApi) -> SingleControllerExecutor {
+            let mut lambda = MockLambdaApi::new();
+            lambda
+                .expect_get_function_configuration()
+                .returning(|name, _| Ok(create_successful_function_response(name)));
+            SingleControllerExecutor::builder()
+                .resource(basic_function())
+                .controller(saved_by_previous_version())
+                .platform(Platform::Aws)
+                .service_provider(setup_mock_service_provider_with_logs(
+                    Arc::new(lambda),
+                    None,
+                    None,
+                    Arc::new(logs),
+                ))
+                .with_test_dependencies()
+                .build()
+                .await
+                .unwrap()
+        }
+
+        fn collection_issues(executor: &SingleControllerExecutor) -> Vec<HeartbeatCollectionIssue> {
+            let [heartbeat] = executor.last_heartbeats() else {
+                panic!("one heartbeat per step: {:?}", executor.last_heartbeats());
+            };
+            match &heartbeat.data {
+                ResourceHeartbeatData::Worker(WorkerHeartbeatData::AwsLambda(data)) => {
+                    data.status.collection_issues.clone()
+                }
+                other => panic!("unexpected heartbeat data {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn a_heartbeat_sets_365_days_on_a_group_from_earlier_code_once() {
+            super::FORCED_LOG_RETENTION_RETRY.with(|forced| forced.set(false));
+            let calls = Calls::default();
+            let granted = Arc::new(AtomicBool::new(true));
+            let mut executor = ready_executor(existing_group(calls.clone(), granted)).await;
+
+            executor.step().await.expect("the heartbeat runs");
+            executor.step().await.expect("the next heartbeat runs");
+
+            assert_eq!(executor.status(), ResourceStatus::Running);
+            assert_eq!(
+                *calls.lock().unwrap(),
+                vec![
+                    format!("CreateLogGroup {LOG_GROUP}"),
+                    format!("PutRetentionPolicy {LOG_GROUP} 365"),
+                ],
+                "set once, not on every heartbeat"
+            );
+            assert_eq!(collection_issues(&executor), vec![]);
+        }
+
+        /// A role from before the worker log group grant cannot create the group either; the
+        /// worker keeps running and the warning names that action.
+        #[tokio::test]
+        async fn a_role_without_create_log_group_warns_and_keeps_running() {
+            super::FORCED_LOG_RETENTION_RETRY.with(|forced| forced.set(false));
+            let mut logs = MockCloudWatchLogsApi::new();
+            logs.expect_create_log_group()
+                .returning(|request| log_group_access_denied(request.log_group_name));
+            let mut executor = ready_executor(logs).await;
+
+            executor
+                .step()
+                .await
+                .expect("a denial does not fail the heartbeat");
+
+            assert_eq!(executor.status(), ResourceStatus::Running);
+            let issues = collection_issues(&executor);
+            assert_eq!(issues.len(), 1);
+            assert!(
+                issues[0].message.contains("logs:CreateLogGroup"),
+                "{}",
+                issues[0].message
+            );
+        }
+
+        #[tokio::test]
+        async fn a_role_without_the_grant_warns_until_a_setup_update_grants_it() {
+            super::FORCED_LOG_RETENTION_RETRY.with(|forced| forced.set(false));
+            let calls = Calls::default();
+            let granted = Arc::new(AtomicBool::new(false));
+            let mut executor = ready_executor(existing_group(calls.clone(), granted.clone())).await;
+
+            executor
+                .step()
+                .await
+                .expect("a denial does not fail the heartbeat");
+            assert_eq!(executor.status(), ResourceStatus::Running);
+            assert_eq!(
+                collection_issues(&executor),
+                vec![HeartbeatCollectionIssue {
+                    source: "log-retention".to_string(),
+                    reason: HeartbeatCollectionIssueReason::Forbidden,
+                    severity: HeartbeatIssueSeverity::Warning,
+                    message: format!(
+                        "The management role is not allowed to call logs:PutRetentionPolicy on \
+                         log group '{LOG_GROUP}', so its logs are not kept for 365 days. Run a \
+                         setup update to grant it."
+                    ),
+                }]
+            );
+
+            // Outside the retry window the warning stays and nothing is called again.
+            executor.step().await.unwrap();
+            assert_eq!(collection_issues(&executor).len(), 1);
+            assert_eq!(calls.lock().unwrap().len(), 2);
+
+            // A setup update grants the action; the next window sets the retention.
+            granted.store(true, Ordering::SeqCst);
+            super::FORCED_LOG_RETENTION_RETRY.with(|forced| forced.set(true));
+            executor.step().await.unwrap();
+            assert_eq!(executor.status(), ResourceStatus::Running);
+            assert_eq!(collection_issues(&executor), vec![]);
+            assert_eq!(
+                calls.lock().unwrap()[2..],
+                [
+                    format!("CreateLogGroup {LOG_GROUP}"),
+                    format!("PutRetentionPolicy {LOG_GROUP} 365"),
+                ]
             );
         }
     }
