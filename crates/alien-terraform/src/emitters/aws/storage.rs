@@ -17,7 +17,8 @@ use crate::{
 use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
 use alien_core::{
     import::EmitContext, ErrorData, LifecycleRule, PermissionProfile, PermissionSetReference,
-    RemoteStackManagement, Result, ServiceAccount, Storage,
+    RemoteStackManagement, Result, ServiceAccount, Storage, AWS_ABORT_INCOMPLETE_UPLOAD_DAYS,
+    AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID,
 };
 use alien_error::AlienError;
 use alien_permissions::BindingTarget;
@@ -61,11 +62,9 @@ impl TfEmitter for AwsStorageEmitter {
         if storage.versioning {
             fragment.resource_blocks.push(versioning(label));
         }
-        if !storage.lifecycle_rules.is_empty() {
-            fragment
-                .resource_blocks
-                .push(lifecycle(label, &storage.lifecycle_rules));
-        }
+        fragment
+            .resource_blocks
+            .push(lifecycle(label, &storage.lifecycle_rules));
         emit_storage_iam(ctx, &mut fragment, label)?;
         emit_storage_key_iam(ctx, &mut fragment, storage, label)?;
         super::storage_notifications::emit(ctx, &mut fragment, label, storage)?;
@@ -378,6 +377,29 @@ fn lifecycle(label: &str, rules: &[LifecycleRule]) -> Block {
         );
         body.push(nested(rule_block));
     }
+    body.push(nested(block(
+        "rule",
+        [
+            attr(
+                "id",
+                Expression::String(AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID.to_string()),
+            ),
+            attr("status", Expression::String("Enabled".to_string())),
+            nested(block(
+                "filter",
+                [attr("prefix", Expression::String(String::new()))],
+            )),
+            nested(block(
+                "abort_incomplete_multipart_upload",
+                [attr(
+                    "days_after_initiation",
+                    Expression::Number(hcl::Number::from(i64::from(
+                        AWS_ABORT_INCOMPLETE_UPLOAD_DAYS,
+                    ))),
+                )],
+            )),
+        ],
+    )));
     resource_block("aws_s3_bucket_lifecycle_configuration", label, body)
 }
 

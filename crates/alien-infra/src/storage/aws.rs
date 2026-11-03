@@ -9,15 +9,16 @@ use tracing::{debug, info, warn};
 use crate::core::{aws_ownership::is_tagged_as_ours, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::s3::{
-    GetBucketEncryptionOutput, LifecycleConfiguration, LifecycleExpiration, LifecycleRule,
-    LifecycleRuleFilter, LifecycleRuleStatus, PublicAccessBlockConfiguration, S3Api,
-    VersioningStatus,
+    AbortIncompleteMultipartUpload, GetBucketEncryptionOutput, LifecycleConfiguration,
+    LifecycleExpiration, LifecycleRule, LifecycleRuleFilter, LifecycleRuleStatus,
+    PublicAccessBlockConfiguration, S3Api, VersioningStatus,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     standard_resource_tags, AwsS3StorageHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus, Storage, StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
+    AWS_ABORT_INCOMPLETE_UPLOAD_DAYS, AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID,
 };
 use alien_error::{Context, IntoAlienError};
 use alien_macros::controller;
@@ -141,6 +142,58 @@ fn may_manage_notifications(ctx: &ResourceControllerContext<'_>, id: &str) -> bo
             .is_some_and(|entry| entry.lifecycle == alien_core::ResourceLifecycle::Frozen)
 }
 
+/// Whether this controller, rather than the setup template, writes the bucket's lifecycle
+/// configuration when the app's rules are unchanged: a runtime-created bucket, or a
+/// setup-owned one during a direct setup run.
+fn owns_lifecycle(ctx: &ResourceControllerContext<'_>, id: &str) -> bool {
+    let frozen = ctx
+        .desired_stack
+        .resources
+        .get(id)
+        .is_some_and(|entry| entry.lifecycle == alien_core::ResourceLifecycle::Frozen);
+    !frozen
+        || (ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+            && ctx.deployment_config.setup_run)
+}
+
+/// The app's expiry rules plus the incomplete-upload rule every bucket carries.
+fn lifecycle_configuration(config: &Storage) -> LifecycleConfiguration {
+    let mut rules: Vec<LifecycleRule> = config
+        .lifecycle_rules
+        .iter()
+        .enumerate()
+        .map(|(i, rule)| {
+            LifecycleRule::builder()
+                .id(format!("Rule{}", i + 1))
+                .status(LifecycleRuleStatus::Enabled)
+                .filter(
+                    LifecycleRuleFilter::builder()
+                        .maybe_prefix(rule.prefix.clone())
+                        .build(),
+                )
+                .expiration(
+                    LifecycleExpiration::builder()
+                        .days(rule.days as i32)
+                        .build(),
+                )
+                .build()
+        })
+        .collect();
+    rules.push(
+        LifecycleRule::builder()
+            .id(AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID.to_string())
+            .status(LifecycleRuleStatus::Enabled)
+            .filter(LifecycleRuleFilter::builder().build())
+            .abort_incomplete_multipart_upload(
+                AbortIncompleteMultipartUpload::builder()
+                    .days_after_initiation(AWS_ABORT_INCOMPLETE_UPLOAD_DAYS)
+                    .build(),
+            )
+            .build(),
+    );
+    LifecycleConfiguration::builder().rules(rules).build()
+}
+
 #[controller]
 pub struct AwsStorageController {
     /// The actual bucket name (includes stack name prefix).
@@ -164,6 +217,10 @@ pub struct AwsStorageController {
     /// Records notification ownership across rule removal and interrupted updates.
     #[serde(default)]
     pub(crate) notifications_managed: bool,
+    /// S3 accepted a lifecycle configuration with the incomplete-upload rule. Buckets from
+    /// earlier versions have no rule when the app declares none.
+    #[serde(default)]
+    pub(crate) incomplete_upload_rule_applied: bool,
 }
 
 #[controller]
@@ -432,49 +489,19 @@ impl AwsStorageController {
             })
         })?;
 
-        if !config.lifecycle_rules.is_empty() {
-            info!(bucket=%bucket_name, rules_count=%config.lifecycle_rules.len(), "Configuring lifecycle rules");
-
-            // Convert our lifecycle rules to the S3 format
-            let mut s3_rules = Vec::new();
-            for (i, rule) in config.lifecycle_rules.iter().enumerate() {
-                let rule_id = format!("Rule{}", i + 1);
-
-                let s3_rule = LifecycleRule::builder()
-                    .id(rule_id)
-                    .status(LifecycleRuleStatus::Enabled)
-                    .filter(
-                        LifecycleRuleFilter::builder()
-                            .maybe_prefix(rule.prefix.clone())
-                            .build(),
-                    )
-                    .expiration(
-                        LifecycleExpiration::builder()
-                            .days(rule.days as i32)
-                            .build(),
-                    )
-                    .build();
-
-                s3_rules.push(s3_rule);
-            }
-
-            let lifecycle_config = LifecycleConfiguration::builder().rules(s3_rules).build();
-
-            client
-                .put_bucket_lifecycle_configuration(bucket_name, &lifecycle_config)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to configure lifecycle rules for S3 bucket '{}'",
-                        bucket_name
-                    ),
-                    resource_id: Some(config.id.clone()),
-                })?;
-
-            info!(bucket=%bucket_name, "Lifecycle rules configured successfully");
-        } else {
-            info!(bucket=%bucket_name, "Skipping lifecycle configuration (no rules defined)");
-        }
+        info!(bucket=%bucket_name, rules_count=%config.lifecycle_rules.len(), "Configuring lifecycle rules");
+        client
+            .put_bucket_lifecycle_configuration(bucket_name, &lifecycle_configuration(config))
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to configure lifecycle rules for S3 bucket '{}'",
+                    bucket_name
+                ),
+                resource_id: Some(config.id.clone()),
+            })?;
+        self.incomplete_upload_rule_applied = true;
+        info!(bucket=%bucket_name, "Lifecycle rules configured successfully");
 
         Ok(HandlerAction::Continue {
             state: ConfiguringCors,
@@ -848,8 +875,9 @@ impl AwsStorageController {
         let config = ctx.desired_resource_config::<Storage>()?;
         let prev_config = ctx.previous_resource_config::<Storage>()?;
 
-        // Check if lifecycle rules need to be updated
-        if config.lifecycle_rules != prev_config.lifecycle_rules {
+        if config.lifecycle_rules != prev_config.lifecycle_rules
+            || (!self.incomplete_upload_rule_applied && owns_lifecycle(ctx, &config.id))
+        {
             let bucket_name = self.bucket_name.as_ref().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceConfigInvalid {
                     message: "Bucket name not set in state during lifecycle update".to_string(),
@@ -858,70 +886,18 @@ impl AwsStorageController {
             })?;
 
             info!(bucket=%bucket_name, rules_count=%config.lifecycle_rules.len(), "Updating lifecycle rules");
-
-            if config.lifecycle_rules.is_empty() {
-                // Remove lifecycle configuration - ignore NotFound errors
-                match client.delete_bucket_lifecycle(bucket_name).await {
-                    Ok(_) => {
-                        info!(bucket=%bucket_name, "Lifecycle rules removed successfully");
-                    }
-                    Err(e)
-                        if matches!(
-                            e.error,
-                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                        ) =>
-                    {
-                        info!(bucket=%bucket_name, "Lifecycle configuration already removed or never existed");
-                    }
-                    Err(e) => {
-                        return Err(e.context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to remove lifecycle configuration for S3 bucket '{}'",
-                                bucket_name
-                            ),
-                            resource_id: Some(config.id.clone()),
-                        }));
-                    }
-                }
-            } else {
-                // Update lifecycle rules - convert our rules to S3 format
-                let mut s3_rules = Vec::new();
-                for (i, rule) in config.lifecycle_rules.iter().enumerate() {
-                    let rule_id = format!("Rule{}", i + 1);
-
-                    let s3_rule = LifecycleRule::builder()
-                        .id(rule_id)
-                        .status(LifecycleRuleStatus::Enabled)
-                        .filter(
-                            LifecycleRuleFilter::builder()
-                                .maybe_prefix(rule.prefix.clone())
-                                .build(),
-                        )
-                        .expiration(
-                            LifecycleExpiration::builder()
-                                .days(rule.days as i32)
-                                .build(),
-                        )
-                        .build();
-
-                    s3_rules.push(s3_rule);
-                }
-
-                let lifecycle_config = LifecycleConfiguration::builder().rules(s3_rules).build();
-
-                client
-                    .put_bucket_lifecycle_configuration(bucket_name, &lifecycle_config)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to update lifecycle configuration for S3 bucket '{}'",
-                            bucket_name
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    })?;
-
-                info!(bucket=%bucket_name, "Lifecycle rules updated successfully");
-            }
+            client
+                .put_bucket_lifecycle_configuration(bucket_name, &lifecycle_configuration(config))
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to update lifecycle configuration for S3 bucket '{}'",
+                        bucket_name
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })?;
+            self.incomplete_upload_rule_applied = true;
+            info!(bucket=%bucket_name, "Lifecycle rules updated successfully");
         } else {
             info!(name=%config.id, "Skipping lifecycle update (no changes needed)");
         }
@@ -1051,11 +1027,15 @@ impl AwsStorageController {
         })
     }
 
+    /// Also updates a bucket from an earlier version that has no incomplete-upload rule yet,
+    /// even when its config is unchanged.
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
         let config = ctx.desired_resource_config::<Storage>()?;
-        Ok(may_manage_notifications(ctx, &config.id)
+        let notifications = may_manage_notifications(ctx, &config.id)
             && !self.notifications_managed
-            && !config.notifications.is_empty())
+            && !config.notifications.is_empty();
+        let lifecycle = !self.incomplete_upload_rule_applied && owns_lifecycle(ctx, &config.id);
+        Ok(notifications || lifecycle)
     }
 
     // ─────────────── DELETE FLOW ──────────────────────────────
@@ -1536,6 +1516,7 @@ impl AwsStorageController {
             ownership_verified: true,
             read_cors_applied: false,
             notifications_managed: false,
+            incomplete_upload_rule_applied: true,
             _internal_stay_count: None,
         }
     }
@@ -1554,11 +1535,11 @@ mod tests {
 
     use alien_aws_clients::{
         s3::{
-            AccessControlList, DeleteObjectsOutput, GetBucketAclOutput, GetBucketLocationOutput,
-            GetBucketPolicyOutput, GetBucketVersioningOutput, LifecycleConfiguration,
-            LifecycleExpiration, LifecycleRule, LifecycleRuleFilter, LifecycleRuleStatus,
-            ListObjectsV2Output, ListVersionsOutput, MockS3Api, PublicAccessBlockConfiguration,
-            S3Api, S3Client, VersioningStatus,
+            AbortIncompleteMultipartUpload, AccessControlList, DeleteObjectsOutput,
+            GetBucketAclOutput, GetBucketLocationOutput, GetBucketPolicyOutput,
+            GetBucketVersioningOutput, LifecycleConfiguration, LifecycleExpiration, LifecycleRule,
+            LifecycleRuleFilter, LifecycleRuleStatus, ListObjectsV2Output, ListVersionsOutput,
+            MockS3Api, PublicAccessBlockConfiguration, S3Api, S3Client, VersioningStatus,
         },
         AwsClientConfigExt, AwsCredentialProvider,
     };
@@ -2190,6 +2171,30 @@ mod tests {
         assert!(!error.retryable);
     }
 
+    fn expiry_rule(id: &str, prefix: Option<&str>, days: i32) -> LifecycleRule {
+        LifecycleRule {
+            id: Some(id.into()),
+            status: LifecycleRuleStatus::Enabled,
+            filter: LifecycleRuleFilter {
+                prefix: prefix.map(Into::into),
+            },
+            expiration: Some(LifecycleExpiration { days: Some(days) }),
+            abort_incomplete_multipart_upload: None,
+        }
+    }
+
+    fn incomplete_upload_rule() -> LifecycleRule {
+        LifecycleRule {
+            id: Some("abort-incomplete-uploads".into()),
+            status: LifecycleRuleStatus::Enabled,
+            filter: LifecycleRuleFilter { prefix: None },
+            expiration: None,
+            abort_incomplete_multipart_upload: Some(AbortIncompleteMultipartUpload {
+                days_after_initiation: 7,
+            }),
+        }
+    }
+
     /// State written by versions that recorded the bucket name before CreateBucket.
     fn legacy_recorded(storage_id: &str) -> AwsStorageController {
         AwsStorageController {
@@ -2199,6 +2204,7 @@ mod tests {
             ownership_verified: false,
             read_cors_applied: false,
             notifications_managed: false,
+            incomplete_upload_rule_applied: false,
             _internal_stay_count: None,
         }
     }
@@ -2371,8 +2377,10 @@ mod tests {
             // Old roles lack PutBucketCORS and old checkpoints lack its acknowledgement.
             let mut old = serde_json::to_value(legacy_recorded("cors")).unwrap();
             old.as_object_mut().unwrap().remove("readCorsApplied");
-            let controller: AwsStorageController = serde_json::from_value(old).unwrap();
+            let mut controller: AwsStorageController = serde_json::from_value(old).unwrap();
             assert!(!controller.read_cors_applied);
+            // Only CORS is under test; the lifecycle upgrade has its own test.
+            controller.incomplete_upload_rule_applied = true;
             let mut state = StackState::with_resource_prefix(Platform::Aws, "test".into());
             let mut resource = StackResourceState::new_pending(
                 Storage::RESOURCE_TYPE.into(),
@@ -2931,56 +2939,19 @@ mod tests {
             .returning(|_, _| Ok(()));
         mock_s3.expect_put_bucket_policy().returning(|_, _| Ok(()));
 
-        // Validate that the generated lifecycle configuration contains expected rules
+        // The app's rules, then the incomplete-upload rule every bucket carries.
         mock_s3
             .expect_put_bucket_lifecycle_configuration()
+            .times(1)
             .withf(|_bucket_name, lifecycle_config| {
-                // Should have 2 rules
-                if lifecycle_config.rules.len() != 2 {
-                    eprintln!(
-                        "Expected 2 lifecycle rules, got {}",
-                        lifecycle_config.rules.len()
-                    );
-                    return false;
-                }
-
-                // Check first rule (with prefix)
-                let rule1 = &lifecycle_config.rules[0];
-                if rule1.id.as_ref().unwrap() != "Rule1" {
-                    eprintln!("Expected rule ID 'Rule1', got {:?}", rule1.id);
-                    return false;
-                }
-                if rule1.filter.prefix.as_ref().unwrap() != "logs/" {
-                    eprintln!("Expected prefix 'logs/', got {:?}", rule1.filter.prefix);
-                    return false;
-                }
-                if rule1.expiration.as_ref().unwrap().days.unwrap() != 30 {
-                    eprintln!(
-                        "Expected 30 days, got {:?}",
-                        rule1.expiration.as_ref().unwrap().days
-                    );
-                    return false;
-                }
-
-                // Check second rule (no prefix)
-                let rule2 = &lifecycle_config.rules[1];
-                if rule2.id.as_ref().unwrap() != "Rule2" {
-                    eprintln!("Expected rule ID 'Rule2', got {:?}", rule2.id);
-                    return false;
-                }
-                if rule2.filter.prefix.is_some() {
-                    eprintln!("Expected no prefix, got {:?}", rule2.filter.prefix);
-                    return false;
-                }
-                if rule2.expiration.as_ref().unwrap().days.unwrap() != 365 {
-                    eprintln!(
-                        "Expected 365 days, got {:?}",
-                        rule2.expiration.as_ref().unwrap().days
-                    );
-                    return false;
-                }
-
-                true
+                *lifecycle_config
+                    == LifecycleConfiguration {
+                        rules: vec![
+                            expiry_rule("Rule1", Some("logs/"), 30),
+                            expiry_rule("Rule2", None, 365),
+                            incomplete_upload_rule(),
+                        ],
+                    }
             })
             .returning(|_, _| Ok(()));
 
@@ -2998,6 +2969,98 @@ mod tests {
 
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
+    }
+
+    /// A bucket from an earlier version, as its saved state reads.
+    async fn earlier_bucket(
+        lifecycle: ResourceLifecycle,
+        authority: InitialSetupAuthority,
+        setup_run: bool,
+        client: MockS3Api,
+    ) -> SingleControllerExecutor {
+        // Earlier versions saved no incomplete-upload field.
+        let mut saved = serde_json::to_value(AwsStorageController::mock_ready("objects")).unwrap();
+        assert!(saved
+            .as_object_mut()
+            .unwrap()
+            .remove("incompleteUploadRuleApplied")
+            .is_some());
+        let saved: AwsStorageController =
+            serde_json::from_value(saved).expect("state saved by an earlier version");
+        SingleControllerExecutor::builder()
+            .resource(Storage::new("objects".into()).build())
+            .controller(saved)
+            .platform(Platform::Aws)
+            .resource_lifecycle(lifecycle)
+            .initial_setup_authority(authority)
+            .setup_run(setup_run)
+            .service_provider(setup_mock_service_provider(Arc::new(client)))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap()
+    }
+
+    /// A runtime bucket from an earlier version, whose app declares no lifecycle rules, is
+    /// updated with its config unchanged, and the update gives it the incomplete-upload rule.
+    #[tokio::test]
+    async fn an_update_gives_a_bucket_from_an_earlier_version_the_incomplete_upload_rule() {
+        let mut client = MockS3Api::new();
+        client.expect_put_bucket_policy().returning(|_, _| Ok(()));
+        client
+            .expect_put_bucket_lifecycle_configuration()
+            .times(1)
+            .withf(|bucket, configuration| {
+                bucket == "test-stack-objects"
+                    && *configuration
+                        == LifecycleConfiguration {
+                            rules: vec![incomplete_upload_rule()],
+                        }
+            })
+            .returning(|_, _| Ok(()));
+        let mut run = earlier_bucket(
+            ResourceLifecycle::Live,
+            InitialSetupAuthority::ImportedHandoff,
+            false,
+            client,
+        )
+        .await;
+        assert!(run.needs_update().unwrap());
+
+        // What the deployment executor does when needs_update holds: an update to the same config.
+        run.update(Storage::new("objects".into()).build()).unwrap();
+        run.run_until_terminal().await.unwrap();
+
+        assert_eq!(run.status(), ResourceStatus::Running);
+        assert!(
+            !run.needs_update().unwrap(),
+            "the next loop has nothing to do"
+        );
+    }
+
+    /// The template writes a setup-owned bucket's lifecycle configuration, so only a direct
+    /// setup run updates one from an earlier version.
+    #[tokio::test]
+    async fn only_a_direct_setup_run_updates_a_frozen_bucket_from_an_earlier_version() {
+        for (authority, setup_run, expected) in [
+            (InitialSetupAuthority::ImportedHandoff, false, false),
+            (InitialSetupAuthority::ImportedHandoff, true, false),
+            (InitialSetupAuthority::DirectSetup, false, false),
+            (InitialSetupAuthority::DirectSetup, true, true),
+        ] {
+            let run = earlier_bucket(
+                ResourceLifecycle::Frozen,
+                authority,
+                setup_run,
+                MockS3Api::new(),
+            )
+            .await;
+            assert_eq!(
+                run.needs_update().unwrap(),
+                expected,
+                "{authority:?} setup_run={setup_run}"
+            );
+        }
     }
 
     #[rstest]
@@ -3030,6 +3093,10 @@ mod tests {
                 assert_https_policy(bucket, policy, public_read);
                 Ok(())
             });
+        client
+            .expect_put_bucket_lifecycle_configuration()
+            .times(1)
+            .returning(|_, _| Ok(()));
         let mut run = SingleControllerExecutor::builder()
             .resource(storage)
             .controller(AwsStorageController::default())
@@ -3137,6 +3204,10 @@ mod tests {
         client
             .expect_get_bucket_tagging()
             .returning(|_| Ok(our_tags("objects")));
+        client
+            .expect_put_bucket_lifecycle_configuration()
+            .times(1)
+            .returning(|_, _| Ok(()));
         client.expect_empty_bucket().times(1).returning(|_| Ok(()));
         client.expect_delete_bucket().times(1).returning(|_| Ok(()));
         let mut controller = legacy_recorded("objects");
@@ -3219,6 +3290,7 @@ mod tests {
             ownership_verified: false,
             read_cors_applied: false,
             notifications_managed: false,
+            incomplete_upload_rule_applied: false,
             _internal_stay_count: None,
         };
 
@@ -3300,6 +3372,7 @@ mod tests {
                 ownership_verified: true,
                 read_cors_applied: false,
                 notifications_managed: false,
+                incomplete_upload_rule_applied: false,
                 _internal_stay_count: None,
             })
             .platform(Platform::Aws)

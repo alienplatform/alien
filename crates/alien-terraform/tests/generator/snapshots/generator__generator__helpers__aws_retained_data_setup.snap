@@ -527,6 +527,23 @@ resource "aws_s3_bucket_versioning" "data" {
   }
 }
 
+resource "aws_s3_bucket_lifecycle_configuration" "data" {
+  bucket = aws_s3_bucket.data.id
+
+  rule {
+    id     = "abort-incomplete-uploads"
+    status = "Enabled"
+
+    filter {
+      prefix = ""
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
 === rows.tf ===
 resource "aws_dynamodb_table" "rows" {
   name         = "${local.resource_prefix}-rows"
@@ -726,6 +743,7 @@ resource "terraform_data" "deployment_registration" {
     aws_s3_bucket_public_access_block.data,
     aws_s3_bucket_policy.data,
     aws_s3_bucket_versioning.data,
+    aws_s3_bucket_lifecycle_configuration.data,
     aws_dynamodb_table.rows,
     aws_ecr_repository.images,
     aws_ecr_lifecycle_policy.images,

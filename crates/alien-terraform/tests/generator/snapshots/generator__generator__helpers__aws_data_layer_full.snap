@@ -531,6 +531,23 @@ resource "aws_s3_bucket_versioning" "assets" {
   }
 }
 
+resource "aws_s3_bucket_lifecycle_configuration" "assets" {
+  bucket = aws_s3_bucket.assets.id
+
+  rule {
+    id     = "abort-incomplete-uploads"
+    status = "Enabled"
+
+    filter {
+      prefix = ""
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
 === jobs.tf ===
 resource "aws_sqs_queue" "jobs" {
   name                       = "${local.resource_prefix}-jobs"
@@ -611,6 +628,7 @@ resource "terraform_data" "deployment_registration" {
     aws_s3_bucket_public_access_block.assets,
     aws_s3_bucket_policy.assets,
     aws_s3_bucket_versioning.assets,
+    aws_s3_bucket_lifecycle_configuration.assets,
     aws_sqs_queue.jobs,
     aws_dynamodb_table.metadata
   ]

@@ -1605,6 +1605,8 @@ pub struct LifecycleRule {
     pub filter: LifecycleRuleFilter,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expiration: Option<LifecycleExpiration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub abort_incomplete_multipart_upload: Option<AbortIncompleteMultipartUpload>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1626,6 +1628,12 @@ pub struct LifecycleRuleFilter {
 pub struct LifecycleExpiration {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub days: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Builder)]
+#[serde(rename_all = "PascalCase")]
+pub struct AbortIncompleteMultipartUpload {
+    pub days_after_initiation: i32,
 }
 
 #[derive(Debug, Serialize, Builder)]

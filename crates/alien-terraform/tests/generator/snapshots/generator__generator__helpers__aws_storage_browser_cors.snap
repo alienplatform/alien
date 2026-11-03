@@ -519,6 +519,23 @@ resource "aws_s3_bucket_cors_configuration" "assets" {
   }
 }
 
+resource "aws_s3_bucket_lifecycle_configuration" "assets" {
+  bucket = aws_s3_bucket.assets.id
+
+  rule {
+    id     = "abort-incomplete-uploads"
+    status = "Enabled"
+
+    filter {
+      prefix = ""
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
 === registration.tf ===
 resource "terraform_data" "deployment_registration" {
   input = {
@@ -542,7 +559,8 @@ resource "terraform_data" "deployment_registration" {
     aws_s3_bucket_ownership_controls.assets,
     aws_s3_bucket_public_access_block.assets,
     aws_s3_bucket_policy.assets,
-    aws_s3_bucket_cors_configuration.assets
+    aws_s3_bucket_cors_configuration.assets,
+    aws_s3_bucket_lifecycle_configuration.assets
   ]
 
   lifecycle {

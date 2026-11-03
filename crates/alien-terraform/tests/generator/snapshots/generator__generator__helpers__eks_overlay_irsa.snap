@@ -618,6 +618,23 @@ resource "aws_s3_bucket_policy" "data" {
   policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "DenyInsecureTransport", Effect = "Deny", Principal = "*", Action = "s3:*", Resource = [aws_s3_bucket.data.arn, "${aws_s3_bucket.data.arn}/*"], Condition = { Bool = { "aws:SecureTransport" = "false" } } }] })
 }
 
+resource "aws_s3_bucket_lifecycle_configuration" "data" {
+  bucket = aws_s3_bucket.data.id
+
+  rule {
+    id     = "abort-incomplete-uploads"
+    status = "Enabled"
+
+    filter {
+      prefix = ""
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
 === execution_sa.tf ===
 data "aws_eks_cluster" "target" {
   name = var.eks_cluster_name
@@ -754,6 +771,7 @@ resource "terraform_data" "deployment_registration" {
     aws_s3_bucket_ownership_controls.data,
     aws_s3_bucket_public_access_block.data,
     aws_s3_bucket_policy.data,
+    aws_s3_bucket_lifecycle_configuration.data,
     aws_iam_role.execution_sa,
     aws_iam_role_policy.execution_sa_set_0,
     aws_iam_openid_connect_provider.eks,
