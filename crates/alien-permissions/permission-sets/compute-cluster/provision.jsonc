@@ -10,10 +10,7 @@
       // cloudwatch:AlarmActions covers AlarmActions, OKActions and InsufficientDataActions.
       {
         "grant": {
-          "actions": [
-            "cloudwatch:PutMetricAlarm",
-            "cloudwatch:TagResource"
-          ]
+          "actions": ["cloudwatch:PutMetricAlarm", "cloudwatch:TagResource"]
         },
         "binding": {
           "stack": {
@@ -25,7 +22,9 @@
             }
           },
           "resource": {
-            "resources": ["arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-${resourceName}-*"],
+            "resources": [
+              "arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-${resourceName}-*"
+            ],
             "condition": {
               "Null": { "cloudwatch:AlarmActions": "true" },
               "StringEquals": { "aws:RequestTag/${stackTag}": "${stackPrefix}" },
@@ -36,9 +35,7 @@
       },
       {
         "grant": {
-          "actions": [
-            "cloudwatch:DeleteAlarms"
-          ]
+          "actions": ["cloudwatch:DeleteAlarms"]
         },
         "binding": {
           "stack": {
@@ -48,7 +45,9 @@
             }
           },
           "resource": {
-            "resources": ["arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-${resourceName}-*"],
+            "resources": [
+              "arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-${resourceName}-*"
+            ],
             "condition": {
               "StringEquals": { "aws:ResourceTag/${stackTag}": "${stackPrefix}" }
             }
