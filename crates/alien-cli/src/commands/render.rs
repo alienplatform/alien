@@ -66,7 +66,7 @@ pub struct RenderArgs {
     #[arg(long, value_enum)]
     pub target: Option<RenderTarget>,
 
-    /// Path to alien.ts, alien.js, alien.json, or a directory containing one.
+    /// Path to alien.ts, alien.js, alien.json, alien.toml, or a directory containing one.
     #[arg(long)]
     pub stack: PathBuf,
 

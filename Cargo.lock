@@ -462,6 +462,7 @@ dependencies = [
  "alien-permissions",
  "alien-platform-api",
  "alien-preflights",
+ "alien-stack-toml",
  "alien-terraform",
  "alien-worker-runtime",
  "async-trait",
