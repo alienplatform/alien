@@ -71,7 +71,7 @@ pub enum ErrorData {
     /// current state and the client resolves it by naming a target.
     #[error(
         code = "COMMAND_TARGET_AMBIGUOUS",
-        message = "Deployment '{deployment_id}' has multiple command-capable targets; specify targetResourceId",
+        message = "Deployment '{deployment_id}' has more than one command-capable target {target_resource_ids:?}; name one with targetResourceId",
         retryable = "false",
         internal = "false",
         http_status_code = 409
@@ -79,6 +79,8 @@ pub enum ErrorData {
     CommandTargetAmbiguous {
         /// Deployment with more than one command-capable target
         deployment_id: String,
+        /// Resource ids the caller can name as the target, sorted
+        target_resource_ids: Vec<String>,
     },
 
     /// The deployment has no command-capable targets at all.

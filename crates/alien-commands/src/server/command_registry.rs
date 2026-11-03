@@ -229,8 +229,15 @@ pub fn select_command_target(
                 }));
             };
             if candidates.next().is_some() {
+                let mut target_resource_ids: Vec<String> = targets
+                    .iter()
+                    .filter(|target| target.resource_id != OPERATOR_COMMAND_TARGET_ID)
+                    .map(|target| target.resource_id.clone())
+                    .collect();
+                target_resource_ids.sort();
                 return Err(AlienError::new(ErrorData::CommandTargetAmbiguous {
                     deployment_id: deployment_id.to_string(),
+                    target_resource_ids,
                 }));
             }
             single.clone()
@@ -735,18 +742,36 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_shorthand_two_targets_is_ambiguous() {
         let registry = InMemoryCommandRegistry::new();
+        // Registered out of order, beside the reserved operator target, so the
+        // error must sort the ids and leave the operator out.
         registry
-            .register_target("worker-a", CommandTargetType::Worker)
+            .register_target("worker-b", CommandTargetType::Worker)
             .await
             .unwrap();
         registry
-            .register_target("worker-b", CommandTargetType::Worker)
+            .register_target(OPERATOR_COMMAND_TARGET_ID, CommandTargetType::Daemon)
+            .await
+            .unwrap();
+        registry
+            .register_target("worker-a", CommandTargetType::Worker)
             .await
             .unwrap();
 
         let err = resolved(&registry, None).await.unwrap_err();
         assert_eq!(err.code, "COMMAND_TARGET_AMBIGUOUS");
         assert_eq!(err.http_status_code, Some(409));
+        assert_eq!(
+            err.context
+                .as_ref()
+                .and_then(|context| context.get("target_resource_ids")),
+            Some(&serde_json::json!(["worker-a", "worker-b"])),
+            "the error must name every target the caller can choose: {err:?}"
+        );
+        assert!(
+            err.message.contains(r#"["worker-a", "worker-b"]"#),
+            "the message must list the targets: {}",
+            err.message
+        );
     }
 
     #[tokio::test]
