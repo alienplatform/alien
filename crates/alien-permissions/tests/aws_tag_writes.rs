@@ -117,6 +117,7 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                             "arn:aws:iam::${awsAccountId}:instance-profile/",
                             "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/",
                             "arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/",
+                            "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/",
                             "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:",
                             "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:",
                             "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/",

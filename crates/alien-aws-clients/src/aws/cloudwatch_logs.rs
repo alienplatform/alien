@@ -28,6 +28,9 @@ pub trait CloudWatchLogsApi: Send + Sync + std::fmt::Debug {
     /// Deletes a log group and its events. A group that does not exist is a
     /// `RemoteResourceNotFound`.
     async fn delete_log_group(&self, log_group_name: &str) -> Result<()>;
+
+    /// Adds tags to a log group (or replaces the values of tags it has).
+    async fn tag_resource(&self, request: TagResourceRequest) -> Result<()>;
 }
 
 /// `CreateLogGroup` request.
@@ -44,6 +47,15 @@ pub struct CreateLogGroupRequest {
 #[serde(rename_all = "camelCase")]
 struct DeleteLogGroupRequest<'a> {
     log_group_name: &'a str,
+}
+
+/// `TagResource` request.
+#[derive(Debug, Clone, Serialize, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct TagResourceRequest {
+    /// The log group's ARN, without the trailing `:*`.
+    pub resource_arn: String,
+    pub tags: HashMap<String, String>,
 }
 
 /// `PutRetentionPolicy` request.
@@ -229,6 +241,19 @@ impl CloudWatchLogsApi for CloudWatchLogsClient {
             .await
     }
 
+    async fn tag_resource(&self, request: TagResourceRequest) -> Result<()> {
+        let body = serde_json::to_string(&request).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize TagResourceRequest for '{}'",
+                    request.resource_arn
+                ),
+            },
+        )?;
+        self.send("TagResource", body, &request.resource_arn, true)
+            .await
+    }
+
     async fn delete_log_group(&self, log_group_name: &str) -> Result<()> {
         let body = serde_json::to_string(&DeleteLogGroupRequest { log_group_name })
             .into_alien_error()
@@ -309,6 +334,40 @@ mod tests {
 
         create.assert_hits_async(1).await;
         retention.assert_hits_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn tags_a_log_group_by_arn() {
+        let server = MockServer::start_async().await;
+        let tag = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("x-amz-target", "Logs_20140328.TagResource")
+                    .json_body(serde_json::json!({
+                        "resourceArn": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/codebuild/app-build",
+                        "tags": { "deployment": "app" }
+                    }));
+                then.status(200).body("{}");
+            })
+            .await;
+
+        client(&server)
+            .tag_resource(
+                TagResourceRequest::builder()
+                    .resource_arn(
+                        "arn:aws:logs:us-east-1:123456789012:log-group:/aws/codebuild/app-build"
+                            .to_string(),
+                    )
+                    .tags(HashMap::from([(
+                        "deployment".to_string(),
+                        "app".to_string(),
+                    )]))
+                    .build(),
+            )
+            .await
+            .expect("tag log group");
+
+        tag.assert_hits_async(1).await;
     }
 
     /// A response recorded from AWS for a role without the grant (account id replaced).
