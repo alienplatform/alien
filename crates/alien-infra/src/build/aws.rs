@@ -648,9 +648,9 @@ impl AwsBuildController {
     /// build and keeps its logs forever. Only direct setup runs this, on create and on update;
     /// a CloudFormation or Terraform setup declares the same group itself.
     ///
-    /// The grant binds both calls to the deployment tag, so a group with the name taken by
-    /// another deployment, or one CodeBuild created untagged before, is refused, as is
-    /// everything under a setup policy rendered before the grant. Neither fails the build: the
+    /// The grant binds both calls to the deployment tag, so CreateLogGroup is refused for a
+    /// group with the name taken by another deployment, or one CodeBuild created untagged
+    /// before, as is everything under a setup policy rendered before the grant. Neither fails the build: the
     /// denied action is recorded, the heartbeat reports it, and CodeBuild keeps logging to the
     /// group as before.
     ///
@@ -690,7 +690,7 @@ impl AwsBuildController {
             Err(error) if is_remote_access_denied(&error) => {
                 warn!(
                     log_group = %log_group_name,
-                    "Not allowed to create the build log group; CodeBuild creates it without a retention period. Run a setup update to grant logs:CreateLogGroup."
+                    "Not allowed to create the build log group, or it exists without this deployment's tag; its logs are not kept for the required period. Run a setup update to grant logs:CreateLogGroup, after tagging a group CodeBuild created for this deployment."
                 );
                 self.log_group_denied_action = Some("logs:CreateLogGroup".to_string());
                 return Ok(());
@@ -720,7 +720,7 @@ impl AwsBuildController {
             Err(error) if is_remote_access_denied(&error) => {
                 warn!(
                     log_group = %log_group_name,
-                    "Not allowed to set the build log group's retention; its logs are not kept for the required period. Run a setup update to grant logs:PutRetentionPolicy, after tagging a group CodeBuild created for this deployment."
+                    "Not allowed to set the build log group's retention; its logs are not kept for the required period. Run a setup update to grant logs:PutRetentionPolicy."
                 );
                 self.log_group_denied_action = Some("logs:PutRetentionPolicy".to_string());
                 Ok(())
@@ -1502,11 +1502,16 @@ mod tests {
         )
     }
 
-    /// CloudWatch Logs where CodeBuild already created the project's group. Setting its
-    /// retention is allowed only once `tagged` is set, as the tag-bound grant decides.
+    /// CloudWatch Logs where CodeBuild already created the project's group. As the tag-bound
+    /// grant decides in AWS, CreateLogGroup is denied until the group carries the deployment
+    /// tag (the tag condition is checked before the name), and then fails as already existing.
     fn existing_group_logs(calls: Calls, tagged: Arc<AtomicBool>) -> Arc<MockCloudWatchLogsApi> {
         let mut logs = MockCloudWatchLogsApi::new();
-        logs.expect_create_log_group().returning(|request| {
+        let create_tagged = tagged.clone();
+        logs.expect_create_log_group().returning(move |request| {
+            if !create_tagged.load(Ordering::SeqCst) {
+                return access(false, request.log_group_name);
+            }
             Err(AlienError::new(
                 CloudClientErrorData::RemoteResourceConflict {
                     resource_type: "CloudWatch Logs log group".to_string(),
@@ -1569,8 +1574,8 @@ mod tests {
         );
         assert!(calls.lock().unwrap().is_empty());
 
-        // The group CodeBuild created is untagged, so the update is refused the retention
-        // call and still succeeds.
+        // The group CodeBuild created is untagged, so the update is refused and still
+        // succeeds.
         let mut updated = basic_build();
         updated.environment = HashMap::from([("STAGE".to_string(), "one".to_string())]);
         executor.update(updated.clone()).unwrap();
@@ -1579,7 +1584,7 @@ mod tests {
         assert_eq!(executor.status(), ResourceStatus::Running);
         assert_eq!(
             collection_issues(&executor)[0].message,
-            retention_warning("setup was not allowed to call logs:PutRetentionPolicy")
+            retention_warning("setup was not allowed to call logs:CreateLogGroup")
         );
 
         // Tagged for this deployment, the next setup update sets 365 days.
@@ -1592,7 +1597,7 @@ mod tests {
         assert_eq!(collection_issues(&executor), vec![]);
         assert_eq!(
             *calls.lock().unwrap(),
-            vec!["PutRetentionPolicy /aws/codebuild/test-basic-build 365".to_string(); 2]
+            vec!["PutRetentionPolicy /aws/codebuild/test-basic-build 365".to_string()]
         );
     }
 }
