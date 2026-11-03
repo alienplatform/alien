@@ -18,6 +18,13 @@ import {
  * Autoscaling machine pool.
  */
 export type ComputePoolSelectionAutoscale = {
+  /**
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
+   */
+  dataDiskGib?: number | null | undefined;
   failureDomains?: FailureDomainSelection | null | undefined;
   /**
    * Provider machine type selected for this deployment.
@@ -38,6 +45,13 @@ export type ComputePoolSelectionAutoscale = {
  * Fixed number of machines.
  */
 export type ComputePoolSelectionFixed = {
+  /**
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
+   */
+  dataDiskGib?: number | null | undefined;
   failureDomains?: FailureDomainSelection | null | undefined;
   /**
    * Provider machine type selected for this deployment.
@@ -62,6 +76,7 @@ export const ComputePoolSelectionAutoscale$inboundSchema: z.ZodType<
   ComputePoolSelectionAutoscale,
   unknown
 > = z.object({
+  dataDiskGib: z.nullable(z.int()).optional(),
   failure_domains: z.nullable(FailureDomainSelection$inboundSchema).optional(),
   machine: z.nullable(z.string()).optional(),
   max: z.int(),
@@ -74,6 +89,7 @@ export const ComputePoolSelectionAutoscale$inboundSchema: z.ZodType<
 });
 /** @internal */
 export type ComputePoolSelectionAutoscale$Outbound = {
+  dataDiskGib?: number | null | undefined;
   failure_domains?: FailureDomainSelection$Outbound | null | undefined;
   machine?: string | null | undefined;
   max: number;
@@ -86,6 +102,7 @@ export const ComputePoolSelectionAutoscale$outboundSchema: z.ZodType<
   ComputePoolSelectionAutoscale$Outbound,
   ComputePoolSelectionAutoscale
 > = z.object({
+  dataDiskGib: z.nullable(z.int()).optional(),
   failureDomains: z.nullable(FailureDomainSelection$outboundSchema).optional(),
   machine: z.nullable(z.string()).optional(),
   max: z.int(),
@@ -121,6 +138,7 @@ export const ComputePoolSelectionFixed$inboundSchema: z.ZodType<
   ComputePoolSelectionFixed,
   unknown
 > = z.object({
+  dataDiskGib: z.nullable(z.int()).optional(),
   failure_domains: z.nullable(FailureDomainSelection$inboundSchema).optional(),
   machine: z.nullable(z.string()).optional(),
   machines: z.int(),
@@ -132,6 +150,7 @@ export const ComputePoolSelectionFixed$inboundSchema: z.ZodType<
 });
 /** @internal */
 export type ComputePoolSelectionFixed$Outbound = {
+  dataDiskGib?: number | null | undefined;
   failure_domains?: FailureDomainSelection$Outbound | null | undefined;
   machine?: string | null | undefined;
   machines: number;
@@ -143,6 +162,7 @@ export const ComputePoolSelectionFixed$outboundSchema: z.ZodType<
   ComputePoolSelectionFixed$Outbound,
   ComputePoolSelectionFixed
 > = z.object({
+  dataDiskGib: z.nullable(z.int()).optional(),
   failureDomains: z.nullable(FailureDomainSelection$outboundSchema).optional(),
   machine: z.nullable(z.string()).optional(),
   machines: z.int(),
