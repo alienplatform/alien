@@ -158,7 +158,7 @@ impl Resolver<'_> {
 
         let pool_ids: Vec<&str> = pools.iter().map(|(id, _)| id.get_ref().as_str()).collect();
         for (id, daemon) in daemons {
-            let (config, lifecycle, scope, secrets) = self.daemon(
+            let daemon = self.daemon(
                 &id,
                 daemon.into_inner(),
                 cluster_id.as_deref(),
@@ -166,8 +166,27 @@ impl Resolver<'_> {
                 &declared,
                 &permissions,
             )?;
-            let mut resource = entry(Resource::new(config), lifecycle);
-            if let Some(scope) = scope {
+            if let Some(span) = daemon.identity_with_host_access {
+                let targets = daemon
+                    .scope
+                    .as_ref()
+                    .map(|scope| scope.get_ref().as_slice())
+                    .or(platforms.as_deref());
+                let cloud = [Platform::Aws, Platform::Gcp, Platform::Azure];
+                if let Some(platform) = cloud
+                    .iter()
+                    .find(|cloud| targets.is_none_or(|targets| targets.contains(cloud)))
+                {
+                    return Err(self.error(
+                        span,
+                        format!(
+                            "on {platform} a daemon with `host-access` could use the machine's credentials, so it cannot also have `permissions`; drop one, or limit the daemon's `platforms`"
+                        ),
+                    ));
+                }
+            }
+            let mut resource = entry(Resource::new(daemon.config), daemon.lifecycle);
+            if let Some(scope) = daemon.scope {
                 resource.enabled_when = Some(inputs.add_platform_gate(
                     self,
                     &id,
@@ -176,7 +195,7 @@ impl Resolver<'_> {
                     platforms.as_deref(),
                 )?);
             }
-            for (key, secret) in secrets {
+            for (key, secret) in daemon.secrets {
                 inputs.add_secret(self, id.get_ref(), key, secret, platforms.as_deref())?;
             }
             resources.insert(id.into_inner(), resource);
@@ -366,7 +385,6 @@ impl Resolver<'_> {
         Ok(builder.build())
     }
 
-    #[allow(clippy::type_complexity)]
     fn daemon(
         &self,
         id: &Spanned<String>,
@@ -375,12 +393,7 @@ impl Resolver<'_> {
         pool_ids: &[&str],
         declared: &Declared,
         permissions: &PermissionsConfig,
-    ) -> Result<(
-        DaemonConfig,
-        ResourceLifecycle,
-        Option<Spanned<Vec<Platform>>>,
-        Vec<(Spanned<String>, Spanned<document::Secret>)>,
-    )> {
+    ) -> Result<ResolvedDaemon> {
         let daemon_id = id.get_ref();
         let code = match (daemon.build, daemon.image) {
             (Some(build), None) => {
@@ -514,6 +527,11 @@ impl Resolver<'_> {
             }
         }
 
+        let identity_with_host_access = daemon
+            .permissions
+            .as_ref()
+            .filter(|_| daemon.host_access)
+            .map(Spanned::span);
         let profile = match daemon.permissions {
             Some(profile) if permissions.profiles.contains_key(profile.get_ref()) => {
                 Some(profile.into_inner())
@@ -548,12 +566,13 @@ impl Resolver<'_> {
             environment,
             commands_enabled: false,
         };
-        Ok((
+        Ok(ResolvedDaemon {
             config,
-            daemon.lifecycle.unwrap_or(ResourceLifecycle::Live),
-            daemon.platforms,
+            lifecycle: daemon.lifecycle.unwrap_or(ResourceLifecycle::Live),
+            scope: daemon.platforms,
             secrets,
-        ))
+            identity_with_host_access,
+        })
     }
 
     fn input(
@@ -924,6 +943,17 @@ impl Resolver<'_> {
         }
         Ok(resolved)
     }
+}
+
+/// A daemon resolved from its table, with what the stack-level pass still needs.
+struct ResolvedDaemon {
+    config: DaemonConfig,
+    lifecycle: ResourceLifecycle,
+    /// The daemon's own `platforms`, if it is scoped.
+    scope: Option<Spanned<Vec<Platform>>>,
+    secrets: Vec<(Spanned<String>, Spanned<document::Secret>)>,
+    /// Where `permissions` is set on a daemon that also has `host-access`.
+    identity_with_host_access: Option<Range<usize>>,
 }
 
 /// Stack inputs the document declares through shorthand, in declaration order.

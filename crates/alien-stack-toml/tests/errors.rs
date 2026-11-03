@@ -305,6 +305,28 @@ fn permission_errors() {
 }
 
 #[test]
+fn host_access_cannot_have_a_cloud_identity() {
+    let text =
+        format!("{DAEMON}host-access = true\npermissions = \"agent\"\n\n[permissions.agent]\n");
+    assert_at(
+        &text.replace(
+            "name = \"acme-agent\"",
+            "name = \"acme-agent\"\nplatforms = [\"machines\", \"gcp\"]",
+        ),
+        7,
+        15,
+        "on gcp a daemon with `host-access` could use the machine's credentials",
+    );
+    let machines_only = text.replace(
+        "name = \"acme-agent\"",
+        "name = \"acme-agent\"\nplatforms = [\"machines\"]",
+    );
+    let stack = alien_stack_toml::parse(&machines_only, "alien.toml", Path::new("."))
+        .expect("machines daemons get no cloud identity, so the pair is allowed");
+    assert_eq!(stack.permissions.profiles.len(), 1);
+}
+
+#[test]
 fn env_file_errors() {
     let dir = tempfile::tempdir().unwrap();
     let missing = reject_in(dir.path(), &format!("{DAEMON}env-file = \"app.env\"\n"));
