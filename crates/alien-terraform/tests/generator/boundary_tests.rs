@@ -17,6 +17,7 @@ use alien_permissions::{
         aws_permissions_boundary_covers, aws_stack_permissions_boundary, AwsIamPolicy,
         AwsIamStatement,
     },
+    initial_setup::generate_aws_initial_setup_policy,
     PermissionContext,
 };
 use alien_preflights::{mutations::ManagementPermissionProfileMutation, StackMutation};
@@ -861,8 +862,9 @@ async fn terraform_management_passes_roles_only_to_their_intended_services() {
     }
 }
 
-/// The flow log objects are made only with setup's credentials: the management identity can't
-/// make them, and the boundary for roles the runtime writes grants nothing on them.
+/// The flow log objects are made only with setup's credentials: the setup policy allows each
+/// request, while the management identity can't make them, and the boundary for roles the
+/// runtime writes grants nothing on them.
 #[tokio::test]
 async fn flow_log_grants_stay_out_of_the_management_identity_and_the_runtime_boundary() {
     let network = NetworkSettings::Create {
@@ -922,7 +924,30 @@ async fn flow_log_grants_stay_out_of_the_management_identity_and_the_runtime_bou
             "logs:DeleteLogGroup",
             flow_log_object("logs:DeleteLogGroup", group),
         ),
+        (
+            "logs:PutRetentionPolicy",
+            flow_log_object("logs:PutRetentionPolicy", group),
+        ),
     ];
+    let setup = generate_aws_initial_setup_policy(
+        &PermissionContext::new()
+            .with_stack_prefix("stack-a")
+            .with_aws_account_id("123456789012")
+            .with_aws_region("us-west-2")
+            .with_managing_account_id("210987654321")
+            .with_aws_permissions_boundary_arn(
+                "arn:aws:iam::123456789012:policy/stack-a-deployment-management-boundary",
+            ),
+    )
+    .unwrap()
+    .statement;
+    for (action, request) in &requests {
+        assert_eq!(
+            evaluate(&setup, request),
+            Decision::Allowed,
+            "the setup policy may not {action} on a flow log object"
+        );
+    }
     for setup_management in [SetupManagement::Automatic, SetupManagement::Manual] {
         let stack = || {
             Stack::new("management-boundary".into())
