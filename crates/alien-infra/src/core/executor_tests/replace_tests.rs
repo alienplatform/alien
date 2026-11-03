@@ -754,6 +754,7 @@ fn capacity_group(max_size: u32) -> alien_core::CapacityGroup {
         max_size,
         scale_policy: None,
         nested_virtualization: None,
+        data_disk_gib_range: None,
     }
 }
 

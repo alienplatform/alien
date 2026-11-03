@@ -7552,6 +7552,15 @@
               "mode"
             ],
             "properties": {
+              "dataDiskGib": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int32",
+                "description": "Data disk size per machine, in whole GiB, within the pool's declared\nrange. Omitted uses the release default; 0 runs the pool without one.",
+                "minimum": 0
+              },
               "failure_domains": {
                 "oneOf": [
                   {
@@ -7593,6 +7602,15 @@
               "mode"
             ],
             "properties": {
+              "dataDiskGib": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int32",
+                "description": "Data disk size per machine, in whole GiB, within the pool's declared\nrange. Omitted uses the release default; 0 runs the pool without one.",
+                "minimum": 0
+              },
               "failure_domains": {
                 "oneOf": [
                   {

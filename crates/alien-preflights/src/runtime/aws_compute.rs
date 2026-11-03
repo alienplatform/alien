@@ -283,6 +283,7 @@ mod tests {
                 max_size: max,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build()
     }

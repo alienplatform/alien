@@ -69,9 +69,29 @@ pub struct ComputePoolPlan {
     pub recommended: ComputePoolSelection,
     /// Valid cloud machine choices. Empty for local and Kubernetes.
     pub machines: Vec<ComputeMachineOption>,
+    /// Data disk sizes this deployment may choose, when the pool declares a data disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_disk: Option<ComputePoolDataDiskPlan>,
     /// Validation errors for supplied deployment settings.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<String>,
+}
+
+/// Data disk sizes a deployment may choose for one pool, in whole GiB. A fixed
+/// declaration has `min_gib == max_gib`. A size of 0 runs the pool without a
+/// data disk, which only a range starting at 0 allows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ComputePoolDataDiskPlan {
+    /// Smallest size the deployment may choose.
+    pub min_gib: u32,
+    /// Largest size the deployment may choose.
+    pub max_gib: u32,
+    /// Size used when the deployment does not choose one.
+    pub default_gib: u32,
+    /// Size this deployment runs with: its choice, or the default.
+    pub selected_gib: u32,
 }
 
 /// One concrete provider machine option.
@@ -204,13 +224,13 @@ pub fn plan_compute_with_state(
         let mut group = groups.remove(&pool_id).expect("pool id came from map keys");
         let mut requirements = group.requirements;
         let selected = selected_settings.and_then(|settings| settings.pools.get(&pool_id));
-        let declared_machine = stack
+        let declared_group = stack
             .resources
             .values()
             .filter_map(|entry| entry.config.downcast_ref::<crate::ComputeCluster>())
             .flat_map(|cluster| &cluster.capacity_groups)
-            .find(|group| group.group_id == pool_id)
-            .and_then(|group| group.instance_type.as_deref());
+            .find(|group| group.group_id == pool_id);
+        let declared_machine = declared_group.and_then(|group| group.instance_type.as_deref());
         let machine_override = match selected {
             Some(selection) => selection.machine(),
             None => declared_machine,
@@ -316,6 +336,29 @@ pub fn plan_compute_with_state(
                 errors.push(message);
             }
         }
+        let selected_data_disk_gib = selected.and_then(ComputePoolSelection::data_disk_gib);
+        let data_disk_choices = declared_group.and_then(crate::CapacityGroup::data_disk_choices);
+        let data_disk_result = match declared_group {
+            Some(group) => group.effective_data_disk_gib(selected_data_disk_gib),
+            None => match selected_data_disk_gib {
+                None | Some(0) => Ok(None),
+                Some(size) => Err(format!(
+                    "pool '{pool_id}' declares no data disk, so dataDiskGib {size} cannot be chosen"
+                )),
+            },
+        };
+        if let Err(message) = &data_disk_result {
+            errors.push(message.clone());
+        }
+        let data_disk = data_disk_choices.map(|choices| ComputePoolDataDiskPlan {
+            min_gib: choices.min,
+            max_gib: choices.max,
+            default_gib: choices.default,
+            selected_gib: match &data_disk_result {
+                Ok(size) => size.unwrap_or(0),
+                Err(_) => selected_data_disk_gib.unwrap_or(choices.default),
+            },
+        });
         let machines = machine_options(
             platform,
             &requirements,
@@ -331,6 +374,7 @@ pub fn plan_compute_with_state(
             selected: selected_choice,
             recommended,
             machines,
+            data_disk,
             errors,
         });
     }
@@ -621,6 +665,7 @@ fn recommended_selection(
             machines: machines.default.max(1),
             machine,
             failure_domains,
+            data_disk_gib: None,
         }),
         // Workloads that never scale need no autoscaling fleet, even where any mode is allowed.
         CapacityGroupScalePolicy::Autoscale { min, max }
@@ -630,6 +675,7 @@ fn recommended_selection(
                 machines: min.default.max(1),
                 machine,
                 failure_domains,
+                data_disk_gib: None,
             })
         }
         CapacityGroupScalePolicy::Autoscale { min, max } => Ok(ComputePoolSelection::Autoscale {
@@ -637,6 +683,7 @@ fn recommended_selection(
             max: max.default.max(min.default),
             machine,
             failure_domains,
+            data_disk_gib: None,
         }),
     }
 }
@@ -1852,6 +1899,7 @@ mod tests {
                 max_size: 1,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build();
         stack.resources.insert(
@@ -1914,6 +1962,7 @@ mod tests {
                     machines: 1,
                     machine: Some("m7g.xlarge".to_string()),
                     failure_domains: None,
+                    data_disk_gib: None,
                 },
             )]
             .into_iter()
@@ -1944,6 +1993,7 @@ mod tests {
                     machines: 1,
                     machine: Some("m8i.2xlarge".to_string()),
                     failure_domains: None,
+                    data_disk_gib: None,
                 },
             )]
             .into_iter()
@@ -1975,6 +2025,7 @@ mod tests {
                     machines: 1,
                     machine: Some("m7i.xlarge".to_string()),
                     failure_domains: None,
+                    data_disk_gib: None,
                 },
             )]
             .into_iter()
@@ -2002,6 +2053,7 @@ mod tests {
                     machines: 1,
                     machine: Some("c8g.2xlarge".to_string()),
                     failure_domains: None,
+                    data_disk_gib: None,
                 },
             )]
             .into_iter()
@@ -2040,6 +2092,7 @@ mod tests {
                 max_size: 5,
                 scale_policy: None,
                 nested_virtualization: Some(true),
+                data_disk_gib_range: None,
             })
             .build();
         stack.resources.insert(
@@ -2092,6 +2145,7 @@ mod tests {
                 max_size: 1,
                 scale_policy: None,
                 nested_virtualization: Some(true),
+                data_disk_gib_range: None,
             })
             .build();
         stack.resources.insert(
@@ -2127,6 +2181,145 @@ mod tests {
         }));
     }
 
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    /// A stack with one declared `general` pool. `data_disk_gib` is the
+    /// declared size (the default for a range) and `range` the sizes offered.
+    fn stack_with_data_disk_pool(
+        data_disk_gib: Option<u64>,
+        range: Option<ComputeChoiceRange>,
+    ) -> Stack {
+        let mut stack = stack_with_container();
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: None,
+                profile: Some(MachineProfile {
+                    cpu: "2".to_string(),
+                    memory_bytes: 8 * GIB,
+                    ephemeral_storage_bytes: 20 * GIB,
+                    architecture: None,
+                    gpu: None,
+                    data_disk: data_disk_gib
+                        .map(|gib| crate::DataDiskRequirement { size_bytes: gib * GIB }),
+                }),
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: None,
+                data_disk_gib_range: range,
+            })
+            .build();
+        stack.resources.insert(
+            "compute".to_string(),
+            ResourceEntry {
+                config: Resource::new(cluster),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                display_name: None,
+                description: None,
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        stack
+    }
+
+    fn data_disk_selection(data_disk_gib: Option<u32>) -> ComputeSettings {
+        ComputeSettings {
+            pools: [(
+                "general".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 1,
+                    machine: None,
+                    failure_domains: None,
+                    data_disk_gib,
+                },
+            )]
+            .into_iter()
+            .collect(),
+            containers: HashMap::new(),
+        }
+    }
+
+    fn general_pool(plan: &ComputePlan) -> &ComputePoolPlan {
+        plan.pools
+            .iter()
+            .find(|pool| pool.pool_id == "general")
+            .expect("general pool should be planned")
+    }
+
+    #[test]
+    fn a_deployment_chooses_its_data_disk_within_the_declared_range() {
+        let range = ComputeChoiceRange {
+            min: 0,
+            max: 4096,
+            default: 200,
+        };
+        let stack = stack_with_data_disk_pool(Some(200), Some(range));
+        for platform in [Platform::Aws, Platform::Machines] {
+            for (selected, expected_gib) in [(None, 200), (Some(50), 50), (Some(0), 0)] {
+                let settings = data_disk_selection(selected);
+                let plan = plan_compute(&stack, platform, Some(&settings)).expect("plan");
+                let pool = general_pool(&plan);
+                assert!(pool.errors.is_empty(), "{platform} {selected:?}: {:?}", pool.errors);
+                assert_eq!(
+                    pool.data_disk,
+                    Some(ComputePoolDataDiskPlan {
+                        min_gib: 0,
+                        max_gib: 4096,
+                        default_gib: 200,
+                        selected_gib: expected_gib,
+                    }),
+                    "{platform} {selected:?}"
+                );
+                // An omitted choice stays omitted, so later releases can move the default.
+                assert_eq!(pool.selected.data_disk_gib(), selected, "{platform}");
+            }
+
+            let settings = data_disk_selection(Some(5000));
+            let plan = plan_compute(&stack, platform, Some(&settings)).expect("plan");
+            assert_eq!(
+                general_pool(&plan).errors,
+                vec!["pool 'general' data disk must be between 0 and 4096 GiB; dataDiskGib 5000 is outside that range".to_string()],
+                "{platform}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fixed_or_absent_data_disk_refuses_another_size() {
+        let fixed = stack_with_data_disk_pool(Some(100), None);
+        let plan = plan_compute(&fixed, Platform::Aws, None).expect("plan");
+        assert_eq!(
+            general_pool(&plan).data_disk,
+            Some(ComputePoolDataDiskPlan {
+                min_gib: 100,
+                max_gib: 100,
+                default_gib: 100,
+                selected_gib: 100,
+            })
+        );
+        let plan = plan_compute(&fixed, Platform::Aws, Some(&data_disk_selection(Some(200))))
+            .expect("plan");
+        assert_eq!(
+            general_pool(&plan).errors,
+            vec!["pool 'general' has a fixed 100 GiB data disk; dataDiskGib 200 cannot be chosen".to_string()]
+        );
+
+        let absent = stack_with_data_disk_pool(None, None);
+        let plan = plan_compute(&absent, Platform::Aws, Some(&data_disk_selection(Some(0))))
+            .expect("plan");
+        assert!(general_pool(&plan).errors.is_empty());
+        assert_eq!(general_pool(&plan).data_disk, None);
+        let plan = plan_compute(&absent, Platform::Aws, Some(&data_disk_selection(Some(50))))
+            .expect("plan");
+        assert_eq!(
+            general_pool(&plan).errors,
+            vec!["pool 'general' declares no data disk, so dataDiskGib 50 cannot be chosen".to_string()]
+        );
+    }
+
     #[test]
     fn materialized_machine_profile_is_not_counted_as_workload_demand() {
         let mut stack = stack_with_container();
@@ -2141,6 +2334,7 @@ mod tests {
                 max_size: 1,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build();
         stack.resources.insert(
@@ -2207,6 +2401,7 @@ mod tests {
                     },
                 }),
                 nested_virtualization: Some(true),
+                data_disk_gib_range: None,
             })
             .build();
         let stack = Stack {
@@ -2275,6 +2470,7 @@ mod tests {
                     machines: 2,
                     machine: Some("m7g.2xlarge".to_string()),
                     failure_domains: None,
+                    data_disk_gib: None,
                 },
             )]
             .into_iter()
@@ -2299,6 +2495,7 @@ mod tests {
                 max_size: scale.default_max_size(),
                 scale_policy: Some(scale),
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build();
         stack.resources.insert(
@@ -2396,6 +2593,7 @@ mod tests {
                     machines,
                     machine: Some("m7g.xlarge".to_string()),
                     failure_domains: None,
+                    data_disk_gib: None,
                 },
             )]
             .into_iter()
@@ -2431,12 +2629,14 @@ mod tests {
             machines,
             machine: Some("m7g.xlarge".to_string()),
             failure_domains: None,
+            data_disk_gib: None,
         };
         let autoscale = |min, max| ComputePoolSelection::Autoscale {
             min,
             max,
             machine: Some("m7g.xlarge".to_string()),
             failure_domains: None,
+            data_disk_gib: None,
         };
         let declared_fixed = CapacityGroupScalePolicy::Fixed {
             machines: range(2, 4, 2),

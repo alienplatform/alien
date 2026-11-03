@@ -904,6 +904,7 @@ async fn deployment_token_activates_its_pending_setup_reservation() {
                 machines: 1,
                 machine: Some("t4g.medium".to_string()),
                 failure_domains: None,
+                data_disk_gib: None,
             },
         )]),
     };

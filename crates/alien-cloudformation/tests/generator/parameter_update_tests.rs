@@ -58,6 +58,7 @@ fn group(group_id: &str, scale_policy: CapacityGroupScalePolicy) -> CapacityGrou
         max_size: 4,
         scale_policy: Some(scale_policy),
         nested_virtualization: None,
+        data_disk_gib_range: None,
     }
 }
 
@@ -109,13 +110,18 @@ fn every_parameter_stays_live_for_updates_that_reuse_the_template() {
                         machines: range(2, 4, 2),
                     },
                 ))
-                .capacity_group(group(
-                    "general",
-                    CapacityGroupScalePolicy::Autoscale {
-                        min: range(1, 2, 1),
-                        max: range(2, 4, 3),
-                    },
-                ))
+                .capacity_group(CapacityGroup {
+                    // Deployments pick a data disk size for this pool; `stateful`
+                    // declares none, so it gets no parameter.
+                    data_disk_gib_range: Some(range(0, 500, 100)),
+                    ..group(
+                        "general",
+                        CapacityGroupScalePolicy::Autoscale {
+                            min: range(1, 2, 1),
+                            max: range(2, 4, 3),
+                        },
+                    )
+                })
                 .build(),
             ResourceLifecycle::Frozen,
         )
@@ -142,6 +148,7 @@ fn every_parameter_stays_live_for_updates_that_reuse_the_template() {
                         machines: 2,
                         machine: Some("m7g.large".to_string()),
                         failure_domains: None,
+                        data_disk_gib: None,
                     },
                 ),
                 (
@@ -151,6 +158,7 @@ fn every_parameter_stays_live_for_updates_that_reuse_the_template() {
                         max: 3,
                         machine: Some("m7g.large".to_string()),
                         failure_domains: None,
+                        data_disk_gib: Some(40),
                     },
                 ),
             ]
@@ -259,6 +267,21 @@ fn every_parameter_stays_live_for_updates_that_reuse_the_template() {
             compute["pools"]["general"]["machine"],
             live("ComputeGeneralMachine")
         );
+
+        assert_eq!(
+            compute["pools"]["general"]["dataDiskGib"],
+            live("ComputeGeneralDataDiskGib")
+        );
+        assert!(compute["pools"]["stateful"].get("dataDiskGib").is_none());
+        let data_disk = &rendered["Parameters"]["ComputeGeneralDataDiskGib"];
+        assert_eq!(data_disk["Type"], "Number");
+        // The deployment's saved pick, not the release default of 100.
+        assert_eq!(data_disk["Default"], json!(40));
+        assert_eq!(data_disk["MinValue"], json!(0));
+        assert_eq!(data_disk["MaxValue"], json!(500));
+        assert!(rendered["Parameters"]
+            .get("ComputeStatefulDataDiskGib")
+            .is_none());
 
         let yaml = to_yaml(&template).expect("template should serialize");
         alien_cloudformation::test_utils::cfn_lint(&yaml).assert_ok("parameter updates");

@@ -10,14 +10,16 @@ import { FailureDomainSelectionSchema } from "./failure-domain-selection-schema.
  * @description User-selected deployment settings for one compute pool.
  */
 export const ComputePoolSelectionSchema = z.union([z.object({
-    get "failure_domains"(){
+    "dataDiskGib": z.int().min(0).describe("Data disk size per machine, in whole GiB, within the pool's declared\nrange. Omitted uses the release default; 0 runs the pool without one.").nullish(),
+get "failure_domains"(){
                 return z.union([FailureDomainSelectionSchema, z.null()]).optional()
               },
 "machine": z.string().describe("Provider machine type selected for this deployment.").nullish(),
 "machines": z.int().min(0).describe("Number of machines to run."),
 "mode": z.enum(["fixed"])
     }), z.object({
-    get "failure_domains"(){
+    "dataDiskGib": z.int().min(0).describe("Data disk size per machine, in whole GiB, within the pool's declared\nrange. Omitted uses the release default; 0 runs the pool without one.").nullish(),
+get "failure_domains"(){
                 return z.union([FailureDomainSelectionSchema, z.null()]).optional()
               },
 "machine": z.string().describe("Provider machine type selected for this deployment.").nullish(),

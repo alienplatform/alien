@@ -189,6 +189,12 @@ pub struct CapacityGroup {
     /// to a vetted nested-virt-capable allowlist.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nested_virtualization: Option<bool>,
+    /// Data disk sizes, in GiB, a deployment may choose from. Present only when
+    /// the source declares a range; `profile.data_disk` then holds the default
+    /// (absent when the default is 0, which means no data disk). Preflight
+    /// writes the deployment's choice into `profile.data_disk`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_disk_gib_range: Option<ComputeChoiceRange>,
 }
 
 impl CapacityGroup {
@@ -221,6 +227,74 @@ impl CapacityGroup {
                 .map(|profile| (profile.ephemeral_storage_bytes, profile.data_disk.clone()))
         };
         disks(self) != disks(other)
+    }
+
+    /// Data disk sizes a deployment may choose, in GiB: the declared range, or
+    /// just the declared size. `None` when the pool declares no data disk.
+    pub fn data_disk_choices(&self) -> Option<ComputeChoiceRange> {
+        if let Some(range) = &self.data_disk_gib_range {
+            return Some(range.clone());
+        }
+        let size_gib = u32::try_from(self.data_disk_size_gib()?).unwrap_or(u32::MAX);
+        Some(ComputeChoiceRange {
+            min: size_gib,
+            max: size_gib,
+            default: size_gib,
+        })
+    }
+
+    /// Data disk size, in GiB, this pool runs with for a deployment that chose
+    /// `selected` (`None` uses the default). 0 means no data disk.
+    pub fn effective_data_disk_gib(
+        &self,
+        selected: Option<u32>,
+    ) -> std::result::Result<Option<u32>, String> {
+        let Some(choices) = self.data_disk_choices() else {
+            return match selected {
+                None | Some(0) => Ok(None),
+                Some(size) => Err(format!(
+                    "pool '{}' declares no data disk, so dataDiskGib {size} cannot be chosen",
+                    self.group_id
+                )),
+            };
+        };
+        let size = selected.unwrap_or(choices.default);
+        if !choices.contains(size) {
+            return Err(if choices.min == choices.max {
+                format!(
+                    "pool '{}' has a fixed {} GiB data disk; dataDiskGib {size} cannot be chosen",
+                    self.group_id, choices.min
+                )
+            } else {
+                format!(
+                    "pool '{}' data disk must be between {} and {} GiB; dataDiskGib {size} is outside that range",
+                    self.group_id, choices.min, choices.max
+                )
+            });
+        }
+        Ok(Some(size))
+    }
+
+    /// The data disk this pool's machines get for a deployment that chose
+    /// `selected` GiB (`None` uses the default; 0 means none).
+    pub fn selected_data_disk(
+        &self,
+        selected: Option<u32>,
+    ) -> std::result::Result<Option<DataDiskRequirement>, String> {
+        let size_gib = self.effective_data_disk_gib(selected)?;
+        if self.data_disk_gib_range.is_none() {
+            // A fixed size stands as declared, to the byte: "500G" must keep
+            // accepting a 500 GB disk rather than the 466 GiB it rounds up to.
+            return Ok(self
+                .profile
+                .as_ref()
+                .and_then(|profile| profile.data_disk.clone()));
+        }
+        Ok(size_gib
+            .filter(|size_gib| *size_gib > 0)
+            .map(|size_gib| DataDiskRequirement {
+                size_bytes: u64::from(size_gib) * 1024 * 1024 * 1024,
+            }))
     }
 
     /// Declared data disk size, rounded up to a whole GiB.
@@ -273,6 +347,7 @@ impl CapacityGroup {
 ///         max_size: 5,
 ///         scale_policy: None,
 ///         nested_virtualization: None,
+///         data_disk_gib_range: None,
 ///     })
 ///     .build();
 /// ```
@@ -537,6 +612,7 @@ mod tests {
                 max_size: 1,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             };
             assert_eq!(group.aws_root_volume_size_gib(), root);
             assert_eq!(group.aws_runtime_data_volume_size_gib(), None);
@@ -544,6 +620,50 @@ mod tests {
             assert_eq!(group.aws_root_volume_size_gib(), root);
             assert_eq!(group.aws_runtime_data_volume_size_gib(), Some(data));
         }
+    }
+
+    /// A fixed size keeps its declared bytes, so a host disk that met it still
+    /// does; a size picked from a range is whole GiB.
+    #[test]
+    fn a_fixed_data_disk_keeps_its_declared_bytes() {
+        let gib: u64 = 1024 * 1024 * 1024;
+        let declared = DataDiskRequirement {
+            size_bytes: 500_000_000_000,
+        };
+        let mut group = CapacityGroup {
+            group_id: "general".into(),
+            instance_type: None,
+            profile: Some(MachineProfile {
+                cpu: "4.0".into(),
+                memory_bytes: 8 * gib,
+                ephemeral_storage_bytes: 20 * gib,
+                architecture: None,
+                gpu: None,
+                data_disk: Some(declared.clone()),
+            }),
+            min_size: 1,
+            max_size: 1,
+            scale_policy: None,
+            nested_virtualization: None,
+            data_disk_gib_range: None,
+        };
+        // 500 GB rounds up to 466 GiB, which is the one size a deployment may name.
+        assert_eq!(group.selected_data_disk(None), Ok(Some(declared.clone())));
+        assert_eq!(group.selected_data_disk(Some(466)), Ok(Some(declared)));
+        assert!(group.selected_data_disk(Some(500)).is_err());
+
+        group.data_disk_gib_range = Some(ComputeChoiceRange {
+            min: 0,
+            max: 1024,
+            default: 466,
+        });
+        assert_eq!(
+            group.selected_data_disk(None),
+            Ok(Some(DataDiskRequirement {
+                size_bytes: 466 * gib
+            }))
+        );
+        assert_eq!(group.selected_data_disk(Some(0)), Ok(None));
     }
 
     #[test]
@@ -566,6 +686,7 @@ mod tests {
             max_size: 1,
             scale_policy: None,
             nested_virtualization: nested,
+            data_disk_gib_range: None,
         };
         for nested in [None, Some(false), Some(true)] {
             // Root keeps the ephemeral storage formula; the second volume is
@@ -594,6 +715,7 @@ mod tests {
                 max_size: 5,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build();
 
@@ -614,6 +736,7 @@ mod tests {
                 max_size: 3,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .capacity_group(CapacityGroup {
                 group_id: "gpu".to_string(),
@@ -633,6 +756,7 @@ mod tests {
                 max_size: 2,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build();
 
@@ -659,6 +783,7 @@ mod tests {
                 max_size: 5,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build();
 
@@ -676,6 +801,7 @@ mod tests {
                 max_size: 5,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build();
 
@@ -688,6 +814,7 @@ mod tests {
                 max_size: 5,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build();
 
@@ -706,6 +833,7 @@ mod tests {
                 max_size: 5,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build();
 
@@ -718,6 +846,7 @@ mod tests {
                 max_size: 10,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build();
 
@@ -738,6 +867,7 @@ mod tests {
                     max_size: 5,
                     scale_policy: None,
                     nested_virtualization: None,
+                    data_disk_gib_range: None,
                 })
                 .build()
         };
@@ -797,6 +927,7 @@ mod tests {
                 max_size: 5,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build();
 

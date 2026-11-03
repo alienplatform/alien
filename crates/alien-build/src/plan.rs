@@ -487,6 +487,7 @@ mod tests {
                 max_size: 1,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             });
         }
         stack_with(cluster.build())
@@ -509,6 +510,7 @@ mod tests {
                 max_size: 1,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build();
         Stack::new("plan-test".to_string())
@@ -543,6 +545,7 @@ mod tests {
                 max_size: 1,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build();
         let stack = stack_with(cluster);
@@ -570,6 +573,7 @@ mod tests {
                     max_size: 1,
                     scale_policy: None,
                     nested_virtualization: Some(true),
+                    data_disk_gib_range: None,
                 })
                 .build(),
         );
@@ -606,6 +610,7 @@ mod tests {
                     max_size: 1,
                     scale_policy: None,
                     nested_virtualization: None,
+                    data_disk_gib_range: None,
                 })
                 .build(),
         );

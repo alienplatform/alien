@@ -611,6 +611,7 @@ async fn a_sandbox_base_is_built_for_its_backend_architecture() {
                         max_size: 1,
                         scale_policy: None,
                         nested_virtualization: None,
+                        data_disk_gib_range: None,
                     })
                     .build(),
                 ResourceLifecycle::Frozen,
@@ -692,6 +693,7 @@ async fn container_build_uses_compute_pool_targets() {
                     max_size: 1,
                     scale_policy: None,
                     nested_virtualization: None,
+                    data_disk_gib_range: None,
                 })
                 .build();
             let container = Container::new("app".to_string())

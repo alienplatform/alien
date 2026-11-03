@@ -48,20 +48,36 @@ export type ComputePoolRequirements = {
   /**
    * An additional empty block device each machine must provide, besides the
    * disk holding the operating system: no partitions, no filesystem, not
-   * mounted, and at least `size` (for example "50Gi").
+   * mounted, and at least `size`.
+   *
+   * `size` is either one size for every deployment (`"1Ti"`), or a range each
+   * deployment chooses from: `{ min: "0Gi", default: "200Gi", max: "4Ti" }`.
+   * A deployment picks its size in its compute settings (`dataDiskGib`), in
+   * the CloudFormation template, or with `alien deployments set-compute
+   * --data-disk`; without a pick it uses `default`. A range that starts at
+   * "0Gi" lets a deployment run the pool without a data disk, for example
+   * on hosts that have no spare disk. Range sizes are whole GiB.
    *
    * On AWS, GCP and Azure, Alien attaches one new disk to every machine and
    * deletes it with the machine: an encrypted gp3 EBS volume, a pd-balanced
    * persistent disk (at least 10 GiB), or a Premium SSD managed disk at LUN 0.
    * Sizes are rounded up to a whole GiB, up to 64 TiB on AWS and GCP and
    * 32,767 GiB on Azure. Changing the size replaces the machines one at a
-   * time without rerunning setup. Data on the disk lasts only as long as its
-   * machine. On machines deployments, `join` refuses a host without one.
-   * Kubernetes rejects it because Alien does not attach disks to nodes.
+   * time without rerunning setup; data on the old disks is not kept. On
+   * machines deployments, `join` refuses a host without a large enough
+   * empty disk. Kubernetes rejects it because Alien does not attach disks
+   * to nodes.
    */
   dataDisk?: {
-    size: string
+    size: string | DataDiskSizeRange
   }
+}
+
+/** Data disk sizes a deployment may choose from, as quantities such as "50Gi" or "1Ti". */
+export type DataDiskSizeRange = {
+  min: string
+  default: string
+  max: string
 }
 
 export type ComputeChoiceRange =
@@ -157,13 +173,15 @@ export class ComputeCluster extends ResourceMetadataBuilder {
       throw new Error("Compute pool failureDomainSpread must be an integer from 1 to 255")
     }
     const { minSize, maxSize } = selectedScaleBounds(config.scale)
+    const dataDiskGibRange = dataDiskRangeFromRequirements(config.requirements)
     this._config.capacityGroups!.push({
       groupId,
-      profile: machineProfileFromRequirements(config.requirements),
+      profile: machineProfileFromRequirements(config.requirements, dataDiskGibRange),
       minSize,
       maxSize,
       scalePolicy: scalePolicyFromInput(config.scale),
       nestedVirtualization: config.requirements.nestedVirtualization,
+      dataDiskGibRange,
     })
     if (config.failureDomainSpread !== undefined) {
       this._config.failureDomainSpread ??= {}
@@ -249,7 +267,43 @@ function defaultChoice(choice: ComputeChoiceRange): number {
   return choice.default
 }
 
-function machineProfileFromRequirements(requirements: ComputePoolRequirements): MachineProfile {
+function dataDiskRangeFromRequirements(
+  requirements: ComputePoolRequirements,
+): { min: number; max: number; default: number } | undefined {
+  const size = requirements.dataDisk?.size
+  if (size === undefined || typeof size === "string") {
+    return undefined
+  }
+  const range = {
+    min: parseWholeGib("dataDisk.size.min", size.min),
+    max: parseWholeGib("dataDisk.size.max", size.max),
+    default: parseWholeGib("dataDisk.size.default", size.default),
+  }
+  if (!(range.min <= range.default && range.default <= range.max)) {
+    throw new Error(
+      `Compute pool dataDisk.size needs min <= default <= max: ${size.min}, ${size.default}, ${size.max}`,
+    )
+  }
+  if (range.max === 0) {
+    throw new Error("Compute pool dataDisk.size.max must be greater than zero")
+  }
+  return range
+}
+
+function parseWholeGib(field: string, value: string): number {
+  const bytes = parseQuantityBytes(value)
+  const gib = bytes / 1024 ** 3
+  if (!Number.isInteger(gib)) {
+    throw new Error(`Compute pool ${field} must be a whole number of GiB: ${value}`)
+  }
+  return gib
+}
+
+function machineProfileFromRequirements(
+  requirements: ComputePoolRequirements,
+  dataDiskGibRange: { default: number } | undefined,
+): MachineProfile {
+  const dataDisk = dataDiskFromRequirements(requirements, dataDiskGibRange)
   return {
     cpu: typeof requirements.cpu === "number" ? `${requirements.cpu}` : requirements.cpu,
     memoryBytes: parseQuantityBytes(requirements.memory),
@@ -261,10 +315,25 @@ function machineProfileFromRequirements(requirements: ComputePoolRequirements): 
           count: requirements.accelerators[0].count,
         }
       : undefined,
-    dataDisk: requirements.dataDisk
-      ? { sizeBytes: parsePositiveQuantityBytes("dataDisk.size", requirements.dataDisk.size) }
-      : undefined,
+    dataDisk,
   }
+}
+
+/** The declared size, or a range's default; a default of 0 means no data disk. */
+function dataDiskFromRequirements(
+  requirements: ComputePoolRequirements,
+  dataDiskGibRange: { default: number } | undefined,
+): MachineProfile["dataDisk"] {
+  const size = requirements.dataDisk?.size
+  if (size === undefined) {
+    return undefined
+  }
+  if (dataDiskGibRange) {
+    return dataDiskGibRange.default > 0
+      ? { sizeBytes: dataDiskGibRange.default * 1024 ** 3 }
+      : undefined
+  }
+  return { sizeBytes: parsePositiveQuantityBytes("dataDisk.size", size as string) }
 }
 
 function parsePositiveQuantityBytes(field: string, value: string): number {

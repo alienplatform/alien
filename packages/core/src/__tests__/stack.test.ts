@@ -102,6 +102,47 @@ describe("Stack builder validation", () => {
     expect(pool("fifty")).toThrow(/Invalid memory\/storage quantity: fifty/)
   })
 
+  it("declares a range of data disk sizes for deployments to choose from", () => {
+    const pool = (min: string, defaultSize: string, max: string) =>
+      new alien.ComputeCluster("runtime")
+        .pool("general", {
+          requirements: {
+            cpu: 2,
+            memory: "4Gi",
+            dataDisk: { size: { min, default: defaultSize, max } },
+          },
+          scale: { type: "fixed", machines: 1 },
+        })
+        .build().config.capacityGroups[0]
+
+    const sized = pool("50Gi", "200Gi", "4Ti")
+    expect(sized?.dataDiskGibRange).toEqual({ min: 50, default: 200, max: 4096 })
+    // Readers that don't know the range still see the default size.
+    expect(sized?.profile?.dataDisk).toEqual({ sizeBytes: 200 * 1024 ** 3 })
+
+    // A default of 0 means no data disk unless the deployment picks one.
+    const optional = pool("0Gi", "0Gi", "1Ti")
+    expect(optional?.dataDiskGibRange).toEqual({ min: 0, default: 0, max: 1024 })
+    expect(optional?.profile?.dataDisk).toBeUndefined()
+  })
+
+  it("rejects data disk ranges that cannot be chosen from", () => {
+    const pool = (min: string, defaultSize: string, max: string) => () =>
+      new alien.ComputeCluster("runtime").pool("general", {
+        requirements: {
+          cpu: 2,
+          memory: "4Gi",
+          dataDisk: { size: { min, default: defaultSize, max } },
+        },
+        scale: { type: "fixed", machines: 1 },
+      })
+    expect(pool("100Gi", "50Gi", "1Ti")).toThrow(/needs min <= default <= max: 100Gi, 50Gi, 1Ti/)
+    expect(pool("0Gi", "0Gi", "0Gi")).toThrow(/dataDisk.size.max must be greater than zero/)
+    expect(pool("0Gi", "1.5Gi", "2Gi")).toThrow(
+      /dataDisk.size.default must be a whole number of GiB: 1.5Gi/,
+    )
+  })
+
   it("rejects invalid compute-pool failure-domain spreads", () => {
     expect(() =>
       new alien.ComputeCluster("runtime").pool("servers", {

@@ -250,6 +250,7 @@ mod tests {
                 max_size: 3,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .dynamic_container_pool("apps".to_string())
             .build()

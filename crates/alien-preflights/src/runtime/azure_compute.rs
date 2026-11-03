@@ -414,6 +414,7 @@ mod tests {
                         profile: None,
                         scale_policy: None,
                         nested_virtualization: None,
+                        data_disk_gib_range: None,
                     })
                     .build(),
                 ResourceLifecycle::Live,
