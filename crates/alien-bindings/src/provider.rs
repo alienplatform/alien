@@ -1042,7 +1042,7 @@ impl BindingsProviderApi for BindingsProvider {
                 }))
             }
 
-            #[cfg(feature = "local")]
+            #[cfg(feature = "local-artifact-registry")]
             ArtifactRegistryBinding::Local { .. } => {
                 use crate::providers::artifact_registry::local::LocalArtifactRegistry;
 
@@ -1051,10 +1051,10 @@ impl BindingsProviderApi for BindingsProvider {
                 );
                 Ok(registry)
             }
-            #[cfg(not(feature = "local"))]
+            #[cfg(not(feature = "local-artifact-registry"))]
             ArtifactRegistryBinding::Local { .. } => {
                 Err(AlienError::new(ErrorData::FeatureNotEnabled {
-                    feature: "local".to_string(),
+                    feature: "local-artifact-registry".to_string(),
                 }))
             }
         }?;

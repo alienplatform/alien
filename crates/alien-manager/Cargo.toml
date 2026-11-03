@@ -35,7 +35,7 @@ bon = { workspace = true }
 alien-core = { workspace = true, features = ["bundle-signature"] }
 alien-error = { workspace = true, features = ["axum"] }
 alien-commands = { workspace = true, features = ["server"] }
-alien-bindings = { workspace = true, features = ["aws", "gcp", "azure", "test", "local"] }
+alien-bindings = { workspace = true, features = ["aws", "gcp", "azure", "test", "local-artifact-registry"] }
 alien-deployment = { workspace = true }
 alien-preflights = { workspace = true }
 alien-infra = { workspace = true, features = ["aws", "gcp", "azure", "kubernetes"] }

@@ -13,6 +13,8 @@ gcp = ["alien-bindings/gcp"]
 azure = ["alien-bindings/azure"]
 kubernetes = ["alien-bindings/kubernetes"]
 local = ["alien-bindings/local"]
+# Opt-in: Local-platform artifact registry bindings (adds an OCI client).
+local-artifact-registry = ["alien-bindings/local-artifact-registry"]
 test = ["alien-bindings/test"]
 # The Worker app protocol (Control + WaitUntil gRPC) lives in
 # alien-worker-protocol; `worker` pulls only the app-side clients used by

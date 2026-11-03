@@ -6,7 +6,7 @@ pub mod acr;
 pub mod ecr;
 #[cfg(feature = "gcp")]
 pub mod gar;
-#[cfg(feature = "local")]
+#[cfg(feature = "local-artifact-registry")]
 pub mod local;
 
 #[cfg(feature = "azure")]
@@ -15,5 +15,5 @@ pub use acr::AcrArtifactRegistry;
 pub use ecr::EcrArtifactRegistry;
 #[cfg(feature = "gcp")]
 pub use gar::GarArtifactRegistry;
-#[cfg(feature = "local")]
+#[cfg(feature = "local-artifact-registry")]
 pub use local::LocalArtifactRegistry;
