@@ -446,10 +446,18 @@ async fn an_inline_install_upgrades_in_place_after_the_managed_policies_attach()
         .collect();
     for grant in &former {
         let role = format!("aws_iam_role.{}", grant.role);
+        // The management role's runtime grants were already managed policies in v3.3.47 and
+        // never held a former grant. A release that adds runtime statements adds one of those
+        // policies, and the stub does not wait for it.
+        let runtime_grants = format!(
+            "aws_iam_role_policy_attachment.{}_managed_policy_",
+            grant.role
+        );
         let role_attachments: BTreeSet<String> = configured
             .iter()
             .filter(|(address, resource)| {
                 address.starts_with("aws_iam_role_policy_attachment.")
+                    && !address.starts_with(&runtime_grants)
                     && !installed.contains(*address)
                     && references(resource, "role").contains(&role)
             })

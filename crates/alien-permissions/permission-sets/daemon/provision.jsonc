@@ -9,8 +9,7 @@
         "grant": {
           "actions": [
             "elasticloadbalancing:CreateLoadBalancer",
-            "elasticloadbalancing:CreateTargetGroup",
-            "elasticloadbalancing:CreateListener"
+            "elasticloadbalancing:CreateTargetGroup"
           ]
         },
         "binding": {
@@ -30,6 +29,108 @@
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceId}",
                 "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // AWS authorizes CreateListener against the load balancer, so the load balancer's tags
+      // limit it to this stack's load balancers. AWS checks neither the target group nor the
+      // certificate a listener names (no resource check and no condition key), so IAM cannot stop
+      // this role from pointing this stack's own listeners at any target group in the same
+      // account and VPC that no other load balancer uses, at a redirect to any URL or a fixed
+      // response, or at any ACM certificate of the same account and region or IAM server
+      // certificate of the account. The certificate's private key never leaves AWS. Other
+      // accounts' target groups and certificates, other stacks' listeners and target groups
+      // another load balancer uses stay out of reach.
+      // IAM can bound the TLS policy and the protocol. A create must name both: an HTTPS
+      // listener created without a policy gets ELBSecurityPolicy-2016-08, which allows TLS 1.0.
+      // Both FIPS policies accept TLS 1.2 and 1.3 only; the PQ one adds post-quantum key exchange.
+      {
+        "label": "create-public-load-balancer-listener",
+        "description": "Create the HTTPS listener on a daemon ALB of this stack.",
+        "grant": {
+          "actions": ["elasticloadbalancing:CreateListener"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime",
+                "elasticloadbalancing:ListenerProtocol": "HTTPS",
+                "elasticloadbalancing:SecurityPolicy": [
+                  "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04",
+                  "ELBSecurityPolicy-TLS13-1-2-FIPS-PQ-2025-09"
+                ]
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
+                "aws:RequestTag/${managedByTag}": "runtime",
+                "elasticloadbalancing:ListenerProtocol": "HTTPS",
+                "elasticloadbalancing:SecurityPolicy": [
+                  "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04",
+                  "ELBSecurityPolicy-TLS13-1-2-FIPS-PQ-2025-09"
+                ]
+              }
+            }
+          }
+        }
+      },
+      // The port 80 listener, which only redirects to HTTPS. IAM cannot see a listener's
+      // actions, so it cannot tell the redirect from an HTTP listener that forwards: this role
+      // could serve this stack's own ALB over plain HTTP, with the same target group limits as
+      // above.
+      {
+        "label": "create-public-load-balancer-redirect-listener",
+        "description": "Create the HTTP listener that redirects to HTTPS on a daemon ALB of this stack.",
+        "grant": {
+          "actions": ["elasticloadbalancing:CreateListener"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime",
+                "elasticloadbalancing:ListenerProtocol": "HTTP"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
+                "aws:RequestTag/${managedByTag}": "runtime",
+                "elasticloadbalancing:ListenerProtocol": "HTTP"
               }
             }
           }
@@ -71,10 +172,9 @@
       },
       {
         "label": "manage-public-load-balancer",
-        "description": "Update and delete ALB resources owned by public daemon endpoints.",
+        "description": "Delete ALB resources owned by public daemon endpoints.",
         "grant": {
           "actions": [
-            "elasticloadbalancing:ModifyListener",
             "elasticloadbalancing:DeleteLoadBalancer",
             "elasticloadbalancing:DeleteTargetGroup",
             "elasticloadbalancing:DeleteListener"
@@ -105,6 +205,55 @@
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceId}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // Certificate rotation and TLS policy moves on this stack's HTTPS listeners, with the same
+      // target group and certificate limits as CreateListener above. A modify that names neither
+      // the TLS policy nor the protocol keeps the listener's own, so both are checked if present.
+      {
+        "label": "update-public-load-balancer-listener",
+        "description": "Rotate the certificate and TLS policy of daemon ALB listeners.",
+        "grant": {
+          "actions": ["elasticloadbalancing:ModifyListener"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/*/*/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              },
+              "StringEqualsIfExists": {
+                "elasticloadbalancing:SecurityPolicy": [
+                  "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04",
+                  "ELBSecurityPolicy-TLS13-1-2-FIPS-PQ-2025-09"
+                ],
+                "elasticloadbalancing:ListenerProtocol": "HTTPS"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/*/*/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              },
+              "StringEqualsIfExists": {
+                "elasticloadbalancing:SecurityPolicy": [
+                  "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04",
+                  "ELBSecurityPolicy-TLS13-1-2-FIPS-PQ-2025-09"
+                ],
+                "elasticloadbalancing:ListenerProtocol": "HTTPS"
               }
             }
           }
