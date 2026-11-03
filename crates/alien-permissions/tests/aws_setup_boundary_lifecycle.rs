@@ -180,6 +180,64 @@ fn setup_can_create_pass_and_delete_the_flow_log_role_of_its_own_stack() {
     }
 }
 
+/// A CloudFormation or Terraform setup creates a created network's flow log, its log group and
+/// its delivery role with the setup policy, and tags all three `managed-by=setup`. Each call
+/// below is one the templates make for them; every one must be allowed for this stack.
+#[test]
+fn template_setup_creates_and_deletes_the_flow_log_of_a_created_network() {
+    let setup = generate_aws_initial_setup_policy(
+        &common::create_test_context().with_aws_permissions_boundary_arn(BOUNDARY),
+    )
+    .unwrap()
+    .statement;
+    let tags: &[(&str, &str)] = &[
+        ("deployment", "my-stack"),
+        ("managed-by", "setup"),
+        ("resource", "default-network"),
+        ("resource-type", "network"),
+    ];
+    let group = "arn:aws:logs:us-east-1:123456789012:log-group:my-stack-default-network-flow-logs";
+    let role = "arn:aws:iam::123456789012:role/my-stack-default-network-flow-logs";
+    let vpc = "arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0123456789abcdef0";
+    let flow_log = "arn:aws:ec2:us-east-1:123456789012:vpc-flow-log/fl-0123456789abcdef0";
+    let mut calls = vec![
+        Request::new("logs:CreateLogGroup", group).request_tags(tags),
+        Request::new("logs:TagResource", group).request_tags(tags),
+        Request::new("iam:CreateRole", role).request_tags(tags),
+        Request::new("iam:TagRole", role).request_tags(tags),
+        Request::new("ec2:CreateFlowLogs", vpc).resource_tags(tags),
+        Request::new("ec2:CreateFlowLogs", flow_log).request_tags(tags),
+        Request::new("ec2:CreateTags", flow_log)
+            .request_tags(tags)
+            .with("ec2:CreateAction", "CreateFlowLogs"),
+        Request::new("ec2:DeleteFlowLogs", flow_log).resource_tags(tags),
+        Request::new("iam:PassRole", role)
+            .with("iam:PassedToService", "vpc-flow-logs.amazonaws.com")
+            .with("iam:ResourceTag/deployment", "my-stack")
+            .with("iam:ResourceTag/managed-by", "setup"),
+    ];
+    for action in ["logs:PutRetentionPolicy", "logs:DeleteLogGroup"] {
+        calls.push(Request::new(action, group).resource_tags(tags));
+    }
+    for action in [
+        "iam:GetRole",
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:DeleteRole",
+    ] {
+        calls.push(Request::new(action, role).resource_tags(tags));
+    }
+    let denied = calls
+        .iter()
+        .filter(|call| evaluate(&setup, call) != Decision::Allowed)
+        .map(|call| format!("{} on {}", call.action, call.resource))
+        .collect::<Vec<_>>();
+    assert!(
+        denied.is_empty(),
+        "the setup policy denies a template setup's flow log calls: {denied:#?}"
+    );
+}
+
 /// Creating the flow log group with its tags authorizes the tagging actions. A CloudFormation or
 /// Terraform setup of this stack tags its group managed-by=setup and runs with the same setup
 /// policy, so it can tag and delete that group; a group another stack tagged stays out of reach.

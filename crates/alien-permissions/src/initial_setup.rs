@@ -126,9 +126,11 @@ pub fn generate_aws_initial_setup_policy(
 /// or delete what it created. The stack tag in the same condition still binds the grant to
 /// this stack.
 fn allow_setup_managed_by_value(statement: &mut AwsIamStatement) {
+    // `iam:ResourceTag` is how `iam:PassRole` sees the tags of the role being passed.
     let keys = [
         format!("aws:ResourceTag/{ALIEN_MANAGED_BY_TAG_KEY}"),
         format!("aws:RequestTag/{ALIEN_MANAGED_BY_TAG_KEY}"),
+        format!("iam:ResourceTag/{ALIEN_MANAGED_BY_TAG_KEY}"),
     ];
     for values in statement.condition.iter_mut().flat_map(|c| c.values_mut()) {
         for (key, value) in values.iter_mut() {
