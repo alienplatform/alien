@@ -58,14 +58,24 @@ const server = new alien.Daemon("server")
   .command(["edge-server", "--role", "server"])
   .cpu({ min: "500m", desired: "500m" })
   .stopGracePeriod(600)
-  .healthCheck({ port: 9000, path: "/ready", method: "HEAD", timeoutSeconds: 2, failureThreshold: 5 })
+  .healthCheck({
+    port: 9000,
+    path: "/ready",
+    method: "HEAD",
+    timeoutSeconds: 2,
+    failureThreshold: 5,
+  })
   .link(artifacts)
   .permissions("server")
   .publicEndpoint("console", 9000)
   .build()
 
 const worker = new alien.Daemon("worker")
-  .code({ type: "source", src: "crates/worker", toolchain: { type: "rust", binaryName: "edge-worker" } })
+  .code({
+    type: "source",
+    src: "crates/worker",
+    toolchain: { type: "rust", binaryName: "edge-worker" },
+  })
   .cluster("edge-runtime")
   .memory("256Mi")
   .stopGracePeriod(5_400)
