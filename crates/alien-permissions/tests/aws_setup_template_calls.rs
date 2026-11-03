@@ -7,12 +7,15 @@ mod common;
 mod iam_policy;
 
 use alien_permissions::{
-    generators::{AwsIamStatement, AwsRuntimePermissionsGenerator},
+    generators::{
+        AwsCloudFormationPermissionsGenerator, AwsIamStatement, AwsRuntimePermissionsGenerator,
+    },
     get_permission_set,
     initial_setup::generate_aws_initial_setup_policy,
-    BindingTarget,
+    BindingTarget, PermissionContext,
 };
 use iam_policy::{evaluate, Decision, Request};
+use serde_json::Value;
 
 const RDS: &str = "arn:aws:rds:us-east-1:123456789012";
 const IAM: &str = "arn:aws:iam::123456789012";
@@ -463,4 +466,142 @@ fn setup_role_writes_on_a_dash_prefixed_stack_stay_as_wide_as_put_role_policy() 
         "iam:CreatePolicyVersion",
         format!("{IAM}:policy/my-stack-prod-execution-sa-setup-0d036fcd"),
     )));
+}
+
+/// Tag sets for the stack's secret: complete, and with each stack tag missing or foreign.
+fn secret_tag_cases() -> Vec<(&'static str, Vec<(&'static str, &'static str)>, Decision)> {
+    vec![
+        (
+            "both tags",
+            vec![("deployment", "my-stack"), ("resource", "db")],
+            Decision::Allowed,
+        ),
+        (
+            "no deployment tag",
+            vec![("resource", "db")],
+            Decision::NotAllowed,
+        ),
+        (
+            "no resource tag",
+            vec![("deployment", "my-stack")],
+            Decision::NotAllowed,
+        ),
+        (
+            "another stack's tag",
+            vec![("deployment", "my-stack-prod"), ("resource", "db")],
+            Decision::NotAllowed,
+        ),
+        ("no tags", vec![], Decision::NotAllowed),
+    ]
+}
+
+/// The Terraform setup grants a workload `postgres/data-access` with the resource binding and
+/// only swaps the resource for the cluster's exact RDS-managed secret ARN, keeping the
+/// conditions. RDS copies the cluster's tags onto that secret, so the read works only while the
+/// secret carries both stack tags.
+#[test]
+fn a_terraform_workload_reads_the_managed_secret_only_with_both_stack_tags() {
+    let managed_secret =
+        format!("{SECRETS}:rds!cluster-5d2e7185-b053-4ac5-a304-1bcf996efbcb-StovOD");
+    let mut set = get_permission_set("postgres/data-access").unwrap().clone();
+    for entry in set.platforms.aws.iter_mut().flatten() {
+        entry.binding.resource.as_mut().unwrap().resources = vec!["${resourceId}".to_string()];
+    }
+    let context = PermissionContext::new()
+        .with_stack_prefix("my-stack")
+        .with_resource_name("db")
+        .with_resource_id(&managed_secret)
+        .with_aws_account_id("123456789012")
+        .with_aws_region("us-east-1");
+    let statements = AwsRuntimePermissionsGenerator::new()
+        .generate_policy(&set, BindingTarget::Resource, &context)
+        .unwrap()
+        .statement;
+    for (case, tags, expected) in secret_tag_cases() {
+        let call = Request::new("secretsmanager:GetSecretValue", managed_secret.clone())
+            .resource_tags(&tags);
+        assert_eq!(evaluate(&statements, &call), expected, "{case}");
+    }
+}
+
+/// The setup identity's rotation calls on the RDS-managed secret need the stack tag.
+#[test]
+fn setup_rotation_calls_on_the_managed_secret_need_the_stack_tag() {
+    let statements = setup_statements();
+    let managed_secret =
+        format!("{SECRETS}:rds!cluster-5d2e7185-b053-4ac5-a304-1bcf996efbcb-StovOD");
+    for action in [
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:RotateSecret",
+        "secretsmanager:CancelRotateSecret",
+    ] {
+        for (tags, expected) in [
+            (
+                vec![("deployment", "my-stack"), ("resource", "db")],
+                Decision::Allowed,
+            ),
+            (vec![("resource", "db")], Decision::NotAllowed),
+            (vec![("deployment", "my-stack-prod")], Decision::NotAllowed),
+        ] {
+            let call = Request::new(action, managed_secret.clone()).resource_tags(&tags);
+            assert_eq!(
+                evaluate(&statements, &call),
+                expected,
+                "{action} with {tags:?}"
+            );
+        }
+    }
+}
+
+/// Resolves the `Fn::Sub` pseudo parameters a CloudFormation-rendered policy uses.
+fn resolve_cloudformation(value: Value) -> Value {
+    match value {
+        Value::Object(map) if map.len() == 1 && map.contains_key("Fn::Sub") => Value::String(
+            map["Fn::Sub"]
+                .as_str()
+                .unwrap()
+                .replace("${AWS::Partition}", "aws")
+                .replace("${AWS::Region}", "us-east-1")
+                .replace("${AWS::AccountId}", "123456789012")
+                .replace("${AWS::StackName}", "my-stack"),
+        ),
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(key, value)| (key, resolve_cloudformation(value)))
+                .collect(),
+        ),
+        Value::Array(values) => {
+            Value::Array(values.into_iter().map(resolve_cloudformation).collect())
+        }
+        other => other,
+    }
+}
+
+/// The CloudFormation setup renders the workload's read as the emitter does (stack-name prefix,
+/// resource binding) for the setup-created `<stack>-<id>-credentials` secret.
+#[test]
+fn a_cloudformation_workload_reads_the_connection_secret_only_with_both_stack_tags() {
+    let context = PermissionContext::new()
+        .with_stack_prefix("")
+        .with_resource_name("db")
+        .with_aws_account_id("123456789012")
+        .with_aws_region("us-east-1");
+    let policy = AwsCloudFormationPermissionsGenerator::new()
+        .generate_policy(
+            get_permission_set("postgres/data-access").unwrap(),
+            BindingTarget::Resource,
+            &context,
+        )
+        .unwrap();
+    let rendered = resolve_cloudformation(serde_json::to_value(&policy).unwrap());
+    let statements: Vec<AwsIamStatement> =
+        serde_json::from_value(rendered["Statement"].clone()).unwrap();
+    for (case, tags, expected) in secret_tag_cases() {
+        let call = Request::new(
+            "secretsmanager:GetSecretValue",
+            format!("{SECRETS}:my-stack-db-credentials-KFPp24"),
+        )
+        .resource_tags(&tags);
+        assert_eq!(evaluate(&statements, &call), expected, "{case}");
+    }
 }
