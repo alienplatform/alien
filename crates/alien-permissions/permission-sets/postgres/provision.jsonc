@@ -569,10 +569,12 @@
         }
       },
       {
-        // Creating the secret with tags is also authorized as TagResource on the new, untagged
-        // secret, so the existing-tag check is IfExists. A secret tagged for another stack cannot
-        // be retagged, so a stack named `app` cannot claim `app-prod`'s password secret and then
-        // read it through a grant bound to the stack tag.
+        // Creating the secret with tags is also authorized as TagResource, and AWS evaluates that
+        // check with the new tags as the secret's tags (measured: CreateSecret with this stack's
+        // tags passes this strict check). So the existing-tag check needs no IfExists, and a
+        // secret that is untagged or tagged for another stack cannot be retagged: a stack named
+        // `app` cannot claim `app-prod`'s password secret and then read it through a grant bound
+        // to the stack tag.
         "label": "tag-connection-secret",
         "description": "Tag the generated connection-password secret.",
         "grant": {
@@ -584,7 +586,7 @@
               "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"
             ],
             "condition": {
-              "StringEqualsIfExists": {
+              "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}"
               }
@@ -595,7 +597,7 @@
               "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"
             ],
             "condition": {
-              "StringEqualsIfExists": {
+              "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceName}",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",

@@ -144,13 +144,12 @@
       {
         // The Terraform setup has RDS manage the master password (manage_master_user_password).
         // RDS creates that secret with the caller's credentials, names it `rds!cluster-<id>`
-        // (only RDS can use the `rds!` prefix), tags it with the cluster's ARN and copies the
-        // cluster's tags to it. A secret of another stack's or the account's own cluster cannot
-        // be tagged: its stack tag or its cluster ARN differs.
+        // (only RDS can use the `rds!` prefix), and sends the cluster's tags plus its ARN as
+        // `aws:rds:primaryDBClusterArn` on the create.
         "label": "create-managed-master-secret",
-        "description": "Let RDS create and tag the master-password secret of the setup-created Aurora cluster.",
+        "description": "Let RDS create the master-password secret of the setup-created Aurora cluster.",
         "grant": {
-          "actions": ["secretsmanager:CreateSecret", "secretsmanager:TagResource"]
+          "actions": ["secretsmanager:CreateSecret"]
         },
         "binding": {
           "stack": {
@@ -160,12 +159,6 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}"
-              },
-              "StringEqualsIfExists": {
-                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
-              },
-              "StringLikeIfExists": {
-                "aws:ResourceTag/aws:rds:primaryDBClusterArn": "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*"
               }
             }
           },
@@ -177,12 +170,46 @@
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        // The create is also authorized as TagResource, checked with the new tags as the
+        // secret's tags (measured live: RDS's create passes this strict check). No IfExists, so
+        // an untagged secret, or one of another stack's or the account's own cluster, cannot be
+        // tagged.
+        "label": "tag-managed-master-secret",
+        "description": "Let RDS tag the master-password secret of the setup-created Aurora cluster.",
+        "grant": {
+          "actions": ["secretsmanager:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:rds!cluster-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
               },
-              "StringEqualsIfExists": {
+              "StringLike": {
+                "aws:ResourceTag/aws:rds:primaryDBClusterArn": "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:rds!cluster-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${resourceTag}": "${resourceName}"
-              },
-              "StringLikeIfExists": {
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
                 "aws:ResourceTag/aws:rds:primaryDBClusterArn": "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}"
               }
             }

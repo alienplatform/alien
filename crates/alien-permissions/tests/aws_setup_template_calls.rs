@@ -103,11 +103,18 @@ fn template_setup_calls() -> Vec<Request> {
         .resource_tags(SETUP_TAGS),
     );
     // The CloudFormation connection-password secret: created with the stack's tags, then
-    // overwritten or deleted.
+    // overwritten or deleted. AWS also authorizes the create as TagResource, checked with the
+    // new tags as the secret's tags (measured live).
     let connection_secret = format!("{SECRETS}:my-stack-db-credentials-KFPp24");
-    for action in ["secretsmanager:CreateSecret", "secretsmanager:TagResource"] {
-        calls.push(Request::new(action, connection_secret.clone()).request_tags(SETUP_TAGS));
-    }
+    calls.push(
+        Request::new("secretsmanager:CreateSecret", connection_secret.clone())
+            .request_tags(SETUP_TAGS),
+    );
+    calls.push(
+        Request::new("secretsmanager:TagResource", connection_secret.clone())
+            .request_tags(SETUP_TAGS)
+            .resource_tags(SETUP_TAGS),
+    );
     for action in [
         "secretsmanager:PutSecretValue",
         "secretsmanager:DeleteSecret",
@@ -186,10 +193,17 @@ fn template_setup_calls() -> Vec<Request> {
         "rds:DescribeGlobalClusters",
         "arn:aws:rds::123456789012:global-cluster:*",
     ));
-    // Terraform has RDS manage the master password.
-    for action in ["secretsmanager:CreateSecret", "secretsmanager:TagResource"] {
-        calls.push(Request::new(action, managed_secret.clone()).request_tags(&managed_secret_tags));
-    }
+    // Terraform has RDS manage the master password. RDS's create is also authorized as
+    // TagResource with the new tags as the secret's tags (measured live).
+    calls.push(
+        Request::new("secretsmanager:CreateSecret", managed_secret.clone())
+            .request_tags(&managed_secret_tags),
+    );
+    calls.push(
+        Request::new("secretsmanager:TagResource", managed_secret.clone())
+            .request_tags(&managed_secret_tags)
+            .resource_tags(&managed_secret_tags),
+    );
     for action in [
         "secretsmanager:DescribeSecret",
         "secretsmanager:RotateSecret",
@@ -404,6 +418,90 @@ fn a_stack_cannot_reach_another_stack_database_or_account_keys() {
             .map(|call| format!("{} on {}", call.action, call.resource))
             .collect();
         assert!(allowed.is_empty(), "{name} allows:\n{}", allowed.join("\n"));
+    }
+}
+
+/// Stack `my-stack` cannot tag an untagged secret of stack `my-stack-prod` (names also start
+/// with `my-stack-`) as its own, so it cannot read or rotate it afterwards either. Its own create
+/// with tags still passes.
+#[test]
+fn a_stack_cannot_claim_an_untagged_secret_of_an_overlapping_stack() {
+    let context = common::create_test_context();
+    let runtime = |id: &str| {
+        AwsRuntimePermissionsGenerator::new()
+            .generate_policy(
+                get_permission_set(id).unwrap(),
+                BindingTarget::Stack,
+                &context,
+            )
+            .unwrap()
+            .statement
+    };
+    let setup = setup_statements();
+    let provision = runtime("postgres/provision");
+    let data_access = runtime("postgres/data-access");
+    let claim = &[("deployment", "my-stack")];
+    let connection_secret = format!("{SECRETS}:my-stack-prod-db-credentials-AbCdEf");
+    let master_secret =
+        format!("{SECRETS}:rds!cluster-0f0e0d0c-0b0a-0908-0706-050403020100-AbCdEf");
+    let master_secret_tags = [(
+        "aws:rds:primaryDBClusterArn",
+        format!("{RDS}:cluster:my-stack-prod-db"),
+    )];
+    let master_secret_tags: Vec<(&str, &str)> = master_secret_tags
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect();
+    for (name, statements) in [("setup", &setup), ("provision", &provision)] {
+        let tag_connection = Request::new("secretsmanager:TagResource", connection_secret.clone())
+            .request_tags(claim);
+        assert_ne!(
+            evaluate(statements, &tag_connection),
+            Decision::Allowed,
+            "{name}: tag the untagged connection secret"
+        );
+        let tag_master = Request::new("secretsmanager:TagResource", master_secret.clone())
+            .resource_tags(&master_secret_tags)
+            .request_tags(claim);
+        assert_ne!(
+            evaluate(statements, &tag_master),
+            Decision::Allowed,
+            "{name}: tag the untagged master secret"
+        );
+    }
+    // Untagged, so neither secret is readable or rotatable by this stack.
+    assert_ne!(
+        evaluate(
+            &data_access,
+            &Request::new("secretsmanager:GetSecretValue", connection_secret.clone())
+        ),
+        Decision::Allowed
+    );
+    for action in [
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:RotateSecret",
+    ] {
+        assert_ne!(
+            evaluate(
+                &setup,
+                &Request::new(action, master_secret.clone()).resource_tags(&master_secret_tags)
+            ),
+            Decision::Allowed,
+            "{action}"
+        );
+    }
+    // This stack's own create with tags still passes, including the TagResource check that AWS
+    // makes with the new tags.
+    let own = format!("{SECRETS}:my-stack-db-credentials-KFPp24");
+    for statements in [&setup, &provision] {
+        for call in [
+            Request::new("secretsmanager:CreateSecret", own.clone()).request_tags(SETUP_TAGS),
+            Request::new("secretsmanager:TagResource", own.clone())
+                .request_tags(SETUP_TAGS)
+                .resource_tags(SETUP_TAGS),
+        ] {
+            assert_eq!(evaluate(statements, &call), Decision::Allowed);
+        }
     }
 }
 
