@@ -92,6 +92,20 @@ impl DynamoDbClient {
         operation: &str,
         resource: &str,
     ) -> Result<T> {
+        self.send_json_retrying_when(target, body, operation, resource, None)
+            .await
+    }
+
+    /// Like `send_json`, but retries only errors for which `retry_when` is true (all retryable
+    /// errors when `None`).
+    async fn send_json_retrying_when<T: DeserializeOwned + Send + 'static>(
+        &self,
+        target: &str,
+        body: Option<String>,
+        operation: &str,
+        resource: &str,
+        retry_when: Option<fn(&alien_error::AlienError<ErrorData>) -> bool>,
+    ) -> Result<T> {
         self.credentials.ensure_fresh().await?;
         let base_url = self.get_base_url();
         let url = base_url.trim_end_matches('/');
@@ -112,8 +126,19 @@ impl DynamoDbClient {
             builder.content_sha256("")
         };
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_json(builder, &self.sign_config()).await;
+        let result = match retry_when {
+            Some(retry_when) => {
+                crate::aws::aws_request_utils::sign_send_json_retrying_when(
+                    builder,
+                    &self.sign_config(),
+                    retry_when,
+                )
+                .await
+            }
+            None => {
+                crate::aws::aws_request_utils::sign_send_json(builder, &self.sign_config()).await
+            }
+        };
 
         Self::map_result(result, operation, resource, body.as_deref())
     }
@@ -443,11 +468,14 @@ impl DynamoDbApi for DynamoDbClient {
                 ),
             },
         )?;
-        self.send_json(
+        // A 4xx answer (denied, table not found) is final; the KV heartbeat calls this every
+        // cycle and retries on its own.
+        self.send_json_retrying_when(
             "DynamoDB_20120810.UpdateContinuousBackups",
             Some(body),
             "UpdateContinuousBackups",
             &request.table_name,
+            Some(crate::aws::aws_request_utils::is_transient_json_error),
         )
         .await
     }
@@ -464,11 +492,14 @@ impl DynamoDbApi for DynamoDbClient {
                 ),
             },
         )?;
-        self.send_json(
+        // A 4xx answer (denied, table not found) is final; the KV heartbeat calls this every
+        // cycle and retries on its own.
+        self.send_json_retrying_when(
             "DynamoDB_20120810.DescribeContinuousBackups",
             Some(body),
             "DescribeContinuousBackups",
             &request.table_name,
+            Some(crate::aws::aws_request_utils::is_transient_json_error),
         )
         .await
     }
