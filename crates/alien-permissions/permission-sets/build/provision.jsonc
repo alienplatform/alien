@@ -40,7 +40,9 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${stackPrefix}-*"],
+            "resources": [
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${stackPrefix}-*"
+            ],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}"
@@ -48,7 +50,9 @@
             }
           },
           "resource": {
-            "resources": ["arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${resourceName}"],
+            "resources": [
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${resourceName}"
+            ],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}"
@@ -65,7 +69,9 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${stackPrefix}-*"],
+            "resources": [
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${stackPrefix}-*"
+            ],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -74,7 +80,9 @@
             }
           },
           "resource": {
-            "resources": ["arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${resourceName}"],
+            "resources": [
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${resourceName}"
+            ],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -92,7 +100,9 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${stackPrefix}-*"],
+            "resources": [
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${stackPrefix}-*"
+            ],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}"
@@ -100,7 +110,9 @@
             }
           },
           "resource": {
-            "resources": ["arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${resourceName}"],
+            "resources": [
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${resourceName}"
+            ],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}"

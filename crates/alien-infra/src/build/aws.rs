@@ -2,7 +2,8 @@ use std::{collections::HashMap, time::Duration};
 use tracing::{debug, info, warn};
 
 use crate::core::{
-    aws_ownership::is_tagged_as_ours, aws_tag_scoped::is_remote_access_denied,
+    aws_ownership::is_tagged_as_ours,
+    aws_tag_scoped::{is_remote_access_denied, remote_rejection_message},
     EnvironmentVariableBuilder, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
@@ -112,9 +113,10 @@ pub struct AwsBuildController {
     /// code have none, and their heartbeat warns until a setup update sets it.
     #[serde(default)]
     pub(crate) log_retention_days: Option<i32>,
-    /// The log action setup was denied the last time it set up the project's log group.
+    /// The log action setup was denied the last time it set up the project's log group, with
+    /// what AWS said.
     #[serde(default)]
-    pub(crate) log_group_denied_action: Option<String>,
+    pub(crate) log_group_denial: Option<String>,
 }
 
 #[controller]
@@ -688,11 +690,16 @@ impl AwsBuildController {
                 info!(log_group = %log_group_name, "Build log group already exists")
             }
             Err(error) if is_remote_access_denied(&error) => {
+                let denial = format!(
+                    "logs:CreateLogGroup was denied: {}",
+                    remote_rejection_message(&error)
+                );
                 warn!(
                     log_group = %log_group_name,
+                    %denial,
                     "Not allowed to create the build log group, or it exists without this deployment's tag; its logs are not kept for the required period. Run a setup update to grant logs:CreateLogGroup, after tagging a group CodeBuild created for this deployment."
                 );
-                self.log_group_denied_action = Some("logs:CreateLogGroup".to_string());
+                self.log_group_denial = Some(denial);
                 return Ok(());
             }
             Err(error) => {
@@ -714,15 +721,20 @@ impl AwsBuildController {
         {
             Ok(()) => {
                 self.log_retention_days = Some(AWS_LOG_RETENTION_DAYS);
-                self.log_group_denied_action = None;
+                self.log_group_denial = None;
                 Ok(())
             }
             Err(error) if is_remote_access_denied(&error) => {
+                let denial = format!(
+                    "logs:PutRetentionPolicy was denied: {}",
+                    remote_rejection_message(&error)
+                );
                 warn!(
                     log_group = %log_group_name,
+                    %denial,
                     "Not allowed to set the build log group's retention; its logs are not kept for the required period. Run a setup update to grant logs:PutRetentionPolicy."
                 );
-                self.log_group_denied_action = Some("logs:PutRetentionPolicy".to_string());
+                self.log_group_denial = Some(denial);
                 Ok(())
             }
             Err(error) => Err(error.context(ErrorData::CloudPlatformError {
@@ -742,10 +754,10 @@ impl AwsBuildController {
         if self.log_retention_days == Some(AWS_LOG_RETENTION_DAYS) {
             return None;
         }
-        let reason = match &self.log_group_denied_action {
-            Some(action) => format!("setup was not allowed to call {action}"),
-            None => "it was created before setup set its retention".to_string(),
-        };
+        let reason = self
+            .log_group_denial
+            .clone()
+            .unwrap_or_else(|| "it was created before setup set its retention".to_string());
         Some(HeartbeatCollectionIssue {
             source: "log-retention".to_string(),
             reason: HeartbeatCollectionIssueReason::Forbidden,
@@ -794,7 +806,7 @@ impl AwsBuildController {
             project_name: Some(project_name.to_string()),
             build_env_vars: Some(HashMap::new()),
             log_retention_days: Some(AWS_LOG_RETENTION_DAYS),
-            log_group_denied_action: None,
+            log_group_denial: None,
             _internal_stay_count: None,
         }
     }
@@ -897,6 +909,7 @@ mod tests {
     use rstest::rstest;
 
     use crate::build::{fixtures::*, AwsBuildController, AwsBuildImporter, AwsBuildState};
+    use crate::core::aws_tag_scoped::logs_access_denied;
     use crate::core::{
         controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
         MockPlatformServiceProvider, PlatformServiceProvider,
@@ -1003,7 +1016,7 @@ mod tests {
                 request.log_group_name,
                 tags.get("deployment").map(String::as_str).unwrap_or("-")
             ));
-            access(granted, request.log_group_name)
+            access(granted, "CreateLogGroup", request.log_group_name)
         });
         logs.expect_put_retention_policy()
             .returning(move |request| {
@@ -1011,19 +1024,17 @@ mod tests {
                     "PutRetentionPolicy {} {}",
                     request.log_group_name, request.retention_in_days
                 ));
-                access(granted, request.log_group_name)
+                access(granted, "PutRetentionPolicy", request.log_group_name)
             });
         Arc::new(logs)
     }
 
-    fn access(granted: bool, log_group_name: String) -> CloudClientResult<()> {
+    /// Allowed, or denied as the real client reports AWS's answer to `action`.
+    fn access(granted: bool, action: &str, log_group_name: String) -> CloudClientResult<()> {
         if granted {
             Ok(())
         } else {
-            Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
-                resource_type: "CloudWatch Logs log group".to_string(),
-                resource_name: log_group_name,
-            }))
+            Err(logs_access_denied::error(action, &log_group_name))
         }
     }
 
@@ -1332,7 +1343,7 @@ mod tests {
             project_name: None,
             build_env_vars: Some(HashMap::new()),
             log_retention_days: None,
-            log_group_denied_action: None,
+            log_group_denial: None,
             _internal_stay_count: None,
         };
         let mut executor = executor_with(basic_build(), controller, &projects, false).await;
@@ -1388,7 +1399,7 @@ mod tests {
             project_name: None,
             build_env_vars: None,
             log_retention_days: None,
-            log_group_denied_action: None,
+            log_group_denial: None,
             _internal_stay_count: None,
         };
         let mut executor = executor_with(basic_build(), controller, &projects, false).await;
@@ -1492,7 +1503,10 @@ mod tests {
                 source: "log-retention".to_string(),
                 reason: HeartbeatCollectionIssueReason::Forbidden,
                 severity: HeartbeatIssueSeverity::Warning,
-                message: retention_warning("setup was not allowed to call logs:CreateLogGroup"),
+                message: retention_warning(&logs_access_denied::denial(
+                    "CreateLogGroup",
+                    "/aws/codebuild/test-basic-build"
+                )),
             }]
         );
     }
@@ -1513,7 +1527,7 @@ mod tests {
         let create_tagged = tagged.clone();
         logs.expect_create_log_group().returning(move |request| {
             if !create_tagged.load(Ordering::SeqCst) {
-                return access(false, request.log_group_name);
+                return access(false, "CreateLogGroup", request.log_group_name);
             }
             Err(AlienError::new(
                 CloudClientErrorData::RemoteResourceConflict {
@@ -1529,7 +1543,11 @@ mod tests {
                     "PutRetentionPolicy {} {}",
                     request.log_group_name, request.retention_in_days
                 ));
-                access(tagged.load(Ordering::SeqCst), request.log_group_name)
+                access(
+                    tagged.load(Ordering::SeqCst),
+                    "PutRetentionPolicy",
+                    request.log_group_name,
+                )
             });
         Arc::new(logs)
     }
@@ -1543,7 +1561,7 @@ mod tests {
             serde_json::to_value(AwsBuildController::mock_ready("test-basic-build")).unwrap();
         let object = saved.as_object_mut().unwrap();
         object.remove("logRetentionDays");
-        object.remove("logGroupDeniedAction");
+        object.remove("logGroupDenial");
         let saved: AwsBuildController = serde_json::from_value(saved).unwrap();
 
         let projects = projects_with(&[(
@@ -1587,7 +1605,10 @@ mod tests {
         assert_eq!(executor.status(), ResourceStatus::Running);
         assert_eq!(
             collection_issues(&executor)[0].message,
-            retention_warning("setup was not allowed to call logs:CreateLogGroup")
+            retention_warning(&logs_access_denied::denial(
+                "CreateLogGroup",
+                "/aws/codebuild/test-basic-build"
+            ))
         );
 
         // Tagged for this deployment, the next setup update sets 365 days.

@@ -28,7 +28,7 @@ impl ResourceImporter for AwsBuildImporter {
             build_env_vars: Some(data.build_env_vars),
             // The template that created the project declares its log group with this retention.
             log_retention_days: Some(AWS_LOG_RETENTION_DAYS),
-            log_group_denied_action: None,
+            log_group_denial: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

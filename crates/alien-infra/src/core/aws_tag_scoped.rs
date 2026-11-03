@@ -19,6 +19,19 @@ pub(crate) fn is_remote_access_denied(error: &AlienError<CloudClientErrorData>) 
     )
 }
 
+/// What AWS said when it refused a call: the service's own message when the client kept it
+/// (it names the denied action and the caller), otherwise the error's message.
+pub(crate) fn remote_rejection_message(error: &AlienError<CloudClientErrorData>) -> String {
+    let mut source = error.source.as_deref();
+    while let Some(layer) = source {
+        if layer.code == "REMOTE_REQUEST_REJECTED" {
+            return layer.message.clone();
+        }
+        source = layer.source.as_deref();
+    }
+    error.message.clone()
+}
+
 pub(crate) fn is_remote_not_found(error: &AlienError<CloudClientErrorData>) -> bool {
     matches!(
         &error.error,
@@ -174,5 +187,148 @@ mod tests {
         let from_read =
             delete_tag_scoped(Err::<(), _>(denied()), || async { Err(not_found()) }).await;
         assert_eq!(from_read.unwrap(), TagScopedDelete::Gone);
+    }
+}
+
+/// CloudWatch Logs AccessDenied errors as the real client returns them.
+#[cfg(test)]
+pub(crate) mod logs_access_denied {
+    use std::collections::HashMap;
+
+    use alien_aws_clients::{
+        cloudwatch_logs::{CreateLogGroupRequest, PutRetentionPolicyRequest},
+        AwsCredentialProvider, CloudWatchLogsApi, CloudWatchLogsClient,
+    };
+    use alien_client_core::ErrorData as CloudClientErrorData;
+    use alien_core::{AwsClientConfig, AwsCredentials, AwsServiceOverrides};
+    use alien_error::{AlienError, ContextError};
+    use httpmock::{Method::POST, MockServer};
+
+    fn aws_message(action: &str, log_group_name: &str) -> String {
+        format!(
+            "User: arn:aws:sts::123456789012:assumed-role/test-management/session is not \
+             authorized to perform: logs:{action} on resource: \
+             arn:aws:logs:us-east-1:123456789012:log-group:{log_group_name} because no \
+             identity-based policy allows the logs:{action} action"
+        )
+    }
+
+    /// The body AWS returns to a role without the grant, as recorded (account id replaced).
+    fn recorded_body(action: &str, log_group_name: &str) -> String {
+        serde_json::json!({
+            "__type": "AccessDeniedException",
+            "Message": aws_message(action, log_group_name),
+        })
+        .to_string()
+    }
+
+    /// The error the client returns when AWS denies `action` (`CreateLogGroup` or
+    /// `PutRetentionPolicy`) on the group; `matches_the_real_client` checks it.
+    pub(crate) fn error(action: &str, log_group_name: &str) -> AlienError<CloudClientErrorData> {
+        AlienError::new(CloudClientErrorData::HttpResponseError {
+            message: "Request failed with HTTP 400: Bad Request".to_string(),
+            url: "https://logs.us-east-1.amazonaws.com/".to_string(),
+            http_status: 400,
+            http_request_text: None,
+            http_response_text: Some(recorded_body(action, log_group_name)),
+        })
+        .context(CloudClientErrorData::RemoteRequestRejected {
+            service: "CloudWatch Logs".to_string(),
+            http_status: 400,
+            provider_code: "AccessDeniedException".to_string(),
+            message: aws_message(action, log_group_name),
+        })
+        .context(CloudClientErrorData::RemoteAccessDenied {
+            resource_type: "CloudWatch Logs log group".to_string(),
+            resource_name: log_group_name.to_string(),
+        })
+    }
+
+    /// The text the controllers record for that denial.
+    pub(crate) fn denial(action: &str, log_group_name: &str) -> String {
+        format!(
+            "logs:{action} was denied: CloudWatch Logs rejected the request \
+             (AccessDeniedException): {}",
+            aws_message(action, log_group_name)
+        )
+    }
+
+    async fn real_client_error(
+        action: &str,
+        log_group_name: &str,
+    ) -> AlienError<CloudClientErrorData> {
+        let server = MockServer::start_async().await;
+        let body = recorded_body(action, log_group_name);
+        server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("x-amz-target", format!("Logs_20140328.{action}"));
+                then.status(400).body(body);
+            })
+            .await;
+        let client = CloudWatchLogsClient::new(
+            reqwest::Client::new(),
+            AwsCredentialProvider::from_config_sync(AwsClientConfig {
+                account_id: "123456789012".into(),
+                region: "us-east-1".into(),
+                credentials: AwsCredentials::AccessKeys {
+                    access_key_id: "test-access".into(),
+                    secret_access_key: "test-secret".into(),
+                    session_token: None,
+                },
+                service_overrides: Some(AwsServiceOverrides {
+                    endpoints: HashMap::from([("logs".into(), server.base_url())]),
+                }),
+            }),
+        );
+        let result = if action == "CreateLogGroup" {
+            client
+                .create_log_group(
+                    CreateLogGroupRequest::builder()
+                        .log_group_name(log_group_name.to_string())
+                        .build(),
+                )
+                .await
+        } else {
+            client
+                .put_retention_policy(
+                    PutRetentionPolicyRequest::builder()
+                        .log_group_name(log_group_name.to_string())
+                        .retention_in_days(365)
+                        .build(),
+                )
+                .await
+        };
+        result.expect_err("AWS denied the call")
+    }
+
+    /// The real client, given the recorded response, returns the error the controller tests use
+    /// (the outer two layers; the HTTP layer only differs in the mock server's address), and
+    /// the controllers read the same denial text from both.
+    #[tokio::test]
+    async fn matches_the_real_client() {
+        for action in ["CreateLogGroup", "PutRetentionPolicy"] {
+            let real = real_client_error(action, "/aws/lambda/test-func").await;
+            let used = error(action, "/aws/lambda/test-func");
+            assert_eq!(
+                serde_json::to_value(&real.error).unwrap(),
+                serde_json::to_value(&used.error).unwrap()
+            );
+            assert_eq!(real.message, used.message);
+            let (real_source, used_source) = (
+                real.source.as_deref().unwrap(),
+                used.source.as_deref().unwrap(),
+            );
+            assert_eq!(real_source.code, used_source.code);
+            assert_eq!(real_source.message, used_source.message);
+            assert!(super::is_remote_access_denied(&real));
+            assert_eq!(
+                format!(
+                    "logs:{action} was denied: {}",
+                    super::remote_rejection_message(&real)
+                ),
+                denial(action, "/aws/lambda/test-func")
+            );
+        }
     }
 }

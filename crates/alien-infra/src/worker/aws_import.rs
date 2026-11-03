@@ -76,7 +76,7 @@ impl ResourceImporter for AwsWorkerImporter {
             wait_for_lambda_started_at: None,
             // Ready sets the log group's retention on the first heartbeat.
             log_retention_days: None,
-            log_group_denied_action: None,
+            log_group_denial: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)
