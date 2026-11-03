@@ -150,6 +150,12 @@ impl CloudWatchClient {
             .unwrap_or_else(|| body.to_string());
 
         match status {
+            StatusCode::FORBIDDEN if matches!(code, "AccessDenied" | "AccessDeniedException") => {
+                Some(ErrorData::RemoteAccessDenied {
+                    resource_type: "CloudWatch".to_string(),
+                    resource_name: resource.to_string(),
+                })
+            }
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
                 Some(ErrorData::AuthenticationError { message })
             }
@@ -535,6 +541,62 @@ mod tests {
             "ListMetrics", "metrics", None).unwrap();
         assert!(
             matches!(mapped, ErrorData::InvalidClientConfig { message, .. } if message == "Expired next token")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_denied_call_is_reported_as_access_denied() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/")
+                    .body_contains("Action=ListMetrics");
+                // Recorded from monitoring.us-east-1.amazonaws.com for a role without
+                // cloudwatch:ListMetrics (account id masked).
+                then.status(403).body(
+                    r#"<ErrorResponse xmlns="http://monitoring.amazonaws.com/doc/2010-08-01/">
+  <Error>
+    <Type>Sender</Type>
+    <Code>AccessDenied</Code>
+    <Message>User: arn:aws:sts::000000000000:assumed-role/demo-no-cloudwatch/probe is not authorized to perform: cloudwatch:ListMetrics because no identity-based policy allows the cloudwatch:ListMetrics action</Message>
+  </Error>
+  <RequestId>55b65eaa-cf30-4139-9386-c5aff34d7e5b</RequestId>
+</ErrorResponse>"#,
+                );
+            })
+            .await;
+
+        let error = client(&server)
+            .await
+            .list_metrics(ListMetricsRequest {
+                namespace: Some("AWS/EC2".into()),
+                metric_name: None,
+                dimensions: Vec::new(),
+                next_token: None,
+                recently_active: None,
+                include_linked_accounts: None,
+                owning_account: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                &error.error,
+                Some(ErrorData::RemoteAccessDenied { resource_type, .. })
+                    if resource_type == "CloudWatch"
+            ),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_rejected_signature_stays_an_authentication_error() {
+        let mapped = CloudWatchClient::map_error(StatusCode::FORBIDDEN,
+            "<ErrorResponse><Error><Code>SignatureDoesNotMatch</Code><Message>bad signature</Message></Error></ErrorResponse>",
+            "ListMetrics", "metrics", None).unwrap();
+        assert!(
+            matches!(mapped, ErrorData::AuthenticationError { message } if message == "bad signature")
         );
     }
 
