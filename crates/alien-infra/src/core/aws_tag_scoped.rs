@@ -190,7 +190,7 @@ mod tests {
     }
 }
 
-/// CloudWatch Logs AccessDenied errors as the real client returns them.
+/// CloudWatch Logs errors as the real client returns them.
 #[cfg(test)]
 pub(crate) mod logs_access_denied {
     use std::collections::HashMap;
@@ -244,6 +244,24 @@ pub(crate) mod logs_access_denied {
         })
     }
 
+    /// AWS's answer to a throttled call, as recorded.
+    const THROTTLED_BODY: &str = r#"{"__type":"ThrottlingException","message":"Rate exceeded"}"#;
+
+    /// The error the client returns when AWS throttles a call; `matches_the_real_client`
+    /// checks it.
+    pub(crate) fn throttled() -> AlienError<CloudClientErrorData> {
+        AlienError::new(CloudClientErrorData::HttpResponseError {
+            message: "Request failed with HTTP 400: Bad Request".to_string(),
+            url: "https://logs.us-east-1.amazonaws.com/".to_string(),
+            http_status: 400,
+            http_request_text: None,
+            http_response_text: Some(THROTTLED_BODY.to_string()),
+        })
+        .context(CloudClientErrorData::RateLimitExceeded {
+            message: "Rate exceeded".to_string(),
+        })
+    }
+
     /// The text the controllers record for that denial.
     pub(crate) fn denial(action: &str, log_group_name: &str) -> String {
         format!(
@@ -256,9 +274,9 @@ pub(crate) mod logs_access_denied {
     async fn real_client_error(
         action: &str,
         log_group_name: &str,
+        body: String,
     ) -> AlienError<CloudClientErrorData> {
         let server = MockServer::start_async().await;
-        let body = recorded_body(action, log_group_name);
         server
             .mock_async(|when, then| {
                 when.method(POST)
@@ -299,7 +317,7 @@ pub(crate) mod logs_access_denied {
                 )
                 .await
         };
-        result.expect_err("AWS denied the call")
+        result.expect_err("AWS refused the call")
     }
 
     /// The real client, given the recorded response, returns the error the controller tests use
@@ -308,7 +326,12 @@ pub(crate) mod logs_access_denied {
     #[tokio::test]
     async fn matches_the_real_client() {
         for action in ["CreateLogGroup", "PutRetentionPolicy"] {
-            let real = real_client_error(action, "/aws/lambda/test-func").await;
+            let real = real_client_error(
+                action,
+                "/aws/lambda/test-func",
+                recorded_body(action, "/aws/lambda/test-func"),
+            )
+            .await;
             let used = error(action, "/aws/lambda/test-func");
             assert_eq!(
                 serde_json::to_value(&real.error).unwrap(),
@@ -330,5 +353,19 @@ pub(crate) mod logs_access_denied {
                 denial(action, "/aws/lambda/test-func")
             );
         }
+
+        let real = real_client_error(
+            "PutRetentionPolicy",
+            "/aws/lambda/test-func",
+            THROTTLED_BODY.to_string(),
+        )
+        .await;
+        let used = throttled();
+        assert_eq!(
+            serde_json::to_value(&real.error).unwrap(),
+            serde_json::to_value(&used.error).unwrap()
+        );
+        assert_eq!(real.message, used.message);
+        assert!(!super::is_remote_access_denied(&real));
     }
 }

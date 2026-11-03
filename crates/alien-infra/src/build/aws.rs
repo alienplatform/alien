@@ -2,12 +2,11 @@ use std::{collections::HashMap, time::Duration};
 use tracing::{debug, info, warn};
 
 use crate::core::{
-    aws_ownership::is_tagged_as_ours, EnvironmentVariableBuilder, ResourceControllerContext,
+    aws_ownership::is_tagged_as_ours, aws_tag_scoped::is_remote_access_denied,
+    EnvironmentVariableBuilder, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::cloudwatch_logs::{
-    CreateLogGroupRequest, PutRetentionPolicyRequest, TagResourceRequest,
-};
+use alien_aws_clients::cloudwatch_logs::{CreateLogGroupRequest, PutRetentionPolicyRequest};
 use alien_aws_clients::codebuild::{
     BatchGetProjectsRequest, CloudWatchLogsConfig, CodeBuildApi, CreateProjectRequest,
     DeleteProjectRequest, EnvironmentVariable, LogsConfig, Project, ProjectArtifacts,
@@ -16,9 +15,9 @@ use alien_aws_clients::codebuild::{
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     standard_resource_tags, AwsCodeBuildHeartbeatData, Build, BuildHeartbeatData,
-    BuildHeartbeatStatus, BuildOutputs, HeartbeatBackend, ObservedHealth, Platform,
-    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceRef,
-    ResourceStatus, AWS_LOG_RETENTION_DAYS,
+    BuildHeartbeatStatus, BuildOutputs, HeartbeatBackend, InitialSetupAuthority, ObservedHealth,
+    Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceRef, ResourceStatus, AWS_LOG_RETENTION_DAYS,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -33,79 +32,6 @@ fn get_aws_project_name(prefix: &str, name: &str) -> String {
 /// The CloudWatch Logs group CodeBuild writes a project's logs to.
 fn build_log_group_name(project_name: &str) -> String {
     format!("/aws/codebuild/{project_name}")
-}
-
-/// Creates the project's log group, tagged for this deployment and kept for the retention
-/// period, before CodeBuild would create it untagged on the first build and keep its logs
-/// forever. A group that exists already is this project's: it carries the project's name, and
-/// this runs only once the project is recorded as ours. It is tagged and given the retention
-/// period, which also fixes the groups CodeBuild created for earlier versions. Only direct
-/// setup runs this; a CloudFormation or Terraform setup declares the same group itself.
-///
-/// To verify against AWS: run a direct setup with a build, then
-/// `aws logs describe-log-groups --log-group-name-prefix /aws/codebuild/<prefix>-<build>`
-/// shows `retentionInDays` 365 and `aws logs list-tags-for-resource` the deployment's tags.
-async fn ensure_log_group(
-    ctx: &ResourceControllerContext<'_>,
-    project_name: &str,
-    resource_id: &str,
-) -> Result<()> {
-    let aws_cfg = ctx.get_aws_config()?;
-    let logs = ctx.service_provider.get_aws_logs_client(aws_cfg).await?;
-    let log_group_name = build_log_group_name(project_name);
-    let tags = standard_resource_tags(ctx.resource_prefix, resource_id);
-
-    match logs
-        .create_log_group(
-            CreateLogGroupRequest::builder()
-                .log_group_name(log_group_name.clone())
-                .tags(tags.clone())
-                .build(),
-        )
-        .await
-    {
-        Ok(()) => info!(log_group = %log_group_name, "Created build log group"),
-        Err(error)
-            if matches!(
-                error.error,
-                Some(CloudClientErrorData::RemoteResourceConflict { .. })
-            ) =>
-        {
-            info!(log_group = %log_group_name, "Build log group exists; tagging it for this deployment");
-            logs.tag_resource(
-                TagResourceRequest::builder()
-                    .resource_arn(format!(
-                        "arn:aws:logs:{}:{}:log-group:{log_group_name}",
-                        aws_cfg.region, aws_cfg.account_id
-                    ))
-                    .tags(tags)
-                    .build(),
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to tag log group '{log_group_name}'"),
-                resource_id: Some(resource_id.to_string()),
-            })?;
-        }
-        Err(error) => {
-            return Err(error.context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create log group '{log_group_name}'"),
-                resource_id: Some(resource_id.to_string()),
-            }))
-        }
-    }
-
-    logs.put_retention_policy(
-        PutRetentionPolicyRequest::builder()
-            .log_group_name(log_group_name.clone())
-            .retention_in_days(AWS_LOG_RETENTION_DAYS)
-            .build(),
-    )
-    .await
-    .context(ErrorData::CloudPlatformError {
-        message: format!("Failed to set the retention of log group '{log_group_name}'"),
-        resource_id: Some(resource_id.to_string()),
-    })
 }
 
 /// What holds a CodeBuild project name, as far as this deployment is concerned.
@@ -186,6 +112,14 @@ pub struct AwsBuildController {
     pub(crate) project_name: Option<String>,
     /// The computed environment variables for this build.
     pub(crate) build_env_vars: Option<HashMap<String, String>>,
+    /// Retention in days last set on the project's log group. Builds from earlier versions
+    /// have none, and the next setup run updates them to set it.
+    #[serde(default)]
+    pub(crate) log_retention_days: Option<i32>,
+    /// The project logs to a group CodeBuild created, without tags, for an earlier version.
+    /// Its logs never expire, and it is left as it is.
+    #[serde(default)]
+    pub(crate) log_group_untagged: bool,
 }
 
 #[controller]
@@ -362,8 +296,9 @@ phases:
         // Only once the project is recorded as ours, so a same-name group of someone else's
         // project is never changed, even by a setup identity allowed more than the generated
         // policy. Create and update both pass here before any build runs.
-        if let Some(project_name) = &self.project_name {
-            ensure_log_group(ctx, project_name, &config.id).await?;
+        if let Some(project_name) = self.project_name.clone() {
+            self.ensure_log_group(ctx, &project_name, &config.id)
+                .await?;
         }
 
         // Apply resource-scoped permissions from the stack using the centralized helper.
@@ -655,6 +590,17 @@ phases:
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
+    /// A setup run updates a build whose log group has not had this version's retention
+    /// period set, such as one from an earlier version, even when its config is unchanged.
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        Ok(
+            ctx.initial_setup_authority == InitialSetupAuthority::DirectSetup
+                && ctx.deployment_config.setup_run
+                && self.log_retention_days != Some(AWS_LOG_RETENTION_DAYS)
+                && !self.log_group_untagged,
+        )
+    }
+
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         self.project_arn.as_ref().map(|arn| {
             ResourceOutputs::new(BuildOutputs {
@@ -688,6 +634,89 @@ phases:
 // Separate impl block for helper methods
 impl AwsBuildController {
     // ─────────────── HELPER METHODS ────────────────────────────
+    /// Creates the project's log group, tagged for this deployment, and gives it the retention
+    /// period, before CodeBuild would create it untagged on the first build and keep its logs
+    /// forever. A group that exists already and carries this deployment's tag (an earlier
+    /// attempt) gets the retention period too.
+    ///
+    /// The grants are bound to this deployment's tag, so another deployment whose name extends
+    /// this one cannot change these groups, nor this one theirs. AWS refuses CreateLogGroup on
+    /// a group tagged for another deployment, and answers that an untagged group exists; that
+    /// is a group CodeBuild created for an earlier version, which the retention grant cannot
+    /// reach. Its logs never expire, so it is left as it is. Only direct setup runs this; a
+    /// CloudFormation or Terraform setup declares the same group itself.
+    ///
+    /// To verify against AWS: run a direct setup with a build, then
+    /// `aws logs describe-log-groups --log-group-name-prefix /aws/codebuild/<prefix>-<build>`
+    /// shows `retentionInDays` 365 and `aws logs list-tags-for-resource` the deployment's tags.
+    async fn ensure_log_group(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        project_name: &str,
+        resource_id: &str,
+    ) -> Result<()> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let logs = ctx.service_provider.get_aws_logs_client(aws_cfg).await?;
+        let log_group_name = build_log_group_name(project_name);
+
+        let created = match logs
+            .create_log_group(
+                CreateLogGroupRequest::builder()
+                    .log_group_name(log_group_name.clone())
+                    .tags(standard_resource_tags(ctx.resource_prefix, resource_id))
+                    .build(),
+            )
+            .await
+        {
+            Ok(()) => true,
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(CloudClientErrorData::RemoteResourceConflict { .. })
+                ) =>
+            {
+                false
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to create log group '{log_group_name}'"),
+                    resource_id: Some(resource_id.to_string()),
+                }))
+            }
+        };
+
+        match logs
+            .put_retention_policy(
+                PutRetentionPolicyRequest::builder()
+                    .log_group_name(log_group_name.clone())
+                    .retention_in_days(AWS_LOG_RETENTION_DAYS)
+                    .build(),
+            )
+            .await
+        {
+            Ok(()) => {
+                info!(log_group = %log_group_name, created, "Set the build log group's retention");
+                self.log_retention_days = Some(AWS_LOG_RETENTION_DAYS);
+                self.log_group_untagged = false;
+                Ok(())
+            }
+            // The identity passed CreateLogGroup's tag check, which comes with this grant, so
+            // the group lacks this deployment's tag.
+            Err(error) if !created && is_remote_access_denied(&error) => {
+                info!(
+                    log_group = %log_group_name,
+                    "Build log group was created untagged by CodeBuild; its logs never expire, leaving it as it is"
+                );
+                self.log_group_untagged = true;
+                Ok(())
+            }
+            Err(error) => Err(error.context(ErrorData::CloudPlatformError {
+                message: format!("Failed to set the retention of log group '{log_group_name}'"),
+                resource_id: Some(resource_id.to_string()),
+            })),
+        }
+    }
+
     async fn get_service_account_arn(
         &self,
         ctx: &ResourceControllerContext<'_>,
@@ -745,6 +774,8 @@ impl AwsBuildController {
             )),
             project_name: Some(project_name.to_string()),
             build_env_vars: Some(HashMap::new()),
+            log_retention_days: None,
+            log_group_untagged: false,
             _internal_stay_count: None,
         }
     }
@@ -836,7 +867,10 @@ mod tests {
         UpdateProjectResponse,
     };
     use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
-    use alien_core::{standard_resource_tags, Build, BuildOutputs, Platform, ResourceStatus};
+    use alien_core::{
+        standard_resource_tags, Build, BuildOutputs, InitialSetupAuthority, Platform,
+        ResourceStatus,
+    };
     use alien_error::AlienError;
     use rstest::rstest;
 
@@ -937,11 +971,14 @@ mod tests {
 
     type Calls = Arc<Mutex<Vec<String>>>;
 
-    /// The project's log group in CloudWatch Logs.
+    /// The project's log group in CloudWatch Logs, as AWS answers the tag-bound grants.
     #[derive(Clone, Copy)]
     enum LogGroup {
         Missing,
-        /// CodeBuild created it, untagged, for an earlier version.
+        /// An earlier attempt created it, tagged for this deployment.
+        Tagged,
+        /// CodeBuild created it, untagged, for an earlier version: CreateLogGroup says it
+        /// exists and the retention grant does not reach it.
         CreatedByCodeBuild,
         /// The setup identity has no log grants.
         Denied,
@@ -960,7 +997,7 @@ mod tests {
             ));
             match group {
                 LogGroup::Missing => Ok(()),
-                LogGroup::CreatedByCodeBuild => Err(AlienError::new(
+                LogGroup::Tagged | LogGroup::CreatedByCodeBuild => Err(AlienError::new(
                     CloudClientErrorData::RemoteResourceConflict {
                         resource_type: "CloudWatch Logs log group".to_string(),
                         resource_name: request.log_group_name,
@@ -973,21 +1010,19 @@ mod tests {
                 )),
             }
         });
-        let recorded = calls.clone();
-        logs.expect_tag_resource().returning(move |request| {
-            recorded.lock().unwrap().push(format!(
-                "TagResource {} deployment={}",
-                request.resource_arn, request.tags["deployment"]
-            ));
-            Ok(())
-        });
         logs.expect_put_retention_policy()
             .returning(move |request| {
                 calls.lock().unwrap().push(format!(
                     "PutRetentionPolicy {} {}",
                     request.log_group_name, request.retention_in_days
                 ));
-                Ok(())
+                match group {
+                    LogGroup::CreatedByCodeBuild => Err(logs_access_denied::error(
+                        "PutRetentionPolicy",
+                        &request.log_group_name,
+                    )),
+                    _ => Ok(()),
+                }
             });
         Arc::new(logs)
     }
@@ -1304,6 +1339,8 @@ mod tests {
             project_arn: None,
             project_name: None,
             build_env_vars: Some(HashMap::new()),
+            log_retention_days: None,
+            log_group_untagged: false,
             _internal_stay_count: None,
         };
         let mut executor = executor_with(basic_build(), controller, &projects, false).await;
@@ -1358,6 +1395,8 @@ mod tests {
             project_arn: None,
             project_name: None,
             build_env_vars: None,
+            log_retention_days: None,
+            log_group_untagged: false,
             _internal_stay_count: None,
         };
         let mut executor = executor_with(basic_build(), controller, &projects, false).await;
@@ -1439,35 +1478,79 @@ mod tests {
         );
     }
 
-    /// A build from an earlier version logs to the untagged group CodeBuild created. The next
-    /// setup update tags it for this deployment and gives it 365 days.
-    #[tokio::test]
-    async fn a_setup_update_adopts_the_group_codebuild_created() {
+    /// A build from an earlier version, as its saved state reads.
+    async fn executor_for_earlier_build(
+        setup_run: bool,
+        authority: InitialSetupAuthority,
+        group: LogGroup,
+        calls: Calls,
+    ) -> SingleControllerExecutor {
         let projects = projects_with(&[(
             "test-basic-build",
             standard_resource_tags("test", "basic-build"),
         )]);
-        let mut codebuild = fake_codebuild(projects.clone(), false);
+        let mut codebuild = fake_codebuild(projects, false);
         codebuild
             .expect_update_project()
             .returning(|request| Ok(create_successful_update_response(&request.name)));
-        let calls = Calls::default();
-        let mut executor = SingleControllerExecutor::builder()
+        // Earlier versions saved no log group fields.
+        let mut saved =
+            serde_json::to_value(AwsBuildController::mock_ready("test-basic-build")).unwrap();
+        let fields = saved.as_object_mut().unwrap();
+        assert!(fields.remove("logRetentionDays").is_some());
+        assert!(fields.remove("logGroupUntagged").is_some());
+        let saved: AwsBuildController =
+            serde_json::from_value(saved).expect("state saved by an earlier version");
+        SingleControllerExecutor::builder()
             .resource(basic_build())
-            .controller(AwsBuildController::mock_ready("test-basic-build"))
+            .controller(saved)
             .platform(Platform::Aws)
+            .setup_run(setup_run)
+            .initial_setup_authority(authority)
             .service_provider(setup_mock_service_provider_with_logs(
                 Arc::new(codebuild),
-                fake_logs(calls.clone(), LogGroup::CreatedByCodeBuild),
+                fake_logs(calls, group),
             ))
             .with_test_dependencies()
             .build()
             .await
-            .unwrap();
+            .unwrap()
+    }
 
-        let mut updated = basic_build();
-        updated.environment = HashMap::from([("STAGE".to_string(), "two".to_string())]);
-        executor.update(updated).unwrap();
+    /// A direct setup run updates a build from an earlier version with its config unchanged,
+    /// and the update gives its log group 365 days. Runs without setup, and template setups
+    /// (which declare the group themselves), leave it alone.
+    #[tokio::test]
+    async fn a_setup_run_gives_a_build_from_an_earlier_version_365_days() {
+        for (setup_run, authority) in [
+            (false, InitialSetupAuthority::DirectSetup),
+            (true, InitialSetupAuthority::ImportedHandoff),
+        ] {
+            let executor = executor_for_earlier_build(
+                setup_run,
+                authority,
+                LogGroup::Tagged,
+                Calls::default(),
+            )
+            .await;
+            assert!(
+                !executor.needs_update().unwrap(),
+                "{setup_run} {authority:?}"
+            );
+        }
+
+        let calls = Calls::default();
+        let mut executor = executor_for_earlier_build(
+            true,
+            InitialSetupAuthority::DirectSetup,
+            LogGroup::Tagged,
+            calls.clone(),
+        )
+        .await;
+        assert!(executor.needs_update().unwrap());
+
+        // What the deployment executor does when needs_update holds: an update to the same config.
+        executor.update(basic_build()).unwrap();
         executor.run_until_terminal().await.unwrap();
 
         assert_eq!(executor.status(), ResourceStatus::Running);
@@ -1475,10 +1558,41 @@ mod tests {
             *calls.lock().unwrap(),
             vec![
                 "CreateLogGroup /aws/codebuild/test-basic-build deployment=test".to_string(),
-                "TagResource arn:aws:logs:us-east-1:123456789012:log-group:/aws/codebuild/test-basic-build deployment=test".to_string(),
                 "PutRetentionPolicy /aws/codebuild/test-basic-build 365".to_string(),
             ]
         );
+        assert!(
+            !executor.needs_update().unwrap(),
+            "the next setup run has nothing to do"
+        );
+    }
+
+    /// The untagged group CodeBuild created for an earlier version is out of the grants' reach.
+    /// Its logs never expire, so the update leaves it as it is, and later setup runs do not
+    /// retry it.
+    #[tokio::test]
+    async fn a_setup_run_leaves_the_untagged_group_codebuild_created() {
+        let calls = Calls::default();
+        let mut executor = executor_for_earlier_build(
+            true,
+            InitialSetupAuthority::DirectSetup,
+            LogGroup::CreatedByCodeBuild,
+            calls.clone(),
+        )
+        .await;
+
+        executor.update(basic_build()).unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                "CreateLogGroup /aws/codebuild/test-basic-build deployment=test".to_string(),
+                "PutRetentionPolicy /aws/codebuild/test-basic-build 365".to_string(),
+            ]
+        );
+        assert!(!executor.needs_update().unwrap());
     }
 
     /// A setup identity without the log grants fails the create, with AWS's answer, instead

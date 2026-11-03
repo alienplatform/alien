@@ -2879,18 +2879,15 @@ impl AwsWorkerController {
             && (self.log_group_denial.is_none()
                 || log_retention_retry_due(&aws_worker_name, Utc::now()))
         {
-            // The retention period does not affect whether the worker serves, so a failure
-            // here is retried on the next heartbeat instead of failing it.
-            if let Err(error) = self
-                .ensure_log_group(ctx, aws_cfg, &aws_worker_name, &worker_config.id)
+            // A role without the log grants is recorded and warned about, not an error.
+            self.ensure_log_group(ctx, aws_cfg, &aws_worker_name, &worker_config.id)
                 .await
-            {
-                warn!(
-                    worker = %worker_config.id,
-                    code = %error.code,
-                    "Could not set the worker log group's retention; the next heartbeat retries"
-                );
-            }
+                .context(ErrorData::CloudPlatformError {
+                    message:
+                        "Failed to set the worker log group's retention during heartbeat check"
+                            .to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                })?;
         }
 
         emit_aws_lambda_worker_heartbeat(
@@ -11835,6 +11832,40 @@ mod tests {
                     "CreateLogGroup",
                     LOG_GROUP
                 ))]
+            );
+        }
+
+        /// Only a denial is a warning: any other failure fails the heartbeat with its cause.
+        #[tokio::test]
+        async fn a_throttled_retention_call_fails_the_heartbeat() {
+            super::FORCED_LOG_RETENTION_RETRY.with(|forced| forced.set(false));
+            let mut logs = MockCloudWatchLogsApi::new();
+            logs.expect_create_log_group().returning(|_| Ok(()));
+            logs.expect_put_retention_policy()
+                .returning(|_| Err(logs_access_denied::throttled()));
+            let mut executor = ready_executor(logs).await;
+
+            let error = executor
+                .step()
+                .await
+                .expect_err("the throttled call fails the heartbeat");
+
+            assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
+            assert!(
+                error
+                    .message
+                    .contains("Failed to set the worker log group's retention"),
+                "{error:?}"
+            );
+            let set = error.source.as_deref().expect("the retention call's error");
+            assert!(
+                set.message
+                    .contains("Failed to set the retention of log group"),
+                "{error:?}"
+            );
+            assert_eq!(
+                set.source.as_deref().map(|cause| cause.code.as_str()),
+                Some("RATE_LIMIT_EXCEEDED")
             );
         }
 
