@@ -1,0 +1,82 @@
+{
+  "id": "service-account/setup",
+  "description": "Allows a CloudFormation or Terraform setup to manage the managed policies it attaches to the roles it creates. Only the setup identity holds it; management and runtime roles do not.",
+  "platforms": {
+    "aws": [
+      // Setup grants roles their permissions through customer-managed policies. Terraform names
+      // them `<prefix>-<role>-setup-<hash>`; CloudFormation generates
+      // `<stack name>-<logical ID>-<random suffix>` with a logical ID containing
+      // `RoleManagedPermissions`. CloudFormation cannot tag managed policies (AWS::IAM::ManagedPolicy
+      // has no Tags), so these grants are bound by those names. The name alone also matches a
+      // stack whose name starts with this one plus a dash; that reaches no further than the setup
+      // identity's existing iam:PutRolePolicy on `<prefix>-*` roles, which is bound the same way.
+      {
+        "label": "setup-role-managed-policies",
+        "grant": {
+          "actions": [
+            "iam:CreatePolicy",
+            "iam:GetPolicy",
+            "iam:GetPolicyVersion",
+            "iam:ListPolicyVersions",
+            "iam:CreatePolicyVersion",
+            "iam:DeletePolicyVersion",
+            "iam:DeletePolicy",
+            "iam:ListEntitiesForPolicy"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-*-setup-*",
+              "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-*RoleManagedPermissions*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-${resourceName}-setup-*",
+              "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-*RoleManagedPermissions*"
+            ]
+          }
+        }
+      },
+      // Attaching is limited to those setup policies, never an AWS managed or other policy, and
+      // to roles tagged for this stack.
+      {
+        "label": "attach-setup-role-policies",
+        "grant": {
+          "actions": ["iam:AttachRolePolicy", "iam:DetachRolePolicy"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              },
+              "StringLike": {
+                "iam:PolicyARN": [
+                  "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-*-setup-*",
+                  "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-*RoleManagedPermissions*"
+                ]
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              },
+              "StringLike": {
+                "iam:PolicyARN": [
+                  "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-${resourceName}-setup-*",
+                  "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-*RoleManagedPermissions*"
+                ]
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

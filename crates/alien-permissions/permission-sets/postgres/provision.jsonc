@@ -251,8 +251,8 @@
         }
       },
       {
-        // CloudFormation reads and sets a new parameter group's parameters, and creates the
-        // cluster in the new groups, within seconds of creating them. RDS authorizes those calls
+        // CloudFormation sets a new parameter group's parameters, and creates the cluster in the
+        // new groups, within seconds of creating them. RDS authorizes those calls
         // before the create-time tags are visible to it (a describe in the same second was denied
         // live), so the tag check is IfExists: a group tagged for another stack is still denied.
         // CreateDBCluster is authorized against the groups it names as well.
@@ -261,9 +261,7 @@
         "grant": {
           "actions": [
             "rds:CreateDBCluster",
-            "rds:DescribeDBClusterParameters",
             "rds:ModifyDBClusterParameterGroup",
-            "rds:ResetDBClusterParameterGroup",
             "rds:DeleteDBClusterParameterGroup",
             "rds:DeleteDBSubnetGroup"
           ]
@@ -295,12 +293,11 @@
         }
       },
       {
-        // CloudFormation reboots the writer to apply pending-reboot cluster parameters. IfExists
-        // keeps untagged runtime instances working (see create-aurora-instances).
+        // IfExists keeps untagged runtime instances working (see create-aurora-instances).
         "label": "manage-aurora-instances",
-        "description": "Change, restart and delete this application's Aurora instances.",
+        "description": "Change and delete this application's Aurora instances.",
         "grant": {
-          "actions": ["rds:ModifyDBInstance", "rds:RebootDBInstance", "rds:DeleteDBInstance"]
+          "actions": ["rds:ModifyDBInstance", "rds:DeleteDBInstance"]
         },
         "binding": {
           "stack": {

@@ -41,35 +41,6 @@
             "resources": ["arn:aws:s3:::${resourceName}", "arn:aws:s3:::${resourceName}/*"]
           }
         }
-      },
-      {
-        // The setup templates set bucket ownership controls, and the Terraform AWS provider reads
-        // every bucket sub-configuration on each refresh, failing the plan on a denied read.
-        // These read configuration only, never object data.
-        "label": "setup-bucket-configuration",
-        "description": "Set ownership controls and read the bucket configuration the setup templates manage.",
-        "grant": {
-          "actions": [
-            "s3:PutBucketOwnershipControls",
-            "s3:GetBucketOwnershipControls",
-            "s3:GetBucketCORS",
-            "s3:GetBucketWebsite",
-            "s3:GetAccelerateConfiguration",
-            "s3:GetBucketRequestPayment",
-            "s3:GetBucketLogging",
-            "s3:GetReplicationConfiguration",
-            "s3:GetBucketObjectLockConfiguration",
-            "s3:ListTagsForResource"
-          ]
-        },
-        "binding": {
-          "stack": {
-            "resources": ["arn:aws:s3:::${stackPrefix}-*"]
-          },
-          "resource": {
-            "resources": ["arn:aws:s3:::${resourceName}"]
-          }
-        }
       }
     ],
     "gcp": [

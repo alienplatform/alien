@@ -55,7 +55,7 @@ pub fn initial_setup_permission_set_ids(stack: &Stack) -> Vec<String> {
         }
     }
 
-    let cross_cutting = ["service-account/provision"];
+    let cross_cutting = ["service-account/provision", "service-account/setup"];
 
     for id in cross_cutting {
         if get_permission_set(id).is_some() && !set_ids.contains(&id.to_string()) {

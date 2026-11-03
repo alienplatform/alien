@@ -4,6 +4,67 @@
   "platforms": {
     "aws": [
       {
+        // CloudFormation reads a parameter group back right after creating it and resets
+        // parameters it drops (also when rolling back), before RDS sees the create-time tags, so
+        // the tag check is IfExists: a group tagged for another stack is denied.
+        "label": "read-and-reset-aurora-parameters",
+        "description": "Read and reset the parameters of this application's cluster parameter group.",
+        "grant": {
+          "actions": ["rds:DescribeDBClusterParameters", "rds:ResetDBClusterParameterGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-*"],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        // The CloudFormation instance handler reboots the writer to apply pending-reboot cluster
+        // parameters. Instances are tagged by both templates.
+        "label": "reboot-aurora-writer",
+        "description": "Restart this application's Aurora writer instance.",
+        "grant": {
+          "actions": ["rds:RebootDBInstance"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
         // The CloudFormation secret is created with GenerateSecretString, which calls
         // GetRandomPassword. AWS defines no resource type or condition key for it, so it can only
         // be granted on "*". It returns a random string and reads or changes nothing.
