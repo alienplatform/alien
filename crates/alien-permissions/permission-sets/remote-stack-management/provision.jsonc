@@ -11,10 +11,14 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-*"]
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-*"
+            ]
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-*"]
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-*"
+            ]
           }
         }
       },
@@ -38,10 +42,14 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-ManagementRoleManagementPolicy*"]
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-ManagementRoleManagementPolicy*"
+            ]
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-ManagementRoleManagementPolicy*"]
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-ManagementRoleManagementPolicy*"
+            ]
           }
         }
       },
