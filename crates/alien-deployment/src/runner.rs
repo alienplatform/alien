@@ -1388,6 +1388,7 @@ mod tests {
                         } else {
                             vec![]
                         },
+                        ..Default::default()
                     })
                 });
             let delete_lifecycle = lifecycle_present.clone();

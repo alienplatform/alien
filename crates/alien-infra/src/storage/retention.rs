@@ -711,7 +711,7 @@ mod tests {
                 Ok(())
             });
         api.expect_get_bucket_lifecycle_configuration()
-            .returning(|_| Ok(alien_aws_clients::s3::LifecycleConfiguration { rules: vec![] }));
+            .returning(|_| Ok(alien_aws_clients::s3::LifecycleConfiguration::default()));
         let api = Arc::new(api);
         let mut provider = MockPlatformServiceProvider::new();
         provider
@@ -799,7 +799,7 @@ mod tests {
                     Ok(())
                 });
             api.expect_get_bucket_lifecycle_configuration()
-                .returning(|_| Ok(alien_aws_clients::s3::LifecycleConfiguration { rules: vec![] }));
+                .returning(|_| Ok(alien_aws_clients::s3::LifecycleConfiguration::default()));
             let api = Arc::new(api);
             let mut provider = MockPlatformServiceProvider::new();
             provider
@@ -898,7 +898,7 @@ mod tests {
             });
             api.expect_get_bucket_lifecycle_configuration()
                 .times(usize::from(accepted))
-                .returning(|_| Ok(alien_aws_clients::s3::LifecycleConfiguration { rules: vec![] }));
+                .returning(|_| Ok(alien_aws_clients::s3::LifecycleConfiguration::default()));
             let api = Arc::new(api);
             let mut provider = MockPlatformServiceProvider::new();
             provider
@@ -972,7 +972,7 @@ mod tests {
                 Ok(alien_core::standard_resource_tags("owned", "data"))
             });
         api.expect_get_bucket_lifecycle_configuration()
-            .returning(|_| Ok(alien_aws_clients::s3::LifecycleConfiguration { rules: vec![] }));
+            .returning(|_| Ok(alien_aws_clients::s3::LifecycleConfiguration::default()));
         let read = policy.clone();
         api.expect_get_bucket_policy().times(4).returning(move |_| {
             Ok(GetBucketPolicyOutput {
@@ -1067,6 +1067,7 @@ mod tests {
                         .build(),
                 )
                 .build()],
+            ..Default::default()
         };
         let mut sequence = mockall::Sequence::new();
         api.expect_get_bucket_lifecycle_configuration()
