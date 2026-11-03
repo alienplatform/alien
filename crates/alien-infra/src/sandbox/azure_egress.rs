@@ -3,11 +3,11 @@
 use alien_core::{import::data::AzureSandboxNetwork, sandbox_egress};
 use alien_error::{AlienError, Context};
 
-use super::{egress, AzureSandboxController};
+use super::{AzureSandboxController, egress};
 use crate::{
-    core::{state_utils::StackResourceStateExt, ResourceControllerContext},
-    network::{validate_azure_sandbox_network, AzureNetworkController},
     ErrorData, Result,
+    core::{ResourceControllerContext, state_utils::StackResourceStateExt},
+    network::{AzureNetworkController, validate_azure_sandbox_network},
 };
 
 /// Records the signing key's public half in `public_key` and returns the sandbox's binding. The

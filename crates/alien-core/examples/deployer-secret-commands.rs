@@ -1,7 +1,4 @@
-use alien_core::{
-    deployer_secret_location, deployer_secret_vault_key, DeployerSecretLocationContext,
-    VaultBinding,
-};
+use alien_core::{deployer_secret_location, deployer_secret_vault_key, DeployerSecretLocationContext, VaultBinding};
 fn main() {
     let context = DeployerSecretLocationContext {
         aws_account_id: Some("123456789012".into()),

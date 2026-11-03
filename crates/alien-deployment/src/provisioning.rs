@@ -685,9 +685,7 @@ mod tests {
             controller.transition_to_update().unwrap();
             controller.transition_to_failure();
             dependency.status = controller.get_status();
-            dependency
-                .set_internal_controller(Some(controller))
-                .unwrap();
+            dependency.set_internal_controller(Some(controller)).unwrap();
             dependency.error = Some(
                 AlienError::new(ErrorData::StackExecutionFailed {
                     message: "denied".to_string(),
@@ -724,12 +722,7 @@ mod tests {
         let mut state = handed_back_after_interruption(true).await;
         for _ in 0..8 {
             state = step(state).await;
-            assert_ne!(
-                state.status,
-                DeploymentStatus::UpdateFailed,
-                "{:?}",
-                state.error
-            );
+            assert_ne!(state.status, DeploymentStatus::UpdateFailed, "{:?}", state.error);
             if state.status == DeploymentStatus::Running {
                 break;
             }

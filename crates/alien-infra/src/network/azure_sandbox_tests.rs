@@ -1,6 +1,6 @@
 use super::*;
 use alien_azure_clients::azure::network::MockNetworkApi;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const PARENT: &str = "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network";
 fn arm(kind: &str, name: &str) -> String {
@@ -168,11 +168,13 @@ async fn refuse_changed_nat_route_delegation_and_peering() {
     }
     let (network, mut vnet, nsg, nat, public) = fixture();
     vnet["properties"]["virtualNetworkPeerings"] = json!([{"name":"peer"}]);
-    assert!(check(&network, vnet, nsg, nat, public)
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("peering"));
+    assert!(
+        check(&network, vnet, nsg, nat, public)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("peering")
+    );
 }
 
 #[tokio::test]

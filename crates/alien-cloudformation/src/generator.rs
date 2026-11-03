@@ -2057,9 +2057,10 @@ fn add_compute_parameters(
             );
             parameter.min_value = Some(CfExpression::from(range.min));
             parameter.max_value = Some(CfExpression::from(range.max));
-            template
-                .parameters
-                .insert(compute_data_disk_parameter_name(&group.group_id), parameter);
+            template.parameters.insert(
+                compute_data_disk_parameter_name(&group.group_id),
+                parameter,
+            );
         }
 
         // Setup preflights add workloads the source does not have (an internet sandbox's

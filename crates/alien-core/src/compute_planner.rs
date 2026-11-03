@@ -2171,10 +2171,7 @@ mod tests {
             .expect("AWS selection should include a machine");
         let spec = instance_catalog::find_instance_type(Platform::Aws, machine)
             .expect("selected machine should exist in the catalog");
-        assert!(
-            spec.is_nested_virt_capable(),
-            "{machine} is not nested-capable"
-        );
+        assert!(spec.is_nested_virt_capable(), "{machine} is not nested-capable");
         assert_eq!(spec.architecture, Architecture::X86_64);
         assert!(!pool.machines.is_empty());
         assert!(pool.machines.iter().all(|option| {
@@ -2203,9 +2200,8 @@ mod tests {
                     ephemeral_storage_bytes: 20 * GIB,
                     architecture: None,
                     gpu: None,
-                    data_disk: data_disk_gib.map(|gib| crate::DataDiskRequirement {
-                        size_bytes: gib * GIB,
-                    }),
+                    data_disk: data_disk_gib
+                        .map(|gib| crate::DataDiskRequirement { size_bytes: gib * GIB }),
                 }),
                 min_size: 1,
                 max_size: 1,
@@ -2266,11 +2262,7 @@ mod tests {
                 let settings = data_disk_selection(selected);
                 let plan = plan_compute(&stack, platform, Some(&settings)).expect("plan");
                 let pool = general_pool(&plan);
-                assert!(
-                    pool.errors.is_empty(),
-                    "{platform} {selected:?}: {:?}",
-                    pool.errors
-                );
+                assert!(pool.errors.is_empty(), "{platform} {selected:?}: {:?}", pool.errors);
                 assert_eq!(
                     pool.data_disk,
                     Some(ComputePoolDataDiskPlan {
@@ -2312,10 +2304,7 @@ mod tests {
             .expect("plan");
         assert_eq!(
             general_pool(&plan).errors,
-            vec![
-                "pool 'general' has a fixed 100 GiB data disk; dataDiskGib 200 cannot be chosen"
-                    .to_string()
-            ]
+            vec!["pool 'general' has a fixed 100 GiB data disk; dataDiskGib 200 cannot be chosen".to_string()]
         );
 
         let absent = stack_with_data_disk_pool(None, None);
@@ -2327,10 +2316,7 @@ mod tests {
             .expect("plan");
         assert_eq!(
             general_pool(&plan).errors,
-            vec![
-                "pool 'general' declares no data disk, so dataDiskGib 50 cannot be chosen"
-                    .to_string()
-            ]
+            vec!["pool 'general' declares no data disk, so dataDiskGib 50 cannot be chosen".to_string()]
         );
     }
 

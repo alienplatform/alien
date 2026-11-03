@@ -5,9 +5,9 @@ use crate::{
     template::{CfExpression, CfResource},
 };
 use alien_core::{
-    import::EmitContext,
-    storage_notifications::{storages_notifying_queue, AWS_QUEUE_INGRESS_SID},
     Result, Storage,
+    import::EmitContext,
+    storage_notifications::{AWS_QUEUE_INGRESS_SID, storages_notifying_queue},
 };
 
 /// The bucket's `NotificationConfiguration`, one queue configuration per rule, and the

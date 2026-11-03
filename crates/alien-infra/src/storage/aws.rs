@@ -6,7 +6,10 @@ use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-use crate::core::{aws_ownership::is_tagged_as_ours, ResourceControllerContext};
+use crate::core::{
+    aws_ownership::is_tagged_as_ours, aws_tag_scoped::remote_rejection_message,
+    ResourceControllerContext,
+};
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::s3::{
     AbortIncompleteMultipartUpload, GetBucketEncryptionOutput, LifecycleConfiguration,
@@ -15,7 +18,9 @@ use alien_aws_clients::s3::{
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    standard_resource_tags, AwsS3StorageHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
+    standard_resource_tags, AwsS3StorageHeartbeatData, HeartbeatBackend,
+    HeartbeatCollectionIssue, HeartbeatCollectionIssueReason, HeartbeatIssueSeverity,
+    ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus, Storage, StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
     AWS_ABORT_INCOMPLETE_UPLOAD_DAYS, AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID,
@@ -212,17 +217,29 @@ fn is_our_lifecycle_rule(rule: &LifecycleRule) -> bool {
 /// When S3 returns a rule with an element the client doesn't model, writing it back would drop
 /// that element. With the app's rules unchanged the bucket keeps its configuration as it is: it
 /// already has one. When the app's rules changed the write is refused instead.
+///
+/// With the app's rules unchanged, only the incomplete-upload rule is missing. A role denied
+/// reading or writing the configuration then leaves the bucket as it is, and the denial is
+/// returned so the bucket's heartbeat can warn about it. When the app's rules changed a denial
+/// fails the write.
 async fn write_lifecycle(
     client: &dyn S3Api,
     bucket_name: &str,
     config: &Storage,
     rules_changed: bool,
-) -> Result<()> {
+) -> Result<Option<String>> {
     let existing = match client.get_bucket_lifecycle_configuration(bucket_name).await {
         Ok(existing) => existing,
         // S3 answers NoSuchLifecycleConfiguration for a bucket without one.
         Err(error) if is_missing_optional_bucket_metadata(&error) => {
             LifecycleConfiguration::default()
+        }
+        Err(error) if is_access_denied(&error) && !rules_changed => {
+            return Ok(Some(lifecycle_denial(
+                bucket_name,
+                "s3:GetLifecycleConfiguration",
+                &error,
+            )));
         }
         Err(error) if is_unreadable_answer(&error) => {
             if rules_changed {
@@ -238,7 +255,7 @@ async fn write_lifecycle(
                 error = %error,
                 "S3 bucket has a lifecycle rule this version can't read; leaving its lifecycle configuration as it is"
             );
-            return Ok(());
+            return Ok(None);
         }
         Err(error) => {
             return Err(error.context(ErrorData::CloudPlatformError {
@@ -257,13 +274,52 @@ async fn write_lifecycle(
     lifecycle.rules.extend(others);
     lifecycle.transition_default_minimum_object_size =
         existing.transition_default_minimum_object_size;
-    client
+    match client
         .put_bucket_lifecycle_configuration(bucket_name, &lifecycle)
         .await
-        .context(ErrorData::CloudPlatformError {
+    {
+        Ok(()) => Ok(None),
+        Err(error) if is_access_denied(&error) && !rules_changed => Ok(Some(lifecycle_denial(
+            bucket_name,
+            "s3:PutLifecycleConfiguration",
+            &error,
+        ))),
+        Err(error) => Err(error.context(ErrorData::CloudPlatformError {
             message: format!("Failed to configure lifecycle rules for S3 bucket '{bucket_name}'"),
             resource_id: Some(config.id.clone()),
-        })
+        })),
+    }
+}
+
+/// Logs a denied lifecycle call and returns the text the bucket's heartbeat warns with.
+fn lifecycle_denial(
+    bucket_name: &str,
+    action: &str,
+    error: &AlienError<CloudClientErrorData>,
+) -> String {
+    let denial = format!("{action} was denied: {}", remote_rejection_message(error));
+    warn!(
+        bucket = %bucket_name,
+        %denial,
+        "Not allowed to give the S3 bucket its incomplete-upload rule; leaving its lifecycle configuration as it is. Run a setup update to grant it."
+    );
+    denial
+}
+
+/// The warning a bucket's heartbeat carries while the role cannot give it the incomplete-upload
+/// rule, or cannot read its lifecycle configuration.
+fn lifecycle_issue(bucket_name: &str, denial: &str) -> HeartbeatCollectionIssue {
+    HeartbeatCollectionIssue {
+        source: "lifecycle".to_string(),
+        reason: HeartbeatCollectionIssueReason::Forbidden,
+        severity: HeartbeatIssueSeverity::Warning,
+        message: format!(
+            "The role cannot manage the lifecycle configuration of S3 bucket '{bucket_name}', \
+             so it may lack the rule that aborts incomplete uploads after \
+             {AWS_ABORT_INCOMPLETE_UPLOAD_DAYS} days. Run a setup update to grant it; the \
+             bucket gets the rule at its next update. {denial}"
+        ),
+    }
 }
 
 /// S3 answered with success, but the body didn't parse.
@@ -304,6 +360,10 @@ pub struct AwsStorageController {
     /// earlier versions have no rule when the app declares none.
     #[serde(default)]
     pub(crate) incomplete_upload_rule_applied: bool,
+    /// The denied call that kept the incomplete-upload rule off the bucket. The heartbeat warns
+    /// with it, and the bucket's next update retries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) lifecycle_denial: Option<String>,
 }
 
 #[controller]
@@ -573,8 +633,9 @@ impl AwsStorageController {
         })?;
 
         info!(bucket=%bucket_name, rules_count=%config.lifecycle_rules.len(), "Configuring lifecycle rules");
-        write_lifecycle(&*client, bucket_name, config, true).await?;
-        self.incomplete_upload_rule_applied = true;
+        let app_rules = !config.lifecycle_rules.is_empty();
+        self.lifecycle_denial = write_lifecycle(&*client, bucket_name, config, app_rules).await?;
+        self.incomplete_upload_rule_applied = self.lifecycle_denial.is_none();
 
         Ok(HandlerAction::Continue {
             state: ConfiguringCors,
@@ -666,9 +727,19 @@ impl AwsStorageController {
                 },
             )?;
 
+            let mut lifecycle_read_denial = None;
             let lifecycle = match client.get_bucket_lifecycle_configuration(bucket_name).await {
                 Ok(configuration) => Some(configuration),
                 Err(error) if is_missing_optional_bucket_metadata(&error) => None,
+                Err(error) if is_access_denied(&error) => {
+                    let denial = format!(
+                        "s3:GetLifecycleConfiguration was denied: {}",
+                        remote_rejection_message(&error)
+                    );
+                    warn!(bucket = %bucket_name, %denial, "Not allowed to read the S3 bucket's lifecycle configuration during heartbeat");
+                    lifecycle_read_denial = Some(denial);
+                    None
+                }
                 Err(error) => {
                     return Err(error.context(ErrorData::CloudPlatformError {
                         message: "Failed to get S3 bucket lifecycle during heartbeat".to_string(),
@@ -724,6 +795,10 @@ impl AwsStorageController {
                 }
             };
 
+            let lifecycle_issue = lifecycle_read_denial
+                .as_deref()
+                .or(self.lifecycle_denial.as_deref())
+                .map(|denial| lifecycle_issue(bucket_name, denial));
             emit_aws_s3_storage_heartbeat(
                 ctx,
                 &config.id,
@@ -731,6 +806,8 @@ impl AwsStorageController {
                 location,
                 versioning.status,
                 lifecycle,
+                lifecycle_read_denial.is_some(),
+                lifecycle_issue,
                 encryption,
                 public_access_block,
                 bucket_policy_present,
@@ -960,8 +1037,9 @@ impl AwsStorageController {
 
             info!(bucket=%bucket_name, rules_count=%config.lifecycle_rules.len(), "Updating lifecycle rules");
             let rules_changed = config.lifecycle_rules != prev_config.lifecycle_rules;
-            write_lifecycle(&*client, bucket_name, config, rules_changed).await?;
-            self.incomplete_upload_rule_applied = true;
+            self.lifecycle_denial =
+                write_lifecycle(&*client, bucket_name, config, rules_changed).await?;
+            self.incomplete_upload_rule_applied = self.lifecycle_denial.is_none();
         } else {
             info!(name=%config.id, "Skipping lifecycle update (no changes needed)");
         }
@@ -1098,7 +1176,10 @@ impl AwsStorageController {
         let notifications = may_manage_notifications(ctx, &config.id)
             && !self.notifications_managed
             && !config.notifications.is_empty();
-        let lifecycle = !self.incomplete_upload_rule_applied && owns_lifecycle(ctx, &config.id);
+        // After a denial, the next update retries rather than every loop.
+        let lifecycle = !self.incomplete_upload_rule_applied
+            && self.lifecycle_denial.is_none()
+            && owns_lifecycle(ctx, &config.id);
         Ok(notifications || lifecycle)
     }
 
@@ -1298,6 +1379,8 @@ fn emit_aws_s3_storage_heartbeat(
     location: alien_aws_clients::s3::GetBucketLocationOutput,
     versioning_status: Option<VersioningStatus>,
     lifecycle: Option<LifecycleConfiguration>,
+    lifecycle_unread: bool,
+    lifecycle_issue: Option<HeartbeatCollectionIssue>,
     encryption: Option<GetBucketEncryptionOutput>,
     public_access_block: Option<PublicAccessBlockConfiguration>,
     bucket_policy_present: Option<bool>,
@@ -1333,8 +1416,8 @@ fn emit_aws_s3_storage_heartbeat(
                     lifecycle: ProviderLifecycleState::Running,
                     message: Some(format!("S3 bucket '{}' metadata is reachable", bucket_name)),
                     stale: false,
-                    partial: false,
-                    collection_issues: vec![],
+                    partial: lifecycle_unread,
+                    collection_issues: lifecycle_issue.into_iter().collect(),
                 },
                 name: bucket_name.to_string(),
                 region: Some(region.clone()),
@@ -1581,6 +1664,7 @@ impl AwsStorageController {
             read_cors_applied: false,
             notifications_managed: false,
             incomplete_upload_rule_applied: true,
+            lifecycle_denial: None,
             _internal_stay_count: None,
         }
     }
@@ -1611,8 +1695,10 @@ mod tests {
     use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
     use alien_core::{
         standard_resource_tags, AwsClientConfig, AwsCredentials, AwsServiceOverrides, ClientConfig,
-        DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, InitialSetupAuthority,
-        LifecycleRule as AlienLifecycleRule, Platform, Resource, ResourceLifecycle, ResourceStatus,
+        DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, HeartbeatCollectionIssue,
+        HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, InitialSetupAuthority,
+        LifecycleRule as AlienLifecycleRule, Platform, Resource, ResourceHeartbeatData,
+        ResourceLifecycle, ResourceStatus, StorageHeartbeatData,
         Stack, StackResourceState, StackSettings, StackState, Storage, StorageOutputs,
     };
     use alien_error::AlienError;
@@ -2283,6 +2369,7 @@ mod tests {
             read_cors_applied: false,
             notifications_managed: false,
             incomplete_upload_rule_applied: false,
+            lifecycle_denial: None,
             _internal_stay_count: None,
         }
     }
@@ -3175,6 +3262,7 @@ mod tests {
                         rule_added_by_someone_else(),
                     ],
                     transition_default_minimum_object_size: Some("varies_by_storage_class".into()),
+                    ..Default::default()
                 })
             });
         client
@@ -3187,6 +3275,7 @@ mod tests {
                         transition_default_minimum_object_size: Some(
                             "varies_by_storage_class".into(),
                         ),
+                        ..Default::default()
                     }
             })
             .returning(|_, _| Ok(()));
@@ -3261,6 +3350,297 @@ mod tests {
             .expect_err("the write is refused");
 
         assert!(error.to_string().contains("can't read"), "{error}");
+    }
+
+    /// What the real S3 client returns when S3 denies a lifecycle call: S3's recorded answer,
+    /// replayed from a local server.
+    async fn denied_lifecycle_call(put: bool) -> AlienError<CloudClientErrorData> {
+        let action = if put {
+            "s3:PutLifecycleConfiguration"
+        } else {
+            "s3:GetLifecycleConfiguration"
+        };
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.path("/test-stack-objects")
+                    .query_param_exists("lifecycle");
+                then.status(403)
+                    .header("content-type", "application/xml")
+                    .body(format!(
+                        "<Error><Code>AccessDenied</Code><Message>User: arn:aws:sts::123456789012:assumed-role/app-management/session is not authorized to perform: {action} on resource: \"arn:aws:s3:::test-stack-objects\" because no identity-based policy allows the {action} action</Message><RequestId>WX5MS0RPRW45ZACR</RequestId><HostId>0grQHP2pocA=</HostId></Error>"
+                    ));
+            })
+            .await;
+        let s3 = S3Client::new(
+            reqwest::Client::new(),
+            AwsCredentialProvider::from_config_sync(AwsClientConfig {
+                account_id: "123456789012".into(),
+                region: "us-east-1".into(),
+                credentials: AwsCredentials::AccessKeys {
+                    access_key_id: "test-access".into(),
+                    secret_access_key: "test-secret".into(),
+                    session_token: None,
+                },
+                service_overrides: Some(AwsServiceOverrides {
+                    endpoints: HashMap::from([("s3".into(), server.base_url())]),
+                }),
+            }),
+        );
+        if put {
+            s3.put_bucket_lifecycle_configuration(
+                "test-stack-objects",
+                &LifecycleConfiguration::default(),
+            )
+            .await
+            .expect_err("denied")
+        } else {
+            s3.get_bucket_lifecycle_configuration("test-stack-objects")
+                .await
+                .expect_err("denied")
+        }
+    }
+
+    /// The reads a Ready heartbeat makes besides the lifecycle configuration.
+    fn expect_heartbeat_reads(client: &mut MockS3Api) {
+        client.expect_get_bucket_location().returning(|_| {
+            Ok(GetBucketLocationOutput {
+                location_constraint: None,
+            })
+        });
+        client.expect_get_bucket_versioning().returning(|_| {
+            Ok(GetBucketVersioningOutput {
+                status: None,
+                mfa_delete: None,
+            })
+        });
+        client
+            .expect_get_bucket_encryption()
+            .returning(|_| Ok(alien_aws_clients::s3::GetBucketEncryptionOutput { rules: vec![] }));
+        client
+            .expect_get_public_access_block()
+            .returning(|_| Ok(PublicAccessBlockConfiguration::default()));
+        client.expect_get_bucket_policy().returning(|_| {
+            Ok(GetBucketPolicyOutput {
+                policy: String::new(),
+            })
+        });
+        client.expect_get_bucket_acl().returning(|_| {
+            Ok(GetBucketAclOutput {
+                owner: None,
+                access_control_list: AccessControlList::default(),
+            })
+        });
+    }
+
+    fn collection_issues(run: &SingleControllerExecutor) -> Vec<HeartbeatCollectionIssue> {
+        let [heartbeat] = run.last_heartbeats() else {
+            panic!("one heartbeat per step: {:?}", run.last_heartbeats());
+        };
+        match &heartbeat.data {
+            ResourceHeartbeatData::Storage(StorageHeartbeatData::AwsS3(data)) => {
+                data.status.collection_issues.clone()
+            }
+            other => panic!("unexpected heartbeat data {other:?}"),
+        }
+    }
+
+    /// A role from before the lifecycle grants, or one tightened by hand, may not read or write
+    /// the lifecycle configuration. Giving a bucket from an earlier version only the
+    /// incomplete-upload rule then leaves the bucket as it is: the update finishes, the bucket
+    /// stays Running, and its heartbeat warns with AWS's message. The update isn't retried on
+    /// every loop.
+    #[rstest]
+    #[case::read_denied(false)]
+    #[case::write_denied(true)]
+    #[tokio::test]
+    async fn a_role_denied_the_incomplete_upload_rule_warns_and_stays_running(
+        #[case] write_denied: bool,
+    ) {
+        let denial = denied_lifecycle_call(write_denied).await;
+        let mut client = MockS3Api::new();
+        client.expect_put_bucket_policy().returning(|_, _| Ok(()));
+        let read = denial.clone();
+        client
+            .expect_get_bucket_lifecycle_configuration()
+            .returning(move |_| {
+                if write_denied {
+                    Err(no_lifecycle())
+                } else {
+                    Err(read.clone())
+                }
+            });
+        let write = denial.clone();
+        client
+            .expect_put_bucket_lifecycle_configuration()
+            .times(usize::from(write_denied))
+            .returning(move |_, _| Err(write.clone()));
+        expect_heartbeat_reads(&mut client);
+        let mut run = earlier_bucket(
+            ResourceLifecycle::Live,
+            InitialSetupAuthority::ImportedHandoff,
+            false,
+            client,
+        )
+        .await;
+        assert!(run.needs_update().unwrap());
+
+        run.update(Storage::new("objects".into()).build()).unwrap();
+        run.run_until_terminal()
+            .await
+            .expect("a denied incomplete-upload rule does not fail the update");
+        assert_eq!(run.status(), ResourceStatus::Running);
+        assert!(!run.needs_update().unwrap(), "not retried on every loop");
+
+        run.step().await.expect("the heartbeat runs");
+        assert_eq!(run.status(), ResourceStatus::Running);
+        let action = if write_denied {
+            "s3:PutLifecycleConfiguration"
+        } else {
+            "s3:GetLifecycleConfiguration"
+        };
+        let [issue] = collection_issues(&run).try_into().unwrap();
+        assert_eq!(issue.source, "lifecycle");
+        assert_eq!(issue.reason, HeartbeatCollectionIssueReason::Forbidden);
+        assert_eq!(issue.severity, HeartbeatIssueSeverity::Warning);
+        assert!(
+            issue.message.contains("Run a setup update to grant it")
+                && issue.message.contains(&format!(
+                    "{action} was denied: S3 rejected the request (AccessDenied): User: \
+                     arn:aws:sts::123456789012:assumed-role/app-management/session is not \
+                     authorized to perform: {action}"
+                )),
+            "{}",
+            issue.message
+        );
+    }
+
+    /// Once a setup update grants the call, the bucket's next update gives it the rule and the
+    /// warning goes away.
+    #[tokio::test]
+    async fn the_next_update_gives_the_rule_once_the_role_is_granted() {
+        let denial = denied_lifecycle_call(true).await;
+        let granted = Arc::new(Mutex::new(false));
+        let mut client = MockS3Api::new();
+        client.expect_put_bucket_policy().returning(|_, _| Ok(()));
+        client
+            .expect_get_bucket_lifecycle_configuration()
+            .returning(|_| Err(no_lifecycle()));
+        let write_granted = granted.clone();
+        client
+            .expect_put_bucket_lifecycle_configuration()
+            .times(2)
+            .returning(move |_, configuration| {
+                assert_eq!(configuration.rules, vec![incomplete_upload_rule()]);
+                if *write_granted.lock().unwrap() {
+                    Ok(())
+                } else {
+                    Err(denial.clone())
+                }
+            });
+        expect_heartbeat_reads(&mut client);
+        let mut run = earlier_bucket(
+            ResourceLifecycle::Live,
+            InitialSetupAuthority::ImportedHandoff,
+            false,
+            client,
+        )
+        .await;
+        run.update(Storage::new("objects".into()).build()).unwrap();
+        run.run_until_terminal().await.unwrap();
+        run.step().await.unwrap();
+        assert_eq!(collection_issues(&run).len(), 1);
+
+        *granted.lock().unwrap() = true;
+        run.update(Storage::new("objects".into()).build()).unwrap();
+        run.run_until_terminal().await.unwrap();
+        run.step().await.unwrap();
+
+        assert_eq!(run.status(), ResourceStatus::Running);
+        assert!(collection_issues(&run).is_empty());
+        assert!(!run.needs_update().unwrap());
+    }
+
+    /// New app rules the role may not write fail the update, as before: the app asked for them.
+    #[tokio::test]
+    async fn changed_rules_the_role_may_not_write_fail_the_update() {
+        let denial = denied_lifecycle_call(true).await;
+        let mut client = MockS3Api::new();
+        client.expect_put_bucket_policy().returning(|_, _| Ok(()));
+        client
+            .expect_get_bucket_lifecycle_configuration()
+            .returning(|_| Err(no_lifecycle()));
+        client
+            .expect_put_bucket_lifecycle_configuration()
+            .returning(move |_, _| Err(denial.clone()));
+        let mut run = earlier_bucket(
+            ResourceLifecycle::Live,
+            InitialSetupAuthority::ImportedHandoff,
+            false,
+            client,
+        )
+        .await;
+
+        run.update(
+            Storage::new("objects".into())
+                .lifecycle_rules(vec![AlienLifecycleRule {
+                    prefix: None,
+                    days: 30,
+                }])
+                .build(),
+        )
+        .unwrap();
+        let error = run
+            .run_until_terminal()
+            .await
+            .expect_err("the app's rules were not written");
+
+        assert!(
+            error.to_string().contains("Failed to configure lifecycle rules"),
+            "{error}"
+        );
+    }
+
+    /// When the bucket's configuration can't be read, nothing is written: a write would replace
+    /// rules the controller hasn't seen.
+    #[rstest]
+    #[case::server_error(AlienError::new(CloudClientErrorData::RemoteServiceUnavailable {
+        message: "We encountered an internal error. Please try again.".into(),
+    }))]
+    #[case::access_denied_with_new_rules(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+        resource_type: "Bucket".into(),
+        resource_name: "test-stack-objects".into(),
+    }))]
+    #[tokio::test]
+    async fn a_failed_lifecycle_read_writes_nothing(
+        #[case] read_error: AlienError<CloudClientErrorData>,
+    ) {
+        let mut client = MockS3Api::new();
+        client.expect_put_bucket_policy().returning(|_, _| Ok(()));
+        client
+            .expect_get_bucket_lifecycle_configuration()
+            .returning(move |_| Err(read_error.clone()));
+        client.expect_put_bucket_lifecycle_configuration().never();
+        let mut run = earlier_bucket(
+            ResourceLifecycle::Live,
+            InitialSetupAuthority::ImportedHandoff,
+            false,
+            client,
+        )
+        .await;
+
+        run.update(
+            Storage::new("objects".into())
+                .lifecycle_rules(vec![AlienLifecycleRule {
+                    prefix: None,
+                    days: 30,
+                }])
+                .build(),
+        )
+        .unwrap();
+        run.run_until_terminal()
+            .await
+            .expect_err("the update stops before writing");
     }
 
     /// The template writes a setup-owned bucket's lifecycle configuration, so only a direct
@@ -3522,6 +3902,7 @@ mod tests {
             read_cors_applied: false,
             notifications_managed: false,
             incomplete_upload_rule_applied: false,
+            lifecycle_denial: None,
             _internal_stay_count: None,
         };
 
@@ -3614,6 +3995,7 @@ mod tests {
                 read_cors_applied: false,
                 notifications_managed: false,
                 incomplete_upload_rule_applied: false,
+                lifecycle_denial: None,
                 _internal_stay_count: None,
             })
             .platform(Platform::Aws)

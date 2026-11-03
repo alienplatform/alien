@@ -285,14 +285,14 @@ impl S3Client {
         resource: &str,
     ) -> AlienError<ErrorData> {
         if let Some(mapped) = Self::map_s3_error(status, &body, operation, resource) {
-            return AlienError::new(ErrorData::HttpResponseError {
+            let error = AlienError::new(ErrorData::HttpResponseError {
                 message: format!("{} failed: {}", operation, body),
                 url,
                 http_status: status.as_u16(),
                 http_request_text: None,
-                http_response_text: Some(body),
-            })
-            .context(mapped);
+                http_response_text: Some(body.clone()),
+            });
+            return Self::with_mapped_error(error, status, &body, mapped);
         }
 
         AlienError::new(ErrorData::HttpResponseError {
@@ -318,7 +318,8 @@ impl S3Client {
                         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                     if let Some(mapped) = Self::map_s3_error(status, text, operation, resource_name)
                     {
-                        Err(e.context(mapped))
+                        let text = text.clone();
+                        Err(Self::with_mapped_error(e, status, &text, mapped))
                     } else {
                         // Couldn't parse S3 error, use original error
                         Err(e)
@@ -327,6 +328,30 @@ impl S3Client {
                     Err(e)
                 }
             }
+        }
+    }
+
+    /// Adds the mapped error to a failed response. A denial also keeps S3's message, which names
+    /// the denied action and the caller, so a warning can show it.
+    fn with_mapped_error(
+        error: AlienError<ErrorData>,
+        status: StatusCode,
+        body: &str,
+        mapped: ErrorData,
+    ) -> AlienError<ErrorData> {
+        let rejection = matches!(mapped, ErrorData::RemoteAccessDenied { .. })
+            .then(|| quick_xml::de::from_str::<S3ErrorResponse>(body).ok())
+            .flatten();
+        match rejection {
+            Some(rejection) => error
+                .context(ErrorData::RemoteRequestRejected {
+                    service: "S3".into(),
+                    http_status: status.as_u16(),
+                    provider_code: rejection.code,
+                    message: rejection.message,
+                })
+                .context(mapped),
+            None => error.context(mapped),
         }
     }
 
@@ -1622,14 +1647,31 @@ pub struct PublicAccessBlockConfiguration {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Builder)]
-#[serde(rename_all = "PascalCase")]
+#[serde(rename_all = "PascalCase", deny_unknown_fields)]
 pub struct LifecycleConfiguration {
+    /// The namespace S3 sends on the root element, accepted so that any other unknown element
+    /// fails to parse instead of being lost on the way back.
+    #[serde(rename = "@xmlns", default, skip_serializing)]
+    #[builder(default)]
+    pub xmlns: XmlNamespace,
     #[serde(rename = "Rule", default, skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<LifecycleRule>,
     /// The bucket's `x-amz-transition-default-minimum-object-size` setting. S3 sends it as a
     /// header next to the rules, not in them, and resets it on a write that leaves it out.
     #[serde(skip)]
     pub transition_default_minimum_object_size: Option<String>,
+}
+
+/// An XML namespace attribute, read and dropped.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct XmlNamespace;
+
+impl<'de> Deserialize<'de> for XmlNamespace {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        serde::de::IgnoredAny::deserialize(deserializer).map(|_| XmlNamespace)
+    }
 }
 
 const TRANSITION_DEFAULT_MINIMUM_OBJECT_SIZE: &str = "x-amz-transition-default-minimum-object-size";
@@ -2304,6 +2346,125 @@ mod tests {
                 })
             ),
             "{error:?}"
+        );
+    }
+
+    /// A rule someone else added for every object, with an empty `Filter`, is written back with
+    /// it. Without a `Filter` or `Prefix` S3 refuses the whole configuration.
+    #[tokio::test]
+    async fn a_rule_with_an_empty_filter_is_written_back_with_it() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/bucket-st")
+                    .query_param_exists("lifecycle");
+                then.status(200).body(
+                    "<LifecycleConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Rule><ID>everything</ID><Filter/><Status>Enabled</Status><Expiration><Days>400</Days></Expiration></Rule></LifecycleConfiguration>",
+                );
+            })
+            .await;
+        let written = server
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path("/bucket-st")
+                    .query_param_exists("lifecycle")
+                    .body_contains("<Filter/>");
+                then.status(200);
+            })
+            .await;
+        let client = client(&server);
+
+        let configuration = client
+            .get_bucket_lifecycle_configuration("bucket-st")
+            .await
+            .unwrap();
+        assert_eq!(
+            configuration.rules[0].filter,
+            Some(LifecycleRuleFilter::default())
+        );
+        client
+            .put_bucket_lifecycle_configuration("bucket-st", &configuration)
+            .await
+            .unwrap();
+
+        written.assert_async().await;
+    }
+
+    /// An element next to the rules that this model doesn't know would be lost on the way back
+    /// too, so reading it fails.
+    #[tokio::test]
+    async fn a_lifecycle_configuration_with_an_unknown_element_is_not_read() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/bucket-st")
+                    .query_param_exists("lifecycle");
+                then.status(200).body(
+                    "<LifecycleConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Rule><ID>new</ID><Filter/><Status>Enabled</Status><Expiration><Days>1</Days></Expiration></Rule><FutureSetting>on</FutureSetting></LifecycleConfiguration>",
+                );
+            })
+            .await;
+
+        let error = client(&server)
+            .get_bucket_lifecycle_configuration("bucket-st")
+            .await
+            .expect_err("an unknown element is refused");
+
+        assert!(
+            matches!(
+                error.error,
+                Some(ErrorData::HttpResponseError {
+                    http_status: 200,
+                    ..
+                })
+            ),
+            "{error:?}"
+        );
+    }
+
+    /// S3's answer to a lifecycle write the caller's policy doesn't allow (recorded; account,
+    /// role and bucket renamed).
+    const RECORDED_LIFECYCLE_ACCESS_DENIED: &str = "<Error><Code>AccessDenied</Code><Message>User: arn:aws:sts::123456789012:assumed-role/app-management/session is not authorized to perform: s3:PutLifecycleConfiguration on resource: \"arn:aws:s3:::bucket-st\" because no identity-based policy allows the s3:PutLifecycleConfiguration action</Message><RequestId>WX5MS0RPRW45ZACR</RequestId><HostId>0grQHP2pocA+V1WJHZRxkdBegYDyctgCsxpw01RIsxh1TCaoOGlwoDjTShnedz/+FCAc7HranB0=</HostId></Error>";
+
+    /// A denial keeps S3's message, which names the denied action and the caller.
+    #[tokio::test]
+    async fn a_denied_lifecycle_write_keeps_s3s_message() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path("/bucket-st")
+                    .query_param_exists("lifecycle");
+                then.status(403)
+                    .header("content-type", "application/xml")
+                    .body(RECORDED_LIFECYCLE_ACCESS_DENIED);
+            })
+            .await;
+
+        let error = client(&server)
+            .put_bucket_lifecycle_configuration("bucket-st", &zero_day_expiration())
+            .await
+            .expect_err("denied");
+
+        assert!(
+            matches!(
+                error.error,
+                Some(ErrorData::RemoteAccessDenied { ref resource_name, .. })
+                    if resource_name == "bucket-st"
+            ),
+            "{error:?}"
+        );
+        let rejection = error.source.as_deref().expect("S3's rejection");
+        assert_eq!(rejection.code, "REMOTE_REQUEST_REJECTED");
+        assert!(!rejection.internal);
+        assert_eq!(
+            rejection.message,
+            "S3 rejected the request (AccessDenied): User: \
+             arn:aws:sts::123456789012:assumed-role/app-management/session is not authorized to \
+             perform: s3:PutLifecycleConfiguration on resource: \"arn:aws:s3:::bucket-st\" \
+             because no identity-based policy allows the s3:PutLifecycleConfiguration action"
         );
     }
 

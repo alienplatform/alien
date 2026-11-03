@@ -167,20 +167,10 @@ fn reaches_public(cidr: &str) -> bool {
 mod tests {
     #[test]
     fn only_publicly_numbered_cluster_ranges_are_listed() {
-        for private in [
-            "192.168.0.0/24",
-            "10.244.3.0/24",
-            "100.64.0.0/16",
-            "172.31.0.2/32",
-        ] {
+        for private in ["192.168.0.0/24", "10.244.3.0/24", "100.64.0.0/16", "172.31.0.2/32"] {
             assert!(!super::reaches_public(private), "{private}");
         }
-        for public in [
-            "11.128.0.0/16",
-            "8.9.10.11/32",
-            "192.168.0.0/15",
-            "10.0.0.0/7",
-        ] {
+        for public in ["11.128.0.0/16", "8.9.10.11/32", "192.168.0.0/15", "10.0.0.0/7"] {
             assert!(super::reaches_public(public), "{public}");
         }
     }

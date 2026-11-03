@@ -1026,9 +1026,7 @@ mod tests {
             })
             .build();
         let mut executor = SingleControllerExecutor::builder()
-            .resource(
-                AzureContainerAppsEnvironment::new("default-container-env".to_string()).build(),
-            )
+            .resource(AzureContainerAppsEnvironment::new("default-container-env".to_string()).build())
             .controller(AzureContainerAppsEnvironmentController::default())
             .platform(Platform::Azure)
             .stack_settings(StackSettings::default())
@@ -1037,10 +1035,7 @@ mod tests {
                 test_azure_resource_group(),
                 AzureResourceGroupController::mock_ready("default-resource-group"),
             )
-            .with_dependency(
-                network,
-                AzureNetworkController::mock_ready("default-network"),
-            )
+            .with_dependency(network, AzureNetworkController::mock_ready("default-network"))
             .build()
             .await
             .expect("executor should build");
@@ -1049,9 +1044,9 @@ mod tests {
 
         let subnet = requested_subnet.lock().unwrap().clone();
         assert!(
-            subnet.as_deref().is_some_and(
-                |id| id.ends_with("/subnets/test-default-network-container-apps-subnet")
-            ),
+            subnet
+                .as_deref()
+                .is_some_and(|id| id.ends_with("/subnets/test-default-network-container-apps-subnet")),
             "environment subnet: {subnet:?}"
         );
     }
