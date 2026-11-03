@@ -123,7 +123,7 @@
         // group and cluster parameter group with the stack tag in the create request, so creates
         // bind on the request tag. CreateDBCluster is also authorized against the subnet group and
         // parameter group it names; this statement covers only the cluster, so those must carry
-        // this stack's tag (manage-aurora-resources), whatever tags the request sends.
+        // this stack's tag (manage-aurora-groups), whatever tags the request sends.
         "label": "create-aurora-cluster",
         "description": "Create the Aurora cluster.",
         "grant": {
@@ -216,17 +216,51 @@
       },
       {
         // The stack tag decides, not the name: a stack named `app` cannot reach `app-prod-*`.
-        // CreateDBCluster and CreateDBInstance are also authorized against the existing subnet
-        // group, parameter group and cluster they name, so those must belong to this stack too.
-        "label": "manage-aurora-resources",
-        "description": "Change, read the parameters of and delete this application's Aurora cluster, subnet group and cluster parameter group.",
+        // CreateDBInstance is also authorized against the cluster it joins, so an instance can
+        // only join a cluster of this stack.
+        "label": "manage-aurora-cluster",
+        "description": "Change, start and delete this application's Aurora cluster.",
         "grant": {
           "actions": [
-            "rds:CreateDBCluster",
             "rds:CreateDBInstance",
             "rds:ModifyDBCluster",
             "rds:StartDBCluster",
-            "rds:DeleteDBCluster",
+            "rds:DeleteDBCluster"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        // CloudFormation reads and sets a new parameter group's parameters, and creates the
+        // cluster in the new groups, within seconds of creating them. RDS authorizes those calls
+        // before the create-time tags are visible to it (a describe in the same second was denied
+        // live), so the tag check is IfExists: a group tagged for another stack is still denied.
+        // CreateDBCluster is authorized against the groups it names as well.
+        "label": "manage-aurora-groups",
+        "description": "Use, change and delete this application's Aurora subnet group and cluster parameter group.",
+        "grant": {
+          "actions": [
+            "rds:CreateDBCluster",
             "rds:DescribeDBClusterParameters",
             "rds:ModifyDBClusterParameterGroup",
             "rds:ResetDBClusterParameterGroup",
@@ -237,24 +271,22 @@
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*",
               "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-*",
               "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-*"
             ],
             "condition": {
-              "StringEquals": {
+              "StringEqualsIfExists": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}"
               }
             }
           },
           "resource": {
             "resources": [
-              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}",
               "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-${resourceName}-*",
               "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-${resourceName}-*"
             ],
             "condition": {
-              "StringEquals": {
+              "StringEqualsIfExists": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceName}"
               }

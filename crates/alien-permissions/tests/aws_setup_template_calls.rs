@@ -145,6 +145,20 @@ fn template_setup_calls() -> Vec<Request> {
     ] {
         calls.push(Request::new(action, resource).resource_tags(SETUP_TAGS));
     }
+    // CloudFormation reads and sets a new parameter group's parameters, and creates the cluster
+    // in the new groups, before RDS sees their create-time tags.
+    for (action, resource) in [
+        ("rds:DescribeDBClusterParameters", cluster_pg.clone()),
+        ("rds:ModifyDBClusterParameterGroup", cluster_pg.clone()),
+        ("rds:DeleteDBClusterParameterGroup", cluster_pg.clone()),
+        ("rds:CreateDBCluster", cluster_pg.clone()),
+        (
+            "rds:CreateDBCluster",
+            format!("{RDS}:subgrp:my-stack-db-subnets"),
+        ),
+    ] {
+        calls.push(Request::new(action, resource));
+    }
     calls.push(Request::new(
         "rds:DescribeGlobalClusters",
         "arn:aws:rds::123456789012:global-cluster:*",
