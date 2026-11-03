@@ -199,9 +199,6 @@ phases:
             .environment_variables(environment_variables)
             .build();
 
-        self.ensure_log_group(ctx, &aws_project_name, &cfg.id)
-            .await?;
-
         let request = CreateProjectRequest::builder()
             .name(aws_project_name.clone())
             .source(source)
@@ -292,6 +289,14 @@ phases:
         let config = ctx.desired_resource_config::<Build>()?;
 
         info!(name=%config.id, "Applying resource-scoped permissions for CodeBuild project");
+
+        // Only once the project is ours: its log group then holds this deployment's logs, and
+        // a same-name group of someone else's project is never touched, even by a setup
+        // identity allowed more than the generated policy.
+        if let Some(project_name) = self.project_name.clone() {
+            self.ensure_log_group(ctx, &project_name, &config.id)
+                .await?;
+        }
 
         // Apply resource-scoped permissions from the stack using the centralized helper.
         // This handles wildcard ("*") permissions and management SA permissions.
@@ -484,9 +489,6 @@ phases:
             .description(format!("Runtime build project: {}", current_config.id))
             .build();
 
-        self.ensure_log_group(ctx, &aws_project_name, &current_config.id)
-            .await?;
-
         client
             .update_project(update_request)
             .await
@@ -647,8 +649,9 @@ impl AwsBuildController {
 
     /// Creates the project's log group, `/aws/codebuild/<project name>`, tagged for this
     /// deployment and with its retention period. Otherwise CodeBuild creates it on the first
-    /// build and keeps its logs forever. Only direct setup runs this, on create and on update;
-    /// a CloudFormation or Terraform setup declares the same group itself.
+    /// build and keeps its logs forever. Only direct setup runs this, after create and update
+    /// have settled that the project is ours; a CloudFormation or Terraform setup declares
+    /// the same group itself.
     ///
     /// The grant binds both calls to the deployment tag, so CreateLogGroup is refused for a
     /// group with the name taken by another deployment, or one CodeBuild created untagged
@@ -1286,7 +1289,8 @@ mod tests {
     }
 
     /// A same-account project that already has the build's name was made by someone else.
-    /// Creating refuses it, and removing the resource afterwards leaves it in place.
+    /// Creating refuses it without touching its log group, and removing the resource
+    /// afterwards leaves it in place.
     #[rstest]
     #[case::other_tags(handmade_tags())]
     #[case::no_tags(HashMap::new())]
@@ -1296,11 +1300,13 @@ mod tests {
         #[case] tags: HashMap<String, String>,
     ) {
         let projects = projects_with(&[("test-basic-build", tags.clone())]);
-        let mut executor = executor_with(
+        let log_calls = Calls::default();
+        let mut executor = executor_with_logs(
             basic_build(),
             AwsBuildController::default(),
             &projects,
             false,
+            fake_logs(log_calls.clone(), true),
         )
         .await;
 
@@ -1308,6 +1314,11 @@ mod tests {
             .run_until_terminal()
             .await
             .expect_err("a project this deployment did not create is refused");
+        assert_eq!(
+            *log_calls.lock().unwrap(),
+            Vec::<String>::new(),
+            "the other project's log group is left alone"
+        );
         assert!(
             matches!(
                 &error.error,
