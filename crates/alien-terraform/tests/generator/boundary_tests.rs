@@ -291,7 +291,7 @@ fn check_boundary(enabled: Option<bool>) {
         .unwrap();
         assert_eq!(imported.permissions_boundary_arn, Some(arn.clone()));
         assert_eq!(imported.permissions_boundary_document, Some(installed));
-        let mut writes = 0;
+        let mut writes = std::collections::BTreeSet::new();
         for block in &blocks {
             if !block
                 .labels()
@@ -324,7 +324,7 @@ fn check_boundary(enabled: Option<bool>) {
                     ]
                     .contains(&action.as_str().unwrap())
                     {
-                        writes += 1;
+                        writes.insert(action.as_str().unwrap().to_string());
                         assert_eq!(
                             statement["Condition"]["StringEquals"]["iam:PermissionsBoundary"],
                             json!(arn)
@@ -333,7 +333,19 @@ fn check_boundary(enabled: Option<bool>) {
                 }
             }
         }
-        assert!(writes >= 6);
+        // Each role write the management role holds is granted only with the boundary.
+        assert_eq!(
+            writes,
+            [
+                "iam:CreateRole",
+                "iam:DeleteRolePolicy",
+                "iam:PutRolePermissionsBoundary",
+                "iam:PutRolePolicy",
+                "iam:UpdateAssumeRolePolicy",
+            ]
+            .map(String::from)
+            .into(),
+        );
     }
 }
 

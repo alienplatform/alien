@@ -372,7 +372,6 @@ Resources:
     - ManagementPermissionsBoundary
     - ManagementRoleManagementPolicy1
     - ManagementRoleManagementPolicy2
-    - ManagementRoleManagementPolicy3
     - ManagementRoleManagedPermissions1
     - MailerRuleSetActivatorRole
     - RegistryPullRole
@@ -444,7 +443,6 @@ Resources:
     - ManagementPermissionsBoundary
     - ManagementRoleManagementPolicy1
     - ManagementRoleManagementPolicy2
-    - ManagementRoleManagementPolicy3
     - ManagementRoleManagedPermissions1
     - MailerRuleSetActivatorRole
     - RegistryPullRole
@@ -516,7 +514,6 @@ Resources:
     - ManagementPermissionsBoundary
     - ManagementRoleManagementPolicy1
     - ManagementRoleManagementPolicy2
-    - ManagementRoleManagementPolicy3
     - ManagementRoleManagedPermissions1
     - MailerRuleSetActivatorRole
     - RegistryPullRole
@@ -675,7 +672,6 @@ Resources:
     - ManagementPermissionsBoundary
     - ManagementRoleManagementPolicy1
     - ManagementRoleManagementPolicy2
-    - ManagementRoleManagementPolicy3
     - ManagementRoleManagedPermissions1
     - MailerRuleSetActivatorRole
     - RegistryPullRole
@@ -938,23 +934,6 @@ Resources:
         Version: 2012-10-17
         Statement:
         - Action:
-          - lambda:GetAccountSettings
-          Effect: Allow
-          Resource:
-          - '*'
-          Sid: ReadLambdaAccountQuota
-        - Action:
-          - lambda:CreateFunction
-          Condition:
-            StringEquals:
-              aws:RequestTag/deployment:
-                Fn::Sub: ${AWS::StackName}
-              aws:RequestTag/managed-by: runtime
-          Effect: Allow
-          Resource:
-          - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
-          Sid: CreateLambdaFunctions
-        - Action:
           - lambda:AddPermission
           - lambda:CreateAlias
           - lambda:CreateFunctionUrlConfig
@@ -992,14 +971,6 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
           Sid: ManageLambdaFunctions
         - Action:
-          - logs:CreateLogGroup
-          - logs:DeleteLogGroup
-          - logs:PutRetentionPolicy
-          Effect: Allow
-          Resource:
-          - Fn::Sub: arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-*
-          Sid: ManageLambdaLogGroups
-        - Action:
           - lambda:CreateEventSourceMapping
           - lambda:DeleteEventSourceMapping
           - lambda:GetEventSourceMapping
@@ -1012,48 +983,6 @@ Resources:
           Resource:
           - '*'
           Sid: ProvisionEventSourceMappings
-        - Action:
-          - lambda:GetFunctionConcurrency
-          Condition:
-            'Null':
-              aws:ResourceTag/deployment: 'true'
-          Effect: Allow
-          Resource:
-          - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
-          Sid: ReadGoneLambdaFunctions
-        - Action:
-          - lambda:GetEventSourceMapping
-          Condition:
-            'Null':
-              lambda:FunctionArn: 'true'
-          Effect: Allow
-          Resource:
-          - '*'
-          Sid: ReadGoneEventSourceMappings
-        - Action:
-          - lambda:ListEventSourceMappings
-          Effect: Allow
-          Resource:
-          - '*'
-          Sid: ListEventSourceMappings
-        - Action:
-          - ec2:DescribeNetworkInterfaces
-          - ec2:DescribeSecurityGroups
-          - ec2:DescribeSubnets
-          - ec2:DescribeVpcs
-          Effect: Allow
-          Resource:
-          - '*'
-          Sid: InspectVpcForLambdaNetworking
-        - Action:
-          - iam:PassRole
-          Condition:
-            StringEquals:
-              iam:PassedToService: lambda.amazonaws.com
-          Effect: Allow
-          Resource:
-          - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*-sa
-          Sid: BoundedRolePass
         - Action:
           - iam:PutRolePermissionsBoundary
           - iam:PutRolePolicy
@@ -1069,62 +998,6 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*
           Sid: AttachLambdaRuntimePolicies
         - Action:
-          - iam:GetRolePolicy
-          - iam:ListRolePolicies
-          Condition:
-            StringEquals:
-              aws:ResourceTag/deployment:
-                Fn::Sub: ${AWS::StackName}
-              aws:ResourceTag/managed-by: runtime
-          Effect: Allow
-          Resource:
-          - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*
-          Sid: ReadLambdaRuntimePolicies
-        - Action:
-          - ecr:GetAuthorizationToken
-          Effect: Allow
-          Resource:
-          - '*'
-          Sid: GetEcrLoginToken
-        - Action:
-          - ecr:BatchGetImage
-          - ecr:GetDownloadUrlForLayer
-          - ecr:GetRepositoryPolicy
-          - ecr:SetRepositoryPolicy
-          Effect: Allow
-          Resource:
-          - Fn::Sub:
-            - arn:${AWS::Partition}:ecr:*:${ManagingAccountId}:repository/*
-            - ManagingAccountId:
-                Fn::Select:
-                - 4
-                - Fn::Split:
-                  - ':'
-                  - Ref: ManagingRoleArn
-          Sid: ConfigureLambdaImagePullAccess
-        - Action:
-          - acm:ImportCertificate
-          Condition:
-            StringEquals:
-              aws:RequestTag/deployment:
-                Fn::Sub: ${AWS::StackName}
-              aws:RequestTag/managed-by: runtime
-          Effect: Allow
-          Resource:
-          - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
-          Sid: ImportTlsCertificates
-      Roles:
-      - Ref: ManagementRole
-    DependsOn:
-    - ManagementRole
-  ManagementRoleManagementPolicy2:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      Description: Application management permissions
-      PolicyDocument:
-        Version: 2012-10-17
-        Statement:
-        - Action:
           - acm:AddTagsToCertificate
           - acm:DeleteCertificate
           - acm:DescribeCertificate
@@ -1139,21 +1012,6 @@ Resources:
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
           Sid: ManageTlsCertificates
-        - Action:
-          - acm:DescribeCertificate
-          Condition:
-            'Null':
-              aws:ResourceTag/deployment: 'true'
-          Effect: Allow
-          Resource:
-          - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
-          Sid: ReadGoneTlsCertificates
-        - Action:
-          - acm:ListCertificates
-          Effect: Allow
-          Resource:
-          - '*'
-          Sid: ListTlsCertificates
         - Action:
           - apigateway:POST
           Condition:
@@ -1183,18 +1041,6 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis/*
           Sid: CreateHttpApiRoutes
         - Action:
-          - apigateway:POST
-          - apigateway:PUT
-          Condition:
-            StringEquals:
-              aws:RequestTag/deployment:
-                Fn::Sub: ${AWS::StackName}
-              aws:RequestTag/managed-by: runtime
-          Effect: Allow
-          Resource:
-          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
-          Sid: TagHttpApiEndpoints
-        - Action:
           - apigateway:DELETE
           - apigateway:GET
           - apigateway:PATCH
@@ -1215,26 +1061,6 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/basepathmappings/*
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis/*
           Sid: ManageHttpApiEndpoints
-        - Action:
-          - apigateway:GET
-          Condition:
-            'Null':
-              aws:ResourceTag/deployment: 'true'
-          Effect: Allow
-          Resource:
-          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/??????????
-          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
-          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis/??????????
-          Sid: ReadGoneHttpApis
-        - Action:
-          - apigateway:GET
-          Condition:
-            'Null':
-              aws:ResourceTag/deployment: 'true'
-          Effect: Deny
-          Resource:
-          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/*
-          Sid: DenyUntaggedDomainMappingReads
         - Action:
           - events:PutRule
           - events:TagResource
@@ -1261,6 +1087,156 @@ Resources:
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
           Sid: ManageEventbridgeSchedules
+      Roles:
+      - Ref: ManagementRole
+    DependsOn:
+    - ManagementRole
+  ManagementRoleManagementPolicy2:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Application management permissions
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Action:
+          - lambda:GetAccountSettings
+          - lambda:ListEventSourceMappings
+          - ec2:DescribeNetworkInterfaces
+          - ec2:DescribeSecurityGroups
+          - ec2:DescribeSubnets
+          - ec2:DescribeVpcs
+          - ecr:GetAuthorizationToken
+          - acm:ListCertificates
+          Effect: Allow
+          Resource:
+          - '*'
+          Sid: ReadLambdaAccountQuota
+        - Action:
+          - lambda:CreateFunction
+          Condition:
+            StringEquals:
+              aws:RequestTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+              aws:RequestTag/managed-by: runtime
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
+          Sid: CreateLambdaFunctions
+        - Action:
+          - logs:CreateLogGroup
+          - logs:DeleteLogGroup
+          - logs:PutRetentionPolicy
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-*
+          Sid: ManageLambdaLogGroups
+        - Action:
+          - lambda:GetFunctionConcurrency
+          Condition:
+            'Null':
+              aws:ResourceTag/deployment: 'true'
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
+          Sid: ReadGoneLambdaFunctions
+        - Action:
+          - lambda:GetEventSourceMapping
+          Condition:
+            'Null':
+              lambda:FunctionArn: 'true'
+          Effect: Allow
+          Resource:
+          - '*'
+          Sid: ReadGoneEventSourceMappings
+        - Action:
+          - iam:PassRole
+          Condition:
+            StringEquals:
+              iam:PassedToService: lambda.amazonaws.com
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*-sa
+          Sid: BoundedRolePass
+        - Action:
+          - iam:GetRolePolicy
+          - iam:ListRolePolicies
+          Condition:
+            StringEquals:
+              aws:ResourceTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+              aws:ResourceTag/managed-by: runtime
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*
+          Sid: ReadLambdaRuntimePolicies
+        - Action:
+          - ecr:BatchGetImage
+          - ecr:GetDownloadUrlForLayer
+          - ecr:GetRepositoryPolicy
+          - ecr:SetRepositoryPolicy
+          Effect: Allow
+          Resource:
+          - Fn::Sub:
+            - arn:${AWS::Partition}:ecr:*:${ManagingAccountId}:repository/*
+            - ManagingAccountId:
+                Fn::Select:
+                - 4
+                - Fn::Split:
+                  - ':'
+                  - Ref: ManagingRoleArn
+          Sid: ConfigureLambdaImagePullAccess
+        - Action:
+          - acm:ImportCertificate
+          Condition:
+            StringEquals:
+              aws:RequestTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+              aws:RequestTag/managed-by: runtime
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
+          Sid: ImportTlsCertificates
+        - Action:
+          - acm:DescribeCertificate
+          Condition:
+            'Null':
+              aws:ResourceTag/deployment: 'true'
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
+          Sid: ReadGoneTlsCertificates
+        - Action:
+          - apigateway:POST
+          - apigateway:PUT
+          Condition:
+            StringEquals:
+              aws:RequestTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+              aws:RequestTag/managed-by: runtime
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
+          Sid: TagHttpApiEndpoints
+        - Action:
+          - apigateway:GET
+          Condition:
+            'Null':
+              aws:ResourceTag/deployment: 'true'
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/??????????
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis/??????????
+          Sid: ReadGoneHttpApis
+        - Action:
+          - apigateway:GET
+          Condition:
+            'Null':
+              aws:ResourceTag/deployment: 'true'
+          Effect: Deny
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/*
+          Sid: DenyUntaggedDomainMappingReads
         - Action:
           - s3:GetBucketAcl
           - s3:GetBucketLocation
@@ -1280,17 +1256,6 @@ Resources:
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-*
           Sid: CheckSqsQueueHealth
-      Roles:
-      - Ref: ManagementRole
-    DependsOn:
-    - ManagementRole
-  ManagementRoleManagementPolicy3:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      Description: Application management permissions
-      PolicyDocument:
-        Version: 2012-10-17
-        Statement:
         - Action:
           - dynamodb:DescribeContinuousBackups
           - dynamodb:DescribeTable
@@ -2594,7 +2559,6 @@ Resources:
     - ManagementPermissionsBoundary
     - ManagementRoleManagementPolicy1
     - ManagementRoleManagementPolicy2
-    - ManagementRoleManagementPolicy3
     - Assets
     - AssetsBucketPolicy
     - Jobs
