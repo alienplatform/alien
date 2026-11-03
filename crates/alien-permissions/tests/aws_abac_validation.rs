@@ -576,16 +576,8 @@ fn aws_wildcard_resources_are_read_only_or_conditioned_unless_documented() {
     );
 }
 
-/// DynamoDB table access stays bound by the table name prefix. The stack tag narrows only
-/// tagging and point-in-time recovery, where another stack's table may share the name prefix:
-/// a tag mismatch there denies the call instead of breaking table reads or writes.
 #[test]
-fn dynamodb_tag_conditions_only_narrow_tagging_and_point_in_time_recovery() {
-    const TAG_BOUND_ACTIONS: [&str; 3] = [
-        "dynamodb:TagResource",
-        "dynamodb:DescribeContinuousBackups",
-        "dynamodb:UpdateContinuousBackups",
-    ];
+fn dynamodb_permissions_do_not_depend_on_abac() {
     let dynamodb_sets = [
         "kv/heartbeat",
         "kv/management",
@@ -603,7 +595,6 @@ fn dynamodb_tag_conditions_only_narrow_tagging_and_point_in_time_recovery() {
         };
 
         for permission in aws_permissions {
-            let actions = permission.grant.actions.as_deref().unwrap_or_default();
             for binding in [
                 permission.binding.stack.as_ref(),
                 permission.binding.resource.as_ref(),
@@ -611,15 +602,11 @@ fn dynamodb_tag_conditions_only_narrow_tagging_and_point_in_time_recovery() {
             .into_iter()
             .flatten()
             {
-                let tag_bound = has_condition_key(binding, "aws:ResourceTag/${stackTag}")
-                    || has_condition_key(binding, "aws:RequestTag/${stackTag}");
-                if tag_bound
-                    && !actions
-                        .iter()
-                        .all(|action| TAG_BOUND_ACTIONS.contains(&action.as_str()))
+                if has_condition_key(binding, "aws:ResourceTag/${stackTag}")
+                    || has_condition_key(binding, "aws:RequestTag/${stackTag}")
                 {
                     failures.push(format!(
-                        "{permission_set_id} binds {actions:?} to DynamoDB tags; table access stays bound by name"
+                        "{permission_set_id} uses DynamoDB tag conditions; add an AWS account preflight before relying on DynamoDB ABAC"
                     ));
                 }
             }

@@ -501,7 +501,8 @@ struct DynamoDbErrorResponse {
     type_field: Option<String>,
     #[serde(rename = "__type")]
     type_field_underscore: Option<String>,
-    #[serde(rename = "message")]
+    // AccessDeniedException spells it "Message".
+    #[serde(rename = "message", alias = "Message")]
     message: Option<String>,
 }
 

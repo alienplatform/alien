@@ -31,25 +31,19 @@ pub struct AwsKvController {
     pub(crate) table_name: Option<String>,
     /// The table ARN for outputs
     pub(crate) table_arn: Option<String>,
-    /// The next update must try to turn on point-in-time recovery. Defaults to true so tables
-    /// created before this field existed are checked on their first update.
-    #[serde(default = "point_in_time_recovery_pending_default")]
-    pub(crate) point_in_time_recovery_pending: bool,
-    /// When IAM last denied turning on point-in-time recovery. Retries wait
-    /// `POINT_IN_TIME_RECOVERY_DENIED_RETRY` after it.
-    #[serde(default)]
-    pub(crate) point_in_time_recovery_denied_at: Option<chrono::DateTime<Utc>>,
 }
-
-/// How long a denied attempt waits before the next one. The grant arrives with a setup update,
-/// so retrying on every heartbeat would only repeat the denial.
-const POINT_IN_TIME_RECOVERY_DENIED_RETRY: chrono::TimeDelta = chrono::TimeDelta::hours(1);
 
 /// UpdateContinuousBackups calls a new table gets before its create finishes without it.
 const POINT_IN_TIME_RECOVERY_ATTEMPTS: u32 = 12;
 
-fn point_in_time_recovery_pending_default() -> bool {
-    true
+/// Outcome of asking DynamoDB to turn on point-in-time recovery.
+enum PointInTimeRecoveryOutcome {
+    Enabled,
+    /// DynamoDB does not find the table, as it can briefly after the table becomes ACTIVE.
+    TableNotFound,
+    /// IAM denied the call, with AWS's message. Management roles installed before this grant
+    /// lack it until their next setup update.
+    Denied(String),
 }
 
 #[controller]
@@ -285,26 +279,27 @@ impl AwsKvController {
             .await?;
 
         // A new table starts with point-in-time recovery off, so there is nothing to read first.
-        if !self
-            .turn_on_point_in_time_recovery(client.as_ref(), &table_name, &config.id)
-            .await?
-        {
-            // DynamoDB can briefly answer TableNotFoundException for a table that just became
-            // ACTIVE. Wait a little, then finish the create anyway: the table works without
-            // point-in-time recovery, the heartbeat reports it off and the next update retries.
-            if self._internal_stay_count.unwrap_or_default() + 1 < POINT_IN_TIME_RECOVERY_ATTEMPTS {
-                debug!(table_name=%table_name, "Table not visible to UpdateContinuousBackups yet");
-                return Ok(HandlerAction::Stay {
-                    max_times: None,
-                    suggested_delay: Some(Duration::from_secs(5)),
-                });
+        // Whatever the outcome, the table works without it, and the Ready heartbeat turns it on
+        // or reports why it cannot.
+        match turn_on_point_in_time_recovery(client.as_ref(), &table_name, &config.id).await? {
+            PointInTimeRecoveryOutcome::Enabled => {}
+            PointInTimeRecoveryOutcome::TableNotFound => {
+                if self._internal_stay_count.unwrap_or_default() + 1
+                    < POINT_IN_TIME_RECOVERY_ATTEMPTS
+                {
+                    debug!(table_name=%table_name, "Table not visible to UpdateContinuousBackups yet");
+                    return Ok(HandlerAction::Stay {
+                        max_times: None,
+                        suggested_delay: Some(Duration::from_secs(5)),
+                    });
+                }
+                warn!(
+                    table_name=%table_name,
+                    "DynamoDB still does not find the table for UpdateContinuousBackups; \
+                     the heartbeat turns on point-in-time recovery"
+                );
             }
-            warn!(
-                table_name=%table_name,
-                "DynamoDB still does not find the table for UpdateContinuousBackups; \
-                 the next update turns on point-in-time recovery"
-            );
-            self.point_in_time_recovery_pending = true;
+            PointInTimeRecoveryOutcome::Denied(_) => {}
         }
 
         Ok(HandlerAction::Continue {
@@ -351,7 +346,7 @@ impl AwsKvController {
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Kv>()?;
-        let table_name = &self.table_name.clone().ok_or_else(|| {
+        let table_name = self.table_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
                 resource_id: Some(config.id.clone()),
                 message: "Table name not set in state".to_string(),
@@ -405,9 +400,9 @@ impl AwsKvController {
                     ),
                 };
 
-                let point_in_time_recovery_issue = self
-                    .check_point_in_time_recovery(ctx, client.as_ref(), table_name, &config.id)
-                    .await;
+                let point_in_time_recovery_issue =
+                    reconcile_point_in_time_recovery(ctx, client.as_ref(), table_name, &config.id)
+                        .await?;
 
                 emit_aws_dynamodb_kv_heartbeat(
                     ctx,
@@ -447,8 +442,8 @@ impl AwsKvController {
     }
 
     // ─────────────── UPDATE FLOW ──────────────────────────────
-    // KV has no mutable config fields. Update turns on point-in-time recovery when it is off,
-    // and also recovers RefreshFailed.
+    // KV has no mutable fields — update is a no-op that also recovers RefreshFailed. The Ready
+    // heartbeat that follows turns on point-in-time recovery when it is off.
     #[flow_entry(Update, from = [Ready, RefreshFailed])]
     #[handler(
         state = UpdateStart,
@@ -457,63 +452,7 @@ impl AwsKvController {
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Kv>()?;
-        let table_name = self.table_name.clone().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                resource_id: Some(config.id.clone()),
-                message: "Table name not set in state".to_string(),
-            })
-        })?;
-
-        if !may_manage_table(ctx, &config.id) {
-            info!(id=%config.id, "AWS KV update: setup owns this table, nothing to change");
-            return Ok(HandlerAction::Continue {
-                state: Ready,
-                suggested_delay: None,
-            });
-        }
-
-        let aws_config = ctx.get_aws_config()?;
-        let client = ctx
-            .service_provider
-            .get_aws_dynamodb_client(aws_config)
-            .await?;
-
-        let already_enabled = match client
-            .describe_continuous_backups(
-                DescribeContinuousBackupsRequest::builder()
-                    .table_name(table_name.clone())
-                    .build(),
-            )
-            .await
-        {
-            Ok(response) => response.point_in_time_recovery_enabled(),
-            // Installs from before this check may lack the read grant. The update call below
-            // is safe to repeat, so make it and let it report its own outcome.
-            Err(e) if is_access_denied(&e) => false,
-            Err(e) => {
-                return Err(e.context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to read point-in-time recovery status of DynamoDB table '{}'",
-                        table_name
-                    ),
-                    resource_id: Some(config.id.clone()),
-                }))
-            }
-        };
-
-        if already_enabled {
-            self.point_in_time_recovery_pending = false;
-            self.point_in_time_recovery_denied_at = None;
-        } else if !self
-            .turn_on_point_in_time_recovery(client.as_ref(), &table_name, &config.id)
-            .await?
-        {
-            return Err(AlienError::new(ErrorData::ResourceDrift {
-                resource_id: config.id.clone(),
-                message: "Table no longer exists".to_string(),
-            }));
-        }
-
+        info!(id=%config.id, "AWS KV update (no-op — no mutable fields)");
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -670,13 +609,6 @@ impl AwsKvController {
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
-    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
-        let config = ctx.desired_resource_config::<Kv>()?;
-        Ok(self.table_name.is_some()
-            && self.point_in_time_recovery_pending
-            && may_manage_table(ctx, &config.id))
-    }
-
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         if let (Some(table_name), Some(table_arn)) = (&self.table_name, &self.table_arn) {
             Some(ResourceOutputs::new(KvOutputs {
@@ -725,149 +657,6 @@ impl AwsKvController {
         self.table_arn = None;
     }
 
-    /// Turns on point-in-time recovery. A denied call is logged and recorded, and the table
-    /// stays usable: installs whose management role predates this grant receive it with their
-    /// next setup update, and the following deployment update tries again.
-    ///
-    /// Returns false when DynamoDB does not find the table, without recording an attempt.
-    async fn turn_on_point_in_time_recovery(
-        &mut self,
-        client: &dyn DynamoDbApi,
-        table_name: &str,
-        resource_id: &str,
-    ) -> Result<bool> {
-        info!(table_name=%table_name, "Turning on point-in-time recovery for DynamoDB table");
-
-        let result = client
-            .update_continuous_backups(
-                UpdateContinuousBackupsRequest::builder()
-                    .table_name(table_name.to_string())
-                    .point_in_time_recovery_specification(
-                        PointInTimeRecoverySpecification::builder()
-                            .point_in_time_recovery_enabled(true)
-                            .build(),
-                    )
-                    .build(),
-            )
-            .await;
-
-        if matches!(&result, Err(e) if matches!(e.error, Some(CloudClientErrorData::RemoteResourceNotFound { .. })))
-        {
-            return Ok(false);
-        }
-
-        // Attempted either way; Ready marks it pending again while the table reports it off.
-        self.point_in_time_recovery_pending = false;
-        match result {
-            Ok(_) => {
-                self.point_in_time_recovery_denied_at = None;
-                info!(table_name=%table_name, "Point-in-time recovery is on for DynamoDB table");
-                Ok(true)
-            }
-            Err(e) if is_access_denied(&e) => {
-                self.point_in_time_recovery_denied_at = Some(Utc::now());
-                warn!(
-                    table_name=%table_name,
-                    "Point-in-time recovery stays off for DynamoDB table: the management role \
-                     is missing dynamodb:UpdateContinuousBackups. A setup update grants it."
-                );
-                Ok(true)
-            }
-            Err(e) => Err(e.context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to turn on point-in-time recovery for DynamoDB table '{}'",
-                    table_name
-                ),
-                resource_id: Some(resource_id.to_string()),
-            })),
-        }
-    }
-
-    /// Reads point-in-time recovery for the heartbeat. Returns a warning when it is off or
-    /// cannot be read. When it is off, marks the next update to turn it on, at most once per
-    /// `POINT_IN_TIME_RECOVERY_DENIED_RETRY` after a denial.
-    async fn check_point_in_time_recovery(
-        &mut self,
-        ctx: &ResourceControllerContext<'_>,
-        client: &dyn DynamoDbApi,
-        table_name: &str,
-        resource_id: &str,
-    ) -> Option<HeartbeatCollectionIssue> {
-        let result = client
-            .describe_continuous_backups(
-                DescribeContinuousBackupsRequest::builder()
-                    .table_name(table_name.to_string())
-                    .build(),
-            )
-            .await;
-
-        let enabled = matches!(&result, Ok(response) if response.point_in_time_recovery_enabled());
-        if enabled {
-            self.point_in_time_recovery_pending = false;
-            self.point_in_time_recovery_denied_at = None;
-            return None;
-        }
-        if result.is_ok() {
-            self.point_in_time_recovery_pending =
-                self.point_in_time_recovery_denied_at
-                    .is_none_or(|denied_at| {
-                        Utc::now() - denied_at >= POINT_IN_TIME_RECOVERY_DENIED_RETRY
-                    });
-        }
-
-        let (reason, message) = match result {
-            Ok(_) if !may_manage_table(ctx, resource_id) => (
-                HeartbeatCollectionIssueReason::NotInstalled,
-                format!(
-                    "Point-in-time recovery is off for DynamoDB table '{}'. Setup owns this \
-                     table; run a setup update to turn it on.",
-                    table_name
-                ),
-            ),
-            Ok(_) if self.point_in_time_recovery_denied_at.is_some() => (
-                HeartbeatCollectionIssueReason::Forbidden,
-                format!(
-                    "Point-in-time recovery is off for DynamoDB table '{}': the management role \
-                     is missing dynamodb:UpdateContinuousBackups. Run a setup update to grant it; \
-                     the next deployment update then turns it on.",
-                    table_name
-                ),
-            ),
-            Ok(_) => (
-                HeartbeatCollectionIssueReason::NotInstalled,
-                format!(
-                    "Point-in-time recovery is off for DynamoDB table '{}'. The next deployment \
-                     update turns it on.",
-                    table_name
-                ),
-            ),
-            Err(e) if is_access_denied(&e) => (
-                HeartbeatCollectionIssueReason::Forbidden,
-                format!(
-                    "Cannot read point-in-time recovery for DynamoDB table '{}': the management \
-                     role is missing dynamodb:DescribeContinuousBackups. Run a setup update to \
-                     grant it.",
-                    table_name
-                ),
-            ),
-            Err(e) => (
-                HeartbeatCollectionIssueReason::CollectionFailed,
-                format!(
-                    "Failed to read point-in-time recovery for DynamoDB table '{}': {}",
-                    table_name, e
-                ),
-            ),
-        };
-        debug!(table_name=%table_name, message=%message, "Point-in-time recovery is not on");
-
-        Some(HeartbeatCollectionIssue {
-            source: "point-in-time-recovery".to_string(),
-            reason,
-            severity: HeartbeatIssueSeverity::Warning,
-            message,
-        })
-    }
-
     /// Creates a controller in a ready state with mock values for testing purposes.
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(table_name: &str) -> Self {
@@ -878,8 +667,6 @@ impl AwsKvController {
                 "arn:aws:dynamodb:us-east-1:123456789012:table/{}",
                 table_name
             )),
-            point_in_time_recovery_pending: false,
-            point_in_time_recovery_denied_at: None,
             _internal_stay_count: None,
         }
     }
@@ -896,11 +683,163 @@ fn may_manage_table(ctx: &ResourceControllerContext<'_>, resource_id: &str) -> b
             .is_some_and(|entry| entry.lifecycle == ResourceLifecycle::Frozen)
 }
 
-fn is_access_denied(error: &AlienError<CloudClientErrorData>) -> bool {
-    matches!(
-        error.error,
-        Some(CloudClientErrorData::RemoteAccessDenied { .. })
-    )
+/// Turns on point-in-time recovery. Errors other than a missing table or an IAM denial are
+/// returned with context.
+async fn turn_on_point_in_time_recovery(
+    client: &dyn DynamoDbApi,
+    table_name: &str,
+    resource_id: &str,
+) -> Result<PointInTimeRecoveryOutcome> {
+    info!(table_name=%table_name, "Turning on point-in-time recovery for DynamoDB table");
+
+    let result = client
+        .update_continuous_backups(
+            UpdateContinuousBackupsRequest::builder()
+                .table_name(table_name.to_string())
+                .point_in_time_recovery_specification(
+                    PointInTimeRecoverySpecification::builder()
+                        .point_in_time_recovery_enabled(true)
+                        .build(),
+                )
+                .build(),
+        )
+        .await;
+
+    match result {
+        Ok(_) => {
+            info!(table_name=%table_name, "Point-in-time recovery is on for DynamoDB table");
+            Ok(PointInTimeRecoveryOutcome::Enabled)
+        }
+        Err(e)
+            if matches!(
+                e.error,
+                Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+            ) =>
+        {
+            Ok(PointInTimeRecoveryOutcome::TableNotFound)
+        }
+        Err(e) => match access_denied_message(&e) {
+            Some(aws_message) => {
+                warn!(
+                    table_name=%table_name,
+                    aws_message=%aws_message,
+                    "Point-in-time recovery stays off for DynamoDB table: the management role \
+                     is missing dynamodb:UpdateContinuousBackups. A setup update grants it."
+                );
+                Ok(PointInTimeRecoveryOutcome::Denied(aws_message))
+            }
+            None => Err(e.context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to turn on point-in-time recovery for DynamoDB table '{}'",
+                    table_name
+                ),
+                resource_id: Some(resource_id.to_string()),
+            })),
+        },
+    }
+}
+
+/// Reads point-in-time recovery and turns it on when it is off and runtime manages the table.
+/// Returns a warning when it stays off; the next heartbeat tries again.
+///
+/// A failed read is an error: the read grant has been in the heartbeat permissions from the
+/// start, so every management role has it. Turning it on is the newer grant, so a failure there
+/// only warns and never fails the heartbeat.
+async fn reconcile_point_in_time_recovery(
+    ctx: &ResourceControllerContext<'_>,
+    client: &dyn DynamoDbApi,
+    table_name: &str,
+    resource_id: &str,
+) -> Result<Option<HeartbeatCollectionIssue>> {
+    let status = client
+        .describe_continuous_backups(
+            DescribeContinuousBackupsRequest::builder()
+                .table_name(table_name.to_string())
+                .build(),
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to read point-in-time recovery status of DynamoDB table '{}'",
+                table_name
+            ),
+            resource_id: Some(resource_id.to_string()),
+        })?;
+    if status.point_in_time_recovery_enabled() {
+        return Ok(None);
+    }
+
+    let (reason, message) = if !may_manage_table(ctx, resource_id) {
+        (
+            HeartbeatCollectionIssueReason::NotInstalled,
+            format!(
+                "Point-in-time recovery is off for DynamoDB table '{}'. Setup owns this table; \
+                 run a setup update to turn it on.",
+                table_name
+            ),
+        )
+    } else {
+        match turn_on_point_in_time_recovery(client, table_name, resource_id).await {
+            Ok(PointInTimeRecoveryOutcome::Enabled) => return Ok(None),
+            Ok(PointInTimeRecoveryOutcome::Denied(aws_message)) => (
+                HeartbeatCollectionIssueReason::Forbidden,
+                format!(
+                    "Point-in-time recovery is off for DynamoDB table '{}': the management role \
+                     is missing dynamodb:UpdateContinuousBackups. Run a setup update to grant \
+                     it. AWS said: {}",
+                    table_name, aws_message
+                ),
+            ),
+            Ok(PointInTimeRecoveryOutcome::TableNotFound) => (
+                HeartbeatCollectionIssueReason::CollectionFailed,
+                format!(
+                    "Point-in-time recovery is off for DynamoDB table '{}': DynamoDB does not \
+                     find the table yet. The next heartbeat tries again.",
+                    table_name
+                ),
+            ),
+            Err(e) => (
+                HeartbeatCollectionIssueReason::CollectionFailed,
+                format!(
+                    "Point-in-time recovery is off for DynamoDB table '{}'; the next heartbeat \
+                     tries again. {}",
+                    table_name, e
+                ),
+            ),
+        }
+    };
+
+    Ok(Some(HeartbeatCollectionIssue {
+        source: "point-in-time-recovery".to_string(),
+        reason,
+        severity: HeartbeatIssueSeverity::Warning,
+        message,
+    }))
+}
+
+/// AWS's message when IAM denied the call. The client reports expired or unknown credentials
+/// as access denied too; those are not a missing grant, so this looks for DynamoDB's
+/// `AccessDeniedException` in the response body.
+fn access_denied_message(error: &AlienError<CloudClientErrorData>) -> Option<String> {
+    let contexts = std::iter::once(error.context.as_ref()).chain(
+        std::iter::successors(error.source.as_deref(), |source| source.source.as_deref())
+            .map(|source| source.context.as_ref()),
+    );
+    contexts.flatten().find_map(|context| {
+        let body = context.get("http_response_text")?.as_str()?;
+        let body: serde_json::Value = serde_json::from_str(body).ok()?;
+        let code = body.get("__type")?.as_str()?;
+        if code.rsplit('#').next() != Some("AccessDeniedException") {
+            return None;
+        }
+        let message = body.get("Message").or_else(|| body.get("message"));
+        Some(
+            message
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("access denied")
+                .to_string(),
+        )
+    })
 }
 
 fn emit_aws_dynamodb_kv_heartbeat(
@@ -1013,29 +952,92 @@ fn region_from_table_arn(table_arn: Option<&str>) -> Option<String> {
 mod tests {
     use super::*;
     use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
-    use alien_aws_clients::dynamodb::{ContinuousBackupsResponse, MockDynamoDbApi};
+    use alien_aws_clients::dynamodb::{ContinuousBackupsResponse, DynamoDbClient, MockDynamoDbApi};
+    use alien_aws_clients::{
+        AwsClientConfig, AwsCredentialProvider, AwsCredentials, ServiceOverrides,
+    };
     use alien_core::InitialSetupAuthority;
+    use httpmock::prelude::*;
     use serde_json::json;
+    use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
     const TABLE: &str = "test-cache";
+
+    /// Recorded from DynamoDB for a management role without the grant (account id replaced).
+    const ACCESS_DENIED: &str = r#"{"__type":"com.amazon.coral.service#AccessDeniedException","Message":"User: arn:aws:sts::123456789012:assumed-role/test-management/session is not authorized to perform: dynamodb:UpdateContinuousBackups on resource: arn:aws:dynamodb:us-east-1:123456789012:table/test-cache because no identity-based policy allows the dynamodb:UpdateContinuousBackups action"}"#;
+    const AWS_MESSAGE: &str = "User: arn:aws:sts::123456789012:assumed-role/test-management/session is not authorized to perform: dynamodb:UpdateContinuousBackups on resource: arn:aws:dynamodb:us-east-1:123456789012:table/test-cache because no identity-based policy allows the dynamodb:UpdateContinuousBackups action";
+    const DESCRIBE_DENIED: &str = r#"{"__type":"com.amazon.coral.service#AccessDeniedException","Message":"User: arn:aws:sts::123456789012:assumed-role/test-management/session is not authorized to perform: dynamodb:DescribeContinuousBackups on resource: arn:aws:dynamodb:us-east-1:123456789012:table/test-cache because no identity-based policy allows the dynamodb:DescribeContinuousBackups action"}"#;
+    const TABLE_NOT_FOUND: &str = r#"{"__type":"com.amazonaws.dynamodb.v20120810#TableNotFoundException","message":"Table not found: test-cache"}"#;
+    const EXPIRED_TOKEN: &str = r#"{"__type":"com.amazon.coral.service#ExpiredTokenException","message":"The security token included in the request is expired"}"#;
+
+    /// The error the real DynamoDB client returns when DynamoDB answers `body` with HTTP 400.
+    async fn client_error(target: &str, body: &str) -> AlienError<CloudClientErrorData> {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("x-amz-target", format!("DynamoDB_20120810.{target}"));
+                then.status(400)
+                    .header("content-type", "application/x-amz-json-1.0")
+                    .body(body);
+            })
+            .await;
+        let client = DynamoDbClient::new(
+            reqwest::Client::new(),
+            AwsCredentialProvider::from_config_sync(AwsClientConfig {
+                account_id: "123456789012".into(),
+                region: "us-east-1".into(),
+                credentials: AwsCredentials::AccessKeys {
+                    access_key_id: "test-access-key".into(),
+                    secret_access_key: "test-secret-key".into(),
+                    session_token: None,
+                },
+                service_overrides: Some(ServiceOverrides {
+                    endpoints: HashMap::from([("dynamodb".into(), server.base_url())]),
+                }),
+            }),
+        );
+        let table_name = TABLE.to_string();
+        let result = match target {
+            "UpdateContinuousBackups" => {
+                client
+                    .update_continuous_backups(
+                        UpdateContinuousBackupsRequest::builder()
+                            .table_name(table_name)
+                            .point_in_time_recovery_specification(
+                                PointInTimeRecoverySpecification::builder()
+                                    .point_in_time_recovery_enabled(true)
+                                    .build(),
+                            )
+                            .build(),
+                    )
+                    .await
+            }
+            "DescribeContinuousBackups" => {
+                client
+                    .describe_continuous_backups(
+                        DescribeContinuousBackupsRequest::builder()
+                            .table_name(table_name)
+                            .build(),
+                    )
+                    .await
+            }
+            other => panic!("unexpected target {other}"),
+        };
+        result.unwrap_err()
+    }
 
     /// A DynamoDB table whose point-in-time recovery the management role may or may not change.
     #[derive(Default)]
     struct Table {
         point_in_time_recovery: bool,
-        update_denied: bool,
-        describe_denied: bool,
-        /// UpdateContinuousBackups calls answered with TableNotFoundException before it works.
-        not_found_answers: usize,
+        /// Errors the real client returned, answered by UpdateContinuousBackups in order before
+        /// it works.
+        update_errors: Vec<AlienError<CloudClientErrorData>>,
+        describe_error: Option<AlienError<CloudClientErrorData>>,
         updates: usize,
-    }
-
-    fn denied() -> AlienError<CloudClientErrorData> {
-        AlienError::new(CloudClientErrorData::RemoteAccessDenied {
-            resource_type: "Table".to_string(),
-            resource_name: TABLE.to_string(),
-        })
+        deleted: bool,
     }
 
     fn continuous_backups(enabled: bool) -> ContinuousBackupsResponse {
@@ -1054,13 +1056,27 @@ mod tests {
             assert_eq!(request.table_name, TABLE);
             Ok(serde_json::from_value(json!({"TableDescription": {}})).unwrap())
         });
-        dynamodb.expect_describe_table().returning(|_| {
+        let tables = table.clone();
+        dynamodb.expect_describe_table().returning(move |_| {
+            if tables.lock().unwrap().deleted {
+                return Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceNotFound {
+                        resource_type: "Table".to_string(),
+                        resource_name: TABLE.to_string(),
+                    },
+                ));
+            }
             Ok(serde_json::from_value(json!({"Table": {
                 "TableName": TABLE,
                 "TableStatus": "ACTIVE",
                 "TableArn": format!("arn:aws:dynamodb:us-east-1:123456789012:table/{TABLE}"),
             }}))
             .unwrap())
+        });
+        let deletes = table.clone();
+        dynamodb.expect_delete_table().returning(move |_| {
+            deletes.lock().unwrap().deleted = true;
+            Ok(serde_json::from_value(json!({"TableDescription": {}})).unwrap())
         });
         dynamodb
             .expect_update_time_to_live()
@@ -1074,8 +1090,8 @@ mod tests {
             .returning(move |request| {
                 assert_eq!(request.table_name, TABLE);
                 let table = reads.lock().unwrap();
-                if table.describe_denied {
-                    return Err(denied());
+                if let Some(error) = &table.describe_error {
+                    return Err(error.clone());
                 }
                 Ok(continuous_backups(table.point_in_time_recovery))
             });
@@ -1089,18 +1105,9 @@ mod tests {
                         .point_in_time_recovery_enabled
                 );
                 let mut table = table.lock().unwrap();
-                if table.not_found_answers > 0 {
-                    table.not_found_answers -= 1;
-                    return Err(AlienError::new(
-                        CloudClientErrorData::RemoteResourceNotFound {
-                            resource_type: "Table".to_string(),
-                            resource_name: TABLE.to_string(),
-                        },
-                    ));
-                }
                 table.updates += 1;
-                if table.update_denied {
-                    return Err(denied());
+                if !table.update_errors.is_empty() {
+                    return Err(table.update_errors.remove(0));
                 }
                 table.point_in_time_recovery = true;
                 Ok(continuous_backups(true))
@@ -1152,13 +1159,12 @@ mod tests {
         }
     }
 
-    /// A Ready checkpoint saved before the point-in-time recovery fields existed.
-    fn previous_ready_checkpoint() -> AwsKvController {
-        let mut saved = serde_json::to_value(AwsKvController::mock_ready(TABLE)).unwrap();
-        let fields = saved.as_object_mut().unwrap();
-        assert!(fields.remove("pointInTimeRecoveryPending").is_some());
-        assert!(fields.remove("pointInTimeRecoveryDeniedAt").is_some());
-        serde_json::from_value(saved).unwrap()
+    fn denied_warning() -> String {
+        format!(
+            "Forbidden: Point-in-time recovery is off for DynamoDB table 'test-cache': the \
+             management role is missing dynamodb:UpdateContinuousBackups. Run a setup update to \
+             grant it. AWS said: {AWS_MESSAGE}"
+        )
     }
 
     #[tokio::test]
@@ -1176,14 +1182,15 @@ mod tests {
         assert_eq!(executor.status(), ResourceStatus::Running);
         assert_eq!(table.lock().unwrap().updates, 1);
         assert!(table.lock().unwrap().point_in_time_recovery);
-        assert!(!executor.needs_update().unwrap());
         assert_eq!(heartbeat_warning(&mut executor).await, None);
+        assert_eq!(table.lock().unwrap().updates, 1);
     }
 
     #[tokio::test]
     async fn create_waits_while_a_new_table_is_not_found() {
+        let not_found = client_error("UpdateContinuousBackups", TABLE_NOT_FOUND).await;
         let table = Arc::new(Mutex::new(Table {
-            not_found_answers: 2,
+            update_errors: vec![not_found.clone(), not_found],
             ..Default::default()
         }));
         let mut executor = executor(
@@ -1196,15 +1203,15 @@ mod tests {
         executor.run_until_terminal().await.unwrap();
 
         assert_eq!(executor.status(), ResourceStatus::Running);
-        assert_eq!(table.lock().unwrap().not_found_answers, 0);
-        assert_eq!(table.lock().unwrap().updates, 1);
+        assert_eq!(table.lock().unwrap().updates, 3);
         assert!(table.lock().unwrap().point_in_time_recovery);
     }
 
     #[tokio::test]
-    async fn create_finishes_when_a_new_table_stays_not_found() {
+    async fn create_finishes_when_a_new_table_stays_not_found_and_the_heartbeat_retries() {
+        let not_found = client_error("UpdateContinuousBackups", TABLE_NOT_FOUND).await;
         let table = Arc::new(Mutex::new(Table {
-            not_found_answers: usize::MAX,
+            update_errors: vec![not_found; POINT_IN_TIME_RECOVERY_ATTEMPTS as usize],
             ..Default::default()
         }));
         let mut executor = executor(
@@ -1215,17 +1222,18 @@ mod tests {
         .await;
 
         executor.run_until_terminal().await.unwrap();
-
         assert_eq!(executor.status(), ResourceStatus::Running);
-        assert_eq!(table.lock().unwrap().updates, 0);
-        // The next update tries again.
-        assert!(executor.needs_update().unwrap());
+        assert!(!table.lock().unwrap().point_in_time_recovery);
+
+        assert_eq!(heartbeat_warning(&mut executor).await, None);
+        assert!(table.lock().unwrap().point_in_time_recovery);
     }
 
     #[tokio::test]
-    async fn denied_update_keeps_the_table_ready_and_reports_the_missing_action() {
+    async fn denied_create_keeps_the_table_running_and_the_heartbeat_retries() {
+        let denied = client_error("UpdateContinuousBackups", ACCESS_DENIED).await;
         let table = Arc::new(Mutex::new(Table {
-            update_denied: true,
+            update_errors: vec![denied.clone(), denied],
             ..Default::default()
         }));
         let mut executor = executor(
@@ -1237,93 +1245,42 @@ mod tests {
 
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
-        assert_eq!(table.lock().unwrap().updates, 1);
-        // The attempt just ran, so this update round does not try again.
-        assert!(!executor.needs_update().unwrap());
-
-        assert_eq!(
-            heartbeat_warning(&mut executor).await.as_deref(),
-            Some(
-                "Forbidden: Point-in-time recovery is off for DynamoDB table 'test-cache': the \
-                 management role is missing dynamodb:UpdateContinuousBackups. Run a setup update \
-                 to grant it; the next deployment update then turns it on."
-            )
-        );
         assert!(executor.outputs().is_some());
-        // The heartbeat sees it off, but the retry waits out the backoff.
-        assert!(!executor.needs_update().unwrap());
         assert_eq!(table.lock().unwrap().updates, 1);
-    }
 
-    /// A Ready checkpoint whose last attempt was denied `minutes_ago`.
-    fn denied_checkpoint(minutes_ago: i64) -> AwsKvController {
-        AwsKvController {
-            point_in_time_recovery_denied_at: Some(
-                Utc::now() - chrono::TimeDelta::minutes(minutes_ago),
-            ),
-            ..AwsKvController::mock_ready(TABLE)
-        }
+        // Each heartbeat tries again and names the missing action until the grant arrives.
+        assert_eq!(
+            heartbeat_warning(&mut executor).await,
+            Some(denied_warning())
+        );
+        assert_eq!(table.lock().unwrap().updates, 2);
+        assert_eq!(heartbeat_warning(&mut executor).await, None);
+        assert_eq!(table.lock().unwrap().updates, 3);
+        assert!(table.lock().unwrap().point_in_time_recovery);
     }
 
     #[tokio::test]
-    async fn denied_attempt_is_retried_after_the_backoff_once_the_grant_arrives() {
+    async fn table_from_previous_version_turns_on_point_in_time_recovery_on_heartbeat() {
         let table = Arc::new(Mutex::new(Table::default()));
         let mut executor = executor(
-            denied_checkpoint(61),
+            AwsKvController::mock_ready(TABLE),
             table.clone(),
             ResourceLifecycle::Live,
         )
         .await;
 
-        // Still off: the warning names the missing action until the retry turns it on.
-        assert!(heartbeat_warning(&mut executor)
-            .await
-            .unwrap()
-            .starts_with("Forbidden: "));
-        assert!(executor.needs_update().unwrap());
-        executor
-            .update(Kv::new("cache".to_string()).build())
-            .unwrap();
-        executor.run_until_terminal().await.unwrap();
-
-        assert_eq!(executor.status(), ResourceStatus::Running);
-        assert_eq!(table.lock().unwrap().updates, 1);
-        assert!(table.lock().unwrap().point_in_time_recovery);
         assert_eq!(heartbeat_warning(&mut executor).await, None);
-        assert!(!executor.needs_update().unwrap());
-    }
-
-    #[tokio::test]
-    async fn denied_update_flow_keeps_the_table_running_and_waits_before_retrying() {
-        let table = Arc::new(Mutex::new(Table {
-            update_denied: true,
-            ..Default::default()
-        }));
-        let mut executor = executor(
-            previous_ready_checkpoint(),
-            table.clone(),
-            ResourceLifecycle::Live,
-        )
-        .await;
-
-        executor
-            .update(Kv::new("cache".to_string()).build())
-            .unwrap();
-        executor.run_until_terminal().await.unwrap();
-
-        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert!(table.lock().unwrap().point_in_time_recovery);
+        // Already on: later heartbeats only read it.
+        assert_eq!(heartbeat_warning(&mut executor).await, None);
         assert_eq!(table.lock().unwrap().updates, 1);
-        assert!(heartbeat_warning(&mut executor)
-            .await
-            .unwrap()
-            .contains("missing dynamodb:UpdateContinuousBackups"));
-        assert!(!executor.needs_update().unwrap());
     }
 
     #[tokio::test]
-    async fn denied_read_keeps_the_table_running_and_reports_the_missing_action() {
+    async fn previous_role_keeps_the_table_running_through_heartbeats_and_updates() {
+        let denied = client_error("UpdateContinuousBackups", ACCESS_DENIED).await;
         let table = Arc::new(Mutex::new(Table {
-            describe_denied: true,
+            update_errors: vec![denied.clone(), denied],
             ..Default::default()
         }));
         let mut executor = executor(
@@ -1334,82 +1291,87 @@ mod tests {
         .await;
 
         assert_eq!(
-            heartbeat_warning(&mut executor).await.as_deref(),
-            Some(
-                "Forbidden: Cannot read point-in-time recovery for DynamoDB table 'test-cache': \
-                 the management role is missing dynamodb:DescribeContinuousBackups. Run a setup \
-                 update to grant it."
-            )
+            heartbeat_warning(&mut executor).await,
+            Some(denied_warning())
         );
-        // An unread status schedules nothing.
-        assert!(!executor.needs_update().unwrap());
-
-        // An update that cannot read the status still turns it on.
         executor
             .update(Kv::new("cache".to_string()).build())
             .unwrap();
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
-        assert_eq!(table.lock().unwrap().updates, 1);
+        assert_eq!(
+            heartbeat_warning(&mut executor).await,
+            Some(denied_warning())
+        );
+        assert_eq!(table.lock().unwrap().updates, 2);
+
+        // After the setup update grants it.
+        assert_eq!(heartbeat_warning(&mut executor).await, None);
         assert!(table.lock().unwrap().point_in_time_recovery);
-    }
 
-    #[tokio::test]
-    async fn table_from_previous_version_turns_on_point_in_time_recovery_on_update() {
-        let table = Arc::new(Mutex::new(Table::default()));
-        let mut executor = executor(
-            previous_ready_checkpoint(),
-            table.clone(),
-            ResourceLifecycle::Live,
-        )
-        .await;
-
-        assert!(executor.needs_update().unwrap());
-        executor
-            .update(Kv::new("cache".to_string()).build())
-            .unwrap();
+        executor.delete().unwrap();
         executor.run_until_terminal().await.unwrap();
-
-        assert_eq!(executor.status(), ResourceStatus::Running);
-        assert_eq!(table.lock().unwrap().updates, 1);
-        assert!(table.lock().unwrap().point_in_time_recovery);
-        assert!(!executor.needs_update().unwrap());
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
     }
 
     #[tokio::test]
-    async fn update_leaves_point_in_time_recovery_alone_when_already_on() {
+    async fn expired_credentials_are_not_reported_as_a_missing_grant() {
+        let expired = client_error("UpdateContinuousBackups", EXPIRED_TOKEN).await;
+        // The client maps expired credentials to the same access-denied error.
+        assert!(matches!(
+            expired.error,
+            Some(CloudClientErrorData::RemoteAccessDenied { .. })
+        ));
         let table = Arc::new(Mutex::new(Table {
-            point_in_time_recovery: true,
+            update_errors: vec![expired],
             ..Default::default()
         }));
         let mut executor = executor(
-            previous_ready_checkpoint(),
+            AwsKvController::mock_ready(TABLE),
             table.clone(),
             ResourceLifecycle::Live,
         )
         .await;
 
-        executor
-            .update(Kv::new("cache".to_string()).build())
-            .unwrap();
-        executor.run_until_terminal().await.unwrap();
+        let warning = heartbeat_warning(&mut executor).await.unwrap();
+        assert!(warning.starts_with("CollectionFailed: "), "{warning}");
+        assert!(!warning.contains("missing dynamodb:UpdateContinuousBackups"));
+    }
 
-        assert_eq!(executor.status(), ResourceStatus::Running);
+    #[tokio::test]
+    async fn denied_read_fails_the_heartbeat() {
+        // Every management role has had this read since the start, so a denial is a real fault.
+        let denied = client_error("DescribeContinuousBackups", DESCRIBE_DENIED).await;
+        let table = Arc::new(Mutex::new(Table {
+            describe_error: Some(denied),
+            ..Default::default()
+        }));
+        let mut executor = executor(
+            AwsKvController::mock_ready(TABLE),
+            table.clone(),
+            ResourceLifecycle::Live,
+        )
+        .await;
+
+        let step = executor.step().await;
+        assert!(
+            step.is_err() || executor.status() == ResourceStatus::RefreshFailed,
+            "{step:?} {:?}",
+            executor.status()
+        );
         assert_eq!(table.lock().unwrap().updates, 0);
-        assert!(!executor.needs_update().unwrap());
     }
 
     #[tokio::test]
     async fn setup_owned_table_is_reported_but_never_changed() {
         let table = Arc::new(Mutex::new(Table::default()));
         let mut executor = executor(
-            previous_ready_checkpoint(),
+            AwsKvController::mock_ready(TABLE),
             table.clone(),
             ResourceLifecycle::Frozen,
         )
         .await;
 
-        assert!(!executor.needs_update().unwrap());
         assert_eq!(
             heartbeat_warning(&mut executor).await.as_deref(),
             Some(
@@ -1417,8 +1379,6 @@ mod tests {
                  Setup owns this table; run a setup update to turn it on."
             )
         );
-        assert!(!executor.needs_update().unwrap());
-
         executor
             .update(Kv::new("cache".to_string()).build())
             .unwrap();
