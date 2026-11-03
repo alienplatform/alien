@@ -605,3 +605,78 @@ fn a_cloudformation_workload_reads_the_connection_secret_only_with_both_stack_ta
         assert_eq!(evaluate(&statements, &call), expected, "{case}");
     }
 }
+
+/// IAM authorizes `rds:ModifyDBCluster` against every resource the request names. CloudFormation's
+/// cluster update names the cluster and its parameter group (`DBClusterParameterGroupName`, from
+/// CloudTrail `requestParameters` of a live stack update); Terraform and the controller name only
+/// the cluster. Replays both against the setup policy and the runtime provision set.
+#[test]
+fn a_cloudformation_cluster_update_is_authorized_on_the_cluster_and_its_parameter_group() {
+    let context = common::create_test_context();
+    let provision = AwsRuntimePermissionsGenerator::new()
+        .generate_policy(
+            get_permission_set("postgres/provision").unwrap(),
+            BindingTarget::Stack,
+            &context,
+        )
+        .unwrap()
+        .statement;
+    // {"dBClusterIdentifier": "my-stack-db", "dBClusterParameterGroupName":
+    //  "my-stack-dbclusterparametergroup-ca6eanueb6cu", "applyImmediately": true, ...}
+    let request = [
+        format!("{RDS}:cluster:my-stack-db"),
+        format!("{RDS}:cluster-pg:my-stack-dbclusterparametergroup-ca6eanueb6cu"),
+    ];
+    for (name, statements) in [("setup", setup_statements()), ("provision", provision)] {
+        for resource in &request {
+            let call =
+                Request::new("rds:ModifyDBCluster", resource.clone()).resource_tags(SETUP_TAGS);
+            assert_eq!(
+                evaluate(&statements, &call),
+                Decision::Allowed,
+                "{name}: {resource}"
+            );
+        }
+    }
+}
+
+/// The parameter-group leg of ModifyDBCluster needs this stack's tag. ModifyDBCluster never
+/// authorizes against a subnet group, and neither path sends an option group, so neither is
+/// granted.
+#[test]
+fn modify_cluster_reaches_only_this_stack_tagged_parameter_group() {
+    let statements = setup_statements();
+    let modify = |resource: String, tags: &[(&str, &str)]| {
+        evaluate(
+            &statements,
+            &Request::new("rds:ModifyDBCluster", resource).resource_tags(tags),
+        )
+    };
+    let own_pg = format!("{RDS}:cluster-pg:my-stack-dbclusterparametergroup-ca6eanueb6cu");
+    assert_eq!(modify(own_pg.clone(), SETUP_TAGS), Decision::Allowed);
+    assert_ne!(
+        modify(own_pg, &[]),
+        Decision::Allowed,
+        "untagged under the prefix"
+    );
+    assert_ne!(
+        modify(
+            format!("{RDS}:cluster-pg:my-stack-prod-db-pg"),
+            OTHER_STACK_TAGS
+        ),
+        Decision::Allowed,
+        "another stack's group"
+    );
+    for (kind, name) in [
+        ("subgrp", "my-stack-db-subnets"),
+        ("og", "my-stack-db-options"),
+    ] {
+        for tags in [SETUP_TAGS, OTHER_STACK_TAGS, &[]] {
+            assert_ne!(
+                modify(format!("{RDS}:{kind}:{name}"), tags),
+                Decision::Allowed,
+                "{kind} with {tags:?}"
+            );
+        }
+    }
+}

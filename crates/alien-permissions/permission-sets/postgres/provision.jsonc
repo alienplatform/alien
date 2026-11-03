@@ -293,6 +293,39 @@
         }
       },
       {
+        // CloudFormation's cluster update sends DBClusterParameterGroupName, so RDS also
+        // authorizes ModifyDBCluster against that parameter group. It runs long after the
+        // group's create, when its tags are visible, so the stack tag is required. ModifyDBCluster
+        // also authorizes option groups and DB parameter groups, but neither our templates nor
+        // the controller send them, and it never checks a subnet group.
+        "label": "modify-aurora-cluster-parameter-group",
+        "description": "Name this application's cluster parameter group when changing its Aurora cluster.",
+        "grant": {
+          "actions": ["rds:ModifyDBCluster"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
         // IfExists keeps untagged runtime instances working (see create-aurora-instances).
         "label": "manage-aurora-instances",
         "description": "Change and delete this application's Aurora instances.",
