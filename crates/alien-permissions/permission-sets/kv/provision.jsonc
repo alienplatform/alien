@@ -13,7 +13,6 @@
             "dynamodb:UpdateTable",
             "dynamodb:UpdateTimeToLive",
             "dynamodb:DescribeTimeToLive",
-            "dynamodb:TagResource",
             "dynamodb:ListTagsOfResource"
           ]
         },
@@ -23,6 +22,69 @@
           },
           "resource": {
             "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"]
+          }
+        }
+      },
+      {
+        // Another stack's name can start with this stack's prefix, so tagging also needs the
+        // table to carry this stack's tag (or no tag yet, at creation) and keep it. Otherwise
+        // a table of that other stack could be retagged into this one.
+        "label": "tag-dynamodb-tables",
+        "description": "Tag this stack's DynamoDB tables at creation.",
+        "grant": {
+          "actions": ["dynamodb:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-*"],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              },
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              },
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          }
+        }
+      },
+      {
+        // Bound to the stack tag as well as the name, for the same reason as tagging.
+        "label": "enable-dynamodb-point-in-time-recovery",
+        "description": "Read and turn on point-in-time recovery for this stack's DynamoDB tables.",
+        "grant": {
+          "actions": [
+            "dynamodb:DescribeContinuousBackups",
+            "dynamodb:UpdateContinuousBackups"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
           }
         }
       }

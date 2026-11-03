@@ -36,6 +36,14 @@ pub trait DynamoDbApi: Send + Sync + std::fmt::Debug {
         &self,
         request: DescribeTimeToLiveRequest,
     ) -> Result<DescribeTimeToLiveResponse>;
+    async fn update_continuous_backups(
+        &self,
+        request: UpdateContinuousBackupsRequest,
+    ) -> Result<ContinuousBackupsResponse>;
+    async fn describe_continuous_backups(
+        &self,
+        request: DescribeContinuousBackupsRequest,
+    ) -> Result<ContinuousBackupsResponse>;
 }
 
 // ---------------------------------------------------------------------------
@@ -191,10 +199,12 @@ impl DynamoDbClient {
                 ErrorData::RemoteServiceUnavailable { message }
             }
             // Resource not found
-            "ResourceNotFoundException" => ErrorData::RemoteResourceNotFound {
-                resource_type: "Table".into(),
-                resource_name: resource.into(),
-            },
+            "ResourceNotFoundException" | "TableNotFoundException" => {
+                ErrorData::RemoteResourceNotFound {
+                    resource_type: "Table".into(),
+                    resource_name: resource.into(),
+                }
+            }
             // Conflict / conditional check failed
             "ConditionalCheckFailedException" => ErrorData::RemoteResourceConflict {
                 message,
@@ -421,6 +431,48 @@ impl DynamoDbApi for DynamoDbClient {
         )
         .await
     }
+    async fn update_continuous_backups(
+        &self,
+        request: UpdateContinuousBackupsRequest,
+    ) -> Result<ContinuousBackupsResponse> {
+        let body = serde_json::to_string(&request).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize UpdateContinuousBackupsRequest for table '{}'",
+                    request.table_name
+                ),
+            },
+        )?;
+        self.send_json(
+            "DynamoDB_20120810.UpdateContinuousBackups",
+            Some(body),
+            "UpdateContinuousBackups",
+            &request.table_name,
+        )
+        .await
+    }
+
+    async fn describe_continuous_backups(
+        &self,
+        request: DescribeContinuousBackupsRequest,
+    ) -> Result<ContinuousBackupsResponse> {
+        let body = serde_json::to_string(&request).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize DescribeContinuousBackupsRequest for table '{}'",
+                    request.table_name
+                ),
+            },
+        )?;
+        self.send_json(
+            "DynamoDB_20120810.DescribeContinuousBackups",
+            Some(body),
+            "DescribeContinuousBackups",
+            &request.table_name,
+        )
+        .await
+    }
+
     async fn list_tags_of_resource(
         &self,
         request: ListTagsOfResourceRequest,
@@ -1194,6 +1246,67 @@ pub struct DescribeTimeToLiveRequest {
 pub struct DescribeTimeToLiveResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time_to_live_description: Option<TimeToLiveDescription>,
+}
+
+// ---------------------------------------------------------------------------
+// Continuous backups (point-in-time recovery) operations
+// ---------------------------------------------------------------------------
+
+/// Point-in-time recovery status values returned by DynamoDB.
+pub mod point_in_time_recovery_status {
+    pub const ENABLED: &str = "ENABLED";
+    pub const DISABLED: &str = "DISABLED";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+#[serde(rename_all = "PascalCase")]
+pub struct PointInTimeRecoverySpecification {
+    pub point_in_time_recovery_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Builder)]
+#[serde(rename_all = "PascalCase")]
+pub struct UpdateContinuousBackupsRequest {
+    pub table_name: String,
+    pub point_in_time_recovery_specification: PointInTimeRecoverySpecification,
+}
+
+#[derive(Debug, Clone, Serialize, Builder)]
+#[serde(rename_all = "PascalCase")]
+pub struct DescribeContinuousBackupsRequest {
+    pub table_name: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct PointInTimeRecoveryDescription {
+    pub point_in_time_recovery_status: Option<String>,
+    pub recovery_period_in_days: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ContinuousBackupsDescription {
+    pub continuous_backups_status: Option<String>,
+    pub point_in_time_recovery_description: Option<PointInTimeRecoveryDescription>,
+}
+
+/// Response of both UpdateContinuousBackups and DescribeContinuousBackups.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ContinuousBackupsResponse {
+    pub continuous_backups_description: Option<ContinuousBackupsDescription>,
+}
+
+impl ContinuousBackupsResponse {
+    /// Whether point-in-time recovery is on for the table.
+    pub fn point_in_time_recovery_enabled(&self) -> bool {
+        self.continuous_backups_description
+            .as_ref()
+            .and_then(|description| description.point_in_time_recovery_description.as_ref())
+            .and_then(|description| description.point_in_time_recovery_status.as_deref())
+            == Some(point_in_time_recovery_status::ENABLED)
+    }
 }
 
 /// Reads one page of resource ownership tags.

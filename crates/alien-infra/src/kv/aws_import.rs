@@ -22,6 +22,9 @@ impl ResourceImporter for AwsKvImporter {
             state: AwsKvState::Ready,
             table_name: Some(data.table_name),
             table_arn: Some(data.table_arn),
+            // Unknown until the first heartbeat reads it.
+            point_in_time_recovery_pending: true,
+            point_in_time_recovery_denied_at: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)
