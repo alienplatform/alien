@@ -347,6 +347,18 @@ jobs:
           read -r -a SELECTION <<< "$RUST_SELECTION"
           cargo nextest run "${SELECTION[@]}" --no-fail-fast --filter-expr "${FILTER_CLAUSES[*]}"
 
+      # Workspace-wide builds unify features, so alien-bindings is always built with
+      # `local-artifact-registry` there (alien-local turns it on). Check alien-sdk
+      # alone so its default features (`local` without the OCI client) keep compiling,
+      # and fail if jwt (RUSTSEC-2016-0007, pulled in by oci-client) comes back.
+      - name: Check alien-sdk default features
+        run: |
+          cargo check --locked -p alien-sdk
+          if cargo tree --locked -p alien-sdk -e normal,build --target all --prefix none --format '{p}' | grep -E '^(jwt|oci-client) '; then
+            echo "::error::alien-sdk default features must not depend on oci-client or jwt"
+            exit 1
+          fi
+
       - name: Platform SDK full-api tests
         # The workspace builds the filtered client; tests that need operations outside it
         # (`#![cfg(feature = "full-api")]`) run here, when the SDK changes.

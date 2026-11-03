@@ -15,7 +15,11 @@ aws = ["object_store/aws", "dep:alien-aws-clients", "alien-client-config/aws", "
 gcp = ["tokio/process", "object_store/gcp", "dep:alien-gcp-clients", "alien-client-config/gcp"]
 azure = ["object_store/azure", "dep:alien-azure-clients", "alien-client-config/azure"]
 kubernetes = ["dep:alien-k8s-clients", "dep:k8s-openapi", "alien-client-config/kubernetes"]
-local = ["object_store/fs", "dep:oci-client", "dep:turso", "tokio/fs", "tokio/process", "alien-core/local"]
+local = ["object_store/fs", "dep:turso", "tokio/fs", "tokio/process", "alien-core/local"]
+# Client for the Local platform's OCI artifact registry. Kept out of `local` and
+# `all-platforms` so apps that only use storage/KV/queue/vault bindings don't
+# link an OCI client and its transitive dependencies.
+local-artifact-registry = ["local", "dep:oci-client"]
 test = []  # Test platform support - fast mock implementations without real cloud APIs
 openapi = ["dep:utoipa", "alien-core/openapi"]
 platform-sdk = ["dep:alien-platform-api", "dep:alien-manager-api"]  # Platform/manager API access for RemoteBindings

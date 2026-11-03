@@ -12,7 +12,7 @@ libc = "0.2"
 alien-core = { workspace = true }
 alien-error = { workspace = true, features = ["axum"] }
 alien-worker-runtime = { workspace = true, default-features = false, features = ["local", "otlp"] }
-alien-bindings = { workspace = true }
+alien-bindings = { workspace = true, features = ["local-artifact-registry"] }
 alien-worker-protocol = { workspace = true, features = ["server"] }
 
 # Async runtime
