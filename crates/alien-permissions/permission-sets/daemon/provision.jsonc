@@ -42,8 +42,8 @@
       // response, or at any ACM certificate of the same account and region or IAM server
       // certificate of the account. Other accounts' target groups and certificates, other
       // stacks' listeners and target groups another load balancer uses stay out of reach.
-      // IAM can bound the TLS policy and the protocol. AWS sets those keys only when the request
-      // names them, so they are checked if present: no TLS downgrade and no plain HTTP.
+      // IAM can bound the TLS policy and the protocol. A create must name both: an HTTPS
+      // listener created without a policy gets ELBSecurityPolicy-2016-08, which allows TLS 1.0.
       {
         "label": "create-public-load-balancer-listener",
         "description": "Create the HTTPS listener on a daemon ALB of this stack.",
@@ -52,26 +52,20 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*"
-            ],
+            "resources": ["arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${managedByTag}": "runtime",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              },
-              "StringEqualsIfExists": {
-                "elasticloadbalancing:SecurityPolicy": "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04",
-                "elasticloadbalancing:ListenerProtocol": "HTTPS"
+                "aws:RequestTag/${managedByTag}": "runtime",
+                "elasticloadbalancing:ListenerProtocol": "HTTPS",
+                "elasticloadbalancing:SecurityPolicy": "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04"
               }
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*"
-            ],
+            "resources": ["arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -79,11 +73,9 @@
                 "aws:ResourceTag/${managedByTag}": "runtime",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceId}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              },
-              "StringEqualsIfExists": {
-                "elasticloadbalancing:SecurityPolicy": "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04",
-                "elasticloadbalancing:ListenerProtocol": "HTTPS"
+                "aws:RequestTag/${managedByTag}": "runtime",
+                "elasticloadbalancing:ListenerProtocol": "HTTPS",
+                "elasticloadbalancing:SecurityPolicy": "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04"
               }
             }
           }
@@ -163,7 +155,9 @@
           }
         }
       },
-      // Certificate rotation and TLS policy moves, with the same limits as CreateListener above.
+      // Certificate rotation and TLS policy moves on this stack's HTTPS listeners, with the same
+      // target group and certificate limits as CreateListener above. A modify that names neither
+      // the TLS policy nor the protocol keeps the listener's own, so both are checked if present.
       {
         "label": "update-public-load-balancer-listener",
         "description": "Rotate the certificate and TLS policy of daemon ALB listeners.",
