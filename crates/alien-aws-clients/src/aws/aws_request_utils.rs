@@ -420,18 +420,40 @@ pub async fn sign_send_no_response_retrying_when(
         .await
 }
 
-/// Whether a failed call may succeed if it is sent again, except that an access denial is final.
-/// The caller's grants do not change between attempts, so resending a denied call only delays
-/// the denial, and callers that handle it (a delete that moves on and reports the object it
-/// could not delete) must see it at once.
-pub fn is_retryable_unless_denied(error: &AlienError<ErrorData>) -> bool {
+/// Whether a failed call may succeed if it is sent again. Final answers are returned at once:
+/// an access denial (the caller's grants do not change between attempts), and a 4xx whose code
+/// says the object already exists (`Duplicate…`, `….Duplicate`) or a quota is reached
+/// (`TooMany…`). Resending those only delays the same answer by seconds, and callers that handle
+/// it (a delete that moves on, a create that reports a conflicting object) must see it at once.
+/// Other 4xx answers are still sent again: some pass once the service catches up, like a
+/// certificate imported a moment ago or a security group just created.
+pub fn is_retryable_unless_final(error: &AlienError<ErrorData>) -> bool {
     match &error.error {
         Some(ErrorData::HttpResponseError {
             http_status: 401 | 403,
             ..
         }) => false,
+        Some(ErrorData::HttpResponseError {
+            http_status: 400..=499,
+            http_response_text: Some(text),
+            ..
+        }) if xml_error_code(text).is_some_and(|code| {
+            code.starts_with("Duplicate")
+                || code.ends_with(".Duplicate")
+                || code.starts_with("TooMany")
+        }) =>
+        {
+            false
+        }
         _ => error.retryable,
     }
+}
+
+/// The `<Code>` of an AWS XML error body.
+fn xml_error_code(body: &str) -> Option<&str> {
+    let start = body.find("<Code>")? + "<Code>".len();
+    let end = start + body[start..].find("</Code>")?;
+    Some(body[start..end].trim())
 }
 
 /// Sign the request and deserialize an XML response into `T`, retrying only throttling.

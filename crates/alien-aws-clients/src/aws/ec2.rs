@@ -275,7 +275,8 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
 
 #[derive(Debug, Clone, Copy)]
 enum Attempts {
-    /// Sent again on transient failures; an access denial is returned at once.
+    /// Sent again on transient failures; a denial, a duplicate or a full quota is returned at
+    /// once.
     Retried,
     /// Only a throttled request is sent again.
     ThrottlingOnly,
@@ -369,7 +370,7 @@ impl Ec2Client {
                 crate::aws::aws_request_utils::sign_send_xml_retrying_when(
                     builder,
                     &self.sign_config(),
-                    crate::aws::aws_request_utils::is_retryable_unless_denied,
+                    crate::aws::aws_request_utils::is_retryable_unless_final,
                 )
                 .await
             }
@@ -409,7 +410,7 @@ impl Ec2Client {
         let result = crate::aws::aws_request_utils::sign_send_no_response_retrying_when(
             builder,
             &self.sign_config(),
-            crate::aws::aws_request_utils::is_retryable_unless_denied,
+            crate::aws::aws_request_utils::is_retryable_unless_final,
         )
         .await;
 
@@ -5013,6 +5014,44 @@ mod tests {
 
         assert_eq!(delete.hits_async().await, 1);
         assert_eq!(error.code, "REMOTE_ACCESS_DENIED");
+    }
+
+    /// A rule that is already in the security group gives the same answer on every attempt.
+    #[tokio::test]
+    async fn a_duplicate_ingress_rule_is_sent_once() {
+        let server = MockServer::start_async().await;
+        let authorize = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .body_contains("Action=AuthorizeSecurityGroupIngress");
+                then.status(400).body(
+                    r#"<Response><Errors><Error><Code>InvalidPermission.Duplicate</Code><Message>the specified rule "peer: 0.0.0.0/0, TCP, from port: 80, to port: 80, ALLOW" already exists</Message></Error></Errors><RequestID>1</RequestID></Response>"#,
+                );
+            })
+            .await;
+
+        let error = client(&server)
+            .authorize_security_group_ingress(
+                AuthorizeSecurityGroupIngressRequest::builder()
+                    .group_id("sg-0123456789abcdef0".to_string())
+                    .ip_permissions(vec![IpPermission {
+                        ip_protocol: "tcp".to_string(),
+                        from_port: Some(80),
+                        to_port: Some(80),
+                        ip_ranges: Some(vec![IpRange {
+                            cidr_ip: "0.0.0.0/0".to_string(),
+                            description: None,
+                        }]),
+                        ipv6_ranges: None,
+                        user_id_group_pairs: None,
+                    }])
+                    .build(),
+            )
+            .await
+            .expect_err("the rule exists");
+
+        assert_eq!(authorize.hits_async().await, 1);
+        assert_eq!(error.code, "REMOTE_RESOURCE_CONFLICT");
     }
 
     /// Transient failures are still sent again.

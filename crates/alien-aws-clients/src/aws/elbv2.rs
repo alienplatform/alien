@@ -194,8 +194,12 @@ impl Elbv2Client {
             .content_sha256(&form_body)
             .body(form_body.clone());
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await;
+        let result = crate::aws::aws_request_utils::sign_send_xml_retrying_when(
+            builder,
+            &self.sign_config(),
+            crate::aws::aws_request_utils::is_retryable_unless_final,
+        )
+        .await;
 
         Self::map_result(result, operation, resource, Some(&form_body))
     }
@@ -221,9 +225,12 @@ impl Elbv2Client {
             .content_sha256(&form_body)
             .body(form_body.clone());
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
-                .await;
+        let result = crate::aws::aws_request_utils::sign_send_no_response_retrying_when(
+            builder,
+            &self.sign_config(),
+            crate::aws::aws_request_utils::is_retryable_unless_final,
+        )
+        .await;
 
         Self::map_result(result, operation, resource, Some(&form_body))
     }
@@ -2307,5 +2314,142 @@ mod describe_tags_tests {
             .expect_err("21 ARNs are more than one call takes");
         assert_eq!(error.code, "INVALID_INPUT");
         assert_eq!(mock.hits_async().await, 0);
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+    use alien_core::{AwsClientConfig, AwsCredentials, AwsServiceOverrides};
+    use httpmock::prelude::*;
+    use std::collections::HashMap;
+
+    const LOAD_BALANCER_ARN: &str = "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/stack-a-api-alb/0123456789abcdef";
+
+    fn client(server: &MockServer) -> Elbv2Client {
+        let config = AwsClientConfig {
+            account_id: "123456789012".to_string(),
+            region: "us-east-1".to_string(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "test-access".to_string(),
+                secret_access_key: "test-secret".to_string(),
+                session_token: None,
+            },
+            service_overrides: Some(AwsServiceOverrides {
+                endpoints: HashMap::from([("elasticloadbalancing".to_string(), server.base_url())]),
+            }),
+        };
+        Elbv2Client::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(config),
+        )
+    }
+
+    /// An error body as ELB sends it, with the account id and names replaced.
+    fn error_body(code: &str, message: &str) -> String {
+        format!(
+            r#"<ErrorResponse xmlns="http://elasticloadbalancing.amazonaws.com/doc/2015-12-01/">
+  <Error>
+    <Type>Sender</Type>
+    <Code>{code}</Code>
+    <Message>{message}</Message>
+  </Error>
+  <RequestId>e8945f67-8f27-4f8e-9b90-594fde9878b8</RequestId>
+</ErrorResponse>"#
+        )
+    }
+
+    /// Sends a port 80 CreateListener answered with `status` and `body`; returns the error and
+    /// how many times the request was sent.
+    async fn create_listener_answered(status: u16, body: String) -> (AlienError<ErrorData>, usize) {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST).body_contains("Action=CreateListener");
+                then.status(status)
+                    .header("content-type", "text/xml")
+                    .body(body);
+            })
+            .await;
+        let error = client(&server)
+            .create_listener(
+                CreateListenerRequest::builder()
+                    .load_balancer_arn(LOAD_BALANCER_ARN.to_string())
+                    .protocol("HTTP".to_string())
+                    .port(80)
+                    .default_actions(vec![Action::builder()
+                        .action_type("redirect".to_string())
+                        .redirect_config(RedirectActionConfig {
+                            status_code: "HTTP_301".to_string(),
+                            protocol: Some("HTTPS".to_string()),
+                            port: Some("443".to_string()),
+                            host: None,
+                            path: None,
+                            query: None,
+                        })
+                        .build()])
+                    .build(),
+            )
+            .await
+            .expect_err("ELB rejects the listener");
+        (error, mock.hits_async().await)
+    }
+
+    /// The role's grants don't change between attempts: a denied call is sent once instead of
+    /// four times over several seconds.
+    #[tokio::test]
+    async fn a_denied_call_is_sent_once() {
+        let (error, sent) = create_listener_answered(
+            403,
+            error_body(
+                "AccessDenied",
+                &format!("User: arn:aws:sts::123456789012:assumed-role/stack-a-management/session is not authorized to perform: elasticloadbalancing:CreateListener on resource: {LOAD_BALANCER_ARN} because no identity-based policy allows the elasticloadbalancing:CreateListener action"),
+            ),
+        )
+        .await;
+        assert_eq!(sent, 1);
+        assert_eq!(error.code, "REMOTE_ACCESS_DENIED");
+    }
+
+    /// A listener already on the port, or a load balancer at its listener quota, gives the same
+    /// answer on every attempt.
+    #[tokio::test]
+    async fn a_duplicate_or_a_full_quota_is_sent_once() {
+        let (error, sent) = create_listener_answered(
+            400,
+            error_body(
+                "DuplicateListener",
+                &format!("A listener already exists on this port for this load balancer '{LOAD_BALANCER_ARN}'"),
+            ),
+        )
+        .await;
+        assert_eq!(sent, 1);
+        assert_eq!(error.code, "REMOTE_RESOURCE_CONFLICT");
+
+        let (error, sent) = create_listener_answered(
+            400,
+            error_body(
+                "TooManyListeners",
+                &format!("The maximum number of listeners on load balancer '{LOAD_BALANCER_ARN}' has been reached"),
+            ),
+        )
+        .await;
+        assert_eq!(sent, 1);
+        assert_eq!(error.code, "QUOTA_EXCEEDED");
+    }
+
+    /// Other 4xx answers are still sent again: ELB can take a moment to see a certificate that
+    /// ACM just imported.
+    #[tokio::test]
+    async fn a_certificate_elb_cannot_see_yet_is_sent_again() {
+        let (_, sent) = create_listener_answered(
+            400,
+            error_body(
+                "CertificateNotFound",
+                "Certificate 'arn:aws:acm:us-east-1:123456789012:certificate/0123' not found",
+            ),
+        )
+        .await;
+        assert_eq!(sent, 4, "one send and three retries");
     }
 }
