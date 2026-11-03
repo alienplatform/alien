@@ -77,7 +77,9 @@ pub fn parse_memory_bytes(s: &str) -> Result<u64, String> {
 // ---------------------------------------------------------------------------
 
 /// Instance family classification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
 pub enum InstanceFamily {
     Burstable,
     GeneralPurpose,
