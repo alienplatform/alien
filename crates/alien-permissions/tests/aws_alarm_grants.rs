@@ -274,9 +274,10 @@ fn alarm_grants_reach_only_this_deployments_alarms_without_actions() {
 }
 
 /// "a" and "a-prod" are two deployments; every name of a-prod's starts with "a-". Its alarms
-/// carry its own tag and stay out of reach of a's grants. An untagged alarm named under a-prod
-/// can't be tagged into a or deleted by it. Only the stack binding can still overwrite one, and
-/// the overwrite leaves it untagged (CloudWatch ignores tags on an update).
+/// carry its own tag, and none of a's alarm writes is allowed on them. On an untagged alarm
+/// named under a-prod the only write allowed is an overwrite, through the stack binding, which
+/// leaves it untagged (CloudWatch ignores tags on an update): it can't be deleted, retagged or
+/// untagged.
 #[test]
 fn a_deployment_cannot_take_over_the_alarms_of_a_deployment_whose_name_extends_its_own() {
     let own_tag = [(ALIEN_STACK_TAG_KEY, "a")];
@@ -286,24 +287,27 @@ fn a_deployment_cannot_take_over_the_alarms_of_a_deployment_whose_name_extends_i
         for target in [BindingTarget::Stack, BindingTarget::Resource] {
             let statements = alarm_statements_for(id, target, &context_for("a", "api"));
             let decide = |request: Request| evaluate(&statements, &request);
+            // Every write except an overwrite is denied, on a-prod's tagged alarm and on an
+            // untagged one alike.
             for resource_tags in [&prod_tag[..], &[]] {
-                assert_eq!(
-                    decide(
-                        Request::new("cloudwatch:TagResource", prod_alarm)
-                            .request_tags(&own_tag)
-                            .resource_tags(resource_tags)
-                    ),
-                    Decision::NotAllowed,
-                    "{id} {target:?} retag {resource_tags:?}"
-                );
-                assert_eq!(
-                    decide(
-                        Request::new("cloudwatch:DeleteAlarms", prod_alarm)
-                            .resource_tags(resource_tags)
-                    ),
-                    Decision::NotAllowed,
-                    "{id} {target:?} delete {resource_tags:?}"
-                );
+                for action in [
+                    "cloudwatch:TagResource",
+                    "cloudwatch:UntagResource",
+                    "cloudwatch:DeleteAlarms",
+                    "cloudwatch:SetAlarmState",
+                    "cloudwatch:EnableAlarmActions",
+                    "cloudwatch:DisableAlarmActions",
+                ] {
+                    assert_eq!(
+                        decide(
+                            Request::new(action, prod_alarm)
+                                .request_tags(&own_tag)
+                                .resource_tags(resource_tags)
+                        ),
+                        Decision::NotAllowed,
+                        "{id} {target:?} {action} {resource_tags:?}"
+                    );
+                }
             }
             assert_eq!(
                 decide(
