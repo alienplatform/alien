@@ -10,7 +10,7 @@
 
 use super::helpers::{
     assert_terraform_valid, assert_terraform_variable_plan_invalid_contains, render,
-    snapshot_module,
+    snapshot_module, subnet_public_ip_assignment,
 };
 use alien_core::{
     AzureResourceGroup, CapacityGroup, ComputeCluster, ComputePoolSelection, ComputeSettings,
@@ -549,6 +549,28 @@ fn aks_managed_cluster_sizes_node_pool_for_kubernetes_workload_requests() {
         "AKS create-mode should fit the full-stack workload within a 4-vCPU node pool"
     );
     assert_terraform_valid(&module, "aks_full_stack_capacity");
+}
+
+/// The VPC a managed EKS cluster brings: nodes run in the private subnets, and no
+/// subnet assigns public IP addresses on launch.
+#[test]
+fn eks_managed_cluster_subnets_do_not_assign_public_ips() {
+    let stack = Stack::new("eks-managed".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Eks, StackSettings::default());
+
+    let subnets = subnet_public_ip_assignment(&module);
+    assert!(!subnets.is_empty(), "the cluster declares subnets");
+    assert!(subnets.iter().all(|(_, assigns)| !assigns), "{subnets:?}");
 }
 
 #[test]

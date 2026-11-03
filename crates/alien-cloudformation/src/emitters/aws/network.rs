@@ -287,7 +287,7 @@ fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
         );
         public_subnet
             .properties
-            .insert("MapPublicIpOnLaunch".to_string(), CfExpression::from(true));
+            .insert("MapPublicIpOnLaunch".to_string(), CfExpression::from(false));
         public_subnet
             .properties
             .insert("Tags".to_string(), tags(ctx));

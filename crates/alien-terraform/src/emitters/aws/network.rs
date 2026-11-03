@@ -371,7 +371,7 @@ fn create_topology(
                 "availability_zone",
                 expr::raw("data.aws_availability_zones.available.names[count.index]"),
             ),
-            attr("map_public_ip_on_launch", Expression::Bool(true)),
+            attr("map_public_ip_on_launch", Expression::Bool(false)),
             attr("tags", tags(ctx, "network")),
         ],
     ));

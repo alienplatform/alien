@@ -317,7 +317,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                             "data.aws_availability_zones.{label}_available[0].names[count.index]"
                         )),
                     ),
-                    attr("map_public_ip_on_launch", Expression::Bool(true)),
+                    attr("map_public_ip_on_launch", Expression::Bool(false)),
                     attr("tags", eks_subnet_tags(label, "public", "elb")),
                 ],
             ),

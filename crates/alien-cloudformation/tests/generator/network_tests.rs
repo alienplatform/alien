@@ -1,6 +1,9 @@
 //! Network axis — `Create` (full topology) vs `ByoVpcAws` (parameter-driven).
 
-use super::helpers::{render_built_ins, render_built_ins_template, render_sample, sample_stack};
+use super::helpers::{
+    render_built_ins, render_built_ins_template, render_sample, sample_stack,
+    subnet_public_ip_assignment,
+};
 use alien_cloudformation::{CloudFormationTarget, RegistrationMode};
 use alien_core::{
     HeartbeatsMode, Network, NetworkSettings, ResourceLifecycle, Stack, StackSettings,
@@ -36,6 +39,40 @@ fn create_network_three_az_emits_full_topology() {
         "create network 3 az",
     );
     insta::assert_snapshot!("network_create_three_az", yaml);
+}
+
+/// Instances launched into the network's subnets get no public IP address unless
+/// they ask for one; public subnets still route to the internet gateway.
+#[test]
+fn created_subnets_do_not_assign_public_ips() {
+    let settings = StackSettings {
+        network: Some(NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        }),
+        ..StackSettings::default()
+    };
+    let stack = Stack::new("network-create".to_string())
+        .add(
+            Network::new("default-network".to_string())
+                .settings(settings.network.clone().expect("network settings"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let (template, _) = render_built_ins_template(
+        &stack,
+        settings,
+        RegistrationMode::OutputsFallback,
+        CloudFormationTarget::Aws,
+        "aws",
+        "create network subnets",
+    );
+
+    let subnets = subnet_public_ip_assignment(&template);
+    assert!(!subnets.is_empty(), "the network declares subnets");
+    assert!(subnets.iter().all(|(_, assigns)| !assigns), "{subnets:?}");
 }
 
 #[test]

@@ -256,7 +256,7 @@ Resources:
             - CidrBlock
           - 6
           - 8
-      MapPublicIpOnLaunch: true
+      MapPublicIpOnLaunch: false
       Tags:
       - Key: managed-by
         Value: setup
@@ -317,7 +317,7 @@ Resources:
             - CidrBlock
           - 6
           - 8
-      MapPublicIpOnLaunch: true
+      MapPublicIpOnLaunch: false
       Tags:
       - Key: managed-by
         Value: setup
@@ -378,7 +378,7 @@ Resources:
             - CidrBlock
           - 6
           - 8
-      MapPublicIpOnLaunch: true
+      MapPublicIpOnLaunch: false
       Tags:
       - Key: managed-by
         Value: setup
