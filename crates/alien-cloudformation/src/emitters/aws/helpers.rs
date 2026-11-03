@@ -45,39 +45,125 @@ const MAX_MANAGED_POLICY_BYTES: usize = 5_500;
 const MAX_POLICY_STACK_NAME_LEN: usize = 40;
 const MAX_POLICY_REGION_LEN: usize = 16;
 
-/// Split IAM statements into documents below AWS's managed-policy size limit.
+/// Merges statements that differ only in their actions (see [`merge_statement_actions`]), then
+/// packs them into as few documents below AWS's managed-policy size limit as fit, first-fit
+/// decreasing: largest statement first (ties keep their order), each into the first
+/// document it fits. A greedy split in the original order leaves room unused in most documents,
+/// which can push a role over the per-role quota of attached policies. Each document lists its
+/// statements in their original order, and the same statements always give the same documents.
 pub(crate) fn chunk_managed_policy_statements(
     statements: Vec<CfExpression>,
 ) -> Result<Vec<CfExpression>> {
-    let mut chunks = Vec::new();
-    let mut current = Vec::new();
-
-    for statement in statements {
-        let mut candidate = current.clone();
-        candidate.push(statement.clone());
-        if managed_policy_document_size(&candidate)? <= MAX_MANAGED_POLICY_BYTES {
-            current = candidate;
-            continue;
-        }
-
-        if current.is_empty()
-            || managed_policy_document_size(std::slice::from_ref(&statement))?
-                > MAX_MANAGED_POLICY_BYTES
-        {
+    let statements = merge_statement_actions(statements)?;
+    let mut sized = Vec::with_capacity(statements.len());
+    for (index, statement) in statements.into_iter().enumerate() {
+        let size = managed_policy_document_size(std::slice::from_ref(&statement))?;
+        if size > MAX_MANAGED_POLICY_BYTES {
             return Err(AlienError::new(ErrorData::GenericError {
                 message: "AWS IAM statement is too large for a managed policy".to_string(),
             }));
         }
+        sized.push((size, index, statement));
+    }
+    sized.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
 
-        chunks.push(managed_policy_document(current));
-        current = vec![statement];
+    let mut chunks: Vec<Vec<(usize, CfExpression)>> = Vec::new();
+    for (_, index, statement) in sized {
+        let mut placed = false;
+        for chunk in chunks.iter_mut() {
+            let mut candidate: Vec<CfExpression> = chunk
+                .iter()
+                .map(|(_, statement)| statement.clone())
+                .collect();
+            candidate.push(statement.clone());
+            if managed_policy_document_size(&candidate)? <= MAX_MANAGED_POLICY_BYTES {
+                chunk.push((index, statement.clone()));
+                placed = true;
+                break;
+            }
+        }
+        if !placed {
+            chunks.push(vec![(index, statement)]);
+        }
+    }
+    Ok(chunks
+        .into_iter()
+        .map(|mut chunk| {
+            chunk.sort_by_key(|(index, _)| *index);
+            managed_policy_document(chunk.into_iter().map(|(_, statement)| statement).collect())
+        })
+        .collect())
+}
+
+/// Merges statements that differ only in their actions: same effect, same resources and same
+/// conditions. A statement allows or denies each of its actions on each resource under its
+/// conditions independently, so one statement with the union of the actions means exactly what
+/// the separate statements meant, and the shared resources and conditions are written once.
+/// The merged statement keeps the first statement's Sid and position, and is never larger than
+/// a policy holds. Statements with `NotAction` or `NotResource` stay as they are.
+fn merge_statement_actions(statements: Vec<CfExpression>) -> Result<Vec<CfExpression>> {
+    fn scope(statement: &IndexMap<String, CfExpression>) -> Option<IndexMap<&str, &CfExpression>> {
+        if !statement.contains_key("Action")
+            || statement.contains_key("NotAction")
+            || statement.contains_key("NotResource")
+        {
+            return None;
+        }
+        Some(
+            statement
+                .iter()
+                .filter(|(key, _)| !matches!(key.as_str(), "Sid" | "Action"))
+                .map(|(key, value)| (key.as_str(), value))
+                .collect(),
+        )
+    }
+    fn actions(value: &CfExpression) -> Vec<CfExpression> {
+        match value {
+            CfExpression::List(values) => values.clone(),
+            value => vec![value.clone()],
+        }
     }
 
-    if !current.is_empty() {
-        chunks.push(managed_policy_document(current));
+    let mut merged: Vec<CfExpression> = Vec::with_capacity(statements.len());
+    for statement in statements {
+        let CfExpression::Object(object) = &statement else {
+            merged.push(statement);
+            continue;
+        };
+        let Some(statement_scope) = scope(object) else {
+            merged.push(statement);
+            continue;
+        };
+        let mut placed = false;
+        for existing in merged.iter_mut() {
+            let CfExpression::Object(existing) = existing else {
+                continue;
+            };
+            if scope(existing).as_ref() != Some(&statement_scope) {
+                continue;
+            }
+            let mut combined = actions(&existing["Action"]);
+            for action in actions(&object["Action"]) {
+                if !combined.contains(&action) {
+                    combined.push(action);
+                }
+            }
+            let mut candidate = existing.clone();
+            candidate.insert("Action".to_string(), CfExpression::list(combined));
+            // A merge never makes a statement too large for a policy of its own.
+            if managed_policy_document_size(&[CfExpression::Object(candidate.clone())])?
+                <= MAX_MANAGED_POLICY_BYTES
+            {
+                *existing = candidate;
+                placed = true;
+                break;
+            }
+        }
+        if !placed {
+            merged.push(statement);
+        }
     }
-
-    Ok(chunks)
+    Ok(merged)
 }
 
 fn managed_policy_document(statements: Vec<CfExpression>) -> CfExpression {
@@ -813,7 +899,92 @@ mod tests {
             assert!(size <= 6_144, "expanded policy uses {size} bytes");
             actual.extend(resolved["Statement"].as_array().unwrap().iter().cloned());
         }
-        assert_eq!(actual, *expected["Statement"].as_array().unwrap());
+        // Merged and packed, the documents grant and deny exactly what the statements did.
+        assert_eq!(
+            expanded(&actual),
+            expanded(expected["Statement"].as_array().unwrap())
+        );
+    }
+
+    /// JSON with object keys sorted, so equal values written in another key order compare equal.
+    fn canonical(value: &serde_json::Value) -> String {
+        match value {
+            serde_json::Value::Object(map) => {
+                let sorted: std::collections::BTreeMap<&String, String> = map
+                    .iter()
+                    .map(|(key, value)| (key, canonical(value)))
+                    .collect();
+                format!("{sorted:?}")
+            }
+            serde_json::Value::Array(values) => {
+                format!("{:?}", values.iter().map(canonical).collect::<Vec<_>>())
+            }
+            value => value.to_string(),
+        }
+    }
+
+    /// Every (effect, action, resource, condition) the statements grant or deny.
+    fn expanded(statements: &[serde_json::Value]) -> std::collections::BTreeSet<String> {
+        let list = |value: &serde_json::Value| match value {
+            serde_json::Value::Array(values) => values.clone(),
+            serde_json::Value::Null => Vec::new(),
+            value => vec![value.clone()],
+        };
+        let mut expanded = std::collections::BTreeSet::new();
+        for statement in statements {
+            let resources = if statement.get("NotResource").is_some() {
+                vec![serde_json::json!({ "NotResource": statement["NotResource"] })]
+            } else {
+                list(&statement["Resource"])
+            };
+            let actions = if statement.get("NotAction").is_some() {
+                vec![serde_json::json!({ "NotAction": statement["NotAction"] })]
+            } else {
+                list(&statement["Action"])
+            };
+            for action in &actions {
+                for resource in &resources {
+                    expanded.insert(format!(
+                        "{} {} {} {}",
+                        statement["Effect"],
+                        canonical(action),
+                        canonical(resource),
+                        canonical(&statement["Condition"])
+                    ));
+                }
+            }
+        }
+        expanded
+    }
+
+    /// Statements a user split to keep each one within a policy stay split when merging them
+    /// would not fit one policy.
+    #[test]
+    fn a_merge_that_would_not_fit_one_policy_keeps_the_statements_apart() {
+        let long = |sid: &str, prefix: &str| {
+            CfExpression::object([
+                ("Sid", CfExpression::from(sid)),
+                ("Effect", CfExpression::from("Allow")),
+                (
+                    "Action",
+                    CfExpression::list(
+                        (0..160).map(|n| CfExpression::from(format!("s3:{prefix}Action{n:03}"))),
+                    ),
+                ),
+                ("Resource", CfExpression::from("arn:aws:s3:::bucket/*")),
+            ])
+        };
+        let chunks =
+            chunk_managed_policy_statements(vec![long("First", "Get"), long("Second", "Put")])
+                .unwrap();
+        let statements: Vec<_> = chunks
+            .iter()
+            .flat_map(|chunk| {
+                let value = serde_json::to_value(chunk).unwrap();
+                value["Statement"].as_array().unwrap().clone()
+            })
+            .collect();
+        assert_eq!(statements.len(), 2);
     }
 
     #[test]

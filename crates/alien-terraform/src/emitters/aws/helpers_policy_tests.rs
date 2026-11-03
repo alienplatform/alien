@@ -160,7 +160,17 @@ fn bounded_catalog_chunks_preserve_conditions_and_fit_the_attachment_budget() {
     crate::iam_limits::RenderedModule::new(fragment.resource_blocks, indexmap::IndexMap::new())
         .check()
         .unwrap();
-    assert_eq!(actual, *expected["Statement"].as_array().unwrap());
+    // Merged and packed, the policies grant and deny exactly what the statements did.
+    let parsed = |statements: &[serde_json::Value]| -> Vec<AwsIamStatement> {
+        statements
+            .iter()
+            .map(|statement| serde_json::from_value(statement.clone()).unwrap())
+            .collect()
+    };
+    assert_eq!(
+        expanded(&parsed(&actual)),
+        expanded(&parsed(expected["Statement"].as_array().unwrap()))
+    );
     let writes: Vec<_> = actual
         .iter()
         .filter(|statement| {
@@ -181,4 +191,139 @@ fn bounded_catalog_chunks_preserve_conditions_and_fit_the_attachment_budget() {
             )
         );
     }
+}
+
+/// The statements of an automatic-setup management role (every provision set), as rendered for
+/// a release whose grants need 19 policies with a split in statement order: with the setup
+/// policy and the permissions boundary that is 21 attachments, over the default quota of 20.
+fn automatic_management_statements() -> Vec<AwsIamStatement> {
+    serde_json::from_str(include_str!(
+        "testdata/automatic-management-statements.json"
+    ))
+    .unwrap()
+}
+
+/// JSON with object keys sorted, so equal conditions written in another key order compare equal.
+fn canonical(value: &Value) -> String {
+    match value {
+        Value::Object(map) => {
+            let sorted: std::collections::BTreeMap<&String, String> = map
+                .iter()
+                .map(|(key, value)| (key, canonical(value)))
+                .collect();
+            format!("{sorted:?}")
+        }
+        Value::Array(values) => format!("{:?}", values.iter().map(canonical).collect::<Vec<_>>()),
+        value => value.to_string(),
+    }
+}
+
+/// Every (effect, action, resource, condition) a set of statements grants or denies.
+fn expanded(statements: &[AwsIamStatement]) -> std::collections::BTreeSet<String> {
+    statements
+        .iter()
+        .flat_map(|statement| {
+            let resources = if statement.not_resource.is_empty() {
+                statement
+                    .resource
+                    .iter()
+                    .map(|r| format!("Resource {r}"))
+                    .collect::<Vec<_>>()
+            } else {
+                vec![format!("NotResource {:?}", statement.not_resource)]
+            };
+            let condition = canonical(&serde_json::to_value(&statement.condition).unwrap());
+            statement.action.iter().flat_map(move |action| {
+                let condition = condition.clone();
+                let effect = statement.effect.clone();
+                resources
+                    .clone()
+                    .into_iter()
+                    .map(move |resource| format!("{effect} {action} {resource} {condition}"))
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn automatic_management_statements_fit_the_attachment_quota() {
+    let statements = automatic_management_statements();
+    let chunks = chunk_iam_statements(statements.clone(), 5_500).unwrap();
+    // The setup policy and the permissions boundary are attached next to these. Keep two
+    // attachments of headroom below AWS's default quota of 20 per role.
+    assert!(chunks.len() + 2 <= 18, "{} policies", chunks.len());
+
+    // Merged and packed, the policies grant and deny exactly what the statements did.
+    for chunk in &chunks {
+        assert!(policy_document_size(chunk).unwrap() <= 5_500);
+    }
+    assert_eq!(expanded(&chunks.concat()), expanded(&statements));
+    // No Sid is used twice.
+    let all = chunks.concat();
+    let sids: std::collections::BTreeSet<&str> = all.iter().map(|s| s.sid.as_str()).collect();
+    assert_eq!(sids.len(), all.len());
+}
+
+#[test]
+fn only_statements_that_differ_in_their_actions_are_merged() {
+    let mut read = statement(1, 1);
+    read.action = vec!["s3:GetObject".into()];
+    let mut write = read.clone();
+    write.sid = "Write".into();
+    write.action = vec!["s3:PutObject".into(), "s3:GetObject".into()];
+    let mut other_resource = read.clone();
+    other_resource.sid = "OtherResource".into();
+    other_resource.resource = vec!["arn:aws:s3:::other/*".into()];
+    let mut denied = read.clone();
+    denied.sid = "Denied".into();
+    denied.effect = "Deny".into();
+    let mut excluded = read.clone();
+    excluded.sid = "Excluded".into();
+    excluded.resource = Vec::new();
+    excluded.not_resource = vec!["arn:aws:s3:::other/*".into()];
+    let mut excluded_too = excluded.clone();
+    excluded_too.sid = "ExcludedToo".into();
+    let input = vec![read, write, other_resource, denied, excluded, excluded_too];
+
+    let merged = merge_iam_statements(input.clone(), 5_500).unwrap();
+    let sids: Vec<&str> = merged.iter().map(|s| s.sid.as_str()).collect();
+    assert_eq!(
+        sids,
+        [
+            "Read1",
+            "OtherResource",
+            "Denied",
+            "Excluded",
+            "ExcludedToo"
+        ]
+    );
+    assert_eq!(merged[0].action, ["s3:GetObject", "s3:PutObject"]);
+    assert_eq!(expanded(&merged), expanded(&input));
+}
+
+#[test]
+fn packing_the_same_statements_twice_gives_the_same_policies() {
+    let first = chunk_iam_statements(automatic_management_statements(), 5_500).unwrap();
+    let second = chunk_iam_statements(automatic_management_statements(), 5_500).unwrap();
+    assert_eq!(first, second);
+}
+
+/// Statements a user split to keep each one within a policy stay split when merging them would
+/// not fit one policy.
+#[test]
+fn a_merge_that_would_not_fit_one_policy_keeps_the_statements_apart() {
+    let long = |sid: &str, prefix: &str| {
+        let mut statement = statement(1, 1);
+        statement.sid = sid.into();
+        statement.action = (0..160)
+            .map(|n| format!("s3:{prefix}Action{n:03}"))
+            .collect();
+        statement
+    };
+    let input = vec![long("First", "Get"), long("Second", "Put")];
+    assert!(policy_document_size(&input[..1]).unwrap() <= 5_500);
+    let chunks = chunk_iam_statements(input.clone(), 5_500).unwrap();
+    let all = chunks.concat();
+    assert_eq!(all.len(), 2);
+    assert_eq!(expanded(&all), expanded(&input));
 }
