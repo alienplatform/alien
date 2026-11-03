@@ -13,10 +13,11 @@ use alien_core::stack_authoring::{
 };
 use alien_core::{
     ComputeChoiceRange, ComputeCluster, Daemon as DaemonConfig, DaemonCode, DaemonRuntime,
-    ExposeProtocol, GpuSpec, HealthCheck, Platform, PublicEndpoint, Resource, ResourceEntry,
-    ResourceLifecycle, ResourceRef, ResourceType, Stack, StackInputDefaultValue,
-    StackInputDefinition, StackInputEnvironmentMapping, StackInputKind, StackInputProvider,
-    StackInputValidation, Storage as StorageConfig, ToolchainConfig, APEX_HOST_LABEL,
+    ExposeProtocol, GpuSpec, HealthCheck, PermissionProfile, PermissionSetReference,
+    PermissionsConfig, Platform, PublicEndpoint, Resource, ResourceEntry, ResourceLifecycle,
+    ResourceRef, ResourceType, Stack, StackInputDefaultValue, StackInputDefinition,
+    StackInputEnvironmentMapping, StackInputKind, StackInputProvider, StackInputValidation,
+    Storage as StorageConfig, ToolchainConfig, APEX_HOST_LABEL,
 };
 use alien_error::AlienError;
 use indexmap::IndexMap;
@@ -64,6 +65,7 @@ impl Resolver<'_> {
             daemon,
             storage,
             input,
+            permissions,
         } = document;
 
         self.check_id(&name, "stack name", MAX_STACK_NAME_LENGTH)?;
@@ -111,6 +113,8 @@ impl Resolver<'_> {
         }
 
         let mut resources = IndexMap::new();
+        let permissions = self.permissions(in_order(permissions), &declared)?;
+
         let mut inputs = Inputs::default();
         for (id, input) in in_order(input) {
             let definition =
@@ -160,6 +164,7 @@ impl Resolver<'_> {
                 cluster_id.as_deref(),
                 &pool_ids,
                 &declared,
+                &permissions,
             )?;
             let mut resource = entry(Resource::new(config), lifecycle);
             if let Some(scope) = scope {
@@ -180,6 +185,7 @@ impl Resolver<'_> {
         let mut stack = Stack::new(name.into_inner()).build();
         stack.resources = resources;
         stack.supported_platforms = platforms;
+        stack.permissions = permissions;
         stack.inputs = inputs.finish();
         Ok(stack)
     }
@@ -368,6 +374,7 @@ impl Resolver<'_> {
         cluster_id: Option<&str>,
         pool_ids: &[&str],
         declared: &Declared,
+        permissions: &PermissionsConfig,
     ) -> Result<(
         DaemonConfig,
         ResourceLifecycle,
@@ -507,13 +514,30 @@ impl Resolver<'_> {
             }
         }
 
+        let profile = match daemon.permissions {
+            Some(profile) if permissions.profiles.contains_key(profile.get_ref()) => {
+                Some(profile.into_inner())
+            }
+            Some(profile) => {
+                return Err(self.error(
+                    profile.span(),
+                    format!(
+                        "unknown permission profile '{}'; declare it with a [permissions.{}] table",
+                        profile.get_ref(),
+                        profile.get_ref()
+                    ),
+                ))
+            }
+            None => None,
+        };
+
         let config = DaemonConfig {
             id: daemon_id.clone(),
             links,
             public_endpoints,
             health_check,
             cluster: cluster_id.map(str::to_string),
-            permissions: None,
+            permissions: profile,
             code,
             cpu,
             memory,
@@ -739,6 +763,44 @@ impl Resolver<'_> {
             target_resources: targets,
             var_type: None,
         })
+    }
+
+    fn permissions(
+        &self,
+        profiles: Vec<(Spanned<String>, Spanned<document::Profile>)>,
+        declared: &Declared,
+    ) -> Result<PermissionsConfig> {
+        let mut config = PermissionsConfig::new();
+        for (name, grants) in profiles {
+            self.check_id(&name, "permission profile name", MAX_RESOURCE_ID_LENGTH)?;
+            let mut grants: Vec<_> = grants.into_inner().into_iter().collect();
+            grants.sort_by_key(|(resource, _)| resource.span().start);
+            let mut profile = PermissionProfile::new();
+            for (resource, sets) in grants {
+                if resource.get_ref() != "*" && !declared.contains_key(resource.get_ref()) {
+                    return Err(self.error(
+                        resource.span(),
+                        format!(
+                            "unknown resource '{}'; use a declared resource ID, or \"*\" for every resource",
+                            resource.get_ref()
+                        ),
+                    ));
+                }
+                let sets = sets
+                    .into_iter()
+                    .map(|set| {
+                        if set.get_ref().is_empty() {
+                            Err(self.error(set.span(), "a permission set name cannot be empty"))
+                        } else {
+                            Ok(PermissionSetReference::from_name(set.into_inner()))
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                profile.0.insert(resource.into_inner(), sets);
+            }
+            config.profiles.insert(name.into_inner(), profile);
+        }
+        Ok(config)
     }
 
     fn seconds(&self, duration: &Spanned<Duration>) -> Result<u64> {

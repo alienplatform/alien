@@ -31,6 +31,7 @@ cpu = "500m"
 stop-grace-period = 600
 health = { port = 9000, path = "/ready", method = "HEAD", timeout = "2s", failure-threshold = 5 }
 links = ["artifacts"]
+permissions = "server"
 
 [daemon.server.endpoints]
 console = { port = 9000 }
@@ -48,3 +49,6 @@ platforms = ["aws", "gcp"]
 [daemon.worker.secrets]
 FLEET_SEED = { label = "Fleet seed", description = "Shared seed for fleet identities." }
 WORKER_TOKEN = { description = "Token the worker presents to the scheduler.", platforms = ["aws"] }
+
+[permissions.server]
+artifacts = ["storage/data-read"]

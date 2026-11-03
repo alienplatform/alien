@@ -63,6 +63,15 @@
       "validation": {}
     }
   ],
+  "permissions": {
+    "profiles": {
+      "server": {
+        "artifacts": [
+          "storage/data-read"
+        ]
+      }
+    }
+  },
   "resources": {
     "edge-runtime": {
       "config": {
@@ -183,6 +192,7 @@
           "desired": "128Mi",
           "min": "128Mi"
         },
+        "permissions": "server",
         "pool": "servers",
         "publicEndpoints": [
           {

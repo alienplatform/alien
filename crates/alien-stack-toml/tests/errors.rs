@@ -289,6 +289,22 @@ fn input_errors() {
 }
 
 #[test]
+fn permission_errors() {
+    assert_at(
+        &format!("{DAEMON}permissions = \"runner\"\n"),
+        5,
+        15,
+        "unknown permission profile 'runner'; declare it with a [permissions.runner] table",
+    );
+    assert_at(
+        &format!("{DAEMON}\n[permissions.agent]\ncache = [\"kv/data-read\"]\n"),
+        7,
+        1,
+        "unknown resource 'cache'; use a declared resource ID, or \"*\" for every resource",
+    );
+}
+
+#[test]
 fn env_file_errors() {
     let dir = tempfile::tempdir().unwrap();
     let missing = reject_in(dir.path(), &format!("{DAEMON}env-file = \"app.env\"\n"));

@@ -61,6 +61,11 @@
       "validation": {}
     }
   ],
+  "permissions": {
+    "profiles": {
+      "loader": {}
+    }
+  },
   "resources": {
     "compute": {
       "config": {

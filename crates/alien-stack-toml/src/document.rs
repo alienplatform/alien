@@ -59,7 +59,16 @@ pub struct Document {
     #[serde(default)]
     #[schemars(with = "BTreeMap<String, Input>")]
     pub input: Tables<Input>,
+
+    /// Permission profiles, by name. Each maps a resource ID (or "*" for every resource)
+    /// to the permission sets granted on it, such as `["storage/data-read"]`.
+    #[serde(default)]
+    #[schemars(with = "BTreeMap<String, BTreeMap<String, Vec<String>>>")]
+    pub permissions: Tables<Profile>,
 }
+
+/// A permission profile: permission sets granted per resource ID.
+pub type Profile = IndexMap<Spanned<String>, Vec<Spanned<String>>>;
 
 /// A machine pool. On machines deployments the pool name is what `join --capacity-group` takes.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -199,6 +208,12 @@ pub struct Daemon {
     #[serde(default)]
     #[schemars(with = "Vec<String>")]
     pub links: Vec<Spanned<String>>,
+
+    /// Permission profile that gives the daemon a cloud identity. Omit for none. On AWS,
+    /// GCP and Azure it cannot be combined with `host-access`.
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    pub permissions: Option<Spanned<String>>,
 
     /// Public HTTP endpoints, by name.
     #[serde(default)]
