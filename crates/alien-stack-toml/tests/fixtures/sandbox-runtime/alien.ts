@@ -65,7 +65,11 @@ const loader = new alien.Daemon("loader")
   })
   .link(snapshots)
   .publicEndpoint("api", 8080, { protocol: "http", hostLabel: "@" })
-  .publicEndpoint("shares", 8080, { protocol: "http", hostLabel: "shares", wildcardSubdomains: true })
+  .publicEndpoint("shares", 8080, {
+    protocol: "http",
+    hostLabel: "shares",
+    wildcardSubdomains: true,
+  })
   .build()
 
 export default new alien.Stack("sandbox-runtime")
