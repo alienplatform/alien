@@ -221,7 +221,17 @@ fn catalog_pass_role_grants_require_the_consuming_service() {
         };
         // Render both binding scopes with the boundary selected: legacy grants must
         // disappear, and every remaining Allow must require the consuming service.
+        // Network sets bind the stack only.
+        let resource_scoped = set
+            .platforms
+            .aws
+            .iter()
+            .flatten()
+            .all(|entry| entry.binding.resource.is_some());
         for target in [BindingTarget::Stack, BindingTarget::Resource] {
+            if target == BindingTarget::Resource && !resource_scoped {
+                continue;
+            }
             let generated = AwsRuntimePermissionsGenerator::new()
                 .generate_policy(
                     set,

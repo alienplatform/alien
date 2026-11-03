@@ -1,6 +1,6 @@
 {
   "id": "network/provision",
-  "description": "Allows creating, deleting, and managing network infrastructure (VPCs, subnets, NAT gateways, route tables, security groups, VPC flow logs)",
+  "description": "Allows creating, deleting, and managing network infrastructure (VPCs, subnets, NAT gateways, route tables, security groups)",
   // Note: Network has only "stack" binding since it's shared infrastructure.
   // Resource-scoped permissions don't apply - this is used by the management profile.
   "platforms": {
@@ -158,114 +158,6 @@
           }
         }
       },
-      // The created VPC's flow log and the log group it writes to. A tagged create also needs
-      // the tagging action. The role the flow logs service assumes is in `network/setup`.
-      {
-        "grant": {
-          "actions": ["ec2:CreateFlowLogs"]
-        },
-        "binding": {
-          "stack": {
-            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc-flow-log/*"],
-            "condition": {
-              "StringEquals": {
-                "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
-      },
-      {
-        "grant": {
-          "actions": ["ec2:CreateTags"]
-        },
-        "binding": {
-          "stack": {
-            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc-flow-log/*"],
-            "condition": {
-              "StringEquals": {
-                "ec2:CreateAction": "CreateFlowLogs",
-                "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
-      },
-      // CreateLogGroup with tags also authorizes the tagging actions. They are limited to a
-      // group without this stack's tag, which is the group being created: a group that already
-      // carries ownership tags, such as one a template setup made, cannot be retagged.
-      {
-        "grant": {
-          "actions": ["logs:CreateLogGroup"]
-        },
-        "binding": {
-          "stack": {
-            "resources": [
-              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:${stackPrefix}-*-flow-logs"
-            ],
-            "condition": {
-              "StringEquals": {
-                "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
-      },
-      {
-        "grant": {
-          "actions": ["logs:TagResource", "logs:TagLogGroup"]
-        },
-        "binding": {
-          "stack": {
-            "resources": [
-              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:${stackPrefix}-*-flow-logs"
-            ],
-            "condition": {
-              "StringEquals": {
-                "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              },
-              "Null": {
-                "aws:ResourceTag/${stackTag}": "true"
-              }
-            }
-          }
-        }
-      },
-      // Reading the tags tells this network's group from another with the same name.
-      {
-        "grant": {
-          "actions": ["logs:ListTagsForResource"]
-        },
-        "binding": {
-          "stack": {
-            "resources": [
-              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:${stackPrefix}-*-flow-logs"
-            ]
-          }
-        }
-      },
-      {
-        "grant": {
-          "actions": ["logs:PutRetentionPolicy", "logs:DeleteLogGroup"]
-        },
-        "binding": {
-          "stack": {
-            "resources": [
-              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:${stackPrefix}-*-flow-logs"
-            ],
-            "condition": {
-              "StringEquals": {
-                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
-      },
       // AWS also authorizes these creates against the parent: the VPC for subnets, route
       // tables and security groups, the subnet and Elastic IP for NAT gateways. Request tags
       // don't apply to a parent, so the parent must already carry this network's tags.
@@ -275,8 +167,7 @@
             "ec2:CreateSubnet",
             "ec2:CreateRouteTable",
             "ec2:CreateSecurityGroup",
-            "ec2:CreateNatGateway",
-            "ec2:CreateFlowLogs"
+            "ec2:CreateNatGateway"
           ]
         },
         "binding": {
@@ -318,8 +209,7 @@
             "ec2:AuthorizeSecurityGroupEgress",
             "ec2:RevokeSecurityGroupIngress",
             "ec2:RevokeSecurityGroupEgress",
-            "ec2:DescribeVpcAttribute",
-            "ec2:DeleteFlowLogs"
+            "ec2:DescribeVpcAttribute"
           ]
         },
         "binding": {
@@ -331,8 +221,7 @@
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:route-table/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:natgateway/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:elastic-ip/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc-flow-log/*"
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
             ],
             "condition": {
               "StringEquals": {
@@ -375,7 +264,6 @@
             "ec2:DescribeSecurityGroupRules",
             "ec2:DescribeNetworkInterfaces",
             "ec2:DescribeTags",
-            "ec2:DescribeFlowLogs",
             "servicequotas:GetServiceQuota"
           ]
         },

@@ -688,7 +688,7 @@ fn create_time_log_group_tagging(
     let requires = |key: &str, value: &str| {
         equals.is_some_and(|equals| equals.get(key).and_then(|v| v.as_string()) == Some(value))
     };
-    permission_set_id == "network/provision"
+    permission_set_id == "network/setup"
         && actions == ["logs:TagResource", "logs:TagLogGroup"]
         && binding.resources
             == ["arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:${stackPrefix}-*-flow-logs"]
