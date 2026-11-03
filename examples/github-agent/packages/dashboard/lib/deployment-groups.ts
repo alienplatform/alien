@@ -13,13 +13,13 @@ async function createDeploymentToken(
   deploymentGroupId: string,
   organizationName: string,
 ): Promise<{ deploymentToken: string; deploymentTokenExpiresAt: Date }> {
-  const expiresAt = new Date(Date.now() + TOKEN_LIFETIME_MS)
+  const requestedExpiresAt = new Date(Date.now() + TOKEN_LIFETIME_MS)
   const tokenResponse = await alien.deploymentGroups.createDeploymentGroupToken({
     workspace: config.workspace,
     id: deploymentGroupId,
     createDeploymentGroupTokenRequest: {
       description: `Deployment token for ${organizationName}`,
-      expiresAt,
+      expiresAt: requestedExpiresAt,
     },
   })
 
@@ -27,7 +27,13 @@ async function createDeploymentToken(
     throw new Error("Failed to create deployment token: missing token")
   }
 
-  return { deploymentToken: tokenResponse.token, deploymentTokenExpiresAt: expiresAt }
+  // The API can shorten the lifetime to the expiry of the key that asked for the token, so
+  // store the expiry it returns. Client versions that do not expose it yet keep the request.
+  const { expiresAt } = tokenResponse as { expiresAt?: Date | string }
+  return {
+    deploymentToken: tokenResponse.token,
+    deploymentTokenExpiresAt: expiresAt ? new Date(expiresAt) : requestedExpiresAt,
+  }
 }
 
 export async function createDeploymentGroupForOrganization(
