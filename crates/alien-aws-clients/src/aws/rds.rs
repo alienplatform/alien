@@ -173,6 +173,9 @@ pub struct DbCluster {
     pub kms_key_id: Option<String>,
     #[serde(default)]
     pub storage_encrypted: Option<bool>,
+    /// Whether snapshots of this cluster get its tags.
+    #[serde(default)]
+    pub copy_tags_to_snapshot: Option<bool>,
     #[serde(rename = "DBClusterIdentifier")]
     pub identifier: String,
     pub status: String,
@@ -368,6 +371,7 @@ fn create_db_cluster_form(r: &CreateDbClusterRequest) -> HashMap<String, String>
         r.backup_retention_days.to_string(),
     );
     form.insert("StorageEncrypted".into(), "true".into());
+    form.insert("CopyTagsToSnapshot".into(), "true".into());
     if let Some(key) = &r.kms_key_id {
         form.insert("KmsKeyId".into(), key.clone());
     }
@@ -379,6 +383,9 @@ fn modify_db_cluster_form(r: &ModifyDbClusterRequest) -> HashMap<String, String>
     let mut form = base_form("ModifyDBCluster");
     form.insert("DBClusterIdentifier".into(), r.identifier.clone());
     form.insert("ApplyImmediately".into(), "true".into());
+    // Every modify keeps snapshots tagged, so a cluster created before this was set gets it on
+    // its next modify.
+    form.insert("CopyTagsToSnapshot".into(), "true".into());
     if let Some(version) = &r.engine_version {
         form.insert("EngineVersion".into(), version.clone());
         form.insert("AllowMajorVersionUpgrade".into(), "true".into());
@@ -848,6 +855,7 @@ mod tests {
         assert_eq!(form["ServerlessV2ScalingConfiguration.MinCapacity"], "0");
         assert_eq!(form["ServerlessV2ScalingConfiguration.MaxCapacity"], "4");
         assert_eq!(form["BackupRetentionPeriod"], "7");
+        assert_eq!(form["CopyTagsToSnapshot"], "true");
         assert_eq!(form["VpcSecurityGroupIds.VpcSecurityGroupId.1"], "sg-1");
         assert_eq!(form["VpcSecurityGroupIds.VpcSecurityGroupId.2"], "sg-2");
     }
@@ -892,6 +900,7 @@ mod tests {
             master_user_password: None,
         });
         assert!(!form.contains_key("ServerlessV2ScalingConfiguration.MaxCapacity"));
+        assert_eq!(form["CopyTagsToSnapshot"], "true");
     }
 
     #[test]
@@ -962,7 +971,7 @@ mod tests {
         let xml = r#"<DescribeDBClustersResponse><DescribeDBClustersResult><DBClusters>
             <DBCluster><DBClusterIdentifier>stack-db</DBClusterIdentifier><Status>available</Status>
             <Endpoint>stack-db.cluster-x.us-east-1.rds.amazonaws.com</Endpoint><Port>5432</Port>
-            <EngineVersion>17.4</EngineVersion>
+            <EngineVersion>17.4</EngineVersion><CopyTagsToSnapshot>false</CopyTagsToSnapshot>
             <ServerlessV2ScalingConfiguration><MinCapacity>0</MinCapacity><MaxCapacity>8</MaxCapacity></ServerlessV2ScalingConfiguration></DBCluster>
         </DBClusters></DescribeDBClustersResult></DescribeDBClustersResponse>"#;
         let env: DescribeDbClustersEnvelope = quick_xml::de::from_str(xml).expect("parses");
@@ -971,6 +980,7 @@ mod tests {
         assert_eq!(clusters[0].identifier, "stack-db");
         assert_eq!(clusters[0].status, "available");
         assert_eq!(clusters[0].port, Some(5432));
+        assert_eq!(clusters[0].copy_tags_to_snapshot, Some(false));
         // The serverless scaling ceiling must parse: `ready`/refresh read it to detect a day-2 memory
         // change, and an imported cluster (max_capacity None) relies on this XML to learn its ceiling.
         assert_eq!(
