@@ -4,6 +4,8 @@
   "platforms": {
     "aws": [
       {
+        "label": "kv-provision",
+        "description": "Create, read, update and delete this stack's DynamoDB tables.",
         "grant": {
           "actions": [
             "dynamodb:CreateTable",
