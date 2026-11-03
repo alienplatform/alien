@@ -5259,26 +5259,20 @@ max = 1
         create.assert_hits_async(1).await;
     }
 
-    /// The vendored Platform API spec has no `dataDiskGib` yet. Creating a
-    /// deployment with a disk choice is refused rather than created with the
-    /// release default. When the spec gains the field, this becomes: the
-    /// typed request carries it.
+    /// Creating a platform-managed deployment sends the data disk choice, so
+    /// the deployment starts at the chosen size instead of the release default.
     #[test]
-    fn platform_creation_refuses_a_data_disk_choice_the_client_would_drop() {
-        let error = typed_stack_settings::<alien_platform_api::types::NewDeploymentRequestStackSettings>(
+    fn platform_creation_sends_the_data_disk_choice() {
+        let settings = typed_stack_settings::<alien_platform_api::types::NewDeploymentRequestStackSettings>(
             &serde_json::json!({
                 "compute": {"pools": {"general": {"mode": "fixed", "machines": 1, "dataDiskGib": 0}}}
             }),
             "Platform API",
         )
-        .expect_err("the typed request would lose the choice");
-        assert_eq!(error.code, "VALIDATION_ERROR");
-        assert!(
-            error
-                .message
-                .contains("cannot send 'general.dataDiskGib', so the change would be lost"),
-            "{error:?}"
-        );
+        .expect("the typed request keeps the choice");
+        let sent = serde_json::to_value(&settings).unwrap();
+        assert_eq!(sent["compute"]["pools"]["general"]["dataDiskGib"], 0);
+        assert_eq!(sent["compute"]["pools"]["general"]["machines"], 1);
 
         // Fields the client knows pass through unchanged.
         let settings = typed_stack_settings::<alien_platform_api::types::NewDeploymentRequestStackSettings>(
