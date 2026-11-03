@@ -143,9 +143,9 @@
       },
       {
         // The Terraform setup has RDS manage the master password (manage_master_user_password).
-        // RDS creates that secret with the caller's credentials, names it `rds!cluster-<id>`
-        // (only RDS can use the `rds!` prefix), and sends the cluster's tags plus its ARN as
-        // `aws:rds:primaryDBClusterArn` on the create.
+        // RDS creates that secret with the caller's credentials and names it `rds!cluster-<id>`
+        // (only RDS can use the `rds!` prefix). RDS's create is authorized with the cluster's tags
+        // and aws:rds:primaryDBClusterArn as request tags (measured; CloudTrail does not show them).
         "label": "create-managed-master-secret",
         "description": "Let RDS create the master-password secret of the setup-created Aurora cluster.",
         "grant": {
@@ -177,9 +177,10 @@
       },
       {
         // The create is also authorized as TagResource, checked with the new tags as the
-        // secret's tags (measured live: RDS's create passes this strict check). No IfExists, so
-        // an untagged secret, or one of another stack's or the account's own cluster, cannot be
-        // tagged.
+        // secret's tags (measured live: RDS's create passes this strict check). No IfExists on the
+        // existing tags, so an untagged secret, or one of another stack's or the account's own
+        // cluster, cannot be tagged. The request tags are IfExists: a later tag update may send
+        // only the changed tags, but it can never set the stack or resource tag to another value.
         "label": "tag-managed-master-secret",
         "description": "Let RDS tag the master-password secret of the setup-created Aurora cluster.",
         "grant": {
@@ -192,8 +193,10 @@
             ],
             "condition": {
               "StringEquals": {
-                "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              },
+              "StringEqualsIfExists": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
               },
               "StringLike": {
                 "aws:ResourceTag/aws:rds:primaryDBClusterArn": "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*"
@@ -206,11 +209,13 @@
             ],
             "condition": {
               "StringEquals": {
-                "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${resourceTag}": "${resourceName}",
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceName}",
                 "aws:ResourceTag/aws:rds:primaryDBClusterArn": "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}"
+              },
+              "StringEqualsIfExists": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}"
               }
             }
           }

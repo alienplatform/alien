@@ -505,6 +505,113 @@ fn a_stack_cannot_claim_an_untagged_secret_of_an_overlapping_stack() {
     }
 }
 
+/// A later tag update on this stack's own secrets (a CloudFormation tag change sends only the
+/// tags it changes) is allowed without the stack tag in the request, but no update can set the
+/// stack tag (and, in the resource binding, the resource tag) to another value. Covers both
+/// bindings; the setup policy itself renders `postgres/setup` with the stack binding only.
+#[test]
+fn tag_updates_on_this_stack_secrets_may_omit_the_stack_tag_but_never_change_it() {
+    let render = |id: &str, binding: BindingTarget, context: &PermissionContext| {
+        AwsRuntimePermissionsGenerator::new()
+            .generate_policy(get_permission_set(id).unwrap(), binding, context)
+            .unwrap()
+            .statement
+    };
+    let resource_context = PermissionContext::new()
+        .with_stack_prefix("my-stack")
+        .with_resource_name("db")
+        .with_aws_account_id("123456789012")
+        .with_aws_region("us-east-1");
+    let connection_secret = format!("{SECRETS}:my-stack-db-credentials-KFPp24");
+    let master_secret =
+        format!("{SECRETS}:rds!cluster-5d2e7185-b053-4ac5-a304-1bcf996efbcb-StovOD");
+    let cluster_arn = format!("{RDS}:cluster:my-stack-db");
+    let master_secret_tags = [
+        SETUP_TAGS,
+        &[("aws:rds:primaryDBClusterArn", cluster_arn.as_str())],
+    ]
+    .concat();
+    let cases = [
+        (
+            "setup",
+            setup_statements(),
+            vec![connection_secret.clone(), master_secret.clone()],
+        ),
+        (
+            "provision",
+            render(
+                "postgres/provision",
+                BindingTarget::Stack,
+                &common::create_test_context(),
+            ),
+            vec![connection_secret.clone()],
+        ),
+        (
+            "provision, resource binding",
+            render(
+                "postgres/provision",
+                BindingTarget::Resource,
+                &resource_context,
+            ),
+            vec![connection_secret.clone()],
+        ),
+        (
+            "setup set, resource binding",
+            render("postgres/setup", BindingTarget::Resource, &resource_context),
+            vec![master_secret.clone()],
+        ),
+    ];
+    for (name, statements, secrets) in cases {
+        for secret in secrets {
+            let tags = if secret == master_secret {
+                master_secret_tags.as_slice()
+            } else {
+                SETUP_TAGS
+            };
+            let tag = |request_tags: &[(&str, &str)]| {
+                evaluate(
+                    &statements,
+                    &Request::new("secretsmanager:TagResource", secret.clone())
+                        .resource_tags(tags)
+                        .request_tags(request_tags),
+                )
+            };
+            assert_eq!(tag(&[("note", "x")]), Decision::Allowed, "{name}: {secret}");
+            assert_eq!(tag(SETUP_TAGS), Decision::Allowed, "{name}: {secret}");
+            let mut foreign = vec![("deployment", "my-stack-prod")];
+            if name.ends_with("resource binding") {
+                foreign.push(("resource", "other"));
+            }
+            for foreign in foreign {
+                let foreign = [foreign];
+                assert_ne!(
+                    tag(&foreign),
+                    Decision::Allowed,
+                    "{name}: {secret} {foreign:?}"
+                );
+            }
+        }
+    }
+    // The resource binding names the exact cluster: a secret of another cluster of this stack
+    // stays out of reach.
+    let statements = render("postgres/setup", BindingTarget::Resource, &resource_context);
+    let other_cluster = format!("{RDS}:cluster:my-stack-db-2");
+    let other_tags = [
+        SETUP_TAGS,
+        &[("aws:rds:primaryDBClusterArn", other_cluster.as_str())],
+    ]
+    .concat();
+    assert_ne!(
+        evaluate(
+            &statements,
+            &Request::new("secretsmanager:TagResource", master_secret)
+                .resource_tags(&other_tags)
+                .request_tags(&[("note", "x")])
+        ),
+        Decision::Allowed
+    );
+}
+
 /// A workload reads its own stack's connection secret, which every create path tags.
 #[test]
 fn a_workload_reads_only_its_own_stack_connection_secret() {

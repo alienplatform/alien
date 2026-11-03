@@ -574,7 +574,8 @@
         // tags passes this strict check). So the existing-tag check needs no IfExists, and a
         // secret that is untagged or tagged for another stack cannot be retagged: a stack named
         // `app` cannot claim `app-prod`'s password secret and then read it through a grant bound
-        // to the stack tag.
+        // to the stack tag. The request tags are IfExists: a later tag update may send only the
+        // changed tags, but it can never set the stack or resource tag to another value.
         "label": "tag-connection-secret",
         "description": "Tag the generated connection-password secret.",
         "grant": {
@@ -587,7 +588,9 @@
             ],
             "condition": {
               "StringEquals": {
-                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              },
+              "StringEqualsIfExists": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}"
               }
             }
@@ -599,7 +602,9 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              },
+              "StringEqualsIfExists": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceName}"
               }
