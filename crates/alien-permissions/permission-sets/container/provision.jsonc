@@ -41,36 +41,28 @@
       // response, or at any ACM certificate of the same account and region or IAM server
       // certificate of the account. Other accounts' target groups and certificates, other
       // stacks' listeners and target groups another load balancer uses stay out of reach.
-      // IAM can bound the TLS policy and the protocol. AWS sets those keys only when the request
-      // names them, so they are checked if present: no TLS downgrade and no plain HTTP.
+      // IAM can bound the TLS policy and the protocol. A create must name both: an HTTPS
+      // listener created without a policy gets ELBSecurityPolicy-2016-08, which allows TLS 1.0.
       {
         "grant": {
           "actions": ["elasticloadbalancing:CreateListener"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/net/*/*"
-            ],
+            "resources": ["arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${managedByTag}": "runtime",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              },
-              "StringEqualsIfExists": {
-                "elasticloadbalancing:SecurityPolicy": "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04",
-                "elasticloadbalancing:ListenerProtocol": ["HTTPS", "TCP"]
+                "aws:RequestTag/${managedByTag}": "runtime",
+                "elasticloadbalancing:ListenerProtocol": "HTTPS",
+                "elasticloadbalancing:SecurityPolicy": "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04"
               }
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/net/*/*"
-            ],
+            "resources": ["arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -78,11 +70,43 @@
                 "aws:ResourceTag/${managedByTag}": "runtime",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceId}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              },
-              "StringEqualsIfExists": {
-                "elasticloadbalancing:SecurityPolicy": "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04",
-                "elasticloadbalancing:ListenerProtocol": ["HTTPS", "TCP"]
+                "aws:RequestTag/${managedByTag}": "runtime",
+                "elasticloadbalancing:ListenerProtocol": "HTTPS",
+                "elasticloadbalancing:SecurityPolicy": "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04"
+              }
+            }
+          }
+        }
+      },
+      // The NLB listeners of TCP endpoints and internal ports, plain TCP only.
+      {
+        "grant": {
+          "actions": ["elasticloadbalancing:CreateListener"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/net/*/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime",
+                "elasticloadbalancing:ListenerProtocol": "TCP"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/net/*/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
+                "aws:RequestTag/${managedByTag}": "runtime",
+                "elasticloadbalancing:ListenerProtocol": "TCP"
               }
             }
           }
@@ -165,7 +189,8 @@
         }
       },
       // Certificate rotation and TLS policy moves on this stack's HTTPS listeners, with the same
-      // limits as CreateListener above.
+      // target group and certificate limits as CreateListener above. A modify that names neither
+      // the TLS policy nor the protocol keeps the listener's own, so both are checked if present.
       {
         "grant": {
           "actions": ["elasticloadbalancing:ModifyListener"]

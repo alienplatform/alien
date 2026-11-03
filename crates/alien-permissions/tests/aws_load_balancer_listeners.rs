@@ -86,8 +86,8 @@ fn listener_request(action: &'static str, owner: &'static str, load_balancer: &s
 }
 
 // AWS sets elasticloadbalancing:SecurityPolicy and ListenerProtocol only from the request, so
-// the requests below name them exactly where the controllers do: CreateListener names both
-// (TCP listeners name only the protocol), ModifyListener names only the TLS policy.
+// the requests below name them exactly where the controllers do: an HTTPS CreateListener names
+// both, a TCP one only the protocol, and ModifyListener only the TLS policy.
 #[rstest]
 #[case::container_provision("container/provision", true)]
 #[case::daemon_provision("daemon/provision", true)]
@@ -145,6 +145,11 @@ fn listener_writes_stay_on_this_stack_with_the_fips_policy_and_https(
                 "{label}: HTTPS listener with a TLS 1.0 policy"
             );
             assert_eq!(
+                decide(create().with("elasticloadbalancing:ListenerProtocol", "HTTPS")),
+                Decision::NotAllowed,
+                "{label}: HTTPS listener without a TLS policy gets ELBSecurityPolicy-2016-08"
+            );
+            assert_eq!(
                 decide(create().with("elasticloadbalancing:ListenerProtocol", "HTTP")),
                 Decision::NotAllowed,
                 "{label}: plain HTTP listener"
@@ -186,18 +191,35 @@ fn listener_writes_stay_on_this_stack_with_the_fips_policy_and_https(
 }
 
 #[test]
-fn container_nlb_tcp_listener_needs_no_tls_policy() {
+fn container_nlb_listeners_are_plain_tcp() {
     let nlb = "loadbalancer/net/stack-a-api-nlb/50dc6c495c0c9188";
     for binding in [BindingTarget::Stack, BindingTarget::Resource] {
         let statements = policy("container/provision", binding, false).statement;
+        let create = || listener_request("elasticloadbalancing:CreateListener", "stack-a", nlb);
         assert_eq!(
             evaluate(
                 &statements,
-                &listener_request("elasticloadbalancing:CreateListener", "stack-a", nlb)
-                    .with("elasticloadbalancing:ListenerProtocol", "TCP")
+                &create().with("elasticloadbalancing:ListenerProtocol", "TCP")
             ),
             Decision::Allowed,
-            "{binding:?}"
+            "{binding:?}: TCP listener"
+        );
+        assert_eq!(
+            evaluate(
+                &statements,
+                &create().with("elasticloadbalancing:ListenerProtocol", "TLS")
+            ),
+            Decision::NotAllowed,
+            "{binding:?}: TLS listener without a TLS policy"
+        );
+        assert_eq!(
+            evaluate(
+                &statements,
+                &listener_request("elasticloadbalancing:CreateListener", "stack-b", nlb)
+                    .with("elasticloadbalancing:ListenerProtocol", "TCP")
+            ),
+            Decision::NotAllowed,
+            "{binding:?}: TCP listener on another stack's NLB"
         );
     }
 }
