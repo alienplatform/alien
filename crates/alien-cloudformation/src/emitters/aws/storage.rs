@@ -21,7 +21,7 @@ use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
 use alien_core::{
     import::EmitContext, ownership_policy_for_resource_type, Email, ErrorData, PermissionProfile,
     PermissionSetReference, RemoteStackManagement, Result, ServiceAccount, Storage,
-    AWS_ABORT_INCOMPLETE_UPLOAD_DAYS, AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID,
+    AWS_ABORT_INCOMPLETE_UPLOAD_DAYS, AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID, AWS_LIFECYCLE_RULE_LIMIT,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
@@ -119,7 +119,8 @@ impl CfEmitter for AwsStorageEmitter {
                 ])
             })
             .collect();
-        lifecycle_rules.push(CfExpression::object([
+        if lifecycle_rules.len() < AWS_LIFECYCLE_RULE_LIMIT {
+            lifecycle_rules.push(CfExpression::object([
             (
                 "Id",
                 CfExpression::from(AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID),
@@ -133,6 +134,7 @@ impl CfEmitter for AwsStorageEmitter {
                 )]),
             ),
         ]));
+        }
         bucket.properties.insert(
             "LifecycleConfiguration".to_string(),
             CfExpression::object([("Rules", CfExpression::List(lifecycle_rules))]),

@@ -10,7 +10,7 @@ use alien_cloudformation::{
 };
 use alien_core::{
     LifecycleRule, ResourceLifecycle, Stack, StackSettings, Storage,
-    AWS_ABORT_INCOMPLETE_UPLOAD_DAYS, AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID,
+    AWS_ABORT_INCOMPLETE_UPLOAD_DAYS, AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID, AWS_LIFECYCLE_RULE_LIMIT,
 };
 use alien_terraform::TerraformTarget;
 use serde_json::Value;
@@ -165,4 +165,32 @@ fn a_bucket_with_app_rules_keeps_them_next_to_the_incomplete_upload_rule() {
         terraform_rules(&stack),
         vec![expiry("rule-1"), incomplete_upload_rule()]
     );
+}
+
+/// S3 accepts at most 1,000 rules on a bucket, so one whose app rules use them all gets no
+/// incomplete-upload rule: it already has a lifecycle configuration.
+#[test]
+fn a_bucket_whose_app_rules_fill_s3s_limit_gets_no_extra_rule() {
+    let rules = |count: usize| {
+        (0..count)
+            .map(|index| LifecycleRule {
+                days: 30,
+                prefix: Some(format!("p{index}/")),
+            })
+            .collect::<Vec<_>>()
+    };
+    let full = stack(rules(AWS_LIFECYCLE_RULE_LIMIT));
+    let cloudformation = cloudformation_rules(&full);
+    let terraform = terraform_rules(&full);
+    assert_eq!(cloudformation.len(), AWS_LIFECYCLE_RULE_LIMIT);
+    assert_eq!(terraform.len(), AWS_LIFECYCLE_RULE_LIMIT);
+    assert!(!cloudformation.contains(&incomplete_upload_rule()));
+    assert!(!terraform.contains(&incomplete_upload_rule()));
+
+    let room = stack(rules(AWS_LIFECYCLE_RULE_LIMIT - 1));
+    assert_eq!(
+        cloudformation_rules(&room).last(),
+        Some(&incomplete_upload_rule())
+    );
+    assert_eq!(terraform_rules(&room).last(), Some(&incomplete_upload_rule()));
 }

@@ -18,7 +18,7 @@ use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
 use alien_core::{
     import::EmitContext, ErrorData, LifecycleRule, PermissionProfile, PermissionSetReference,
     RemoteStackManagement, Result, ServiceAccount, Storage, AWS_ABORT_INCOMPLETE_UPLOAD_DAYS,
-    AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID,
+    AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID, AWS_LIFECYCLE_RULE_LIMIT,
 };
 use alien_error::AlienError;
 use alien_permissions::BindingTarget;
@@ -376,6 +376,9 @@ fn lifecycle(label: &str, rules: &[LifecycleRule]) -> Block {
             ],
         );
         body.push(nested(rule_block));
+    }
+    if rules.len() >= AWS_LIFECYCLE_RULE_LIMIT {
+        return resource_block("aws_s3_bucket_lifecycle_configuration", label, body);
     }
     body.push(nested(block(
         "rule",

@@ -699,7 +699,18 @@ impl S3Api for S3Client {
             .get(TRANSITION_DEFAULT_MINIMUM_OBJECT_SIZE)
             .and_then(|value| value.to_str().ok())
             .map(str::to_string);
-        let body = response.text().await.unwrap_or_default();
+        let body = if status.is_success() {
+            // A configuration that didn't arrive whole must not read as an unreadable one.
+            response
+                .text()
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpRequestFailed {
+                    message: format!("{operation} response body for '{bucket}' could not be read"),
+                })?
+        } else {
+            response.text().await.unwrap_or_default()
+        };
         if !status.is_success() {
             return Err(Self::response_error(status, body, url, operation, bucket));
         }
@@ -2466,6 +2477,51 @@ mod tests {
              perform: s3:PutLifecycleConfiguration on resource: \"arn:aws:s3:::bucket-st\" \
              because no identity-based policy allows the s3:PutLifecycleConfiguration action"
         );
+    }
+
+    /// A configuration that arrives cut off is a failed request, not one the client can't
+    /// read: callers retry it instead of leaving the bucket as it is.
+    #[tokio::test]
+    async fn a_lifecycle_configuration_cut_off_in_transit_is_a_failed_request() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request).await;
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 500\r\nConnection: close\r\n\r\n<LifecycleConfiguration><Rule>")
+                    .await
+                    .unwrap();
+                stream.shutdown().await.unwrap();
+            }
+        });
+        let credentials = AwsCredentialProvider::from_config_sync(AwsClientConfig {
+            account_id: "123456789012".into(),
+            region: "eu-west-1".into(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "test-access".into(),
+                secret_access_key: "test-secret".into(),
+                session_token: None,
+            },
+            service_overrides: Some(AwsServiceOverrides {
+                endpoints: HashMap::from([("s3".into(), format!("http://{address}"))]),
+            }),
+        });
+        let client = S3Client::new(Client::builder().no_proxy().build().unwrap(), credentials);
+
+        let error = client
+            .get_bucket_lifecycle_configuration("bucket-st")
+            .await
+            .expect_err("the body was cut off");
+
+        assert!(
+            matches!(error.error, Some(ErrorData::HttpRequestFailed { .. })),
+            "{error:?}"
+        );
+        server.abort();
     }
 
     #[tokio::test]

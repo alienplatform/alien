@@ -23,7 +23,7 @@ use alien_core::{
     ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus, Storage, StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
-    AWS_ABORT_INCOMPLETE_UPLOAD_DAYS, AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID,
+    AWS_ABORT_INCOMPLETE_UPLOAD_DAYS, AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID, AWS_LIFECYCLE_RULE_LIMIT,
 };
 use alien_error::{Context, IntoAlienError};
 use alien_macros::controller;
@@ -161,7 +161,7 @@ fn owns_lifecycle(ctx: &ResourceControllerContext<'_>, id: &str) -> bool {
             && ctx.deployment_config.setup_run)
 }
 
-/// The app's expiry rules plus the incomplete-upload rule every bucket carries.
+/// The app's expiry rules plus the incomplete-upload rule every bucket carries while it has room.
 fn lifecycle_configuration(config: &Storage) -> LifecycleConfiguration {
     let mut rules: Vec<LifecycleRule> = config
         .lifecycle_rules
@@ -184,6 +184,9 @@ fn lifecycle_configuration(config: &Storage) -> LifecycleConfiguration {
                 .build()
         })
         .collect();
+    if rules.len() >= AWS_LIFECYCLE_RULE_LIMIT {
+        return LifecycleConfiguration::builder().rules(rules).build();
+    }
     rules.push(
         LifecycleRule::builder()
             .id(AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID.to_string())
@@ -272,6 +275,20 @@ async fn write_lifecycle(
         .collect();
     debug!(bucket = %bucket_name, kept = others.len(), "Keeping lifecycle rules others added");
     lifecycle.rules.extend(others);
+    if lifecycle.rules.len() > AWS_LIFECYCLE_RULE_LIMIT {
+        // The bucket's own rules leave no room. It already has a lifecycle configuration.
+        lifecycle
+            .rules
+            .retain(|rule| rule.id.as_deref() != Some(AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID));
+        warn!(
+            bucket = %bucket_name,
+            rules = lifecycle.rules.len(),
+            "S3 bucket has no room for the incomplete-upload rule under S3's limit of {AWS_LIFECYCLE_RULE_LIMIT} lifecycle rules; leaving it out"
+        );
+        if !rules_changed {
+            return Ok(None);
+        }
+    }
     lifecycle.transition_default_minimum_object_size =
         existing.transition_default_minimum_object_size;
     match client
@@ -356,8 +373,9 @@ pub struct AwsStorageController {
     /// Records notification ownership across rule removal and interrupted updates.
     #[serde(default)]
     pub(crate) notifications_managed: bool,
-    /// S3 accepted a lifecycle configuration with the incomplete-upload rule. Buckets from
-    /// earlier versions have no rule when the app declares none.
+    /// S3 accepted a lifecycle configuration with the incomplete-upload rule, or the bucket's
+    /// rules leave no room for it. Buckets from earlier versions have no rule when the app
+    /// declares none.
     #[serde(default)]
     pub(crate) incomplete_upload_rule_applied: bool,
     /// The denied call that kept the incomplete-upload rule off the bucket. The heartbeat warns
@@ -1700,6 +1718,7 @@ mod tests {
         LifecycleRule as AlienLifecycleRule, Platform, Resource, ResourceHeartbeatData,
         ResourceLifecycle, ResourceStatus, StorageHeartbeatData,
         Stack, StackResourceState, StackSettings, StackState, Storage, StorageOutputs,
+        AWS_LIFECYCLE_RULE_LIMIT,
     };
     use alien_error::AlienError;
     use httpmock::{Method::PUT, MockServer};
@@ -3641,6 +3660,53 @@ mod tests {
         run.run_until_terminal()
             .await
             .expect_err("the update stops before writing");
+    }
+
+    /// S3 accepts at most 1,000 rules on a bucket. A bucket whose rules already fill that limit
+    /// keeps them as they are: it already has a lifecycle configuration.
+    #[tokio::test]
+    async fn a_bucket_at_s3s_rule_limit_keeps_its_rules() {
+        let app_rules: Vec<AlienLifecycleRule> = (0..AWS_LIFECYCLE_RULE_LIMIT)
+            .map(|index| AlienLifecycleRule {
+                prefix: Some(format!("p{index}/")),
+                days: 30,
+            })
+            .collect();
+        let full = super::lifecycle_configuration(
+            &Storage::new("objects".into())
+                .lifecycle_rules(app_rules)
+                .build(),
+        );
+        assert_eq!(full.rules.len(), AWS_LIFECYCLE_RULE_LIMIT);
+        assert!(!full.rules.contains(&incomplete_upload_rule()));
+
+        // Rules added by someone else fill the bucket of an earlier version.
+        let mut client = MockS3Api::new();
+        client.expect_put_bucket_policy().returning(|_, _| Ok(()));
+        client
+            .expect_get_bucket_lifecycle_configuration()
+            .returning(|_| {
+                Ok(LifecycleConfiguration {
+                    rules: (0..AWS_LIFECYCLE_RULE_LIMIT)
+                        .map(|index| expiry_rule(&format!("theirs-{index}"), None, 30))
+                        .collect(),
+                    ..Default::default()
+                })
+            });
+        client.expect_put_bucket_lifecycle_configuration().never();
+        let mut run = earlier_bucket(
+            ResourceLifecycle::Live,
+            InitialSetupAuthority::ImportedHandoff,
+            false,
+            client,
+        )
+        .await;
+
+        run.update(Storage::new("objects".into()).build()).unwrap();
+        run.run_until_terminal().await.unwrap();
+
+        assert_eq!(run.status(), ResourceStatus::Running);
+        assert!(!run.needs_update().unwrap(), "not retried on every loop");
     }
 
     /// The template writes a setup-owned bucket's lifecycle configuration, so only a direct
