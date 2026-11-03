@@ -640,11 +640,12 @@ fn a_cloudformation_cluster_update_is_authorized_on_the_cluster_and_its_paramete
     }
 }
 
-/// The parameter-group leg of ModifyDBCluster needs this stack's tag. ModifyDBCluster never
-/// authorizes against a subnet group, and neither path sends an option group or a DB parameter
-/// group, so none of them is granted.
+/// The parameter-group leg of ModifyDBCluster refuses a group tagged for another stack. A group
+/// under the prefix whose tags are not visible yet is allowed, because CloudFormation attaches a
+/// new group seconds after creating it. ModifyDBCluster never authorizes against a subnet group,
+/// and neither path sends an option group or a DB parameter group, so none of them is granted.
 #[test]
-fn modify_cluster_reaches_only_this_stack_tagged_parameter_group() {
+fn modify_cluster_reaches_only_this_stack_parameter_group() {
     let statements = setup_statements();
     let modify = |resource: String, tags: &[(&str, &str)]| {
         evaluate(
@@ -654,10 +655,10 @@ fn modify_cluster_reaches_only_this_stack_tagged_parameter_group() {
     };
     let own_pg = format!("{RDS}:cluster-pg:my-stack-dbclusterparametergroup-ca6eanueb6cu");
     assert_eq!(modify(own_pg.clone(), SETUP_TAGS), Decision::Allowed);
-    assert_ne!(
+    assert_eq!(
         modify(own_pg, &[]),
         Decision::Allowed,
-        "untagged under the prefix"
+        "new group whose tags are not visible yet"
     );
     assert_ne!(
         modify(

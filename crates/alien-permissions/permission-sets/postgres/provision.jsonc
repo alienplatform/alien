@@ -294,10 +294,12 @@
       },
       {
         // CloudFormation's cluster update sends DBClusterParameterGroupName, so RDS also
-        // authorizes ModifyDBCluster against that parameter group. It runs long after the
-        // group's create, when its tags are visible, so the stack tag is required. ModifyDBCluster
-        // also authorizes option groups and DB parameter groups, but neither our templates nor
-        // the controller send them, and it never checks a subnet group.
+        // authorizes ModifyDBCluster against that parameter group. When the update adds or
+        // replaces the group, it attaches it seconds after the create, possibly before the
+        // create-time tags are visible to RDS (see manage-aurora-groups), so the tag check is
+        // IfExists: a group tagged for another stack is still denied. ModifyDBCluster also
+        // authorizes option groups and DB parameter groups, but neither our templates nor the
+        // controller send them, and it never checks a subnet group.
         "label": "modify-aurora-cluster-parameter-group",
         "description": "Name this application's cluster parameter group when changing its Aurora cluster.",
         "grant": {
@@ -307,7 +309,7 @@
           "stack": {
             "resources": ["arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-*"],
             "condition": {
-              "StringEquals": {
+              "StringEqualsIfExists": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}"
               }
             }
@@ -317,7 +319,7 @@
               "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-${resourceName}-*"
             ],
             "condition": {
-              "StringEquals": {
+              "StringEqualsIfExists": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceName}"
               }
