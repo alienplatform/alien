@@ -531,8 +531,10 @@ pub enum DeploymentsCmd {
         machine: Option<String>,
 
         /// Data disk size for each machine, such as 50Gi, 1Ti, or 0 for none,
-        /// within the sizes the pool offers. Changing it replaces each machine
-        /// in the pool; data on the old disks is not kept.
+        /// within the sizes the pool offers. On a cloud pool, changing it
+        /// replaces each machine and data on the old disks is not kept. On
+        /// Machines, hosts already joined keep their disks and hosts that join
+        /// afterwards need the new size.
         #[arg(long = "data-disk", value_parser = deployment_actions::parse_data_disk_gib)]
         data_disk: Option<u32>,
 

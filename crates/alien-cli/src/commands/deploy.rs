@@ -1352,23 +1352,39 @@ fn api_url(base_url: &str, path: &str, workspace: Option<&str>) -> Result<reqwes
     Ok(url)
 }
 
+/// Converts the deployment settings to a typed API client's settings. A
+/// client generated from an older spec drops compute pool fields it doesn't
+/// know, such as a data disk choice, so that is refused instead of sent.
+fn typed_stack_settings<T>(settings: &serde_json::Value, api: &str) -> Result<T>
+where
+    T: serde::de::DeserializeOwned + serde::Serialize,
+{
+    let typed: T = serde_json::from_value(settings.clone())
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to convert deployment settings for the {api}"),
+        })?;
+    let sent =
+        serde_json::to_value(&typed)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to serialize deployment settings".to_string(),
+            })?;
+    if let Some(pools) = settings.pointer("/compute/pools") {
+        super::deployment_actions::ensure_pool_fields_kept(pools, &sent["compute"]["pools"])?;
+    }
+    Ok(typed)
+}
+
 async fn create_standalone_deployment(
     token: &str,
     base_url: &str,
     resolved_args: &ResolvedDeployArgs,
     args: &DeployArgs,
-    stack_settings: alien_platform_api::types::NewDeploymentRequestStackSettings,
+    stack_settings: &serde_json::Value,
 ) -> Result<serde_json::Value> {
-    let settings = serde_json::to_value(stack_settings)
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to serialize deployment settings".to_string(),
-        })?;
-    let settings: alien_manager_api::types::StackSettings = serde_json::from_value(settings)
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to convert deployment settings for the manager".to_string(),
-        })?;
+    let settings: alien_manager_api::types::StackSettings =
+        typed_stack_settings(stack_settings, "manager")?;
     let platform: alien_manager_api::types::Platform =
         serde_json::from_value(serde_json::json!(resolved_args.platform.as_str()))
             .into_alien_error()
@@ -1642,14 +1658,7 @@ async fn deploy_task_with_environment(
 
                         let sdk_client = create_platform_client(token, &base_url)?;
 
-                        let stack_settings = serde_json::from_value(
-                            deployment_stack_settings_json(&resolved_args, &args)?,
-                        )
-                        .into_alien_error()
-                        .context(ErrorData::ConfigurationError {
-                            message: "Failed to convert deployment settings to SDK type"
-                                .to_string(),
-                        })?;
+                        let stack_settings = deployment_stack_settings_json(&resolved_args, &args)?;
 
                         let parsed_setup_item = match args.setup_item {
                             Some(item) => Some(
@@ -1713,7 +1722,10 @@ async fn deploy_task_with_environment(
                                         message: "Invalid project".to_string(),
                                     },
                                 )?,
-                                stack_settings: Some(stack_settings),
+                                stack_settings: Some(typed_stack_settings(
+                                    &stack_settings,
+                                    "Platform API",
+                                )?),
                                 resource_prefix: args
                                     .resource_prefix
                                     .clone()
@@ -1769,7 +1781,7 @@ async fn deploy_task_with_environment(
                                 &base_url,
                                 &resolved_args,
                                 &args,
-                                stack_settings,
+                                &stack_settings,
                             )
                             .await?
                         };
@@ -5186,18 +5198,99 @@ max = 1
         };
         let args = DeployArgs::try_parse_from(["deploy", "--name", "test", "--platform", "aws"])
             .expect("valid standalone arguments");
-        let settings = serde_json::from_value(serde_json::json!({})).expect("valid empty settings");
         let error = create_standalone_deployment(
             "test-group-token",
             &server.base_url(),
             &resolved,
             &args,
-            settings,
+            &serde_json::json!({}),
         )
         .await
         .expect_err("manager rejects the correctly formed request");
         assert!(error.to_string().contains("409"), "{error}");
         create.assert_hits_async(1).await;
+    }
+
+    /// A deploy config's data disk choice, including 0 for no disk, must reach
+    /// the manager rather than being dropped by the typed client.
+    #[tokio::test]
+    async fn standalone_creation_sends_the_data_disk_choice() {
+        let server = httpmock::MockServer::start_async().await;
+        let create = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/deployments")
+                    .json_body_partial(
+                        serde_json::json!({
+                            "stackSettings": {"compute": {"pools": {"general": {"dataDiskGib": 0}}}}
+                        })
+                        .to_string(),
+                    );
+                then.status(409)
+                    .json_body(serde_json::json!({"message":"Synthetic creation rejection"}));
+            })
+            .await;
+        let resolved = ResolvedDeployArgs {
+            name: "test".to_string(),
+            platform: "machines".to_string(),
+            platform_enum: Platform::Machines,
+            setup_management: alien_core::SetupManagement::Manual,
+            network_settings: None,
+            compute_settings: None,
+            domain_settings: None,
+            input_values: HashMap::new(),
+            public_subdomain: None,
+        };
+        let args =
+            DeployArgs::try_parse_from(["deploy", "--name", "test", "--platform", "machines"])
+                .expect("valid standalone arguments");
+        let error = create_standalone_deployment(
+            "test-group-token",
+            &server.base_url(),
+            &resolved,
+            &args,
+            &serde_json::json!({
+                "compute": {"pools": {"general": {"mode": "fixed", "machines": 1, "dataDiskGib": 0}}}
+            }),
+        )
+        .await
+        .expect_err("manager rejects the request after receiving it");
+        assert!(error.to_string().contains("409"), "{error}");
+        create.assert_hits_async(1).await;
+    }
+
+    /// The vendored Platform API spec has no `dataDiskGib` yet. Creating a
+    /// deployment with a disk choice is refused rather than created with the
+    /// release default. When the spec gains the field, this becomes: the
+    /// typed request carries it.
+    #[test]
+    fn platform_creation_refuses_a_data_disk_choice_the_client_would_drop() {
+        let error = typed_stack_settings::<alien_platform_api::types::NewDeploymentRequestStackSettings>(
+            &serde_json::json!({
+                "compute": {"pools": {"general": {"mode": "fixed", "machines": 1, "dataDiskGib": 0}}}
+            }),
+            "Platform API",
+        )
+        .expect_err("the typed request would lose the choice");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(
+            error
+                .message
+                .contains("cannot send 'general.dataDiskGib', so the change would be lost"),
+            "{error:?}"
+        );
+
+        // Fields the client knows pass through unchanged.
+        let settings = typed_stack_settings::<alien_platform_api::types::NewDeploymentRequestStackSettings>(
+            &serde_json::json!({
+                "compute": {"pools": {"general": {"mode": "fixed", "machines": 2, "machine": "m8i.large"}}}
+            }),
+            "Platform API",
+        )
+        .expect("known pool fields are kept");
+        let sent = serde_json::to_value(&settings).unwrap();
+        assert_eq!(sent["compute"]["pools"]["general"]["machines"], 2);
+        assert_eq!(sent["compute"]["pools"]["general"]["machine"], "m8i.large");
     }
 
     #[test]

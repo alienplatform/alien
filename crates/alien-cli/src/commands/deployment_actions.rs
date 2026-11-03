@@ -312,22 +312,41 @@ fn compute_request(
     }
     let request: UpdateDeploymentComputeRequest = request_body(Value::Object(body), "compute")?;
     if let Some(pools) = &pools_json {
-        let sent = serde_json::to_value(&request)
-            .into_alien_error()
-            .context(ErrorData::ValidationError {
+        let sent = serde_json::to_value(&request).into_alien_error().context(
+            ErrorData::ValidationError {
                 field: "compute".to_string(),
                 message: "The compute request could not be serialized".to_string(),
-            })?;
-        if let Some(dropped) = dropped_pool_field(pools, &sent["compute"]["pools"]) {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "compute".to_string(),
-                message: format!(
-                    "This CLI's Platform API client cannot send '{dropped}', so the change would be lost. Update the Alien CLI and try again."
-                ),
-            }));
-        }
+            },
+        )?;
+        ensure_pool_fields_kept(pools, &sent["compute"]["pools"])?;
     }
     Ok(request)
+}
+
+/// What a data disk change does to the pool's machines. Cloud pools replace
+/// each machine; Machines hosts are the operator's own and keep running.
+fn data_disk_change_note(platform: Option<&str>) -> &'static str {
+    if platform == Some("machines") {
+        "Hosts already in the pool keep their disks. Hosts that join from now on need the new size."
+    } else {
+        "Changing this replaces each machine in the pool. Data on the old disks is not kept."
+    }
+}
+
+/// Refuses a typed request that lost a compute pool field, so a change the API
+/// client can't carry fails loudly instead of being dropped. `requested` is the
+/// `compute.pools` object asked for; `sent` is the same object after the
+/// request went through the typed client.
+pub(crate) fn ensure_pool_fields_kept(requested: &Value, sent: &Value) -> Result<()> {
+    match dropped_pool_field(requested, sent) {
+        Some(dropped) => Err(AlienError::new(ErrorData::ValidationError {
+            field: "compute".to_string(),
+            message: format!(
+                "This CLI's API client cannot send '{dropped}', so the change would be lost. Update the Alien CLI and try again."
+            ),
+        })),
+        None => Ok(()),
+    }
 }
 
 /// The first `pool.field` the typed request lost, comparing each pool's set
@@ -373,8 +392,7 @@ pub(crate) async fn set_compute_task(
     if change.pool.is_empty() && change.pool.pool.is_some() {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "pool".to_string(),
-            message: "--pool needs --machines, --min/--max, --machine, or --data-disk."
-                .to_string(),
+            message: "--pool needs --machines, --min/--max, --machine, or --data-disk.".to_string(),
         }));
     }
 
@@ -389,8 +407,7 @@ pub(crate) async fn set_compute_task(
             .as_ref()
             .and_then(|current| current.pools.get(&pool_id))
             .and_then(ComputePoolSelection::data_disk_gib);
-        if change.pool.data_disk_gib.is_some() && change.pool.data_disk_gib != saved_data_disk_gib
-        {
+        if change.pool.data_disk_gib.is_some() && change.pool.data_disk_gib != saved_data_disk_gib {
             changed_data_disk = Some((saved_data_disk_gib, change.pool.data_disk_gib));
         }
         if matches!(confirmation, ConfirmationMode::Prompt)
@@ -451,7 +468,10 @@ pub(crate) async fn set_compute_task(
             describe_data_disk(old),
             describe_data_disk(new)
         );
-        println!("Changing this replaces each machine in the pool. Data on the old disks is not kept.");
+        println!(
+            "{}",
+            data_disk_change_note(detail.get("platform").and_then(Value::as_str))
+        );
     }
     if let Some(overrides) = &change.quota_warning_overrides {
         let value = if overrides.is_empty() {

@@ -6451,6 +6451,13 @@
               "mode"
             ],
             "properties": {
+              "dataDiskGib": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Data disk size per machine, in whole GiB, within the pool's declared\nrange. Omitted uses the release default; 0 runs the pool without one.",
+                "minimum": 0,
+                "nullable": true
+              },
               "failure_domains": {
                 "nullable": true,
                 "description": "Optional failure-domain policy. Absence preserves the existing aggregate layout.",
@@ -6488,6 +6495,13 @@
               "mode"
             ],
             "properties": {
+              "dataDiskGib": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Data disk size per machine, in whole GiB, within the pool's declared\nrange. Omitted uses the release default; 0 runs the pool without one.",
+                "minimum": 0,
+                "nullable": true
+              },
               "failure_domains": {
                 "nullable": true,
                 "description": "Optional failure-domain policy. Absence preserves the existing aggregate layout.",
