@@ -31,3 +31,6 @@ TAILNET_AUTH_KEY = { required = false, platforms = ["machines"] }
 
 [storage.snapshots]
 platforms = ["aws"]
+
+# Kept so upgrades of existing deployments don't need setup again.
+[permissions.loader]

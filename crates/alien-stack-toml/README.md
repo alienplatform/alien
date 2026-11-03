@@ -69,6 +69,7 @@ Quantities take `Ki`, `Mi`, `Gi`, `Ti` (powers of 1024) or `k`, `M`, `G`, `T` (p
 | `env` | Environment variables. |
 | `env-file` | A `KEY=value` file relative to `alien.toml`, read when the stack loads. `env` wins over it. |
 | `links` | IDs of resources the daemon uses. |
+| `permissions` | Permission profile that gives the daemon a cloud identity. On AWS, GCP and Azure it can't be combined with `host-access`. |
 | `lifecycle` | `"live"` (default) or `"frozen"`. |
 | `platforms` | Create the daemon only on these platforms. |
 
@@ -104,6 +105,15 @@ A stack input: a value provided per deployment. The table name is the input ID.
 | `min`, `max` | Number and integer constraints. |
 | `values` | The values an enum accepts. |
 | `min-items`, `max-items` | String-list constraints. |
+
+### `[permissions.<profile>]`
+
+A permission profile maps resource IDs, or `"*"` for every resource, to the permission sets it grants:
+
+```toml
+[permissions.loader]
+snapshots = ["storage/data-read", "storage/data-write"]
+```
 
 ### Platform scope
 

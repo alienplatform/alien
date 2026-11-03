@@ -228,6 +228,14 @@
             "null"
           ]
         },
+        "permissions": {
+          "default": null,
+          "description": "Permission profile that gives the daemon a cloud identity. Omit for none. On AWS, GCP and Azure it cannot be combined with `host-access`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "platforms": {
           "default": null,
           "description": "Create this daemon only on these platforms.",
@@ -957,6 +965,20 @@
     "name": {
       "description": "Stack name. Letters, digits, hyphens and underscores, up to 128 characters.",
       "type": "string"
+    },
+    "permissions": {
+      "additionalProperties": {
+        "additionalProperties": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "type": "object"
+      },
+      "default": {},
+      "description": "Permission profiles, by name. Each maps a resource ID (or \"*\" for every resource) to the permission sets granted on it, such as `[\"storage/data-read\"]`.",
+      "type": "object"
     },
     "platforms": {
       "default": null,
