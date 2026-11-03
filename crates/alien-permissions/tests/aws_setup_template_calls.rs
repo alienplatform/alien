@@ -641,8 +641,8 @@ fn a_cloudformation_cluster_update_is_authorized_on_the_cluster_and_its_paramete
 }
 
 /// The parameter-group leg of ModifyDBCluster needs this stack's tag. ModifyDBCluster never
-/// authorizes against a subnet group, and neither path sends an option group, so neither is
-/// granted.
+/// authorizes against a subnet group, and neither path sends an option group or a DB parameter
+/// group, so none of them is granted.
 #[test]
 fn modify_cluster_reaches_only_this_stack_tagged_parameter_group() {
     let statements = setup_statements();
@@ -670,6 +670,7 @@ fn modify_cluster_reaches_only_this_stack_tagged_parameter_group() {
     for (kind, name) in [
         ("subgrp", "my-stack-db-subnets"),
         ("og", "my-stack-db-options"),
+        ("pg", "my-stack-db-params"),
     ] {
         for tags in [SETUP_TAGS, OTHER_STACK_TAGS, &[]] {
             assert_ne!(
