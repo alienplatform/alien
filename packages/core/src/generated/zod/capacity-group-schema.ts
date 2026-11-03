@@ -5,13 +5,17 @@
 
 import * as z from "zod";
 import { CapacityGroupScalePolicySchema } from "./capacity-group-scale-policy-schema.js";
+import { ComputeChoiceRangeSchema } from "./compute-choice-range-schema.js";
 import { MachineProfileSchema } from "./machine-profile-schema.js";
 
 /**
  * @description Capacity group definition.\n\nA capacity group represents machines with identical hardware profiles.\nEach group becomes a separate Auto Scaling Group (AWS), Managed Instance Group (GCP),\nor VM Scale Set (Azure).
  */
 export const CapacityGroupSchema = z.object({
-    "groupId": z.string().describe("Unique identifier for this capacity group (must be lowercase alphanumeric with hyphens)"),
+    get "dataDiskGibRange"(){
+                return z.union([ComputeChoiceRangeSchema, z.null()]).optional()
+              },
+"groupId": z.string().describe("Unique identifier for this capacity group (must be lowercase alphanumeric with hyphens)"),
 "instanceType": z.string().describe("Provider machine selected at deployment time.\n`alien.ts` should declare portable requirements; preflight materialization\nfills this field from `StackSettings.compute`.").nullish(),
 "maxSize": z.int().min(0).describe("Maximum number of machines (must be ≤ 10)"),
 "minSize": z.int().min(0).describe("Minimum number of machines (can be 0 for scale-to-zero)"),
