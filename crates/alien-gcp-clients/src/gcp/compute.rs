@@ -1919,15 +1919,31 @@ impl ComputeApi for ComputeClient {
             "projects/{}/zones/{}/instanceGroupManagers/{}/listManagedInstances",
             self.project_id, zone, instance_group_manager_name
         );
-        self.base
-            .execute_request(
-                Method::POST,
-                &path,
-                None,
-                Option::<()>::None,
-                &instance_group_manager_name,
-            )
-            .await
+        // GCP returns at most 500 instances per page. Callers treat the result as the whole
+        // group, so every page is read.
+        let mut managed_instances = Vec::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            let page: InstanceGroupManagersListManagedInstancesResponse = self
+                .base
+                .execute_request(
+                    Method::POST,
+                    &path,
+                    page_token.take().map(|token| vec![("pageToken", token)]),
+                    Option::<()>::None,
+                    &instance_group_manager_name,
+                )
+                .await?;
+            managed_instances.extend(page.managed_instances);
+            match page.next_page_token {
+                Some(token) if !token.is_empty() => page_token = Some(token),
+                _ => break,
+            }
+        }
+        Ok(InstanceGroupManagersListManagedInstancesResponse {
+            managed_instances,
+            next_page_token: None,
+        })
     }
 
     async fn patch_instance_group_manager(
