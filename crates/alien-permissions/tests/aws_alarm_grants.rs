@@ -48,7 +48,23 @@ fn alarm_statements_for(
         .collect()
 }
 
+/// Every set that writes alarms. The five sets that keep alarms next to their resources must
+/// be among them, so no test here passes by finding none.
 fn alarm_writing_sets() -> Vec<&'static str> {
+    let sets = all_alarm_writing_sets();
+    for id in [
+        "container/provision",
+        "daemon/provision",
+        "compute-cluster/management",
+        "compute-cluster/provision",
+        "postgres/provision",
+    ] {
+        assert!(sets.contains(&id), "{id} writes alarms: {sets:?}");
+    }
+    sets
+}
+
+fn all_alarm_writing_sets() -> Vec<&'static str> {
     alien_permissions::list_permission_set_ids()
         .into_iter()
         .filter(|id| {
@@ -383,6 +399,43 @@ fn a_compute_cluster_reaches_only_its_own_group_alarms() {
                 expected,
                 "{id} delete {name}"
             );
+        }
+    }
+}
+
+/// Stack "a" with a resource named "prod": its per-resource binding `a-prod-*` also matches
+/// every alarm name of stack "a-prod". The deployment tag is what keeps a-prod's alarms out of
+/// reach: none of a's alarm writes is allowed on an alarm tagged for a-prod.
+#[test]
+fn the_deployment_tag_denies_writes_when_a_resource_name_matches_another_deployment() {
+    let own_tag = [(ALIEN_STACK_TAG_KEY, "a")];
+    let prod_tag = [(ALIEN_STACK_TAG_KEY, "a-prod")];
+    let prod_alarm = "arn:aws:cloudwatch:us-east-1:123456789012:alarm:a-prod-api-cpu";
+    let own_alarm = "arn:aws:cloudwatch:us-east-1:123456789012:alarm:a-prod-writer-cpu";
+    for id in alarm_writing_sets() {
+        let statements =
+            alarm_statements_for(id, BindingTarget::Resource, &context_for("a", "prod"));
+        let decide = |request: Request| evaluate(&statements, &request);
+        // The name matches this resource's own binding.
+        assert_eq!(
+            decide(
+                Request::new("cloudwatch:PutMetricAlarm", own_alarm)
+                    .request_tags(&own_tag)
+                    .resource_tags(&own_tag)
+            ),
+            Decision::Allowed,
+            "{id} own alarm"
+        );
+        for request in [
+            Request::new("cloudwatch:PutMetricAlarm", prod_alarm)
+                .request_tags(&own_tag)
+                .resource_tags(&prod_tag),
+            Request::new("cloudwatch:TagResource", prod_alarm)
+                .request_tags(&own_tag)
+                .resource_tags(&prod_tag),
+            Request::new("cloudwatch:DeleteAlarms", prod_alarm).resource_tags(&prod_tag),
+        ] {
+            assert_eq!(decide(request), Decision::NotAllowed, "{id}");
         }
     }
 }
