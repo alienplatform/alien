@@ -89,12 +89,12 @@ fn listener_request(action: &'static str, owner: &'static str, load_balancer: &s
 
 // AWS sets elasticloadbalancing:SecurityPolicy and ListenerProtocol only from the request, so
 // the requests below name them exactly where the controllers do: an HTTPS CreateListener names
-// both, a TCP one only the protocol, and ModifyListener only the TLS policy.
+// both, a TCP or HTTP one only the protocol, and ModifyListener only the TLS policy.
 #[rstest]
 #[case::container_provision("container/provision", true)]
 #[case::daemon_provision("daemon/provision", true)]
 #[case::container_management("container/management", false)]
-fn listener_writes_stay_on_this_stack_with_the_fips_policy_and_https(
+fn listener_writes_stay_on_this_stack_with_the_fips_policy(
     #[case] set: &str,
     #[case] creates_listeners: bool,
 ) {
@@ -153,10 +153,23 @@ fn listener_writes_stay_on_this_stack_with_the_fips_policy_and_https(
                 Decision::NotAllowed,
                 "{label}: HTTPS listener without a TLS policy gets ELBSecurityPolicy-2016-08"
             );
+            // The port 80 listener that redirects to HTTPS. IAM cannot see its actions.
             assert_eq!(
                 decide(create().with("elasticloadbalancing:ListenerProtocol", "HTTP")),
+                created,
+                "{label}: HTTP listener on this stack's ALB"
+            );
+            assert_eq!(
+                decide(
+                    listener_request(
+                        "elasticloadbalancing:CreateListener",
+                        "stack-b",
+                        other_stack_alb
+                    )
+                    .with("elasticloadbalancing:ListenerProtocol", "HTTP")
+                ),
                 Decision::NotAllowed,
-                "{label}: plain HTTP listener"
+                "{label}: HTTP listener on another stack's ALB"
             );
 
             let modify = || listener_request("elasticloadbalancing:ModifyListener", "stack-a", alb);
