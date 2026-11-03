@@ -15,10 +15,11 @@ use alien_core::{
 use alien_permissions::{
     generators::{
         aws_permissions_boundary_covers, aws_stack_permissions_boundary, AwsIamPolicy,
-        AwsIamStatement,
+        AwsIamStatement, AwsRuntimePermissionsGenerator,
     },
+    get_permission_set,
     initial_setup::generate_aws_initial_setup_policy,
-    PermissionContext,
+    list_permission_set_ids, BindingTarget, PermissionContext,
 };
 use alien_preflights::{mutations::ManagementPermissionProfileMutation, StackMutation};
 use alien_terraform::TerraformTarget;
@@ -691,7 +692,21 @@ async fn management_policy_statements(
     stack: Stack,
     settings: StackSettings,
 ) -> Vec<AwsIamStatement> {
-    let mut statements = Vec::new();
+    let statements: Vec<_> = management_policies(stack, settings)
+        .await
+        .into_iter()
+        .flat_map(|(_, statements)| statements)
+        .collect();
+    assert!(!statements.is_empty());
+    statements
+}
+
+/// Each management policy the module renders, other than the runtime boundary, by name.
+async fn management_policies(
+    stack: Stack,
+    settings: StackSettings,
+) -> Vec<(String, Vec<AwsIamStatement>)> {
+    let mut policies = Vec::new();
     for (name, mut policy) in management_policy_documents(stack, settings).await {
         if name.ends_with("/management_permissions_boundary") {
             continue;
@@ -705,12 +720,12 @@ async fn management_policy_statements(
                 }
             }
         }
+        // The statement type has no NotAction, so a policy using it fails to parse here.
         let policy: AwsIamPolicy =
             serde_json::from_value(policy).unwrap_or_else(|error| panic!("{name}: {error}"));
-        statements.extend(policy.statement);
+        policies.push((name, policy.statement));
     }
-    assert!(!statements.is_empty());
-    statements
+    policies
 }
 
 #[tokio::test]
@@ -863,8 +878,8 @@ async fn terraform_management_passes_roles_only_to_their_intended_services() {
 }
 
 /// The flow log objects are made only with setup's credentials: the setup policy allows each
-/// request, while the management identity can't make them, and the boundary for roles the
-/// runtime writes grants nothing on them.
+/// request, while no management policy and no runtime role policy allows any of them, and the
+/// boundary for roles the runtime writes grants nothing on them.
 #[tokio::test]
 async fn flow_log_grants_stay_out_of_the_management_identity_and_the_runtime_boundary() {
     let network = NetworkSettings::Create {
@@ -948,6 +963,57 @@ async fn flow_log_grants_stay_out_of_the_management_identity_and_the_runtime_bou
             "the setup policy may not {action} on a flow log object"
         );
     }
+    // Runtime roles get their policies from permission sets. Render each set's stack and
+    // resource grants, bound to the network for the resource case, and evaluate each policy
+    // on its own: the boundary only caps these, so they are what keep the runtime out.
+    let runtime_context = PermissionContext::new()
+        .with_stack_prefix("stack-a")
+        .with_aws_account_id("123456789012")
+        .with_aws_region("us-west-2")
+        .with_managing_account_id("210987654321")
+        .with_resource_id("default-network")
+        .with_resource_name("stack-a-default-network")
+        .with_aws_permissions_boundary_arn(
+            "arn:aws:iam::123456789012:policy/stack-a-deployment-management-boundary",
+        );
+    let generator = AwsRuntimePermissionsGenerator::new();
+    let mut runtime_policies = 0;
+    for id in list_permission_set_ids() {
+        // Setup credentials only; never a runtime role's policy.
+        if ["network/setup", "remote-stack-management/provision"].contains(&id) {
+            continue;
+        }
+        let set = get_permission_set(id).unwrap();
+        let Some(entries) = &set.platforms.aws else {
+            continue;
+        };
+        for target in [BindingTarget::Stack, BindingTarget::Resource] {
+            let mut set = set.clone();
+            set.platforms.aws = Some(
+                entries
+                    .iter()
+                    .filter(|entry| match target {
+                        BindingTarget::Stack => entry.binding.stack.is_some(),
+                        BindingTarget::Resource => entry.binding.resource.is_some(),
+                    })
+                    .cloned()
+                    .collect(),
+            );
+            let statements = generator
+                .generate_policy(&set, target, &runtime_context)
+                .unwrap_or_else(|error| panic!("{id}: {error}"))
+                .statement;
+            runtime_policies += 1;
+            for (action, request) in &requests {
+                assert_eq!(
+                    evaluate(&statements, request),
+                    Decision::NotAllowed,
+                    "runtime policy {id} ({target:?}) may {action} on a flow log object"
+                );
+            }
+        }
+    }
+    assert!(runtime_policies > 0);
     for setup_management in [SetupManagement::Automatic, SetupManagement::Manual] {
         let stack = || {
             Stack::new("management-boundary".into())
@@ -969,13 +1035,16 @@ async fn flow_log_grants_stay_out_of_the_management_identity_and_the_runtime_bou
             ..Default::default()
         };
 
-        let management = management_policy_statements(stack(), settings.clone()).await;
-        for (action, request) in &requests {
-            assert_eq!(
-                evaluate(&management, request),
-                Decision::NotAllowed,
-                "{setup_management:?}: the management identity may {action} on a flow log object"
-            );
+        let management = management_policies(stack(), settings.clone()).await;
+        assert!(!management.is_empty());
+        for (name, statements) in &management {
+            for (action, request) in &requests {
+                assert_eq!(
+                    evaluate(statements, request),
+                    Decision::NotAllowed,
+                    "{setup_management:?}: management policy {name} may {action} on a flow log object"
+                );
+            }
         }
 
         let documents = management_policy_documents(stack(), settings).await;
