@@ -8,21 +8,23 @@ use std::ops::Range;
 use std::path::Path;
 
 use alien_core::stack_authoring::{
-    self, ComputeChoice, ComputePool, CpuAmount, DataDiskSize, PoolRequirements, PoolScale,
+    self, ComputeChoice, ComputePool, CpuAmount, DataDiskSize, InputValue as AuthoredValue,
+    PoolRequirements, PoolScale,
 };
 use alien_core::{
     ComputeChoiceRange, ComputeCluster, Daemon as DaemonConfig, DaemonCode, DaemonRuntime,
     ExposeProtocol, GpuSpec, HealthCheck, Platform, PublicEndpoint, Resource, ResourceEntry,
     ResourceLifecycle, ResourceRef, ResourceType, Stack, StackInputDefaultValue,
     StackInputDefinition, StackInputEnvironmentMapping, StackInputKind, StackInputProvider,
-    StackInputValidation,
-    Storage as StorageConfig, ToolchainConfig, APEX_HOST_LABEL,
+    StackInputValidation, Storage as StorageConfig, ToolchainConfig, APEX_HOST_LABEL,
 };
 use alien_error::AlienError;
 use indexmap::IndexMap;
 use toml::Spanned;
 
-use crate::document::{self, Choice, Cpu, DataDisk, Document, Duration, Tables};
+use crate::document::{
+    self, Choice, Cpu, DataDisk, Document, Duration, EnvTarget, InputValue, Tables,
+};
 use crate::env_file;
 use crate::error::{ErrorData, Result};
 use crate::source::SourceFile;
@@ -61,6 +63,7 @@ impl Resolver<'_> {
             pool,
             daemon,
             storage,
+            input,
         } = document;
 
         self.check_id(&name, "stack name", MAX_STACK_NAME_LENGTH)?;
@@ -90,16 +93,17 @@ impl Resolver<'_> {
         };
         if let Some(cluster_id) = &cluster_id {
             let span = cluster.as_ref().map_or(0..0, Spanned::span);
-            declared.insert(
-                cluster_id.clone(),
-                (ComputeCluster::RESOURCE_TYPE, span),
-            );
+            declared.insert(cluster_id.clone(), (ComputeCluster::RESOURCE_TYPE, span));
         }
         // In file order, so a clash is reported at the later declaration.
         let mut ids: Vec<(&Spanned<String>, ResourceType)> = storages
             .iter()
             .map(|(id, _)| (id, StorageConfig::RESOURCE_TYPE))
-            .chain(daemons.iter().map(|(id, _)| (id, DaemonConfig::RESOURCE_TYPE)))
+            .chain(
+                daemons
+                    .iter()
+                    .map(|(id, _)| (id, DaemonConfig::RESOURCE_TYPE)),
+            )
             .collect();
         ids.sort_by_key(|(id, _)| id.span().start);
         for (id, resource_type) in ids {
@@ -108,6 +112,11 @@ impl Resolver<'_> {
 
         let mut resources = IndexMap::new();
         let mut inputs = Inputs::default();
+        for (id, input) in in_order(input) {
+            let definition =
+                self.input(&id, input.into_inner(), &declared, platforms.as_deref())?;
+            inputs.insert(self, id.span(), definition)?;
+        }
 
         if let Some(cluster_id) = &cluster_id {
             let cluster = self.cluster(cluster_id, &pools)?;
@@ -145,8 +154,13 @@ impl Resolver<'_> {
 
         let pool_ids: Vec<&str> = pools.iter().map(|(id, _)| id.get_ref().as_str()).collect();
         for (id, daemon) in daemons {
-            let (config, lifecycle, scope, secrets) =
-                self.daemon(&id, daemon.into_inner(), cluster_id.as_deref(), &pool_ids, &declared)?;
+            let (config, lifecycle, scope, secrets) = self.daemon(
+                &id,
+                daemon.into_inner(),
+                cluster_id.as_deref(),
+                &pool_ids,
+                &declared,
+            )?;
             let mut resource = entry(Resource::new(config), lifecycle);
             if let Some(scope) = scope {
                 resource.enabled_when = Some(inputs.add_platform_gate(
@@ -374,12 +388,10 @@ impl Resolver<'_> {
             (None, Some(image)) => DaemonCode::Image {
                 image: image.into_inner(),
             },
-            (Some(_), Some(image)) => {
-                return Err(self.error(
-                    image.span(),
-                    "set either `build` (build from source) or `image` (a prebuilt image), not both",
-                ))
-            }
+            (Some(_), Some(image)) => return Err(self.error(
+                image.span(),
+                "set either `build` (build from source) or `image` (a prebuilt image), not both",
+            )),
             (None, None) => {
                 return Err(self.error(
                     id.span(),
@@ -451,9 +463,10 @@ impl Resolver<'_> {
                 Some(_) if link.get_ref() == daemon_id => {
                     Err(self.error(link.span(), "a daemon cannot link to itself"))
                 }
-                Some((resource_type, _)) => {
-                    Ok(ResourceRef::new(resource_type.clone(), link.get_ref().clone()))
-                }
+                Some((resource_type, _)) => Ok(ResourceRef::new(
+                    resource_type.clone(),
+                    link.get_ref().clone(),
+                )),
                 None => Err(self.error(
                     link.span(),
                     format!(
@@ -474,7 +487,7 @@ impl Resolver<'_> {
 
         let secrets = in_order(daemon.secrets);
         for (key, _) in &secrets {
-            if !is_secret_env_name(key.get_ref()) {
+            if !is_input_env_name(key.get_ref()) {
                 return Err(self.error(
                     key.span(),
                     format!(
@@ -519,6 +532,215 @@ impl Resolver<'_> {
         ))
     }
 
+    fn input(
+        &self,
+        id: &Spanned<String>,
+        input: document::Input,
+        declared: &Declared,
+        stack_platforms: Option<&[Platform]>,
+    ) -> Result<StackInputDefinition> {
+        let name = id.get_ref();
+        if !is_input_id(name) || !name.chars().any(|c| c.is_ascii_lowercase()) {
+            return Err(self.error(
+                id.span(),
+                format!(
+                    "input ID '{name}' must start with a letter or underscore, use only letters, digits and underscores, and not be all caps"
+                ),
+            ));
+        }
+        let kind = StackInputKind::from(input.kind);
+
+        let provided_by = match input.provided_by {
+            None => vec![StackInputProvider::Developer],
+            Some(providers) => {
+                let span = providers.span();
+                let providers = providers.into_inner().into_vec();
+                if providers.is_empty() {
+                    return Err(self.error(span, "list at least one provider"));
+                }
+                if providers.len() == 2 && providers[0] == providers[1] {
+                    return Err(self.error(span, "a provider is listed twice"));
+                }
+                providers
+                    .into_iter()
+                    .map(StackInputProvider::from)
+                    .collect()
+            }
+        };
+
+        let required = input.required.unwrap_or(true);
+        let description = match input.description {
+            Some(description) => description,
+            None if required => return Err(self.error(
+                id.span(),
+                "a required input needs a `description`; it is shown where the value is asked for",
+            )),
+            None => String::new(),
+        };
+
+        let default = input
+            .default
+            .as_ref()
+            .map(|value| {
+                stack_authoring::input_default(&kind, &authored(value.get_ref()))
+                    .map_err(|error| self.error(value.span(), definition_error(error).1))
+            })
+            .transpose()?;
+
+        let only_for = |span: Range<usize>, key: &str, kinds: &[StackInputKind], what: &str| {
+            if kinds.contains(&kind) {
+                Ok(())
+            } else {
+                Err(self.error(span, format!("`{key}` applies to {what} inputs only")))
+            }
+        };
+        let text = [StackInputKind::String, StackInputKind::Secret];
+        let numeric = [StackInputKind::Number, StackInputKind::Integer];
+        let mut validation = StackInputValidation::default();
+        if let Some(value) = input.min_length {
+            only_for(value.span(), "min-length", &text, "string and secret")?;
+            validation.min_length = Some(value.into_inner());
+        }
+        if let Some(value) = input.max_length {
+            only_for(value.span(), "max-length", &text, "string and secret")?;
+            validation.max_length = Some(value.into_inner());
+        }
+        if let Some(value) = input.pattern {
+            only_for(value.span(), "pattern", &text, "string and secret")?;
+            validation.pattern = Some(value.into_inner());
+        }
+        for (key, value, slot) in [
+            ("min", input.min, &mut validation.min),
+            ("max", input.max, &mut validation.max),
+        ] {
+            if let Some(value) = value {
+                only_for(value.span(), key, &numeric, "number and integer")?;
+                *slot = Some(
+                    stack_authoring::input_number(key, &kind, &authored(value.get_ref()))
+                        .map_err(|error| self.error(value.span(), definition_error(error).1))?,
+                );
+            }
+        }
+        match (input.values, kind == StackInputKind::Enum) {
+            (Some(values), true) if values.get_ref().is_empty() => {
+                return Err(self.error(values.span(), "list at least one value"))
+            }
+            (Some(values), true) => validation.values = Some(values.into_inner()),
+            (Some(values), false) => {
+                return Err(self.error(values.span(), "`values` applies to enum inputs only"))
+            }
+            (None, true) => {
+                return Err(self.error(
+                    id.span(),
+                    "an enum input needs `values`, the values it accepts",
+                ))
+            }
+            (None, false) => {}
+        }
+        if let Some(value) = input.min_items {
+            only_for(
+                value.span(),
+                "min-items",
+                &[StackInputKind::StringList],
+                "string-list",
+            )?;
+            validation.min_items = Some(value.into_inner());
+        }
+        if let Some(value) = input.max_items {
+            only_for(
+                value.span(),
+                "max-items",
+                &[StackInputKind::StringList],
+                "string-list",
+            )?;
+            validation.max_items = Some(value.into_inner());
+        }
+
+        let platforms = input
+            .platforms
+            .map(|platforms| self.platform_list(platforms, stack_platforms))
+            .transpose()?;
+
+        let env = match input.env {
+            None => Vec::new(),
+            Some(env) => {
+                let span = env.span();
+                env.into_inner()
+                    .into_vec()
+                    .into_iter()
+                    .map(|target| self.env_mapping(span.clone(), target, declared))
+                    .collect::<Result<Vec<_>>>()?
+            }
+        };
+
+        Ok(StackInputDefinition {
+            id: name.clone(),
+            kind: kind.clone(),
+            provided_by,
+            required,
+            label: input.label.unwrap_or_else(|| name.clone()),
+            description,
+            placeholder: input.placeholder,
+            default,
+            platforms,
+            when: None,
+            validation: stack_authoring::input_validation(&kind, validation),
+            generate: None,
+            env,
+        })
+    }
+
+    fn env_mapping(
+        &self,
+        span: Range<usize>,
+        target: EnvTarget,
+        declared: &Declared,
+    ) -> Result<StackInputEnvironmentMapping> {
+        let (name, targets) = match target {
+            EnvTarget::Name(name) => (name, None),
+            EnvTarget::Mapping(mapping) => (mapping.name, mapping.targets),
+        };
+        if !is_input_env_name(&name) {
+            return Err(self.error(
+                span,
+                format!(
+                    "'{name}' must be an environment variable name: uppercase letters, digits and underscores"
+                ),
+            ));
+        }
+        if let Some(targets) = &targets {
+            if targets.is_empty() {
+                return Err(self.error(
+                    span,
+                    "`targets` is empty; leave it out to set the variable on every daemon",
+                ));
+            }
+            for target in targets.iter().filter(|target| !target.ends_with('*')) {
+                match declared.get(target) {
+                    Some((resource_type, _)) if *resource_type == DaemonConfig::RESOURCE_TYPE => {}
+                    Some((resource_type, _)) => {
+                        return Err(self.error(
+                            span,
+                            format!(
+                            "'{target}' is a {resource_type}, which takes no environment variables"
+                        ),
+                        ))
+                    }
+                    None => {
+                        return Err(
+                            self.error(span, format!("unknown resource '{target}' in `targets`"))
+                        )
+                    }
+                }
+            }
+        }
+        Ok(StackInputEnvironmentMapping {
+            name,
+            target_resources: targets,
+            var_type: None,
+        })
+    }
+
     fn seconds(&self, duration: &Spanned<Duration>) -> Result<u64> {
         match duration.get_ref() {
             Duration::Seconds(seconds) => u64::try_from(*seconds)
@@ -552,7 +774,9 @@ impl Resolver<'_> {
             port: Some(health.port),
             method: health.method.unwrap_or(defaults.method),
             timeout_seconds,
-            failure_threshold: health.failure_threshold.unwrap_or(defaults.failure_threshold),
+            failure_threshold: health
+                .failure_threshold
+                .unwrap_or(defaults.failure_threshold),
         })
     }
 
@@ -627,7 +851,10 @@ impl Resolver<'_> {
                 {
                     return Err(self.error(
                         span,
-                        format!("only one endpoint can use host \"@\"; '{}' already does", apex.name),
+                        format!(
+                            "only one endpoint can use host \"@\"; '{}' already does",
+                            apex.name
+                        ),
                     ));
                 }
             }
@@ -732,7 +959,9 @@ impl Inputs {
         let platforms = secret
             .platforms
             .clone()
-            .map(|platforms| resolver.platform_list(Spanned::new(span.clone(), platforms), stack_platforms))
+            .map(|platforms| {
+                resolver.platform_list(Spanned::new(span.clone(), platforms), stack_platforms)
+            })
             .transpose()?;
         self.insert(
             resolver,
@@ -825,6 +1054,16 @@ fn choice(choice: &Choice) -> ComputeChoice {
     }
 }
 
+fn authored(value: &InputValue) -> AuthoredValue {
+    match value {
+        InputValue::String(text) => AuthoredValue::String(text.clone()),
+        InputValue::Integer(number) => AuthoredValue::Integer(*number),
+        InputValue::Float(number) => AuthoredValue::Float(*number),
+        InputValue::Boolean(flag) => AuthoredValue::Boolean(*flag),
+        InputValue::StringList(items) => AuthoredValue::StringList(items.clone()),
+    }
+}
+
 fn cpu_amount(cpu: &Cpu) -> CpuAmount {
     match cpu {
         Cpu::Integer(cores) => CpuAmount::Integer(*cores),
@@ -862,7 +1101,7 @@ fn is_env_name(name: &str) -> bool {
 }
 
 /// Stack input env mappings take uppercase names only.
-fn is_secret_env_name(name: &str) -> bool {
+fn is_input_env_name(name: &str) -> bool {
     let mut chars = name.chars();
     chars
         .next()
@@ -925,6 +1164,9 @@ mod tests {
         assert_eq!(camel_case_env_name("TOKEN"), "token");
         assert_eq!(camel_case_env_name("_PRIVATE_KEY2"), "privateKey2");
         assert_eq!(camel_case_resource_id("snapshots"), "snapshots");
-        assert_eq!(camel_case_resource_id("snapshot-cache_v2"), "snapshotCacheV2");
+        assert_eq!(
+            camel_case_resource_id("snapshot-cache_v2"),
+            "snapshotCacheV2"
+        );
     }
 }

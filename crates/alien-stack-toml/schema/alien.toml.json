@@ -341,6 +341,48 @@
       ],
       "type": "object"
     },
+    "EnvMapping": {
+      "additionalProperties": false,
+      "description": "An environment variable for chosen resources.",
+      "properties": {
+        "name": {
+          "description": "The variable name.",
+          "type": "string"
+        },
+        "targets": {
+          "default": null,
+          "description": "IDs of the resources that get it. A trailing `*` matches a prefix.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "EnvTarget": {
+      "anyOf": [
+        {
+          "description": "The variable name; every daemon gets it.",
+          "type": "string"
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/definitions/EnvMapping"
+            }
+          ],
+          "description": "The variable name and the resources that get it."
+        }
+      ],
+      "description": "An environment variable that receives an input's value."
+    },
     "Gpu": {
       "additionalProperties": false,
       "description": "A GPU requirement.",
@@ -414,6 +456,241 @@
         "port"
       ],
       "type": "object"
+    },
+    "Input": {
+      "additionalProperties": false,
+      "description": "A stack input: a value provided per deployment. Its ID is the table name.",
+      "properties": {
+        "default": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/InputValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Value used when none is provided."
+        },
+        "description": {
+          "default": null,
+          "description": "What the value is for. Required for required inputs.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/OneOrMany_for_EnvTarget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Environment variables that receive the value: a name, `{ name, targets }`, or a list. Without `targets` every daemon gets it."
+        },
+        "kind": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/InputKind"
+            }
+          ],
+          "description": "What kind of value it is."
+        },
+        "label": {
+          "default": null,
+          "description": "Shown where the value is asked for. Defaults to the input ID.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max": {
+          "description": "Largest accepted number (number and integer inputs).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "max-items": {
+          "default": null,
+          "description": "Most accepted items (string-list inputs).",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max-length": {
+          "default": null,
+          "description": "Longest accepted string (string and secret inputs).",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "min": {
+          "description": "Smallest accepted number (number and integer inputs).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "min-items": {
+          "default": null,
+          "description": "Fewest accepted items (string-list inputs).",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "min-length": {
+          "default": null,
+          "description": "Shortest accepted string (string and secret inputs).",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pattern": {
+          "default": null,
+          "description": "Regular expression the value must match (string and secret inputs).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "placeholder": {
+          "default": null,
+          "description": "Example shown in an empty field.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "platforms": {
+          "default": null,
+          "description": "Ask for the input only on these platforms.",
+          "items": {
+            "$ref": "#/definitions/Platform"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "provided-by": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/OneOrMany_for_Provider"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Who provides the value: \"developer\", \"deployer\", or both. Defaults to \"developer\"."
+        },
+        "required": {
+          "default": null,
+          "description": "Whether a deployment needs a value. Defaults to true.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "values": {
+          "default": null,
+          "description": "The accepted values (enum inputs).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "InputKind": {
+      "description": "The kind of value an input takes.",
+      "enum": [
+        "string",
+        "secret",
+        "number",
+        "integer",
+        "boolean",
+        "enum",
+        "string-list"
+      ],
+      "type": "string"
+    },
+    "InputValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "format": "int64",
+          "type": "integer"
+        },
+        {
+          "format": "double",
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "A value as written in TOML: string, number, boolean, or list of strings."
+    },
+    "OneOrMany_for_EnvTarget": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/EnvTarget"
+        },
+        {
+          "items": {
+            "$ref": "#/definitions/EnvTarget"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "One value or a list of them."
+    },
+    "OneOrMany_for_Provider": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Provider"
+        },
+        {
+          "items": {
+            "$ref": "#/definitions/Provider"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "One value or a list of them."
     },
     "Platform": {
       "description": "Represents the target cloud platform.",
@@ -532,6 +809,25 @@
       ],
       "type": "object"
     },
+    "Provider": {
+      "description": "Who provides an input's value.",
+      "oneOf": [
+        {
+          "description": "The developer, for each deployment.",
+          "enum": [
+            "developer"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Whoever installs the deployment.",
+          "enum": [
+            "deployer"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "ResourceLifecycle": {
       "description": "Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.",
       "oneOf": [
@@ -649,6 +945,13 @@
         "$ref": "#/definitions/Daemon"
       },
       "description": "Daemons: one process on every machine of their pool.",
+      "type": "object"
+    },
+    "input": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Input"
+      },
+      "description": "Stack inputs: values provided per deployment, by the developer or the deployer.",
       "type": "object"
     },
     "name": {

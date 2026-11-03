@@ -962,7 +962,11 @@ health = { port = 8080 }
     #[tokio::test]
     async fn an_existing_stack_file_wins_over_alien_toml() {
         let temp_dir = TempDir::new().unwrap();
-        fs::write(temp_dir.path().join("alien.json"), create_json_config_content()).unwrap();
+        fs::write(
+            temp_dir.path().join("alien.json"),
+            create_json_config_content(),
+        )
+        .unwrap();
         fs::write(temp_dir.path().join("alien.toml"), TOML_CONFIG).unwrap();
 
         let stack = load_configuration(temp_dir.path().to_path_buf())

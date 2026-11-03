@@ -8,10 +8,10 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use alien_core::instance_catalog::Architecture;
-use alien_core::{Platform, ResourceLifecycle};
+use alien_core::{Platform, ResourceLifecycle, StackInputKind, StackInputProvider};
 use indexmap::IndexMap;
 use schemars::JsonSchema;
-use serde::de::{self, value::MapAccessDeserializer, Deserializer, MapAccess, Visitor};
+use serde::de::{self, value::MapAccessDeserializer, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::Deserialize;
 use toml::Spanned;
 
@@ -54,6 +54,11 @@ pub struct Document {
     #[serde(default)]
     #[schemars(with = "BTreeMap<String, Storage>")]
     pub storage: Tables<Storage>,
+
+    /// Stack inputs: values provided per deployment, by the developer or the deployer.
+    #[serde(default)]
+    #[schemars(with = "BTreeMap<String, Input>")]
+    pub input: Tables<Input>,
 }
 
 /// A machine pool. On machines deployments the pool name is what `join --capacity-group` takes.
@@ -314,7 +319,9 @@ impl<'de> Deserialize<'de> for Cpu {
         impl Visitor<'_> for CpuVisitor {
             type Value = Cpu;
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str("a number of CPU cores such as 2 or 0.5, or a quantity such as \"500m\"")
+                f.write_str(
+                    "a number of CPU cores such as 2 or 0.5, or a quantity such as \"500m\"",
+                )
             }
             fn visit_i64<E: de::Error>(self, v: i64) -> Result<Cpu, E> {
                 Ok(Cpu::Integer(v))
@@ -430,5 +437,201 @@ impl<'de> Deserialize<'de> for DataDisk {
             }
         }
         deserializer.deserialize_any(DataDiskVisitor)
+    }
+}
+
+/// A stack input: a value provided per deployment. Its ID is the table name.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct Input {
+    /// What kind of value it is.
+    pub kind: InputKind,
+    /// Who provides the value: "developer", "deployer", or both. Defaults to "developer".
+    #[serde(default)]
+    #[schemars(with = "Option<OneOrMany<Provider>>")]
+    pub provided_by: Option<Spanned<OneOrMany<Provider>>>,
+    /// Whether a deployment needs a value. Defaults to true.
+    #[serde(default)]
+    pub required: Option<bool>,
+    /// Shown where the value is asked for. Defaults to the input ID.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// What the value is for. Required for required inputs.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Example shown in an empty field.
+    #[serde(default)]
+    pub placeholder: Option<String>,
+    /// Value used when none is provided.
+    #[serde(default)]
+    #[schemars(with = "Option<InputValue>")]
+    pub default: Option<Spanned<InputValue>>,
+    /// Ask for the input only on these platforms.
+    #[serde(default)]
+    #[schemars(with = "Option<Vec<Platform>>")]
+    pub platforms: Option<Spanned<Vec<Platform>>>,
+    /// Environment variables that receive the value: a name, `{ name, targets }`, or a list.
+    /// Without `targets` every daemon gets it.
+    #[serde(default)]
+    #[schemars(with = "Option<OneOrMany<EnvTarget>>")]
+    pub env: Option<Spanned<OneOrMany<EnvTarget>>>,
+    /// Shortest accepted string (string and secret inputs).
+    #[serde(default)]
+    #[schemars(with = "Option<u32>")]
+    pub min_length: Option<Spanned<u32>>,
+    /// Longest accepted string (string and secret inputs).
+    #[serde(default)]
+    #[schemars(with = "Option<u32>")]
+    pub max_length: Option<Spanned<u32>>,
+    /// Regular expression the value must match (string and secret inputs).
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    pub pattern: Option<Spanned<String>>,
+    /// Smallest accepted number (number and integer inputs).
+    #[serde(default)]
+    #[schemars(with = "Option<f64>")]
+    pub min: Option<Spanned<InputValue>>,
+    /// Largest accepted number (number and integer inputs).
+    #[serde(default)]
+    #[schemars(with = "Option<f64>")]
+    pub max: Option<Spanned<InputValue>>,
+    /// The accepted values (enum inputs).
+    #[serde(default)]
+    #[schemars(with = "Option<Vec<String>>")]
+    pub values: Option<Spanned<Vec<String>>>,
+    /// Fewest accepted items (string-list inputs).
+    #[serde(default)]
+    #[schemars(with = "Option<u32>")]
+    pub min_items: Option<Spanned<u32>>,
+    /// Most accepted items (string-list inputs).
+    #[serde(default)]
+    #[schemars(with = "Option<u32>")]
+    pub max_items: Option<Spanned<u32>>,
+}
+
+/// The kind of value an input takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum InputKind {
+    String,
+    Secret,
+    Number,
+    Integer,
+    Boolean,
+    Enum,
+    StringList,
+}
+
+impl From<InputKind> for StackInputKind {
+    fn from(kind: InputKind) -> Self {
+        match kind {
+            InputKind::String => StackInputKind::String,
+            InputKind::Secret => StackInputKind::Secret,
+            InputKind::Number => StackInputKind::Number,
+            InputKind::Integer => StackInputKind::Integer,
+            InputKind::Boolean => StackInputKind::Boolean,
+            InputKind::Enum => StackInputKind::Enum,
+            InputKind::StringList => StackInputKind::StringList,
+        }
+    }
+}
+
+/// Who provides an input's value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum Provider {
+    /// The developer, for each deployment.
+    Developer,
+    /// Whoever installs the deployment.
+    Deployer,
+}
+
+impl From<Provider> for StackInputProvider {
+    fn from(provider: Provider) -> Self {
+        match provider {
+            Provider::Developer => StackInputProvider::Developer,
+            Provider::Deployer => StackInputProvider::Deployer,
+        }
+    }
+}
+
+/// One value or a list of them.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum OneOrMany<T> {
+    One(T),
+    Many(Vec<T>),
+}
+
+impl<T> OneOrMany<T> {
+    pub fn into_vec(self) -> Vec<T> {
+        match self {
+            OneOrMany::One(one) => vec![one],
+            OneOrMany::Many(many) => many,
+        }
+    }
+}
+
+/// An environment variable that receives an input's value.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum EnvTarget {
+    /// The variable name; every daemon gets it.
+    Name(String),
+    /// The variable name and the resources that get it.
+    Mapping(EnvMapping),
+}
+
+/// An environment variable for chosen resources.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct EnvMapping {
+    /// The variable name.
+    pub name: String,
+    /// IDs of the resources that get it. A trailing `*` matches a prefix.
+    #[serde(default)]
+    pub targets: Option<Vec<String>>,
+}
+
+/// A value as written in TOML: string, number, boolean, or list of strings.
+#[derive(Debug, Clone, PartialEq, JsonSchema)]
+#[schemars(untagged)]
+pub enum InputValue {
+    String(String),
+    Integer(i64),
+    Float(f64),
+    Boolean(bool),
+    StringList(Vec<String>),
+}
+
+impl<'de> Deserialize<'de> for InputValue {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct InputValueVisitor;
+        impl<'de> Visitor<'de> for InputValueVisitor {
+            type Value = InputValue;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a string, number, boolean, or list of strings")
+            }
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<InputValue, E> {
+                Ok(InputValue::String(v.to_string()))
+            }
+            fn visit_i64<E: de::Error>(self, v: i64) -> Result<InputValue, E> {
+                Ok(InputValue::Integer(v))
+            }
+            fn visit_f64<E: de::Error>(self, v: f64) -> Result<InputValue, E> {
+                Ok(InputValue::Float(v))
+            }
+            fn visit_bool<E: de::Error>(self, v: bool) -> Result<InputValue, E> {
+                Ok(InputValue::Boolean(v))
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<InputValue, A::Error> {
+                let mut items = Vec::new();
+                while let Some(item) = seq.next_element::<String>()? {
+                    items.push(item);
+                }
+                Ok(InputValue::StringList(items))
+            }
+        }
+        deserializer.deserialize_any(InputValueVisitor)
     }
 }

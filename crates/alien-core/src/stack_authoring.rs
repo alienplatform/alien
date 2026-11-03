@@ -12,9 +12,9 @@
 use crate::error::{ErrorData, Result};
 use crate::instance_catalog::Architecture;
 use crate::{
-    CapacityGroup, CapacityGroupScalePolicy, ComputeChoiceRange, DataDiskRequirement,
-    DaemonRuntime, DaemonRuntimeMount, GpuSpec, MachineProfile, ResourceSpec, StackInputKind,
-    StackInputValidation,
+    CapacityGroup, CapacityGroupScalePolicy, ComputeChoiceRange, DaemonRuntime, DaemonRuntimeMount,
+    DataDiskRequirement, GpuSpec, MachineProfile, ResourceSpec, StackInputDefaultValue,
+    StackInputKind, StackInputValidation,
 };
 use alien_error::AlienError;
 
@@ -248,7 +248,10 @@ pub enum PoolScale {
     /// A fixed number of machines.
     Fixed { machines: ComputeChoice },
     /// An autoscaling group between `min` and `max` machines.
-    Autoscale { min: ComputeChoice, max: ComputeChoice },
+    Autoscale {
+        min: ComputeChoice,
+        max: ComputeChoice,
+    },
 }
 
 /// The extra empty data disk each machine must provide.
@@ -407,7 +410,12 @@ pub fn failure_domain_spread(field: &str, spread: i64) -> Result<u8> {
     u8::try_from(spread)
         .ok()
         .filter(|spread| *spread >= 1)
-        .ok_or_else(|| invalid(field, format!("must be an integer from 1 to 255, got {spread}")))
+        .ok_or_else(|| {
+            invalid(
+                field,
+                format!("must be an integer from 1 to 255, got {spread}"),
+            )
+        })
 }
 
 /// The validation block a stack input carries.
@@ -424,6 +432,85 @@ pub fn input_validation(
         StackInputKind::Boolean => None,
         _ => Some(validation),
     }
+}
+
+/// A stack input value as written: a default, or a numeric constraint.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InputValue {
+    String(String),
+    Integer(i64),
+    Float(f64),
+    Boolean(bool),
+    StringList(Vec<String>),
+}
+
+impl InputValue {
+    fn describe(&self) -> &'static str {
+        match self {
+            InputValue::String(_) => "a string",
+            InputValue::Integer(_) => "an integer",
+            InputValue::Float(_) => "a number",
+            InputValue::Boolean(_) => "a boolean",
+            InputValue::StringList(_) => "a list of strings",
+        }
+    }
+}
+
+/// The default value of an input of `kind`, typed the way the stack stores it.
+pub fn input_default(kind: &StackInputKind, value: &InputValue) -> Result<StackInputDefaultValue> {
+    let mismatch = |expected: &str| {
+        invalid(
+            "default",
+            format!(
+                "expected {expected} for a {kind:?} input, got {}",
+                value.describe()
+            ),
+        )
+    };
+    match (kind, value) {
+        (StackInputKind::Secret, _) => Err(invalid(
+            "default",
+            "secret inputs cannot have a default value",
+        )),
+        (StackInputKind::String | StackInputKind::Enum, InputValue::String(text)) => {
+            Ok(StackInputDefaultValue::String(text.clone()))
+        }
+        (StackInputKind::String | StackInputKind::Enum, _) => Err(mismatch("a string")),
+        (StackInputKind::Number | StackInputKind::Integer, _) => Ok(
+            StackInputDefaultValue::Number(input_number("default", kind, value)?),
+        ),
+        (StackInputKind::Boolean, InputValue::Boolean(flag)) => {
+            Ok(StackInputDefaultValue::Boolean(*flag))
+        }
+        (StackInputKind::Boolean, _) => Err(mismatch("a boolean")),
+        (StackInputKind::StringList, InputValue::StringList(items)) => {
+            Ok(StackInputDefaultValue::StringList(items.clone()))
+        }
+        (StackInputKind::StringList, _) => Err(mismatch("a list of strings")),
+    }
+}
+
+/// A number for a number or integer input (a default, `min` or `max`), as the stack stores
+/// it: decimal text printed the way JavaScript prints numbers. Integer inputs take whole
+/// numbers only.
+pub fn input_number(field: &str, kind: &StackInputKind, value: &InputValue) -> Result<String> {
+    let number = match value {
+        InputValue::Integer(number) => return Ok(number.to_string()),
+        InputValue::Float(number) => *number,
+        other => {
+            return Err(invalid(
+                field,
+                format!("expected a number, got {}", other.describe()),
+            ))
+        }
+    };
+    if !number.is_finite() {
+        return Err(invalid(field, "must be a finite number"));
+    }
+    if *kind == StackInputKind::Integer && number.fract() != 0.0 {
+        return Err(invalid(field, format!("{number} is not a whole number")));
+    }
+    Ok(number.to_string())
 }
 
 #[cfg(test)]
@@ -447,7 +534,9 @@ mod tests {
         assert_eq!(parse_quantity_bytes("m", "1024").unwrap(), 1_024);
         // Math.round(0.3 * 1024) in the TS SDK.
         assert_eq!(parse_quantity_bytes("m", "0.3Ki").unwrap(), 307);
-        for bad in ["", "Gi", "16 Gi", " 16Gi", "16gi", "-1Gi", "1e3", "1.Gi", ".5Gi", "16GiB"] {
+        for bad in [
+            "", "Gi", "16 Gi", " 16Gi", "16gi", "-1Gi", "1e3", "1.Gi", ".5Gi", "16GiB",
+        ] {
             assert_eq!(
                 field_of(parse_quantity_bytes("memory", bad).unwrap_err()),
                 "memory",
@@ -464,7 +553,10 @@ mod tests {
         assert_eq!(parse_duration_seconds("d", "1h30m").unwrap(), 5_400);
         assert_eq!(parse_duration_seconds("d", "1d").unwrap(), 86_400);
         for bad in ["", "10", "h", "1.5h", "10 m", "10ms", "-1s", "1h30"] {
-            assert!(parse_duration_seconds("d", bad).is_err(), "{bad:?} must be rejected");
+            assert!(
+                parse_duration_seconds("d", bad).is_err(),
+                "{bad:?} must be rejected"
+            );
         }
         assert_eq!(stop_grace_period_seconds("g", 86_400).unwrap(), 86_400);
         assert!(stop_grace_period_seconds("g", 86_401).is_err());
@@ -477,11 +569,15 @@ mod tests {
         assert_eq!(CpuAmount::Float(0.5).to_quantity("cpu").unwrap(), "0.5");
         assert_eq!(CpuAmount::Float(2.0).to_quantity("cpu").unwrap(), "2");
         assert_eq!(
-            CpuAmount::Quantity("500m".into()).to_quantity("cpu").unwrap(),
+            CpuAmount::Quantity("500m".into())
+                .to_quantity("cpu")
+                .unwrap(),
             "500m"
         );
         assert!(CpuAmount::Integer(0).to_quantity("cpu").is_err());
-        assert!(CpuAmount::Quantity("lots".into()).to_quantity("cpu").is_err());
+        assert!(CpuAmount::Quantity("lots".into())
+            .to_quantity("cpu")
+            .is_err());
     }
 
     fn pool(scale: PoolScale, data_disk: Option<DataDiskSize>) -> ComputePool {
@@ -566,7 +662,10 @@ mod tests {
             },
             None,
         );
-        assert_eq!(field_of(inverted.to_capacity_group("w").unwrap_err()), "scale");
+        assert_eq!(
+            field_of(inverted.to_capacity_group("w").unwrap_err()),
+            "scale"
+        );
     }
 
     #[test]
@@ -651,5 +750,43 @@ mod tests {
                 options: None
             }]
         );
+    }
+
+    #[test]
+    fn input_defaults_are_typed_by_kind() {
+        use StackInputDefaultValue as Default;
+        let text = InputValue::String("eu".into());
+        assert_eq!(
+            input_default(&StackInputKind::Enum, &text).unwrap(),
+            Default::String("eu".into())
+        );
+        assert_eq!(
+            input_default(&StackInputKind::Number, &InputValue::Float(0.5)).unwrap(),
+            Default::Number("0.5".into())
+        );
+        assert_eq!(
+            input_default(&StackInputKind::Integer, &InputValue::Float(3.0)).unwrap(),
+            Default::Number("3".into())
+        );
+        assert_eq!(
+            input_default(&StackInputKind::Integer, &InputValue::Integer(180_000)).unwrap(),
+            Default::Number("180000".into())
+        );
+        assert_eq!(
+            input_default(&StackInputKind::StringList, &InputValue::StringList(vec![])).unwrap(),
+            Default::StringList(vec![])
+        );
+        for (kind, value) in [
+            (StackInputKind::Secret, text.clone()),
+            (StackInputKind::Integer, InputValue::Float(1.5)),
+            (StackInputKind::Boolean, text.clone()),
+            (StackInputKind::String, InputValue::Integer(1)),
+            (StackInputKind::StringList, text.clone()),
+        ] {
+            assert_eq!(
+                field_of(input_default(&kind, &value).unwrap_err()),
+                "default"
+            );
+        }
     }
 }
