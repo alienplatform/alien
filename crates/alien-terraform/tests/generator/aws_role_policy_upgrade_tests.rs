@@ -61,6 +61,15 @@ struct FormerGrant {
     role: String,
 }
 
+/// Whether an attachment is one of the management role's permission profile chunks, which
+/// `emit_iam_managed_policy_chunks` addresses by index.
+fn is_profile_chunk_attachment(address: &str) -> bool {
+    address
+        .strip_suffix("_attachment")
+        .and_then(|policy| policy.rsplit_once("_managed_policy_"))
+        .is_some_and(|(_, index)| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// Addresses of every IAM policy and attachment v3.3.47 installed.
 fn v3_3_47_addresses() -> BTreeSet<String> {
     let body: hcl::Body = hcl::parse(V3_3_47_IAM).expect("the fixture parses");
@@ -437,7 +446,9 @@ async fn an_inline_install_upgrades_in_place_after_the_managed_policies_attach()
     }
 
     // Each former grant waits for every attachment of its role, so its update to the stub runs
-    // only after the role holds the managed policies.
+    // only after the role holds the managed policies. The management role's permission profile
+    // chunks (`<role>_managed_policy_<n>`) carry no former grant; how many there are follows
+    // the profile's size, so a release that adds permissions can add one.
     let configured: BTreeMap<String, &Value> = upgrade["configuration"]["root_module"]["resources"]
         .as_array()
         .expect("configured resources")
@@ -459,6 +470,7 @@ async fn an_inline_install_upgrades_in_place_after_the_managed_policies_attach()
                 address.starts_with("aws_iam_role_policy_attachment.")
                     && !address.starts_with(&runtime_grants)
                     && !installed.contains(*address)
+                    && !is_profile_chunk_attachment(address)
                     && references(resource, "role").contains(&role)
             })
             .map(|(address, _)| address.clone())

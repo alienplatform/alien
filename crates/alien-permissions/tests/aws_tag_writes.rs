@@ -173,7 +173,18 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                     })
                     && binding.not_resources.is_empty()
                     && binding.resources == ["arn:aws:apigateway:${awsRegion}::/tags/*"];
-                assert!(owned || (creation && !other_tag_actions) || named_resource || lambda_creation
+                // PutMetricAlarm both creates and replaces an alarm, so its tag grant binds
+                // the request tag and, when the alarm exists, the tag it already carries.
+                let created_or_owned = equals
+                    .and_then(|c| c.get("aws:RequestTag/${stackTag}"))
+                    .is_some_and(|value| value.as_string() == Some("${stackPrefix}"))
+                    && binding
+                        .condition
+                        .as_ref()
+                        .and_then(|c| c.get("StringEqualsIfExists"))
+                        .and_then(|c| c.get("aws:ResourceTag/${stackTag}"))
+                        .is_some_and(|value| value.as_string() == Some("${stackPrefix}"));
+                assert!(owned || created_or_owned || (creation && !other_tag_actions) || named_resource || lambda_creation
                     || elb_creation || gateway_creation || gateway_tag_path,
                     "{id} allows tag writes without creation or existing stack ownership: {binding:?}");
             }
