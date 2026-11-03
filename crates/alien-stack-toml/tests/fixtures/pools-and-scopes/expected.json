@@ -1,0 +1,247 @@
+{
+  "id": "edge-fleet",
+  "inputs": [
+    {
+      "description": "Shared seed for fleet identities.",
+      "env": [
+        {
+          "name": "FLEET_SEED",
+          "targetResources": [
+            "server",
+            "worker"
+          ]
+        }
+      ],
+      "id": "fleetSeed",
+      "kind": "secret",
+      "label": "Fleet seed",
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {}
+    },
+    {
+      "default": {
+        "type": "boolean",
+        "value": true
+      },
+      "description": "Whether this deployment gets the 'worker' daemon.",
+      "env": [],
+      "id": "workerEnabled",
+      "kind": "boolean",
+      "label": "Create worker",
+      "platforms": [
+        "aws",
+        "gcp"
+      ],
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    },
+    {
+      "description": "Token the worker presents to the scheduler.",
+      "env": [
+        {
+          "name": "WORKER_TOKEN",
+          "targetResources": [
+            "worker"
+          ]
+        }
+      ],
+      "id": "workerToken",
+      "kind": "secret",
+      "label": "WORKER_TOKEN",
+      "platforms": [
+        "aws"
+      ],
+      "providedBy": [
+        "developer"
+      ],
+      "required": true,
+      "validation": {}
+    }
+  ],
+  "permissions": {
+    "profiles": {
+      "server": {
+        "artifacts": [
+          "storage/data-read"
+        ]
+      }
+    }
+  },
+  "resources": {
+    "edge-runtime": {
+      "config": {
+        "id": "edge-runtime",
+        "type": "compute-cluster",
+        "capacityGroups": [
+          {
+            "groupId": "servers",
+            "maxSize": 3,
+            "minSize": 3,
+            "profile": {
+              "architecture": "arm64",
+              "cpu": "8",
+              "dataDisk": {
+                "sizeBytes": 500000000000
+              },
+              "ephemeralStorageBytes": 21474836480,
+              "gpu": {
+                "count": 1,
+                "type": "nvidia-l4"
+              },
+              "memoryBytes": 34359738368
+            },
+            "scalePolicy": {
+              "machines": {
+                "default": 3,
+                "max": 3,
+                "min": 3
+              },
+              "type": "fixed"
+            }
+          },
+          {
+            "dataDiskGibRange": {
+              "default": 200,
+              "max": 4096,
+              "min": 0
+            },
+            "groupId": "workers",
+            "maxSize": 10,
+            "minSize": 1,
+            "profile": {
+              "cpu": "0.5",
+              "dataDisk": {
+                "sizeBytes": 214748364800
+              },
+              "ephemeralStorageBytes": 107374182400,
+              "memoryBytes": 1610612736
+            },
+            "scalePolicy": {
+              "max": {
+                "default": 10,
+                "max": 20,
+                "min": 2
+              },
+              "min": {
+                "default": 1,
+                "max": 1,
+                "min": 1
+              },
+              "type": "autoscale"
+            }
+          }
+        ],
+        "failureDomainSpread": {
+          "servers": 3
+        }
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "artifacts": {
+      "config": {
+        "id": "artifacts",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": true,
+        "versioning": true
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "server": {
+      "config": {
+        "id": "server",
+        "type": "daemon",
+        "cluster": "edge-runtime",
+        "code": {
+          "image": "ghcr.io/acme/edge-server:1.4.0",
+          "type": "image"
+        },
+        "command": [
+          "edge-server",
+          "--role",
+          "server"
+        ],
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "500m",
+          "min": "500m"
+        },
+        "environment": {},
+        "healthCheck": {
+          "failureThreshold": 5,
+          "method": "HEAD",
+          "path": "/ready",
+          "port": 9000,
+          "timeoutSeconds": 2
+        },
+        "links": [
+          {
+            "id": "artifacts",
+            "type": "storage"
+          }
+        ],
+        "memory": {
+          "desired": "128Mi",
+          "min": "128Mi"
+        },
+        "permissions": "server",
+        "pool": "servers",
+        "publicEndpoints": [
+          {
+            "name": "console",
+            "port": 9000,
+            "protocol": "http",
+            "wildcardSubdomains": false
+          }
+        ],
+        "stopGracePeriodSeconds": 600
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "worker": {
+      "config": {
+        "id": "worker",
+        "type": "daemon",
+        "cluster": "edge-runtime",
+        "code": {
+          "src": "crates/worker",
+          "toolchain": {
+            "binaryName": "edge-worker",
+            "type": "rust"
+          },
+          "type": "source"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "0.1",
+          "min": "0.1"
+        },
+        "environment": {},
+        "links": [],
+        "memory": {
+          "desired": "256Mi",
+          "min": "256Mi"
+        },
+        "publicEndpoints": [],
+        "stopGracePeriodSeconds": 5400
+      },
+      "dependencies": [],
+      "enabledWhen": "workerEnabled",
+      "lifecycle": "frozen"
+    }
+  },
+  "supportedPlatforms": [
+    "machines",
+    "aws",
+    "gcp"
+  ]
+}

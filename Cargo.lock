@@ -462,6 +462,7 @@ dependencies = [
  "alien-permissions",
  "alien-platform-api",
  "alien-preflights",
+ "alien-stack-toml",
  "alien-terraform",
  "alien-worker-runtime",
  "async-trait",
@@ -1371,6 +1372,20 @@ dependencies = [
  "tracing",
  "utoipa",
  "uuid",
+]
+
+[[package]]
+name = "alien-stack-toml"
+version = "3.3.50"
+dependencies = [
+ "alien-core",
+ "alien-error",
+ "indexmap 2.14.1",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]

@@ -4,6 +4,8 @@
 //! - **TypeScript files** (`.ts`): Dynamically executed using Bun or Node.js
 //! - **JavaScript files** (`.js`): Dynamically executed using Bun or Node.js
 //! - **JSON files** (`.json`): Directly parsed as serialized Stack objects
+//! - **TOML files** (`.toml`): Declarative `alien.toml`, resolved by `alien-stack-toml`
+//!   without running any code
 //!
 //! ## Configuration Discovery
 //!
@@ -12,6 +14,10 @@
 //! 1. `alien.ts` - TypeScript configuration file
 //! 2. `alien.js` - JavaScript configuration file
 //! 3. `alien.json` - JSON configuration file
+//! 4. `alien.toml` - declarative TOML configuration file
+//!
+//! An existing `alien.ts` keeps winning when an `alien.toml` is added beside it, so adding
+//! one cannot change what a project releases; the CLI warns about the ignored file.
 //!
 //! ## TypeScript and JavaScript Configuration Loading
 //!
@@ -25,7 +31,7 @@
 //! use std::path::PathBuf;
 //! use alien_cli::config::load_configuration;
 //!
-//! // Load from a directory (will search for alien.ts, alien.js, or alien.json)
+//! // Load from a directory (will search for alien.ts, alien.js, alien.json, or alien.toml)
 //! let stack = load_configuration(PathBuf::from("./my-app")).await?;
 //!
 //! // Load from a specific file
@@ -67,7 +73,7 @@ impl JavaScriptRuntime {
 /// Load an Alien stack configuration from a file or directory.
 /// Searches for configuration files in directories.
 ///
-/// Resolution order: `alien.ts`, `alien.js`, `alien.json`.
+/// Resolution order: `alien.ts`, `alien.js`, `alien.json`, `alien.toml`.
 #[alien_event(AlienEvent::LoadingConfiguration)]
 pub async fn load_configuration(config_path: PathBuf) -> Result<Stack> {
     info!("Loading configuration from: {}", config_path.display());
@@ -77,8 +83,9 @@ pub async fn load_configuration(config_path: PathBuf) -> Result<Stack> {
             "Searching for configuration files in directory: {}",
             config_path.display()
         );
-        // Search in priority order
-        let candidates = ["alien.ts", "alien.js", "alien.json"];
+        // Search in priority order. TOML comes last so that adding an alien.toml beside an
+        // existing stack cannot change what it releases.
+        let candidates = ["alien.ts", "alien.js", "alien.json", "alien.toml"];
 
         if let Some(found) = candidates
             .iter()
@@ -86,6 +93,14 @@ pub async fn load_configuration(config_path: PathBuf) -> Result<Stack> {
             .find(|p| p.exists())
         {
             info!("Found configuration: {}", found.display());
+            let toml_file = config_path.join("alien.toml");
+            if found != toml_file && toml_file.exists() {
+                eprintln!(
+                    "Warning: using {} and ignoring {}; remove one of them",
+                    found.display(),
+                    toml_file.display()
+                );
+            }
             found
         } else {
             warn!(
@@ -95,7 +110,7 @@ pub async fn load_configuration(config_path: PathBuf) -> Result<Stack> {
             return Err(alien_error::AlienError::new(
                 ErrorData::ConfigurationError {
                     message: format!(
-                        "Could not find alien.ts, alien.js, or alien.json in {}",
+                        "Could not find alien.ts, alien.js, alien.json, or alien.toml in {}",
                         config_path.display()
                     ),
                 },
@@ -126,12 +141,16 @@ pub async fn load_configuration(config_path: PathBuf) -> Result<Stack> {
             info!("Loading JSON configuration");
             load_json_config(config_file).await
         }
+        Some("toml") => {
+            info!("Loading TOML configuration");
+            load_toml_config(config_file).await
+        }
         _ => {
             error!("Unsupported config file format: {:?}", extension);
             Err(alien_error::AlienError::new(
                 ErrorData::ConfigurationError {
                     message: format!(
-                        "Unsupported config file format. Expected .ts, .js, or .json, got: {}",
+                        "Unsupported config file format. Expected .ts, .js, .json, or .toml, got: {}",
                         config_file.display()
                     ),
                 },
@@ -568,6 +587,26 @@ async fn load_json_config(config_file: PathBuf) -> Result<Stack> {
     Ok(stack)
 }
 
+/// Load a declarative `alien.toml`. Nothing in it is executed.
+async fn load_toml_config(config_file: PathBuf) -> Result<Stack> {
+    let path = config_file.clone();
+    let stack = tokio::task::spawn_blocking(move || alien_stack_toml::load(&path))
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Loading {} was interrupted", config_file.display()),
+        })?
+        .context(ErrorData::ConfigurationError {
+            message: format!("Invalid stack in {}", config_file.display()),
+        })?;
+
+    info!(
+        "Successfully loaded TOML configuration from: {}",
+        config_file.display()
+    );
+    Ok(stack)
+}
+
 #[cfg(test)]
 mod tests {
     mod core_cache {
@@ -668,6 +707,7 @@ mod tests {
     }
 
     use super::*;
+    use alien_core::Platform;
     use std::fs;
     use tempfile::TempDir;
     use which;
@@ -891,6 +931,69 @@ mod tests {
         let stack = result.unwrap();
         // Should load JSON last
         assert_eq!(stack.id(), "test-stack-json");
+    }
+
+    const TOML_CONFIG: &str = r#"name = "test-stack-toml"
+platforms = ["machines"]
+
+[daemon.agent]
+build = { rust = "agent" }
+health = { port = 8080 }
+"#;
+
+    #[tokio::test]
+    async fn toml_is_discovered_last_and_needs_no_javascript_runtime() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(temp_dir.path().join("alien.toml"), TOML_CONFIG).unwrap();
+
+        let stack = load_configuration(temp_dir.path().to_path_buf())
+            .await
+            .expect("a directory with only alien.toml loads it");
+
+        assert_eq!(stack.id(), "test-stack-toml");
+        assert_eq!(stack.supported_platforms(), Some(&[Platform::Machines][..]));
+        let daemon = stack.resources["agent"]
+            .config
+            .downcast_ref::<alien_core::Daemon>()
+            .expect("agent is a daemon");
+        assert_eq!(daemon.health_check.as_ref().unwrap().port, Some(8080));
+    }
+
+    #[tokio::test]
+    async fn an_existing_stack_file_wins_over_alien_toml() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(
+            temp_dir.path().join("alien.json"),
+            create_json_config_content(),
+        )
+        .unwrap();
+        fs::write(temp_dir.path().join("alien.toml"), TOML_CONFIG).unwrap();
+
+        let stack = load_configuration(temp_dir.path().to_path_buf())
+            .await
+            .expect("alien.json loads");
+
+        assert_eq!(stack.id(), "test-stack-json");
+    }
+
+    #[tokio::test]
+    async fn toml_errors_show_where_the_problem_is() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("alien.toml");
+        fs::write(
+            &config_path,
+            TOML_CONFIG.replace("health = { port = 8080 }", "pool = \"gpu\""),
+        )
+        .unwrap();
+
+        let error = load_configuration(config_path.clone())
+            .await
+            .expect_err("an unknown pool is rejected");
+
+        let rendered = crate::ui::render_human_error(&error);
+        let location = format!("{}:6:8: unknown pool 'gpu'", config_path.display());
+        assert!(rendered.contains(&location), "{rendered}");
+        assert!(rendered.contains("6 | pool = \"gpu\""), "{rendered}");
     }
 
     #[tokio::test]
