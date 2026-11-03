@@ -1658,6 +1658,16 @@ Resources:
       LogGroupName:
         Fn::Sub: /aws/lambda/${AWS::StackName}-mailer-rule-set-activator
       RetentionInDays: 365
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: mailer
+      - Key: resource-type
+        Value: email
   MailerRuleSetActivatorRole:
     Type: AWS::IAM::Role
     Properties:
@@ -1683,7 +1693,8 @@ Resources:
             - logs:CreateLogStream
             - logs:PutLogEvents
             Resource:
-              Fn::GetAtt:
+            - Fn::Sub: arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${MailerRuleSetActivatorLogs}
+            - Fn::GetAtt:
               - MailerRuleSetActivatorLogs
               - Arn
   MailerRuleSetActivatorFunction:

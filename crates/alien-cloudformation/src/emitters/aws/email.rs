@@ -614,7 +614,15 @@ fn inbound_resources(
                                         CfExpression::from("logs:PutLogEvents"),
                                     ]),
                                 ),
-                                ("Resource", CfExpression::get_att(&activator_logs_id, "Arn")),
+                                (
+                                    "Resource",
+                                    CfExpression::list([
+                                        CfExpression::sub(format!(
+                                            "arn:${{AWS::Partition}}:logs:${{AWS::Region}}:${{AWS::AccountId}}:log-group:${{{activator_logs_id}}}"
+                                        )),
+                                        CfExpression::get_att(&activator_logs_id, "Arn"),
+                                    ]),
+                                ),
                             ]),
                         ]),
                     ),
@@ -626,8 +634,7 @@ fn inbound_resources(
     // Lambda would otherwise create `/aws/lambda/<function name>` on first invoke, with no
     // retention. That group already exists on stacks created before this one was declared, and
     // CloudFormation cannot create a group whose name is taken, so the function logs to a new
-    // group of its own instead. Untagged like the template's other log groups, so a setup
-    // update does not need logs:TagResource.
+    // group of its own instead.
     let mut activator_logs =
         CfResource::new(activator_logs_id.clone(), "AWS::Logs::LogGroup".to_string());
     activator_logs.properties.insert(
@@ -641,6 +648,9 @@ fn inbound_resources(
         "RetentionInDays".to_string(),
         CfExpression::Integer(AWS_LOG_RETENTION_DAYS.into()),
     );
+    activator_logs
+        .properties
+        .insert("Tags".to_string(), tags(ctx));
 
     let mut activator_function = CfResource::new(
         activator_function_id.clone(),
