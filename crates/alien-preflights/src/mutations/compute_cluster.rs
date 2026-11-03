@@ -59,13 +59,11 @@ impl StackMutation for ComputeClusterMutation {
         if stack_state.platform == Platform::Kubernetes {
             return false;
         }
-        // Machines pools have no provider machine to select, but they still take
-        // the deployment's data disk choice: the join token asks hosts for it.
-        if !matches!(
-            stack_state.platform,
-            Platform::Aws | Platform::Gcp | Platform::Azure
-        ) && data_disk_choice_pending(stack, config)
-        {
+        // A pool takes the deployment's data disk choice even when nothing else
+        // would rerun the mutation: Machines pools have no provider machine to
+        // select (the join token asks hosts for the disk), and a cloud pool with
+        // no workloads placed on it stops at the early returns below.
+        if data_disk_choice_pending(stack, config) {
             return true;
         }
 
@@ -347,8 +345,8 @@ fn selected_data_disk(
     group.selected_data_disk(selected)
 }
 
-/// True when a pool on a platform without provider machines still carries a
-/// data disk other than the one this deployment chose.
+/// True when a pool's prepared profile carries a data disk other than the one
+/// this deployment chose.
 fn data_disk_choice_pending(stack: &Stack, config: &DeploymentConfig) -> bool {
     stack
         .resources
@@ -357,7 +355,9 @@ fn data_disk_choice_pending(stack: &Stack, config: &DeploymentConfig) -> bool {
         .flat_map(|cluster| cluster.capacity_groups.iter())
         .filter(|group| group.profile.is_some())
         .any(|group| match selected_data_disk(group, config) {
-            Ok(data_disk) => group.profile.as_ref().and_then(|p| p.data_disk.as_ref()) != data_disk.as_ref(),
+            Ok(data_disk) => {
+                group.profile.as_ref().and_then(|p| p.data_disk.as_ref()) != data_disk.as_ref()
+            }
             // Let the mutation run so it reports the invalid choice.
             Err(_) => true,
         })
@@ -369,7 +369,10 @@ fn apply_data_disk_choice(group: &mut CapacityGroup, config: &DeploymentConfig) 
     let data_disk = selected_data_disk(group, config).map_err(|message| {
         AlienError::new(crate::error::ErrorData::StackMutationFailed {
             mutation_name: "ComputeClusterMutation".to_string(),
-            message: format!("Invalid compute selection for '{}': {message}", group.group_id),
+            message: format!(
+                "Invalid compute selection for '{}': {message}",
+                group.group_id
+            ),
             resource_id: None,
         })
     })?;
@@ -1205,7 +1208,10 @@ fn materialize_selection_within(
         .map_err(|message| {
             AlienError::new(crate::error::ErrorData::StackMutationFailed {
                 mutation_name: "ComputeClusterMutation".to_string(),
-                message: format!("Invalid compute selection for '{}': {message}", group.group_id),
+                message: format!(
+                    "Invalid compute selection for '{}': {message}",
+                    group.group_id
+                ),
                 resource_id: None,
             })
         })?;
@@ -4655,15 +4661,21 @@ mod tests {
         let state = StackState::new(Platform::Machines);
         let config_with = |data_disk_gib: Option<u32>| {
             let mut config = deployment_config_with_compute_pool("", 1, 1);
-            config.stack_settings.compute.as_mut().unwrap().pools.insert(
-                "general".to_string(),
-                ComputePoolSelection::Fixed {
-                    machines: 1,
-                    machine: None,
-                    failure_domains: None,
-                    data_disk_gib,
-                },
-            );
+            config
+                .stack_settings
+                .compute
+                .as_mut()
+                .unwrap()
+                .pools
+                .insert(
+                    "general".to_string(),
+                    ComputePoolSelection::Fixed {
+                        machines: 1,
+                        machine: None,
+                        failure_domains: None,
+                        data_disk_gib,
+                    },
+                );
             config
         };
         let prepared_disk = |stack: &Stack| {
@@ -4704,9 +4716,104 @@ mod tests {
             .await
             .expect_err("5000 GiB is outside the declared range");
         assert!(
-            error.message.contains("data disk must be between 0 and 4096 GiB"),
+            error
+                .message
+                .contains("data disk must be between 0 and 4096 GiB"),
             "{}",
             error.message
         );
+    }
+
+    /// A cloud pool with no workloads placed on it still takes the
+    /// deployment's data disk choice, including no disk at all.
+    #[tokio::test]
+    async fn an_idle_cloud_pool_takes_the_deployments_data_disk_choice() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let stack = Stack::new("idle-pool".to_string())
+            .add(
+                ComputeCluster::new("compute".to_string())
+                    .capacity_group(CapacityGroup {
+                        group_id: "general".to_string(),
+                        instance_type: Some("m8i.large".to_string()),
+                        profile: Some(MachineProfile {
+                            cpu: "2".to_string(),
+                            memory_bytes: 8 * GIB,
+                            ephemeral_storage_bytes: 20 * GIB,
+                            architecture: None,
+                            gpu: None,
+                            data_disk: Some(alien_core::DataDiskRequirement {
+                                size_bytes: 200 * GIB,
+                            }),
+                        }),
+                        min_size: 1,
+                        max_size: 1,
+                        scale_policy: None,
+                        nested_virtualization: None,
+                        data_disk_gib_range: Some(ComputeChoiceRange {
+                            min: 0,
+                            max: 4096,
+                            default: 200,
+                        }),
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let state = StackState::new(Platform::Aws);
+        let config_with = |data_disk_gib: Option<u32>| {
+            let mut config = deployment_config_with_compute_pool("m8i.large", 1, 1);
+            config
+                .stack_settings
+                .compute
+                .as_mut()
+                .unwrap()
+                .pools
+                .insert(
+                    "general".to_string(),
+                    ComputePoolSelection::Fixed {
+                        machines: 1,
+                        machine: Some("m8i.large".to_string()),
+                        failure_domains: None,
+                        data_disk_gib,
+                    },
+                );
+            config
+        };
+        let prepared_disk = |stack: &Stack| {
+            stack.resources["compute"]
+                .config
+                .downcast_ref::<ComputeCluster>()
+                .unwrap()
+                .capacity_groups[0]
+                .profile
+                .as_ref()
+                .unwrap()
+                .data_disk
+                .clone()
+        };
+
+        // No pick keeps the release default, so nothing needs to change.
+        assert!(!ComputeClusterMutation.should_run(&stack, &state, &config_with(None)));
+
+        for (pick, expected) in [(Some(0), None), (Some(50), Some(50 * GIB))] {
+            let config = config_with(pick);
+            assert!(
+                ComputeClusterMutation.should_run(&stack, &state, &config),
+                "{pick:?}"
+            );
+            let prepared = ComputeClusterMutation
+                .mutate(stack.clone(), &state, &config)
+                .await
+                .expect("the pick is within the declared range");
+            assert_eq!(
+                prepared_disk(&prepared),
+                expected.map(|size_bytes| alien_core::DataDiskRequirement { size_bytes }),
+                "{pick:?}"
+            );
+            assert!(
+                !ComputeClusterMutation.should_run(&prepared, &state, &config),
+                "{pick:?}"
+            );
+        }
     }
 }
