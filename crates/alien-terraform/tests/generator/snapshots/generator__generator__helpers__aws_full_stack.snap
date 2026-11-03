@@ -637,6 +637,10 @@ resource "aws_subnet" "default_network_private" {
     "resource-type" = "network"
   }
   depends_on = [
+    aws_iam_role.default_network_flow_logs,
+    aws_iam_role_policy.default_network_flow_logs,
+    aws_iam_policy.default_network_flow_logs_0_network_mode_0f3fc614_setup_0a1e77f4,
+    aws_iam_role_policy_attachment.default_network_flow_logs_0_network_mode_0f3fc614_setup_0a1e77f4_attachment,
     aws_iam_role.execution_sa,
     aws_iam_role_policy.execution_sa_set_0,
     aws_iam_role_policy.execution_sa_set_1,
@@ -756,6 +760,10 @@ resource "aws_security_group" "default_network_workload" {
     "resource-type" = "network"
   }
   depends_on = [
+    aws_iam_role.default_network_flow_logs,
+    aws_iam_role_policy.default_network_flow_logs,
+    aws_iam_policy.default_network_flow_logs_0_network_mode_0f3fc614_setup_0a1e77f4,
+    aws_iam_role_policy_attachment.default_network_flow_logs_0_network_mode_0f3fc614_setup_0a1e77f4_attachment,
     aws_iam_role.execution_sa,
     aws_iam_role_policy.execution_sa_set_0,
     aws_iam_role_policy.execution_sa_set_1,
@@ -781,6 +789,93 @@ resource "aws_security_group" "default_network_workload" {
     aws_iam_policy.registry_push_setup_2bb131f2,
     aws_iam_role_policy_attachment.registry_push_setup_2bb131f2_attachment
   ]
+}
+
+resource "aws_cloudwatch_log_group" "default_network_flow_logs" {
+  count             = var.network_mode == "create-new" ? 1 : 0
+  name              = "${local.resource_prefix}-default-network-flow-logs"
+  retention_in_days = 365
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
+  }
+}
+
+resource "aws_iam_role" "default_network_flow_logs" {
+  count              = var.network_mode == "create-new" ? 1 : 0
+  name               = length(format("%s-%s", local.resource_prefix, "default-network-flow-logs")) <= 64 ? format("%s-%s", local.resource_prefix, "default-network-flow-logs") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "default-network-flow-logs"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "default-network-flow-logs")), 0, 8))
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "vpc-flow-logs.amazonaws.com" }, Action = "sts:AssumeRole", Condition = { StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }, ArnLike = { "aws:SourceArn" = "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:vpc-flow-log/*" } } }] })
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
+  }
+}
+
+resource "aws_iam_role_policy" "default_network_flow_logs" {
+  count  = var.network_mode == "create-new" ? 1 : 0
+  name   = "flow-logs-delivery"
+  role   = aws_iam_role.default_network_flow_logs[0].id
+  policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
+  depends_on = [
+    aws_iam_role_policy_attachment.default_network_flow_logs_0_network_mode_0f3fc614_setup_0a1e77f4_attachment
+  ]
+}
+
+resource "aws_flow_log" "default_network" {
+  count                    = var.network_mode == "create-new" ? 1 : 0
+  vpc_id                   = aws_vpc.default_network[0].id
+  traffic_type             = "ALL"
+  log_destination_type     = "cloud-watch-logs"
+  log_destination          = aws_cloudwatch_log_group.default_network_flow_logs[0].arn
+  iam_role_arn             = aws_iam_role.default_network_flow_logs[0].arn
+  max_aggregation_interval = 600
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
+  }
+  depends_on = [
+    aws_iam_role_policy_attachment.default_network_flow_logs_0_network_mode_0f3fc614_setup_0a1e77f4_attachment
+  ]
+}
+
+resource "aws_iam_policy" "default_network_flow_logs_0_network_mode_0f3fc614_setup_0a1e77f4" {
+  count  = var.network_mode == "create-new" ? 1 : 0
+  name   = length(format("%s-%s", local.resource_prefix, "default-network-flow-logs-0-network-mode-0f3fc614-setup-0a1e77f4")) <= 128 ? format("%s-%s", local.resource_prefix, "default-network-flow-logs-0-network-mode-0f3fc614-setup-0a1e77f4") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "default-network-flow-logs-0-network-mode-0f3fc614-setup-0a1e77f4"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "default-network-flow-logs-0-network-mode-0f3fc614-setup-0a1e77f4")), 0, 8))
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Action = ["logs:CreateLogStream", "logs:PutLogEvents", "logs:DescribeLogGroups", "logs:DescribeLogStreams"], Resource = ["arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:${local.resource_prefix}-default-network-flow-logs", "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:${local.resource_prefix}-default-network-flow-logs:*"] }] })
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "default_network_flow_logs_0_network_mode_0f3fc614_setup_0a1e77f4_attachment" {
+  count      = var.network_mode == "create-new" ? 1 : 0
+  role       = aws_iam_role.default_network_flow_logs[0].name
+  policy_arn = aws_iam_policy.default_network_flow_logs_0_network_mode_0f3fc614_setup_0a1e77f4[0].arn
+  depends_on = [
+    aws_iam_policy.default_network_flow_logs_0_network_mode_0f3fc614_setup_0a1e77f4
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "terraform_data" "default_network_flow_logs_0_network_mode_0f3fc614_setup_policies_barrier" {
+  count = var.network_mode == "create-new" ? 1 : 0
+  triggers_replace = [
+    aws_iam_role_policy_attachment.default_network_flow_logs_0_network_mode_0f3fc614_setup_0a1e77f4_attachment[0].id
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 === execution_sa.tf ===
@@ -1230,6 +1325,13 @@ resource "terraform_data" "deployment_registration" {
     aws_route_table_association.default_network_public,
     aws_route_table_association.default_network_private,
     aws_security_group.default_network_workload,
+    aws_cloudwatch_log_group.default_network_flow_logs,
+    aws_iam_role.default_network_flow_logs,
+    aws_iam_role_policy.default_network_flow_logs,
+    aws_flow_log.default_network,
+    aws_iam_policy.default_network_flow_logs_0_network_mode_0f3fc614_setup_0a1e77f4,
+    aws_iam_role_policy_attachment.default_network_flow_logs_0_network_mode_0f3fc614_setup_0a1e77f4_attachment,
+    terraform_data.default_network_flow_logs_0_network_mode_0f3fc614_setup_policies_barrier,
     aws_iam_role.execution_sa,
     aws_iam_role_policy.execution_sa_set_0,
     aws_iam_role_policy.execution_sa_set_1,

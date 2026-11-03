@@ -6,7 +6,7 @@
 //! * `ByoVpcAws` — emit nothing; existing network IDs are passed via parameters.
 //! * `Create` — full topology: VPC, public + private subnets across 1–3
 //!   AZs, internet gateway, NAT gateway, route tables, default routes,
-//!   subnet associations, security group.
+//!   subnet associations, security group, and the VPC's flow log.
 
 use crate::{
     emitter::CfEmitter,
@@ -507,6 +507,13 @@ fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
             }
         }
     }
+
+    resources.extend(super::flow_logs::resources(
+        ctx,
+        prefix,
+        &vpc_id,
+        CONDITION_NETWORK_MODE_CREATE,
+    ));
 
     for resource in &mut resources {
         if resource.condition.is_none() {

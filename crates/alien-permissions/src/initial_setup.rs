@@ -20,11 +20,16 @@ fn normalize_resource_type(resource_type: &str) -> String {
     resource_type.replace('_', "-")
 }
 
+/// Permission set operations setup holds for the resources it creates. `setup` sets are never
+/// granted to the management identity.
+const SETUP_OPERATIONS: [&str; 2] = ["provision", "setup"];
+
 /// Collects all provision permission set IDs needed for a stack's initial setup.
 ///
 /// Walks resources emitted during setup and includes their `<type>/provision`
-/// permission set if one exists in the registry. Live resources are excluded:
-/// their provision permissions belong to the ongoing management profile.
+/// and setup-only `<type>/setup` permission sets if they exist in the registry.
+/// Live resources are excluded: their provision permissions belong to the
+/// ongoing management profile.
 /// Also adds cross-cutting permission sets (e.g. `service-account/provision`)
 /// that any initial setup requires regardless of the resources declared.
 pub fn initial_setup_permission_set_ids(stack: &Stack) -> Vec<String> {
@@ -39,10 +44,11 @@ pub fn initial_setup_permission_set_ids(stack: &Stack) -> Vec<String> {
         }
 
         let resource_type = normalize_resource_type(raw_resource_type);
-        let provision_id = format!("{resource_type}/provision");
-
-        if get_permission_set(&provision_id).is_some() && !set_ids.contains(&provision_id) {
-            set_ids.push(provision_id);
+        for operation in SETUP_OPERATIONS {
+            let id = format!("{resource_type}/{operation}");
+            if get_permission_set(&id).is_some() && !set_ids.contains(&id) {
+                set_ids.push(id);
+            }
         }
     }
 
@@ -76,7 +82,7 @@ pub fn generate_aws_initial_setup_policy(
             let Some((resource_type, operation)) = id.split_once('/') else {
                 return false;
             };
-            if operation != "provision" {
+            if !SETUP_OPERATIONS.contains(&operation) {
                 return false;
             }
             ownership_policy_for_resource_type(resource_type)

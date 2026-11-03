@@ -28,6 +28,10 @@ pub trait CloudWatchLogsApi: Send + Sync + std::fmt::Debug {
     /// Deletes a log group and its events. A group that does not exist is a
     /// `RemoteResourceNotFound`.
     async fn delete_log_group(&self, log_group_name: &str) -> Result<()>;
+
+    /// The tags of a log group, by its ARN without the trailing `:*`. A group that does not
+    /// exist is a `RemoteResourceNotFound`.
+    async fn list_tags_for_resource(&self, resource_arn: &str) -> Result<HashMap<String, String>>;
 }
 
 /// `CreateLogGroup` request.
@@ -44,6 +48,20 @@ pub struct CreateLogGroupRequest {
 #[serde(rename_all = "camelCase")]
 struct DeleteLogGroupRequest<'a> {
     log_group_name: &'a str,
+}
+
+/// `ListTagsForResource` request.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ListTagsForResourceRequest<'a> {
+    resource_arn: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListTagsForResourceResponse {
+    #[serde(default)]
+    tags: HashMap<String, String>,
 }
 
 /// `PutRetentionPolicy` request.
@@ -109,14 +127,7 @@ impl CloudWatchLogsClient {
         retry: bool,
     ) -> Result<()> {
         self.credentials.ensure_fresh().await?;
-        let builder = self
-            .client
-            .request(Method::POST, self.get_base_url())
-            .host(&self.get_host())
-            .header("X-Amz-Target", format!("Logs_20140328.{target}"))
-            .header("Content-Type", "application/x-amz-json-1.1")
-            .content_sha256(&body)
-            .body(body);
+        let builder = self.request(target, &body);
 
         let result = if retry {
             crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config()).await
@@ -124,8 +135,22 @@ impl CloudWatchLogsClient {
             crate::aws::aws_request_utils::sign_send_no_response_once(builder, &self.sign_config())
                 .await
         };
+        Self::map_result(result, log_group_name)
+    }
+
+    fn request(&self, target: &str, body: &str) -> reqwest::RequestBuilder {
+        self.client
+            .request(Method::POST, self.get_base_url())
+            .host(&self.get_host())
+            .header("X-Amz-Target", format!("Logs_20140328.{target}"))
+            .header("Content-Type", "application/x-amz-json-1.1")
+            .content_sha256(body)
+            .body(body.to_string())
+    }
+
+    fn map_result<T>(result: Result<T>, log_group_name: &str) -> Result<T> {
         match result {
-            Ok(()) => Ok(()),
+            Ok(value) => Ok(value),
             Err(error) => {
                 let mapped = match &error.error {
                     Some(ErrorData::HttpResponseError {
@@ -239,6 +264,21 @@ impl CloudWatchLogsApi for CloudWatchLogsClient {
             })?;
         self.send("DeleteLogGroup", body, log_group_name, true)
             .await
+    }
+
+    async fn list_tags_for_resource(&self, resource_arn: &str) -> Result<HashMap<String, String>> {
+        let body = serde_json::to_string(&ListTagsForResourceRequest { resource_arn })
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize ListTagsForResourceRequest for '{resource_arn}'"
+                ),
+            })?;
+        self.credentials.ensure_fresh().await?;
+        let builder = self.request("ListTagsForResource", &body);
+        let result: Result<ListTagsForResourceResponse> =
+            crate::aws::aws_request_utils::sign_send_json(builder, &self.sign_config()).await;
+        Self::map_result(result, resource_arn).map(|response| response.tags)
     }
 }
 
@@ -383,6 +423,60 @@ mod tests {
                 Some(ErrorData::RemoteResourceConflict { ref resource_name, .. })
                     if resource_name == "/aws/lambda/app-api"
             ),
+            "{error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn lists_a_log_groups_tags_and_reports_a_missing_one_as_not_found() {
+        let server = MockServer::start_async().await;
+        let tags = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("x-amz-target", "Logs_20140328.ListTagsForResource")
+                    .json_body(serde_json::json!({
+                        "resourceArn": "arn:aws:logs:us-east-1:123456789012:log-group:app-net-flow-logs"
+                    }));
+                then.status(200)
+                    .body(r#"{"tags":{"deployment":"app","managed-by":"runtime"}}"#);
+            })
+            .await;
+        let missing = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("x-amz-target", "Logs_20140328.ListTagsForResource")
+                    .json_body(serde_json::json!({
+                        "resourceArn": "arn:aws:logs:us-east-1:123456789012:log-group:gone"
+                    }));
+                then.status(400).body(
+                    r#"{"__type":"com.amazonaws.logs#ResourceNotFoundException","message":"The specified log group does not exist."}"#,
+                );
+            })
+            .await;
+        let client = client(&server);
+
+        let found = client
+            .list_tags_for_resource(
+                "arn:aws:logs:us-east-1:123456789012:log-group:app-net-flow-logs",
+            )
+            .await
+            .expect("tags");
+        let error = client
+            .list_tags_for_resource("arn:aws:logs:us-east-1:123456789012:log-group:gone")
+            .await
+            .expect_err("missing log group");
+
+        assert_eq!(
+            found,
+            HashMap::from([
+                ("deployment".to_string(), "app".to_string()),
+                ("managed-by".to_string(), "runtime".to_string()),
+            ])
+        );
+        tags.assert_hits_async(1).await;
+        assert!(missing.hits_async().await >= 1);
+        assert!(
+            matches!(error.error, Some(ErrorData::RemoteResourceNotFound { .. })),
             "{error:?}"
         );
     }

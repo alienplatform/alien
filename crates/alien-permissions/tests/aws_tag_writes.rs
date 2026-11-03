@@ -78,6 +78,7 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                                     | "CreateNatGateway"
                                     | "AllocateAddress"
                                     | "CreateSecurityGroup"
+                                    | "CreateFlowLogs"
                                     | "CreateLaunchTemplate"
                                     | "RunInstances"
                                     | "CreateVolume"
@@ -117,6 +118,7 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                             "arn:aws:iam::${awsAccountId}:instance-profile/",
                             "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/",
                             "arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/",
+                            "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:",
                             "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:",
                             "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:",
                             "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/",
@@ -214,11 +216,22 @@ fn catalog_pass_role_grants_require_the_consuming_service() {
             "build/provision" => "codebuild.amazonaws.com",
             "compute-cluster/management" | "compute-cluster/provision" => "ec2.amazonaws.com",
             "container/provision" => "dlm.amazonaws.com",
+            "network/setup" => "vpc-flow-logs.amazonaws.com",
             _ => panic!("review the consuming service for {id}"),
         };
         // Render both binding scopes with the boundary selected: legacy grants must
         // disappear, and every remaining Allow must require the consuming service.
+        // Network sets bind the stack only.
+        let resource_scoped = set
+            .platforms
+            .aws
+            .iter()
+            .flatten()
+            .all(|entry| entry.binding.resource.is_some());
         for target in [BindingTarget::Stack, BindingTarget::Resource] {
+            if target == BindingTarget::Resource && !resource_scoped {
+                continue;
+            }
             let generated = AwsRuntimePermissionsGenerator::new()
                 .generate_policy(
                     set,
@@ -245,10 +258,25 @@ fn catalog_pass_role_grants_require_the_consuming_service() {
                     Some(service),
                     "{id} / {target}"
                 );
+                // The role's own tags, where the grant requires them; this checks the service.
+                let role_tags = statement
+                    .condition
+                    .as_ref()
+                    .and_then(|condition| condition.get("StringEquals"))
+                    .into_iter()
+                    .flatten()
+                    .filter(|(key, _)| {
+                        key.starts_with("aws:ResourceTag/") || key.starts_with("iam:ResourceTag/")
+                    })
+                    .filter_map(|(key, value)| Some((key.clone(), value.as_string()?.to_string())))
+                    .collect::<Vec<_>>();
                 for resource in &statement.resource {
                     let role = resource.replace('*', "example");
                     for candidate in [service, "unrelated.amazonaws.com", ""] {
-                        let request = Request::new("iam:PassRole", &role);
+                        let request = role_tags.iter().fold(
+                            Request::new("iam:PassRole", &role),
+                            |request, (key, value)| request.with(key.clone(), value.clone()),
+                        );
                         let request = if candidate.is_empty() {
                             request
                         } else {

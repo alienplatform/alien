@@ -105,6 +105,12 @@ fn eks_resources(ctx: &EmitContext<'_>, prefix: &str) -> Vec<CfResource> {
                 &private_route_table_id,
             ),
         ]);
+        resources.extend(super::flow_logs::resources(
+            ctx,
+            prefix,
+            &vpc_id,
+            CONDITION_NETWORK_MODE_CREATE,
+        ));
     }
 
     resources.extend([

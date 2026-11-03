@@ -673,6 +673,37 @@ fn is_tag_absent_binding(binding: &AwsBindingSpec) -> bool {
         })
 }
 
+/// CreateLogGroup with tags authorizes the tagging actions on the group being created. Here
+/// `Null` narrows them: on top of this stack's request tags, the group must not carry the stack
+/// tag yet, so a group another setup tagged cannot be retagged into this one's and deleted.
+fn create_time_log_group_tagging(
+    permission_set_id: &str,
+    actions: &[String],
+    binding: &AwsBindingSpec,
+) -> bool {
+    let Some(conditions) = binding.condition.as_ref() else {
+        return false;
+    };
+    let equals = conditions.get("StringEquals");
+    let requires = |key: &str, value: &str| {
+        equals.is_some_and(|equals| equals.get(key).and_then(|v| v.as_string()) == Some(value))
+    };
+    permission_set_id == "network/setup"
+        && actions == ["logs:TagResource", "logs:TagLogGroup"]
+        && binding.resources
+            == ["arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:${stackPrefix}-*-flow-logs"]
+        && conditions.len() == 2
+        && requires("aws:RequestTag/${stackTag}", "${stackPrefix}")
+        && requires("aws:RequestTag/${managedByTag}", "runtime")
+        && conditions.get("Null").is_some_and(|null| {
+            null.len() == 1
+                && null
+                    .get("aws:ResourceTag/${stackTag}")
+                    .and_then(|value| value.as_string())
+                    == Some("true")
+        })
+}
+
 /// The reads a gone tag-scoped object answers with NotFound once they are granted on objects
 /// without the stack's tag. Each returns metadata only. For Lambda that is the reserved
 /// concurrency: GetFunctionConfiguration and GetFunction return environment variables.
@@ -728,6 +759,9 @@ fn tag_absent_grants_are_reads_of_gone_objects() {
                     continue;
                 }
                 let at = format!("{permission_set_id}[{statement_index}]");
+                if create_time_log_group_tagging(permission_set_id, actions, binding) {
+                    continue;
+                }
                 if !is_tag_absent_binding(binding) {
                     failures.push(format!(
                         "{at} combines Null with other conditions or keys: {:?}",

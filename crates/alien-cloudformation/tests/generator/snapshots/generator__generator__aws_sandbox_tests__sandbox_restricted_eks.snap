@@ -615,6 +615,90 @@ Resources:
       - Key: resource-type
         Value: network
     Condition: NetworkModeCreate
+  DefaultNetworkFlowLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 365
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: default-network
+      - Key: resource-type
+        Value: network
+    Condition: NetworkModeCreate
+  DefaultNetworkFlowLogRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: vpc-flow-logs.amazonaws.com
+          Action: sts:AssumeRole
+          Condition:
+            StringEquals:
+              aws:SourceAccount:
+                Ref: AWS::AccountId
+            ArnLike:
+              aws:SourceArn:
+                Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:vpc-flow-log/*
+      Policies:
+      - PolicyName: flow-logs-delivery
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            - logs:DescribeLogGroups
+            - logs:DescribeLogStreams
+            Resource:
+              Fn::GetAtt:
+              - DefaultNetworkFlowLogGroup
+              - Arn
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: default-network
+      - Key: resource-type
+        Value: network
+    Condition: NetworkModeCreate
+  DefaultNetworkFlowLog:
+    Type: AWS::EC2::FlowLog
+    Properties:
+      ResourceId:
+        Ref: DefaultNetworkVpc
+      ResourceType: VPC
+      TrafficType: ALL
+      LogDestinationType: cloud-watch-logs
+      LogGroupName:
+        Ref: DefaultNetworkFlowLogGroup
+      DeliverLogsPermissionArn:
+        Fn::GetAtt:
+        - DefaultNetworkFlowLogRole
+        - Arn
+      MaxAggregationInterval: 600
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: default-network
+      - Key: resource-type
+        Value: network
+    Condition: NetworkModeCreate
   DeploymentRegistration:
     Type: AWS::CloudFormation::CustomResource
     Properties:
@@ -816,6 +900,18 @@ Resources:
             availabilityZones: []
             isByoVpc: true
       ConditionalDependencies:
+      - Fn::If:
+        - NetworkModeCreate
+        - Ref: DefaultNetworkFlowLog
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkModeCreate
+        - Ref: DefaultNetworkFlowLogGroup
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkModeCreate
+        - Ref: DefaultNetworkFlowLogRole
+        - Ref: AWS::NoValue
       - Fn::If:
         - NetworkModeCreate
         - Ref: DefaultNetworkInternetGateway

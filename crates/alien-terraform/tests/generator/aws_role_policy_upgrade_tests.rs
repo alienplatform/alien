@@ -505,7 +505,7 @@ async fn an_inline_install_upgrades_in_place_after_the_managed_policies_attach()
         let grants: BTreeSet<String> = policies
             .iter()
             .chain(&attachments)
-            .cloned()
+            .map(|address| without_index(address))
             .chain(former.iter().map(|grant| grant.address.clone()))
             .collect();
         assert!(
@@ -810,6 +810,14 @@ fn creates_before_destroying(module: &alien_terraform::ModuleFiles) -> BTreeSet<
     addresses
 }
 
+/// A plan address without its instance key: `depends_on` names a counted resource as a whole.
+fn without_index(address: &str) -> String {
+    address
+        .split_once('[')
+        .map_or(address, |(resource, _)| resource)
+        .to_string()
+}
+
 fn write_state(dir: &Path, resources: Vec<Value>) {
     let version: Value =
         serde_json::from_str(&terraform(dir, &["version", "-json"])).expect("version");
@@ -875,6 +883,8 @@ async fn a_grant_added_early_leaves_the_installed_policies_alone() {
                 .iter()
                 .any(|kind| address.starts_with(kind))
                     && address.contains("_setup")
+                    // `applied_iam_state` applies only resources without a `count`.
+                    && !address.ends_with(']')
                     && **actions != json!(["no-op"])
                     && **actions != json!(["update"])
             })
