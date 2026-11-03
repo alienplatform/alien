@@ -365,6 +365,7 @@ pub async fn create_new_project(
             default_managers: None,
             deployment_count: Some(0.0),
             latest_release: None.into(),
+            health: None,
         },
         git_repository_warning: response.git_repository_warning,
     })

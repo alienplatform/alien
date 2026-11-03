@@ -230,6 +230,7 @@ mod tests {
 
     fn service_account_subject(role: Role, scope: SubjectScope) -> ServiceAccountSubject {
         ServiceAccountSubject {
+            additional_roles: Vec::new(),
             id: "sa_01HXYZ".to_string(),
             kind: ServiceAccountSubjectKind::ServiceAccount,
             role,

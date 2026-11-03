@@ -3833,6 +3833,9 @@ async fn create_deployment_task(
         setup_method: None,
         setup_metadata: None,
         setup_handoff: ::std::default::Default::default(),
+        cloud_account_id: None,
+        region: None,
+        dedicated_account: None,
     };
 
     let workspace_param = CreateDeploymentWorkspace::try_from(workspace)
