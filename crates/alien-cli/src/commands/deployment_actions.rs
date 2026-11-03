@@ -1447,7 +1447,7 @@ mod tests {
     }
 
     #[test]
-    fn a_data_disk_choice_survives_other_changes_and_reaches_the_request() {
+    fn a_data_disk_choice_survives_other_changes_and_is_refused_until_the_client_can_send_it() {
         let mut saved = fixed(2, Some("m8i.large"));
         if let ComputePoolSelection::Fixed { data_disk_gib, .. } = &mut saved {
             *data_disk_gib = Some(200);
@@ -1478,11 +1478,19 @@ mod tests {
         .expect("mode and disk change applies");
         assert_eq!(next.pools["general"].data_disk_gib(), Some(0));
 
-        let sent = serde_json::to_value(
-            compute_request(Some(&next.pools), None).expect("request type accepts pools"),
-        )
-        .expect("serialize request");
-        assert_eq!(sent["compute"]["pools"]["general"]["dataDiskGib"], 0);
+        // The vendored Platform API spec doesn't have `dataDiskGib` yet, so the
+        // typed request would drop the choice. The CLI refuses instead of
+        // sending a request that loses it. When the spec gains the field, this
+        // becomes: the request carries `dataDiskGib: 0`.
+        let error = compute_request(Some(&next.pools), None)
+            .expect_err("a disk choice the client can't send is refused");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(
+            error
+                .message
+                .contains("cannot send 'general.dataDiskGib', so the change would be lost"),
+            "{error:?}"
+        );
     }
 
     #[test]
