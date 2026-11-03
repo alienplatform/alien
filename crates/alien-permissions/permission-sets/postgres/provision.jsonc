@@ -55,6 +55,30 @@
           }
         }
       },
+      // The setup templates create a setup-owned cluster's writer alarms, and their alarm
+      // handlers read an alarm and its tags back. Reads never reach another deployment's alarm.
+      {
+        "grant": {
+          "actions": [
+            "cloudwatch:DescribeAlarms",
+            "cloudwatch:ListTagsForResource"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-*"],
+            "condition": {
+              "StringEqualsIfExists": { "aws:ResourceTag/${stackTag}": "${stackPrefix}" }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-${resourceName}-*"],
+            "condition": {
+              "StringEqualsIfExists": { "aws:ResourceTag/${stackTag}": "${stackPrefix}" }
+            }
+          }
+        }
+      },
       {
         "label": "manage-aurora-cluster",
         "description": "Create, modify and delete the Aurora cluster, instances and subnet group.",
