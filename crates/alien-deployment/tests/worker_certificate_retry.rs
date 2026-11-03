@@ -1,6 +1,7 @@
 //! Recover the durable checkpoint written when a heartbeat entered the update flow.
 use alien_aws_clients::{
     acm::{ImportCertificateResponse, MockAcmApi},
+    cloudwatch_logs::MockCloudWatchLogsApi,
     lambda::{FunctionConfiguration, MockLambdaApi},
     AwsClientConfig, AwsClientConfigExt, ErrorData as CloudClientErrorData,
 };
@@ -278,6 +279,14 @@ async fn failed_certificate_renewal_preserves_delay_through_deployment_step() {
     provider
         .expect_get_aws_acm_client()
         .returning(move |_| Ok(acm.clone()));
+    // The legacy checkpoint has no recorded log retention, so Ready sets it.
+    let mut logs = MockCloudWatchLogsApi::new();
+    logs.expect_create_log_group().returning(|_| Ok(()));
+    logs.expect_put_retention_policy().returning(|_| Ok(()));
+    let logs = Arc::new(logs);
+    provider
+        .expect_get_aws_logs_client()
+        .returning(move |_| Ok(logs.clone()));
     let provider = Arc::new(provider);
     let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
     for attempt in 0..3 {
