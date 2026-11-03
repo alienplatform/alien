@@ -29,10 +29,10 @@
       // condition key), so IAM cannot stop this role from pointing this stack's own listeners at
       // any target group in the same account and VPC that no other load balancer uses, at a
       // redirect to any URL or a fixed response, or at any ACM certificate of the same account
-      // and region or IAM server certificate of the account. IAM can bound the TLS policy and the
-      // protocol. AWS sets those keys only when the request names them, and a modify that names
-      // neither keeps the listener's own, so they are checked if present: no TLS downgrade and no
-      // plain HTTP.
+      // and region or IAM server certificate of the account (the private key never leaves AWS).
+      // IAM can bound the TLS policy and the protocol. AWS sets those keys only when the request
+      // names them, and a modify that names neither keeps the listener's own, so they are checked
+      // if present: no TLS downgrade and no plain HTTP.
       {
         "grant": {
           "actions": ["elasticloadbalancing:ModifyListener"]
