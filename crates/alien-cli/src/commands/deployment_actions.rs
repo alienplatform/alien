@@ -300,7 +300,8 @@ fn compute_request(
     quota_warning_overrides: Option<Vec<String>>,
 ) -> Result<UpdateDeploymentComputeRequest> {
     let mut body = Map::new();
-    if let Some(pools) = pools {
+    let pools_json = pools.map(|pools| serde_json::json!(pools));
+    if let Some(pools) = &pools_json {
         body.insert("compute".to_string(), serde_json::json!({ "pools": pools }));
     }
     if let Some(overrides) = quota_warning_overrides {
@@ -309,7 +310,46 @@ fn compute_request(
             serde_json::json!(overrides),
         );
     }
-    request_body(Value::Object(body), "compute")
+    let request: UpdateDeploymentComputeRequest = request_body(Value::Object(body), "compute")?;
+    if let Some(pools) = &pools_json {
+        let sent = serde_json::to_value(&request)
+            .into_alien_error()
+            .context(ErrorData::ValidationError {
+                field: "compute".to_string(),
+                message: "The compute request could not be serialized".to_string(),
+            })?;
+        if let Some(dropped) = dropped_pool_field(pools, &sent["compute"]["pools"]) {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "compute".to_string(),
+                message: format!(
+                    "This CLI's Platform API client cannot send '{dropped}', so the change would be lost. Update the Alien CLI and try again."
+                ),
+            }));
+        }
+    }
+    Ok(request)
+}
+
+/// The first `pool.field` the typed request lost, comparing each pool's set
+/// fields with what will be sent. A client generated from an older API spec
+/// drops fields it doesn't know instead of failing.
+fn dropped_pool_field(requested: &Value, sent: &Value) -> Option<String> {
+    let requested = requested.as_object()?;
+    let mut pool_ids: Vec<&String> = requested.keys().collect();
+    pool_ids.sort_unstable();
+    for pool_id in pool_ids {
+        let Some(fields) = requested[pool_id].as_object() else {
+            continue;
+        };
+        let mut names: Vec<&String> = fields.keys().collect();
+        names.sort_unstable();
+        for name in names {
+            if !fields[name].is_null() && sent[pool_id].get(name) != Some(&fields[name]) {
+                return Some(format!("{pool_id}.{name}"));
+            }
+        }
+    }
+    None
 }
 
 pub(crate) async fn set_compute_task(
@@ -1443,6 +1483,22 @@ mod tests {
         )
         .expect("serialize request");
         assert_eq!(sent["compute"]["pools"]["general"]["dataDiskGib"], 0);
+    }
+
+    #[test]
+    fn a_field_the_api_client_drops_is_an_error_not_a_lost_change() {
+        let requested = serde_json::json!({
+            "general": { "mode": "fixed", "machines": 2, "dataDiskGib": 50, "machine": null }
+        });
+        let sent = serde_json::json!({ "general": { "mode": "fixed", "machines": 2 } });
+        assert_eq!(
+            dropped_pool_field(&requested, &sent).as_deref(),
+            Some("general.dataDiskGib")
+        );
+        let sent = serde_json::json!({
+            "general": { "mode": "fixed", "machines": 2, "dataDiskGib": 50, "failure_domains": null }
+        });
+        assert_eq!(dropped_pool_field(&requested, &sent), None);
     }
 
     #[tokio::test]
