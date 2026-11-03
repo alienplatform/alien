@@ -220,27 +220,31 @@ pub fn select_command_target(
                 .clone()
         }
         None => {
-            let mut candidates = targets
+            let candidates: Vec<&CommandTarget> = targets
                 .iter()
-                .filter(|target| !is_operations_command_target(&target.resource_id));
-            let Some(single) = candidates.next() else {
-                return Err(AlienError::new(ErrorData::NoCommandTargets {
-                    deployment_id: deployment_id.to_string(),
-                }));
-            };
-            if candidates.next().is_some() {
-                let mut target_resource_ids: Vec<String> = targets
-                    .iter()
-                    .filter(|target| target.resource_id != OPERATOR_COMMAND_TARGET_ID)
-                    .map(|target| target.resource_id.clone())
-                    .collect();
-                target_resource_ids.sort();
-                return Err(AlienError::new(ErrorData::CommandTargetAmbiguous {
-                    deployment_id: deployment_id.to_string(),
-                    target_resource_ids,
-                }));
+                .filter(|target| !is_operations_command_target(&target.resource_id))
+                .collect();
+            match candidates.as_slice() {
+                [] => {
+                    return Err(AlienError::new(ErrorData::NoCommandTargets {
+                        deployment_id: deployment_id.to_string(),
+                    }));
+                }
+                [single] => (*single).clone(),
+                several => {
+                    // List only targets shorthand could pick, so the error never
+                    // suggests a reserved operations target the caller can't use.
+                    let mut target_resource_ids: Vec<String> = several
+                        .iter()
+                        .map(|target| target.resource_id.clone())
+                        .collect();
+                    target_resource_ids.sort();
+                    return Err(AlienError::new(ErrorData::CommandTargetAmbiguous {
+                        deployment_id: deployment_id.to_string(),
+                        target_resource_ids,
+                    }));
+                }
             }
-            single.clone()
         }
     };
 
@@ -742,14 +746,21 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_shorthand_two_targets_is_ambiguous() {
         let registry = InMemoryCommandRegistry::new();
-        // Registered out of order, beside the reserved operator target, so the
-        // error must sort the ids and leave the operator out.
+        // Registered out of order, beside both reserved operations targets, so
+        // the error must sort the ids and leave the reserved ones out.
         registry
             .register_target("worker-b", CommandTargetType::Worker)
             .await
             .unwrap();
         registry
             .register_target(OPERATOR_COMMAND_TARGET_ID, CommandTargetType::Daemon)
+            .await
+            .unwrap();
+        registry
+            .register_target(
+                OPERATIONS_WORKER_COMMAND_TARGET_ID,
+                CommandTargetType::Worker,
+            )
             .await
             .unwrap();
         registry
