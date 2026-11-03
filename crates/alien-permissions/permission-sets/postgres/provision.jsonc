@@ -470,25 +470,66 @@
         }
       },
       {
-        "label": "manage-connection-secret",
-        "description": "Create and delete the generated connection-password secret.",
+        // Every create path (runtime controller, CloudFormation, Terraform) has sent the stack
+        // tag on CreateSecret since the connection secret first existed, so the create, change
+        // and delete legs all require it. A stack named `app` cannot create, overwrite or delete
+        // `app-prod`'s secret even though the name matches `app-*`.
+        "label": "create-connection-secret",
+        "description": "Create the generated connection-password secret with this stack's tags.",
         "grant": {
-          "actions": [
-            "secretsmanager:CreateSecret",
-            "secretsmanager:DeleteSecret",
-            "secretsmanager:PutSecretValue"
-          ]
+          "actions": ["secretsmanager:CreateSecret"]
         },
         "binding": {
           "stack": {
             "resources": [
               "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"
-            ]
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
           },
           "resource": {
             "resources": [
               "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"
-            ]
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "manage-connection-secret",
+        "description": "Overwrite and delete this stack's tagged connection-password secret.",
+        "grant": {
+          "actions": ["secretsmanager:DeleteSecret", "secretsmanager:PutSecretValue"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
           }
         }
       },

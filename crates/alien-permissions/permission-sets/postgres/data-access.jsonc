@@ -7,8 +7,10 @@
   "platforms": {
     "aws": [
       {
+        // Bound to the stack tag, which every create path has set on the connection secret since
+        // it first existed, so a workload of stack `app` cannot read `app-prod`'s password.
         "label": "read-connection-secret",
-        "description": "Read the generated connection-password secret.",
+        "description": "Read this stack's tagged connection-password secret.",
         "grant": {
           "actions": ["secretsmanager:GetSecretValue"]
         },
@@ -16,12 +18,23 @@
           "stack": {
             "resources": [
               "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"
-            ]
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
           },
           "resource": {
             "resources": [
               "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"
-            ]
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
           }
         }
       }

@@ -99,6 +99,18 @@ fn template_setup_calls() -> Vec<Request> {
         )
         .resource_tags(SETUP_TAGS),
     );
+    // The CloudFormation connection-password secret: created with the stack's tags, then
+    // overwritten or deleted.
+    let connection_secret = format!("{SECRETS}:my-stack-db-credentials-KFPp24");
+    for action in ["secretsmanager:CreateSecret", "secretsmanager:TagResource"] {
+        calls.push(Request::new(action, connection_secret.clone()).request_tags(SETUP_TAGS));
+    }
+    for action in [
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:DeleteSecret",
+    ] {
+        calls.push(Request::new(action, connection_secret.clone()).resource_tags(SETUP_TAGS));
+    }
     // The database security group, tagged `managed-by=setup` by both templates.
     calls.push(
         Request::new(
@@ -301,6 +313,23 @@ fn calls_on_another_stack() -> Vec<Request> {
             .resource_tags(&[("aws:rds:primaryDBClusterArn", account_cluster.as_str())])
             .request_tags(&[("deployment", "my-stack")]),
     );
+    // Creating, overwriting or deleting the other stack's password secret.
+    let other_connection_secret = format!("{SECRETS}:my-stack-prod-db-credentials-AbCdEf");
+    calls.push(
+        Request::new(
+            "secretsmanager:CreateSecret",
+            other_connection_secret.clone(),
+        )
+        .request_tags(OTHER_STACK_TAGS),
+    );
+    for action in [
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:DeleteSecret",
+    ] {
+        calls.push(
+            Request::new(action, other_connection_secret.clone()).resource_tags(OTHER_STACK_TAGS),
+        );
+    }
     // Retagging the other stack's password secret, then reading it.
     calls.push(
         Request::new(
@@ -348,7 +377,11 @@ fn calls_on_another_stack() -> Vec<Request> {
 fn a_stack_cannot_reach_another_stack_database_or_account_keys() {
     let context = common::create_test_context();
     let mut policies = vec![("setup", setup_statements())];
-    for id in ["postgres/provision", "postgres/management"] {
+    for id in [
+        "postgres/provision",
+        "postgres/management",
+        "postgres/data-access",
+    ] {
         policies.push((
             id,
             AwsRuntimePermissionsGenerator::new()
@@ -369,4 +402,65 @@ fn a_stack_cannot_reach_another_stack_database_or_account_keys() {
             .collect();
         assert!(allowed.is_empty(), "{name} allows:\n{}", allowed.join("\n"));
     }
+}
+
+/// A workload reads its own stack's connection secret, which every create path tags.
+#[test]
+fn a_workload_reads_only_its_own_stack_connection_secret() {
+    let statements = AwsRuntimePermissionsGenerator::new()
+        .generate_policy(
+            get_permission_set("postgres/data-access").unwrap(),
+            BindingTarget::Stack,
+            &common::create_test_context(),
+        )
+        .unwrap()
+        .statement;
+    let read = |tags: &[(&str, &str)]| {
+        evaluate(
+            &statements,
+            &Request::new(
+                "secretsmanager:GetSecretValue",
+                format!("{SECRETS}:my-stack-db-credentials-KFPp24"),
+            )
+            .resource_tags(tags),
+        )
+    };
+    assert_eq!(read(SETUP_TAGS), Decision::Allowed);
+    assert_ne!(read(OTHER_STACK_TAGS), Decision::Allowed);
+    // No create path has ever made the secret without the stack tag.
+    assert_ne!(read(&[]), Decision::Allowed);
+}
+
+/// Two role writes the setup policy still allows on a dash-prefixed stack's roles and policies.
+/// Both reach no further than `iam:PutRolePolicy` on `<prefix>-*` roles, which the setup policy
+/// holds without a tag or boundary condition (the setup context strips the boundary condition),
+/// as it did before.
+#[test]
+fn setup_role_writes_on_a_dash_prefixed_stack_stay_as_wide_as_put_role_policy() {
+    let statements = setup_statements();
+    let role = format!("{IAM}:role/my-stack-prod-execution-sa");
+    let allowed = |call: Request| evaluate(&statements, &call) == Decision::Allowed;
+
+    assert!(allowed(
+        Request::new("iam:PutRolePolicy", role.clone()).resource_tags(OTHER_STACK_TAGS)
+    ));
+    // Tag the other stack's role for this stack, then attach a policy to it.
+    assert!(allowed(
+        Request::new("iam:TagRole", role.clone())
+            .resource_tags(OTHER_STACK_TAGS)
+            .request_tags(&[("deployment", "my-stack")])
+    ));
+    assert!(allowed(
+        Request::new("iam:AttachRolePolicy", role)
+            .resource_tags(SETUP_TAGS)
+            .with(
+                "iam:PolicyARN",
+                format!("{IAM}:policy/my-stack-prod-execution-sa-setup-0d036fcd"),
+            )
+    ));
+    // A new default version of the other stack's setup-managed role policy.
+    assert!(allowed(Request::new(
+        "iam:CreatePolicyVersion",
+        format!("{IAM}:policy/my-stack-prod-execution-sa-setup-0d036fcd"),
+    )));
 }
