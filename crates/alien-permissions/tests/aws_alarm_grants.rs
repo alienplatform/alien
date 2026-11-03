@@ -1,6 +1,6 @@
 mod iam_policy;
 
-use alien_core::{AwsConditionValue, ALIEN_STACK_TAG_KEY};
+use alien_core::{AwsConditionValue, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY};
 use alien_permissions::{
     generators::{AwsIamStatement, AwsRuntimePermissionsGenerator},
     get_permission_set, BindingTarget, PermissionContext,
@@ -179,7 +179,7 @@ fn every_alarm_write_refuses_actions_and_is_bound_to_the_deployment_tag() {
 
 #[test]
 fn alarm_grants_reach_only_this_deployments_alarms_without_actions() {
-    let own_tag = [(ALIEN_STACK_TAG_KEY, "acme")];
+    let own_tag = [(ALIEN_STACK_TAG_KEY, "acme"), (ALIEN_RESOURCE_TAG_KEY, "api")];
     let other_tag = [(ALIEN_STACK_TAG_KEY, "acme-prod")];
     for id in alarm_writing_sets() {
         for target in [BindingTarget::Stack, BindingTarget::Resource] {
@@ -280,8 +280,8 @@ fn alarm_grants_reach_only_this_deployments_alarms_without_actions() {
 /// untagged.
 #[test]
 fn a_deployment_cannot_take_over_the_alarms_of_a_deployment_whose_name_extends_its_own() {
-    let own_tag = [(ALIEN_STACK_TAG_KEY, "a")];
-    let prod_tag = [(ALIEN_STACK_TAG_KEY, "a-prod")];
+    let own_tag = [(ALIEN_STACK_TAG_KEY, "a"), (ALIEN_RESOURCE_TAG_KEY, "api")];
+    let prod_tag = [(ALIEN_STACK_TAG_KEY, "a-prod"), (ALIEN_RESOURCE_TAG_KEY, "api")];
     let prod_alarm = "arn:aws:cloudwatch:us-east-1:123456789012:alarm:a-prod-api-cpu";
     for id in alarm_writing_sets() {
         for target in [BindingTarget::Stack, BindingTarget::Resource] {
@@ -334,7 +334,7 @@ fn a_deployment_cannot_take_over_the_alarms_of_a_deployment_whose_name_extends_i
 /// even though both carry the deployment's tag.
 #[test]
 fn a_resource_reaches_only_its_own_alarms() {
-    let own_tag = [(ALIEN_STACK_TAG_KEY, "acme")];
+    let own_tag = [(ALIEN_STACK_TAG_KEY, "acme"), (ALIEN_RESOURCE_TAG_KEY, "db")];
     let db_alarm = "arn:aws:cloudwatch:us-east-1:123456789012:alarm:acme-db-writer-cpu";
     let db2_alarm = "arn:aws:cloudwatch:us-east-1:123456789012:alarm:acme-db2-writer-cpu";
     for id in alarm_writing_sets() {
@@ -375,7 +375,7 @@ fn a_resource_reaches_only_its_own_alarms() {
 /// stack "a" never reaches stack "a-prod"'s group alarms.
 #[test]
 fn a_compute_cluster_reaches_only_its_own_group_alarms() {
-    let own_tag = [(ALIEN_STACK_TAG_KEY, "a")];
+    let own_tag = [(ALIEN_STACK_TAG_KEY, "a"), (ALIEN_RESOURCE_TAG_KEY, "compute")];
     let alarm = |name: &str| format!("arn:aws:cloudwatch:us-east-1:123456789012:alarm:{name}");
     for id in ["compute-cluster/management", "compute-cluster/provision"] {
         let statements =
@@ -412,8 +412,8 @@ fn a_compute_cluster_reaches_only_its_own_group_alarms() {
 /// reach: none of a's alarm writes is allowed on an alarm tagged for a-prod.
 #[test]
 fn the_deployment_tag_denies_writes_when_a_resource_name_matches_another_deployment() {
-    let own_tag = [(ALIEN_STACK_TAG_KEY, "a")];
-    let prod_tag = [(ALIEN_STACK_TAG_KEY, "a-prod")];
+    let own_tag = [(ALIEN_STACK_TAG_KEY, "a"), (ALIEN_RESOURCE_TAG_KEY, "prod")];
+    let prod_tag = [(ALIEN_STACK_TAG_KEY, "a-prod"), (ALIEN_RESOURCE_TAG_KEY, "prod")];
     let prod_alarm = "arn:aws:cloudwatch:us-east-1:123456789012:alarm:a-prod-api-cpu";
     let own_alarm = "arn:aws:cloudwatch:us-east-1:123456789012:alarm:a-prod-writer-cpu";
     for id in alarm_writing_sets() {
@@ -440,6 +440,52 @@ fn the_deployment_tag_denies_writes_when_a_resource_name_matches_another_deploym
             Request::new("cloudwatch:DeleteAlarms", prod_alarm).resource_tags(&prod_tag),
         ] {
             assert_eq!(decide(request), Decision::NotAllowed, "{id}");
+        }
+    }
+}
+
+/// Resource ids may contain dashes, so cluster "compute"'s binding `acme-compute-*` also matches
+/// the names of cluster "compute-prod" in the same deployment, whose alarms carry the same
+/// deployment tag. The resource tag every alarm carries is what keeps them apart: the
+/// per-resource grants write only alarms tagged with their own resource.
+#[test]
+fn a_resource_cannot_write_the_alarms_of_a_sibling_whose_id_extends_its_own() {
+    let deployment = (ALIEN_STACK_TAG_KEY, "acme");
+    let own = [deployment, (ALIEN_RESOURCE_TAG_KEY, "compute")];
+    let sibling = [deployment, (ALIEN_RESOURCE_TAG_KEY, "compute-prod")];
+    let own_alarm = "arn:aws:cloudwatch:us-east-1:123456789012:alarm:acme-compute-general-cpu";
+    let sibling_alarm =
+        "arn:aws:cloudwatch:us-east-1:123456789012:alarm:acme-compute-prod-general-cpu";
+    for id in alarm_writing_sets() {
+        let statements =
+            alarm_statements_for(id, BindingTarget::Resource, &context_for("acme", "compute"));
+        let decide = |request: Request| evaluate(&statements, &request);
+        assert_eq!(
+            decide(
+                Request::new("cloudwatch:PutMetricAlarm", own_alarm)
+                    .request_tags(&own)
+                    .resource_tags(&own)
+            ),
+            Decision::Allowed,
+            "{id} own alarm"
+        );
+        assert_eq!(
+            decide(Request::new("cloudwatch:DeleteAlarms", own_alarm).resource_tags(&own)),
+            Decision::Allowed,
+            "{id} delete own alarm"
+        );
+        for request in [
+            // A new alarm must carry its own resource's tag.
+            Request::new("cloudwatch:PutMetricAlarm", sibling_alarm).request_tags(&sibling),
+            Request::new("cloudwatch:PutMetricAlarm", sibling_alarm)
+                .request_tags(&own)
+                .resource_tags(&sibling),
+            Request::new("cloudwatch:TagResource", sibling_alarm)
+                .request_tags(&own)
+                .resource_tags(&sibling),
+            Request::new("cloudwatch:DeleteAlarms", sibling_alarm).resource_tags(&sibling),
+        ] {
+            assert_eq!(decide(request), Decision::NotAllowed, "{id} sibling's alarm");
         }
     }
 }

@@ -27,8 +27,14 @@
             ],
             "condition": {
               "Null": { "cloudwatch:AlarmActions": "true" },
-              "StringEquals": { "aws:RequestTag/${stackTag}": "${stackPrefix}" },
-              "StringEqualsIfExists": { "aws:ResourceTag/${stackTag}": "${stackPrefix}" }
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}"
+              },
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}"
+              }
             }
           }
         }
@@ -57,7 +63,9 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}"
               }
             }
           }
@@ -79,7 +87,10 @@
               "arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-${resourceId}-*"
             ],
             "condition": {
-              "StringEquals": { "aws:ResourceTag/${stackTag}": "${stackPrefix}" }
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}"
+              }
             }
           }
         }
