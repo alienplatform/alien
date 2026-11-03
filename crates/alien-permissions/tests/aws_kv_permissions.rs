@@ -46,14 +46,11 @@ fn tagged(action: &'static str, table: &str, stack: Option<&str>) -> Request {
 
 fn assert_point_in_time_recovery_reach(statements: &[AwsIamStatement], own_table: &str) {
     for action in POINT_IN_TIME_RECOVERY_ACTIONS {
-        // Tagged for this stack, or with tags not evaluated (DynamoDB ABAC off).
-        for stack in [Some("my-stack"), None] {
-            assert_eq!(
-                evaluate(statements, &tagged(action, own_table, stack)),
-                Decision::Allowed,
-                "{action} on {own_table} tagged {stack:?}"
-            );
-        }
+        assert_eq!(
+            evaluate(statements, &tagged(action, own_table, Some("my-stack"))),
+            Decision::Allowed,
+            "{action} on {own_table}"
+        );
         let denied = [
             // Another stack's prefix, another region, another account (the managing account
             // included).
@@ -70,6 +67,23 @@ fn assert_point_in_time_recovery_reach(statements: &[AwsIamStatement], own_table
             );
         }
     }
+    // Reading needs no tag. Changing backups needs this stack's tag: an untagged table under
+    // the prefix, or any table where DynamoDB does not evaluate tags, is denied (the controller
+    // then warns).
+    assert_eq!(
+        evaluate(
+            statements,
+            &tagged("dynamodb:DescribeContinuousBackups", own_table, None)
+        ),
+        Decision::Allowed
+    );
+    assert_eq!(
+        evaluate(
+            statements,
+            &tagged("dynamodb:UpdateContinuousBackups", own_table, None)
+        ),
+        Decision::NotAllowed
+    );
     // A stack whose name starts with this stack's prefix keeps its backups.
     assert_eq!(
         evaluate(

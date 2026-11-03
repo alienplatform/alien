@@ -8005,6 +8005,7 @@ async fn push_initial_setup_targeted(
         }
 
         config.setup_run = true;
+        config.setup_run_id = Some(uuid::Uuid::new_v4().to_string());
 
         // Re-fetch the deployment state now that we hold the lock.
         // The manager may have advanced the state while we were waiting.

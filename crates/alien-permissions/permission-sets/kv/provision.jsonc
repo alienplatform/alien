@@ -30,13 +30,13 @@
       },
       {
         // Another stack's name can start with this stack's prefix. Where the account evaluates
-        // DynamoDB tag conditions, these keep that stack's tables out of reach: no retagging them
-        // and no changing their backups. IfExists keeps the grant working, as name-only, in
-        // accounts that evaluate them as if no tags are present (DynamoDB ABAC off).
-        "label": "tag-and-back-up-dynamodb-tables",
-        "description": "Tag this stack's DynamoDB tables and turn on their point-in-time recovery.",
+        // DynamoDB tag conditions, this keeps that stack's tables from being retagged. IfExists
+        // keeps CreateTable with tags working, as name-only, in accounts that evaluate them as if
+        // no tags are present (DynamoDB ABAC off).
+        "label": "tag-dynamodb-tables",
+        "description": "Tag this stack's DynamoDB tables.",
         "grant": {
-          "actions": ["dynamodb:TagResource", "dynamodb:UpdateContinuousBackups"]
+          "actions": ["dynamodb:TagResource"]
         },
         "binding": {
           "stack": {
@@ -55,6 +55,30 @@
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}"
               }
+            }
+          }
+        }
+      },
+      {
+        // The stack tag must match, so another stack's tables and untagged tables keep their
+        // backups. Where DynamoDB does not evaluate tag conditions this is denied, and the table
+        // stays Running with a warning.
+        "label": "enable-dynamodb-backups",
+        "description": "Turn on point-in-time recovery for this stack's DynamoDB tables.",
+        "grant": {
+          "actions": ["dynamodb:UpdateContinuousBackups"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": { "aws:ResourceTag/${stackTag}": "${stackPrefix}" }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"],
+            "condition": {
+              "StringEquals": { "aws:ResourceTag/${stackTag}": "${stackPrefix}" }
             }
           }
         }

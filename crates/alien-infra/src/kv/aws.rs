@@ -56,11 +56,18 @@ pub struct PointInTimeRecoveryDenial {
     /// does not reach the controller, so the table asks again on the next update at least a day
     /// later.
     pub denied_at: chrono::DateTime<Utc>,
-    /// Denied during a setup run. A setup run asks again only for denials from outside one:
-    /// within a setup run the grants stay the same, and a later setup run that changes them
-    /// changes the management permissions revision.
-    #[serde(default)]
-    pub in_setup_run: bool,
+    /// The setup run it was denied in, if any. Every step of a setup run plans again, and its
+    /// grants stay the same within it, so that setup run does not ask again; a later one does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_run: Option<String>,
+}
+
+/// The setup run this step is part of, if any.
+fn current_setup_run(ctx: &ResourceControllerContext<'_>) -> Option<String> {
+    ctx.deployment_config
+        .setup_run
+        .then(|| ctx.deployment_config.setup_run_id.clone())
+        .flatten()
 }
 
 /// How long after a denial the next update asks again.
@@ -772,7 +779,8 @@ impl AwsKvController {
         }
         match &self.point_in_time_recovery_denial {
             None => Ok(true),
-            Some(denial) => Ok((ctx.deployment_config.setup_run && !denial.in_setup_run)
+            Some(denial) => Ok((ctx.deployment_config.setup_run
+                && (denial.setup_run.is_none() || denial.setup_run != current_setup_run(ctx)))
                 || Utc::now() - denial.denied_at >= POINT_IN_TIME_RECOVERY_DENIAL_RECHECK
                 || management_permissions_revision(ctx)? != denial.management_permissions_revision),
         }
@@ -838,7 +846,7 @@ impl AwsKvController {
                         message,
                         management_permissions_revision: management_permissions_revision(ctx)?,
                         denied_at: Utc::now(),
-                        in_setup_run: ctx.deployment_config.setup_run,
+                        setup_run: current_setup_run(ctx),
                     });
                     Ok(PointInTimeRecoveryRequest::Denied)
                 }
@@ -892,8 +900,9 @@ impl AwsKvController {
     /// Reads point-in-time recovery for the heartbeat and returns a warning while it is off.
     /// The heartbeat never changes it; the next update turns it on.
     ///
-    /// A denied read is an error: the read grant has been in the heartbeat permissions from the
-    /// start, so every management role has it. Other read errors only warn, as for TTL.
+    /// A denied read is a warning too: management roles from earlier releases have the read only
+    /// in the heartbeat permissions, which are not attached when heartbeats are off. Other read
+    /// errors warn as for TTL.
     async fn point_in_time_recovery_issue(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
@@ -910,15 +919,16 @@ impl AwsKvController {
             .await;
 
         let (reason, message) = match status {
-            Err(e) if access_denied_message(&e).is_some() => {
-                return Err(e.context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to read point-in-time recovery of DynamoDB table '{}'",
-                        table_name
-                    ),
-                    resource_id: Some(resource_id.to_string()),
-                }))
-            }
+            Err(e) if access_denied_message(&e).is_some() => (
+                HeartbeatCollectionIssueReason::Forbidden,
+                format!(
+                    "Could not read point-in-time recovery for DynamoDB table '{}': the \
+                     management role is missing dynamodb:DescribeContinuousBackups. Run a setup \
+                     update to grant it. AWS said: {}",
+                    table_name,
+                    access_denied_message(&e).unwrap_or_default()
+                ),
+            ),
             Err(e) => (
                 HeartbeatCollectionIssueReason::CollectionFailed,
                 format!(
@@ -1146,6 +1156,7 @@ mod tests {
     const ACCESS_DENIED: &str = r#"{"__type":"com.amazon.coral.service#AccessDeniedException","Message":"User: arn:aws:sts::123456789012:assumed-role/test-management/session is not authorized to perform: dynamodb:UpdateContinuousBackups on resource: arn:aws:dynamodb:us-east-1:123456789012:table/test-cache because no identity-based policy allows the dynamodb:UpdateContinuousBackups action"}"#;
     const AWS_MESSAGE: &str = "User: arn:aws:sts::123456789012:assumed-role/test-management/session is not authorized to perform: dynamodb:UpdateContinuousBackups on resource: arn:aws:dynamodb:us-east-1:123456789012:table/test-cache because no identity-based policy allows the dynamodb:UpdateContinuousBackups action";
     const DESCRIBE_DENIED: &str = r#"{"__type":"com.amazon.coral.service#AccessDeniedException","Message":"User: arn:aws:sts::123456789012:assumed-role/test-management/session is not authorized to perform: dynamodb:DescribeContinuousBackups on resource: arn:aws:dynamodb:us-east-1:123456789012:table/test-cache because no identity-based policy allows the dynamodb:DescribeContinuousBackups action"}"#;
+    const DESCRIBE_MESSAGE: &str = "User: arn:aws:sts::123456789012:assumed-role/test-management/session is not authorized to perform: dynamodb:DescribeContinuousBackups on resource: arn:aws:dynamodb:us-east-1:123456789012:table/test-cache because no identity-based policy allows the dynamodb:DescribeContinuousBackups action";
     const TABLE_NOT_FOUND: &str = r#"{"__type":"com.amazonaws.dynamodb.v20120810#TableNotFoundException","message":"Table not found: test-cache"}"#;
     /// Seen live right after a table became ACTIVE.
     const BACKUPS_BEING_ENABLED: &str = r#"{"__type":"com.amazonaws.dynamodb.v20120810#ContinuousBackupsUnavailableException","message":"Backups are being enabled for the table: test-cache. Please retry later"}"#;
@@ -1339,6 +1350,14 @@ mod tests {
             }
             issues => panic!("unexpected issues: {issues:?}"),
         }
+    }
+
+    fn read_denied_warning() -> String {
+        format!(
+            "Forbidden: Could not read point-in-time recovery for DynamoDB table 'test-cache': \
+             the management role is missing dynamodb:DescribeContinuousBackups. Run a setup \
+             update to grant it. AWS said: {DESCRIBE_MESSAGE}"
+        )
     }
 
     fn denied_warning() -> String {
@@ -1583,6 +1602,14 @@ mod tests {
         let denial = saved(&executor).point_in_time_recovery_denial.unwrap();
         assert_eq!(denial.message, AWS_MESSAGE);
         assert!(!plans_update(&executor));
+
+        // Ready stays Running and reports the missing read.
+        assert_eq!(
+            heartbeat_warning(&mut executor).await,
+            Some(read_denied_warning())
+        );
+        assert_eq!(table.lock().unwrap().updates, 1);
+        assert!(!plans_update(&executor));
     }
 
     /// Every step of a setup run plans again. A denial from the same setup run is not asked
@@ -1609,14 +1636,49 @@ mod tests {
         update(&mut executor).await.unwrap();
 
         assert_eq!(executor.status(), ResourceStatus::Running);
-        assert!(
-            saved(&executor)
-                .point_in_time_recovery_denial
-                .unwrap()
-                .in_setup_run
-        );
+        assert!(saved(&executor)
+            .point_in_time_recovery_denial
+            .unwrap()
+            .setup_run
+            .is_some());
         assert!(!plans_update(&executor));
         assert_eq!(table.lock().unwrap().updates, 1);
+    }
+
+    /// The permissions are repaired after a setup run was denied. The next setup run asks again
+    /// and turns point-in-time recovery on.
+    #[tokio::test]
+    async fn the_next_setup_run_asks_again_after_the_permissions_are_repaired() {
+        let denied = client_error("UpdateContinuousBackups", ACCESS_DENIED).await;
+        let table = Arc::new(Mutex::new(Table {
+            update_errors: vec![denied],
+            ..Default::default()
+        }));
+        let setup_run = |controller| {
+            SingleControllerExecutor::builder()
+                .resource(Kv::new("cache".to_string()).build())
+                .controller(controller)
+                .platform(Platform::Aws)
+                .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+                .setup_run(true)
+                .service_provider(provider(table.clone()))
+                .build()
+        };
+
+        let mut first = setup_run(saved_by_previous_version()).await.unwrap();
+        update(&mut first).await.unwrap();
+        assert!(saved(&first).point_in_time_recovery_denial.is_some());
+        assert!(!table.lock().unwrap().point_in_time_recovery);
+
+        // The first setup run's only denial is used up, so the role now has the grant.
+        let mut second = setup_run(saved(&first)).await.unwrap();
+        assert!(plans_update(&second));
+        update(&mut second).await.unwrap();
+
+        assert_eq!(second.status(), ResourceStatus::Running);
+        assert_eq!(table.lock().unwrap().updates, 2);
+        assert!(table.lock().unwrap().point_in_time_recovery);
+        assert_eq!(saved(&second).point_in_time_recovery_denial, None);
     }
 
     #[tokio::test]
@@ -1676,7 +1738,7 @@ mod tests {
             message: AWS_MESSAGE.to_string(),
             management_permissions_revision: Some("earlier-release".to_string()),
             denied_at: Utc::now(),
-            in_setup_run: false,
+            setup_run: None,
         });
         let executor = executor(controller, table, ResourceLifecycle::Live).await;
 
@@ -1789,8 +1851,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn denied_read_fails_the_heartbeat() {
-        // Every management role has had this read since the start, so a denial is a real fault.
+    async fn denied_read_keeps_the_table_running_and_warns() {
+        // Roles from earlier releases have this read only when heartbeats are on.
         let denied = client_error("DescribeContinuousBackups", DESCRIBE_DENIED).await;
         let table = Arc::new(Mutex::new(Table {
             describe_error: Some(denied),
@@ -1803,17 +1865,13 @@ mod tests {
         )
         .await;
 
-        let error = executor.step().await.unwrap_err();
-
-        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
-        assert!(
-            error
-                .message
-                .contains("Failed to read point-in-time recovery of DynamoDB table 'test-cache'"),
-            "{}",
-            error.message
+        assert_eq!(
+            heartbeat_warning(&mut executor).await,
+            Some(read_denied_warning())
         );
         assert_eq!(table.lock().unwrap().updates, 0);
+        // What was last read stays recorded.
+        assert!(saved(&executor).point_in_time_recovery_enabled);
     }
 
     fn service_unavailable() -> AlienError<CloudClientErrorData> {
