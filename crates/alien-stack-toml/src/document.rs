@@ -229,10 +229,16 @@ pub struct Daemon {
     #[serde(default)]
     pub lifecycle: Option<ResourceLifecycle>,
 
-    /// Create this daemon only on these platforms.
+    /// Create this daemon only on these platforms. On them, the deployer may still decline it.
     #[serde(default)]
     #[schemars(with = "Option<Vec<Platform>>")]
     pub platforms: Option<Spanned<Vec<Platform>>>,
+
+    /// Create this daemon only when this deployer-provided boolean `[input.<id>]` is true.
+    /// Set this or `platforms`.
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    pub enabled_when: Option<Spanned<String>>,
 }
 
 /// How to build a daemon from source.
@@ -313,10 +319,16 @@ pub struct Storage {
     /// Who owns the bucket. Defaults to "frozen" (setup creates it).
     #[serde(default)]
     pub lifecycle: Option<ResourceLifecycle>,
-    /// Create this bucket only on these platforms.
+    /// Create this bucket only on these platforms. On them, the deployer may still decline it.
     #[serde(default)]
     #[schemars(with = "Option<Vec<Platform>>")]
     pub platforms: Option<Spanned<Vec<Platform>>>,
+
+    /// Create this bucket only when this deployer-provided boolean `[input.<id>]` is true.
+    /// Set this or `platforms`.
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    pub enabled_when: Option<Spanned<String>>,
 }
 
 /// CPU cores: a number such as 2 or 0.5, or a quantity string such as "500m".

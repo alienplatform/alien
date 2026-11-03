@@ -72,6 +72,7 @@ Quantities take `Ki`, `Mi`, `Gi`, `Ti` (powers of 1024) or `k`, `M`, `G`, `T` (p
 | `permissions` | Permission profile that gives the daemon a cloud identity. On AWS, GCP and Azure it can't be combined with `host-access`. |
 | `lifecycle` | `"live"` (default) or `"frozen"`. |
 | `platforms` | Create the daemon only on these platforms. |
+| `enabled-when` | Create the daemon only when this deployer boolean `[input.<id>]` is true. Set this or `platforms`. |
 
 `[daemon.<id>.endpoints]` declares public HTTP endpoints by name: `api = { port = 8080, host = "@", wildcard = false }`. `host` is the label under the deployment's domain (`"@"` is the domain itself) and defaults to the endpoint name.
 
@@ -87,6 +88,7 @@ The env file format: one `KEY=value` per line, `#` starts a comment line, whites
 | `versioning` | Keep previous object versions. |
 | `lifecycle` | `"frozen"` (default) or `"live"`. |
 | `platforms` | Create the bucket only on these platforms. |
+| `enabled-when` | Create the bucket only when this deployer boolean `[input.<id>]` is true. Set this or `platforms`. |
 
 ### `[input.<id>]`
 

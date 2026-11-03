@@ -165,6 +165,24 @@
       }
     },
     {
+      "default": {
+        "type": "boolean",
+        "value": true
+      },
+      "description": "Create an Alien-managed bucket for this deployment's data.",
+      "env": [],
+      "id": "managedBucket",
+      "kind": "boolean",
+      "label": "Create a data bucket",
+      "platforms": [
+        "aws"
+      ],
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true
+    },
+    {
       "description": "Sets the API_TOKEN environment variable.",
       "env": [
         {
@@ -185,6 +203,19 @@
     }
   ],
   "resources": {
+    "data": {
+      "config": {
+        "id": "data",
+        "type": "storage",
+        "corsAllowedOrigins": [],
+        "lifecycleRules": [],
+        "publicRead": false,
+        "versioning": false
+      },
+      "dependencies": [],
+      "enabledWhen": "managedBucket",
+      "lifecycle": "frozen"
+    },
     "worker": {
       "config": {
         "id": "worker",

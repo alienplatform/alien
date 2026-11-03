@@ -63,6 +63,14 @@ const inputs = alien.inputs({
     minLength: 32,
     env: "ACTIVATION_TOKEN",
   }),
+  managedBucket: alien.boolean({
+    providedBy: "deployer",
+    required: true,
+    platforms: ["aws"],
+    default: true,
+    label: "Create a data bucket",
+    description: "Create an Alien-managed bucket for this deployment's data.",
+  }),
   apiToken: alien.secret({
     providedBy: "developer",
     required: true,
@@ -72,10 +80,13 @@ const inputs = alien.inputs({
   }),
 })
 
+const data = new alien.Storage("data").enabled(inputs.managedBucket).build()
+
 const worker = new alien.Daemon("worker").code({ type: "image", image: "ghcr.io/acme/worker:2.0.0" }).build()
 
 export default new alien.Stack("inputs-demo")
   .inputs(inputs)
   .platforms(["machines", "aws"])
+  .add(data, "frozen")
   .add(worker, "live")
   .build()

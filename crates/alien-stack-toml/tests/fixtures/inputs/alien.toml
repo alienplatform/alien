@@ -59,6 +59,17 @@ description = "Short-lived token used to enroll this runtime."
 min-length = 32
 env = "ACTIVATION_TOKEN"
 
+[input.managedBucket]
+kind = "boolean"
+provided-by = "deployer"
+platforms = ["aws"]
+default = true
+label = "Create a data bucket"
+description = "Create an Alien-managed bucket for this deployment's data."
+
+[storage.data]
+enabled-when = "managedBucket"
+
 [daemon.worker]
 image = "ghcr.io/acme/worker:2.0.0"
 
