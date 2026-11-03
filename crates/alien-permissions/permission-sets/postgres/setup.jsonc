@@ -4,13 +4,13 @@
   "platforms": {
     "aws": [
       {
-        // CloudFormation reads a parameter group back right after creating it and resets
-        // parameters it drops (also when rolling back), before RDS sees the create-time tags, so
-        // the tag check is IfExists: a group tagged for another stack is denied.
-        "label": "read-and-reset-aurora-parameters",
-        "description": "Read and reset the parameters of this application's cluster parameter group.",
+        // CloudFormation reads a parameter group back right after creating it, before RDS sees
+        // the create-time tags, so the read's tag check is IfExists: a group tagged for another
+        // stack is denied.
+        "label": "read-aurora-parameters",
+        "description": "Read the parameters of this application's cluster parameter group.",
         "grant": {
-          "actions": ["rds:DescribeDBClusterParameters", "rds:ResetDBClusterParameterGroup"]
+          "actions": ["rds:DescribeDBClusterParameters"]
         },
         "binding": {
           "stack": {
@@ -27,6 +27,36 @@
             ],
             "condition": {
               "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        // CloudFormation resets the parameters an update or rollback drops, long after the
+        // group's create, so the stack tag is required.
+        "label": "reset-aurora-parameters",
+        "description": "Reset the parameters of this application's cluster parameter group.",
+        "grant": {
+          "actions": ["rds:ResetDBClusterParameterGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceName}"
               }

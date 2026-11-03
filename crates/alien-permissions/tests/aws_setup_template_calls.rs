@@ -640,6 +640,74 @@ fn a_cloudformation_cluster_update_is_authorized_on_the_cluster_and_its_paramete
     }
 }
 
+/// A CloudFormation create that fails right after creating a parameter group rolls back by
+/// deleting it before RDS shows its create-time tags (live: the delete came 3 s after the
+/// create). The delete must be allowed then, or the stack ends in ROLLBACK_FAILED.
+#[test]
+fn a_rollback_deletes_a_new_group_before_its_tags_are_visible() {
+    let statements = setup_statements();
+    for (action, resource) in [
+        (
+            "rds:DeleteDBClusterParameterGroup",
+            format!("{RDS}:cluster-pg:my-stack-dbclusterparametergroup-ca6eanueb6cu"),
+        ),
+        (
+            "rds:DeleteDBSubnetGroup",
+            format!("{RDS}:subgrp:my-stack-db-subnets"),
+        ),
+    ] {
+        assert_eq!(
+            evaluate(&statements, &Request::new(action, resource.clone())),
+            Decision::Allowed,
+            "{action} on {resource}"
+        );
+    }
+}
+
+/// Deleting a group under the prefix needs it untagged or tagged for this stack, so a group
+/// tagged for `my-stack-prod` cannot be deleted by `my-stack`. Resetting parameters needs this
+/// stack's tag, because no rollback resets a group it just created.
+#[test]
+fn group_deletes_and_resets_refuse_another_stack_groups() {
+    let statements = setup_statements();
+    let call = |action: &'static str, resource: &str, tags: &[(&str, &str)]| {
+        evaluate(
+            &statements,
+            &Request::new(action, format!("{RDS}:{resource}")).resource_tags(tags),
+        )
+    };
+    for (action, resource) in [
+        (
+            "rds:DeleteDBClusterParameterGroup",
+            "cluster-pg:my-stack-prod-db-pg",
+        ),
+        ("rds:DeleteDBSubnetGroup", "subgrp:my-stack-prod-db-subnets"),
+    ] {
+        assert_ne!(
+            call(action, resource, OTHER_STACK_TAGS),
+            Decision::Allowed,
+            "{action} on another stack's tagged {resource}"
+        );
+        assert_eq!(
+            call(action, resource, &[]),
+            Decision::Allowed,
+            "{action} on an untagged {resource}; RDS refuses it while the group is in use"
+        );
+    }
+    let reset = "rds:ResetDBClusterParameterGroup";
+    assert_eq!(
+        call(reset, "cluster-pg:my-stack-db-pg", SETUP_TAGS),
+        Decision::Allowed
+    );
+    for tags in [OTHER_STACK_TAGS, &[]] {
+        assert_ne!(
+            call(reset, "cluster-pg:my-stack-prod-db-pg", tags),
+            Decision::Allowed,
+            "reset with {tags:?}"
+        );
+    }
+}
+
 /// The parameter-group leg of ModifyDBCluster refuses a group tagged for another stack. A group
 /// under the prefix whose tags are not visible yet is allowed, because CloudFormation attaches a
 /// new group seconds after creating it. ModifyDBCluster never authorizes against a subnet group,
