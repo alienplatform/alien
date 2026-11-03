@@ -492,6 +492,10 @@ mod tests {
 /// Only identities implemented by the checks are accepted, never arbitrary quota names.
 pub fn validate_warning_overrides(platform: Platform, ids: &[String]) -> crate::error::Result<()> {
     for id in ids {
+        let gcp_family_quota = platform == Platform::Gcp
+            && id
+                .strip_prefix(GCP_VM_FAMILY_QUOTA_PREFIX)
+                .is_some_and(|family| GCP_VM_FAMILY_QUOTA_FAMILIES.contains(&family));
         let known = match platform {
             Platform::Aws => matches!(
                 id.as_str(),
@@ -556,7 +560,7 @@ pub fn validate_warning_overrides(platform: Platform, ids: &[String]) -> crate::
             }
             _ => false,
         };
-        if !known {
+        if !known && !gcp_family_quota {
             return Err(alien_error::AlienError::new(
                 crate::error::ErrorData::InvalidQuotaOverride {
                     quota_id: id.clone(),
@@ -567,6 +571,13 @@ pub fn validate_warning_overrides(platform: Platform, ids: &[String]) -> crate::
     }
     Ok(())
 }
+
+/// Provider id prefix of the GCP quota dimensioned by VM family, followed by the
+/// family, such as `CPUS_PER_VM_FAMILY/N4`. Compute Engine reports no usage for it.
+pub const GCP_VM_FAMILY_QUOTA_PREFIX: &str = "CPUS_PER_VM_FAMILY/";
+
+/// VM families whose vCPUs count against the per-family quota.
+pub const GCP_VM_FAMILY_QUOTA_FAMILIES: &[&str] = &["N4", "N4A", "C4", "C4A", "C3D"];
 
 /// Render the same failure before and after an explicit deployment override.
 #[cfg(any(feature = "runtime-checks", test))]
@@ -580,8 +591,13 @@ pub(crate) fn failure_message(result: &QuotaResult) -> Option<String> {
         return None;
     };
     let quota = &result.quota;
+    let usage = if quota.provider_id.starts_with(GCP_VM_FAMILY_QUOTA_PREFIX) {
+        "usage not readable".to_string()
+    } else {
+        format!("used {used}")
+    };
     Some(format!(
-        "{} ({}, {}): used {used}, applied limit {limit}, additional needed {needed}. Request an increase: {}",
+        "{} ({}, {}): {usage}, applied limit {limit}, additional needed {needed}. Request an increase: {}",
         quota.name, quota.provider_id, quota.scope, quota.increase_url,
     ))
 }

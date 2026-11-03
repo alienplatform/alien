@@ -3,7 +3,7 @@ use super::cloud_quotas::record;
 use crate::{
     quotas::{
         evaluate_capacity, ComputeCapacity, QuotaDemand, QuotaIdentity, QuotaObservation,
-        QuotaOutcome, QuotaResult,
+        QuotaOutcome, QuotaResult, GCP_VM_FAMILY_QUOTA_FAMILIES, GCP_VM_FAMILY_QUOTA_PREFIX,
     },
     CheckResult,
 };
@@ -14,18 +14,52 @@ use alien_core::{
 use alien_gcp_clients::{compute::QuotaCollection, CloudQuotasApi, ComputeApi, ErrorData};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// E2 and N1 share the general CPU pool; other supported families have separate metrics.
+/// E2 and N1 share the general CPU pool. Newer families share one quota
+/// dimensioned by VM family; other supported families have separate metrics.
 fn family_metric(machine: &str) -> Option<String> {
     let family = machine.split_once('-')?.0;
+    let upper = family.to_uppercase();
     if matches!(family, "n1" | "e2") {
         Some("CPUS".into())
+    } else if GCP_VM_FAMILY_QUOTA_FAMILIES.contains(&upper.as_str()) {
+        Some(format!("{GCP_VM_FAMILY_QUOTA_PREFIX}{upper}"))
     } else if matches!(
         family,
-        "n2" | "n2d" | "c2" | "c2d" | "c3" | "c3d" | "t2d" | "t2a" | "m1" | "m2" | "m3" | "a2"
+        "n2" | "n2d" | "c2" | "c2d" | "c3" | "t2d" | "t2a" | "m1" | "m2" | "m3" | "a2"
     ) {
-        Some(format!("{}_CPUS", family.to_uppercase()))
+        Some(format!("{upper}_CPUS"))
     } else {
         None
+    }
+}
+
+const VM_FAMILY_QUOTA_ID: &str = "CPUS-PER-VM-FAMILY-per-project-region";
+
+/// Compute Engine reports no usage for the per-family quota, so only demand that
+/// exceeds the applied limit on its own is a certain shortfall.
+fn limit_only_outcome(required: QuotaDemand, maximum: QuotaDemand, limit: f64) -> QuotaOutcome {
+    let (Some(needed), Some(maximum_needed)) = (required.additional(), maximum.additional()) else {
+        return QuotaOutcome::Unknown {
+            reason: "quota demand is not a finite non-negative amount".into(),
+        };
+    };
+    if needed > limit {
+        // Usage is unknown; 0 is the lower bound and the failure text says usage is unreadable.
+        QuotaOutcome::Fail {
+            used: 0.0,
+            limit,
+            needed,
+        }
+    } else if maximum_needed > limit {
+        QuotaOutcome::Warn {
+            message: format!(
+                "Cluster cannot scale to its configured maximum even with no current usage: applied limit {limit}, needs {maximum_needed} additional capacity."
+            ),
+        }
+    } else {
+        QuotaOutcome::Unknown {
+            reason: format!("applied limit is {limit}, but provider-reported usage is unavailable"),
+        }
     }
 }
 
@@ -36,6 +70,8 @@ fn identity(project: &str, region: &str, metric: &str) -> QuotaIdentity {
         provider_id: metric.into(),
         name: if metric.contains("GPU") {
             "Compute Engine GPUs"
+        } else if metric.starts_with(GCP_VM_FAMILY_QUOTA_PREFIX) {
+            "Compute Engine vCPUs per VM family"
         } else {
             "Compute Engine vCPUs"
         }
@@ -224,6 +260,20 @@ pub async fn check(
     } else {
         None
     };
+    let needs_family_quota = demands_by_kind.iter().flatten().any(|demands| {
+        demands
+            .keys()
+            .any(|metric| metric.starts_with(GCP_VM_FAMILY_QUOTA_PREFIX))
+    });
+    let family_quota = if needs_family_quota {
+        Some(
+            cloud_quotas
+                .get_quota_info("compute.googleapis.com", VM_FAMILY_QUOTA_ID)
+                .await,
+        )
+    } else {
+        None
+    };
     for (gpus, demands) in [false, true].into_iter().zip(demands_by_kind) {
         let Some(demands) = demands else {
             record(
@@ -259,6 +309,18 @@ pub async fn check(
                     }
                     Ok(_) => QuotaOutcome::Unknown { reason: "Cloud Quotas returned a different quota identity".into() },
                     Err(_) => QuotaOutcome::Unknown { reason: "could not read the applied all-regions limit; enable the Cloud Quotas API (cloudquotas.googleapis.com) in the target project and grant cloudquotas.quotas.get".into() },
+                }
+            } else if let Some(family) = metric.strip_prefix(GCP_VM_FAMILY_QUOTA_PREFIX) {
+                match family_quota.as_ref() {
+                    Some(Ok(info)) if info.quota_id == VM_FAMILY_QUOTA_ID
+                        && info.metric == "compute.googleapis.com/cpus_per_vm_family" => {
+                        match info.region_family_limit(region, family) {
+                            Some(limit) => limit_only_outcome(required[&metric], demand, limit),
+                            None => QuotaOutcome::Unknown { reason: format!("Cloud Quotas returned no unambiguous applied limit for VM family {family} in {region}") },
+                        }
+                    }
+                    Some(Ok(_)) => QuotaOutcome::Unknown { reason: "Cloud Quotas returned a different quota identity".into() },
+                    Some(Err(_)) | None => QuotaOutcome::Unknown { reason: "could not read the applied per-family limit; enable the Cloud Quotas API (cloudquotas.googleapis.com) in the target project and grant cloudquotas.quotas.get".into() },
                 }
             } else {
                 evaluate_capacity(
@@ -398,6 +460,15 @@ mod tests {
         assert_eq!(family_metric("n1-standard-2"), Some("CPUS".into()));
         assert_eq!(family_metric("n2-standard-2"), Some("N2_CPUS".into()));
         assert_eq!(family_metric("a2-highgpu-1g"), Some("A2_CPUS".into()));
+        for (machine, metric) in [
+            ("n4-standard-2", "CPUS_PER_VM_FAMILY/N4"),
+            ("n4a-highmem-2", "CPUS_PER_VM_FAMILY/N4A"),
+            ("c4-highcpu-4", "CPUS_PER_VM_FAMILY/C4"),
+            ("c4a-standard-1", "CPUS_PER_VM_FAMILY/C4A"),
+            ("c3d-standard-8", "CPUS_PER_VM_FAMILY/C3D"),
+        ] {
+            assert_eq!(family_metric(machine), Some(metric.into()), "{machine}");
+        }
         for json in [
             r#"{}"#,
             r#"{"quotas":[]}"#,
@@ -676,6 +747,153 @@ mod tests {
             result.warnings,
             ["Could not confirm that GCP region 'us-central1' offers machine types n4-standard-2, n4-standard-4: the setup does not grant compute.machineTypes.get"]
         );
+    }
+
+    /// Runs the full check for one pool in us-central1. The per-family quota read
+    /// returns the recorded Cloud Quotas body, or access denied.
+    async fn check_family_pool(machine: &str, min: u32, max: u32, denied: bool) -> CheckResult {
+        let mut compute = alien_gcp_clients::compute::MockComputeApi::new();
+        compute.expect_get_region_quotas().times(1).returning(|_| {
+            Ok(serde_json::from_str(include_str!("fixtures/gcp-regional-quotas.json")).unwrap())
+        });
+        compute.expect_get_project_quotas().times(1).returning(|| {
+            Ok(serde_json::from_str(
+                r#"{"quotas":[{"metric":"CPUS_ALL_REGIONS","limit":9999,"usage":0}]}"#,
+            )
+            .unwrap())
+        });
+        let mut quotas = alien_gcp_clients::cloud_quotas::MockCloudQuotasApi::new();
+        quotas
+            .expect_get_quota_info()
+            .times(2)
+            .withf(|service, _| service == "compute.googleapis.com")
+            .returning(move |_, id| match id {
+                "CPUS-ALL-REGIONS-per-project" => Ok(serde_json::from_str(include_str!(
+                    "fixtures/gcp-cloud-quota-cpus.json"
+                ))
+                .unwrap()),
+                "CPUS-PER-VM-FAMILY-per-project-region" if denied => Err(
+                    alien_error::AlienError::new(ErrorData::RemoteAccessDenied {
+                        resource_type: "Cloud Quotas".into(),
+                        resource_name: id.into(),
+                    }),
+                ),
+                "CPUS-PER-VM-FAMILY-per-project-region" => Ok(serde_json::from_str(include_str!(
+                    "fixtures/gcp-cloud-quota-cpus-per-vm-family.json"
+                ))
+                .unwrap()),
+                other => panic!("unexpected quota {other}"),
+            });
+        let mut desired = gpu_stack(machine, max);
+        let entry = desired.resources.get_mut("cluster").unwrap();
+        let mut cluster = entry
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .unwrap()
+            .clone();
+        cluster.capacity_groups[0].min_size = min;
+        entry.config = alien_core::Resource::new(cluster);
+        let mut result = CheckResult::success();
+        check(
+            &desired,
+            &StackState::new(Platform::Gcp),
+            "test",
+            "us-central1",
+            &compute,
+            &quotas,
+            &mut result,
+        )
+        .await;
+        result
+    }
+
+    fn outcome<'a>(result: &'a CheckResult, metric: &str) -> &'a QuotaOutcome {
+        &result
+            .quota_results
+            .iter()
+            .find(|row| row.quota.provider_id == metric)
+            .unwrap_or_else(|| panic!("no {metric} result"))
+            .outcome
+    }
+
+    #[tokio::test]
+    async fn n4_demand_over_the_applied_family_limit_blocks_and_can_be_overridden() {
+        // Three n4-standard-80 need 240 vCPUs; the applied N4 limit in us-central1 is 200.
+        let mut result = check_family_pool("n4-standard-80", 3, 3, false).await;
+        assert!(!result.success);
+        assert_eq!(
+            result.errors,
+            ["Compute Engine vCPUs per VM family (CPUS_PER_VM_FAMILY/N4, test/us-central1): usage not readable, applied limit 200, additional needed 240. Request an increase: https://console.cloud.google.com/iam-admin/quotas?service=compute.googleapis.com"]
+        );
+        assert_eq!(
+            *outcome(&result, "CPUS_ALL_REGIONS"),
+            QuotaOutcome::Pass {
+                used: 0.0,
+                limit: 360.0,
+                needed: 240.0
+            }
+        );
+        crate::quotas::validate_warning_overrides(Platform::Gcp, &["CPUS_PER_VM_FAMILY/N4".into()])
+            .unwrap();
+        assert!(crate::quotas::validate_warning_overrides(
+            Platform::Gcp,
+            &["CPUS_PER_VM_FAMILY/E2".into()],
+        )
+        .is_err());
+        crate::quotas::apply_warning_overrides(&mut result, &["CPUS_PER_VM_FAMILY/N4".into()]);
+        assert!(result.success);
+        assert!(result.warnings.iter().any(|warning| warning
+            .starts_with("Deployment quota override: Compute Engine vCPUs per VM family")));
+    }
+
+    #[tokio::test]
+    async fn family_demand_under_the_applied_limit_warns_with_the_limit() {
+        let result = check_family_pool("n4-standard-2", 1, 1, false).await;
+        assert!(result.success);
+        assert_eq!(
+            *outcome(&result, "CPUS_PER_VM_FAMILY/N4"),
+            QuotaOutcome::Unknown {
+                reason: "applied limit is 200, but provider-reported usage is unavailable".into()
+            }
+        );
+        assert!(result.warnings.contains(&"Compute Engine vCPUs per VM family (CPUS_PER_VM_FAMILY/N4, test/us-central1): could not verify quota: applied limit is 200, but provider-reported usage is unavailable".to_string()));
+        assert!(matches!(
+            outcome(&result, "CPUS_ALL_REGIONS"),
+            QuotaOutcome::Pass { needed, .. } if *needed == 2.0
+        ));
+        // Launching nothing now, but the maximum alone exceeds the limit.
+        let result = check_family_pool("n4-standard-80", 0, 3, false).await;
+        assert!(result.success);
+        assert!(matches!(
+            outcome(&result, "CPUS_PER_VM_FAMILY/N4"),
+            QuotaOutcome::Warn { message } if message.contains("applied limit 200, needs 240")
+        ));
+    }
+
+    #[tokio::test]
+    async fn c3d_pools_get_the_per_family_quota() {
+        let result = check_family_pool("c3d-standard-8", 1, 1, false).await;
+        assert!(result.success);
+        assert_eq!(
+            *outcome(&result, "CPUS_PER_VM_FAMILY/C3D"),
+            QuotaOutcome::Unknown {
+                reason: "applied limit is 24, but provider-reported usage is unavailable".into()
+            }
+        );
+        assert!(result
+            .quota_results
+            .iter()
+            .any(|row| row.quota.provider_id == "CPUS_ALL_REGIONS"));
+    }
+
+    #[tokio::test]
+    async fn denied_family_quota_read_warns() {
+        let result = check_family_pool("c4a-standard-72", 1, 1, true).await;
+        assert!(result.success);
+        assert!(matches!(
+            outcome(&result, "CPUS_PER_VM_FAMILY/C4A"),
+            QuotaOutcome::Unknown { reason } if reason.contains("grant cloudquotas.quotas.get")
+        ));
     }
 
     #[tokio::test]
