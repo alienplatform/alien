@@ -11,8 +11,8 @@ use alien_core::{
     instance_catalog::find_instance_type, ComputeCluster, ComputeClusterOutputs, Platform,
     ResourceStatus, Stack, StackState,
 };
-use alien_gcp_clients::{compute::QuotaCollection, CloudQuotasApi, ComputeApi};
-use std::collections::BTreeMap;
+use alien_gcp_clients::{compute::QuotaCollection, CloudQuotasApi, ComputeApi, ErrorData};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// E2 and N1 share the general CPU pool; other supported families have separate metrics.
 fn family_metric(machine: &str) -> Option<String> {
@@ -280,6 +280,86 @@ pub async fn check(
     }
 }
 
+/// Fails each machine type that no zone of the region offers. Zone placement stays
+/// with the controller. Setups that predate the `compute.machineTypes.get` grant
+/// get a warning instead.
+pub async fn check_offerings(
+    machines: &BTreeSet<String>,
+    region: &str,
+    compute: &dyn ComputeApi,
+    result: &mut CheckResult,
+) {
+    if machines.is_empty() {
+        return;
+    }
+    let unverified = |reason: &str| {
+        format!(
+            "Could not confirm that GCP region '{region}' offers machine types {}: {reason}",
+            machines.iter().cloned().collect::<Vec<_>>().join(", ")
+        )
+    };
+    let denied = |error: &alien_gcp_clients::Error| {
+        matches!(error.error, Some(ErrorData::RemoteAccessDenied { .. }))
+    };
+    let zones = match compute
+        .list_zones(Some(format!("region eq .*/regions/{region}")))
+        .await
+    {
+        Ok(zones) => {
+            let mut zones = zones
+                .items
+                .into_iter()
+                .filter(|zone| zone.status.as_deref() == Some("UP"))
+                .filter_map(|zone| zone.name)
+                .filter(|zone| zone.starts_with(&format!("{region}-")))
+                .collect::<Vec<_>>();
+            zones.sort();
+            zones
+        }
+        Err(error) => {
+            result.add_warning(unverified(if denied(&error) {
+                "the setup does not grant compute.zones.list"
+            } else {
+                "listing the region's zones failed"
+            }));
+            return;
+        }
+    };
+    if zones.is_empty() {
+        result.add_warning(unverified("the region has no zone that is up"));
+        return;
+    }
+    for machine in machines {
+        let mut offered = false;
+        for zone in &zones {
+            match compute
+                .get_machine_type(zone.clone(), machine.clone())
+                .await
+            {
+                Ok(_) => {
+                    offered = true;
+                    break;
+                }
+                Err(error)
+                    if matches!(error.error, Some(ErrorData::RemoteResourceNotFound { .. })) => {}
+                Err(error) => {
+                    result.add_warning(unverified(if denied(&error) {
+                        "the setup does not grant compute.machineTypes.get"
+                    } else {
+                        "reading the machine type failed"
+                    }));
+                    return;
+                }
+            }
+        }
+        if !offered {
+            result.add_error(format!(
+                "Machine type '{machine}' is not offered in any zone of GCP region '{region}'. Choose a machine type this region offers."
+            ));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,6 +595,87 @@ mod tests {
             true
         )
         .is_none());
+    }
+
+    /// Zones as zones.list returns them for `region eq .*/regions/us-central1`: one
+    /// zone is down and must not be asked.
+    fn us_central1_zones() -> alien_gcp_clients::compute::ZoneList {
+        serde_json::from_value(serde_json::json!({"items": [
+            {"name": "us-central1-c", "status": "UP", "region": "https://www.googleapis.com/compute/v1/projects/test/regions/us-central1"},
+            {"name": "us-central1-a", "status": "UP", "region": "https://www.googleapis.com/compute/v1/projects/test/regions/us-central1"},
+            {"name": "us-central1-b", "status": "DOWN", "region": "https://www.googleapis.com/compute/v1/projects/test/regions/us-central1"}
+        ]}))
+        .unwrap()
+    }
+
+    fn machine_type_error(
+        machine: &str,
+        error: fn(String) -> ErrorData,
+    ) -> alien_gcp_clients::Error {
+        alien_error::AlienError::new(error(machine.into()))
+    }
+
+    #[tokio::test]
+    async fn a_machine_no_zone_of_the_region_offers_fails_naming_region_and_machine() {
+        let mut compute = alien_gcp_clients::compute::MockComputeApi::new();
+        compute
+            .expect_list_zones()
+            .times(1)
+            .withf(|filter| filter.as_deref() == Some("region eq .*/regions/us-central1"))
+            .returning(|_| Ok(us_central1_zones()));
+        compute
+            .expect_get_machine_type()
+            .times(4)
+            .returning(|zone, machine| {
+                if machine == "n4-standard-2" && zone == "us-central1-c" {
+                    Ok(serde_json::from_value(serde_json::json!({"name": machine, "zone": zone, "guestCpus": 2, "memoryMb": 8192})).unwrap())
+                } else {
+                    assert_ne!(zone, "us-central1-b", "a zone that is down is not asked");
+                    Err(machine_type_error(&machine, |name| {
+                        ErrorData::RemoteResourceNotFound {
+                            resource_type: "Compute Engine".into(),
+                            resource_name: name,
+                        }
+                    }))
+                }
+            });
+        let mut result = CheckResult::success();
+        let machines = BTreeSet::from(["c4a-standard-72".to_string(), "n4-standard-2".to_string()]);
+        check_offerings(&machines, "us-central1", &compute, &mut result).await;
+        assert!(!result.success);
+        assert_eq!(
+            result.errors,
+            ["Machine type 'c4a-standard-72' is not offered in any zone of GCP region 'us-central1'. Choose a machine type this region offers."]
+        );
+    }
+
+    #[tokio::test]
+    async fn setups_without_the_machine_type_grant_warn_and_continue() {
+        let mut compute = alien_gcp_clients::compute::MockComputeApi::new();
+        compute
+            .expect_list_zones()
+            .times(1)
+            .returning(|_| Ok(us_central1_zones()));
+        compute
+            .expect_get_machine_type()
+            .times(1)
+            .returning(|_, machine| {
+                Err(machine_type_error(&machine, |name| {
+                    ErrorData::RemoteAccessDenied {
+                        resource_type: "Compute Engine".into(),
+                        resource_name: name,
+                    }
+                }))
+            });
+        let mut result = CheckResult::success();
+        let machines = BTreeSet::from(["n4-standard-2".to_string(), "n4-standard-4".to_string()]);
+        check_offerings(&machines, "us-central1", &compute, &mut result).await;
+        assert!(result.success);
+        assert!(result.errors.is_empty());
+        assert_eq!(
+            result.warnings,
+            ["Could not confirm that GCP region 'us-central1' offers machine types n4-standard-2, n4-standard-4: the setup does not grant compute.machineTypes.get"]
+        );
     }
 
     #[tokio::test]

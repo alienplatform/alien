@@ -13,7 +13,10 @@ use alien_core::{
     ClientConfig, ComputeCluster, DeploymentConfig, Network, NetworkOutputs, NetworkSettings,
     Platform, ResourceStatus, Stack, StackState, Worker,
 };
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{BTreeSet, HashSet},
+    time::Duration,
+};
 
 pub struct CloudQuotasCheck;
 
@@ -99,6 +102,13 @@ impl RuntimeCheck for CloudQuotasCheck {
                 &config.region,
                 &compute,
                 &cloud_quotas,
+                &mut result,
+            )
+            .await;
+            super::gcp_compute::check_offerings(
+                &machines_to_offer(stack, stack_state),
+                &config.region,
+                &compute,
                 &mut result,
             )
             .await;
@@ -198,6 +208,13 @@ impl RuntimeCheck for CloudQuotasCheck {
                 stack_state,
                 &config.region,
                 &quotas,
+                &ec2,
+                &mut result,
+            )
+            .await;
+            super::aws_compute::check_offerings(
+                &machines_to_offer(stack, stack_state),
+                &config.region,
                 &ec2,
                 &mut result,
             )
@@ -514,6 +531,37 @@ async fn read_vpc_observation(
     Some(QuotaObservation { used, limit })
 }
 
+/// Machine types that pools may launch, leaving out a pool's machine its running
+/// cluster already runs: the region offered it then, and setups without the
+/// offerings grant would otherwise warn on every update.
+pub(super) fn machines_to_offer(stack: &Stack, state: &StackState) -> BTreeSet<String> {
+    let mut machines = BTreeSet::new();
+    for (id, entry) in &stack.resources {
+        let Some(cluster) = entry.config.downcast_ref::<ComputeCluster>() else {
+            continue;
+        };
+        let running = state
+            .resources
+            .get(id)
+            .filter(|current| current.status == ResourceStatus::Running)
+            .and_then(|current| current.config.downcast_ref::<ComputeCluster>());
+        for group in &cluster.capacity_groups {
+            let Some(machine) = group.instance_type.as_deref() else {
+                continue;
+            };
+            let already_running = running.is_some_and(|old| {
+                old.capacity_groups.iter().any(|old| {
+                    old.group_id == group.group_id && old.instance_type.as_deref() == Some(machine)
+                })
+            });
+            if group.max_size > 0 && !already_running {
+                machines.insert(machine.to_string());
+            }
+        }
+    }
+    machines
+}
+
 pub(super) fn record(result: &mut CheckResult, quota_result: QuotaResult) {
     let quota = &quota_result.quota;
     let label = format!("{} ({}, {})", quota.name, quota.provider_id, quota.scope);
@@ -558,6 +606,61 @@ mod tests {
                 ResourceLifecycle::Live,
             )
             .build()
+    }
+
+    #[test]
+    fn offering_checks_skip_machines_the_running_pool_already_runs() {
+        let cluster = |groups: &[(&str, &str, u32)]| {
+            let mut cluster = ComputeCluster::new("compute".into());
+            for (group_id, machine, max_size) in groups {
+                cluster = cluster.capacity_group(alien_core::CapacityGroup {
+                    group_id: (*group_id).into(),
+                    instance_type: Some((*machine).into()),
+                    profile: None,
+                    min_size: 0,
+                    max_size: *max_size,
+                    scale_policy: None,
+                    nested_virtualization: None,
+                    data_disk_gib_range: None,
+                });
+            }
+            cluster.build()
+        };
+        let desired = Stack::new("offerings".into())
+            .add(
+                cluster(&[
+                    ("kept", "m8i.large", 2),
+                    ("resized", "m8i.24xlarge", 2),
+                    ("new", "c8i.large", 1),
+                    ("parked", "r8i.large", 0),
+                ]),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let mut state = StackState::new(Platform::Aws);
+        assert_eq!(
+            machines_to_offer(&desired, &state),
+            BTreeSet::from([
+                "c8i.large".to_string(),
+                "m8i.24xlarge".to_string(),
+                "m8i.large".to_string()
+            ])
+        );
+        let mut current = StackResourceState::new_pending(
+            "compute".into(),
+            alien_core::Resource::new(cluster(&[
+                ("kept", "m8i.large", 2),
+                ("resized", "m8i.4xlarge", 2),
+            ])),
+            None,
+            vec![],
+        );
+        current.status = ResourceStatus::Running;
+        state.resources.insert("compute".into(), current);
+        assert_eq!(
+            machines_to_offer(&desired, &state),
+            BTreeSet::from(["c8i.large".to_string(), "m8i.24xlarge".to_string()])
+        );
     }
 
     #[test]

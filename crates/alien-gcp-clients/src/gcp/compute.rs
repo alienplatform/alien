@@ -82,6 +82,11 @@ pub trait ComputeApi: Send + Sync + Debug {
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/zones/list
     async fn list_zones(&self, filter: Option<String>) -> Result<ZoneList>;
 
+    /// Gets a machine type offered in a zone, in one attempt: a zone without the type
+    /// answers 404, which the default retry policy would retry for seconds per zone.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/machineTypes/get
+    async fn get_machine_type(&self, zone: String, machine_type: String) -> Result<MachineType>;
+
     // --- Network Operations ---
 
     /// Gets a VPC network.
@@ -750,6 +755,16 @@ impl ComputeApi for ComputeClient {
                 Option::<()>::None,
                 "zones",
             )
+            .await
+    }
+
+    async fn get_machine_type(&self, zone: String, machine_type: String) -> Result<MachineType> {
+        let path = format!(
+            "projects/{}/zones/{zone}/machineTypes/{machine_type}",
+            self.project_id
+        );
+        self.base
+            .execute_request_once(Method::GET, &path, None, Option::<()>::None, &machine_type)
             .await
     }
 
@@ -2473,6 +2488,28 @@ pub struct ZoneList {
     /// Type of resource.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+}
+
+/// A machine type offered in one zone.
+/// See: https://cloud.google.com/compute/docs/reference/rest/v1/machineTypes
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MachineType {
+    /// Name of the machine type, such as `n4-standard-2`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// Zone the machine type is offered in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
+
+    /// Number of vCPUs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guest_cpus: Option<u32>,
+
+    /// Memory in MiB.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_mb: Option<u64>,
 }
 
 // =============================================================================================
@@ -6624,6 +6661,28 @@ mod tests {
             serde_json::from_str(body).expect("request JSON")
         };
         (line, body)
+    }
+
+    #[tokio::test]
+    async fn machine_type_get_reads_the_zone_offering() {
+        // Body returned by machineTypes.get for n4-standard-2 in us-central1-a.
+        const MACHINE_TYPE: &str = r#"{"architecture":"X86_64","description":"2 vCPUs, 8 GB RAM","guestCpus":2,"id":"1750001","isSharedCpu":false,"kind":"compute#machineType","memoryMb":8192,"name":"n4-standard-2","selfLink":"https://www.googleapis.com/compute/v1/projects/example-project/zones/us-central1-a/machineTypes/n4-standard-2","zone":"us-central1-a"}"#;
+        let (endpoint, server) = serve_json_responses(vec![MACHINE_TYPE]);
+        let machine = test_client(endpoint)
+            .get_machine_type("us-central1-a".into(), "n4-standard-2".into())
+            .await
+            .expect("get machine type");
+        assert_eq!(machine.name.as_deref(), Some("n4-standard-2"));
+        assert_eq!(machine.zone.as_deref(), Some("us-central1-a"));
+        assert_eq!(machine.guest_cpus, Some(2));
+        assert_eq!(machine.memory_mb, Some(8192));
+        let requests = server.join().expect("HTTP server");
+        let (line, body) = request_line_and_body(&requests[0]);
+        assert_eq!(
+            line,
+            "GET /projects/example-project/zones/us-central1-a/machineTypes/n4-standard-2 HTTP/1.1"
+        );
+        assert_eq!(body, serde_json::Value::Null);
     }
 
     #[tokio::test]

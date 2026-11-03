@@ -650,6 +650,28 @@ mod tests {
     }
 
     #[test]
+    fn current_generation_skus_charge_their_provider_family() {
+        let skus: Vec<ResourceSku> =
+            serde_json::from_str(include_str!("fixtures/azure-compute-skus-v6.json")).unwrap();
+        for (machine, family) in [
+            ("Standard_D2s_v6", "StandardDsv6Family"),
+            ("Standard_E2s_v6", "StandardEsv6Family"),
+            ("Standard_D2as_v6", "standardDav6Family"),
+        ] {
+            let demands =
+                demands(&stack(machine, 3), &StackState::new(Platform::Azure), &skus).unwrap();
+            let expected = QuotaDemand {
+                peak: 6.0,
+                held: 0.0,
+            };
+            assert_eq!(demands[family], expected, "{machine}");
+            assert_eq!(demands["cores"], expected, "{machine}");
+            crate::quotas::validate_warning_overrides(Platform::Azure, &[family.into()])
+                .unwrap_or_else(|_| panic!("{family} quota failures can be overridden"));
+        }
+    }
+
+    #[test]
     fn location_and_zone_restrictions_are_distinct() {
         let skus = skus();
         let mut sku = sku(&skus, "Standard_D2s_v5").unwrap().clone();
