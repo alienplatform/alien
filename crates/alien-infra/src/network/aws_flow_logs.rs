@@ -198,11 +198,22 @@ impl AwsNetworkController {
         )
     }
 
+    /// Whether this run may create or delete the flow log objects. Only direct setup holds
+    /// the credentials that create the delivery role: a network the runtime creates for an
+    /// automatic setup runs under the management identity, which may only create roles under
+    /// the setup's permissions boundary, and that boundary does not allow log delivery.
+    pub(super) fn flow_log_owned_here(ctx: &ResourceControllerContext<'_>) -> bool {
+        ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+    }
+
     /// One create call per step until the flow log exists.
     pub(super) async fn reconcile_flow_log(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<FlowLogStep> {
+        if !Self::flow_log_owned_here(ctx) {
+            return Ok(FlowLogStep::Ready);
+        }
         let config = ctx.desired_resource_config::<Network>()?;
         let id = config.id.as_str();
         let vpc_id = self.vpc_id.clone().ok_or_else(|| {
@@ -387,18 +398,25 @@ impl AwsNetworkController {
             .service_provider
             .get_aws_ec2_client(ctx.get_aws_config()?)
             .await?;
-        let flow_log = ec2
+        let described = match ec2
             .describe_flow_logs(
                 DescribeFlowLogsRequest::builder()
                     .flow_log_ids(vec![flow_log_id.clone()])
                     .build(),
             )
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to read flow log '{flow_log_id}'"),
-                resource_id: Some(id.to_string()),
-            })?
-            .flow_log_set
+        {
+            Ok(described) => Some(described),
+            Err(error) if is_not_found(&error) => None,
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to read flow log '{flow_log_id}'"),
+                    resource_id: Some(id.to_string()),
+                }))
+            }
+        };
+        let flow_log = described
+            .and_then(|described| described.flow_log_set)
             .into_iter()
             .flat_map(|set| set.items)
             .find(|flow_log| flow_log.flow_log_id.as_deref() == Some(flow_log_id.as_str()));

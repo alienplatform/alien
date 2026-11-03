@@ -280,12 +280,16 @@ fn provider(cloud: &Arc<Mutex<Cloud>>) -> Arc<MockPlatformServiceProvider> {
             } else {
                 cloud.delivery.remove(0)
             };
-            let items = cloud
+            let items: Vec<_> = cloud
                 .flow_logs
                 .iter()
                 .filter(|(id, _)| ids.contains(id))
                 .map(|(id, _)| flow_log(id, delivery))
                 .collect();
+            // EC2 answers an unknown flow log ID with InvalidFlowLogId.NotFound.
+            if items.is_empty() {
+                return Err(missing("FlowLog", &ids[0]));
+            }
             return Ok(DescribeFlowLogsResponse {
                 flow_log_set: Some(FlowLogSet { items }),
                 next_token: None,
@@ -735,4 +739,74 @@ fn a_long_role_name_keeps_the_prefix_and_suffix_within_iams_limit() {
     );
     assert_ne!(name, role_name(&prefix, "other-network"));
     assert_eq!(role_name("test", "net"), "test-net-flow-logs");
+}
+
+/// The recorded flow log is deleted before its delivery is confirmed, and the read by ID
+/// answers not found. The flow log is created again instead of being looked for forever.
+#[tokio::test]
+async fn a_flow_log_deleted_before_its_delivery_check_is_created_again() {
+    let cloud = Arc::new(Mutex::new(Cloud::default()));
+    let mut executor = direct_setup(&cloud, creating_flow_logs()).await;
+    for _ in 0..4 {
+        executor
+            .step()
+            .await
+            .expect("log group, role, policy, flow log");
+    }
+    let first_token = flow_logs(&executor)
+        .and_then(|setup| setup.create_token)
+        .expect("token recorded");
+    cloud.lock().unwrap().flow_logs.clear();
+
+    executor
+        .run_until_terminal()
+        .await
+        .expect("create finishes");
+    assert_eq!(executor.status(), ResourceStatus::Running);
+    let setup = flow_logs(&executor).expect("recorded");
+    assert!(setup.is_complete());
+    assert_eq!(setup.flow_log_id.as_deref(), Some("fl-1"));
+    let cloud = cloud.lock().unwrap();
+    assert_eq!(cloud.flow_logs.len(), 1);
+    assert_ne!(
+        cloud.flow_logs[0].1, first_token,
+        "created under a new token"
+    );
+    assert_eq!(
+        cloud
+            .calls
+            .iter()
+            .filter(|call| call.starts_with("CreateFlowLogs"))
+            .count(),
+        2
+    );
+}
+
+/// A network the runtime creates for an automatic setup runs without direct setup's
+/// authority. It creates no flow log objects (the management identity cannot make the role)
+/// and its delete looks for none.
+#[tokio::test]
+async fn without_direct_setup_authority_no_flow_log_objects_are_touched() {
+    let cloud = Arc::new(Mutex::new(Cloud::default()));
+    let mut executor = executor(
+        &cloud,
+        creating_flow_logs(),
+        InitialSetupAuthority::ImportedHandoff,
+        false,
+    )
+    .await;
+
+    executor
+        .run_until_terminal()
+        .await
+        .expect("create finishes");
+    assert_eq!(executor.status(), ResourceStatus::Running);
+    assert_eq!(flow_logs(&executor), None);
+    executor.delete().expect("delete starts");
+    executor
+        .run_until_terminal()
+        .await
+        .expect("delete finishes");
+    assert_eq!(executor.status(), ResourceStatus::Deleted);
+    assert_eq!(cloud.lock().unwrap().calls, ["DeleteVpc vpc-1"]);
 }

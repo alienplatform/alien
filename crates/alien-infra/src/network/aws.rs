@@ -4894,9 +4894,9 @@ impl AwsNetworkController {
         // the exact token of its create call, so the steps below delete it.
         self.recover_lost_creates(ctx, &config.id).await?;
 
-        // A created VPC's flow log objects go first. They are looked up even without a record:
-        // an older binary that rewrote this state dropped it.
-        if self.vpc_id.is_some() || self.flow_logs.is_some() {
+        // A created VPC's flow log objects go first. Under direct setup they are looked up even
+        // without a record: an older binary that rewrote this state dropped it.
+        if self.flow_logs.is_some() || (self.vpc_id.is_some() && Self::flow_log_owned_here(ctx)) {
             return Ok(HandlerAction::Continue {
                 state: DeletingFlowLogs,
                 suggested_delay: None,
