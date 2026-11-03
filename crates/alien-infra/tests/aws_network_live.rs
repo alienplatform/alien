@@ -674,7 +674,7 @@ async fn flow_log_delivery(
         .put_retention_policy(
             alien_aws_clients::cloudwatch_logs::PutRetentionPolicyRequest::builder()
                 .log_group_name(name.clone())
-                .retention_in_days(alien_core::AWS_VPC_FLOW_LOG_RETENTION_DAYS)
+                .retention_in_days(alien_core::AWS_VPC_FLOW_LOG.retention_in_days)
                 .build(),
         )
         .await

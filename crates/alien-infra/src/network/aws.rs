@@ -9717,9 +9717,10 @@ mod controller_state_tests {
             .withf(move |request| {
                 request.resource_ids == ["vpc-1"]
                     && request.resource_type == "VPC"
-                    && request.traffic_type == "ALL"
+                    && request.traffic_type == alien_core::AWS_VPC_FLOW_LOG.traffic_type
                     && request.log_group_name == name
-                    && request.max_aggregation_interval == Some(600)
+                    && request.max_aggregation_interval
+                        == Some(alien_core::AWS_VPC_FLOW_LOG.max_aggregation_interval)
             })
             .returning(|_| {
                 Ok(CreateFlowLogsResponse {

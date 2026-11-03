@@ -1,5 +1,5 @@
 //! Direct setup's flow log for the VPC it creates: a log group that keeps records for
-//! [`AWS_VPC_FLOW_LOG_RETENTION_DAYS`], a role the flow logs service assumes to write to that
+//! the retention in [`AWS_VPC_FLOW_LOG`], a role the flow logs service assumes to write to that
 //! group, and the flow log itself. The template setups render the same three objects.
 //!
 //! Each step makes at most one create call and records it before the next step. The log group
@@ -13,14 +13,11 @@ use super::*;
 use alien_aws_clients::cloudwatch_logs::{CreateLogGroupRequest, PutRetentionPolicyRequest};
 use alien_aws_clients::ec2::{CreateFlowLogsRequest, DescribeFlowLogsRequest};
 use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag};
-use alien_core::{ALIEN_MANAGED_BY_TAG_KEY, ALIEN_STACK_TAG_KEY, AWS_VPC_FLOW_LOG_RETENTION_DAYS};
+use alien_core::{ALIEN_MANAGED_BY_TAG_KEY, ALIEN_STACK_TAG_KEY, AWS_VPC_FLOW_LOG};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 const DELIVERY_POLICY_NAME: &str = "flow-logs-delivery";
-
-/// Seconds a flow is aggregated into one record. 600 is the AWS default and the cheapest.
-const MAX_AGGREGATION_INTERVAL: u32 = 600;
 
 /// IAM is eventually consistent: give a new role policy time to reach the flow logs service
 /// before the flow log is created.
@@ -150,7 +147,7 @@ fn trust_policy(partition: &str, region: &str, account_id: &str) -> String {
         "Version": "2012-10-17",
         "Statement": [{
             "Effect": "Allow",
-            "Principal": { "Service": "vpc-flow-logs.amazonaws.com" },
+            "Principal": { "Service": AWS_VPC_FLOW_LOG.delivery_service },
             "Action": "sts:AssumeRole",
             "Condition": {
                 "StringEquals": { "aws:SourceAccount": account_id },
@@ -168,12 +165,7 @@ fn delivery_policy(log_group_arn: &str) -> String {
         "Version": "2012-10-17",
         "Statement": [{
             "Effect": "Allow",
-            "Action": [
-                "logs:CreateLogStream",
-                "logs:PutLogEvents",
-                "logs:DescribeLogGroups",
-                "logs:DescribeLogStreams"
-            ],
+            "Action": AWS_VPC_FLOW_LOG.delivery_actions,
             "Resource": [log_group_arn, format!("{log_group_arn}:*")]
         }]
     })
@@ -276,7 +268,7 @@ impl AwsNetworkController {
             logs.put_retention_policy(
                 PutRetentionPolicyRequest::builder()
                     .log_group_name(name.clone())
-                    .retention_in_days(AWS_VPC_FLOW_LOG_RETENTION_DAYS)
+                    .retention_in_days(AWS_VPC_FLOW_LOG.retention_in_days)
                     .build(),
             )
             .await
@@ -483,10 +475,10 @@ impl AwsNetworkController {
                 CreateFlowLogsRequest::builder()
                     .resource_ids(vec![vpc_id.to_string()])
                     .resource_type("VPC".to_string())
-                    .traffic_type("ALL".to_string())
+                    .traffic_type(AWS_VPC_FLOW_LOG.traffic_type.to_string())
                     .log_group_name(name.to_string())
                     .deliver_logs_permission_arn(role_arn)
-                    .max_aggregation_interval(MAX_AGGREGATION_INTERVAL)
+                    .max_aggregation_interval(AWS_VPC_FLOW_LOG.max_aggregation_interval)
                     .tag_specifications(self.create_tags(ctx.resource_prefix, id, "vpc-flow-log"))
                     .client_token(token)
                     .build(),

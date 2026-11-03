@@ -1,14 +1,14 @@
 //! VPC flow logs for a VPC the template creates.
 //!
 //! The flow log sends every accepted and rejected flow to a log group that keeps records
-//! for [`AWS_VPC_FLOW_LOG_RETENTION_DAYS`]. The flow logs service writes to the group with a
+//! for the retention in [`AWS_VPC_FLOW_LOG`]. The flow logs service writes to the group with a
 //! role that can only write to that group. All three are deleted with the VPC.
 
 use crate::{
     emitters::aws::helpers::tags,
     template::{CfExpression, CfResource},
 };
-use alien_core::{import::EmitContext, AWS_VPC_FLOW_LOG_RETENTION_DAYS};
+use alien_core::{import::EmitContext, AWS_VPC_FLOW_LOG};
 
 /// The log group, role and flow log for the VPC `vpc_id`, under `condition`.
 pub(crate) fn resources(
@@ -23,7 +23,7 @@ pub(crate) fn resources(
     let mut log_group = CfResource::new(log_group_id.clone(), "AWS::Logs::LogGroup".to_string());
     log_group.properties.insert(
         "RetentionInDays".to_string(),
-        CfExpression::Integer(AWS_VPC_FLOW_LOG_RETENTION_DAYS.into()),
+        CfExpression::Integer(AWS_VPC_FLOW_LOG.retention_in_days.into()),
     );
     log_group.properties.insert("Tags".to_string(), tags(ctx));
 
@@ -47,13 +47,11 @@ pub(crate) fn resources(
                             (
                                 "Action",
                                 CfExpression::list(
-                                    [
-                                        "logs:CreateLogStream",
-                                        "logs:PutLogEvents",
-                                        "logs:DescribeLogGroups",
-                                        "logs:DescribeLogStreams",
-                                    ]
-                                    .map(CfExpression::from),
+                                    AWS_VPC_FLOW_LOG
+                                        .delivery_actions
+                                        .iter()
+                                        .copied()
+                                        .map(CfExpression::from),
                                 ),
                             ),
                             // `Arn` of a log group ends in `:*`, so it covers its streams.
@@ -73,12 +71,13 @@ pub(crate) fn resources(
     flow_log
         .properties
         .insert("ResourceType".to_string(), CfExpression::from("VPC"));
-    flow_log
-        .properties
-        .insert("TrafficType".to_string(), CfExpression::from("ALL"));
+    flow_log.properties.insert(
+        "TrafficType".to_string(),
+        CfExpression::from(AWS_VPC_FLOW_LOG.traffic_type),
+    );
     flow_log.properties.insert(
         "LogDestinationType".to_string(),
-        CfExpression::from("cloud-watch-logs"),
+        CfExpression::from(AWS_VPC_FLOW_LOG.log_destination_type),
     );
     flow_log.properties.insert(
         "LogGroupName".to_string(),
@@ -90,7 +89,7 @@ pub(crate) fn resources(
     );
     flow_log.properties.insert(
         "MaxAggregationInterval".to_string(),
-        CfExpression::from(600u32),
+        CfExpression::from(AWS_VPC_FLOW_LOG.max_aggregation_interval),
     );
     flow_log.properties.insert("Tags".to_string(), tags(ctx));
 
@@ -114,7 +113,7 @@ fn flow_logs_trust_policy() -> CfExpression {
                     "Principal",
                     CfExpression::object([(
                         "Service",
-                        CfExpression::from("vpc-flow-logs.amazonaws.com"),
+                        CfExpression::from(AWS_VPC_FLOW_LOG.delivery_service),
                     )]),
                 ),
                 ("Action", CfExpression::from("sts:AssumeRole")),

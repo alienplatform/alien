@@ -1,7 +1,7 @@
 //! VPC flow logs for a VPC the module creates.
 //!
 //! The flow log sends every accepted and rejected flow to a log group that keeps records
-//! for [`AWS_VPC_FLOW_LOG_RETENTION_DAYS`]. The flow logs service writes to the group with a
+//! for the retention in [`AWS_VPC_FLOW_LOG`]. The flow logs service writes to the group with a
 //! role that can only write to that group. All three are destroyed with the VPC.
 
 use crate::{
@@ -9,7 +9,7 @@ use crate::{
     emitters::aws::helpers::{iam_role_name_template, jsonencode, policy_attr},
     expr,
 };
-use alien_core::AWS_VPC_FLOW_LOG_RETENTION_DAYS;
+use alien_core::AWS_VPC_FLOW_LOG;
 use hcl::{expr::Expression, structure::Block};
 
 /// The log group, role, role policy and flow log for `vpc_id`, created when `count` is 1.
@@ -39,7 +39,7 @@ pub(crate) fn blocks(
                 attr(
                     "retention_in_days",
                     Expression::Number(hcl::Number::from(i64::from(
-                        AWS_VPC_FLOW_LOG_RETENTION_DAYS,
+                        AWS_VPC_FLOW_LOG.retention_in_days,
                     ))),
                 ),
                 attr("tags", tags.clone()),
@@ -67,14 +67,11 @@ pub(crate) fn blocks(
                     (
                         "Action",
                         Expression::Array(
-                            [
-                                "logs:CreateLogStream",
-                                "logs:PutLogEvents",
-                                "logs:DescribeLogGroups",
-                                "logs:DescribeLogStreams",
-                            ]
-                            .map(|action| Expression::String(action.to_string()))
-                            .to_vec(),
+                            AWS_VPC_FLOW_LOG
+                                .delivery_actions
+                                .iter()
+                                .map(|action| Expression::String(action.to_string()))
+                                .collect(),
                         ),
                     ),
                     // The group and its streams.
@@ -94,16 +91,21 @@ pub(crate) fn blocks(
             [
                 attr("count", expr::raw(count)),
                 attr("vpc_id", vpc_id),
-                attr("traffic_type", Expression::String("ALL".to_string())),
+                attr(
+                    "traffic_type",
+                    Expression::String(AWS_VPC_FLOW_LOG.traffic_type.to_string()),
+                ),
                 attr(
                     "log_destination_type",
-                    Expression::String("cloud-watch-logs".to_string()),
+                    Expression::String(AWS_VPC_FLOW_LOG.log_destination_type.to_string()),
                 ),
                 attr("log_destination", expr::raw(&log_group_arn)),
                 attr("iam_role_arn", expr::raw(format!("{role}.arn"))),
                 attr(
                     "max_aggregation_interval",
-                    Expression::Number(hcl::Number::from(600i64)),
+                    Expression::Number(hcl::Number::from(
+                        AWS_VPC_FLOW_LOG.max_aggregation_interval,
+                    )),
                 ),
                 attr("tags", tags),
                 // Created after the role can write to the group, destroyed before it no longer can.
@@ -132,7 +134,7 @@ fn trust_policy() -> Expression {
                     "Principal",
                     expr::object([(
                         "Service",
-                        Expression::String("vpc-flow-logs.amazonaws.com".to_string()),
+                        Expression::String(AWS_VPC_FLOW_LOG.delivery_service.to_string()),
                     )]),
                 ),
                 ("Action", Expression::String("sts:AssumeRole".to_string())),
