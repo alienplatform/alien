@@ -100,10 +100,18 @@ pub(crate) fn chunk_managed_policy_statements(
 /// conditions independently, so one statement with the union of the actions means exactly what
 /// the separate statements meant, and the shared resources and conditions are written once.
 /// The merged statement keeps the first statement's Sid and position, and is never larger than
-/// a policy holds. Statements with `NotAction` or `NotResource` stay as they are.
+/// a policy holds. Statements with `NotAction` or `NotResource`, or with actions that are not
+/// plain strings (such as an intrinsic function), stay as they are.
 fn merge_statement_actions(statements: Vec<CfExpression>) -> Result<Vec<CfExpression>> {
     fn scope(statement: &IndexMap<String, CfExpression>) -> Option<IndexMap<&str, &CfExpression>> {
-        if !statement.contains_key("Action")
+        let plain_actions = match statement.get("Action")? {
+            CfExpression::String(_) => true,
+            CfExpression::List(values) => values
+                .iter()
+                .all(|value| matches!(value, CfExpression::String(_))),
+            _ => false,
+        };
+        if !plain_actions
             || statement.contains_key("NotAction")
             || statement.contains_key("NotResource")
         {
@@ -899,6 +907,12 @@ mod tests {
             assert!(size <= 6_144, "expanded policy uses {size} bytes");
             actual.extend(resolved["Statement"].as_array().unwrap().iter().cloned());
         }
+        // No statement is written twice: each merged statement keeps one unique Sid.
+        let sids: std::collections::BTreeSet<&str> = actual
+            .iter()
+            .map(|statement| statement["Sid"].as_str().unwrap())
+            .collect();
+        assert_eq!(sids.len(), actual.len());
         // Merged and packed, the documents grant and deny exactly what the statements did.
         assert_eq!(
             expanded(&actual),
@@ -985,6 +999,116 @@ mod tests {
             })
             .collect();
         assert_eq!(statements.len(), 2);
+    }
+
+    /// Only statements with the same effect, resources and conditions and plain-string actions
+    /// merge; anything else that differs keeps them apart.
+    #[test]
+    fn only_statements_that_differ_in_plain_actions_merge() {
+        let statement = |sid: &str, action: CfExpression, extra: Vec<(&str, CfExpression)>| {
+            let mut fields = vec![
+                ("Sid", CfExpression::from(sid)),
+                ("Effect", CfExpression::from("Allow")),
+                ("Action", action),
+                (
+                    "Resource",
+                    CfExpression::list([
+                        CfExpression::from("arn:aws:s3:::first"),
+                        CfExpression::from("arn:aws:s3:::second"),
+                    ]),
+                ),
+            ];
+            fields.extend(extra);
+            CfExpression::object(fields)
+        };
+        let get = || CfExpression::from("s3:GetObject");
+        let put = || CfExpression::from("s3:PutObject");
+        let condition = |value: &str| {
+            CfExpression::object([(
+                "StringEquals",
+                CfExpression::object([("aws:ResourceTag/deployment", CfExpression::from(value))]),
+            )])
+        };
+        let principal =
+            |account: &str| CfExpression::object([("AWS", CfExpression::from(account))]);
+        let sids = |statements: Vec<CfExpression>| -> Vec<String> {
+            merge_statement_actions(statements)
+                .unwrap()
+                .iter()
+                .map(|statement| {
+                    let CfExpression::Object(object) = statement else {
+                        panic!("statement is not an object");
+                    };
+                    let CfExpression::String(sid) = &object["Sid"] else {
+                        panic!("Sid is not a string");
+                    };
+                    sid.clone()
+                })
+                .collect()
+        };
+
+        assert_eq!(
+            sids(vec![
+                statement("A", get(), vec![]),
+                statement("B", put(), vec![])
+            ]),
+            vec!["A"]
+        );
+        let cases = [
+            (
+                "a differing Condition",
+                statement("B", put(), vec![("Condition", condition("other"))]),
+            ),
+            (
+                "a differing Principal",
+                statement("B", put(), vec![("Principal", principal("111111111111"))]),
+            ),
+            (
+                "NotAction",
+                CfExpression::object([
+                    ("Sid", CfExpression::from("B")),
+                    ("Effect", CfExpression::from("Allow")),
+                    ("NotAction", put()),
+                    (
+                        "Resource",
+                        CfExpression::list([
+                            CfExpression::from("arn:aws:s3:::first"),
+                            CfExpression::from("arn:aws:s3:::second"),
+                        ]),
+                    ),
+                ]),
+            ),
+            (
+                "the same resources in another order",
+                CfExpression::object([
+                    ("Sid", CfExpression::from("B")),
+                    ("Effect", CfExpression::from("Allow")),
+                    ("Action", put()),
+                    (
+                        "Resource",
+                        CfExpression::list([
+                            CfExpression::from("arn:aws:s3:::second"),
+                            CfExpression::from("arn:aws:s3:::first"),
+                        ]),
+                    ),
+                ]),
+            ),
+            (
+                "an intrinsic Action",
+                statement(
+                    "B",
+                    CfExpression::object([("Ref", CfExpression::from("ActionParameter"))]),
+                    vec![],
+                ),
+            ),
+        ];
+        for (case, other) in cases {
+            assert_eq!(
+                sids(vec![statement("A", get(), vec![]), other]),
+                vec!["A", "B"],
+                "{case}"
+            );
+        }
     }
 
     #[test]
