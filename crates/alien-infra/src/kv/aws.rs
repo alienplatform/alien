@@ -52,7 +52,13 @@ pub struct PointInTimeRecoveryDenial {
     /// Revision of the management permissions the stack asked for when it was denied. A
     /// release that changes them retries.
     pub management_permissions_revision: Option<String>,
+    /// When it was denied. A CloudFormation or Terraform setup update that installs the grant
+    /// does not reach the controller, so the table asks again once a day.
+    pub denied_at: chrono::DateTime<Utc>,
 }
+
+/// How long after a denial a table asks for an update again.
+const POINT_IN_TIME_RECOVERY_DENIAL_RECHECK: chrono::TimeDelta = chrono::TimeDelta::hours(24);
 
 /// Times a table is polled, 10 s apart, while DynamoDB prepares point-in-time recovery.
 const POINT_IN_TIME_RECOVERY_POLLS: u32 = 30;
@@ -678,8 +684,8 @@ impl AwsKvController {
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
     /// Tables runtime manages ask for an update while point-in-time recovery is off. After a
-    /// denial they wait for a setup run or a release that changes the management permissions,
-    /// so a role without the grant is not asked again on every deployment step.
+    /// denial they wait for a setup run, a release that changes the management permissions, or
+    /// a day, so a role without the grant is not asked again on every deployment step.
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
         if self.point_in_time_recovery_enabled || !may_manage_table(ctx, ctx.desired_config.id()) {
             return Ok(false);
@@ -687,6 +693,7 @@ impl AwsKvController {
         match &self.point_in_time_recovery_denial {
             None => Ok(true),
             Some(denial) => Ok(ctx.deployment_config.setup_run
+                || Utc::now() - denial.denied_at >= POINT_IN_TIME_RECOVERY_DENIAL_RECHECK
                 || management_permissions_revision(ctx)? != denial.management_permissions_revision),
         }
     }
@@ -814,6 +821,7 @@ impl AwsKvController {
                     self.point_in_time_recovery_denial = Some(PointInTimeRecoveryDenial {
                         message,
                         management_permissions_revision: management_permissions_revision(ctx)?,
+                        denied_at: Utc::now(),
                     });
                     Ok(PointInTimeRecoveryRequest::Denied)
                 }
@@ -1433,15 +1441,15 @@ mod tests {
         assert_eq!(executor.status(), ResourceStatus::Running);
         assert!(executor.outputs().is_some());
         assert_eq!(table.lock().unwrap().updates, 1);
+        let denial = saved(&executor).point_in_time_recovery_denial.unwrap();
+        assert_eq!(denial.message, AWS_MESSAGE);
         assert_eq!(
-            saved(&executor).point_in_time_recovery_denial,
-            Some(PointInTimeRecoveryDenial {
-                message: AWS_MESSAGE.to_string(),
-                management_permissions_revision: executor
-                    .with_context(management_permissions_revision)
-                    .unwrap(),
-            })
+            denial.management_permissions_revision,
+            executor
+                .with_context(management_permissions_revision)
+                .unwrap()
         );
+        assert!(Utc::now() - denial.denied_at < chrono::TimeDelta::minutes(1));
 
         // The heartbeat names the missing action and never calls it; nothing asks for an update.
         assert_eq!(
@@ -1559,10 +1567,43 @@ mod tests {
         controller.point_in_time_recovery_denial = Some(PointInTimeRecoveryDenial {
             message: AWS_MESSAGE.to_string(),
             management_permissions_revision: Some("earlier-release".to_string()),
+            denied_at: Utc::now(),
         });
         let executor = executor(controller, table, ResourceLifecycle::Live).await;
 
         assert!(executor.needs_update().unwrap());
+    }
+
+    /// A CloudFormation or Terraform setup update installs the grant without reaching the
+    /// controller, so a denied table asks again a day later, and then turns it on.
+    #[tokio::test]
+    async fn a_denied_table_asks_again_a_day_later() {
+        let denied = client_error("UpdateContinuousBackups", ACCESS_DENIED).await;
+        let table = Arc::new(Mutex::new(Table {
+            update_errors: vec![denied],
+            ..Default::default()
+        }));
+        let mut first = executor(
+            saved_by_previous_version(),
+            table.clone(),
+            ResourceLifecycle::Live,
+        )
+        .await;
+        update(&mut first).await.unwrap();
+        assert!(!first.needs_update().unwrap());
+
+        let mut controller = saved(&first);
+        let denial = controller.point_in_time_recovery_denial.as_mut().unwrap();
+        denial.denied_at -= POINT_IN_TIME_RECOVERY_DENIAL_RECHECK;
+        let mut executor = executor(controller, table.clone(), ResourceLifecycle::Live).await;
+
+        assert!(executor.needs_update().unwrap());
+        update(&mut executor).await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(table.lock().unwrap().updates, 2);
+        assert!(table.lock().unwrap().point_in_time_recovery);
+        assert_eq!(saved(&executor).point_in_time_recovery_denial, None);
+        assert!(!executor.needs_update().unwrap());
     }
 
     #[tokio::test]
