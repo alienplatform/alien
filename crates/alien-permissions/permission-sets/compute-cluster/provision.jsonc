@@ -10,7 +10,7 @@
       // cloudwatch:AlarmActions covers AlarmActions, OKActions and InsufficientDataActions.
       {
         "grant": {
-          "actions": ["cloudwatch:PutMetricAlarm", "cloudwatch:TagResource"]
+          "actions": ["cloudwatch:PutMetricAlarm"]
         },
         "binding": {
           "stack": {
@@ -23,12 +23,42 @@
           },
           "resource": {
             "resources": [
-              "arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-${resourceName}-*"
+              "arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-${resourceId}-*"
             ],
             "condition": {
               "Null": { "cloudwatch:AlarmActions": "true" },
               "StringEquals": { "aws:RequestTag/${stackTag}": "${stackPrefix}" },
               "StringEqualsIfExists": { "aws:ResourceTag/${stackTag}": "${stackPrefix}" }
+            }
+          }
+        }
+      },
+      // TagResource on its own only retags an alarm that already carries this deployment's
+      // tag. Creating an alarm with tags doesn't need it to match, so an untagged alarm under
+      // the prefix can't be tagged into this deployment and then deleted.
+      {
+        "grant": {
+          "actions": ["cloudwatch:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-${resourceId}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
             }
           }
         }
@@ -46,7 +76,7 @@
           },
           "resource": {
             "resources": [
-              "arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-${resourceName}-*"
+              "arn:aws:cloudwatch:${awsRegion}:${awsAccountId}:alarm:${stackPrefix}-${resourceId}-*"
             ],
             "condition": {
               "StringEquals": { "aws:ResourceTag/${stackTag}": "${stackPrefix}" }

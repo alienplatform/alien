@@ -11,20 +11,30 @@ const OWN_ALARM: &str = "arn:aws:cloudwatch:us-east-1:123456789012:alarm:acme-ap
 // "acme-prod" is another deployment whose name starts with "acme-".
 const OTHER_ALARM: &str = "arn:aws:cloudwatch:us-east-1:123456789012:alarm:acme-prod-api-cpu";
 
-fn context() -> PermissionContext {
+/// A resource's permission context as the management role's resource-scoped grants build it:
+/// the resource name is the prefixed name, the resource id is not.
+fn context_for(stack: &str, resource: &str) -> PermissionContext {
     PermissionContext::new()
-        .with_stack_prefix("acme")
-        .with_resource_name("api")
-        .with_resource_id("api")
+        .with_stack_prefix(stack)
+        .with_resource_name(format!("{stack}-{resource}"))
+        .with_resource_id(resource)
         .with_managing_account_id("123456789012")
         .with_aws_account_id("123456789012")
         .with_aws_region("us-east-1")
 }
 
 fn alarm_statements(id: &str, target: BindingTarget) -> Vec<AwsIamStatement> {
+    alarm_statements_for(id, target, &context_for("acme", "api"))
+}
+
+fn alarm_statements_for(
+    id: &str,
+    target: BindingTarget,
+    context: &PermissionContext,
+) -> Vec<AwsIamStatement> {
     let set = get_permission_set(id).expect("registered permission set");
     AwsRuntimePermissionsGenerator::new()
-        .generate_policy(set, target, &context())
+        .generate_policy(set, target, context)
         .unwrap()
         .statement
         .into_iter()
@@ -94,15 +104,33 @@ fn every_alarm_write_refuses_actions_and_is_bound_to_the_deployment_tag() {
                     actions.iter().all(|action| !action.contains('*')),
                     "{id} {target:?}: {actions:?}"
                 );
-                let puts = actions.iter().any(|action| {
-                    matches!(
-                        action.as_str(),
-                        "cloudwatch:putmetricalarm" | "cloudwatch:tagresource"
-                    )
-                });
+                let puts = actions
+                    .iter()
+                    .any(|action| action == "cloudwatch:putmetricalarm");
+                let tags = actions
+                    .iter()
+                    .any(|action| action == "cloudwatch:tagresource");
                 let deletes = actions
                     .iter()
                     .any(|action| action == "cloudwatch:deletealarms");
+                assert!(
+                    !(puts && tags),
+                    "{id} {target:?}: TagResource needs its own, stricter statement"
+                );
+                if tags {
+                    // Retagging needs the alarm to carry the tag already: with IfExists an
+                    // untagged alarm under the prefix could be tagged in and then deleted.
+                    assert_eq!(
+                        condition(&statement, "StringEquals", &existing_tag),
+                        Some(&own),
+                        "{id} {target:?}"
+                    );
+                    assert_eq!(
+                        condition(&statement, "StringEquals", &stack_tag),
+                        Some(&own),
+                        "{id} {target:?}"
+                    );
+                }
                 if puts {
                     assert_eq!(
                         condition(&statement, "Null", "cloudwatch:AlarmActions"),
@@ -224,6 +252,99 @@ fn alarm_grants_reach_only_this_deployments_alarms_without_actions() {
                     "{id} {target:?} {action}"
                 );
             }
+        }
+    }
+}
+
+/// "a" and "a-prod" are two deployments; every name of a-prod's starts with "a-". Its alarms
+/// carry its own tag and stay out of reach of a's grants. An untagged alarm named under a-prod
+/// can't be tagged into a or deleted by it. Only the stack binding can still overwrite one, and
+/// the overwrite leaves it untagged (CloudWatch ignores tags on an update).
+#[test]
+fn a_deployment_cannot_take_over_the_alarms_of_a_deployment_whose_name_extends_its_own() {
+    let own_tag = [(ALIEN_STACK_TAG_KEY, "a")];
+    let prod_tag = [(ALIEN_STACK_TAG_KEY, "a-prod")];
+    let prod_alarm = "arn:aws:cloudwatch:us-east-1:123456789012:alarm:a-prod-api-cpu";
+    for id in alarm_writing_sets() {
+        for target in [BindingTarget::Stack, BindingTarget::Resource] {
+            let statements = alarm_statements_for(id, target, &context_for("a", "api"));
+            let decide = |request: Request| evaluate(&statements, &request);
+            for resource_tags in [&prod_tag[..], &[]] {
+                assert_eq!(
+                    decide(
+                        Request::new("cloudwatch:TagResource", prod_alarm)
+                            .request_tags(&own_tag)
+                            .resource_tags(resource_tags)
+                    ),
+                    Decision::NotAllowed,
+                    "{id} {target:?} retag {resource_tags:?}"
+                );
+                assert_eq!(
+                    decide(
+                        Request::new("cloudwatch:DeleteAlarms", prod_alarm)
+                            .resource_tags(resource_tags)
+                    ),
+                    Decision::NotAllowed,
+                    "{id} {target:?} delete {resource_tags:?}"
+                );
+            }
+            assert_eq!(
+                decide(
+                    Request::new("cloudwatch:PutMetricAlarm", prod_alarm)
+                        .request_tags(&own_tag)
+                        .resource_tags(&prod_tag)
+                ),
+                Decision::NotAllowed,
+                "{id} {target:?} overwrite"
+            );
+            let overwrite_untagged = decide(
+                Request::new("cloudwatch:PutMetricAlarm", prod_alarm).request_tags(&own_tag),
+            );
+            let expected = match target {
+                BindingTarget::Stack => Decision::Allowed,
+                _ => Decision::NotAllowed,
+            };
+            assert_eq!(overwrite_untagged, expected, "{id} {target:?}");
+        }
+    }
+}
+
+/// A resource's grants reach only its own alarms: "db" never reaches the alarms of "db2",
+/// even though both carry the deployment's tag.
+#[test]
+fn a_resource_reaches_only_its_own_alarms() {
+    let own_tag = [(ALIEN_STACK_TAG_KEY, "acme")];
+    let db_alarm = "arn:aws:cloudwatch:us-east-1:123456789012:alarm:acme-db-writer-cpu";
+    let db2_alarm = "arn:aws:cloudwatch:us-east-1:123456789012:alarm:acme-db2-writer-cpu";
+    for id in alarm_writing_sets() {
+        let statements =
+            alarm_statements_for(id, BindingTarget::Resource, &context_for("acme", "db"));
+        let decide = |request: Request| evaluate(&statements, &request);
+        for (alarm, expected) in [(db_alarm, Decision::Allowed), (db2_alarm, Decision::NotAllowed)]
+        {
+            assert_eq!(
+                decide(
+                    Request::new("cloudwatch:PutMetricAlarm", alarm)
+                        .request_tags(&own_tag)
+                        .resource_tags(&own_tag)
+                ),
+                expected,
+                "{id} put {alarm}"
+            );
+            assert_eq!(
+                decide(
+                    Request::new("cloudwatch:TagResource", alarm)
+                        .request_tags(&own_tag)
+                        .resource_tags(&own_tag)
+                ),
+                expected,
+                "{id} tag {alarm}"
+            );
+            assert_eq!(
+                decide(Request::new("cloudwatch:DeleteAlarms", alarm).resource_tags(&own_tag)),
+                expected,
+                "{id} delete {alarm}"
+            );
         }
     }
 }
