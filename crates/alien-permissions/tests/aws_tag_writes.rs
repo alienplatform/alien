@@ -347,3 +347,47 @@ fn certificate_reimport_and_gateway_tagging_require_existing_ownership() {
         }
     }
 }
+
+/// The build controller reads `PutRetentionPolicy` denied right after `CreateLogGroup` found the
+/// group as "the group lacks this deployment's tag", and leaves it alone. That holds only while
+/// the grant that allows the create also allows the retention change on a group carrying the
+/// tag, and only the tag decides it.
+#[test]
+fn build_log_group_creation_comes_with_retention_on_the_deployment_groups() {
+    let tags = [
+        (ALIEN_STACK_TAG_KEY, "stack-a"),
+        (ALIEN_MANAGED_BY_TAG_KEY, "runtime"),
+        (alien_core::ALIEN_RESOURCE_TAG_KEY, "build"),
+    ];
+    for (binding, group) in [
+        (BindingTarget::Stack, "/aws/codebuild/stack-a-build"),
+        (BindingTarget::Resource, "/aws/codebuild/worker"),
+    ] {
+        let policy = policy("build/provision", binding);
+        let arn = format!("arn:aws:logs:us-west-2:123456789012:log-group:{group}");
+        let decide = |request: Request| evaluate(&policy.statement, &request);
+        assert_eq!(
+            decide(Request::new("logs:CreateLogGroup", &arn).request_tags(&tags)),
+            Decision::Allowed,
+            "{binding:?}"
+        );
+        assert_eq!(
+            decide(Request::new("logs:PutRetentionPolicy", &arn).resource_tags(&tags)),
+            Decision::Allowed,
+            "{binding:?}"
+        );
+        assert_eq!(
+            decide(Request::new("logs:PutRetentionPolicy", &arn)),
+            Decision::NotAllowed,
+            "{binding:?}: untagged"
+        );
+        assert_eq!(
+            decide(
+                Request::new("logs:PutRetentionPolicy", &arn)
+                    .resource_tags(&[(ALIEN_STACK_TAG_KEY, "stack-a-prod")])
+            ),
+            Decision::NotAllowed,
+            "{binding:?}: another deployment's"
+        );
+    }
+}

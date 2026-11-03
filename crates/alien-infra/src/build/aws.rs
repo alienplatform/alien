@@ -2,7 +2,8 @@ use std::{collections::HashMap, time::Duration};
 use tracing::{debug, info, warn};
 
 use crate::core::{
-    aws_ownership::is_tagged_as_ours, aws_tag_scoped::is_remote_access_denied,
+    aws_ownership::is_tagged_as_ours,
+    aws_tag_scoped::{is_remote_access_denied, remote_rejection_message},
     EnvironmentVariableBuilder, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
@@ -700,12 +701,15 @@ impl AwsBuildController {
                 self.log_group_untagged = false;
                 Ok(())
             }
-            // The identity passed CreateLogGroup's tag check, which comes with this grant, so
-            // the group lacks this deployment's tag.
+            // The identity passed CreateLogGroup's tag check, and the setup policy grants
+            // PutRetentionPolicy on every group carrying the tag along with it (checked by
+            // `build_log_group_creation_comes_with_retention_on_the_deployment_groups`), so the
+            // group lacks this deployment's tag.
             Err(error) if !created && is_remote_access_denied(&error) => {
-                info!(
+                warn!(
                     log_group = %log_group_name,
-                    "Build log group was created untagged by CodeBuild; its logs never expire, leaving it as it is"
+                    denial = %remote_rejection_message(&error),
+                    "Build log group has no tag for this deployment, as CodeBuild created it for an earlier version; its logs never expire, so it is left as it is"
                 );
                 self.log_group_untagged = true;
                 Ok(())
