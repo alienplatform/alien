@@ -1064,17 +1064,20 @@ mod tests {
             .returning(move |_| {
                 if *read.lock().unwrap() {
                     Ok(alien_aws_clients::s3::LifecycleConfiguration {
-                        rules: vec![alien_aws_clients::s3::LifecycleRule {
-                            id: Some("expire".into()),
-                            status: alien_aws_clients::s3::LifecycleRuleStatus::Enabled,
-                            filter: alien_aws_clients::s3::LifecycleRuleFilter { prefix: None },
-                            expiration: Some(alien_aws_clients::s3::LifecycleExpiration {
-                                days: Some(1),
-                            }),
-                        }],
+                        rules: vec![alien_aws_clients::s3::LifecycleRule::builder()
+                            .id("expire".into())
+                            .status(alien_aws_clients::s3::LifecycleRuleStatus::Enabled)
+                            .filter(alien_aws_clients::s3::LifecycleRuleFilter::default())
+                            .expiration(
+                                alien_aws_clients::s3::LifecycleExpiration::builder()
+                                    .days(1)
+                                    .build(),
+                            )
+                            .build()],
+                        ..Default::default()
                     })
                 } else {
-                    Ok(alien_aws_clients::s3::LifecycleConfiguration { rules: vec![] })
+                    Ok(alien_aws_clients::s3::LifecycleConfiguration::default())
                 }
             });
         s3.expect_delete_bucket_lifecycle()

@@ -1348,6 +1348,12 @@ Resources:
         RestrictPublicBuckets: true
       VersioningConfiguration:
         Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+        - Id: abort-incomplete-uploads
+          Status: Enabled
+          AbortIncompleteMultipartUpload:
+            DaysAfterInitiation: 7
       Tags:
       - Key: managed-by
         Value: setup
@@ -1458,6 +1464,12 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+        - Id: abort-incomplete-uploads
+          Status: Enabled
+          AbortIncompleteMultipartUpload:
+            DaysAfterInitiation: 7
       Tags:
       - Key: managed-by
         Value: setup

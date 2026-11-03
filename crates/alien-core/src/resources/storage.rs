@@ -8,6 +8,20 @@ use bon::Builder;
 use serde::{Deserialize, Serialize};
 use std::{any::Any, fmt::Debug};
 
+/// Days after which S3 aborts a multipart upload that was started and never completed. Every
+/// S3 bucket Alien creates, whether setup (CloudFormation, Terraform) or the storage controller
+/// creates it, carries this rule next to the app's own lifecycle rules. It gives each bucket the
+/// lifecycle configuration that compliance checks require and never expires a stored object.
+pub const AWS_ABORT_INCOMPLETE_UPLOAD_DAYS: i32 = 7;
+
+/// Most lifecycle rules S3 accepts on one bucket. The incomplete-upload rule is added only while
+/// a bucket has room for it: a bucket at the limit already has a lifecycle configuration.
+pub const AWS_LIFECYCLE_RULE_LIMIT: usize = 1000;
+
+/// Id of the incomplete-upload rule. App rules are numbered (`Rule1`, `rule-1`), so it can't
+/// collide with one.
+pub const AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID: &str = "abort-incomplete-uploads";
+
 /// Defines a rule for managing the lifecycle of objects within a storage bucket.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]

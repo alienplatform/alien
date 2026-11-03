@@ -21,6 +21,7 @@ use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
 use alien_core::{
     import::EmitContext, ownership_policy_for_resource_type, Email, ErrorData, PermissionProfile,
     PermissionSetReference, RemoteStackManagement, Result, ServiceAccount, Storage,
+    AWS_ABORT_INCOMPLETE_UPLOAD_DAYS, AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID, AWS_LIFECYCLE_RULE_LIMIT,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
@@ -99,34 +100,45 @@ impl CfEmitter for AwsStorageEmitter {
             );
         }
 
-        if !storage.lifecycle_rules.is_empty() {
-            bucket.properties.insert(
-                "LifecycleConfiguration".to_string(),
+        let mut lifecycle_rules: Vec<CfExpression> = storage
+            .lifecycle_rules
+            .iter()
+            .enumerate()
+            .map(|(index, rule)| {
+                CfExpression::object([
+                    ("Id", CfExpression::from(format!("Rule{}", index + 1))),
+                    ("Status", CfExpression::from("Enabled")),
+                    (
+                        "ExpirationInDays",
+                        CfExpression::Integer(i64::from(rule.days)),
+                    ),
+                    (
+                        "Prefix",
+                        CfExpression::from(rule.prefix.clone().unwrap_or_default()),
+                    ),
+                ])
+            })
+            .collect();
+        if lifecycle_rules.len() < AWS_LIFECYCLE_RULE_LIMIT {
+            lifecycle_rules.push(CfExpression::object([
+            (
+                "Id",
+                CfExpression::from(AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID),
+            ),
+            ("Status", CfExpression::from("Enabled")),
+            (
+                "AbortIncompleteMultipartUpload",
                 CfExpression::object([(
-                    "Rules",
-                    CfExpression::list(storage.lifecycle_rules.iter().enumerate().map(
-                        |(index, rule)| {
-                            let mut lifecycle_rule = IndexMap::from([
-                                (
-                                    "Id".to_string(),
-                                    CfExpression::from(format!("Rule{}", index + 1)),
-                                ),
-                                ("Status".to_string(), CfExpression::from("Enabled")),
-                                (
-                                    "ExpirationInDays".to_string(),
-                                    CfExpression::Integer(i64::from(rule.days)),
-                                ),
-                            ]);
-                            lifecycle_rule.insert(
-                                "Prefix".to_string(),
-                                CfExpression::from(rule.prefix.clone().unwrap_or_default()),
-                            );
-                            CfExpression::Object(lifecycle_rule)
-                        },
-                    )),
+                    "DaysAfterInitiation",
+                    CfExpression::Integer(i64::from(AWS_ABORT_INCOMPLETE_UPLOAD_DAYS)),
                 )]),
-            );
+            ),
+        ]));
         }
+        bucket.properties.insert(
+            "LifecycleConfiguration".to_string(),
+            CfExpression::object([("Rules", CfExpression::List(lifecycle_rules))]),
+        );
 
         if !storage.cors_allowed_origins.is_empty() {
             bucket.properties.insert(

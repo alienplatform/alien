@@ -117,6 +117,10 @@ Resources:
           Status: Enabled
           ExpirationInDays: 365
           Prefix: ''
+        - Id: abort-incomplete-uploads
+          Status: Enabled
+          AbortIncompleteMultipartUpload:
+            DaysAfterInitiation: 7
       Tags:
       - Key: managed-by
         Value: setup

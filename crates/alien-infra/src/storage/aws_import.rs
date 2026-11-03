@@ -33,6 +33,9 @@ impl ResourceImporter for AwsStorageImporter {
             ownership_verified: false,
             read_cors_applied: false,
             notifications_managed: false,
+            // The template that created the bucket also wrote its lifecycle configuration.
+            incomplete_upload_rule_applied: true,
+            lifecycle_denial: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)
