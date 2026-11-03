@@ -337,4 +337,121 @@ mod input_values_tests {
         )
         .is_err());
     }
+
+    fn deployment_config_with_cluster(
+        cluster_image: Option<serde_json::Value>,
+    ) -> serde_json::Value {
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .compute_backend(crate::ComputeBackend::Horizon(crate::HorizonConfig {
+                url: "https://horizon.example.com".to_string(),
+                horizon_machine_image: None,
+                clusters: HashMap::from([(
+                    "compute".to_string(),
+                    crate::HorizonClusterConfig {
+                        cluster_id: "cluster-1".to_string(),
+                        management_token: "hm_test".to_string(),
+                        horizon_machine_image: cluster_image
+                            .map(|image| serde_json::from_value(image).unwrap()),
+                    },
+                )]),
+            }))
+            .build();
+        serde_json::to_value(&config).unwrap()
+    }
+
+    fn machine_image(version: &str) -> serde_json::Value {
+        serde_json::json!({
+            "channel": "stable",
+            "machineImageVersion": version,
+            "horizondVersion": version,
+            "gitSha": "abc123",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "baseImage": { "name": "linux", "version": "1" },
+            "horizondArtifacts": {}
+        })
+    }
+
+    /// A deployment config written before clusters could carry a machine image, as managers
+    /// receive and store it, reads back with no cluster image.
+    #[test]
+    fn deployment_config_without_cluster_machine_image_reads_as_before() {
+        let wire = deployment_config_with_cluster(None);
+        let cluster = &wire["computeBackend"]["clusters"]["compute"];
+        assert_eq!(
+            cluster,
+            &serde_json::json!({ "clusterId": "cluster-1", "managementToken": "hm_test" })
+        );
+
+        let config: DeploymentConfig = serde_json::from_value(wire).unwrap();
+        let Some(crate::ComputeBackend::Horizon(horizon)) = config.compute_backend else {
+            panic!("the Horizon backend reads back");
+        };
+        assert_eq!(horizon.clusters["compute"].horizon_machine_image, None);
+    }
+
+    /// The types on the path from the deployment config to a cluster as they were before the
+    /// cluster machine image existed: none of them rejects unknown fields.
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PreviousDeploymentConfig {
+        compute_backend: Option<PreviousComputeBackend>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(tag = "type", rename_all = "camelCase")]
+    enum PreviousComputeBackend {
+        Horizon(PreviousHorizonConfig),
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PreviousHorizonConfig {
+        clusters: HashMap<String, PreviousHorizonClusterConfig>,
+    }
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    struct PreviousHorizonClusterConfig {
+        cluster_id: String,
+        management_token: String,
+    }
+
+    /// A manager built before the field reads a deployment config that sets it and ignores it.
+    #[test]
+    fn deployment_config_with_cluster_machine_image_reads_in_older_readers() {
+        let wire = deployment_config_with_cluster(Some(machine_image("1")));
+        assert!(wire["computeBackend"]["clusters"]["compute"]["horizonMachineImage"].is_object());
+
+        let previous: PreviousDeploymentConfig = serde_json::from_value(wire.clone())
+            .expect("an older reader must accept a cluster that carries its own image");
+        let Some(PreviousComputeBackend::Horizon(horizon)) = previous.compute_backend else {
+            panic!("the Horizon backend reads back");
+        };
+        assert_eq!(
+            horizon.clusters["compute"],
+            PreviousHorizonClusterConfig {
+                cluster_id: "cluster-1".to_string(),
+                management_token: "hm_test".to_string(),
+            }
+        );
+
+        let current: DeploymentConfig = serde_json::from_value(wire).unwrap();
+        let Some(crate::ComputeBackend::Horizon(horizon)) = current.compute_backend else {
+            panic!("the Horizon backend reads back");
+        };
+        assert_eq!(
+            horizon
+                .machine_image_for("compute")
+                .map(|image| image.machine_image_version.as_str()),
+            Some("1")
+        );
+    }
 }
