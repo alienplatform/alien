@@ -15,6 +15,7 @@ use alien_core::{
     ExposeProtocol, GpuSpec, HealthCheck, Platform, PublicEndpoint, Resource, ResourceEntry,
     ResourceLifecycle, ResourceRef, ResourceType, Stack, StackInputDefaultValue,
     StackInputDefinition, StackInputEnvironmentMapping, StackInputKind, StackInputProvider,
+    StackInputValidation,
     Storage as StorageConfig, ToolchainConfig, APEX_HOST_LABEL,
 };
 use alien_error::AlienError;
@@ -94,11 +95,15 @@ impl Resolver<'_> {
                 (ComputeCluster::RESOURCE_TYPE, span),
             );
         }
-        for (id, _) in &storages {
-            self.declare(&mut declared, id, StorageConfig::RESOURCE_TYPE)?;
-        }
-        for (id, _) in &daemons {
-            self.declare(&mut declared, id, DaemonConfig::RESOURCE_TYPE)?;
+        // In file order, so a clash is reported at the later declaration.
+        let mut ids: Vec<(&Spanned<String>, ResourceType)> = storages
+            .iter()
+            .map(|(id, _)| (id, StorageConfig::RESOURCE_TYPE))
+            .chain(daemons.iter().map(|(id, _)| (id, DaemonConfig::RESOURCE_TYPE)))
+            .collect();
+        ids.sort_by_key(|(id, _)| id.span().start);
+        for (id, resource_type) in ids {
+            self.declare(&mut declared, id, resource_type)?;
         }
 
         let mut resources = IndexMap::new();
@@ -173,6 +178,15 @@ impl Resolver<'_> {
     ) -> Result<()> {
         self.check_id(id, "resource ID", MAX_RESOURCE_ID_LENGTH)?;
         if let Some((other_type, other_span)) = declared.get(id.get_ref()) {
+            if *other_type == ComputeCluster::RESOURCE_TYPE {
+                return Err(self.error(
+                    id.span(),
+                    format!(
+                        "'{}' is the ID of the compute cluster that holds the pools; rename this resource or set a different top-level `cluster`",
+                        id.get_ref()
+                    ),
+                ));
+            }
             let line = self.line_of(other_span.start);
             return Err(self.error(
                 id.span(),
@@ -671,7 +685,10 @@ impl Inputs {
                 default: Some(StackInputDefaultValue::Boolean(true)),
                 platforms: Some(platforms),
                 when: None,
-                validation: None,
+                validation: stack_authoring::input_validation(
+                    &StackInputKind::Boolean,
+                    StackInputValidation::default(),
+                ),
                 generate: None,
                 env: Vec::new(),
             },
@@ -734,7 +751,10 @@ impl Inputs {
                 default: None,
                 platforms,
                 when: None,
-                validation: None,
+                validation: stack_authoring::input_validation(
+                    &StackInputKind::Secret,
+                    StackInputValidation::default(),
+                ),
                 generate: None,
                 env: vec![StackInputEnvironmentMapping {
                     name: name.clone(),

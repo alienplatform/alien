@@ -1,0 +1,33 @@
+name = "sandbox-runtime"
+platforms = ["machines", "aws"]
+
+[pool.general]
+cpu = 4
+memory = "16Gi"
+disk = "20Gi"
+arch = "x86_64"
+nested-virtualization = true
+machines = { min = 1, max = 5, default = 2 }
+
+[daemon.loader]
+build = { rust = "loader" }
+pool = "general"
+cpu = 2
+memory = "4Gi"
+host-access = true          # privileged, host pid and network, / at /host, uid 0
+stop-grace-period = "24h"
+health = { port = 18082, path = "/health" }
+env = { RUST_LOG = "info" }
+env-file = "deploy/loader.env"
+links = ["snapshots"]
+
+[daemon.loader.endpoints]
+api = { port = 8080, host = "@" }
+shares = { port = 8080, host = "shares", wildcard = true }
+
+[daemon.loader.secrets]
+AUTH_ACCESS_KEY = { label = "Auth access key" }
+TAILNET_AUTH_KEY = { required = false, platforms = ["machines"] }
+
+[storage.snapshots]
+platforms = ["aws"]
