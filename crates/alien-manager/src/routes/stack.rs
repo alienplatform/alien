@@ -1589,6 +1589,7 @@ async fn prepare_import_stack(
         },
         allow_frozen_changes: false,
         setup_run: false,
+        setup_run_id: None,
         compute_backend: None,
         external_bindings: ExternalBindings::default(),
         base_platform: req.base_platform,

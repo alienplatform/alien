@@ -23,6 +23,12 @@ pub struct DeploymentConfig {
     #[cfg_attr(feature = "openapi", schema(ignore))]
     #[builder(default)]
     pub setup_run: bool,
+    /// Identifies this setup run, set together with `setup_run`. Every setup run gets a new
+    /// one, so a controller can tell a result recorded earlier in this run from one recorded in
+    /// an earlier run.
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub setup_run_id: Option<String>,
     /// Human-readable deployment name for cloud console metadata.
     ///
     /// This is separate from the physical resource prefix in StackState. It is

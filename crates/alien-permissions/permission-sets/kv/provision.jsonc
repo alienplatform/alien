@@ -4,6 +4,8 @@
   "platforms": {
     "aws": [
       {
+        "label": "kv-provision",
+        "description": "Create, read, update and delete this stack's DynamoDB tables.",
         "grant": {
           "actions": [
             "dynamodb:CreateTable",
@@ -13,7 +15,7 @@
             "dynamodb:UpdateTable",
             "dynamodb:UpdateTimeToLive",
             "dynamodb:DescribeTimeToLive",
-            "dynamodb:TagResource",
+            "dynamodb:DescribeContinuousBackups",
             "dynamodb:ListTagsOfResource"
           ]
         },
@@ -23,6 +25,61 @@
           },
           "resource": {
             "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"]
+          }
+        }
+      },
+      {
+        // Another stack's name can start with this stack's prefix. Where the account evaluates
+        // DynamoDB tag conditions, this keeps that stack's tables from being retagged. IfExists
+        // keeps CreateTable with tags working, as name-only, in accounts that evaluate them as if
+        // no tags are present (DynamoDB ABAC off).
+        "label": "tag-dynamodb-tables",
+        "description": "Tag this stack's DynamoDB tables.",
+        "grant": {
+          "actions": ["dynamodb:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-*"],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          }
+        }
+      },
+      {
+        // The stack tag must match, so another stack's tables and untagged tables keep their
+        // backups. Where DynamoDB does not evaluate tag conditions this is denied, and the table
+        // stays Running with a warning.
+        "label": "enable-dynamodb-backups",
+        "description": "Turn on point-in-time recovery for this stack's DynamoDB tables.",
+        "grant": {
+          "actions": ["dynamodb:UpdateContinuousBackups"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": { "aws:ResourceTag/${stackTag}": "${stackPrefix}" }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"],
+            "condition": {
+              "StringEquals": { "aws:ResourceTag/${stackTag}": "${stackPrefix}" }
+            }
           }
         }
       }

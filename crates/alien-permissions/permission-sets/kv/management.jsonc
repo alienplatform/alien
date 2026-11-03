@@ -4,6 +4,8 @@
   "platforms": {
     "aws": [
       {
+        "label": "kv-management",
+        "description": "Read this stack's DynamoDB tables and change their TTL.",
         "grant": {
           "actions": [
             "dynamodb:DescribeTable",
@@ -11,8 +13,7 @@
             "dynamodb:DescribeTimeToLive",
             "dynamodb:UpdateTimeToLive",
             "dynamodb:ListTagsOfResource",
-            "dynamodb:DescribeContinuousBackups",
-            "dynamodb:UpdateContinuousBackups"
+            "dynamodb:DescribeContinuousBackups"
           ]
         },
         "binding": {
@@ -21,6 +22,30 @@
           },
           "resource": {
             "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"]
+          }
+        }
+      },
+      {
+        // Another stack's name can start with this stack's prefix, so the stack tag must match.
+        // Where DynamoDB does not evaluate tag conditions this is denied, and the table stays
+        // Running with a warning.
+        "label": "back-up-dynamodb-tables",
+        "description": "Turn on point-in-time recovery for this stack's DynamoDB tables.",
+        "grant": {
+          "actions": ["dynamodb:UpdateContinuousBackups"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": { "aws:ResourceTag/${stackTag}": "${stackPrefix}" }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"],
+            "condition": {
+              "StringEquals": { "aws:ResourceTag/${stackTag}": "${stackPrefix}" }
+            }
           }
         }
       }

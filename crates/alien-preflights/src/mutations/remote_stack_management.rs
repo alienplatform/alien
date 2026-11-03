@@ -207,6 +207,7 @@ mod tests {
             input_values: Default::default(),
             allow_frozen_changes: false,
             setup_run: false,
+            setup_run_id: None,
             compute_backend: None,
             external_bindings: ExternalBindings::default(),
             base_platform,
