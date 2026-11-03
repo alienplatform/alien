@@ -839,12 +839,12 @@ pub fn vpc_id_expr(ctx: &EmitContext<'_>) -> Expression {
     };
     match &network.settings {
         NetworkSettings::Create { .. } if stack_has_setup_postgres(ctx) => expr::raw(format!(
-            "var.network_mode == \"create-new\" ? aws_vpc.{label}[0].id : var.network_mode == \"use-existing\" ? var.vpc_id : data.aws_vpc.{label}_default[0].id"
+            "var.network_mode == \"create-new\" ? aws_vpc.{label}[0].id : var.network_mode == \"use-existing\" ? var.vpc_id : data.aws_vpcs.{label}_default[0].ids[0]"
         )),
         NetworkSettings::Create { .. } => expr::raw(format!(
             "var.network_mode == \"create-new\" ? aws_vpc.{label}[0].id : var.network_mode == \"use-existing\" ? var.vpc_id : null"
         )),
-        NetworkSettings::UseDefault => expr::raw(format!("data.aws_vpc.{label}_default.id")),
+        NetworkSettings::UseDefault => expr::raw(format!("data.aws_vpcs.{label}_default.ids[0]")),
         NetworkSettings::ByoVpcAws { .. } => expr::raw(format!("var.{label}_vpc_id")),
         _ => expr::raw("null"),
     }

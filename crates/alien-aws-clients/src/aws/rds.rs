@@ -125,6 +125,8 @@ pub struct CreateDbInstanceRequest {
     pub identifier: String,
     pub cluster_identifier: String,
     pub engine_version: String,
+    /// Tags set when the instance is created. RDS does not copy the cluster's tags to it.
+    pub tags: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -431,6 +433,7 @@ fn create_db_instance_form(r: &CreateDbInstanceRequest) -> HashMap<String, Strin
         form.insert("EnablePerformanceInsights".into(), "true".into());
         form.insert("PerformanceInsightsKMSKeyId".into(), key.clone());
     }
+    tag_members(&mut form, &r.tags);
     form
 }
 
@@ -937,8 +940,11 @@ mod tests {
             identifier: "stack-db-1".into(),
             cluster_identifier: "stack-db".into(),
             engine_version: "17.4".into(),
+            tags: HashMap::from([("deployment".to_string(), "stack".to_string())]),
         });
         assert_eq!(form["DBInstanceClass"], "db.serverless");
+        assert_eq!(form["Tags.Tag.1.Key"], "deployment");
+        assert_eq!(form["Tags.Tag.1.Value"], "stack");
         assert_eq!(form["Engine"], "aurora-postgresql");
         // pinned on the instance — the cluster has no such flag.
         assert_eq!(form["PubliclyAccessible"], "false");

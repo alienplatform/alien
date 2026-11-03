@@ -186,7 +186,34 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                         .and_then(|c| c.get("StringEqualsIfExists"))
                         .and_then(|c| c.get("aws:ResourceTag/${stackTag}"))
                         .is_some_and(|value| value.as_string() == Some("${stackPrefix}"));
+                // RDS creates the secret of an RDS-managed master password with the caller's
+                // credentials. Its name is not ours, but it carries the cluster's stack tag and
+                // ARN, so an existing secret of another cluster cannot be tagged.
+                let if_exists = binding
+                    .condition
+                    .as_ref()
+                    .and_then(|c| c.get("StringEqualsIfExists"))
+                    .and_then(|c| c.get("aws:ResourceTag/${stackTag}"))
+                    .is_some_and(|value| value.as_string() == Some("${stackPrefix}"));
+                let cluster_arn = binding
+                    .condition
+                    .as_ref()
+                    .and_then(|c| c.get("StringLikeIfExists"))
+                    .and_then(|c| c.get("aws:ResourceTag/aws:rds:primaryDBClusterArn"))
+                    .and_then(|value| value.as_string())
+                    .is_some_and(|arn| {
+                        arn.starts_with(
+                            "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-",
+                        )
+                    });
+                let rds_managed_secret = binding.not_resources.is_empty()
+                    && binding.resources
+                        == ["arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:rds!cluster-*"]
+                    && gateway_request_owned
+                    && if_exists
+                    && cluster_arn;
                 assert!(owned || created_or_owned || (creation && !other_tag_actions) || named_resource || lambda_creation
+                    || rds_managed_secret
                     || elb_creation || gateway_creation || gateway_tag_path,
                     "{id} allows tag writes without creation or existing stack ownership: {binding:?}");
             }

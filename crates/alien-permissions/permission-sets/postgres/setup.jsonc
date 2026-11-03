@@ -1,0 +1,216 @@
+{
+  "id": "postgres/setup",
+  "description": "Allows a CloudFormation or Terraform setup to create the Postgres database. Only the setup identity holds it; no runtime role does.",
+  "platforms": {
+    "aws": [
+      {
+        // The CloudFormation secret is created with GenerateSecretString, which calls
+        // GetRandomPassword. AWS defines no resource type or condition key for it, so it can only
+        // be granted on "*". It returns a random string and reads or changes nothing.
+        "label": "generate-master-password",
+        "description": "Generate the master password of the setup-created Aurora cluster.",
+        "grant": {
+          "actions": ["secretsmanager:GetRandomPassword"]
+        },
+        "binding": {
+          "stack": { "resources": ["*"] },
+          "resource": { "resources": ["*"] }
+        }
+      },
+      {
+        // CloudFormation resolves the cluster's {{resolve:secretsmanager:...}} master password
+        // with the caller's credentials. Only the stack's own tagged secret can be read.
+        "label": "resolve-master-password",
+        "description": "Read the setup-created master password while CloudFormation creates or updates the cluster.",
+        "grant": {
+          "actions": ["secretsmanager:GetSecretValue"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        // The Terraform setup has RDS manage the master password (manage_master_user_password).
+        // RDS creates that secret with the caller's credentials, names it `rds!cluster-<id>`
+        // (only RDS can use the `rds!` prefix), tags it with the cluster's ARN and copies the
+        // cluster's tags to it. A secret of another stack's or the account's own cluster cannot
+        // be tagged: its stack tag or its cluster ARN differs.
+        "label": "create-managed-master-secret",
+        "description": "Let RDS create and tag the master-password secret of the setup-created Aurora cluster.",
+        "grant": {
+          "actions": ["secretsmanager:CreateSecret", "secretsmanager:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:rds!cluster-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              },
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              },
+              "StringLikeIfExists": {
+                "aws:ResourceTag/aws:rds:primaryDBClusterArn": "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:rds!cluster-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}"
+              },
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              },
+              "StringLikeIfExists": {
+                "aws:ResourceTag/aws:rds:primaryDBClusterArn": "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        // The Terraform setup turns rotation of that secret off and reads it back.
+        "label": "manage-managed-master-secret",
+        "description": "Read and set the rotation of the RDS-managed master-password secret.",
+        "grant": {
+          "actions": [
+            "secretsmanager:DescribeSecret",
+            "secretsmanager:RotateSecret",
+            "secretsmanager:CancelRotateSecret"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:rds!cluster-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:rds!cluster-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        // Creating the cluster with RDS-managed credentials and default encryption makes RDS use
+        // the account's AWS managed keys for RDS and Secrets Manager on the caller's behalf. Only
+        // those two keys, and only through RDS. AWS managed key IDs differ per account, so the
+        // alias is the scope.
+        "label": "describe-aws-managed-database-keys",
+        "description": "Let RDS read the AWS managed RDS and Secrets Manager keys while creating the cluster.",
+        "grant": {
+          "actions": ["kms:DescribeKey"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:kms:${awsRegion}:${awsAccountId}:key/*"],
+            "condition": {
+              "StringEquals": {
+                "kms:ViaService": "rds.${awsRegion}.amazonaws.com"
+              },
+              "ForAnyValue:StringEquals": {
+                "kms:ResourceAliases": ["alias/aws/rds", "alias/aws/secretsmanager"]
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:kms:${awsRegion}:${awsAccountId}:key/*"],
+            "condition": {
+              "StringEquals": {
+                "kms:ViaService": "rds.${awsRegion}.amazonaws.com"
+              },
+              "ForAnyValue:StringEquals": {
+                "kms:ResourceAliases": ["alias/aws/rds", "alias/aws/secretsmanager"]
+              }
+            }
+          }
+        }
+      },
+      {
+        // Grants can only go to an AWS service acting for the cluster, never to a principal.
+        "label": "grant-aws-managed-database-keys",
+        "description": "Let RDS create grants on the AWS managed RDS and Secrets Manager keys for itself.",
+        "grant": {
+          "actions": ["kms:CreateGrant"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:kms:${awsRegion}:${awsAccountId}:key/*"],
+            "condition": {
+              "StringEquals": {
+                "kms:ViaService": "rds.${awsRegion}.amazonaws.com"
+              },
+              "ForAnyValue:StringEquals": {
+                "kms:ResourceAliases": ["alias/aws/rds", "alias/aws/secretsmanager"]
+              },
+              "Bool": {
+                "kms:GrantIsForAWSResource": "true"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:kms:${awsRegion}:${awsAccountId}:key/*"],
+            "condition": {
+              "StringEquals": {
+                "kms:ViaService": "rds.${awsRegion}.amazonaws.com"
+              },
+              "ForAnyValue:StringEquals": {
+                "kms:ResourceAliases": ["alias/aws/rds", "alias/aws/secretsmanager"]
+              },
+              "Bool": {
+                "kms:GrantIsForAWSResource": "true"
+              }
+            }
+          }
+        }
+      },
+      {
+        // The Terraform AWS provider reads global-cluster membership on every refresh of an Aurora
+        // cluster. The request names no global cluster, so AWS authorizes it against every global
+        // cluster in the account. Read-only; it returns no data of non-global clusters.
+        "label": "read-global-cluster-membership",
+        "description": "Read whether the Aurora cluster belongs to a global cluster.",
+        "grant": {
+          "actions": ["rds:DescribeGlobalClusters"]
+        },
+        "binding": {
+          "stack": { "resources": ["arn:aws:rds::${awsAccountId}:global-cluster:*"] },
+          "resource": { "resources": ["arn:aws:rds::${awsAccountId}:global-cluster:*"] }
+        }
+      }
+    ]
+  }
+}

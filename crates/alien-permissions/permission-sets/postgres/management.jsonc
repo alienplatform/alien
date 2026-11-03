@@ -4,15 +4,12 @@
   "platforms": {
     "aws": [
       {
-        "label": "describe-and-modify-aurora",
-        "description": "Read cluster/instance state and apply configuration changes.",
+        "label": "read-aurora",
+        "description": "Read cluster, instance and subnet group state.",
         "grant": {
           "actions": [
             "rds:DescribeDBClusters",
             "rds:DescribeDBSubnetGroups",
-            "rds:ModifyDBCluster",
-            "rds:StartDBCluster",
-            "rds:ModifyDBInstance",
             "rds:ListTagsForResource"
           ]
         },
@@ -28,6 +25,66 @@
               "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}",
               "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-${resourceName}-*"
             ]
+          }
+        }
+      },
+      {
+        // Every create path tags the cluster with the stack tag, so a stack named `app` cannot
+        // change `app-prod`'s cluster.
+        "label": "modify-aurora-cluster",
+        "description": "Apply configuration changes to this application's Aurora cluster.",
+        "grant": {
+          "actions": ["rds:ModifyDBCluster", "rds:StartDBCluster"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        // Instances the runtime controller created before it tagged them carry no tags;
+        // IfExists keeps those working and denies instances tagged for another stack.
+        "label": "modify-aurora-instances",
+        "description": "Apply configuration changes to this application's Aurora instances.",
+        "grant": {
+          "actions": ["rds:ModifyDBInstance"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-*"],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
           }
         }
       },

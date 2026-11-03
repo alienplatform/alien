@@ -12,7 +12,7 @@ use iam_policy::{evaluate, Decision, Request};
 const BOUNDARY: &str = "arn:aws:iam::123456789012:policy/my-stack-deployment-management-boundary";
 
 #[test]
-fn setup_can_manage_its_boundary_and_read_only_the_exact_boundary() {
+fn setup_manages_only_its_own_management_policies() {
     let context = common::create_test_context();
     let mut policies = vec![generate_aws_initial_setup_policy(&context).unwrap()];
     for target in [BindingTarget::Stack, BindingTarget::Resource] {
@@ -45,9 +45,10 @@ fn setup_can_manage_its_boundary_and_read_only_the_exact_boundary() {
             ] {
                 assert_eq!(
                     evaluate(&policy.statement, &Request::new(action, resource)),
+                    // Setup reads the management policies it writes: the Terraform provider
+                    // reads each one back after creating it.
                     if resource == BOUNDARY
-                        || (resource == "arn:aws:iam::123456789012:policy/my-stack-deployment-management-boundary-copy"
-                            && !matches!(action, "iam:GetPolicy" | "iam:GetPolicyVersion"))
+                        || resource == "arn:aws:iam::123456789012:policy/my-stack-deployment-management-boundary-copy"
                     {
                         Decision::Allowed
                     } else {

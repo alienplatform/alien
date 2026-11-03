@@ -303,6 +303,7 @@ fn aws_resource_arns_are_stack_or_resource_scoped_unless_documented_external() {
                         || documented_run_instances_companion_resource(actions, resource)
                         || documented_create_security_group_vpc_resource(actions, resource)
                         || documented_ses_domain_identity_scope(resource)
+                        || documented_global_cluster_membership_read(actions, resource)
                         || documented_detached_network_interface_cleanup(
                             permission_set_id,
                             actions,
@@ -380,6 +381,14 @@ fn documented_detached_network_interface_cleanup(
     permission_set_id == "network/provision"
         && actions == ["ec2:DeleteNetworkInterface"]
         && resource == "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*"
+}
+
+fn documented_global_cluster_membership_read(actions: &[String], resource: &str) -> bool {
+    // The Terraform AWS provider asks which global cluster an Aurora cluster belongs to without
+    // naming one, so AWS authorizes the read against every global cluster in the account. It is
+    // read-only and pinned to the account.
+    actions == ["rds:DescribeGlobalClusters"]
+        && resource == "arn:aws:rds::${awsAccountId}:global-cluster:*"
 }
 
 fn documented_ses_domain_identity_scope(resource: &str) -> bool {

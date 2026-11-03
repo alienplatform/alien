@@ -3,21 +3,45 @@
   "description": "Allows provisioning the cross-account management role and its generated managed policies",
   "platforms": {
     "aws": [
-      // Setup reads the execution ceiling; the management-policy scope below owns its writes.
+      // Setup reads the execution ceiling and the management policies it writes below; the
+      // Terraform AWS provider reads every policy back after creating it.
       {
         "grant": {
           "actions": ["iam:GetPolicy", "iam:GetPolicyVersion"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-boundary"
-            ]
+            "resources": ["arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-boundary"
-            ]
+            "resources": ["arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-*"]
+          }
+        }
+      },
+      // CloudFormation names the management role's managed policies itself:
+      // `<stack name>-ManagementRoleManagementPolicy<n>-<random suffix>`. CloudFormation cannot tag
+      // managed policies (AWS::IAM::ManagedPolicy has no Tags) and renaming them would replace
+      // them on existing stacks, so the grant is bound by that name. The fixed text right after
+      // the stack name keeps a stack named `app` off `app-prod`'s policies.
+      {
+        "grant": {
+          "actions": [
+            "iam:CreatePolicy",
+            "iam:GetPolicy",
+            "iam:GetPolicyVersion",
+            "iam:ListPolicyVersions",
+            "iam:CreatePolicyVersion",
+            "iam:DeletePolicyVersion",
+            "iam:DeletePolicy",
+            "iam:ListEntitiesForPolicy"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-ManagementRoleManagementPolicy*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-ManagementRoleManagementPolicy*"]
           }
         }
       },

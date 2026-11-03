@@ -1765,6 +1765,7 @@ mod tests {
             "worker/management",
             "storage/heartbeat",
             "storage/telemetry",
+            "postgres/setup",
             "guard/example",
             "sandbox/protect-setup-roles",
             "network/setup",
