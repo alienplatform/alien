@@ -76,6 +76,32 @@
             }
           }
         }
+      },
+      {
+        // The Terraform AWS provider lists a role's instance profiles before deleting the role.
+        "label": "read-setup-role-instance-profiles",
+        "description": "List the instance profiles of the roles the setup created.",
+        "grant": {
+          "actions": ["iam:ListInstanceProfilesForRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          }
+        }
       }
     ]
   }

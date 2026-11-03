@@ -82,6 +82,14 @@ fn template_setup_calls() -> Vec<Request> {
             .with("iam:PolicyARN", policy.clone()),
         );
     }
+    // Terraform reads a role's instance profiles before deleting it.
+    calls.push(
+        Request::new(
+            "iam:ListInstanceProfilesForRole",
+            format!("{IAM}:role/my-stack-execution-sa"),
+        )
+        .resource_tags(SETUP_TAGS),
+    );
     // The CloudFormation master-password secret.
     calls.push(Request::new("secretsmanager:GetRandomPassword", "*"));
     calls.push(
