@@ -281,8 +281,16 @@ impl CapacityGroup {
         &self,
         selected: Option<u32>,
     ) -> std::result::Result<Option<DataDiskRequirement>, String> {
-        Ok(self
-            .effective_data_disk_gib(selected)?
+        let size_gib = self.effective_data_disk_gib(selected)?;
+        if self.data_disk_gib_range.is_none() {
+            // A fixed size stands as declared, to the byte: "500G" must keep
+            // accepting a 500 GB disk rather than the 466 GiB it rounds up to.
+            return Ok(self
+                .profile
+                .as_ref()
+                .and_then(|profile| profile.data_disk.clone()));
+        }
+        Ok(size_gib
             .filter(|size_gib| *size_gib > 0)
             .map(|size_gib| DataDiskRequirement {
                 size_bytes: u64::from(size_gib) * 1024 * 1024 * 1024,
@@ -612,6 +620,50 @@ mod tests {
             assert_eq!(group.aws_root_volume_size_gib(), root);
             assert_eq!(group.aws_runtime_data_volume_size_gib(), Some(data));
         }
+    }
+
+    /// A fixed size keeps its declared bytes, so a host disk that met it still
+    /// does; a size picked from a range is whole GiB.
+    #[test]
+    fn a_fixed_data_disk_keeps_its_declared_bytes() {
+        let gib: u64 = 1024 * 1024 * 1024;
+        let declared = DataDiskRequirement {
+            size_bytes: 500_000_000_000,
+        };
+        let mut group = CapacityGroup {
+            group_id: "general".into(),
+            instance_type: None,
+            profile: Some(MachineProfile {
+                cpu: "4.0".into(),
+                memory_bytes: 8 * gib,
+                ephemeral_storage_bytes: 20 * gib,
+                architecture: None,
+                gpu: None,
+                data_disk: Some(declared.clone()),
+            }),
+            min_size: 1,
+            max_size: 1,
+            scale_policy: None,
+            nested_virtualization: None,
+            data_disk_gib_range: None,
+        };
+        // 500 GB rounds up to 466 GiB, which is the one size a deployment may name.
+        assert_eq!(group.selected_data_disk(None), Ok(Some(declared.clone())));
+        assert_eq!(group.selected_data_disk(Some(466)), Ok(Some(declared)));
+        assert!(group.selected_data_disk(Some(500)).is_err());
+
+        group.data_disk_gib_range = Some(ComputeChoiceRange {
+            min: 0,
+            max: 1024,
+            default: 466,
+        });
+        assert_eq!(
+            group.selected_data_disk(None),
+            Ok(Some(DataDiskRequirement {
+                size_bytes: 466 * gib
+            }))
+        );
+        assert_eq!(group.selected_data_disk(Some(0)), Ok(None));
     }
 
     #[test]
