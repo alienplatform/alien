@@ -34,6 +34,7 @@ fn eks_compute_pools_do_not_emit_cloud_fleets_or_choices() {
                     max_size: 3,
                     scale_policy: None,
                     nested_virtualization: None,
+                    data_disk_gib_range: None,
                 })
                 .dynamic_container_pool("apps".to_string())
                 .build(),
@@ -49,6 +50,7 @@ fn eks_compute_pools_do_not_emit_cloud_fleets_or_choices() {
                     machines: 2,
                     machine: Some("provider-machine".to_string()),
                     failure_domains: None,
+                    data_disk_gib: None,
                 },
             )]
             .into_iter()

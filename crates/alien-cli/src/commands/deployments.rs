@@ -497,7 +497,7 @@ pub enum DeploymentsCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Change machine counts, machine type, or quota warning overrides of a deployment
+    /// Change machine counts, machine type, data disk size, or quota warning overrides of a deployment
     ///
     /// Pass --machines for a fixed pool, or --min and --max for an autoscaling
     /// pool; switching between them changes the pool's mode. The update
@@ -529,6 +529,12 @@ pub enum DeploymentsCmd {
         /// CPU architecture; the pool's machines are replaced to apply it.
         #[arg(long)]
         machine: Option<String>,
+
+        /// Data disk size for each machine, such as 50Gi, 1Ti, or 0 for none,
+        /// within the sizes the pool offers. Changing it replaces each machine
+        /// in the pool; data on the old disks is not kept.
+        #[arg(long = "data-disk", value_parser = deployment_actions::parse_data_disk_gib)]
+        data_disk: Option<u32>,
 
         /// Downgrade a quota failure to a visible warning (repeatable; replaces the saved list)
         #[arg(
@@ -1293,6 +1299,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             min,
             max,
             machine,
+            data_disk,
             quota_warning_overrides,
             clear_quota_warning_overrides,
             yes,
@@ -1321,6 +1328,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                         min,
                         max,
                         machine,
+                        data_disk_gib: data_disk,
                     },
                     quota_warning_overrides,
                 },

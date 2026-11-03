@@ -28,6 +28,8 @@ pub(crate) struct PoolChange {
     pub min: Option<u32>,
     pub max: Option<u32>,
     pub machine: Option<String>,
+    /// Data disk size per machine in GiB; 0 runs the pool without one.
+    pub data_disk_gib: Option<u32>,
 }
 
 impl PoolChange {
@@ -36,6 +38,30 @@ impl PoolChange {
             && self.min.is_none()
             && self.max.is_none()
             && self.machine.is_none()
+            && self.data_disk_gib.is_none()
+    }
+}
+
+/// Parses `--data-disk`: whole GiB as a number or with a `Gi`/`Ti` suffix,
+/// such as `50`, `50Gi` or `1Ti`. `0` runs the pool without a data disk.
+pub(crate) fn parse_data_disk_gib(value: &str) -> std::result::Result<u32, String> {
+    let invalid = || format!("'{value}' is not a whole number of GiB, such as 50Gi, 1Ti or 0");
+    let (number, multiplier) = match value.strip_suffix("Ti") {
+        Some(number) => (number, 1024),
+        None => (value.strip_suffix("Gi").unwrap_or(value), 1),
+    };
+    number
+        .parse::<u32>()
+        .ok()
+        .and_then(|number| number.checked_mul(multiplier))
+        .ok_or_else(invalid)
+}
+
+fn describe_data_disk(size_gib: Option<u32>) -> String {
+    match size_gib {
+        None => "the release default".to_string(),
+        Some(0) => "no data disk".to_string(),
+        Some(size_gib) => format!("{size_gib} GiB"),
     }
 }
 
@@ -131,6 +157,7 @@ pub(crate) fn apply_pool_change(
         } => (machine.clone(), failure_domains.clone()),
     };
     let machine = change.machine.clone().or(current_machine);
+    let data_disk_gib = change.data_disk_gib.or(selection.data_disk_gib());
     let invalid = |field: &str, message: String| {
         AlienError::new(ErrorData::ValidationError {
             field: field.to_string(),
@@ -150,12 +177,14 @@ pub(crate) fn apply_pool_change(
             machines,
             machine,
             failure_domains,
+            data_disk_gib,
         },
         (None, None, None, ComputePoolSelection::Fixed { machines, .. }) => {
             ComputePoolSelection::Fixed {
                 machines: *machines,
                 machine,
                 failure_domains,
+                data_disk_gib,
             }
         }
         (
@@ -172,6 +201,7 @@ pub(crate) fn apply_pool_change(
             max: max.unwrap_or(*cur_max),
             machine,
             failure_domains,
+            data_disk_gib,
         },
         (None, Some(min), Some(max), ComputePoolSelection::Fixed { .. }) => {
             ComputePoolSelection::Autoscale {
@@ -179,6 +209,7 @@ pub(crate) fn apply_pool_change(
                 max,
                 machine,
                 failure_domains,
+                data_disk_gib,
             }
         }
         (None, _, _, ComputePoolSelection::Fixed { .. }) => {
@@ -294,23 +325,34 @@ pub(crate) async fn set_compute_task(
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "compute".to_string(),
             message: "Nothing to change. Pass --machines, --min/--max, --machine, \
-                      --quota-warning-override, or --clear-quota-warning-overrides."
+                      --data-disk, --quota-warning-override, or \
+                      --clear-quota-warning-overrides."
                 .to_string(),
         }));
     }
     if change.pool.is_empty() && change.pool.pool.is_some() {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "pool".to_string(),
-            message: "--pool needs --machines, --min/--max, or --machine.".to_string(),
+            message: "--pool needs --machines, --min/--max, --machine, or --data-disk."
+                .to_string(),
         }));
     }
 
     let detail = detail_json(deployment)?;
     let mut changed_pool = None;
+    let mut changed_data_disk = None;
     let mut pools_to_send = None;
     if !change.pool.is_empty() {
         let current = saved_compute(&detail)?;
         let (pool_id, compute) = apply_pool_change(current.as_ref(), &change.pool)?;
+        let saved_data_disk_gib = current
+            .as_ref()
+            .and_then(|current| current.pools.get(&pool_id))
+            .and_then(ComputePoolSelection::data_disk_gib);
+        if change.pool.data_disk_gib.is_some() && change.pool.data_disk_gib != saved_data_disk_gib
+        {
+            changed_data_disk = Some((saved_data_disk_gib, change.pool.data_disk_gib));
+        }
         if matches!(confirmation, ConfirmationMode::Prompt)
             && !prompt_confirm(
                 &format!("Scale pool '{pool_id}' to 0 machines? Its workloads stop running."),
@@ -361,6 +403,15 @@ pub(crate) async fn set_compute_task(
     println!("{}", success_line("Compute update requested."));
     if let Some((pool_id, description)) = changed_pool {
         println!("{} {pool_id}: {description}", dim_label("Pool"));
+    }
+    if let Some((old, new)) = changed_data_disk {
+        println!(
+            "{} {} -> {}",
+            dim_label("Data disk"),
+            describe_data_disk(old),
+            describe_data_disk(new)
+        );
+        println!("Changing this replaces each machine in the pool. Data on the old disks is not kept.");
     }
     if let Some(overrides) = &change.quota_warning_overrides {
         let value = if overrides.is_empty() {
@@ -1180,6 +1231,7 @@ mod tests {
                 spread: 2,
                 selected_failure_domains: vec!["us-east-2a".into(), "us-east-2b".into()],
             }),
+            data_disk_gib: None,
         }
     }
 
@@ -1194,6 +1246,7 @@ mod tests {
                     max: 4,
                     machine: Some("g5.xlarge".into()),
                     failure_domains: None,
+                    data_disk_gib: None,
                 },
             ),
         ]);
@@ -1238,6 +1291,7 @@ mod tests {
                 max: 6,
                 machine: Some("t3.medium".into()),
                 failure_domains: failure_domains.clone(),
+                data_disk_gib: None,
             }
         );
 
@@ -1257,6 +1311,7 @@ mod tests {
                 max: 10,
                 machine: Some("m6i.large".into()),
                 failure_domains,
+                data_disk_gib: None,
             }
         );
     }
@@ -1338,6 +1393,56 @@ mod tests {
         );
         assert_eq!(sent["compute"]["pools"]["general"]["machines"], 3);
         assert_eq!(sent["compute"]["pools"]["general"]["machine"], "t3.medium");
+    }
+
+    #[test]
+    fn data_disk_sizes_parse_as_whole_gib() {
+        assert_eq!(parse_data_disk_gib("50Gi"), Ok(50));
+        assert_eq!(parse_data_disk_gib("1Ti"), Ok(1024));
+        assert_eq!(parse_data_disk_gib("200"), Ok(200));
+        assert_eq!(parse_data_disk_gib("0"), Ok(0));
+        for invalid in ["1.5Ti", "50G", "-1", "", "5000000Ti"] {
+            assert!(parse_data_disk_gib(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn a_data_disk_choice_survives_other_changes_and_reaches_the_request() {
+        let mut saved = fixed(2, Some("m8i.large"));
+        if let ComputePoolSelection::Fixed { data_disk_gib, .. } = &mut saved {
+            *data_disk_gib = Some(200);
+        }
+        let current = compute(vec![("general", saved)]);
+
+        // Changing the machine count keeps the saved disk size.
+        let (_, next) = apply_pool_change(
+            Some(&current),
+            &PoolChange {
+                machines: Some(3),
+                ..PoolChange::default()
+            },
+        )
+        .expect("count change applies");
+        assert_eq!(next.pools["general"].data_disk_gib(), Some(200));
+
+        // Switching to autoscaling keeps it too, and --data-disk replaces it.
+        let (_, next) = apply_pool_change(
+            Some(&current),
+            &PoolChange {
+                min: Some(1),
+                max: Some(4),
+                data_disk_gib: Some(0),
+                ..PoolChange::default()
+            },
+        )
+        .expect("mode and disk change applies");
+        assert_eq!(next.pools["general"].data_disk_gib(), Some(0));
+
+        let sent = serde_json::to_value(
+            compute_request(Some(&next.pools), None).expect("request type accepts pools"),
+        )
+        .expect("serialize request");
+        assert_eq!(sent["compute"]["pools"]["general"]["dataDiskGib"], 0);
     }
 
     #[tokio::test]

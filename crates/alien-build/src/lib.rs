@@ -4640,6 +4640,7 @@ mod tests {
                 max_size: 1,
                 scale_policy: None,
                 nested_virtualization: Some(true),
+                data_disk_gib_range: None,
             })
             .build();
         let daemon = Daemon::new("host-loader".to_string())
@@ -4774,6 +4775,7 @@ mod tests {
                 max_size: 1,
                 scale_policy: None,
                 nested_virtualization: Some(true),
+                data_disk_gib_range: None,
             })
             .build();
         let stack = Stack::new("nested-virtualization".into())

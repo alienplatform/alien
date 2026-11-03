@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{ComputeCluster, Platform, Stack};
+use alien_core::{CapacityGroup, ComputeCluster, Platform, Stack};
 
 const GIB: u64 = 1024 * 1024 * 1024;
 
@@ -42,13 +42,38 @@ impl CompileTimeCheck for ComputePoolDataDiskCheck {
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
 
-        for (cluster_id, group_id, size_bytes) in data_disk_pools(stack) {
-            let pool = format!("ComputeCluster '{cluster_id}' pool '{group_id}'");
-            if size_bytes == 0 {
-                errors.push(format!(
-                    "{pool}: requirements.dataDisk.size must be greater than zero."
-                ));
-            }
+        for (cluster_id, group) in data_disk_pools(stack) {
+            let pool = format!("ComputeCluster '{cluster_id}' pool '{}'", group.group_id);
+            // The largest size a deployment of this pool can run with.
+            let largest_gib = match &group.data_disk_gib_range {
+                Some(range) => {
+                    if !(range.min <= range.default && range.default <= range.max) {
+                        errors.push(format!(
+                            "{pool}: requirements.dataDisk.size range needs min <= default <= max, but is min {} GiB, default {} GiB, max {} GiB.",
+                            range.min, range.default, range.max
+                        ));
+                    }
+                    if range.max == 0 {
+                        errors.push(format!(
+                            "{pool}: requirements.dataDisk.size range must allow a size greater than zero."
+                        ));
+                    }
+                    u64::from(range.max)
+                }
+                None => {
+                    let size_bytes = group
+                        .profile
+                        .as_ref()
+                        .and_then(|profile| profile.data_disk.as_ref())
+                        .map_or(0, |data_disk| data_disk.size_bytes);
+                    if size_bytes == 0 {
+                        errors.push(format!(
+                            "{pool}: requirements.dataDisk.size must be greater than zero."
+                        ));
+                    }
+                    size_bytes.div_ceil(GIB)
+                }
+            };
             match platform {
                 Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Machines => {}
                 Platform::Local | Platform::Test => warnings.push(format!(
@@ -59,10 +84,9 @@ impl CompileTimeCheck for ComputePoolDataDiskCheck {
                 )),
             }
             if let Some(max_gib) = max_data_disk_gib(platform) {
-                let size_gib = size_bytes.div_ceil(GIB);
-                if size_gib > max_gib {
+                if largest_gib > max_gib {
                     errors.push(format!(
-                        "{pool}: requirements.dataDisk.size is {size_gib} GiB, but the largest data disk on platform '{platform}' is {max_gib} GiB."
+                        "{pool}: requirements.dataDisk.size allows {largest_gib} GiB, but the largest data disk on platform '{platform}' is {max_gib} GiB."
                     ));
                 }
             }
@@ -76,19 +100,23 @@ impl CompileTimeCheck for ComputePoolDataDiskCheck {
     }
 }
 
-fn data_disk_pools(stack: &Stack) -> impl Iterator<Item = (&str, &str, u64)> {
+/// Pools that declare a data disk: a fixed size or a range of sizes.
+fn data_disk_pools(stack: &Stack) -> impl Iterator<Item = (&str, &CapacityGroup)> {
     stack
         .resources()
         .filter_map(|(_, entry)| entry.config.downcast_ref::<ComputeCluster>())
         .flat_map(|cluster| {
-            cluster.capacity_groups.iter().filter_map(move |group| {
-                let data_disk = group.profile.as_ref()?.data_disk.as_ref()?;
-                Some((
-                    cluster.id.as_str(),
-                    group.group_id.as_str(),
-                    data_disk.size_bytes,
-                ))
-            })
+            cluster
+                .capacity_groups
+                .iter()
+                .filter(|group| {
+                    group.data_disk_gib_range.is_some()
+                        || group
+                            .profile
+                            .as_ref()
+                            .is_some_and(|profile| profile.data_disk.is_some())
+                })
+                .map(move |group| (cluster.id.as_str(), group))
         })
 }
 
@@ -115,6 +143,7 @@ mod tests {
                 max_size: 3,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build();
         Stack::new("test".to_string())
@@ -170,10 +199,52 @@ mod tests {
             assert_eq!(
                 over.errors,
                 vec![format!(
-                    "ComputeCluster 'compute' pool 'general': requirements.dataDisk.size is {} GiB, but the largest data disk on platform '{platform}' is {max_gib} GiB.",
+                    "ComputeCluster 'compute' pool 'general': requirements.dataDisk.size allows {} GiB, but the largest data disk on platform '{platform}' is {max_gib} GiB.",
                     max_gib + 1
                 )]
             );
+        }
+    }
+
+    /// A pool offering `min..=max` GiB, prepared as the SDK declares it: the
+    /// profile holds the default (none when it is 0).
+    fn stack_with_data_disk_range(min: u32, default: u32, max: u32) -> Stack {
+        let mut stack = stack_with_data_disk((default > 0).then(|| u64::from(default) * GIB));
+        for (_, entry) in stack.resources_mut() {
+            if let Some(cluster) = entry.config.downcast_mut::<ComputeCluster>() {
+                cluster.capacity_groups[0].data_disk_gib_range =
+                    Some(alien_core::ComputeChoiceRange { min, max, default });
+            }
+        }
+        stack
+    }
+
+    #[tokio::test]
+    async fn a_range_starting_at_zero_is_accepted() {
+        for platform in [Platform::Aws, Platform::Machines] {
+            for default in [0, 200] {
+                let result = ComputePoolDataDiskCheck
+                    .check(&stack_with_data_disk_range(0, default, 4096), platform)
+                    .await
+                    .unwrap();
+                assert!(result.success, "{platform}, default {default}: {:?}", result.errors);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_ranges_are_rejected() {
+        let pool = "ComputeCluster 'compute' pool 'general'";
+        for (min, default, max, error) in [
+            (100, 50, 200, format!("{pool}: requirements.dataDisk.size range needs min <= default <= max, but is min 100 GiB, default 50 GiB, max 200 GiB.")),
+            (0, 0, 0, format!("{pool}: requirements.dataDisk.size range must allow a size greater than zero.")),
+            (50, 50, 70_000, format!("{pool}: requirements.dataDisk.size allows 70000 GiB, but the largest data disk on platform 'aws' is 65536 GiB.")),
+        ] {
+            let result = ComputePoolDataDiskCheck
+                .check(&stack_with_data_disk_range(min, default, max), Platform::Aws)
+                .await
+                .unwrap();
+            assert_eq!(result.errors, vec![error]);
         }
     }
 

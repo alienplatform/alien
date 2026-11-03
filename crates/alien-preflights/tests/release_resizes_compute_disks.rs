@@ -36,6 +36,7 @@ fn release(ephemeral_gib: u64, data_disk_gib: Option<u64>, machine_arch_x86: boo
             max_size: 1,
             scale_policy: None,
             nested_virtualization: machine_arch_x86.then_some(true),
+            data_disk_gib_range: None,
         })
         .build();
     let container = Container::new("vm-host".to_string())
@@ -76,6 +77,7 @@ fn deployment_config(machine: &str) -> DeploymentConfig {
                         machines: 1,
                         machine: Some(machine.to_string()),
                         failure_domains: None,
+                        data_disk_gib: None,
                     },
                 )]
                 .into(),
@@ -260,6 +262,6 @@ async fn an_over_limit_data_disk_is_refused_at_build() {
     assert!(!summary.success);
     assert_eq!(
         errors(&summary),
-        ["ComputeCluster 'compute' pool 'sandbox': requirements.dataDisk.size is 65537 GiB, but the largest data disk on platform 'aws' is 65536 GiB."]
+        ["ComputeCluster 'compute' pool 'sandbox': requirements.dataDisk.size allows 65537 GiB, but the largest data disk on platform 'aws' is 65536 GiB."]
     );
 }

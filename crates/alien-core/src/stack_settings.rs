@@ -289,6 +289,15 @@ pub enum ComputePoolSelection {
         /// Optional failure-domain policy. Absence preserves the existing aggregate layout.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         failure_domains: Option<FailureDomainSelection>,
+        /// Data disk size per machine, in whole GiB, within the pool's declared
+        /// range. Omitted uses the release default; 0 runs the pool without one.
+        #[serde(
+            rename = "dataDiskGib",
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_selected_data_disk_gib"
+        )]
+        data_disk_gib: Option<u32>,
     },
     /// Autoscaling machine pool.
     Autoscale {
@@ -306,7 +315,37 @@ pub enum ComputePoolSelection {
         /// Optional failure-domain policy. Absence preserves the existing aggregate layout.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         failure_domains: Option<FailureDomainSelection>,
+        /// Data disk size per machine, in whole GiB, within the pool's declared
+        /// range. Omitted uses the release default; 0 runs the pool without one.
+        #[serde(
+            rename = "dataDiskGib",
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_selected_data_disk_gib"
+        )]
+        data_disk_gib: Option<u32>,
     },
+}
+
+fn deserialize_selected_data_disk_gib<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<u32>, D::Error> {
+    // CloudFormation Number references arrive as strings in setup import JSON.
+    match Option::<serde_json::Value>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(serde_json::Value::Number(number)) => number
+            .as_u64()
+            .and_then(|number| u32::try_from(number).ok())
+            .map(Some)
+            .ok_or_else(|| serde::de::Error::custom("dataDiskGib must be a whole number of GiB")),
+        Some(serde_json::Value::String(number)) => number
+            .parse()
+            .map(Some)
+            .map_err(|_| serde::de::Error::custom("dataDiskGib must be a whole number of GiB")),
+        Some(_) => Err(serde::de::Error::custom(
+            "dataDiskGib must be a whole number of GiB",
+        )),
+    }
 }
 
 fn deserialize_machine_override<'de, D: serde::Deserializer<'de>>(
@@ -333,6 +372,15 @@ impl ComputePoolSelection {
             | Self::Autoscale {
                 failure_domains, ..
             } => failure_domains.as_ref(),
+        }
+    }
+
+    /// Selected data disk size in GiB, when the deployment chose one.
+    pub fn data_disk_gib(&self) -> Option<u32> {
+        match self {
+            Self::Fixed { data_disk_gib, .. } | Self::Autoscale { data_disk_gib, .. } => {
+                *data_disk_gib
+            }
         }
     }
 
@@ -994,6 +1042,7 @@ mod failure_domain_tests {
                 spread: 2,
                 selected_failure_domains: vec!["us-west-2a".to_string(); 2],
             }),
+            data_disk_gib: None,
         };
         assert_eq!(
             selection.validate(),
@@ -1010,6 +1059,7 @@ mod failure_domain_tests {
                 spread: 2,
                 selected_failure_domains: Vec::new(),
             }),
+            data_disk_gib: None,
         };
         assert_eq!(
             invalid.validate(),
@@ -1026,6 +1076,7 @@ mod failure_domain_tests {
                 spread: 2,
                 selected_failure_domains: Vec::new(),
             }),
+            data_disk_gib: None,
         };
         assert_eq!(valid.validate(), Ok(()));
     }
@@ -1040,6 +1091,7 @@ mod failure_domain_tests {
                 spread: 2,
                 selected_failure_domains: Vec::new(),
             }),
+            data_disk_gib: None,
         };
         assert_eq!(
             invalid_max.validate(),
@@ -1057,6 +1109,7 @@ mod failure_domain_tests {
                 spread: 2,
                 selected_failure_domains: Vec::new(),
             }),
+            data_disk_gib: None,
         };
         assert_eq!(
             invalid_min.validate(),
@@ -1074,6 +1127,7 @@ mod failure_domain_tests {
                 spread: 2,
                 selected_failure_domains: Vec::new(),
             }),
+            data_disk_gib: None,
         };
         assert_eq!(valid.validate(), Ok(()));
     }

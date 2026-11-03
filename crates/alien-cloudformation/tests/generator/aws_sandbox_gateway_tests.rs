@@ -193,6 +193,7 @@ async fn an_internet_sandbox_setup_template_carries_the_gateway_network() {
                     machines: 2,
                     machine: Some("c7g.large".to_string()),
                     failure_domains: None,
+                    data_disk_gib: None,
                 },
             )]
             .into(),

@@ -369,6 +369,7 @@ mod tests {
                 max_size: 10,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build();
         resources.insert(

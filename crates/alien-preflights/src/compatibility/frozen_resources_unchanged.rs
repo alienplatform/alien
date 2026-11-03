@@ -56,6 +56,9 @@ fn runtime_managed_frozen_change(platform: Platform, old: &Resource, new: &Resou
         old_group.min_size = new_group.min_size;
         old_group.max_size = new_group.max_size;
         old_group.scale_policy = new_group.scale_policy.clone();
+        // Like the scale policy, the data disk sizes offered are a bound on a
+        // runtime choice, not setup-owned structure.
+        old_group.data_disk_gib_range = new_group.data_disk_gib_range.clone();
         if let Some((old_machine, new_machine)) = machine_change(old_group, new_group) {
             if runtime_machine_change(platform, old_machine, new_machine)
                 && validated_machine_profile(platform, new_group)
@@ -94,17 +97,26 @@ fn validated_machine_profile(platform: Platform, group: &CapacityGroup) -> bool 
     let scale = group.scale_policy.clone().unwrap_or_else(|| {
         CapacityGroupScalePolicy::from_selected_bounds(group.min_size, group.max_size)
     });
+    // The group already carries the deployment's data disk choice; keep it so
+    // only the machine's hardware is compared.
+    let data_disk_gib = group.data_disk_gib_range.as_ref().map(|_| {
+        group
+            .data_disk_size_gib()
+            .map_or(0, |size_gib| u32::try_from(size_gib).unwrap_or(u32::MAX))
+    });
     let selection = match scale {
         CapacityGroupScalePolicy::Fixed { .. } => ComputePoolSelection::Fixed {
             machines: group.min_size,
             machine: group.instance_type.clone(),
             failure_domains: None,
+            data_disk_gib,
         },
         CapacityGroupScalePolicy::Autoscale { .. } => ComputePoolSelection::Autoscale {
             min: group.min_size,
             max: group.max_size,
             machine: group.instance_type.clone(),
             failure_domains: None,
+            data_disk_gib,
         },
     };
     let mut materialized = group.clone();
@@ -978,6 +990,7 @@ mod tests {
                 max_size: size,
                 scale_policy: None,
                 nested_virtualization: Some(true),
+                data_disk_gib_range: None,
             })
             .build()
     }
@@ -1284,6 +1297,7 @@ mod tests {
                 max_size: 2,
                 scale_policy: None,
                 nested_virtualization: Some(platform == Platform::Aws),
+                data_disk_gib_range: None,
             })
             .build()
     }
@@ -1319,6 +1333,39 @@ mod tests {
             ] {
                 let result = disk_change(platform, old, new).await;
                 assert!(result.success, "{platform}: {:?}", result.errors);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn deployment_data_disk_choices_do_not_need_setup() {
+        for (platform, machine) in [
+            (Platform::Aws, Some("m8i.2xlarge")),
+            (Platform::Machines, None),
+        ] {
+            // A pool offering 0 to `max` GiB, prepared with the deployment's choice.
+            let chosen = |data_disk_gib: Option<u64>, max: u32| {
+                let mut cluster = disk_cluster(platform, machine, 20, data_disk_gib);
+                cluster.capacity_groups[0].data_disk_gib_range =
+                    Some(alien_core::ComputeChoiceRange {
+                        min: 0,
+                        max,
+                        default: 200,
+                    });
+                cluster
+            };
+            for (case, old, new) in [
+                ("another size", chosen(Some(40), 4096), chosen(Some(60), 4096)),
+                ("no data disk", chosen(Some(60), 4096), chosen(None, 4096)),
+                ("a wider range", chosen(Some(40), 1024), chosen(Some(40), 4096)),
+                (
+                    "a range replacing a fixed size",
+                    disk_cluster(platform, machine, 20, Some(40)),
+                    chosen(Some(40), 4096),
+                ),
+            ] {
+                let result = disk_change(platform, old, new).await;
+                assert!(result.success, "{platform}, {case}: {:?}", result.errors);
             }
         }
     }

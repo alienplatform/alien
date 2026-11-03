@@ -2041,6 +2041,28 @@ fn add_compute_parameters(
             ),
         );
 
+        if let Some(range) = offered_data_disk_sizes(group) {
+            let without_disk = if range.min == 0 {
+                " 0 runs the pool without a data disk."
+            } else {
+                ""
+            };
+            let mut parameter = number_parameter(
+                &format!(
+                    "Data disk size in GiB for each machine of runtime compute pool '{}' ({} to {}).{} Changing it replaces each machine; data on the old disks is not kept.",
+                    group.group_id, range.min, range.max, without_disk
+                ),
+                selection.data_disk_gib().unwrap_or(range.default),
+                None,
+            );
+            parameter.min_value = Some(CfExpression::from(range.min));
+            parameter.max_value = Some(CfExpression::from(range.max));
+            template.parameters.insert(
+                compute_data_disk_parameter_name(&group.group_id),
+                parameter,
+            );
+        }
+
         // Setup preflights add workloads the source does not have (an internet sandbox's
         // egress gateway), so their pool can be missing from the source plan. No source declares
         // such a pool, so it gets a generated pool's range, as preflight gives it.
@@ -2713,6 +2735,12 @@ fn compute_settings_expression(
                 machine,
             ],
         };
+        if offered_data_disk_sizes(group).is_some() {
+            fields.push((
+                "dataDiskGib",
+                CfExpression::ref_(compute_data_disk_parameter_name(&group.group_id)),
+            ));
+        }
         if let Some(failure_domains) = selection.failure_domains() {
             fields.push((
                 "failure_domains",
@@ -2774,6 +2802,18 @@ fn compute_settings_expression(
         fields.push(("containers", CfExpression::object(containers)));
     }
     (!fields.is_empty()).then(|| CfExpression::object(fields))
+}
+
+/// The data disk sizes a pool lets the installer choose from, when it offers
+/// more than one. A fixed size needs no parameter.
+fn offered_data_disk_sizes(group: &CapacityGroup) -> Option<alien_core::ComputeChoiceRange> {
+    group
+        .data_disk_choices()
+        .filter(|range| range.min < range.max)
+}
+
+fn compute_data_disk_parameter_name(pool_id: &str) -> String {
+    format!("Compute{}DataDiskGib", pascal_identifier(pool_id))
 }
 
 fn compute_machine_parameter_name(pool_id: &str) -> String {

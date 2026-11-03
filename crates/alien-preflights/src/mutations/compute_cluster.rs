@@ -1000,6 +1000,7 @@ fn installed_pool_selections(
                     machines: group.max_size,
                     machine,
                     failure_domains: None,
+                    data_disk_gib: None,
                 }
             } else {
                 ComputePoolSelection::Autoscale {
@@ -1007,6 +1008,7 @@ fn installed_pool_selections(
                     max: group.max_size,
                     machine,
                     failure_domains: None,
+                    data_disk_gib: None,
                 }
             };
             Some((group.group_id.clone(), selection))
@@ -1033,6 +1035,15 @@ fn group_needs_materialization(
         || group.min_size != selection.min_size()
         || group.max_size != selection.max_size()
         || group.profile.is_none()
+        || group
+            .selected_data_disk(selection.data_disk_gib())
+            .map_or(true, |data_disk| {
+                group
+                    .profile
+                    .as_ref()
+                    .and_then(|profile| profile.data_disk.as_ref())
+                    != data_disk.as_ref()
+            })
 }
 
 /// The scale bounds a capacity group carries: its declared policy, or the exact
@@ -1130,17 +1141,24 @@ fn materialize_selection_within(
             resource_id: None,
         })
     })?;
+    // The deployment's data disk choice, checked against the declared sizes
+    // before the profile is rebuilt from the machine.
+    let data_disk = group
+        .selected_data_disk(selection.data_disk_gib())
+        .map_err(|message| {
+            AlienError::new(crate::error::ErrorData::StackMutationFailed {
+                mutation_name: "ComputeClusterMutation".to_string(),
+                message: format!("Invalid compute selection for '{}': {message}", group.group_id),
+                resource_id: None,
+            })
+        })?;
     if group.instance_type.as_deref() != Some(machine) || group.profile.is_none() {
-        // The machine supplies the hardware; the data disk is attached to it
-        // as declared.
-        let data_disk = group
-            .profile
-            .as_ref()
-            .and_then(|profile| profile.data_disk.clone());
-        let mut profile =
-            spec.to_machine_profile_for_storage(requirements.max_ephemeral_storage_bytes);
+        // The machine supplies the hardware; the data disk is attached to it.
+        group.profile =
+            Some(spec.to_machine_profile_for_storage(requirements.max_ephemeral_storage_bytes));
+    }
+    if let Some(profile) = group.profile.as_mut() {
         profile.data_disk = data_disk;
-        group.profile = Some(profile);
     }
     group.instance_type = Some(machine.to_string());
     group.min_size = selection.min_size();
@@ -1218,6 +1236,7 @@ fn build_categorized_capacity_groups(
             max_size: 1,
             scale_policy: None,
             nested_virtualization: None,
+            data_disk_gib_range: None,
         }]),
         Platform::Kubernetes | Platform::Machines | Platform::Test => Ok(vec![CapacityGroup {
             group_id: "general".to_string(),
@@ -1239,6 +1258,7 @@ fn build_categorized_capacity_groups(
             },
             scale_policy: None,
             nested_virtualization: None,
+            data_disk_gib_range: None,
         }]),
     }
 }
@@ -1285,6 +1305,7 @@ fn build_capacity_group_for_id(
         max_size: default_max_machines(&requirements),
         scale_policy: None,
         nested_virtualization: None,
+        data_disk_gib_range: None,
     };
     if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
         // No source declaration bounds a generated pool; its counts are only the
@@ -2431,6 +2452,7 @@ mod tests {
                     machines: 1,
                     machine: Some("t4g.medium".to_string()),
                     failure_domains: None,
+                    data_disk_gib: None,
                 },
             )]
             .into_iter()
@@ -2476,6 +2498,7 @@ mod tests {
             max_size: 1,
             scale_policy: None,
             nested_virtualization: None,
+            data_disk_gib_range: None,
         };
         let mut cluster = ComputeCluster::new("compute".to_string())
             .capacity_group(capacity_group("general"))
@@ -2521,6 +2544,7 @@ mod tests {
                 spread: 1,
                 selected_failure_domains,
             }),
+            data_disk_gib: None,
         };
         let config = DeploymentConfig::builder()
             .stack_settings(StackSettings {
@@ -2580,6 +2604,7 @@ mod tests {
                                     machines: *min_size,
                                     machine: Some((*machine).to_string()),
                                     failure_domains: None,
+                                    data_disk_gib: None,
                                 }
                             } else {
                                 ComputePoolSelection::Autoscale {
@@ -2587,6 +2612,7 @@ mod tests {
                                     max: *max_size,
                                     machine: Some((*machine).to_string()),
                                     failure_domains: None,
+                                    data_disk_gib: None,
                                 }
                             };
                             ((*pool_id).to_string(), selection)
@@ -2764,6 +2790,7 @@ mod tests {
                 max_size: 10,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build();
 
@@ -3103,12 +3130,14 @@ mod tests {
             machines,
             machine: machine.clone(),
             failure_domains: None,
+            data_disk_gib: None,
         };
         let autoscale = |min, max| ComputePoolSelection::Autoscale {
             min,
             max,
             machine: machine.clone(),
             failure_domains: None,
+            data_disk_gib: None,
         };
         for (selection, expected) in [
             (fixed(1), (1, 1)),
@@ -3207,12 +3236,14 @@ mod tests {
             machines: 1,
             machine: Some("m7g.large".to_string()),
             failure_domains: None,
+            data_disk_gib: None,
         };
         let autoscale_one_two = ComputePoolSelection::Autoscale {
             min: 1,
             max: 2,
             machine: Some("m7g.large".to_string()),
             failure_domains: None,
+            data_disk_gib: None,
         };
         let releases = [
             ContainerReplicas::Fixed(1),
@@ -3257,6 +3288,7 @@ mod tests {
                 max: saved_max,
                 machine: Some("m7g.large".to_string()),
                 failure_domains: None,
+                data_disk_gib: None,
             };
             for replicas in [saved_max, saved_max - 1, 3, 400] {
                 let group = prepare_release(
@@ -3319,6 +3351,7 @@ mod tests {
                     machines: 1,
                     machine: machine.map(ToString::to_string),
                     failure_domains: None,
+                    data_disk_gib: None,
                 },
             )]
             .into_iter()
@@ -3417,6 +3450,7 @@ mod tests {
             machines: 1,
             machine: Some("m7g.large".to_string()),
             failure_domains: None,
+            data_disk_gib: None,
         };
         // m7g.large has 1.5 vCPU available after host reserve; five replicas request 2.5.
         let error = prepare_release(gw_release(ContainerReplicas::Fixed(5)), &fixed_one)
@@ -3829,6 +3863,7 @@ mod tests {
                 max_size: 10,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build();
         resources.insert(
@@ -4159,6 +4194,7 @@ mod tests {
                 max_size: 1,
                 scale_policy: None,
                 nested_virtualization: Some(true),
+                data_disk_gib_range: None,
             })
             .build();
 
@@ -4257,6 +4293,7 @@ mod tests {
                     },
                 }),
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build();
 
@@ -4350,6 +4387,7 @@ mod tests {
                 max_size: 1,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build()
     }

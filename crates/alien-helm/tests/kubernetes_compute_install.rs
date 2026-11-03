@@ -34,6 +34,7 @@ fn frozen_compute_and_referenced_container_keep_helm_install_requirements() {
             max_size: 3,
             scale_policy: None,
             nested_virtualization: None,
+            data_disk_gib_range: None,
         })
         .dynamic_container_pool("apps".to_string())
         .build();

@@ -685,6 +685,7 @@ async fn imported_kubernetes_compute_retries_namespace_verification() -> Result<
                     max_size: 1,
                     scale_policy: None,
                     nested_virtualization: None,
+                    data_disk_gib_range: None,
                 })
                 .build(),
             ResourceLifecycle::Frozen,
@@ -836,6 +837,7 @@ async fn materialize_machine(stack: Stack, machine: &str) -> Stack {
                 machines: 1,
                 machine: Some(machine.to_string()),
                 failure_domains: None,
+                data_disk_gib: None,
             },
         )]
         .into_iter()

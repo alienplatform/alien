@@ -160,6 +160,7 @@ fn advanced_settings_overlay_preserves_generated_compute_defaults() {
                         machines: 1,
                         machine: Some("Standard_D2as_v5".to_string()),
                         failure_domains: None,
+                        data_disk_gib: None,
                     },
                 )]
                 .into_iter()

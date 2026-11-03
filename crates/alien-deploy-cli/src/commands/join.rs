@@ -4205,6 +4205,51 @@ mod tests {
         );
     }
 
+    /// The join token carries the size this deployment chose for the pool, so a
+    /// host is checked against that pick: a host with no spare disk joins a pool
+    /// whose deployment chose none, and is told exactly what it has when the
+    /// pick is larger than its only empty disk.
+    #[test]
+    fn capacity_check_follows_the_deployments_data_disk_choice() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let host = host_with_capacity(
+            dir.path(),
+            4,
+            8,
+            25,
+            vec![root_disk(), empty_disk("/dev/sdb", 500)],
+        );
+
+        check_capacity_group_requirements(
+            "general",
+            &pool_requirements(None),
+            &host,
+            MachineArch::X64,
+        )
+        .expect("no data disk chosen");
+        check_capacity_group_requirements(
+            "general",
+            &pool_requirements(Some(500)),
+            &host,
+            MachineArch::X64,
+        )
+        .expect("the empty disk is exactly the chosen size");
+
+        let error = check_capacity_group_requirements(
+            "general",
+            &pool_requirements(Some(1024)),
+            &host,
+            MachineArch::X64,
+        )
+        .expect_err("the only empty disk is smaller than the chosen size");
+        assert_eq!(
+            error.message,
+            "Validation failed for host: this host does not meet the requirements of capacity group 'general':\n  \
+             - additional empty disk: needs a disk of at least 1024 GiB with no partitions, no filesystem and no mounts; \
+             found /dev/nvme0n1 (100 GiB, has partitions), /dev/sdb (500 GiB, empty but too small)"
+        );
+    }
+
     #[test]
     fn capacity_check_reports_unlistable_disks_only_when_a_disk_is_required() {
         let dir = tempfile::tempdir().expect("temp dir");

@@ -142,6 +142,7 @@ fn gcp_container_cluster_without_platform_extension_errors_cleanly() {
                     max_size: 3,
                     scale_policy: None,
                     nested_virtualization: None,
+                    data_disk_gib_range: None,
                 })
                 .build(),
             ResourceLifecycle::Frozen,

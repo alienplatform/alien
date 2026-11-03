@@ -3293,6 +3293,7 @@ mod tests {
                 max_size: 1,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build();
         let stack = Stack::new("no-nested".to_string())
@@ -3317,6 +3318,7 @@ mod tests {
                 max_size: 1,
                 scale_policy: None,
                 nested_virtualization: Some(true),
+                data_disk_gib_range: None,
             })
             .build();
         let stack = Stack::new("nested".to_string())

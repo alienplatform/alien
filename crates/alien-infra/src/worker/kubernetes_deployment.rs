@@ -244,6 +244,7 @@ mod tests {
                 max_size: 3,
                 scale_policy: None,
                 nested_virtualization: None,
+                data_disk_gib_range: None,
             })
             .build();
         let stack = alien_core::Stack::new("test".to_string())
