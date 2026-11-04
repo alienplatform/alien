@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/bindings-node",
-  "version": "3.3.51",
+  "version": "3.3.52",
   "private": true,
   "description": "napi-rs addon exposing alien-bindings storage/kv/queue/vault to JavaScript",
   "napi": {
