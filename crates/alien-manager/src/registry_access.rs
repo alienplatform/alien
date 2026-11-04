@@ -44,7 +44,7 @@ async fn ensure_registry_access(
     repo_id: &str,
     environment_info: &EnvironmentInfo,
     stack_state: Option<&StackState>,
-    declares_sandbox: bool,
+    declared: DeclaredCompute,
 ) -> GrantOutcome {
     let rsm_access = extract_rsm_management_identity(stack_state);
     // The project number is what names the compute agents, and an import predating that field
@@ -56,7 +56,7 @@ async fn ensure_registry_access(
     );
     let has_management_sa = rsm_access.is_some();
 
-    let access = match build_cross_account_access(environment_info, stack_state, declares_sandbox) {
+    let access = match build_cross_account_access(environment_info, stack_state, declared) {
         Some(a) => a,
         None => {
             return GrantOutcome {
@@ -187,8 +187,12 @@ async fn revoke_registry_access(
         return Ok(());
     }
 
-    // The AWS arm names its own principal, so the sandbox flag does not reach it.
-    let Some(access) = build_cross_account_access(environment_info, stack_state, false) else {
+    // Everything a grant could have named, not what this release declares: a release that dropped
+    // its workers would otherwise leave the regions an earlier grant wrote unvisited. Removal is a
+    // `retain` on this deployment's principals, so naming more removes nothing else.
+    let Some(access) =
+        build_cross_account_access(environment_info, stack_state, DeclaredCompute::ALL)
+    else {
         return Ok(());
     };
     remove_registry_access(
@@ -372,10 +376,10 @@ pub async fn reconcile_registry_access_with_proxy(
         }
         return Ok(());
     }
-    let sandbox_declared = declares_sandbox(state);
+    let declared = DeclaredCompute::of(state);
     let needed = RegistryAccess {
         repositories: repo_ids.clone(),
-        service_types: service_type_names(environment_info, sandbox_declared),
+        service_types: service_type_names(environment_info, declared),
     };
 
     // What the policy already says, not merely that something was once written: a deployment that
@@ -412,7 +416,7 @@ pub async fn reconcile_registry_access_with_proxy(
             repo_id,
             environment_info,
             state.stack_state.as_ref(),
-            sandbox_declared,
+            declared,
         )
         .await;
         if outcome.written {
@@ -587,21 +591,24 @@ fn previously_opened(recorded: Option<&RegistryAccess>, needed: &[String]) -> Ve
 /// Read through `build_cross_account_access`, the same call the grant itself makes — a record
 /// derived any other way could disagree with the policy it describes, and the comparison that
 /// stops the retry would never settle.
-fn service_type_names(environment_info: &EnvironmentInfo, declares_sandbox: bool) -> Vec<String> {
-    let mut names: Vec<String> =
-        match build_cross_account_access(environment_info, None, declares_sandbox) {
-            Some(CrossAccountAccess::Aws(access)) => access
-                .allowed_service_types
-                .iter()
-                .map(service_type_name)
-                .collect(),
-            Some(CrossAccountAccess::Gcp(access)) => access
-                .allowed_service_types
-                .iter()
-                .map(service_type_name)
-                .collect(),
-            _ => Vec::new(),
-        };
+fn service_type_names(
+    environment_info: &EnvironmentInfo,
+    declared: DeclaredCompute,
+) -> Vec<String> {
+    let mut names: Vec<String> = match build_cross_account_access(environment_info, None, declared)
+    {
+        Some(CrossAccountAccess::Aws(access)) => access
+            .allowed_service_types
+            .iter()
+            .map(service_type_name)
+            .collect(),
+        Some(CrossAccountAccess::Gcp(access)) => access
+            .allowed_service_types
+            .iter()
+            .map(service_type_name)
+            .collect(),
+        _ => Vec::new(),
+    };
     names.sort();
     names
 }
@@ -975,25 +982,56 @@ fn all_gcp_service_types() -> Vec<ComputeServiceType> {
     ComputeServiceType::ALL.to_vec()
 }
 
+/// The compute a deployment's releases declare, which decides whom its grant names.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct DeclaredCompute {
+    /// A sandbox, which a GCP grant names as its own principal.
+    sandbox: bool,
+    /// A worker. On AWS it is the only resource that pulls from a copy of the repository in its
+    /// own region, so the only one a grant waits on a regional replica for.
+    worker: bool,
+}
+
+impl DeclaredCompute {
+    /// Everything a grant can name, for a revoke with no record to go on.
+    const ALL: Self = Self {
+        sandbox: true,
+        worker: true,
+    };
+
+    fn of(state: &DeploymentState) -> Self {
+        Self {
+            sandbox: declares::<Sandbox>(state),
+            worker: declares::<Worker>(state),
+        }
+    }
+}
+
 fn declares_sandbox(state: &DeploymentState) -> bool {
-    let has_sandbox = |stack: &Stack| {
+    declares::<Sandbox>(state)
+}
+
+/// Whether any release the deployment is on, moving to, or prepared declares a resource of type
+/// `R`.
+fn declares<R: alien_core::ResourceDefinition>(state: &DeploymentState) -> bool {
+    let has_resource = |stack: &Stack| {
         stack
             .resources()
-            .any(|(_id, entry)| entry.config.downcast_ref::<Sandbox>().is_some())
+            .any(|(_id, entry)| entry.config.downcast_ref::<R>().is_some())
     };
     state
         .current_release
         .as_ref()
-        .is_some_and(|release| has_sandbox(&release.stack))
+        .is_some_and(|release| has_resource(&release.stack))
         || state
             .target_release
             .as_ref()
-            .is_some_and(|release| has_sandbox(&release.stack))
+            .is_some_and(|release| has_resource(&release.stack))
         || state
             .runtime_metadata
             .as_ref()
             .and_then(|runtime_metadata| runtime_metadata.prepared_stack.as_ref())
-            .is_some_and(has_sandbox)
+            .is_some_and(has_resource)
 }
 
 /// Whether this platform's sandbox takes its root filesystem from an image Alien hosts.
@@ -1322,7 +1360,7 @@ fn extract_rsm_management_identity(stack_state: Option<&StackState>) -> Option<S
 fn build_cross_account_access(
     environment_info: &EnvironmentInfo,
     stack_state: Option<&StackState>,
-    declares_sandbox: bool,
+    declared: DeclaredCompute,
 ) -> Option<CrossAccountAccess> {
     let rsm_access = extract_rsm_management_identity(stack_state);
 
@@ -1331,10 +1369,20 @@ fn build_cross_account_access(
             account_id, region, ..
         }) => {
             let role_arns = rsm_access.into_iter().collect();
+            // Lambda takes an image only from its own region, so a worker's grant names that
+            // region and the binding waits for the repository's replica there. Nothing else reads
+            // a replica: containers pull through the manager's proxy and a MicroVM image builds
+            // from the source repository. Naming the region for them would hold the deployment on
+            // a replica no rule may ever create.
+            let (regions, allowed_service_types) = if declared.worker {
+                (vec![region.clone()], vec![ComputeServiceType::Worker])
+            } else {
+                (Vec::new(), Vec::new())
+            };
             Some(CrossAccountAccess::Aws(AwsCrossAccountAccess {
                 account_ids: vec![account_id.clone()],
-                regions: vec![region.clone()],
-                allowed_service_types: vec![ComputeServiceType::Worker],
+                regions,
+                allowed_service_types,
                 role_arns,
             }))
         }
@@ -1347,7 +1395,7 @@ fn build_cross_account_access(
             };
             Some(CrossAccountAccess::Gcp(GcpCrossAccountAccess {
                 project_numbers,
-                allowed_service_types: gcp_service_types(declares_sandbox),
+                allowed_service_types: gcp_service_types(declared.sandbox),
                 service_account_emails,
             }))
         }
@@ -1472,6 +1520,12 @@ mod tests {
     use std::sync::Mutex;
 
     use crate::traits::deployment_store::MockDeploymentStore;
+
+    /// A release that declares a sandbox and no worker.
+    const SANDBOX_ONLY: DeclaredCompute = DeclaredCompute {
+        sandbox: true,
+        worker: false,
+    };
 
     #[derive(Debug)]
     struct TestArtifactRegistry {
@@ -2836,8 +2890,12 @@ mod tests {
     fn gcp_grant_names_the_management_service_account_under_both_protocols() {
         for (case, outputs) in gcp_management_outputs() {
             let stack_state = gcp_stack_state(outputs);
-            let access = build_cross_account_access(&gcp_environment(), Some(&stack_state), false)
-                .expect("GCP cross-account access should be configured");
+            let access = build_cross_account_access(
+                &gcp_environment(),
+                Some(&stack_state),
+                DeclaredCompute::default(),
+            )
+            .expect("GCP cross-account access should be configured");
             let CrossAccountAccess::Gcp(access) = access else {
                 panic!("GCP environment must produce GCP cross-account access");
             };
@@ -3022,7 +3080,7 @@ mod tests {
             account_id: "123456789012".to_string(),
             region: "us-east-2".to_string(),
         });
-        let access = build_cross_account_access(&environment_info, None, false)
+        let access = build_cross_account_access(&environment_info, None, DeclaredCompute::ALL)
             .expect("AWS registry access should be configured");
 
         let error = remove_registry_access(
@@ -3118,7 +3176,7 @@ mod tests {
         let access = build_cross_account_access(
             state.environment_info.as_ref().expect("AWS environment"),
             state.stack_state.as_ref(),
-            declares_sandbox(&state),
+            DeclaredCompute::of(&state),
         )
         .expect("AWS cross-account access should be configured");
         let CrossAccountAccess::Aws(aws_access) = access else {
@@ -3158,9 +3216,9 @@ mod tests {
         assert_eq!(policy["Version"], "2012-10-17");
     }
 
-    /// The whole document for one account and role. The policy is built from the environment and
-    /// the RSM outputs alone — never from stack resources — so this pins what every deployment
-    /// gets, whichever resources earned it.
+    /// The whole document for one account and role, for a deployment with workers. Apart from the
+    /// worker statement, the policy is built from the environment and the RSM outputs alone, so
+    /// this pins what every deployment gets, whichever resources earned it.
     #[test]
     fn aws_repository_policy_document_is_pinned() {
         let role_arn = "arn:aws:iam::123456789012:role/alien-rsm-role";
@@ -3170,8 +3228,15 @@ mod tests {
             region: "us-east-2".to_string(),
         });
 
-        let access = build_cross_account_access(&environment_info, Some(&stack_state), false)
-            .expect("AWS cross-account access should be configured");
+        let access = build_cross_account_access(
+            &environment_info,
+            Some(&stack_state),
+            DeclaredCompute {
+                worker: true,
+                ..DeclaredCompute::default()
+            },
+        )
+        .expect("AWS cross-account access should be configured");
         let CrossAccountAccess::Aws(aws_access) = access else {
             panic!("AWS environment must produce AWS cross-account access");
         };
@@ -3623,7 +3688,7 @@ mod tests {
             account_id: "123456789012".to_string(),
             region: "us-east-2".to_string(),
         });
-        let access = build_cross_account_access(&environment_info, None, false)
+        let access = build_cross_account_access(&environment_info, None, DeclaredCompute::ALL)
             .expect("AWS registry access should be configured");
 
         remove_registry_access(
@@ -3674,7 +3739,7 @@ mod tests {
         });
         let needed = RegistryAccess {
             repositories: granted_for_workers.repositories.clone(),
-            service_types: service_type_names(&gcp, true),
+            service_types: service_type_names(&gcp, SANDBOX_ONLY),
         };
 
         assert_eq!(needed.service_types, vec!["sandbox", "worker"]);
@@ -3686,7 +3751,7 @@ mod tests {
             needed,
             RegistryAccess {
                 repositories: needed.repositories.clone(),
-                service_types: service_type_names(&gcp, true),
+                service_types: service_type_names(&gcp, SANDBOX_ONLY),
             },
             "and an unchanged one compares equal, so the policy is not rewritten every tick"
         );
@@ -3786,7 +3851,10 @@ mod tests {
                     region: "us-central1".to_string(),
                 }),
                 None,
-                declares_sandbox,
+                DeclaredCompute {
+                    sandbox: declares_sandbox,
+                    worker: false,
+                },
             )
             .expect("a GCP environment builds a cross-account access");
             let CrossAccountAccess::Gcp(gcp) = access else {
@@ -3811,8 +3879,14 @@ mod tests {
             region: "us-central1".to_string(),
         });
 
-        assert_eq!(service_type_names(&gcp, false), vec!["worker"]);
-        assert_eq!(service_type_names(&gcp, true), vec!["sandbox", "worker"]);
+        assert_eq!(
+            service_type_names(&gcp, DeclaredCompute::default()),
+            vec!["worker"]
+        );
+        assert_eq!(
+            service_type_names(&gcp, SANDBOX_ONLY),
+            vec!["sandbox", "worker"]
+        );
     }
 
     /// Pins `needs_regrant`'s containment check: a record that is a superset of what's needed does
