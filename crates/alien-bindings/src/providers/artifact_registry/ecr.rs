@@ -651,13 +651,28 @@ impl EcrArtifactRegistry {
             );
             return Ok(());
         }
+        // ECR creates the replica on the first push after a replication rule targets the region.
+        // A replica that never appears usually means no rule does, which this registry's roles
+        // cannot read, so the wait stays retryable and names the fix.
+        let source_region = self.credentials.region();
+        let fix = format!(
+            "if it never appears, add an ECR replication rule for {region} in the registry's \
+             account and publish a new release (only images pushed after the rule replicate), \
+             or deploy in {source_region}"
+        );
+        warn!(
+            repo_name = %repo_name,
+            region = %region,
+            registry_region = %source_region,
+            last_status = %last_status,
+            "Replicated ECR repository not created yet; {fix}"
+        );
         Err(AlienError::new(ErrorData::RegistryReplicaNotReady {
             repository: repo_name.to_string(),
             region: region.to_string(),
             details: format!(
-                "not created within {}s; last status: {}",
+                "not created within {}s; last status: {last_status}; {fix}",
                 REPLICA_WAIT.as_secs(),
-                last_status
             ),
         }))
     }
@@ -1952,6 +1967,18 @@ mod tests {
         assert_eq!(error.code, "REGISTRY_REPLICA_NOT_READY", "{error}");
         assert!(error.retryable, "a replica can still appear: {error}");
         assert!(error.to_string().contains("eu-west-1"), "{error}");
+        // A replica that never appears usually means no replication rule targets the region, so
+        // the error says how to end the wait.
+        assert!(
+            error
+                .to_string()
+                .contains("add an ECR replication rule for eu-west-1 in the registry's account"),
+            "{error}"
+        );
+        assert!(
+            error.to_string().contains("or deploy in us-east-1"),
+            "{error}"
+        );
         assert!(
             pending.hits_async().await >= 2,
             "the replica is polled until the bound"
