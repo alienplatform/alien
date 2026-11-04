@@ -1,0 +1,38 @@
+[
+  {
+    "currentValue": 6,
+    "limit": 10,
+    "name": {
+      "localizedValue": "Total Regional vCPUs",
+      "value": "cores"
+    },
+    "unit": "Count"
+  },
+  {
+    "currentValue": 0,
+    "limit": 10,
+    "name": {
+      "localizedValue": "Standard Dsv6 Family vCPUs",
+      "value": "StandardDsv6Family"
+    },
+    "unit": "Count"
+  },
+  {
+    "currentValue": 0,
+    "limit": 10,
+    "name": {
+      "localizedValue": "standard Dav6 Family vCPUs",
+      "value": "standardDav6Family"
+    },
+    "unit": "Count"
+  },
+  {
+    "currentValue": 0,
+    "limit": 10,
+    "name": {
+      "localizedValue": "Standard Esv6 Family vCPUs",
+      "value": "StandardEsv6Family"
+    },
+    "unit": "Count"
+  }
+]

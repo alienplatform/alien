@@ -653,6 +653,9 @@ mod tests {
     fn current_generation_skus_charge_their_provider_family() {
         let skus: Vec<ResourceSku> =
             serde_json::from_str(include_str!("fixtures/azure-compute-skus-v6.json")).unwrap();
+        // Rows the Compute Usages API returns for eastus; the family names keep its casing.
+        let usages: Vec<Usage> =
+            serde_json::from_str(include_str!("fixtures/azure-compute-usages-v6.json")).unwrap();
         for (machine, family) in [
             ("Standard_D2s_v6", "StandardDsv6Family"),
             ("Standard_E2s_v6", "StandardEsv6Family"),
@@ -666,6 +669,7 @@ mod tests {
             };
             assert_eq!(demands[family], expected, "{machine}");
             assert_eq!(demands["cores"], expected, "{machine}");
+            assert!(observation(&usages, family).is_some(), "{family}");
             crate::quotas::validate_warning_overrides(Platform::Azure, &[family.into()])
                 .unwrap_or_else(|_| panic!("{family} quota failures can be overridden"));
         }
