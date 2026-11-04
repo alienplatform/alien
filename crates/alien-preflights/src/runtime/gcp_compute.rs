@@ -141,6 +141,7 @@ fn demands_for(
         peak: 0.0,
         held: 0.0,
     };
+    let mut unchanged_family_held = BTreeMap::<String, f64>::new();
     let mut surges = BTreeMap::new();
     let mut total_surge = 0.0;
     for (id, entry) in &stack.resources {
@@ -168,6 +169,25 @@ fn demands_for(
                         && old.max_size == group.max_size
                 })
             {
+                // Compute Engine reports no usage for the per-family quota, so this
+                // group's running machines are the part of it the check knows about.
+                let running = current
+                    .and_then(|current| current.outputs.as_ref())
+                    .and_then(|outputs| outputs.downcast_ref::<ComputeClusterOutputs>())
+                    .and_then(|outputs| {
+                        outputs
+                            .capacity_group_statuses
+                            .iter()
+                            .find(|held| held.group_id == group.group_id)
+                    });
+                if let Some(running) = running {
+                    if let Some(Some((code, units))) = units(&running.instance_type, gpus) {
+                        if code.starts_with(GCP_VM_FAMILY_QUOTA_PREFIX) {
+                            *unchanged_family_held.entry(code).or_insert(0.0) +=
+                                f64::from(running.current_machines) * units;
+                        }
+                    }
+                }
                 continue;
             }
             let machine = group.instance_type.as_deref()?;
@@ -225,6 +245,14 @@ fn demands_for(
             }
             .add_to(&mut total, &mut total_surge, required);
             total.held += f64::from(current_count) * plan.previous_units;
+        }
+    }
+    // A family no changed group uses needs no check. Adding the same amount to
+    // peak and held keeps the additional demand and raises the known usage.
+    for (code, held) in unchanged_family_held {
+        if let Some(demand) = demands.get_mut(&code) {
+            demand.peak += held;
+            demand.held += held;
         }
     }
     if !demands.is_empty() {
@@ -946,6 +974,150 @@ mod tests {
                 needed: 80.0
             }
         );
+    }
+
+    fn pool_group(id: &str, machine: &str, min: u32, max: u32) -> CapacityGroup {
+        CapacityGroup {
+            group_id: id.into(),
+            instance_type: Some(machine.into()),
+            min_size: min,
+            max_size: max,
+            profile: None,
+            scale_policy: None,
+            nested_virtualization: None,
+            data_disk_gib_range: None,
+        }
+    }
+
+    fn pools(groups: Vec<CapacityGroup>) -> Stack {
+        let mut cluster = ComputeCluster::new("cluster".into());
+        for group in groups {
+            cluster = cluster.capacity_group(group);
+        }
+        Stack::new("quota-test".into())
+            .add(cluster.build(), ResourceLifecycle::Live)
+            .build()
+    }
+
+    fn group_status(id: &str, machine: &str, machines: u32) -> serde_json::Value {
+        serde_json::json!({"groupId": id, "instanceType": machine, "currentMachines": machines, "desiredMachines": machines})
+    }
+
+    fn running_state(old: &Stack, statuses: serde_json::Value) -> StackState {
+        let mut state = StackState::new(Platform::Gcp);
+        let mut current = StackResourceState::new_pending(
+            "cluster".into(),
+            old.resources["cluster"].config.clone(),
+            None,
+            vec![],
+        );
+        current.status = ResourceStatus::Running;
+        let outputs: ComputeClusterOutputs = serde_json::from_value(serde_json::json!({
+            "clusterId": "quota-test", "horizonReady": true, "totalMachines": 2,
+            "capacityGroupStatuses": statuses
+        }))
+        .unwrap();
+        current.outputs = Some(ResourceOutputs::new(outputs));
+        state.resources.insert("cluster".into(), current);
+        state
+    }
+
+    async fn run_check(desired: &Stack, state: &StackState) -> CheckResult {
+        let mut compute = alien_gcp_clients::compute::MockComputeApi::new();
+        compute.expect_get_region_quotas().returning(|_| {
+            Ok(serde_json::from_str(include_str!("fixtures/gcp-regional-quotas.json")).unwrap())
+        });
+        compute.expect_get_project_quotas().returning(|| {
+            Ok(serde_json::from_str(
+                r#"{"quotas":[{"metric":"CPUS_ALL_REGIONS","limit":9999,"usage":160}]}"#,
+            )
+            .unwrap())
+        });
+        let mut quotas = alien_gcp_clients::cloud_quotas::MockCloudQuotasApi::new();
+        quotas.expect_get_quota_info().returning(|_, id| match id {
+            "CPUS-ALL-REGIONS-per-project" => Ok(serde_json::from_str(include_str!(
+                "fixtures/gcp-cloud-quota-cpus.json"
+            ))
+            .unwrap()),
+            _ => Ok(serde_json::from_str(include_str!(
+                "fixtures/gcp-cloud-quota-cpus-per-vm-family.json"
+            ))
+            .unwrap()),
+        });
+        let mut result = CheckResult::success();
+        check(
+            desired,
+            state,
+            "test",
+            "us-central1",
+            &compute,
+            &quotas,
+            &mut result,
+        )
+        .await;
+        result
+    }
+
+    #[tokio::test]
+    async fn a_new_pool_counts_the_unchanged_running_pool_of_its_family() {
+        // Pool a runs 2 x n4-standard-80 unchanged (160 N4 vCPUs); new pool b adds 80,
+        // and 240 is over the applied N4 limit of 200.
+        let old = pools(vec![pool_group("a", "n4-standard-80", 2, 2)]);
+        let state = running_state(
+            &old,
+            serde_json::json!([group_status("a", "n4-standard-80", 2)]),
+        );
+        let desired = pools(vec![
+            pool_group("a", "n4-standard-80", 2, 2),
+            pool_group("b", "n4-standard-80", 1, 1),
+        ]);
+        let result = run_check(&desired, &state).await;
+        assert!(!result.success);
+        assert_eq!(
+            *outcome(&result, "CPUS_PER_VM_FAMILY/N4"),
+            QuotaOutcome::Fail {
+                used: 160.0,
+                limit: 200.0,
+                needed: 80.0
+            }
+        );
+        // The deployment unchanged still updates: no family demand at all.
+        let result = run_check(
+            &desired,
+            &running_state(
+                &desired,
+                serde_json::json!([
+                    group_status("a", "n4-standard-80", 2),
+                    group_status("b", "n4-standard-80", 1)
+                ]),
+            ),
+        )
+        .await;
+        assert!(result.success);
+        assert!(result.quota_results.is_empty());
+    }
+
+    #[test]
+    fn unchanged_pools_leave_quotas_with_provider_usage_alone() {
+        // N2 usage comes from Compute Engine, which already counts the running pool.
+        let old = pools(vec![pool_group("a", "n2-standard-2", 2, 2)]);
+        let state = running_state(
+            &old,
+            serde_json::json!([group_status("a", "n2-standard-2", 2)]),
+        );
+        let desired = pools(vec![
+            pool_group("a", "n2-standard-2", 2, 2),
+            pool_group("b", "n2-standard-2", 1, 1),
+        ]);
+        let new_pool_only = QuotaDemand {
+            peak: 2.0,
+            held: 0.0,
+        };
+        for required in [false, true] {
+            let demands = demands_for(&desired, &state, false, required).unwrap();
+            assert_eq!(demands["N2_CPUS"], new_pool_only);
+            assert_eq!(demands["CPUS_ALL_REGIONS"], new_pool_only);
+        }
     }
 
     #[tokio::test]
