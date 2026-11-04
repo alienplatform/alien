@@ -163,6 +163,10 @@ fn family_usage(state: &StackState) -> (BTreeMap<String, f64>, bool) {
                 .any(|status| status.group_id == group.group_id)
         });
         for status in statuses {
+            if status.instance_type.is_empty() {
+                resolved = false;
+                continue;
+            }
             let Some(code) = family_metric(&status.instance_type)
                 .filter(|code| code.starts_with(GCP_VM_FAMILY_QUOTA_PREFIX))
             else {
@@ -178,6 +182,189 @@ fn family_usage(state: &StackState) -> (BTreeMap<String, f64>, bool) {
         }
     }
     (usage, resolved)
+}
+
+/// The per-family quota and vCPUs of one machine, or None for other quotas and
+/// machine types missing from the catalog.
+fn family_vcpus(machine: &str) -> Option<(String, f64)> {
+    let code =
+        family_metric(machine).filter(|code| code.starts_with(GCP_VM_FAMILY_QUOTA_PREFIX))?;
+    Some((
+        code,
+        f64::from(find_instance_type(Platform::Gcp, machine)?.vcpu),
+    ))
+}
+
+/// vCPUs per family over the controller's update phases. Each value is added to
+/// the phase's total when the machine is in a per-family quota.
+#[derive(Default)]
+struct FamilyPhases {
+    resize: BTreeMap<String, f64>,
+    create: BTreeMap<String, f64>,
+    roll: BTreeMap<String, f64>,
+    surge: BTreeMap<String, f64>,
+}
+
+impl FamilyPhases {
+    fn add(phase: &mut BTreeMap<String, f64>, machine: &str, machines: u32) {
+        if let Some((code, vcpus)) = family_vcpus(machine) {
+            *phase.entry(code).or_insert(0.0) += f64::from(machines) * vcpus;
+        }
+    }
+
+    /// Machines that run in every phase.
+    fn add_throughout(&mut self, machine: &str, machines: u32) {
+        Self::add(&mut self.resize, machine, machines);
+        Self::add(&mut self.create, machine, machines);
+        Self::add(&mut self.roll, machine, machines);
+    }
+
+    fn peaks(self) -> BTreeMap<String, f64> {
+        let mut peaks = BTreeMap::<String, f64>::new();
+        for (code, value) in self
+            .resize
+            .into_iter()
+            .chain(self.create)
+            .chain(merge(self.roll, self.surge))
+        {
+            let peak = peaks.entry(code).or_insert(0.0);
+            *peak = peak.max(value);
+        }
+        peaks
+    }
+}
+
+fn merge(mut into: BTreeMap<String, f64>, from: BTreeMap<String, f64>) -> BTreeMap<String, f64> {
+    for (code, value) in from {
+        *into.entry(code).or_insert(0.0) += value;
+    }
+    into
+}
+
+/// Peak vCPUs of each per-family quota while the update runs, in the GCP
+/// controller's update order for each cluster:
+/// 1. existing groups resize, on their current machine type, while removed groups
+///    still run;
+/// 2. removed groups are deleted, and their deletion awaited, before new groups are
+///    created at their initial size;
+/// 3. groups whose machine type or disks change roll one machine at a time; only
+///    one replacement surge is counted, since rolls may serialize.
+///
+/// Clusters update independently, so their peaks add up. A cluster in state that
+/// the stack no longer has keeps its machines in every phase.
+/// `required` uses the counts this update launches; otherwise each group's maximum.
+fn family_peaks(stack: &Stack, state: &StackState, required: bool) -> BTreeMap<String, f64> {
+    let mut total = BTreeMap::<String, f64>::new();
+    let running_now = |current: &alien_core::StackResourceState| {
+        current.status != ResourceStatus::Deleted
+            && !(current.status == ResourceStatus::Pending
+                && current.internal_state.is_none()
+                && current.last_failed_state.is_none())
+    };
+    let statuses = |current: &alien_core::StackResourceState| {
+        current
+            .outputs
+            .as_ref()
+            .and_then(|outputs| outputs.downcast_ref::<ComputeClusterOutputs>())
+            .map(|outputs| outputs.capacity_group_statuses.clone())
+            .unwrap_or_default()
+    };
+    for (id, current) in &state.resources {
+        if stack.resources.contains_key(id)
+            || current.config.downcast_ref::<ComputeCluster>().is_none()
+            || !running_now(current)
+        {
+            continue;
+        }
+        let mut phases = FamilyPhases::default();
+        for status in statuses(current) {
+            phases.add_throughout(&status.instance_type, status.current_machines);
+        }
+        total = merge(total, phases.peaks());
+    }
+    for (id, entry) in &stack.resources {
+        let Some(cluster) = entry.config.downcast_ref::<ComputeCluster>() else {
+            continue;
+        };
+        let current = state
+            .resources
+            .get(id)
+            .filter(|current| running_now(current));
+        let old = current.and_then(|current| current.config.downcast_ref::<ComputeCluster>());
+        let rows = current.map(statuses).unwrap_or_default();
+        let mut phases = FamilyPhases::default();
+        for row in rows.iter().filter(|row| {
+            !cluster
+                .capacity_groups
+                .iter()
+                .any(|group| group.group_id == row.group_id)
+        }) {
+            FamilyPhases::add(&mut phases.resize, &row.instance_type, row.current_machines);
+        }
+        for group in &cluster.capacity_groups {
+            let Some(machine) = group.instance_type.as_deref() else {
+                continue;
+            };
+            let Some(row) = rows.iter().find(|row| row.group_id == group.group_id) else {
+                let initial = if required {
+                    group.min_size
+                } else {
+                    group.max_size
+                };
+                FamilyPhases::add(&mut phases.create, machine, initial);
+                FamilyPhases::add(&mut phases.roll, machine, initial);
+                continue;
+            };
+            let target = if required {
+                row.current_machines.max(group.min_size).min(group.max_size)
+            } else {
+                group.max_size
+            };
+            let old_machine = row.instance_type.as_str();
+            FamilyPhases::add(
+                &mut phases.resize,
+                old_machine,
+                row.current_machines.max(target),
+            );
+            FamilyPhases::add(&mut phases.create, old_machine, target);
+            let rolls = old
+                .and_then(|old| {
+                    old.capacity_groups
+                        .iter()
+                        .find(|old| old.group_id == group.group_id)
+                })
+                .map_or(old_machine != machine, |old| {
+                    old.instance_type.as_deref() != Some(machine) || old.disks_differ(group)
+                });
+            if !rolls {
+                FamilyPhases::add(&mut phases.roll, old_machine, target);
+                continue;
+            }
+            // The roll ends with the new machines. Within one family, a new machine
+            // starts before an old one stops, so one extra machine briefly runs.
+            let t = f64::from(target);
+            match (family_vcpus(old_machine), family_vcpus(machine)) {
+                (Some((old_code, old_vcpus)), Some((new_code, new_vcpus)))
+                    if old_code == new_code =>
+                {
+                    let settled = (t * old_vcpus).max(t * new_vcpus);
+                    *phases.roll.entry(old_code.clone()).or_insert(0.0) += settled;
+                    if target > 0 {
+                        let peak = (t * old_vcpus + new_vcpus).max(t * new_vcpus + old_vcpus);
+                        let surge = phases.surge.entry(old_code).or_insert(0.0);
+                        *surge = surge.max(peak - settled);
+                    }
+                }
+                (start, end) => {
+                    for (code, vcpus) in start.into_iter().chain(end) {
+                        *phases.roll.entry(code).or_insert(0.0) += t * vcpus;
+                    }
+                }
+            }
+        }
+        total = merge(total, phases.peaks());
+    }
+    total
 }
 
 fn demands(stack: &Stack, state: &StackState, gpus: bool) -> Option<BTreeMap<String, QuotaDemand>> {
@@ -281,19 +468,19 @@ fn demands_for(
             total.held += f64::from(current_count) * plan.previous_units;
         }
     }
+    // Per-family quotas follow the controller's phases instead of per-group netting:
+    // their usage is not readable, so held is what the deployment runs now.
     if !gpus {
         let (usage, _) = family_usage(state);
+        let peaks = family_peaks(stack, state, required);
         for (code, demand) in demands
             .iter_mut()
             .filter(|(code, _)| code.starts_with(GCP_VM_FAMILY_QUOTA_PREFIX))
         {
-            if let Some(additional) = demand.additional() {
-                let held = usage.get(code).copied().unwrap_or(0.0);
-                *demand = QuotaDemand {
-                    peak: held + additional,
-                    held,
-                };
-            }
+            *demand = QuotaDemand {
+                peak: peaks.get(code).copied().unwrap_or(0.0),
+                held: usage.get(code).copied().unwrap_or(0.0),
+            };
         }
     }
     if !demands.is_empty() {
@@ -1267,6 +1454,157 @@ mod tests {
                 reason: "applied limit is 200, but provider-reported usage is unavailable and held capacity is unresolved".into()
             }
         );
+    }
+
+    #[tokio::test]
+    async fn removed_groups_run_during_resize_but_not_beside_new_groups() {
+        // b (2 x n4-80) is removed and c (1 x n4-80) added. The controller deletes b's
+        // MIG and waits before creating c: resize 160, create 80, roll 80.
+        let removed_then_added = (
+            vec![("b", "n4-standard-80", 2)],
+            vec![pool_group("c", "n4-standard-80", 1, 1)],
+        );
+        // b (1 x n4-80) is removed while c grows from 1 to 2 x n4-64: during the resize
+        // b still runs beside both of c's machines, 80 + 128 = 208.
+        let removed_while_resizing = (
+            vec![("b", "n4-standard-80", 1), ("c", "n4-standard-64", 1)],
+            vec![pool_group("c", "n4-standard-64", 2, 2)],
+        );
+        for ((running, desired), peak, expected) in [
+            (
+                removed_then_added,
+                160.0,
+                QuotaOutcome::Unknown {
+                    reason: "applied limit is 200, but provider-reported usage is unavailable"
+                        .into(),
+                },
+            ),
+            (
+                removed_while_resizing,
+                208.0,
+                QuotaOutcome::Fail {
+                    used: 144.0,
+                    limit: 200.0,
+                    needed: 64.0,
+                },
+            ),
+        ] {
+            let old = pools(
+                running
+                    .iter()
+                    .map(|(id, machine, machines)| pool_group(id, machine, *machines, *machines))
+                    .collect(),
+            );
+            let state = running_state(
+                &old,
+                serde_json::Value::Array(
+                    running
+                        .iter()
+                        .map(|(id, machine, machines)| group_status(id, machine, *machines))
+                        .collect(),
+                ),
+            );
+            let desired = pools(desired);
+            assert_eq!(
+                family_peaks(&desired, &state, true)["CPUS_PER_VM_FAMILY/N4"],
+                peak
+            );
+            let result = run_check(&desired, &state).await;
+            assert_eq!(*outcome(&result, "CPUS_PER_VM_FAMILY/N4"), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_running_machine_type_decides_the_known_usage() {
+        // Config says n4-standard-80, but the pool still runs 2 x n4-standard-64.
+        let old = pools(vec![pool_group("a", "n4-standard-80", 2, 2)]);
+        let state = running_state(
+            &old,
+            serde_json::json!([group_status("a", "n4-standard-64", 2)]),
+        );
+        let desired = pools(vec![
+            pool_group("a", "n4-standard-80", 2, 2),
+            pool_group("b", "n4-standard-80", 1, 1),
+        ]);
+        let result = run_check(&desired, &state).await;
+        assert_eq!(
+            *outcome(&result, "CPUS_PER_VM_FAMILY/N4"),
+            QuotaOutcome::Fail {
+                used: 128.0,
+                limit: 200.0,
+                needed: 80.0
+            }
+        );
+    }
+
+    #[test]
+    fn families_are_counted_apart() {
+        let old = pools(vec![
+            pool_group("a", "n4-standard-80", 2, 2),
+            pool_group("b", "c4-standard-8", 1, 1),
+        ]);
+        let state = running_state(
+            &old,
+            serde_json::json!([
+                group_status("a", "n4-standard-80", 2),
+                group_status("b", "c4-standard-8", 1)
+            ]),
+        );
+        let desired = pools(vec![
+            pool_group("a", "n4-standard-80", 2, 2),
+            pool_group("b", "c4-standard-8", 2, 2),
+        ]);
+        let demands = demands_for(&desired, &state, false, true).unwrap();
+        assert_eq!(
+            demands["CPUS_PER_VM_FAMILY/C4"],
+            QuotaDemand {
+                peak: 16.0,
+                held: 8.0
+            }
+        );
+        assert!(!demands.contains_key("CPUS_PER_VM_FAMILY/N4"));
+    }
+
+    #[test]
+    fn known_usage_skips_clusters_that_run_nothing_and_flags_unknown_rows() {
+        let cluster = pools(vec![pool_group("o", "n4-standard-80", 2, 2)]);
+        let entry = |status, started: bool, machine: &str| {
+            let mut entry =
+                running_state(&cluster, serde_json::json!([group_status("o", machine, 2)]))
+                    .resources
+                    .remove("cluster")
+                    .unwrap();
+            entry.status = status;
+            entry.internal_state = started.then(|| serde_json::json!({}));
+            entry
+        };
+        for (status, started, counted) in [
+            (ResourceStatus::Running, true, true),
+            (ResourceStatus::UpdateFailed, true, true),
+            (ResourceStatus::Deleting, true, true),
+            (ResourceStatus::Pending, true, true),
+            (ResourceStatus::Pending, false, false),
+            (ResourceStatus::Deleted, false, false),
+        ] {
+            let mut state = StackState::new(Platform::Gcp);
+            state
+                .resources
+                .insert("other".into(), entry(status, started, "n4-standard-80"));
+            let (usage, resolved) = family_usage(&state);
+            assert!(resolved, "{status:?}");
+            assert_eq!(
+                usage.get("CPUS_PER_VM_FAMILY/N4").copied(),
+                counted.then_some(160.0),
+                "{status:?} started {started}"
+            );
+        }
+        let mut state = StackState::new(Platform::Gcp);
+        state
+            .resources
+            .insert("other".into(), entry(ResourceStatus::Running, true, ""));
+        let (usage, resolved) = family_usage(&state);
+        assert!(!resolved);
+        assert!(usage.is_empty());
     }
 
     #[test]
