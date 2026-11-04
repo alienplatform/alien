@@ -21,7 +21,7 @@ platform = ["dep:oauth2", "dep:open"]
 
 [dependencies]
 bon = { workspace = true }
-alien-core = { workspace = true, features = ["release-signature"] }
+alien-core = { workspace = true }
 alien-client-config = { workspace = true, features = ["aws"] }
 alien-cloudformation = { workspace = true }
 alien-helm = { workspace = true }
@@ -98,6 +98,8 @@ flate2 = "1"
 tar = "0.4"
 toml = "0.9"
 crossterm = { workspace = true }
+alien-release-trust = { workspace = true }
+alien-aws-clients = { workspace = true }
 
 [dev-dependencies]
 alien-aws-clients = { workspace = true, features = ["test-utils"] }

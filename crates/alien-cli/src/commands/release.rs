@@ -1,14 +1,13 @@
-use crate::commands::release_key::load_signing_key;
 use crate::execution_context::{ExecutionMode, ManagerContext};
 use crate::get_current_dir;
 use crate::git_utils::collect_git_metadata;
 use crate::output::print_json;
+use crate::signing::{self, api::SigningApi, SignerArgs, SigningHome};
 use crate::ui::{command, contextual_heading, dim_label, success_line};
 use crate::{ErrorData, Result};
 use alien_build::{settings::PushSettings, ImageDestinations};
-use alien_core::release_signature::{
-    code_image, code_image_mut, image_digest, ReleaseSigningKey, ReleaseStatement, TrustedKeys,
-    STATEMENT_TYPE,
+use alien_core::release_statement::{
+    code_image, code_image_mut, image_digest, release_body, ReleaseOptions,
 };
 use alien_core::{
     alien_event, is_deployer_secret_input, AlienEvent, Container, ContainerCode, Daemon,
@@ -160,16 +159,24 @@ pub struct ReleaseArgs {
     #[arg(long)]
     pub registry_password: Option<String>,
 
-    /// Sign the release with this key (from `alien release-key generate`). Every
-    /// image is pinned to its digest, and each platform's stack is signed, so
-    /// deployments that pin your public key run only what you released.
-    #[arg(long, env = "ALIEN_RELEASE_SIGNING_KEY_FILE")]
-    pub signing_key_file: Option<PathBuf>,
+    /// Sign the release. Every image is pinned to its digest and each
+    /// platform's workloads are signed, so protected deployments run exactly
+    /// what was released. Signs with this machine's device key unless a CI key
+    /// is given.
+    #[arg(long)]
+    pub sign: bool,
 
-    /// Operator image, as `repository@sha256:<digest>`, that deployments pinning
-    /// your key may update themselves to. Requires --signing-key-file.
-    #[arg(long, requires = "signing_key_file")]
-    pub operator_image: Option<String>,
+    #[command(flatten)]
+    pub signer: SignerArgs,
+
+    /// Environment variable names deployment config may set with a signed
+    /// `alien deployments set-env --sign`. Nothing else can change env.
+    #[arg(long, value_delimiter = ',', requires = "sign")]
+    pub configurable_env: Vec<String>,
+
+    /// Developer input ids deployment config may set with a signed config.
+    #[arg(long, value_delimiter = ',', requires = "sign")]
+    pub configurable_input: Vec<String>,
 }
 
 /// JSON output for release command
@@ -205,9 +212,8 @@ pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()
         #[cfg(feature = "platform")]
         parse_release_title(Some(title))?;
     }
-    if let Some(path) = &args.signing_key_file {
-        validate_signing(&args, &ctx)?;
-        load_signing_key(path)?;
+    if args.sign {
+        validate_signing(&args)?;
     }
 
     if args.no_stack {
@@ -634,16 +640,16 @@ async fn release_task_core(
         local: None,
         test: None,
     };
-    let signing_key = args
-        .signing_key_file
-        .as_deref()
-        .map(load_signing_key)
-        .transpose()?;
-    // One sequence for the whole release: the signing time, which only grows.
-    let sequence = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis() as u64)
-        .unwrap_or_default();
+    // Open the signer and verify the signer list before building anything,
+    // so a key that isn't on the list fails here and not after the push.
+    let signing = if args.sign {
+        validate_signing(&args)?;
+        Some(open_release_signer(&args, ctx, &project_link.project_id).await?)
+    } else {
+        None
+    };
+    // One sequence for every platform of the release.
+    let sequence = signing::new_sequence();
     let mut signed_stacks = HashMap::new();
 
     for platform_str in &platforms_to_release {
@@ -679,22 +685,27 @@ async fn release_task_core(
                 platform,
                 built_stack,
                 &output_dir,
-                signing_key.is_some(),
+                signing.is_some(),
             )
             .await?
         } else {
             built_stack
         };
-        if let Some(key) = &signing_key {
+        if let Some((signer, chain)) = &signing {
             let signed = sign_platform_stack(
-                key,
+                signer,
+                chain,
                 &project_link.project_id,
                 platform,
                 sequence,
                 &pushed_stack,
-                args.operator_image.as_deref(),
-            )?;
-            signed_stacks.insert(platform.as_str().to_string(), signed);
+                &ReleaseOptions {
+                    configurable_env: args.configurable_env.clone(),
+                    configurable_inputs: args.configurable_input.clone(),
+                },
+            )
+            .await?;
+            signed_stacks.insert(platform.as_str().to_string(), manager_statement(&signed)?);
         }
 
         // Convert to JSON for the API
@@ -779,60 +790,102 @@ async fn release_task_core(
 }
 
 /// Refuse signing options this release can't honor, before building anything.
-fn validate_signing(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<()> {
+fn validate_signing(args: &ReleaseArgs) -> Result<()> {
     if args.no_stack {
         return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: "A stackless release has nothing to sign; omit --signing-key-file".to_string(),
+            message: "A stackless release has nothing to sign; omit --sign".to_string(),
         }));
     }
-    if ctx.is_platform() {
+    // A build override replaces code the release would otherwise build from
+    // pinned inputs, so a signed release takes none.
+    if let Some(image) = &args.override_base_image {
         return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: "Signed releases are stored by a manager; release to a manager, or omit --signing-key-file"
-                .to_string(),
+            message: format!(
+                "--sign refuses --override-base-image ({image}): a signed release builds only from the base images this CLI pins"
+            ),
         }));
-    }
-    if let Some(image) = &args.operator_image {
-        if image_digest(image).is_none() {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "operator-image".to_string(),
-                message: format!("'{image}' must be pinned as repository@sha256:<digest>"),
-            }));
-        }
     }
     Ok(())
 }
 
-/// Sign `stack` for `platform`, then check the result with the same rules a
-/// protected deployment applies, so a release it would refuse fails here.
-fn sign_platform_stack(
-    key: &ReleaseSigningKey,
+/// The release signer, after verifying the project's signer list and
+/// checking the signer may release.
+async fn open_release_signer(
+    args: &ReleaseArgs,
+    ctx: &ExecutionMode,
+    project_id: &str,
+) -> Result<(signing::StatementSigner, alien_release_trust::SignerChain)> {
+    let home = SigningHome::current()?;
+    let api = SigningApi::from_context(ctx).await?;
+    let chain =
+        signing::verified_chain(&api, &home, project_id, args.signer.fingerprint.as_deref())
+            .await?;
+    let signer = args.signer.open(&home).await?;
+    signing::check_signer(&chain, &signer, alien_release_trust::Role::Release)?;
+    Ok((signer, chain))
+}
+
+/// The manager SDK's copy of a signed statement. Both are the same two
+/// strings; the payload is carried, never re-encoded.
+fn manager_statement(
+    statement: &alien_core::SignedStatement,
+) -> Result<alien_manager_api::types::SignedStatement> {
+    Ok(alien_manager_api::types::SignedStatement {
+        payload: statement.payload.clone(),
+        signatures: statement
+            .signatures
+            .iter()
+            .map(|signature| alien_manager_api::types::Signature {
+                signer: signature.signer.clone(),
+                sig: signature.sig.clone(),
+            })
+            .collect(),
+    })
+}
+
+/// Sign `stack` for `platform` as a `release/v2` statement, then verify the
+/// result with the checks a protected deployment runs, so a release it would
+/// refuse fails here.
+async fn sign_platform_stack(
+    signer: &signing::StatementSigner,
+    chain: &alien_release_trust::SignerChain,
     project_id: &str,
     platform: Platform,
     sequence: u64,
     stack: &Stack,
-    operator_image: Option<&str>,
-) -> Result<alien_manager_api::types::SignedRelease> {
+    options: &ReleaseOptions,
+) -> Result<alien_core::SignedStatement> {
     let refused = |reason: String| ErrorData::ReleaseFailed {
         message: format!("Can't sign the {} stack: {reason}", platform.as_str()),
     };
-    let signed = key
-        .sign(&ReleaseStatement {
-            statement_type: STATEMENT_TYPE.to_string(),
-            project: project_id.to_string(),
-            platform,
-            sequence,
-            stack: stack.clone(),
-            operator_image: operator_image.map(str::to_string),
-        })
-        .context(refused("the statement could not be built".to_string()))?;
-    TrustedKeys::parse(&[key.public_key()])
-        .context(refused("the key is invalid".to_string()))?
-        .verify(project_id, platform, &signed)
-        .map_err(|rejection| AlienError::new(refused(rejection.to_string())))?;
-    Ok(alien_manager_api::types::SignedRelease {
-        payload: signed.payload,
-        signature: signed.signature,
-    })
+    let body = release_body(platform, stack, options)
+        .map_err(|error| AlienError::new(refused(error.message)))?;
+    let mut envelope = signing::envelope(
+        alien_release_trust::Kind::Release,
+        project_id,
+        None,
+        chain,
+        body,
+    );
+    envelope.sequence = sequence;
+    let statement = signing::sign_envelope(&envelope, signer).await?;
+    let list = chain.current();
+    let opened = statement
+        .open()
+        .map_err(|error| AlienError::new(refused(error.message)))?;
+    list.check_signatures(&opened, alien_release_trust::Role::Release)
+        .map_err(|error| AlienError::new(refused(error.message)))?;
+    let verified: alien_release_trust::ReleaseBody = opened
+        .body()
+        .map_err(|error| AlienError::new(refused(error.message)))?;
+    let carried = alien_core::release_statement::signed_stack(&verified, platform)
+        .map_err(|error| AlienError::new(refused(error.message)))?;
+    if &carried != stack {
+        return Err(AlienError::new(refused(
+            "the signed stack does not read back as the pushed stack".to_string(),
+        )));
+    }
+    Ok(statement)
 }
 
 /// Fail before building when a manager you run has no such channel.
@@ -872,7 +925,7 @@ async fn create_manager_release(
     manager: &ManagerContext,
     project_id: &str,
     stack: ManagerStackByPlatform,
-    signed_stacks: HashMap<String, alien_manager_api::types::SignedRelease>,
+    signed_stacks: HashMap<String, alien_manager_api::types::SignedStatement>,
     git_metadata: Option<alien_manager_api::types::GitMetadata>,
     channel: &str,
 ) -> Result<String> {
@@ -3871,9 +3924,26 @@ mod tests {
 
     /// A manager that records each release request body and answers it.
     async fn start_recording_manager() -> (String, Arc<std::sync::Mutex<Vec<serde_json::Value>>>) {
+        start_recording_manager_with_lists(Vec::new()).await
+    }
+
+    /// A manager that records release bodies and serves `signer_lists` for
+    /// project `default`, as a compromised one could serve any list.
+    async fn start_recording_manager_with_lists(
+        signer_lists: Vec<alien_core::SignedStatement>,
+    ) -> (String, Arc<std::sync::Mutex<Vec<serde_json::Value>>>) {
         let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
         let recorded = requests.clone();
-        let app = axum::Router::new().route(
+        let lists = serde_json::json!({ "items": signer_lists });
+        let app = axum::Router::new()
+            .route(
+                "/v1/projects/default/signer-lists",
+                axum::routing::get(move || {
+                    let lists = lists.clone();
+                    async move { axum::Json(lists) }
+                }),
+            )
+            .route(
             "/v1/releases",
             axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
                 let recorded = recorded.clone();
@@ -3945,17 +4015,54 @@ mod tests {
         release_task_core(args, config, &ctx).await
     }
 
-    /// With a key, the release carries a statement that verifies against the
-    /// key's public half and holds exactly the stack sent beside it. Without
-    /// one, the request is what it has always been.
+    /// A one-key signer list for project `default` whose key releases.
+    fn release_signer(
+        seed: u8,
+    ) -> (
+        alien_release_trust::SoftwareKey,
+        alien_core::SignedStatement,
+    ) {
+        let key = alien_release_trust::SoftwareKey::from_secret_bytes(&[seed; 32]).unwrap();
+        let envelope = alien_release_trust::Envelope {
+            kind: alien_release_trust::Kind::SignerList.as_str().to_string(),
+            project: Some("default".to_string()),
+            deployment: None,
+            sequence: 1,
+            not_after: None,
+            signer_list_version: 1,
+            body: alien_release_trust::SignerListBody {
+                previous: None,
+                admin_threshold: 1,
+                signers: vec![alien_release_trust::Signer {
+                    id: "ci".to_string(),
+                    key: key.public_key().as_str().to_string(),
+                    kind: alien_release_trust::SignerKind::Ci,
+                    roles: vec![
+                        alien_release_trust::Role::Release,
+                        alien_release_trust::Role::Admin,
+                    ],
+                    label: None,
+                }],
+                deny: Vec::new(),
+            },
+        };
+        let list = alien_core::SignedStatement::new(&envelope.to_payload().unwrap())
+            .sign_with("ci", &key)
+            .unwrap();
+        (key, list)
+    }
+
+    /// Signed, the release carries a `release/v2` statement that verifies from
+    /// the pinned fingerprint and reads back as exactly the stack sent beside
+    /// it. Unsigned, the request is what it has always been.
     #[tokio::test]
     async fn a_signed_release_carries_a_verifiable_statement_of_its_stack() {
-        let (manager_url, requests) = start_recording_manager().await;
+        let (key, list) = release_signer(11);
+        let fingerprint = alien_release_trust::fingerprint(&list.open().unwrap().digest);
+        let (manager_url, requests) = start_recording_manager_with_lists(vec![list.clone()]).await;
         let keys = tempfile::tempdir().unwrap();
-        let key_file = keys.path().join("release.pem");
-        let key = ReleaseSigningKey::from_secret_bytes(&[11; 32]).unwrap();
+        let key_file = keys.path().join("ci.pem");
         fs::write(&key_file, key.to_pkcs8_pem().unwrap()).unwrap();
-        let operator = format!("registry.example.com/operator@sha256:{}", "b".repeat(64));
         let stack = Stack::new("app".to_string())
             .add(
                 test_container(
@@ -3971,10 +4078,13 @@ mod tests {
             &manager_url,
             &stack,
             &[
+                "--sign",
                 "--signing-key-file",
                 key_file.to_str().unwrap(),
-                "--operator-image",
-                &operator,
+                "--signing-fingerprint",
+                &fingerprint,
+                "--configurable-env",
+                "FEATURE_FLAGS",
             ],
         )
         .await
@@ -3988,42 +4098,118 @@ mod tests {
             requests[0]
         );
         assert_eq!(requests[0]["stack"], requests[1]["stack"]);
-        let signed: alien_core::SignedRelease =
+        let signed: alien_core::SignedStatement =
             serde_json::from_value(requests[1]["signedStacks"]["test"].clone()).unwrap();
-        let verified = TrustedKeys::parse(&[key.public_key()])
+        let anchor = alien_release_trust::Anchor {
+            project: "default".to_string(),
+            deployment: "dep_1".to_string(),
+            protected: true,
+            signing: fingerprint,
+            components: key.public_key().as_str().to_string(),
+            session_approval: Default::default(),
+            inputs: None,
+        };
+        let verified = alien_release_trust::Trust::new(anchor, &[list])
             .unwrap()
-            .verify("default", Platform::Test, &signed)
-            .expect("the statement verifies against the developer's key");
-        assert_eq!(verified.stack, stack);
-        assert_eq!(verified.operator_image.as_deref(), Some(operator.as_str()));
+            .verify::<alien_release_trust::ReleaseBody>(
+                &signed,
+                alien_release_trust::Kind::Release,
+                chrono::Utc::now(),
+            )
+            .expect("the statement verifies from the pinned fingerprint");
+        assert_eq!(
+            verified.body.configurable.env,
+            vec!["FEATURE_FLAGS".to_string()]
+        );
+        assert_eq!(
+            alien_core::release_statement::signed_stack(&verified.body, Platform::Test).unwrap(),
+            stack
+        );
     }
 
-    /// The CLI refuses a stack a protected deployment would refuse, before
-    /// anything is created.
+    /// The CLI refuses to sign a stack a protected deployment would refuse, a
+    /// key the signer list doesn't hold, a list that doesn't match the pinned
+    /// fingerprint, and a build override, all before anything is created.
     #[tokio::test]
     async fn a_release_that_cannot_be_signed_is_not_created() {
-        let (manager_url, requests) = start_recording_manager().await;
+        let (key, list) = release_signer(11);
+        let fingerprint = alien_release_trust::fingerprint(&list.open().unwrap().digest);
         let keys = tempfile::tempdir().unwrap();
-        let key_file = keys.path().join("release.pem");
-        let key = ReleaseSigningKey::from_secret_bytes(&[11; 32]).unwrap();
+        let key_file = keys.path().join("ci.pem");
         fs::write(&key_file, key.to_pkcs8_pem().unwrap()).unwrap();
+        let pinned_stack = Stack::new("app".to_string())
+            .add(
+                test_container(
+                    "web",
+                    format!("registry.example.com/app/web@sha256:{}", "a".repeat(64)),
+                ),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let sign = [
+            "--sign",
+            "--signing-key-file",
+            key_file.to_str().unwrap(),
+            "--signing-fingerprint",
+            fingerprint.as_str(),
+        ];
+
         // The test platform pushes nothing, so nothing pins this tag.
-        let stack = Stack::new("app".to_string())
+        let (manager_url, requests) = start_recording_manager_with_lists(vec![list.clone()]).await;
+        let tagged = Stack::new("app".to_string())
             .add(
                 test_container("web", "registry.example.com/app/web:v1".to_string()),
                 ResourceLifecycle::Live,
             )
             .build();
+        let error = release_to_manager(&manager_url, &tagged, &sign)
+            .await
+            .expect_err("an unpinned image can't be signed");
+        assert!(
+            error.to_string().contains("not pinned by sha256 digest"),
+            "{error}"
+        );
+
+        // A key that isn't on the list.
+        let other_file = keys.path().join("other.pem");
+        fs::write(&other_file, release_signer(12).0.to_pkcs8_pem().unwrap()).unwrap();
+        let error = release_to_manager(
+            &manager_url,
+            &pinned_stack,
+            &[
+                "--sign",
+                "--signing-key-file",
+                other_file.to_str().unwrap(),
+                "--signing-fingerprint",
+                fingerprint.as_str(),
+            ],
+        )
+        .await
+        .expect_err("a key the list doesn't hold can't sign");
+        assert!(error.to_string().contains("another key"), "{error}");
+
+        // A manager serving a list of its own making.
+        let (forged_manager, forged_requests) =
+            start_recording_manager_with_lists(vec![release_signer(12).1]).await;
+        let error = release_to_manager(&forged_manager, &pinned_stack, &sign)
+            .await
+            .expect_err("a list that doesn't match the pinned fingerprint is refused");
+        assert!(error.to_string().contains("do not verify"), "{error}");
+        assert!(forged_requests.lock().unwrap().is_empty());
 
         let error = release_to_manager(
             &manager_url,
-            &stack,
-            &["--signing-key-file", key_file.to_str().unwrap()],
+            &pinned_stack,
+            &[
+                &sign[..],
+                &["--override-base-image", "ghcr.io/acme/base:latest"],
+            ]
+            .concat(),
         )
         .await
-        .expect_err("an unpinned image can't be signed");
+        .expect_err("--sign refuses build overrides");
         assert!(
-            error.to_string().contains("not pinned by sha256 digest"),
+            error.to_string().contains("--override-base-image"),
             "{error}"
         );
         assert!(requests.lock().unwrap().is_empty());

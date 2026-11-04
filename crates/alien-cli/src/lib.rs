@@ -15,6 +15,7 @@ pub mod output;
 #[cfg(feature = "platform")]
 pub mod platform_deployment_resolver;
 pub mod project_link;
+pub mod signing;
 pub mod ui;
 
 #[cfg(test)]
@@ -38,16 +39,16 @@ use crate::commands::{
     CustomersArgs, DomainsArgs, ExamplesArgs, UsageArgs,
 };
 use crate::commands::{
-    build_and_post_release_simple, build_command, build_dev_status, commands_task,
+    approve_task, build_and_post_release_simple, build_command, build_dev_status, commands_task,
     commands_task_dev, debug_task, debug_task_dev, deploy_task, deployments_task,
     destroy_local_deployment, destroy_task, ensure_server_running_for_dev_session,
     fetch_all_dev_deployment_live_states, init_task, local_operations_task, logs_task,
-    onboard_task, operations_task, prepare_dev_session_deployment, release_command,
-    release_key_task, releases_task, render_task, status_task, upgrade_task,
-    validate_deploy_config, vault_remote_task, vault_task, whoami_task, write_dev_status,
-    BuildArgs, BuildSubcommand, CliEnvVar, CommandsArgs, DebugArgs, DeployArgs, DeploymentsArgs,
-    DestroyArgs, InitArgs, LogsArgs, OnboardArgs, OperationsArgs, ReleaseArgs, ReleaseKeyArgs,
-    ReleasesArgs, RenderArgs, StatusArgs, UpgradeArgs, WhoamiArgs,
+    onboard_task, operations_task, prepare_dev_session_deployment, release_command, releases_task,
+    render_task, signers_task, signing_task, status_task, upgrade_task, validate_deploy_config,
+    vault_remote_task, vault_task, whoami_task, write_dev_status, ApproveArgs, BuildArgs,
+    BuildSubcommand, CliEnvVar, CommandsArgs, DebugArgs, DeployArgs, DeploymentsArgs, DestroyArgs,
+    InitArgs, LogsArgs, OnboardArgs, OperationsArgs, ReleaseArgs, ReleasesArgs, RenderArgs,
+    SignersArgs, SigningArgs, StatusArgs, UpgradeArgs, WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -182,7 +183,9 @@ impl Cli {
             | Some(Commands::Commands(_))
             | Some(Commands::Serve(_))
             | Some(Commands::Upgrade(_))
-            | Some(Commands::ReleaseKey(_)) => false,
+            | Some(Commands::Signing(_))
+            | Some(Commands::Signers(_))
+            | Some(Commands::Approve(_)) => false,
         }
     }
 }
@@ -195,8 +198,12 @@ pub enum Commands {
     Build(BuildArgs),
     /// Push images and create a release
     Release(ReleaseArgs),
-    /// Create and inspect release signing keys
-    ReleaseKey(ReleaseKeyArgs),
+    /// Set up release signing: the signer list, device keys and the CI key
+    Signing(SigningArgs),
+    /// Approve, remove and rotate the keys that may sign
+    Signers(SignersArgs),
+    /// Review and sign a change prepared in the dashboard
+    Approve(ApproveArgs),
     /// Render setup artifacts for review
     Render(RenderArgs),
     /// Create a deployment group and generate a deployment link
@@ -1981,11 +1988,6 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         return render_task(args).await;
     }
 
-    // Signing keys are local files.
-    if let Some(Commands::ReleaseKey(args)) = cli.command {
-        return release_key_task(args).await;
-    }
-
     // Upgrades do not need a project or authentication context.
     if let Some(Commands::Upgrade(args)) = cli.command {
         return upgrade_task(args).await;
@@ -2103,7 +2105,9 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             Some(Commands::Serve(_)) => unreachable!("handled before ctx resolution"),
             Some(Commands::Render(_)) => unreachable!("handled before ctx resolution"),
             Some(Commands::Upgrade(_)) => unreachable!("handled before ctx resolution"),
-            Some(Commands::ReleaseKey(_)) => unreachable!("handled before ctx resolution"),
+            Some(Commands::Signing(args)) => signing_task(args, ctx).await?,
+            Some(Commands::Signers(args)) => signers_task(args, ctx).await?,
+            Some(Commands::Approve(args)) => approve_task(args, ctx).await?,
             Some(Commands::Build(args)) => build_command(args).await?,
             Some(Commands::Release(args)) => release_command(args, ctx).await?,
             Some(Commands::Onboard(args)) => onboard_task(args, ctx).await?,

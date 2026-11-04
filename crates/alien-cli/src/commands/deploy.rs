@@ -3048,6 +3048,7 @@ fn target_release_from_json(
         description: None,
         stack,
         signed: None,
+        signer_lists: Vec::new(),
     })
 }
 
@@ -4726,6 +4727,7 @@ mod tests {
                     version: None,
                     description: None,
                     signed: None,
+                    signer_lists: Vec::new(),
                 });
                 async move { release }
             })
@@ -5588,6 +5590,7 @@ max = 1
                     )
                     .unwrap(),
                     signed: None,
+                    signer_lists: Vec::new(),
                 }),
                 // The real preparation refuses an installed state with no target.
                 target_release: None,
