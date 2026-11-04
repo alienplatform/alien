@@ -50,10 +50,13 @@ fn context(bounded: bool) -> PermissionContext {
 /// (legacy-role-1: CreateRole, PutRolePolicy), `ai/provision` (legacy-role-1: PutRolePolicy,
 /// DeleteRolePolicy), `artifact-registry/provision` (legacy-role-3: CreateRole, PutRolePolicy,
 /// DeleteRolePolicy; legacy-role-4: TagRole, DeleteRole) and `artifact-registry/management`
-/// (legacy-role-3: PutRolePolicy, DeleteRolePolicy). They reach the flow log role because its
-/// name has the stack prefix, whatever its tags.
+/// (legacy-role-3: PutRolePolicy, DeleteRolePolicy). PassRole, with no service or tag
+/// condition, comes from `compute-cluster/provision` and `compute-cluster/management`
+/// (legacy-role-pass). They reach the flow log role because its name has the stack prefix,
+/// whatever its tags. None of them lets management create the flow log itself.
 const LEGACY_UNBOUNDED_ROLE_WRITES: &[&str] = &[
     "iam:CreateRole",
+    "iam:PassRole",
     "iam:PutRolePolicy",
     "iam:DeleteRolePolicy",
     "iam:TagRole",
@@ -217,11 +220,9 @@ async fn automatic_management_cannot_delete_flow_log_objects_it_does_not_own() {
     }
 }
 
-/// Creating the role, writing its policy and passing it to the service cannot be limited to
-/// what the role may do, so the management identity creates none of the flow log objects.
-#[tokio::test]
-async fn automatic_management_creates_no_flow_log_objects() {
-    let creates = [
+/// Every call that creates or writes a flow log object, for this stack's runtime tags.
+fn create_calls() -> Vec<Request> {
+    vec![
         Request::new("ec2:CreateFlowLogs", FLOW_LOG).request_tags(RUNTIME),
         Request::new("ec2:CreateFlowLogs", VPC).resource_tags(RUNTIME),
         Request::new("iam:CreateRole", ROLE).request_tags(RUNTIME),
@@ -232,10 +233,20 @@ async fn automatic_management_creates_no_flow_log_objects() {
             .with("iam:ResourceTag/managed-by", "runtime"),
         Request::new("logs:CreateLogGroup", GROUP).request_tags(RUNTIME),
         Request::new("logs:PutRetentionPolicy", GROUP).resource_tags(RUNTIME),
-    ];
+    ]
+}
+
+/// Creating the role, writing its policy and passing it to the service cannot be limited to
+/// what the role may do, so the management identity creates none of the flow log objects. A
+/// setup without a boundary keeps the legacy role writes above, but not `ec2:CreateFlowLogs`.
+#[tokio::test]
+async fn automatic_management_creates_no_flow_log_objects() {
     for bounded in [false, true] {
         let policy = automatic_management(bounded).await;
-        for request in creates.iter().filter(|r| !legacy_unbounded(bounded, r)) {
+        for request in create_calls()
+            .iter()
+            .filter(|r| !legacy_unbounded(bounded, r))
+        {
             assert_ne!(
                 evaluate(&policy, request),
                 Decision::Allowed,
@@ -247,9 +258,9 @@ async fn automatic_management_creates_no_flow_log_objects() {
     }
 }
 
-/// The flow log statements in `network/provision` reach only this stack's runtime-tagged
-/// objects. Without them, the policy decides every other flow log call the same way, so what a
-/// setup without a boundary may do to an untagged or foreign object comes only from the legacy
+/// The flow log statements in `network/provision` only delete this stack's runtime-tagged
+/// objects. Without them, the policy decides every create and every delete on another object
+/// the same way, so what a setup without a boundary may do there comes only from the legacy
 /// grants above.
 #[tokio::test]
 async fn flow_log_statements_add_nothing_for_objects_this_stack_does_not_own() {
@@ -275,6 +286,15 @@ async fn flow_log_statements_add_nothing_for_objects_this_stack_does_not_own() {
                     request.resource
                 );
             }
+        }
+        for request in create_calls() {
+            assert_eq!(
+                evaluate(&all, &request),
+                evaluate(&without_network, &request),
+                "bounded={bounded}: {} on {}",
+                request.action,
+                request.resource
+            );
         }
     }
 }
