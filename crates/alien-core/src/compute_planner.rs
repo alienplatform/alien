@@ -807,7 +807,7 @@ fn machine_options(
         .into_iter()
         .map(|spec| {
             let unavailable_reasons =
-                unavailable_reasons(spec, requirements, resolved_architecture);
+                unavailable_reasons(spec, requirements, resolved_architecture, Fit::OneReplica);
             ComputeMachineOption {
                 machine: spec.name.to_string(),
                 series: spec.series.to_string(),
@@ -831,15 +831,27 @@ fn instance_satisfies(
     requirements: &WorkloadRequirements,
     resolved_architecture: Architecture,
 ) -> bool {
-    unavailable_reasons(spec, requirements, resolved_architecture).is_empty()
+    unavailable_reasons(spec, requirements, resolved_architecture, Fit::Hardware).is_empty()
 }
 
-/// Every pool requirement `spec` fails, in a fixed order. The one fit rule behind both the
+/// How `unavailable_reasons` compares a replica's CPU and memory with a machine.
+#[derive(Clone, Copy)]
+enum Fit {
+    /// Against the machine's hardware totals: what selection validation has always accepted,
+    /// so an explicit choice that validated before still does.
+    Hardware,
+    /// Against what is left after the host reserve, the numbers the pool capacity check uses:
+    /// a machine the plan offers is one a pool can run a replica on.
+    OneReplica,
+}
+
+/// Every pool requirement `spec` fails, in a fixed order. The fit rule behind both the
 /// machine list and selection validation.
 fn unavailable_reasons(
     spec: &instance_catalog::InstanceTypeSpec,
     requirements: &WorkloadRequirements,
     resolved_architecture: Architecture,
+    fit: Fit,
 ) -> Vec<MachineUnavailableReason> {
     let mut reasons = Vec::new();
     if spec.architecture != resolved_architecture {
@@ -848,12 +860,22 @@ fn unavailable_reasons(
     if requirements.nested_virt && !spec.is_nested_virt_capable() {
         reasons.push(MachineUnavailableReason::NestedVirtualization);
     }
-    // One replica must fit what the machine has left after its host reserve,
-    // the same numbers the pool capacity check uses.
-    if instance_catalog::allocatable_cpu(spec) + f64::EPSILON < requirements.max_cpu_per_container {
+    let (cpu_fits, memory_fits) = match fit {
+        Fit::Hardware => (
+            spec.vcpu >= requirements.max_cpu_per_container.ceil() as u32,
+            spec.memory_bytes >= requirements.max_memory_per_container,
+        ),
+        Fit::OneReplica => (
+            instance_catalog::allocatable_cpu(spec) + f64::EPSILON
+                >= requirements.max_cpu_per_container,
+            instance_catalog::allocatable_memory_bytes(spec)
+                >= requirements.max_memory_per_container,
+        ),
+    };
+    if !cpu_fits {
         reasons.push(MachineUnavailableReason::Cpu);
     }
-    if instance_catalog::allocatable_memory_bytes(spec) < requirements.max_memory_per_container {
+    if !memory_fits {
         reasons.push(MachineUnavailableReason::Memory);
     }
     let storage_fits = if spec.has_configurable_ephemeral_storage() {
