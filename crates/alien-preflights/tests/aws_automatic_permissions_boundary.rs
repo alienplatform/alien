@@ -192,10 +192,14 @@ async fn automatic_profile_bounds_every_role_writer_and_cannot_change_the_bounda
                     .action
                     .iter()
                     .all(|a| matches!(a.as_str(), "iam:DeleteRolePolicy" | "iam:DeleteRole"))
-                && conditions
-                    .and_then(|c| c.get("aws:ResourceTag/managed-by"))
-                    .and_then(|value| value.as_string())
-                    == Some("runtime");
+                && [("managed-by", "runtime"), ("deployment", "sample")]
+                    .iter()
+                    .all(|(key, value)| {
+                        conditions
+                            .and_then(|c| c.get(&format!("aws:ResourceTag/{key}")))
+                            .and_then(|v| v.as_string())
+                            == Some(*value)
+                    });
             for write in WRITES.iter().filter(|write| matches_action(write)) {
                 observed_writes.insert(*write);
                 if detaches_aws_managed_policy || deletes_flow_log_delivery_role {
