@@ -35,10 +35,15 @@ fn family_metric(machine: &str) -> Option<String> {
 
 const VM_FAMILY_QUOTA_ID: &str = "CPUS-PER-VM-FAMILY-per-project-region";
 
-/// Compute Engine reports no usage for the per-family quota. This deployment's
-/// running machines of the family already count against it, so `held` is a known
-/// lower bound of usage: only demand beyond the limit at that usage is certain.
-fn limit_only_outcome(required: QuotaDemand, maximum: QuotaDemand, limit: f64) -> QuotaOutcome {
+/// Compute Engine reports no usage for the per-family quota. `held` is every machine
+/// of the family this deployment runs now (`family_usage`), a known lower bound of
+/// usage: only demand beyond the limit at that usage is certain.
+fn limit_only_outcome(
+    required: QuotaDemand,
+    maximum: QuotaDemand,
+    limit: f64,
+    held_resolved: bool,
+) -> QuotaOutcome {
     let at_least_held = |demand: QuotaDemand| {
         evaluate(
             demand,
@@ -59,9 +64,11 @@ fn limit_only_outcome(required: QuotaDemand, maximum: QuotaDemand, limit: f64) -
             ),
         },
         QuotaOutcome::Pass { .. } => QuotaOutcome::Unknown {
-            reason: format!(
-                "applied limit is {limit}, but provider-reported usage is unavailable"
-            ),
+            reason: if held_resolved {
+                format!("applied limit is {limit}, but provider-reported usage is unavailable")
+            } else {
+                format!("applied limit is {limit}, but provider-reported usage is unavailable and held capacity is unresolved")
+            },
         },
         outcome => outcome,
     }
@@ -126,6 +133,53 @@ fn units(machine: &str, gpus: bool) -> Option<Option<(String, f64)>> {
     Some(Some((metric.into(), f64::from(gpu.count))))
 }
 
+/// vCPUs the deployment runs now in each per-family quota, from every compute
+/// cluster in state, including pools that change, leave the family or are being
+/// removed. Compute Engine reports no usage for these quotas, so this is the known
+/// lower bound of it. The flag is false when some pool's running machines are unknown.
+fn family_usage(state: &StackState) -> (BTreeMap<String, f64>, bool) {
+    let mut usage = BTreeMap::<String, f64>::new();
+    let mut resolved = true;
+    for current in state.resources.values() {
+        let Some(cluster) = current.config.downcast_ref::<ComputeCluster>() else {
+            continue;
+        };
+        if current.status == ResourceStatus::Deleted
+            || (current.status == ResourceStatus::Pending
+                && current.internal_state.is_none()
+                && current.last_failed_state.is_none())
+        {
+            continue;
+        }
+        let statuses = current
+            .outputs
+            .as_ref()
+            .and_then(|outputs| outputs.downcast_ref::<ComputeClusterOutputs>())
+            .map(|outputs| outputs.capacity_group_statuses.as_slice())
+            .unwrap_or_default();
+        resolved &= cluster.capacity_groups.iter().all(|group| {
+            statuses
+                .iter()
+                .any(|status| status.group_id == group.group_id)
+        });
+        for status in statuses {
+            let Some(code) = family_metric(&status.instance_type)
+                .filter(|code| code.starts_with(GCP_VM_FAMILY_QUOTA_PREFIX))
+            else {
+                continue;
+            };
+            match find_instance_type(Platform::Gcp, &status.instance_type) {
+                Some(spec) => {
+                    *usage.entry(code).or_insert(0.0) +=
+                        f64::from(status.current_machines) * f64::from(spec.vcpu)
+                }
+                None => resolved = false,
+            }
+        }
+    }
+    (usage, resolved)
+}
+
 fn demands(stack: &Stack, state: &StackState, gpus: bool) -> Option<BTreeMap<String, QuotaDemand>> {
     demands_for(stack, state, gpus, false)
 }
@@ -141,7 +195,6 @@ fn demands_for(
         peak: 0.0,
         held: 0.0,
     };
-    let mut unchanged_family_held = BTreeMap::<String, f64>::new();
     let mut surges = BTreeMap::new();
     let mut total_surge = 0.0;
     for (id, entry) in &stack.resources {
@@ -169,25 +222,6 @@ fn demands_for(
                         && old.max_size == group.max_size
                 })
             {
-                // Compute Engine reports no usage for the per-family quota, so this
-                // group's running machines are the part of it the check knows about.
-                let running = current
-                    .and_then(|current| current.outputs.as_ref())
-                    .and_then(|outputs| outputs.downcast_ref::<ComputeClusterOutputs>())
-                    .and_then(|outputs| {
-                        outputs
-                            .capacity_group_statuses
-                            .iter()
-                            .find(|held| held.group_id == group.group_id)
-                    });
-                if let Some(running) = running {
-                    if let Some(Some((code, units))) = units(&running.instance_type, gpus) {
-                        if code.starts_with(GCP_VM_FAMILY_QUOTA_PREFIX) {
-                            *unchanged_family_held.entry(code).or_insert(0.0) +=
-                                f64::from(running.current_machines) * units;
-                        }
-                    }
-                }
                 continue;
             }
             let machine = group.instance_type.as_deref()?;
@@ -247,12 +281,19 @@ fn demands_for(
             total.held += f64::from(current_count) * plan.previous_units;
         }
     }
-    // A family no changed group uses needs no check. Adding the same amount to
-    // peak and held keeps the additional demand and raises the known usage.
-    for (code, held) in unchanged_family_held {
-        if let Some(demand) = demands.get_mut(&code) {
-            demand.peak += held;
-            demand.held += held;
+    if !gpus {
+        let (usage, _) = family_usage(state);
+        for (code, demand) in demands
+            .iter_mut()
+            .filter(|(code, _)| code.starts_with(GCP_VM_FAMILY_QUOTA_PREFIX))
+        {
+            if let Some(additional) = demand.additional() {
+                let held = usage.get(code).copied().unwrap_or(0.0);
+                *demand = QuotaDemand {
+                    peak: held + additional,
+                    held,
+                };
+            }
         }
     }
     if !demands.is_empty() {
@@ -347,7 +388,7 @@ pub async fn check(
                     Some(Ok(info)) if info.quota_id == VM_FAMILY_QUOTA_ID
                         && info.metric == "compute.googleapis.com/cpus_per_vm_family" => {
                         match info.region_family_limit(region, family) {
-                            Some(limit) => limit_only_outcome(required[&metric], demand, limit),
+                            Some(limit) => limit_only_outcome(required[&metric], demand, limit, family_usage(state).1),
                             None => QuotaOutcome::Unknown { reason: format!("Cloud Quotas returned no unambiguous applied limit for VM family {family} in {region}") },
                         }
                     }
@@ -1095,6 +1136,137 @@ mod tests {
         .await;
         assert!(result.success);
         assert!(result.quota_results.is_empty());
+    }
+
+    /// Runs the check with pools as they run now and as the update wants them, and
+    /// returns the N4 outcome.
+    async fn n4_outcome(
+        running: Vec<(&str, &str, u32)>,
+        desired: Vec<CapacityGroup>,
+    ) -> QuotaOutcome {
+        let old = pools(
+            running
+                .iter()
+                .map(|(id, machine, machines)| pool_group(id, machine, *machines, *machines))
+                .collect(),
+        );
+        let statuses = running
+            .iter()
+            .map(|(id, machine, machines)| group_status(id, machine, *machines))
+            .collect::<Vec<_>>();
+        let state = running_state(&old, serde_json::Value::Array(statuses));
+        let result = run_check(&pools(desired), &state).await;
+        outcome(&result, "CPUS_PER_VM_FAMILY/N4").clone()
+    }
+
+    #[test]
+    fn a_pool_leaving_the_family_still_holds_its_old_machines_while_a_new_pool_launches() {
+        // b moves to n2 but its n4 machine runs until the rolling update replaces it,
+        // after the controller creates c's group. N4 running: a 80 + b 80.
+        let old = pools(vec![
+            pool_group("a", "n4-standard-80", 1, 1),
+            pool_group("b", "n4-standard-80", 1, 1),
+        ]);
+        let state = running_state(
+            &old,
+            serde_json::json!([
+                group_status("a", "n4-standard-80", 1),
+                group_status("b", "n4-standard-80", 1)
+            ]),
+        );
+        let desired = pools(vec![
+            pool_group("a", "n4-standard-80", 1, 1),
+            pool_group("b", "n2-standard-80", 1, 1),
+            pool_group("c", "n4-standard-80", 1, 1),
+        ]);
+        let demand = demands_for(&desired, &state, false, true).unwrap()["CPUS_PER_VM_FAMILY/N4"];
+        assert_eq!(demand.held, 160.0, "{demand:?}");
+        assert_eq!(demand.additional(), Some(80.0), "{demand:?}");
+    }
+
+    #[tokio::test]
+    async fn every_running_family_machine_counts_as_known_usage() {
+        let fail = |used, needed| QuotaOutcome::Fail {
+            used,
+            limit: 200.0,
+            needed,
+        };
+        // a unchanged 80; b grows from 1 to 2 x n4-standard-64: 144 runs, 64 more.
+        assert_eq!(
+            n4_outcome(
+                vec![("a", "n4-standard-80", 1), ("b", "n4-standard-64", 1)],
+                vec![
+                    pool_group("a", "n4-standard-80", 1, 1),
+                    pool_group("b", "n4-standard-64", 2, 2)
+                ],
+            )
+            .await,
+            fail(144.0, 64.0)
+        );
+        // Replacing 2 x n4-standard-80 with n4-standard-64 one machine at a time adds 64
+        // while both old machines run.
+        assert_eq!(
+            n4_outcome(
+                vec![("pool", "n4-standard-80", 2)],
+                vec![pool_group("pool", "n4-standard-64", 2, 2)],
+            )
+            .await,
+            fail(160.0, 64.0)
+        );
+        // Scaling down needs nothing more, even with 240 already over the limit.
+        assert_eq!(
+            n4_outcome(
+                vec![("pool", "n4-standard-80", 3)],
+                vec![pool_group("pool", "n4-standard-80", 2, 2)],
+            )
+            .await,
+            QuotaOutcome::Unknown {
+                reason: "applied limit is 200, but provider-reported usage is unavailable".into()
+            }
+        );
+        // Only the maximum goes past the limit: a warning.
+        assert!(matches!(
+            n4_outcome(
+                vec![("pool", "n4-standard-80", 2)],
+                vec![pool_group("pool", "n4-standard-80", 2, 3)],
+            )
+            .await,
+            QuotaOutcome::Warn { message } if message.contains("this deployment holds 160, needs 80")
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_cluster_being_removed_still_counts_and_a_missing_status_is_named() {
+        let removed = pools(vec![pool_group("old", "n4-standard-80", 2, 2)]);
+        let mut state = running_state(
+            &removed,
+            serde_json::json!([group_status("old", "n4-standard-80", 2)]),
+        );
+        let leaving = state.resources.remove("cluster").unwrap();
+        state.resources.insert("leaving".into(), leaving);
+        let desired = pools(vec![pool_group("new", "n4-standard-80", 1, 1)]);
+        let result = run_check(&desired, &state).await;
+        assert_eq!(
+            *outcome(&result, "CPUS_PER_VM_FAMILY/N4"),
+            QuotaOutcome::Fail {
+                used: 160.0,
+                limit: 200.0,
+                needed: 80.0
+            }
+        );
+        // A running pool without a status row adds nothing, and the reason says so.
+        let unknown = pools(vec![pool_group("old", "n4-standard-80", 2, 2)]);
+        let mut state = running_state(&unknown, serde_json::json!([]));
+        let leaving = state.resources.remove("cluster").unwrap();
+        state.resources.insert("leaving".into(), leaving);
+        let desired = pools(vec![pool_group("new", "n4-standard-2", 1, 1)]);
+        let result = run_check(&desired, &state).await;
+        assert_eq!(
+            *outcome(&result, "CPUS_PER_VM_FAMILY/N4"),
+            QuotaOutcome::Unknown {
+                reason: "applied limit is 200, but provider-reported usage is unavailable and held capacity is unresolved".into()
+            }
+        );
     }
 
     #[test]
