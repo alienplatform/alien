@@ -1316,6 +1316,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "alien-release-trust"
+version = "3.3.53"
+dependencies = [
+ "alien-error",
+ "base64 0.22.1",
+ "chrono",
+ "getrandom 0.3.4",
+ "hex",
+ "p256",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "alien-sandbox-agent"
 version = "3.3.53"
 dependencies = [

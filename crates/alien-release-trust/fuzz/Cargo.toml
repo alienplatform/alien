@@ -1,0 +1,28 @@
+[package]
+name = "alien-release-trust-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+alien-release-trust = { path = ".." }
+base64 = "0.22"
+chrono = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "statement"
+path = "fuzz_targets/statement.rs"
+test = false
+doc = false
+bench = false
