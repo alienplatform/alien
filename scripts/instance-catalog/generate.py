@@ -78,10 +78,8 @@ def aws_machine(raw):
         "memory_mib": raw["MemoryInfo"]["SizeInMiB"],
         "architecture": "Arm64" if "arm64" in raw["ProcessorInfo"]["SupportedArchitectures"]
         else "X86_64",
-        # AWS reports decimal GB. The catalog reads the figure as GiB, which overstates the disk
-        # by about 7%; the pinned AWS local-disk rows use that reading, so a storage fit decided
-        # on them stays the same.
-        "local_mib": storage.get("TotalSizeInGB", 0) * 1024,
+        # AWS reports local disk in decimal GB.
+        "local_mib": storage.get("TotalSizeInGB", 0) * 1000**3 // 1024**2,
         "gpu": (f"{gpus[0]['Manufacturer']}-{gpus[0]['Name']}".lower(), gpus[0]["Count"])
         if gpus else None,
         "nested_virt": "nested-virtualization" in raw["ProcessorInfo"].get("SupportedFeatures", []),
@@ -187,7 +185,7 @@ def check_overrides(platform, series, members):
             raise RuntimeError(f"{platform} {name}: unknown override fields {sorted(unknown)}")
 
 
-def row(platform, series, name, machine, auto_select):
+def row(platform, series, name, machine_type, machine, auto_select):
     category = series["category"]
     if category not in CATEGORIES:
         raise RuntimeError(f"{platform} {series['series']}: unknown category {category}")
@@ -224,6 +222,8 @@ def row(platform, series, name, machine, auto_select):
         "memory_mib": override["memory_gib"] * 1024 if "memory_gib" in override
         else machine["memory_mib"],
         "storage_mib": storage_mib,
+        "local_disk_mib": machine["local_mib"],
+        "machine_type": machine_type,
         "gpu": gpu,
         "nested_virt": nested_virt,
         "auto_select": auto_select,
@@ -246,7 +246,8 @@ def render(rows):
     ]
     units = sorted({expression.split(" * ")[-1] for spec in rows
                     for expression in (bytes_expression(spec["memory_mib"]),
-                                       bytes_expression(spec["storage_mib"]))} - {"0"})
+                                       bytes_expression(spec["storage_mib"]),
+                                       bytes_expression(spec["local_disk_mib"]))} - {"0"})
     imports = ["Architecture", "CatalogGpu", "InstanceFamily", "InstanceTypeSpec", *units]
     lines += [f"use super::{{{', '.join(imports)}}};", "use crate::Platform;", "",
               "pub(super) static CATALOG: &[InstanceTypeSpec] = &["]
@@ -262,6 +263,8 @@ def render(rows):
             f"        vcpu: {spec['vcpu']},",
             f"        memory_bytes: {bytes_expression(spec['memory_mib'])},",
             f"        ephemeral_storage_bytes: {bytes_expression(spec['storage_mib'])},",
+            f"        local_disk_bytes: {bytes_expression(spec['local_disk_mib'])},",
+            f'        machine_type: "{spec["machine_type"]}",',
         ]
         if spec["gpu"] is None:
             lines.append("        gpu: None,")
@@ -298,7 +301,7 @@ def main():
             members = series_machines(platform, series, machines[platform])
             check_overrides(platform, series, members)
             for name, machine, auto_select in members:
-                rows.append(row(platform, series, name, machines[platform][machine],
+                rows.append(row(platform, series, name, machine, machines[platform][machine],
                                 auto_select))
     names = [(spec["platform"], spec["name"]) for spec in rows]
     duplicates = sorted({name for name in names if names.count(name) > 1})

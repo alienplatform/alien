@@ -134,6 +134,11 @@ pub struct InstanceTypeSpec {
     pub memory_bytes: u64,
     /// Ephemeral storage in bytes (hardware total, NVMe for storage-optimized)
     pub ephemeral_storage_bytes: u64,
+    /// Local instance disk the provider reports for the machine, in bytes; 0 when it has none.
+    pub local_disk_bytes: u64,
+    /// The provider's machine type for this row. It differs from `name` only for a catalog
+    /// row that adds an accelerator to a machine type, such as `n1-standard-4-t4`.
+    pub machine_type: &'static str,
     /// GPU specification (for GPU instances)
     pub gpu: Option<CatalogGpu>,
     /// Whether the machine exposes nested virtualization (VT-x/EPT) to guest VMs.

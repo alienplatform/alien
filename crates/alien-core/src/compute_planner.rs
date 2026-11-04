@@ -112,8 +112,8 @@ pub struct ComputeMachineOption {
     pub profile: MachineProfile,
     /// Whether the machine exposes nested virtualization to guest VMs.
     pub nested_virtualization: bool,
-    /// Fixed local instance storage in bytes. Absent when the machine's storage is a
-    /// provider disk sized at deployment time.
+    /// Local instance disk the provider reports for the machine, in bytes. Absent when the
+    /// machine has none and its storage is a provider disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_storage: Option<u64>,
     /// Whether the machine can run this pool.
@@ -816,8 +816,7 @@ fn machine_options(
                 profile: spec
                     .to_machine_profile_for_storage(requirements.max_ephemeral_storage_bytes),
                 nested_virtualization: spec.is_nested_virt_capable(),
-                local_storage: (!spec.has_configurable_ephemeral_storage())
-                    .then_some(spec.ephemeral_storage_bytes),
+                local_storage: (spec.local_disk_bytes > 0).then_some(spec.local_disk_bytes),
                 available: unavailable_reasons.is_empty(),
                 unavailable_reasons,
                 recommended: Some(spec.name) == recommended_machine
@@ -2400,7 +2399,8 @@ mod tests {
         let local = option("i7i.2xlarge");
         assert!(local.available);
         assert_eq!(local.category, InstanceFamily::StorageOptimized);
-        assert_eq!(local.local_storage, Some(1875 * GIB));
+        // AWS reports 1875 decimal GB of local NVMe.
+        assert_eq!(local.local_storage, Some(1_788_139 * 1024 * 1024));
 
         let wire = serde_json::to_value(large).expect("option should serialize");
         assert_eq!(wire["category"], "generalPurpose");
@@ -2415,7 +2415,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(local).expect("option should serialize")["localStorage"],
-            1875 * GIB
+            1_788_139u64 * 1024 * 1024
         );
     }
 

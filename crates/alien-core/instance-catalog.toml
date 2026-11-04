@@ -183,6 +183,9 @@ category = "StorageOptimized"
 label = "Storage optimized · Intel · 4th gen"
 from = "i4i.xlarge"
 auto_select_to = "i4i.8xlarge"
+# AWS reports local disk in decimal GB (937 GB is 872 GiB). These sizes are automatic picks,
+# so they keep the disk existing pools are sized and validated with.
+overrides = { "i4i.xlarge" = { ephemeral_storage_gib = 937 }, "i4i.2xlarge" = { ephemeral_storage_gib = 1875 }, "i4i.4xlarge" = { ephemeral_storage_gib = 3750 }, "i4i.8xlarge" = { ephemeral_storage_gib = 7500 } }
 
 [[aws.series]]
 series = "i7i"
@@ -203,6 +206,8 @@ category = "GpuCompute"
 label = "GPU · NVIDIA A10G"
 sizes = ["g5.xlarge", "g5.2xlarge"]
 auto_select_to = "g5.2xlarge"
+# AWS reports local disk in decimal GB. These sizes keep the disk existing pools are sized with.
+overrides = { "g5.xlarge" = { ephemeral_storage_gib = 250 }, "g5.2xlarge" = { ephemeral_storage_gib = 450 } }
 
 [[aws.series]]
 series = "p4d"
@@ -210,6 +215,8 @@ category = "GpuCompute"
 label = "GPU · NVIDIA A100"
 sizes = ["p4d.24xlarge"]
 auto_select_to = "p4d.24xlarge"
+# AWS reports local disk in decimal GB. This size keeps the disk existing pools are sized with.
+overrides = { "p4d.24xlarge" = { ephemeral_storage_gib = 8000 } }
 
 [[aws.series]]
 series = "p5"
