@@ -88,20 +88,26 @@ const WORKER_BUNDLE_NATIVE_INSTALL_SNIPPET: &str =
 /// most Bun accepts, the same value the Worker runtime uses.
 const DIRECT_ENTRY_IDLE_TIMEOUT_SECS: u8 = 255;
 
-/// Prints whether a module has a default export and does not mention
-/// `import.meta.main`. It reads the export names with Bun's transpiler, without
-/// running the module. The module path is the script's only argument.
+/// Prints whether a module has a default export and cannot read
+/// `import.meta.main`, using Bun's transpiler without running the module. The
+/// transpiled code has no comments and spells `import.meta["main"]` and
+/// `import.meta .main` as `import.meta.main`. In it, any use of `import.meta`
+/// other than reading a property not named `main` counts as possibly reading
+/// `main`: `import.meta.main`, `import.meta?.main`, or `import.meta` passed or
+/// destructured. The module path is the script's only argument.
 const SCAN_ENTRY_SCRIPT: &str = r#"const [path] = process.argv.slice(1)
 const loader = path.endsWith(".tsx") ? "tsx" : path.endsWith(".jsx") ? "jsx" : /\.[cm]?ts$/.test(path) ? "ts" : "js"
+const transpiler = new Bun.Transpiler({ loader })
 const source = await Bun.file(path).text()
-const { exports } = new Bun.Transpiler({ loader }).scan(source)
-console.log(exports.includes("default") && !source.includes("import.meta.main"))"#;
+const { exports } = transpiler.scan(source)
+const readsMain = /\bimport\.meta(?!\.(?!main\b)[\w$])/.test(transpiler.transformSync(source))
+console.log(exports.includes("default") && !readsMain)"#;
 
 /// Whether a Container/Daemon entry module without an embedded addon gets the
 /// entry wrapper, which starts the server for its default export. Bun starts
 /// that server itself only for its main module, and inside the wrapper the
 /// entry is not the main module, so `import.meta.main` is `false` there. An
-/// entry without a default export, or one that mentions `import.meta.main`
+/// entry without a default export, or one that may read `import.meta.main`
 /// (it may start its own server only when it is the main module), is compiled
 /// directly and keeps Bun's own behaviour.
 async fn entry_gets_entry_wrapper(entry_path: &Path) -> Result<bool> {
@@ -582,7 +588,7 @@ impl Toolchain for TypeScriptToolchain {
         // entrypoint. When the entry has a default export, or an addon is
         // embedded, they compile a thin wrapper around it that registers the
         // addon and starts the default export's server with a longer idle
-        // timeout. Otherwise, and when the entry mentions `import.meta.main`,
+        // timeout. Otherwise, and when the entry may read `import.meta.main`,
         // the entry is compiled directly.
         let (compile_entry, bootstrap_dir) = if context.workload == WorkloadKind::Worker {
             // .alien-build/ lives inside the source directory so bun can
@@ -1170,6 +1176,31 @@ if (import.meta.main) {
                 "app-and-main-guard.ts",
                 "const app = { fetch: () => new Response(\"ok\") }\nexport default app\nif (import.meta.main) console.log(\"main\")",
                 false,
+            ),
+            (
+                "spaced-main.ts",
+                "export default function helper() {}\nif (import\n  .meta .main) Bun.serve({ fetch: () => new Response(\"ok\") })",
+                false,
+            ),
+            (
+                "bracket-main.ts",
+                "export default function helper() {}\nif (import.meta[\"main\"]) Bun.serve({ fetch: () => new Response(\"ok\") })",
+                false,
+            ),
+            (
+                "optional-main.ts",
+                "export default function helper() {}\nif (import.meta?.main) Bun.serve({ fetch: () => new Response(\"ok\") })",
+                false,
+            ),
+            (
+                "destructured-main.ts",
+                "export default function helper() {}\nconst { main } = import.meta\nif (main) Bun.serve({ fetch: () => new Response(\"ok\") })",
+                false,
+            ),
+            (
+                "other-meta.ts",
+                "// not import.meta.main\nconsole.log(import.meta.url, import.meta.dir)\nexport default { fetch: () => new Response(\"ok\") }",
+                true,
             ),
             ("top-level.ts", "Bun.serve({ fetch: () => new Response(\"ok\") })", false),
             ("commonjs.js", "module.exports = { fetch() {} }", false),
