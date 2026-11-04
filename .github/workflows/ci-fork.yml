@@ -46,7 +46,7 @@ jobs:
         with:
           version: 2026.10.1
           add_shims_to_path: false
-          install_args: node pnpm
+          install_args: node pnpm bun
           cache_key: "{{default}}-${{ hashFiles('package.json') }}"
 
       - name: Cache pnpm dependencies
