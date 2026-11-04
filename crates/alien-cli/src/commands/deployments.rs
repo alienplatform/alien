@@ -586,6 +586,15 @@ pub enum DeploymentsCmd {
         #[arg(long, conflicts_with_all = ["env", "secret", "env_targeted", "secret_targeted"])]
         clear: bool,
 
+        /// Sign the values as a config statement, for deployments that run
+        /// only what the developer signed. Only plain `--env` values, and only
+        /// names the release marks configurable.
+        #[arg(long, conflicts_with_all = ["secret", "env_targeted", "secret_targeted"])]
+        sign: bool,
+
+        #[command(flatten)]
+        signer: crate::signing::SignerArgs,
+
         /// Skip confirmation prompt
         #[arg(long)]
         yes: bool,
@@ -624,6 +633,15 @@ pub enum DeploymentsCmd {
         /// Input to reset to its default (can be used multiple times)
         #[arg(long)]
         clear: Vec<String>,
+
+        /// Sign the values as a config statement, for deployments that run
+        /// only what the developer signed. Only `--input` values, and only
+        /// inputs the release marks configurable.
+        #[arg(long, conflicts_with_all = ["secret_inputs", "clear"])]
+        sign: bool,
+
+        #[command(flatten)]
+        signer: crate::signing::SignerArgs,
 
         /// Print the saved inputs as machine-readable JSON
         #[arg(long)]
@@ -1342,12 +1360,39 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
         DeploymentsCmd::SetEnv {
             id,
             env,
+            sign: true,
+            signer,
+            json,
+            ..
+        } => {
+            let target =
+                resolve_platform_target(&ctx, &id, json, "Environment variable changes").await?;
+            let mut values = std::collections::BTreeMap::new();
+            for pair in &env {
+                let (key, value) = parse_env_var(pair).ok_or_else(|| {
+                    AlienError::new(ErrorData::ValidationError {
+                        field: "env".to_string(),
+                        message: format!("'{pair}' is not KEY=VALUE"),
+                    })
+                })?;
+                values.insert(key, value);
+            }
+            let body = alien_release_trust::kinds::ConfigBody {
+                env: values,
+                inputs: Default::default(),
+            };
+            sign_config(&ctx, &target, body, &signer, json).await
+        }
+        DeploymentsCmd::SetEnv {
+            id,
+            env,
             secret,
             env_targeted,
             secret_targeted,
             clear,
             yes,
             json,
+            ..
         } => {
             let variables =
                 build_environment_variables(env, secret, env_targeted, secret_targeted)?;
@@ -1386,9 +1431,37 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
         DeploymentsCmd::SetInputs {
             id,
             inputs,
+            sign: true,
+            signer,
+            json,
+            ..
+        } => {
+            let target = resolve_platform_target(&ctx, &id, json, "Stack input changes").await?;
+            let mut values = std::collections::BTreeMap::new();
+            for pair in &inputs {
+                let (key, value) = parse_env_var(pair).ok_or_else(|| {
+                    AlienError::new(ErrorData::ValidationError {
+                        field: "input".to_string(),
+                        message: format!("'{pair}' is not ID=VALUE"),
+                    })
+                })?;
+                let value =
+                    serde_json::from_str(&value).unwrap_or(serde_json::Value::String(value));
+                values.insert(key, value);
+            }
+            let body = alien_release_trust::kinds::ConfigBody {
+                env: Default::default(),
+                inputs: values,
+            };
+            sign_config(&ctx, &target, body, &signer, json).await
+        }
+        DeploymentsCmd::SetInputs {
+            id,
+            inputs,
             secret_inputs,
             clear,
             json,
+            ..
         } => {
             let target = resolve_platform_target(&ctx, &id, json, "Stack input changes").await?;
             deployment_actions::set_inputs_task(
@@ -1489,6 +1562,49 @@ struct PlatformTarget {
     workspace: String,
     client: alien_platform_api::Client,
     deployment: DeploymentDetailResponse,
+}
+
+/// Sign `body` as the deployment's `config/v1` statement and send it. The
+/// signer list is verified from the pinned fingerprint first, and the
+/// statement replaces every configurable value the deployment had.
+async fn sign_config(
+    ctx: &ExecutionMode,
+    target: &PlatformTarget,
+    body: alien_release_trust::kinds::ConfigBody,
+    signer_args: &crate::signing::SignerArgs,
+    json: bool,
+) -> Result<()> {
+    let project = target.deployment.project_id.to_string();
+    let deployment = target.deployment.id.to_string();
+    let home = crate::signing::SigningHome::current()?;
+    let api = crate::signing::api::SigningApi::from_context(ctx).await?;
+    let chain =
+        crate::signing::verified_chain(&api, &home, &project, signer_args.fingerprint.as_deref())
+            .await?;
+    let signer = signer_args.open(&home).await?;
+    crate::signing::check_signer(&chain, &signer, alien_release_trust::Role::Release)?;
+    let envelope = crate::signing::envelope(
+        alien_release_trust::Kind::Config,
+        &project,
+        Some(&deployment),
+        &chain,
+        body,
+    );
+    let statement = crate::signing::sign_envelope(&envelope, &signer).await?;
+    api.publish_config(&deployment, &statement).await?;
+    if json {
+        return crate::output::print_json(&serde_json::json!({
+            "deploymentId": deployment,
+            "sequence": envelope.sequence,
+            "signer": signer.id(),
+        }));
+    }
+    println!(
+        "Signed config {} for deployment {deployment} as '{}'.",
+        envelope.sequence,
+        signer.id()
+    );
+    Ok(())
 }
 
 async fn resolve_platform_target(
