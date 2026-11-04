@@ -56,6 +56,7 @@ fn deployment() -> Value {
         "deploymentGroupId": GROUP_ID,
         "deploymentGroup": {"id": GROUP_ID, "name": "customers", "externalId": null},
         "purpose": "application",
+        "stackSettings": {},
         "releaseChannel": "production",
         "retryRequested": false,
         "updateBlocked": false,
