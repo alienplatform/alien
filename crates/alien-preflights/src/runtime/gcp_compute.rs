@@ -305,7 +305,17 @@ fn family_peaks(stack: &Stack, state: &StackState, required: bool) -> BTreeMap<S
             let Some(machine) = group.instance_type.as_deref() else {
                 continue;
             };
+            let existed = old.is_some_and(|old| {
+                old.capacity_groups
+                    .iter()
+                    .any(|old| old.group_id == group.group_id)
+            });
             let Some(row) = rows.iter().find(|row| row.group_id == group.group_id) else {
+                // An existing group without a status row adds nothing; the known
+                // usage marks its held capacity unresolved.
+                if existed {
+                    continue;
+                }
                 let initial = if required {
                     group.min_size
                 } else {
@@ -1450,6 +1460,23 @@ mod tests {
         let result = run_check(&desired, &state).await;
         assert_eq!(
             *outcome(&result, "CPUS_PER_VM_FAMILY/N4"),
+            QuotaOutcome::Unknown {
+                reason: "applied limit is 200, but provider-reported usage is unavailable and held capacity is unresolved".into()
+            }
+        );
+        // The same inside the cluster that changes: its unchanged group a has no row.
+        let old = pools(vec![pool_group("a", "n4-standard-80", 2, 2)]);
+        let state = running_state(&old, serde_json::json!([]));
+        let desired = pools(vec![
+            pool_group("a", "n4-standard-80", 2, 2),
+            pool_group("b", "n4-standard-2", 1, 1),
+        ]);
+        assert_eq!(
+            family_peaks(&desired, &state, true)["CPUS_PER_VM_FAMILY/N4"],
+            2.0
+        );
+        assert_eq!(
+            *outcome(&run_check(&desired, &state).await, "CPUS_PER_VM_FAMILY/N4"),
             QuotaOutcome::Unknown {
                 reason: "applied limit is 200, but provider-reported usage is unavailable and held capacity is unresolved".into()
             }
