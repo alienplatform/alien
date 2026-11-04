@@ -616,6 +616,20 @@ impl LambdaMicrovmsClient {
     }
 }
 
+/// The conflict message `DeleteMicrovmImage` is classified with while sessions started from the
+/// image are still running. Read it through [`is_refused_for_running_microvms`].
+pub const IMAGE_HAS_RUNNING_MICROVMS: &str =
+    "the image still has running MicroVMs; it can be deleted once they end";
+
+/// Whether a MicroVMs API error is `DeleteMicrovmImage` refusing an image that still has running
+/// sessions. Unlike a settling image, this can last as long as a session does.
+pub fn is_refused_for_running_microvms(error: &AlienError<ErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(ErrorData::RemoteResourceConflict { message, .. }) if message == IMAGE_HAS_RUNNING_MICROVMS
+    )
+}
+
 /// Turns a MicroVMs API failure into the error a caller can act on.
 ///
 /// Quota exhaustion has to arrive as `QuotaExceeded` — it is retryable and names the limit — and
@@ -636,6 +650,22 @@ fn classify(error: &AlienError<ErrorData>, operation: &str) -> ErrorData {
             return ErrorData::RemoteResourceNotFound {
                 resource_type: "Microvm".to_string(),
                 resource_name: operation.to_string(),
+            };
+        }
+        // While any session started from an image is running, the service refuses to delete the
+        // image with a 400, "Cannot delete microvm image with running microvms.". AWS ends every
+        // session within eight hours, so this also clears without any change on the caller's
+        // side. It gets its own message because it can last far longer than settling does.
+        if *http_status == 400
+            && http_response_text.as_deref().is_some_and(|text| {
+                text.to_ascii_lowercase()
+                    .contains("cannot delete microvm image with running microvms")
+            })
+        {
+            return ErrorData::RemoteResourceConflict {
+                resource_type: "MicrovmImage".to_string(),
+                resource_name: operation.to_string(),
+                message: IMAGE_HAS_RUNNING_MICROVMS.to_string(),
             };
         }
         // The service refuses a change to an image that is still settling with a 400
@@ -1098,6 +1128,55 @@ mod tests {
         assert!(
             matches!(error.error, Some(ErrorData::RemoteResourceConflict { .. })),
             "expected a conflict, got {error:?}"
+        );
+        assert!(refused.hits_async().await >= 1);
+    }
+
+    /// The refusal AWS returned live when teardown deleted an image whose sessions were still
+    /// running. As a generic failure it ended teardown at once, although the same delete succeeds
+    /// once the sessions end, which AWS guarantees within eight hours.
+    #[tokio::test]
+    async fn an_image_delete_refused_for_running_microvms_is_a_conflict_to_wait_out() {
+        let server = MockServer::start_async().await;
+        let refused = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::DELETE)
+                    .path(format!("/{API_VERSION}/microvm-images/test-image"));
+                then.status(400)
+                    .header("x-amzn-ErrorType", "ValidationException")
+                    .json_body(serde_json::json!({
+                        "message": "Cannot delete microvm image with running microvms."
+                    }));
+            })
+            .await;
+        let client = LambdaMicrovmsClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(AwsClientConfig {
+                account_id: "111122223333".to_string(),
+                region: "us-east-1".to_string(),
+                credentials: AwsCredentials::AccessKeys {
+                    access_key_id: "test".to_string(),
+                    secret_access_key: "test".to_string(),
+                    session_token: None,
+                },
+                service_overrides: Some(ServiceOverrides {
+                    endpoints: HashMap::from([("lambda".to_string(), server.base_url())]),
+                }),
+            }),
+        );
+
+        let error = client
+            .delete_microvm_image("test-image")
+            .await
+            .expect_err("the service refused the delete");
+
+        assert!(
+            matches!(
+                &error.error,
+                Some(ErrorData::RemoteResourceConflict { message, .. })
+                    if message.contains("running MicroVMs")
+            ),
+            "expected a running-MicroVMs conflict, got {error:?}"
         );
         assert!(refused.hits_async().await >= 1);
     }
