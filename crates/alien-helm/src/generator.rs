@@ -4175,14 +4175,22 @@ tunnel:
   enabled: true
 
 releaseSigning:
-  # Protected mode. When set, the Operator runs only releases signed by one of
-  # these public keys (ecdsa-p256:...) for this project, and refuses the rest
-  # of what the manager could change: environment variables, bindings, debug
-  # sessions, access requests, operations plugins and dynamic containers. Get
-  # the key and project from the developer through a channel you trust, not
-  # from the manager. Deployer inputs come only from inputValues.
-  publicKeys: []
+  # Protected mode. With protected: true the Operator runs only releases the
+  # developer's signer list signed, and refuses the rest of what the manager
+  # could change: environment variables, bindings, debug sessions, access
+  # requests, operations plugins and dynamic containers. Get the signing
+  # fingerprint from the developer's install guide, not from the manager.
+  # Deployer inputs come only from inputValues.
+  protected: false
+  # Project and deployment the signed statements must name.
   project: ""
+  deployment: ""
+  # SHA256:<hex> fingerprint of the developer's signer list version 1.
+  signing: ""
+  # ecdsa-p256:<base64> key that signs Operator builds.
+  components: ""
+  # developer, or developer+customer to also require your approval of exec.
+  sessionApproval: developer
 
 clusterBootstrap:
   metricsServer:
@@ -5087,11 +5095,12 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "publicKeys": {
-          "type": "array",
-          "items": { "type": "string", "pattern": "^ecdsa-p256:[A-Za-z0-9+/=]+$" }
-        },
-        "project": { "type": "string" }
+        "protected": { "type": "boolean" },
+        "project": { "type": "string" },
+        "deployment": { "type": "string" },
+        "signing": { "type": "string", "pattern": "^(SHA256:[0-9a-f]{64})?$" },
+        "components": { "type": "string", "pattern": "^(ecdsa-p256:[A-Za-z0-9+/=]+)?$" },
+        "sessionApproval": { "type": "string", "enum": ["developer", "developer+customer"] }
       }
     },
     "heartbeat": {
@@ -6814,17 +6823,15 @@ spec:
               value: {{ include "deployment.fullname" . | quote }}
             {{- end }}
             {{- $releaseSigning := default dict .Values.releaseSigning }}
-            {{- if $releaseSigning.publicKeys }}
-            {{- if not $releaseSigning.project }}
-              {{- fail "releaseSigning.project is required with releaseSigning.publicKeys" }}
+            {{- if $releaseSigning.protected }}
+            {{- if not (and $releaseSigning.project $releaseSigning.deployment $releaseSigning.signing $releaseSigning.components) }}
+              {{- fail "releaseSigning.protected needs project, deployment, signing and components" }}
             {{- end }}
             {{- if dig "enabled" false (default dict .Values.remoteOperator) }}
               {{- fail "releaseSigning runs only signed releases; it can't be combined with remoteOperator.enabled" }}
             {{- end }}
-            - name: OPERATOR_RELEASE_SIGNING_PUBLIC_KEYS
-              value: {{ join "," $releaseSigning.publicKeys | quote }}
-            - name: OPERATOR_RELEASE_SIGNING_PROJECT
-              value: {{ $releaseSigning.project | quote }}
+            - name: OPERATOR_RELEASE_TRUST_ANCHOR
+              value: {{ toJson $releaseSigning | quote }}
             {{- end }}
             - name: OTLP_PORT
               value: {{ .Values.runtime.api.port | quote }}

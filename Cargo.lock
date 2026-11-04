@@ -888,6 +888,7 @@ dependencies = [
  "alien-operations-sdk",
  "alien-permissions",
  "alien-preflights",
+ "alien-release-trust",
  "alien-terraform",
  "flate2",
  "indexmap 2.14.1",

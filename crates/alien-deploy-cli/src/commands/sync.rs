@@ -4270,9 +4270,9 @@ fn merged_value<'a>(
 
 /// Whether the customer's values turn on protected mode (`releaseSigning`).
 fn protected_site(values: &[serde_json::Value]) -> bool {
-    merged_value(values, "releaseSigning", "publicKeys")
-        .and_then(|keys| keys.as_array())
-        .is_some_and(|keys| !keys.is_empty())
+    merged_value(values, "releaseSigning", "protected")
+        .and_then(|protected| protected.as_bool())
+        .unwrap_or(false)
 }
 
 /// A protected site's Operator runs only signed releases, but the chart
@@ -4937,11 +4937,11 @@ mod tests {
             "apiVersion: v2\nname: app\nversion: 0.1.0\n",
         )
         .unwrap();
-        std::fs::write(chart.path().join("values.yaml"), "runtime:\n  image:\n    repository: registry.example.com/operator\n    tag: fixture\nreleaseSigning:\n  publicKeys: []\n  project: \"\"\n").unwrap();
+        std::fs::write(chart.path().join("values.yaml"), "runtime:\n  image:\n    repository: registry.example.com/operator\n    tag: fixture\nreleaseSigning:\n  protected: false\n  project: \"\"\n").unwrap();
         let values = chart.path().join("site.yaml");
         std::fs::write(
             &values,
-            "releaseSigning:\n  publicKeys: [\"ecdsa-p256:customer\"]\n  project: shop\n",
+            "releaseSigning:\n  protected: true\n  project: shop\n",
         )
         .unwrap();
         let mut package = Command::new("helm");
@@ -4959,7 +4959,7 @@ mod tests {
             values: vec![values],
             kube_context: Some(context),
         };
-        let injected = "v1,releaseSigning.publicKeys[0]=ecdsa-p256:attacker@sha256:aa";
+        let injected = "v1,releaseSigning.protected=false@sha256:aa";
         let record = InstalledBundle {
             rollout_succeeded: false,
             sequence: None,
@@ -5004,10 +5004,7 @@ mod tests {
         run(cleanup, "removing injection fixture").await.unwrap();
         installed.unwrap();
         let values = values.unwrap().unwrap();
-        assert_eq!(
-            values["releaseSigning"]["publicKeys"],
-            serde_json::json!(["ecdsa-p256:customer"])
-        );
+        assert_eq!(values["releaseSigning"]["protected"], true);
         assert_eq!(values["releaseSigning"]["project"], "shop");
         assert_eq!(values["runtime"]["image"]["tag"], injected);
         assert_eq!(
@@ -5028,7 +5025,7 @@ mod tests {
         );
         for key in [
             "releaseSigning",
-            "releaseSigning.publicKeys",
+            "releaseSigning.protected",
             "postgres.a,b.image",
             "postgres..image",
             "runtime.image.tag",
@@ -5261,16 +5258,15 @@ stringData:
         // Keys set in the saved values and cleared by a later values file
         // turn protected mode off, as Helm merges them.
         let cleared = [
-            serde_json::json!({"releaseSigning": {"publicKeys": ["ecdsa-p256:x"]}}),
-            serde_json::json!({"releaseSigning": {"publicKeys": []}}),
+            serde_json::json!({"releaseSigning": {"protected": true}}),
+            serde_json::json!({"releaseSigning": {"protected": false}}),
         ];
         assert_eq!(
             decide_chart(&cleared, true, digest, None).unwrap(),
             ChartDecision::Install(None)
         );
 
-        let keys =
-            serde_json::json!({"releaseSigning": {"publicKeys": ["ecdsa-p256:x"], "project": "p"}});
+        let keys = serde_json::json!({"releaseSigning": {"protected": true, "project": "p"}});
         let first = decide_chart(std::slice::from_ref(&keys), false, digest, None).unwrap_err();
         assert_eq!(first.code, "VALIDATION_ERROR");
         assert!(

@@ -202,39 +202,40 @@ fn unconditional_deployer_default_keeps_existing_chart() {
     super::helpers::snapshot_chart("unconditional_deployer_default", &chart);
 }
 
-/// `releaseSigning` turns on protected mode with the pinned keys and project,
-/// and the chart refuses settings protected mode can't honor.
+/// `releaseSigning` turns on protected mode with the anchor the customer's
+/// setup pins, and the chart refuses an incomplete anchor.
 #[test]
-fn release_signing_pins_keys_and_project_for_the_operator() {
+fn release_signing_passes_the_anchor_to_the_operator() {
     let chart = render(
         &Stack::new("sample-agent".to_string()).build(),
         StackSettings::default(),
     );
     let base = "management:\n  token: ax_bootstrap\n  url: https://manager.example.test\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
-    let first = "ecdsa-p256:MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE";
-    let second = "ecdsa-p256:MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAF";
+    let fingerprint = format!("SHA256:{}", "a".repeat(64));
+    let components_key = alien_release_trust::SoftwareKey::from_secret_bytes(&[9; 32]).unwrap();
+    let components = components_key.public_key().as_str().to_string();
 
     let unprotected = test_utils::helm_template(&chart.files, Some(base));
     unprotected.assert_ok("default values");
-    let env = operator_env(&unprotected.stdout);
-    assert!(!env.contains_key("OPERATOR_RELEASE_SIGNING_PUBLIC_KEYS"));
-    assert!(!env.contains_key("OPERATOR_RELEASE_SIGNING_PROJECT"));
+    assert!(!operator_env(&unprotected.stdout).contains_key("OPERATOR_RELEASE_TRUST_ANCHOR"));
 
     let protected_values = format!(
-        "{base}releaseSigning:\n  publicKeys:\n    - {first}\n    - {second}\n  project: shop\n"
+        "{base}releaseSigning:\n  protected: true\n  project: shop\n  deployment: dep_shop\n  signing: {fingerprint}\n  components: {components}\n"
     );
     let protected = test_utils::helm_template(&chart.files, Some(&protected_values));
     protected.assert_ok("protected mode");
     let env = operator_env(&protected.stdout);
-    assert_eq!(
-        env.get("OPERATOR_RELEASE_SIGNING_PUBLIC_KEYS"),
-        Some(&format!("{first},{second}"))
-    );
-    assert_eq!(
-        env.get("OPERATOR_RELEASE_SIGNING_PROJECT")
-            .map(String::as_str),
-        Some("shop")
-    );
+    let anchor = alien_release_trust::Anchor::parse(
+        env.get("OPERATOR_RELEASE_TRUST_ANCHOR")
+            .expect("protected mode passes the anchor")
+            .as_bytes(),
+    )
+    .expect("the Operator can read the anchor the chart renders");
+    assert!(anchor.protected);
+    assert_eq!(anchor.project, "shop");
+    assert_eq!(anchor.deployment, "dep_shop");
+    assert_eq!(anchor.signing, fingerprint);
+    assert_eq!(anchor.components, components);
 
     let refused = |values: String, reason: &str| {
         let run = test_utils::helm_template(&chart.files, Some(&values));
@@ -245,11 +246,11 @@ fn release_signing_pins_keys_and_project_for_the_operator() {
         assert!(run.stderr.contains(reason), "{}", run.stderr);
     };
     refused(
-        format!("{base}releaseSigning:\n  publicKeys:\n    - {first}\n"),
-        "releaseSigning.project is required",
+        format!("{base}releaseSigning:\n  protected: true\n  project: shop\n"),
+        "releaseSigning.protected needs",
     );
     refused(
-        format!("{base}releaseSigning:\n  publicKeys:\n    - ed25519:AAAA\n  project: shop\n"),
-        "publicKeys",
+        format!("{base}releaseSigning:\n  protected: true\n  project: shop\n  deployment: d\n  signing: SHA256:abc\n  components: {components}\n"),
+        "signing",
     );
 }
