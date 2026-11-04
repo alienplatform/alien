@@ -1561,9 +1561,12 @@ mod tests {
     #[derive(Debug, Default)]
     struct RecordingAwsRegistry {
         grants: Mutex<Vec<String>>,
+        /// The access each grant asked for, in order.
+        accesses: Mutex<Vec<AwsCrossAccountAccess>>,
         removals: Mutex<Vec<String>>,
-        /// Answer every grant the way ECR does while a regional replica does not exist yet:
-        /// the source policy is written, the replica's is not.
+        /// Answer every grant that names a region the way ECR does while the repository has no
+        /// replica there yet: the source policy is written, the replica's is not. A grant naming
+        /// no region waits on no replica, as in the binding.
         replica_missing: bool,
     }
 
@@ -1601,16 +1604,14 @@ mod tests {
                 panic!("an AWS deployment must grant AWS access");
             };
             assert_eq!(access.role_arns, vec!["test-management-role"]);
-            assert_eq!(
-                access.allowed_service_types,
-                vec![ComputeServiceType::Worker]
-            );
             assert_eq!(access.account_ids.len(), 1);
             self.grants
                 .lock()
                 .expect("grants lock")
                 .push(repository.to_string());
-            if self.replica_missing {
+            let names_a_region = !access.regions.is_empty();
+            self.accesses.lock().expect("accesses lock").push(access);
+            if self.replica_missing && names_a_region {
                 return Err(AlienError::new(
                     alien_bindings::error::ErrorData::RegistryReplicaNotReady {
                         repository: repository.to_string(),
@@ -1686,6 +1687,18 @@ mod tests {
             let access = metadata.registry_access.expect("record");
             assert_eq!(access.repositories, vec![repository]);
             assert_eq!(access.service_types, vec!["worker"]);
+            let accesses = registry.accesses.lock().expect("accesses lock");
+            assert_eq!(accesses.len(), 1);
+            assert_eq!(
+                accesses[0].allowed_service_types,
+                vec![ComputeServiceType::Worker],
+                "Lambda pulls as its service principal"
+            );
+            assert_eq!(
+                accesses[0].regions,
+                vec!["us-east-2"],
+                "Lambda pulls from its own region's replica"
+            );
         }
     }
 
@@ -1798,6 +1811,99 @@ mod tests {
                 .repositories,
             vec!["alien-artifacts-prj_test"]
         );
+    }
+
+    /// Only a worker pulls from a replica in its own region. A deployment without one, here a
+    /// sandbox whose MicroVM image builds from the source repository, is granted there and done
+    /// in one pass, even in a region the repository has no replica in. It used to wait on that
+    /// replica, which no replication rule might ever create, and so never left setup.
+    #[tokio::test]
+    async fn a_deployment_without_workers_does_not_wait_for_a_regional_replica() {
+        let registry = Arc::new(RecordingAwsRegistry {
+            replica_missing: true,
+            ..Default::default()
+        });
+        let mut state = aws_state_with_stack(sandbox_stack(Some(
+            "123456789012.dkr.ecr.{region}.amazonaws.com/alien-artifacts-prj_test:agents-abc123",
+        )));
+        state.stack_state = Some(registered_stack_state("test-management-role"));
+        state.environment_info = Some(EnvironmentInfo::Aws(AwsEnvironmentInfo {
+            account_id: "123456789012".to_string(),
+            region: "eu-west-1".to_string(),
+        }));
+
+        for _ in 0..2 {
+            reconcile_registry_access(
+                &recording_provider(registry.clone()),
+                &HashMap::new(),
+                "deployment",
+                PROJECT,
+                &mut state,
+            )
+            .await
+            .expect("a deployment without workers waits on no replica");
+        }
+
+        assert_eq!(
+            *registry.grants.lock().expect("grants lock"),
+            vec!["alien-artifacts-prj_test"],
+            "granted once, and the finished grant is not written again"
+        );
+        let accesses = registry.accesses.lock().expect("accesses lock");
+        assert!(accesses[0].regions.is_empty(), "{:?}", accesses[0]);
+        assert!(
+            accesses[0].allowed_service_types.is_empty(),
+            "no Lambda statement for a stack without workers: {:?}",
+            accesses[0]
+        );
+        assert_eq!(state.status, DeploymentStatus::InitialSetup);
+        assert!(state.error.is_none());
+        let metadata = state.runtime_metadata.expect("metadata");
+        assert!(metadata.registry_access_granted);
+        let record = metadata.registry_access.expect("record");
+        assert_eq!(record.repositories, vec!["alien-artifacts-prj_test"]);
+        assert!(record.service_types.is_empty());
+    }
+
+    /// A grant recorded for workers, on a deployment whose releases no longer declare any, is
+    /// written once more without the worker principal and then settles.
+    #[tokio::test]
+    async fn a_worker_record_on_a_stack_without_workers_is_rewritten_once() {
+        let registry = Arc::new(RecordingAwsRegistry::default());
+        let mut state = aws_state_with_stack(sandbox_stack(Some(
+            "123456789012.dkr.ecr.{region}.amazonaws.com/alien-artifacts-prj_test:agents-abc123",
+        )));
+        state.stack_state = Some(registered_stack_state("test-management-role"));
+        let metadata = state.runtime_metadata.as_mut().expect("metadata");
+        metadata.registry_access_granted = true;
+        metadata.registry_access = Some(RegistryAccess {
+            repositories: vec!["alien-artifacts-prj_test".to_string()],
+            service_types: vec!["worker".to_string()],
+        });
+
+        for _ in 0..3 {
+            reconcile_registry_access(
+                &recording_provider(registry.clone()),
+                &HashMap::new(),
+                "deployment",
+                PROJECT,
+                &mut state,
+            )
+            .await
+            .expect("no replica is pending");
+        }
+
+        assert_eq!(
+            *registry.grants.lock().expect("grants lock"),
+            vec!["alien-artifacts-prj_test"]
+        );
+        let metadata = state.runtime_metadata.expect("metadata");
+        assert!(metadata.registry_access_granted);
+        assert!(metadata
+            .registry_access
+            .expect("record")
+            .service_types
+            .is_empty());
     }
 
     #[tokio::test]
@@ -3043,6 +3149,11 @@ mod tests {
                 "ecr:SetRepositoryPolicy"
             ]),
             "the MicroVM build pulls layers and manifests through this statement"
+        );
+        assert_eq!(
+            statements.len(),
+            1,
+            "a stack without workers grants no Lambda service principal: {policy}"
         );
         assert_eq!(policy["Version"], "2012-10-17");
     }
