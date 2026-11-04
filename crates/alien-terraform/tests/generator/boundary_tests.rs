@@ -890,8 +890,14 @@ async fn terraform_management_passes_roles_only_to_their_intended_services() {
 }
 
 /// The flow log objects are made only with setup's credentials: the setup policy allows each
-/// request, while no management policy and no runtime role policy allows any of them, and the
-/// boundary for roles the runtime writes grants nothing on them.
+/// request, no management policy and no runtime role policy allows creating or writing any of
+/// them, and the boundary for roles the runtime writes grants nothing on them.
+///
+/// Deleting them is the exception. With automatic setup management, runtime cleanup deletes a
+/// created network under the management identity, and the network deletes its flow log, delivery
+/// role and log group first. So `network/provision`, which only management and setup hold, allows
+/// the deletes on this stack's runtime-tagged objects, and the automatic management identity gets
+/// them through it. `network/provision` is not a runtime set, so the boundary stays without them.
 #[tokio::test]
 async fn flow_log_grants_stay_out_of_the_management_identity_and_the_runtime_boundary() {
     let network = NetworkSettings::Create {
@@ -968,6 +974,7 @@ async fn flow_log_grants_stay_out_of_the_management_identity_and_the_runtime_bou
     )
     .unwrap()
     .statement;
+    let is_delete = |action: &str| matches!(action, "ec2:DeleteFlowLogs" | "logs:DeleteLogGroup");
     for (action, request) in &requests {
         assert_eq!(
             evaluate(&setup, request),
@@ -1017,10 +1024,16 @@ async fn flow_log_grants_stay_out_of_the_management_identity_and_the_runtime_bou
                 .statement;
             runtime_policies += 1;
             for (action, request) in &requests {
+                let deletes_flow_log_objects =
+                    id == "network/provision" && target == BindingTarget::Stack;
                 assert_eq!(
                     evaluate(&statements, request),
-                    Decision::NotAllowed,
-                    "runtime policy {id} ({target:?}) may {action} on a flow log object"
+                    if deletes_flow_log_objects && is_delete(action) {
+                        Decision::Allowed
+                    } else {
+                        Decision::NotAllowed
+                    },
+                    "policy {id} ({target:?}) on {action} for a flow log object"
                 );
             }
         }
@@ -1050,13 +1063,29 @@ async fn flow_log_grants_stay_out_of_the_management_identity_and_the_runtime_bou
         let management = management_policies(stack(), settings.clone()).await;
         assert!(!management.is_empty());
         for (name, statements) in &management {
-            for (action, request) in &requests {
+            for (action, request) in requests.iter().filter(|(action, _)| !is_delete(action)) {
                 assert_eq!(
                     evaluate(statements, request),
                     Decision::NotAllowed,
                     "{setup_management:?}: management policy {name} may {action} on a flow log object"
                 );
             }
+        }
+        // IAM allows a request when any policy of the identity does.
+        let identity: Vec<_> = management
+            .iter()
+            .flat_map(|(_, statements)| statements.clone())
+            .collect();
+        for (action, request) in requests.iter().filter(|(action, _)| is_delete(action)) {
+            assert_eq!(
+                evaluate(&identity, request),
+                if setup_management == SetupManagement::Automatic {
+                    Decision::Allowed
+                } else {
+                    Decision::NotAllowed
+                },
+                "{setup_management:?}: the management identity on {action} for a flow log object"
+            );
         }
 
         let documents = management_policy_documents(stack(), settings).await;

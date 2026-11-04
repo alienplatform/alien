@@ -1,10 +1,12 @@
 {
   "id": "network/setup",
-  "description": "Allows setup to create and delete a created network's VPC flow log, the log group it writes to and the role the VPC flow logs service assumes",
-  // Setup credentials only: the flow log is part of the network, which setup creates, so
-  // the management identity never needs these. Creating a role and writing its policy cannot
-  // be limited to what the role may do either. Automatic setup management copies only
-  // provision, management, heartbeat and telemetry sets to the management identity.
+  "description": "Allows setup to create a created network's VPC flow log, the log group it writes to and the role the VPC flow logs service assumes",
+  // Setup credentials only. Creating a role and writing its policy cannot be limited to what
+  // the role may do, so only setup creates the flow log objects. Deleting them is in
+  // network/provision: the management identity deletes the network it was given, and the
+  // flow log objects with it, as it deletes the network's other children. Automatic setup
+  // management copies only provision, management, heartbeat and telemetry sets to the
+  // management identity.
   "platforms": {
     "aws": [
       // The created VPC's flow log. AWS also authorizes the create against the VPC, which must
@@ -58,33 +60,6 @@
           }
         }
       },
-      {
-        "grant": {
-          "actions": ["ec2:DeleteFlowLogs"]
-        },
-        "binding": {
-          "stack": {
-            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc-flow-log/*"],
-            "condition": {
-              "StringEquals": {
-                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
-      },
-      // AWS requires Resource: "*" for this read-only discovery API.
-      {
-        "grant": {
-          "actions": ["ec2:DescribeFlowLogs"]
-        },
-        "binding": {
-          "stack": {
-            "resources": ["*"]
-          }
-        }
-      },
       // CreateLogGroup with tags also authorizes the tagging actions. They are limited to a
       // group without this stack's tag, which is the group being created: a group that already
       // carries ownership tags, such as one a template setup made, cannot be retagged.
@@ -127,27 +102,17 @@
           }
         }
       },
-      // Reading the tags tells this network's group from another with the same name.
+      // CloudWatch Logs authorizes some log group actions against the group's ARN with a
+      // trailing ":*", so both forms are listed.
       {
         "grant": {
-          "actions": ["logs:ListTagsForResource"]
+          "actions": ["logs:PutRetentionPolicy"]
         },
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:${stackPrefix}-*-flow-logs"
-            ]
-          }
-        }
-      },
-      {
-        "grant": {
-          "actions": ["logs:PutRetentionPolicy", "logs:DeleteLogGroup"]
-        },
-        "binding": {
-          "stack": {
-            "resources": [
-              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:${stackPrefix}-*-flow-logs"
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:${stackPrefix}-*-flow-logs",
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:${stackPrefix}-*-flow-logs:*"
             ],
             "condition": {
               "StringEquals": {
@@ -199,7 +164,7 @@
       },
       {
         "grant": {
-          "actions": ["iam:GetRole", "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:DeleteRole"]
+          "actions": ["iam:GetRole", "iam:PutRolePolicy"]
         },
         "binding": {
           "stack": {
