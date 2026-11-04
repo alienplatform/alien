@@ -550,6 +550,10 @@ pub async fn handle_updating(
             observed_inventory_batches: vec![],
         });
     }
+    // Every required deployer secret is written now, so a wait recorded by an
+    // earlier step no longer describes this deployment. Clear it here: a step
+    // that is still in progress carries the previous error forward otherwise.
+    next.error = None;
 
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
