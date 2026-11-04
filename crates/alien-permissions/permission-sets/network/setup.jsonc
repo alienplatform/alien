@@ -102,6 +102,8 @@
           }
         }
       },
+      // CloudWatch Logs authorizes some log group actions against the group's ARN with a
+      // trailing ":*", so both forms are listed.
       {
         "grant": {
           "actions": ["logs:PutRetentionPolicy"]
@@ -109,7 +111,8 @@
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:${stackPrefix}-*-flow-logs"
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:${stackPrefix}-*-flow-logs",
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:${stackPrefix}-*-flow-logs:*"
             ],
             "condition": {
               "StringEquals": {
