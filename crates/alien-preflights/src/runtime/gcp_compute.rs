@@ -357,10 +357,12 @@ fn family_peaks(stack: &Stack, state: &StackState, required: bool) -> BTreeMap<S
                     .iter()
                     .find(|old| old.group_id == group.group_id)
             });
-            let order = if cluster
-                .selected_failure_domains
-                .contains_key(&group.group_id)
-            {
+            // The controller makes a group zonal when either map names it.
+            let zonal = cluster.failure_domain_spread.contains_key(&group.group_id)
+                || cluster
+                    .selected_failure_domains
+                    .contains_key(&group.group_id);
+            let order = if zonal {
                 format!("{}/", group.group_id)
             } else {
                 group.group_id.clone()
@@ -1426,11 +1428,12 @@ mod tests {
 
     /// The roll-phase peak of N4 for pools as they run now and as the update wants
     /// them. Each tuple is (group, machine type, machines); `zonal` names groups
-    /// with failure domains.
+    /// with selected failure domains and `spread` groups with only a spread.
     fn n4_roll_peak(
         running: &[(&str, &str, u32)],
         desired: &[(&str, &str, u32)],
         zonal: &[&str],
+        spread: &[&str],
     ) -> f64 {
         let fixed = |groups: &[(&str, &str, u32)]| {
             let mut cluster = ComputeCluster::new("cluster".into());
@@ -1443,6 +1446,9 @@ mod tests {
                     (*id).into(),
                     vec!["us-central1-a".into(), "us-central1-b".into()],
                 );
+            }
+            for id in spread {
+                cluster.failure_domain_spread.insert((*id).into(), 1);
             }
             Stack::new("quota-test".into())
                 .add(cluster, ResourceLifecycle::Live)
@@ -1469,6 +1475,7 @@ mod tests {
                 &[("a", "n4-standard-48", 2), ("b", "n4-standard-16", 2)],
                 &[("a", "n4-standard-16", 2), ("b", "n4-standard-48", 2)],
                 &[],
+                &[],
             ),
             144.0
         );
@@ -1477,6 +1484,7 @@ mod tests {
             n4_roll_peak(
                 &[("a", "n4-standard-16", 2), ("b", "n4-standard-48", 2)],
                 &[("a", "n4-standard-48", 2), ("b", "n4-standard-16", 2)],
+                &[],
                 &[],
             ),
             208.0
@@ -1488,6 +1496,7 @@ mod tests {
                 &[("a", "n4-standard-48", 2), ("b", "n4-standard-16", 2)],
                 &[("a", "n2-standard-48", 2), ("b", "n4-standard-48", 2)],
                 &[],
+                &[],
             ),
             128.0
         );
@@ -1498,6 +1507,7 @@ mod tests {
                 &[("a", "n4-standard-80", 2), ("b", "n4-standard-2", 1)],
                 &[("a", "n4-standard-80", 2), ("b", "n4-standard-4", 1)],
                 &[],
+                &[],
             ),
             242.0
         );
@@ -1505,8 +1515,10 @@ mod tests {
         // (112 + 32 = 144), then a grows (32 + 112). Aggregate, a would grow first: 208.
         let running = [("a", "n4-standard-16", 2), ("a-x", "n4-standard-48", 2)];
         let desired = [("a", "n4-standard-48", 2), ("a-x", "n4-standard-16", 2)];
-        assert_eq!(n4_roll_peak(&running, &desired, &["a"]), 144.0);
-        assert_eq!(n4_roll_peak(&running, &desired, &[]), 208.0);
+        assert_eq!(n4_roll_peak(&running, &desired, &["a"], &[]), 144.0);
+        assert_eq!(n4_roll_peak(&running, &desired, &[], &[]), 208.0);
+        // A spread alone, the default for persistent pools, also makes a zonal.
+        assert_eq!(n4_roll_peak(&running, &desired, &[], &["a"]), 144.0);
     }
 
     #[tokio::test]
