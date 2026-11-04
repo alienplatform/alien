@@ -88,6 +88,49 @@ const WORKER_BUNDLE_NATIVE_INSTALL_SNIPPET: &str =
 /// most Bun accepts, the same value the Worker runtime uses.
 const DIRECT_ENTRY_IDLE_TIMEOUT_SECS: u8 = 255;
 
+/// Reads a module's export names with Bun's transpiler, without running it.
+/// The module path is the script's only argument.
+const SCAN_DEFAULT_EXPORT_SCRIPT: &str = r#"const [path] = process.argv.slice(1)
+const loader = path.endsWith(".tsx") ? "tsx" : path.endsWith(".jsx") ? "jsx" : /\.[cm]?ts$/.test(path) ? "ts" : "js"
+const { exports } = new Bun.Transpiler({ loader }).scan(await Bun.file(path).text())
+console.log(exports.includes("default"))"#;
+
+/// Whether a Container/Daemon entry module has a default export, and so needs
+/// the entry wrapper to start its server. Bun starts that server itself only
+/// for its main module, and the wrapper makes the entry a non-main module, so
+/// entries without one are compiled directly.
+async fn entry_has_default_export(entry_path: &Path) -> Result<bool> {
+    let output = Command::new("bun")
+        .arg("--eval")
+        .arg(SCAN_DEFAULT_EXPORT_SCRIPT)
+        .arg(entry_path)
+        .output()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ImageBuildFailed {
+            resource_name: "typescript-project".to_string(),
+            reason: "Failed to run bun to read the entry point's exports. Is Bun installed?"
+                .to_string(),
+            build_output: None,
+        })?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    match (output.status.success(), stdout.trim()) {
+        (true, "true") => Ok(true),
+        (true, "false") => Ok(false),
+        _ => Err(AlienError::new(ErrorData::ImageBuildFailed {
+            resource_name: "typescript-project".to_string(),
+            reason: format!(
+                "Failed to read the exports of entry point {}",
+                entry_path.display()
+            ),
+            build_output: Some(format!(
+                "{stdout}{}",
+                String::from_utf8_lossy(&output.stderr)
+            )),
+        })),
+    }
+}
+
 /// Rewrite a user entry point (relative to `src_dir`) into an import specifier
 /// usable from a generated file under `src_dir/.alien-build/`.
 fn bootstrap_relative_import(user_entry_point: &str) -> String {
@@ -341,9 +384,10 @@ impl TypeScriptToolchain {
         Ok(bootstrap_path)
     }
 
-    /// Generate the thin entry wrapper every source-built Container/Daemon
-    /// compiles. When the binary embeds the bindings addon (`addon_route` is
-    /// set), it registers the addon first; then it dynamically imports the
+    /// Generate the thin entry wrapper a source-built Container/Daemon compiles
+    /// when its entry has a default export or its binary embeds the bindings
+    /// addon. With the addon (`addon_route` is set), it registers the addon
+    /// first; then it dynamically imports the
     /// user's entry point. The dynamic import is required because static
     /// imports are evaluated before the wrapper body. Because the user module
     /// is not Bun's entry module, the wrapper starts the server Bun would start
@@ -503,11 +547,11 @@ impl Toolchain for TypeScriptToolchain {
 
         // Workers compile a generated bootstrap that hands the app to
         // `runWorker` (the binary runs behind alien-worker-runtime).
-        // Containers and Daemons compile a thin wrapper around the user's
-        // entry point: their binary is the image entrypoint and owns its own
-        // lifecycle. The wrapper starts the default export's server with a
-        // longer idle timeout and, when an addon is embedded, registers it
-        // before importing the user entry.
+        // Containers and Daemons own their lifecycle: their binary is the image
+        // entrypoint. When the entry has a default export, or an addon is
+        // embedded, they compile a thin wrapper around it that registers the
+        // addon and starts the default export's server with a longer idle
+        // timeout. Otherwise the entry is compiled directly.
         let (compile_entry, bootstrap_dir) = if context.workload == WorkloadKind::Worker {
             // .alien-build/ lives inside the source directory so bun can
             // resolve node_modules; it is cleaned up after the build.
@@ -522,13 +566,21 @@ impl Toolchain for TypeScriptToolchain {
                 )
                 .await?;
             (bootstrap_path, Some(bootstrap_dir))
-        } else {
+        } else if staged.is_some()
+            || entry_has_default_export(&src_dir.join(entry_point.trim_start_matches("./")))
+                .await?
+        {
             let route = staged.as_ref().map(|staged_addon| staged_addon.route);
             let bootstrap_dir = src_dir.join(".alien-build");
             let wrapper_path = self
                 .generate_direct_entry_wrapper(&src_dir, &entry_point, &bootstrap_dir, route)
                 .await?;
             (wrapper_path, Some(bootstrap_dir))
+        } else {
+            // No default export for the wrapper to serve and no addon to
+            // register: the entry stays Bun's main module, so an app that
+            // starts its own server under `import.meta.main` keeps doing so.
+            (src_dir.join(entry_point.trim_start_matches("./")), None)
         };
 
         // Cloud Workers reuse Bun from the immutable Worker base. Other
@@ -1007,5 +1059,32 @@ mod tests {
             response, "",
             "the app's 2 s idle timeout should drop a connection that is silent for 8 s"
         );
+    }
+
+    #[tokio::test]
+    async fn only_entries_with_a_default_export_get_the_entry_wrapper() {
+        let project = tempdir().unwrap();
+        let cases = [
+            ("object.ts", "export default { fetch: () => new Response(\"ok\") }", true),
+            ("named.ts", "const app = { fetch() {} }\nexport { app as default }", true),
+            ("reexport.ts", "export { default } from \"./object.ts\"", true),
+            ("function.ts", "export default function handler() {}", true),
+            (
+                "main-guard.ts",
+                "if (import.meta.main) Bun.serve({ fetch: () => new Response(\"ok\") })",
+                false,
+            ),
+            ("top-level.ts", "Bun.serve({ fetch: () => new Response(\"ok\") })", false),
+            ("commonjs.js", "module.exports = { fetch() {} }", false),
+        ];
+        for (file, source, expected) in cases {
+            let path = project.path().join(file);
+            fs::write(&path, source).await.unwrap();
+            assert_eq!(
+                entry_has_default_export(&path).await.unwrap(),
+                expected,
+                "{file}: {source}"
+            );
+        }
     }
 }
