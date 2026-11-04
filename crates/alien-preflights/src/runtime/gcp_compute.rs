@@ -723,10 +723,13 @@ pub async fn check_offerings(
         return;
     }
     for (decided, machine) in machines.iter().enumerate() {
+        // A catalog row can add an accelerator to a machine type; GCP knows the machine type.
+        let machine_type = find_instance_type(Platform::Gcp, machine)
+            .map_or(*machine, |spec| spec.machine_type);
         let mut offered = false;
         for zone in &zones {
             match compute
-                .get_machine_type(zone.clone(), machine.to_string())
+                .get_machine_type(zone.clone(), machine_type.to_string())
                 .await
             {
                 Ok(_) => {
@@ -1052,6 +1055,31 @@ mod tests {
             result.errors,
             ["Machine type 'c4a-standard-72' is not offered in any zone of GCP region 'us-central1'. Choose a machine type this region offers."]
         );
+    }
+
+    #[tokio::test]
+    async fn an_accelerator_row_is_checked_as_its_machine_type() {
+        let mut compute = alien_gcp_clients::compute::MockComputeApi::new();
+        compute
+            .expect_list_zones()
+            .times(1)
+            .returning(|_| Ok(us_central1_zones()));
+        compute
+            .expect_get_machine_type()
+            .withf(|_, machine| machine == "n1-standard-4")
+            .times(1)
+            .returning(|zone, machine| {
+                Ok(alien_gcp_clients::compute::MachineType {
+                    name: Some(machine),
+                    zone: Some(zone),
+                    ..Default::default()
+                })
+            });
+        let mut result = CheckResult::success();
+        let machines = BTreeSet::from(["n1-standard-4-t4".to_string()]);
+        check_offerings(&machines, "us-central1", &compute, &mut result).await;
+        assert!(result.success, "{:?}", result.errors);
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
     }
 
     #[tokio::test]
