@@ -93,7 +93,9 @@ async fn create_replica_and_request_exact_failover_use_signed_private_requests()
                 .body_contains("AvailabilityZone=us-east-1b")
                 .body_contains("PromotionTier=1")
                 .body_contains("DBInstanceClass=db.serverless")
-                .body_contains("PubliclyAccessible=false");
+                .body_contains("PubliclyAccessible=false")
+                .body_contains("Tags.Tag.1.Key=deployment")
+                .body_contains("Tags.Tag.1.Value=stack");
             then.status(200).body("<CreateDBInstanceResponse/>");
         })
         .await;
@@ -116,6 +118,7 @@ async fn create_replica_and_request_exact_failover_use_signed_private_requests()
             performance_insights_kms_key_id: None,
             availability_zone: Some("us-east-1b".into()),
             promotion_tier: Some(1),
+            tags: HashMap::from([("deployment".to_string(), "stack".to_string())]),
         })
         .await
         .unwrap();

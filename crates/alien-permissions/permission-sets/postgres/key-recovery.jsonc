@@ -11,12 +11,23 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*"]
+            "resources": ["arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
           },
           "resource": {
             "resources": [
               "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}"
-            ]
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
           }
         }
       }

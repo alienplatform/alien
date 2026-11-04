@@ -119,27 +119,338 @@
         }
       },
       {
+        // Every create path (runtime controller, CloudFormation, Terraform) tags the cluster, subnet
+        // group and cluster parameter group with the stack tag in the create request, so creates
+        // bind on the request tag. CreateDBCluster is also authorized against the subnet group and
+        // parameter group it names; this statement covers only the cluster, so those must carry
+        // this stack's tag (manage-aurora-groups), whatever tags the request sends.
+        "label": "create-aurora-cluster",
+        "description": "Create the Aurora cluster.",
+        "grant": {
+          "actions": ["rds:CreateDBCluster"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "create-aurora-groups",
+        "description": "Create the Aurora subnet group and cluster parameter group.",
+        "grant": {
+          "actions": ["rds:CreateDBSubnetGroup", "rds:CreateDBClusterParameterGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-*",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-${resourceName}-*",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        // Writer instances created by the runtime controller before it tagged them carry no tags,
+        // and a controller older than this grant still creates them untagged. IfExists keeps both
+        // working and denies an instance tagged for another stack.
+        "label": "create-aurora-instances",
+        "description": "Create the Aurora writer instance.",
+        "grant": {
+          "actions": ["rds:CreateDBInstance"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-*"],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        // The stack tag decides, not the name: a stack named `app` cannot reach `app-prod-*`.
+        // CreateDBInstance is also authorized against the cluster it joins, so an instance can
+        // only join a cluster of this stack.
         "label": "manage-aurora-cluster",
-        "description": "Create, modify and delete the Aurora cluster, instances and subnet group.",
+        "description": "Change, start and delete this application's Aurora cluster.",
+        "grant": {
+          "actions": [
+            "rds:CreateDBInstance",
+            "rds:ModifyDBCluster",
+            "rds:StartDBCluster",
+            "rds:DeleteDBCluster"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        // CloudFormation sets a new parameter group's parameters, and creates the cluster in the
+        // new groups, within seconds of creating them. RDS authorizes those calls
+        // before the create-time tags are visible to it (a describe in the same second was denied
+        // live), so the tag check is IfExists: a group tagged for another stack is still denied.
+        // CreateDBCluster is authorized against the groups it names as well.
+        "label": "manage-aurora-groups",
+        "description": "Use, change and delete this application's Aurora subnet group and cluster parameter group.",
         "grant": {
           "actions": [
             "rds:CreateDBCluster",
-            "rds:DeleteDBCluster",
-            "rds:ModifyDBCluster",
-            "rds:StartDBCluster",
-            "rds:CreateDBInstance",
-            "rds:DeleteDBInstance",
-            "rds:ModifyDBInstance",
-            "rds:CreateDBSubnetGroup",
-            "rds:CreateDBClusterParameterGroup",
             "rds:ModifyDBClusterParameterGroup",
-            "rds:DescribeDBClusterParameterGroups",
             "rds:DeleteDBClusterParameterGroup",
-            "rds:DeleteDBSubnetGroup",
+            "rds:DeleteDBSubnetGroup"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-*",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-${resourceName}-*",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        // CloudFormation's cluster update sends DBClusterParameterGroupName, so RDS also
+        // authorizes ModifyDBCluster against that parameter group. When the update adds or
+        // replaces the group, it attaches it seconds after the create, possibly before the
+        // create-time tags are visible to RDS (see manage-aurora-groups), so the tag check is
+        // IfExists: a group tagged for another stack is still denied. ModifyDBCluster also
+        // authorizes option groups and DB parameter groups, but neither our templates nor the
+        // controller send them, and it never checks a subnet group.
+        "label": "modify-aurora-cluster-parameter-group",
+        "description": "Name this application's cluster parameter group when changing its Aurora cluster.",
+        "grant": {
+          "actions": ["rds:ModifyDBCluster"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-*"],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        // IfExists keeps untagged runtime instances working (see create-aurora-instances).
+        "label": "manage-aurora-instances",
+        "description": "Change and delete this application's Aurora instances.",
+        "grant": {
+          "actions": ["rds:ModifyDBInstance", "rds:DeleteDBInstance"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-*"],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        // A create that carries tags is also authorized as AddTagsToResource on the new, untagged
+        // object, so the existing-tag check is IfExists. An object tagged for another stack cannot
+        // be tagged, and no request can set the stack tag to another stack.
+        "label": "tag-aurora-resources",
+        "description": "Tag the Aurora objects this application creates.",
+        "grant": {
+          "actions": ["rds:AddTagsToResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-*",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-*",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-${resourceName}-*",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-${resourceName}-*",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        // CloudFormation removes tags dropped from the template. The ownership tags can never be
+        // removed, so a stack cannot release an object for another stack to claim.
+        "label": "untag-aurora-resources",
+        "description": "Remove tags from this application's Aurora objects.",
+        "grant": {
+          "actions": ["rds:RemoveTagsFromResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-*",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-*",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              },
+              "ForAllValues:StringNotEquals": {
+                "aws:TagKeys": ["${stackTag}", "${resourceTag}", "${managedByTag}"]
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-${resourceName}-*",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-${resourceName}-*",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              },
+              "ForAllValues:StringNotEquals": {
+                "aws:TagKeys": ["${stackTag}", "${resourceTag}", "${managedByTag}"]
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "read-aurora-resources",
+        "description": "Read the Aurora cluster, instances, subnet group and cluster parameter group.",
+        "grant": {
+          "actions": [
             "rds:DescribeDBClusters",
             "rds:DescribeDBInstances",
             "rds:DescribeDBSubnetGroups",
-            "rds:AddTagsToResource",
+            "rds:DescribeDBClusterParameterGroups",
             "rds:ListTagsForResource"
           ]
         },
@@ -159,38 +470,6 @@
               "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-${resourceName}-*",
               "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-${resourceName}-*"
             ]
-          }
-        }
-      },
-      {
-        // CloudFormation and Terraform read the group's current values when they create or
-        // update it, to work out which values to change, and reset a value that a template no
-        // longer sets (also on rollback). Limited to groups tagged for this stack, so a stack
-        // whose name starts with this prefix is not reachable.
-        "label": "update-cluster-parameters",
-        "description": "Read and reset values of the Aurora cluster parameter group.",
-        "grant": {
-          "actions": ["rds:DescribeDBClusterParameters", "rds:ResetDBClusterParameterGroup"]
-        },
-        "binding": {
-          "stack": {
-            "resources": ["arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-*"],
-            "condition": {
-              "StringEquals": {
-                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
-              }
-            }
-          },
-          "resource": {
-            "resources": [
-              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-${resourceName}-*"
-            ],
-            "condition": {
-              "StringEquals": {
-                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${resourceTag}": "${resourceName}"
-              }
-            }
           }
         }
       },
@@ -226,26 +505,110 @@
         }
       },
       {
-        "label": "manage-connection-secret",
-        "description": "Create and delete the generated connection-password secret.",
+        // Every create path (runtime controller, CloudFormation, Terraform) has sent the stack
+        // tag on CreateSecret since the connection secret first existed, so the create, change
+        // and delete legs all require it. A stack named `app` cannot create, overwrite or delete
+        // `app-prod`'s secret even though the name matches `app-*`.
+        "label": "create-connection-secret",
+        "description": "Create the generated connection-password secret with this stack's tags.",
         "grant": {
-          "actions": [
-            "secretsmanager:CreateSecret",
-            "secretsmanager:DeleteSecret",
-            "secretsmanager:PutSecretValue",
-            "secretsmanager:TagResource"
-          ]
+          "actions": ["secretsmanager:CreateSecret"]
         },
         "binding": {
           "stack": {
             "resources": [
               "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"
-            ]
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
           },
           "resource": {
             "resources": [
               "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"
-            ]
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "manage-connection-secret",
+        "description": "Overwrite and delete this stack's tagged connection-password secret.",
+        "grant": {
+          "actions": ["secretsmanager:DeleteSecret", "secretsmanager:PutSecretValue"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        // Creating the secret with tags is also authorized as TagResource, and AWS evaluates that
+        // check with the new tags as the secret's tags (measured: CreateSecret with this stack's
+        // tags passes this strict check). So the existing-tag check needs no IfExists, and a
+        // secret that is untagged or tagged for another stack cannot be retagged: a stack named
+        // `app` cannot claim `app-prod`'s password secret and then read it through a grant bound
+        // to the stack tag. The request tags are IfExists: a later tag update may send only the
+        // changed tags, but it can never set the stack or resource tag to another value.
+        "label": "tag-connection-secret",
+        "description": "Tag the generated connection-password secret.",
+        "grant": {
+          "actions": ["secretsmanager:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              },
+              "StringEqualsIfExists": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              },
+              "StringEqualsIfExists": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}"
+              }
+            }
           }
         }
       },

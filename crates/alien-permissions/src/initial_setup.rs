@@ -5,10 +5,13 @@
 //! credentials. This module generates the setup permission set for that first
 //! Frozen-resource phase.
 
-use alien_core::{ownership_policy_for_resource_type, Stack};
+use alien_core::{
+    ownership_policy_for_resource_type, AwsConditionValue, Stack, ALIEN_MANAGED_BY_TAG_KEY,
+    ALIEN_MANAGED_BY_TAG_VALUE, ALIEN_SETUP_MANAGED_BY_TAG_VALUE,
+};
 
 use crate::generators::{
-    ensure_unique_statement_sids, AwsIamPolicy, AwsRuntimePermissionsGenerator,
+    ensure_unique_statement_sids, AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator,
 };
 use crate::registry::get_permission_set;
 use crate::{BindingTarget, PermissionContext};
@@ -52,7 +55,7 @@ pub fn initial_setup_permission_set_ids(stack: &Stack) -> Vec<String> {
         }
     }
 
-    let cross_cutting = ["service-account/provision"];
+    let cross_cutting = ["service-account/provision", "service-account/setup"];
 
     for id in cross_cutting {
         if get_permission_set(id).is_some() && !set_ids.contains(&id.to_string()) {
@@ -105,12 +108,42 @@ pub fn generate_aws_initial_setup_policy(
         }
     }
 
+    for statement in &mut all_statements {
+        allow_setup_managed_by_value(statement);
+    }
     ensure_unique_statement_sids(&mut all_statements);
 
     Ok(AwsIamPolicy {
         version: "2012-10-17".to_string(),
         statement: all_statements,
     })
+}
+
+/// The setup identity runs either a direct setup, which creates objects through the runtime
+/// controllers and tags them `managed-by=runtime`, or a CloudFormation or Terraform setup stack,
+/// which tags the same objects `managed-by=setup`. A provision grant bound to the runtime value
+/// therefore also has to match the setup value here, or the template setup cannot tag, change
+/// or delete what it created. The stack tag in the same condition still binds the grant to
+/// this stack.
+fn allow_setup_managed_by_value(statement: &mut AwsIamStatement) {
+    // `iam:ResourceTag` is how `iam:PassRole` sees the tags of the role being passed.
+    let keys = [
+        format!("aws:ResourceTag/{ALIEN_MANAGED_BY_TAG_KEY}"),
+        format!("aws:RequestTag/{ALIEN_MANAGED_BY_TAG_KEY}"),
+        format!("iam:ResourceTag/{ALIEN_MANAGED_BY_TAG_KEY}"),
+    ];
+    for values in statement.condition.iter_mut().flat_map(|c| c.values_mut()) {
+        for (key, value) in values.iter_mut() {
+            if keys.iter().any(|k| k.eq_ignore_ascii_case(key))
+                && value.as_string() == Some(ALIEN_MANAGED_BY_TAG_VALUE)
+            {
+                *value = AwsConditionValue::List(vec![
+                    ALIEN_MANAGED_BY_TAG_VALUE.to_string(),
+                    ALIEN_SETUP_MANAGED_BY_TAG_VALUE.to_string(),
+                ]);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -127,7 +127,13 @@ fn role_writes_require_boundary_and_ownership_only_for_bounded_setups() {
 }
 
 /// Sets only setup credentials hold.
-const SETUP_ONLY_SETS: [&str; 2] = ["remote-stack-management/provision", "network/setup"];
+const SETUP_ONLY_SETS: [&str; 5] = [
+    "remote-stack-management/provision",
+    "network/setup",
+    "postgres/setup",
+    "service-account/setup",
+    "storage/setup",
+];
 
 #[test]
 fn catalog_management_role_writes_require_boundary_and_ownership() {
