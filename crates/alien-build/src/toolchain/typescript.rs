@@ -426,11 +426,15 @@ impl TypeScriptToolchain {
       // Bun closes a connection that sends and receives nothing for
       // idleTimeout seconds, even while its handler is still running, and
       // defaults to 10. Default to Bun's maximum unless the app sets its own.
-      // Inheriting from the app keeps the options and methods Bun reads from
-      // it, including ones defined on a class.
+      // Every other option Bun reads comes from the app itself, so getters on
+      // a class (including ones reading private fields) see the app as `this`.
       Bun.serve(
         app.idleTimeout === undefined
-          ? Object.create(app, {{ idleTimeout: {{ value: {DIRECT_ENTRY_IDLE_TIMEOUT_SECS}, enumerable: true }} }})
+          ? new Proxy(app, {{
+              get: (target, key) =>
+                key === "idleTimeout" ? {DIRECT_ENTRY_IDLE_TIMEOUT_SECS} : Reflect.get(target, key, target),
+              has: (target, key) => key === "idleTimeout" || Reflect.has(target, key),
+            }})
           : app,
       )
     }}
@@ -1049,6 +1053,30 @@ mod tests {
             "expected a 200 after a 13 s handler, got {response:?}"
         );
         assert!(response.ends_with("slept 13000"), "unexpected body: {response:?}");
+    }
+
+    // Bun reads options such as `port` through getters; a getter that reads a
+    // private field must still see the app itself as `this`.
+    #[tokio::test]
+    async fn a_class_app_whose_options_read_private_fields_still_starts() {
+        let app = r#"class App {
+  #port = Number(process.env.PORT)
+  get port() {
+    return this.#port
+  }
+  async fetch(request: Request) {
+    const ms = Number(new URL(request.url).searchParams.get("ms"))
+    await Bun.sleep(ms)
+    return new Response(`slept ${ms}`)
+  }
+}
+export default new App()
+"#;
+        let response = request_through_direct_entry(app, 100).await;
+        assert!(
+            response.starts_with("HTTP/1.1 200") && response.ends_with("slept 100"),
+            "unexpected response: {response:?}"
+        );
     }
 
     #[tokio::test]
