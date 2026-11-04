@@ -37,7 +37,9 @@ const VM_FAMILY_QUOTA_ID: &str = "CPUS-PER-VM-FAMILY-per-project-region";
 
 /// Compute Engine reports no usage for the per-family quota. `held` is every machine
 /// of the family this deployment runs now (`family_usage`), a known lower bound of
-/// usage: only demand beyond the limit at that usage is certain.
+/// usage: only demand beyond the limit at that usage is certain. When several
+/// clusters change, `required` and `maximum` sum their peaks as a worst case, as if
+/// they all updated at the same time.
 fn limit_only_outcome(
     required: QuotaDemand,
     maximum: QuotaDemand,
@@ -195,7 +197,7 @@ fn family_vcpus(machine: &str) -> Option<(String, f64)> {
     ))
 }
 
-/// vCPUs per family in each of the controller's update phases.
+/// vCPUs per family in each phase of the update order `family_peaks` assumes.
 #[derive(Default)]
 struct FamilyPhases {
     resize: BTreeMap<String, f64>,
@@ -236,14 +238,14 @@ struct RollingGroup<'a> {
     after: &'a str,
 }
 
-/// The largest vCPUs of each family while the controller rolls the cluster. It
-/// rolls one MIG at a time, in the order of its MIG keys: the group id, or
-/// `group/zone` for each zone of a zonal group. Before draining each old machine
-/// it adds one new one, so a group of `n` machines that has `r` old machines left
-/// runs `r` old and `n - r + 1` new; the family's usage is largest at the first or
-/// the last of those steps. Groups already rolled run their new machines, and the
-/// rest their old ones. The zones of one group roll in a row, so their split adds
-/// up to the same steps as a single MIG.
+/// The largest vCPUs of each family while every group of the cluster rolls onto its
+/// new machines. The check assumes one instance group rolls at a time, in key order:
+/// the group id, or `group/zone` for each zone of a zonal group. One new machine is
+/// added before each old one drains, so a group of `n` machines that has `r` old
+/// machines left runs `r` old and `n - r + 1` new; the family's usage is largest at
+/// the first or the last of those steps. Groups already rolled run their new
+/// machines, and the rest their old ones. The zones of one group roll in a row, so
+/// their split adds up to the same steps as a single instance group.
 fn roll_peaks(groups: &mut [RollingGroup<'_>]) -> BTreeMap<String, f64> {
     groups.sort_by(|left, right| left.order.cmp(&right.order));
     let vcpus = |machine: &str, code: &str| {
@@ -282,17 +284,17 @@ fn roll_peaks(groups: &mut [RollingGroup<'_>]) -> BTreeMap<String, f64> {
     peaks
 }
 
-/// Peak vCPUs of each per-family quota while the update runs, in the GCP
-/// controller's update order for each cluster:
-/// 1. existing groups resize, on the machine type they run now, while removed
+/// Peak vCPUs of each per-family quota while the update runs. The check assumes this
+/// update order for each cluster:
+/// 1. existing groups resize first, on the machine type they run now, while removed
 ///    groups still run;
-/// 2. removed groups are deleted, and their deletion awaited, before new groups are
-///    created at their initial size;
+/// 2. removed groups are deleted before new groups are created at their initial size;
 /// 3. when any group's machine type or disks change, every group of the cluster,
-///    including new ones, rolls onto new templates (`roll_peaks`).
+///    including new ones, rolls one instance group at a time (`roll_peaks`).
 ///
-/// Clusters update independently, so their peaks add up. A cluster in state that
-/// the stack no longer has keeps its machines in every phase.
+/// The peaks of several clusters add up, a worst case for clusters that update at
+/// the same time. A cluster in state that the stack no longer has keeps its machines
+/// in every phase.
 /// `required` uses the counts this update launches; otherwise each group's maximum.
 fn family_peaks(stack: &Stack, state: &StackState, required: bool) -> BTreeMap<String, f64> {
     let mut total = BTreeMap::<String, f64>::new();
@@ -357,7 +359,7 @@ fn family_peaks(stack: &Stack, state: &StackState, required: bool) -> BTreeMap<S
                     .iter()
                     .find(|old| old.group_id == group.group_id)
             });
-            // The controller makes a group zonal when either map names it.
+            // A group is zonal when either map names it.
             let zonal = cluster.failure_domain_spread.contains_key(&group.group_id)
                 || cluster
                     .selected_failure_domains
@@ -399,8 +401,8 @@ fn family_peaks(stack: &Stack, state: &StackState, required: bool) -> BTreeMap<S
                 row.current_machines.max(target),
             );
             FamilyPhases::add(&mut phases.create, running, target);
-            // The controller compares the machine type it recorded, which the
-            // previous configuration holds, and the disks.
+            // Compare against the machine type the previous configuration recorded,
+            // and the disks.
             inputs_change |= previous.map_or(running != machine, |previous| {
                 previous.instance_type.as_deref() != Some(machine) || previous.disks_differ(group)
             });
@@ -522,10 +524,21 @@ fn demands_for(
             total.held += f64::from(current_count) * plan.previous_units;
         }
     }
-    // Per-family quotas follow the controller's phases instead of per-group netting:
-    // their usage is not readable, so held is what the deployment runs now.
+    // Per-family quotas follow the update order of `family_peaks` instead of per-group
+    // netting: their usage is not readable, so held is what the deployment runs now.
     if !gpus {
         let (usage, _) = family_usage(state);
+        // A machine-type or disk change rolls every group, so a family can grow while
+        // none of its own groups change. The launched counts pick the families, so the
+        // required and maximum demands have the same keys.
+        for (code, peak) in family_peaks(stack, state, true) {
+            if peak > usage.get(&code).copied().unwrap_or(0.0) {
+                demands.entry(code).or_insert(QuotaDemand {
+                    peak: 0.0,
+                    held: 0.0,
+                });
+            }
+        }
         let peaks = family_peaks(stack, state, required);
         for (code, demand) in demands
             .iter_mut()
@@ -656,9 +669,9 @@ pub async fn check(
     }
 }
 
-/// Fails each machine type that no zone of the region offers. Zone placement stays
-/// with the controller. Setups that predate the `compute.machineTypes.get` grant
-/// get a warning instead.
+/// Fails each machine type that no zone of the region offers. Zone placement is
+/// decided at provisioning. Setups without the `compute.machineTypes.get` grant get a
+/// warning instead.
 pub async fn check_offerings(
     machines: &BTreeSet<String>,
     region: &str,
@@ -668,10 +681,11 @@ pub async fn check_offerings(
     if machines.is_empty() {
         return;
     }
-    let unverified = |reason: &str| {
+    let machines = machines.iter().map(String::as_str).collect::<Vec<_>>();
+    let unverified = |undecided: &[&str], reason: &str| {
         format!(
             "Could not confirm that GCP region '{region}' offers machine types {}: {reason}",
-            machines.iter().cloned().collect::<Vec<_>>().join(", ")
+            undecided.join(", ")
         )
     };
     let denied = |error: &alien_gcp_clients::Error| {
@@ -693,23 +707,26 @@ pub async fn check_offerings(
             zones
         }
         Err(error) => {
-            result.add_warning(unverified(if denied(&error) {
-                "the setup does not grant compute.zones.list"
-            } else {
-                "listing the region's zones failed"
-            }));
+            result.add_warning(unverified(
+                &machines,
+                if denied(&error) {
+                    "the setup does not grant compute.zones.list"
+                } else {
+                    "listing the region's zones failed"
+                },
+            ));
             return;
         }
     };
     if zones.is_empty() {
-        result.add_warning(unverified("the region has no zone that is up"));
+        result.add_warning(unverified(&machines, "the region has no zone that is up"));
         return;
     }
-    for machine in machines {
+    for (decided, machine) in machines.iter().enumerate() {
         let mut offered = false;
         for zone in &zones {
             match compute
-                .get_machine_type(zone.clone(), machine.clone())
+                .get_machine_type(zone.clone(), machine.to_string())
                 .await
             {
                 Ok(_) => {
@@ -719,11 +736,14 @@ pub async fn check_offerings(
                 Err(error)
                     if matches!(error.error, Some(ErrorData::RemoteResourceNotFound { .. })) => {}
                 Err(error) => {
-                    result.add_warning(unverified(if denied(&error) {
-                        "the setup does not grant compute.machineTypes.get"
-                    } else {
-                        "reading the machine type failed"
-                    }));
+                    result.add_warning(unverified(
+                        &machines[decided..],
+                        if denied(&error) {
+                            "the setup does not grant compute.machineTypes.get"
+                        } else {
+                            "reading the machine type failed"
+                        },
+                    ));
                     return;
                 }
             }
@@ -1063,6 +1083,47 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_failed_read_warns_only_about_the_machines_not_yet_checked() {
+        let mut compute = alien_gcp_clients::compute::MockComputeApi::new();
+        compute
+            .expect_list_zones()
+            .times(1)
+            .returning(|_| Ok(us_central1_zones()));
+        compute
+            .expect_get_machine_type()
+            .times(3)
+            .returning(|zone, machine| match machine.as_str() {
+                "c4a-standard-72" => Err(machine_type_error(&machine, |name| {
+                    ErrorData::RemoteResourceNotFound {
+                        resource_type: "Compute Engine".into(),
+                        resource_name: name,
+                    }
+                })),
+                "n4-standard-2" => Err(alien_error::AlienError::new(
+                    ErrorData::RemoteServiceUnavailable {
+                        message: "backend error".into(),
+                    },
+                )),
+                _ => panic!("unexpected {zone} {machine}"),
+            });
+        let mut result = CheckResult::success();
+        let machines = BTreeSet::from([
+            "c4a-standard-72".to_string(),
+            "n4-standard-2".to_string(),
+            "n4-standard-4".to_string(),
+        ]);
+        check_offerings(&machines, "us-central1", &compute, &mut result).await;
+        assert_eq!(
+            result.errors,
+            ["Machine type 'c4a-standard-72' is not offered in any zone of GCP region 'us-central1'. Choose a machine type this region offers."]
+        );
+        assert_eq!(
+            result.warnings,
+            ["Could not confirm that GCP region 'us-central1' offers machine types n4-standard-2, n4-standard-4: reading the machine type failed"]
+        );
+    }
+
     /// Runs the full check for one pool in us-central1. The per-family quota read
     /// returns the recorded Cloud Quotas body, or access denied.
     async fn check_family_pool(machine: &str, min: u32, max: u32, denied: bool) -> CheckResult {
@@ -1379,6 +1440,27 @@ mod tests {
         assert!(result.quota_results.is_empty());
     }
 
+    #[tokio::test]
+    async fn an_unchanged_family_pool_is_checked_when_another_pool_rolls_the_cluster() {
+        // Only b changes machine type, which rolls every group: a's surge machine runs
+        // beside both of its n4-standard-80, 240 N4 vCPUs over the applied limit of 200.
+        assert_eq!(
+            n4_outcome(
+                vec![("a", "n4-standard-80", 2), ("b", "n2-standard-2", 1)],
+                vec![
+                    pool_group("a", "n4-standard-80", 2, 2),
+                    pool_group("b", "n2-standard-4", 1, 1),
+                ],
+            )
+            .await,
+            QuotaOutcome::Fail {
+                used: 160.0,
+                limit: 200.0,
+                needed: 80.0
+            }
+        );
+    }
+
     /// Runs the check with pools as they run now and as the update wants them, and
     /// returns the N4 outcome.
     async fn n4_outcome(
@@ -1403,7 +1485,7 @@ mod tests {
     #[test]
     fn a_pool_leaving_the_family_still_holds_its_old_machines_while_a_new_pool_launches() {
         // b moves to n2 but its n4 machine runs until the rolling update replaces it,
-        // after the controller creates c's group. N4 running: a 80 + b 80. b's change
+        // after c's group is created. N4 running: a 80 + b 80. b's change
         // rolls every group, a first: a's surge machine runs beside a, b and c, 320.
         let old = pools(vec![
             pool_group("a", "n4-standard-80", 1, 1),
@@ -1467,7 +1549,7 @@ mod tests {
     }
 
     #[test]
-    fn the_cluster_rolls_one_group_at_a_time_in_mig_key_order() {
+    fn the_cluster_rolls_one_group_at_a_time_in_key_order() {
         // a shrinks 2 x n4-48 to n4-16 before b grows 2 x n4-16 to n4-48:
         // a rolling 112 + b 32 = 144, then a 32 + b rolling 112 = 144.
         assert_eq!(
@@ -1511,7 +1593,7 @@ mod tests {
             ),
             242.0
         );
-        // A zonal group's MIGs are keyed `a/<zone>`, after `a-x`: a-x shrinks first
+        // A zonal group rolls by the keys `a/<zone>`, after `a-x`: a-x shrinks first
         // (112 + 32 = 144), then a grows (32 + 112). Aggregate, a would grow first: 208.
         let running = [("a", "n4-standard-16", 2), ("a-x", "n4-standard-48", 2)];
         let desired = [("a", "n4-standard-48", 2), ("a-x", "n4-standard-16", 2)];
@@ -1683,8 +1765,8 @@ mod tests {
 
     #[tokio::test]
     async fn removed_groups_run_during_resize_but_not_beside_new_groups() {
-        // b (2 x n4-80) is removed and c (1 x n4-80) added. The controller deletes b's
-        // MIG and waits before creating c: resize 160, create 80, roll 80.
+        // b (2 x n4-80) is removed and c (1 x n4-80) added. b's group is deleted
+        // before c's is created: resize 160, create 80, roll 80.
         let removed_then_added = (
             vec![("b", "n4-standard-80", 2)],
             vec![pool_group("c", "n4-standard-80", 1, 1)],

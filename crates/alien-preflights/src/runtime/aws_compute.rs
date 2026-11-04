@@ -183,9 +183,9 @@ pub async fn check(
     }
 }
 
-/// Fails each machine type the region does not offer. Zone placement stays with the
-/// controller, which skips zones without the type. Setups that predate the
-/// `ec2:DescribeInstanceTypeOfferings` grant get a warning instead.
+/// Fails each machine type the region does not offer. Setups without the
+/// `ec2:DescribeInstanceTypeOfferings` grant get a warning instead. Zone placement is
+/// decided at provisioning, which skips zones without the type.
 pub async fn check_offerings(
     machines: &BTreeSet<String>,
     region: &str,
