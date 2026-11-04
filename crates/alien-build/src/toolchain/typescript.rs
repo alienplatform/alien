@@ -379,7 +379,16 @@ impl TypeScriptToolchain {
   .then((userModule) => {{
     const app = userModule.default
     if (app && typeof app.fetch === "function") {{
-      Bun.serve(app)
+      // Bun closes a connection that sends and receives nothing for
+      // idleTimeout seconds, even while its handler is still running, and
+      // defaults to 10. Default to Bun's maximum unless the app sets its own.
+      // Inheriting from the app keeps the options and methods Bun reads from
+      // it, including ones defined on a class.
+      Bun.serve(
+        app.idleTimeout === undefined
+          ? Object.create(app, {{ idleTimeout: {{ value: {DIRECT_ENTRY_IDLE_TIMEOUT_SECS}, enumerable: true }} }})
+          : app,
+      )
     }}
   }})
   .catch((error) => {{
