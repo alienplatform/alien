@@ -4845,9 +4845,24 @@ mod tests {
                 },
             ),
         ] {
-            // What the executor does to the last failed state before resuming it.
-            let mut retried = exhausted;
-            retried.reset_stay_count();
+            // The resource as a delete that failed in `DeletingImage` leaves it, retried the way
+            // the executor retries it.
+            let mut resource_state = alien_core::StackResourceState::new_pending(
+                Sandbox::RESOURCE_TYPE.as_ref().to_string(),
+                alien_core::Resource::new(sandbox()),
+                None,
+                Vec::new(),
+            );
+            resource_state.status = ResourceStatus::DeleteFailed;
+            resource_state
+                .set_last_failed_controller(Some(Box::new(exhausted)))
+                .expect("store the failed checkpoint");
+            assert!(resource_state.retry_failed().expect("retry"));
+            assert_eq!(resource_state.status, ResourceStatus::Deleting);
+            let retried = resource_state
+                .get_internal_controller_typed::<AwsSandboxController>()
+                .expect("the retried checkpoint");
+            assert_eq!(retried.state, AwsSandboxState::DeletingImage);
             assert_eq!(retried.wait_for_image_settle_iterations, 0);
             assert!(retried.wait_for_running_sessions_started_at.is_none());
 
