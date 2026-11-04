@@ -1,6 +1,6 @@
 use std::num::NonZeroU64;
 
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::{types, SdkResultExt as _};
 
 use crate::error::{ErrorData, Result};
@@ -33,6 +33,20 @@ pub async fn resolve_with_manager(
     Ok(ResolvedDeployment { detail, manager })
 }
 
+/// The SDK checks a deployment ID's format only when it builds the request, and its error names
+/// a generated type. Checking it first tells a mistyped ID what is wrong with it.
+fn check_deployment_id(reference: &str) -> Result<()> {
+    types::GetDeploymentId::try_from(reference)
+        .into_alien_error()
+        .context(ErrorData::ValidationError {
+            field: "deployment".to_string(),
+            message: format!(
+                "'{reference}' is not a valid deployment ID: an ID is dep_ followed by 28 lowercase letters and digits. Copy it from `alien deployments list`, or use <deployment-group-name>/<deployment-name>."
+            ),
+        })?;
+    Ok(())
+}
+
 pub async fn resolve(
     ctx: &ExecutionMode,
     client: &alien_platform_api::Client,
@@ -42,6 +56,7 @@ pub async fn resolve(
     allow_prompt: bool,
 ) -> Result<types::DeploymentDetailResponse> {
     let id = if reference.starts_with("dep_") {
+        check_deployment_id(reference)?;
         reference.to_string()
     } else {
         let Some((group_name, deployment_name)) = reference.split_once('/') else {
@@ -126,4 +141,33 @@ pub async fn resolve(
             url: None,
         })
         .map(|response| response.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_deployment_id;
+
+    #[test]
+    fn a_malformed_deployment_id_says_what_an_id_looks_like() {
+        check_deployment_id("dep_0c29fq4a2yjb7kx3smwdgxlcxd7f").expect("a well-formed ID");
+        for malformed in [
+            "dep_0c29fq4a2yjb7kx3smwdgxlcxd7",   // one character short
+            "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f0", // one character long
+            "dep_0C29FQ4A2YJB7KX3SMWDGXLCXD7F",  // uppercase
+            "dep_",
+        ] {
+            let error = check_deployment_id(malformed).expect_err(malformed);
+            assert_eq!(error.code, "VALIDATION_ERROR", "{malformed}");
+            assert!(
+                error
+                    .message
+                    .contains(&format!("'{malformed}' is not a valid deployment ID"))
+                    && error
+                        .message
+                        .contains("<deployment-group-name>/<deployment-name>"),
+                "{malformed}: {}",
+                error.message
+            );
+        }
+    }
 }
