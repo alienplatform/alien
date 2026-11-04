@@ -6,11 +6,7 @@
     "locationInfo": [
       {
         "location": "eastus",
-        "zones": [
-          "1",
-          "3",
-          "2"
-        ]
+        "zones": ["1", "3", "2"]
       }
     ],
     "restrictions": []
@@ -22,11 +18,7 @@
     "locationInfo": [
       {
         "location": "eastus",
-        "zones": [
-          "2",
-          "3",
-          "1"
-        ]
+        "zones": ["2", "3", "1"]
       }
     ],
     "restrictions": []
@@ -38,11 +30,7 @@
     "locationInfo": [
       {
         "location": "eastus",
-        "zones": [
-          "2",
-          "3",
-          "1"
-        ]
+        "zones": ["2", "3", "1"]
       }
     ],
     "restrictions": []

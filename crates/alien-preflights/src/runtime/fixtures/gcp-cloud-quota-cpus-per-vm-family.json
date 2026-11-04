@@ -4,10 +4,7 @@
   "service": "compute.googleapis.com",
   "isPrecise": true,
   "containerType": "PROJECT",
-  "dimensions": [
-    "region",
-    "vm_family"
-  ],
+  "dimensions": ["region", "vm_family"],
   "metricDisplayName": "CPU count per VM family.",
   "quotaDisplayName": "CPUs per VM family",
   "metricUnit": "1",
@@ -20,9 +17,7 @@
       "details": {
         "value": "48"
       },
-      "applicableLocations": [
-        "africa-south1"
-      ]
+      "applicableLocations": ["africa-south1"]
     },
     {
       "dimensions": {
@@ -32,9 +27,7 @@
       "details": {
         "value": "24"
       },
-      "applicableLocations": [
-        "us-central1"
-      ]
+      "applicableLocations": ["us-central1"]
     },
     {
       "dimensions": {
@@ -44,9 +37,7 @@
       "details": {
         "value": "24"
       },
-      "applicableLocations": [
-        "us-central1"
-      ]
+      "applicableLocations": ["us-central1"]
     },
     {
       "dimensions": {
@@ -56,9 +47,7 @@
       "details": {
         "value": "24"
       },
-      "applicableLocations": [
-        "us-central1"
-      ]
+      "applicableLocations": ["us-central1"]
     },
     {
       "dimensions": {
@@ -68,9 +57,7 @@
       "details": {
         "value": "200"
       },
-      "applicableLocations": [
-        "us-central1"
-      ]
+      "applicableLocations": ["us-central1"]
     },
     {
       "dimensions": {
@@ -80,18 +67,14 @@
       "details": {
         "value": "200"
       },
-      "applicableLocations": [
-        "us-central1"
-      ]
+      "applicableLocations": ["us-central1"]
     },
     {
       "dimensions": {
         "region": "us-central1"
       },
       "details": {},
-      "applicableLocations": [
-        "us-central1"
-      ]
+      "applicableLocations": ["us-central1"]
     },
     {
       "dimensions": {
@@ -100,9 +83,7 @@
       "details": {
         "value": "24"
       },
-      "applicableLocations": [
-        "europe-west12"
-      ]
+      "applicableLocations": ["europe-west12"]
     },
     {
       "dimensions": {
@@ -111,15 +92,11 @@
       "details": {
         "value": "48"
       },
-      "applicableLocations": [
-        "europe-west12"
-      ]
+      "applicableLocations": ["europe-west12"]
     },
     {
       "details": {},
-      "applicableLocations": [
-        "europe-west12"
-      ]
+      "applicableLocations": ["europe-west12"]
     }
   ]
 }
