@@ -3565,8 +3565,10 @@ async fn initial_update_resumes_prepared_target_after_waiting_for_secrets() {
         .await
         .unwrap();
     let checkpoint = serde_json::from_value(serde_json::to_value(&blocked).unwrap()).unwrap();
-    let running = run_to_completion(checkpoint, config).await;
+    let (running, updating_steps) = run_to_running_after_secrets_written(checkpoint, config).await;
+    assert!(updating_steps > 0, "the update resumes through Updating");
     assert_eq!(running.status, DeploymentStatus::Running);
+    assert!(running.error.is_none());
     assert_eq!(running.current_release, Some(target_release));
     assert!(running.target_release.is_none());
     let metadata = running.runtime_metadata.as_ref().unwrap();
@@ -3648,9 +3650,14 @@ async fn test_missing_deployer_secret_blocks_workloads_until_written() {
         .await
         .unwrap();
 
-    let running = run_until_status(blocked, config, &[DeploymentStatus::Running]).await;
+    let (running, provisioning_steps) = run_to_running_after_secrets_written(blocked, config).await;
 
+    assert!(
+        provisioning_steps > 0,
+        "provisioning resumes once the secret is written"
+    );
     assert_eq!(running.status, DeploymentStatus::Running);
+    assert!(running.error.is_none());
     assert_eq!(
         deployer_reports(&running)[0].status,
         alien_core::DeployerSecretStatus::Present
@@ -3676,6 +3683,42 @@ async fn test_missing_deployer_secret_blocks_workloads_until_written() {
             .unwrap()
             .contains("customer-only-value"),
         "the deployment state never carries the deployer's secret"
+    );
+}
+
+/// Runs a deployment whose deployer secrets were just written to Running.
+/// Every step that is still provisioning or updating must carry no error:
+/// the wait for secrets is over, so its error no longer describes the
+/// deployment. Returns the final state and how many such steps ran.
+async fn run_to_running_after_secrets_written(
+    mut state: DeploymentState,
+    config: DeploymentConfig,
+) -> (DeploymentState, usize) {
+    let mut in_progress_steps = 0;
+    for _ in 0..MAX_STEPS {
+        if state.status == DeploymentStatus::Running {
+            return (state, in_progress_steps);
+        }
+        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+            .await
+            .expect("Step should not fail")
+            .state;
+        if matches!(
+            state.status,
+            DeploymentStatus::Provisioning | DeploymentStatus::Updating
+        ) {
+            in_progress_steps += 1;
+            assert!(
+                state.error.is_none(),
+                "{:?} still reports {:?}",
+                state.status,
+                state.error.as_ref().map(|error| &error.code)
+            );
+        }
+    }
+    panic!(
+        "Deployment did not reach Running after {MAX_STEPS} steps. Final status: {:?}",
+        state.status
     );
 }
 
