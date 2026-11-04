@@ -152,8 +152,7 @@ fn explains_a_malformed_deployment_id_before_calling_the_api() {
     let api = MockServer::start();
     mock_identity(&api);
     let pin = api.mock(|when, then| {
-        when.method(POST)
-            .path_matches(r"^/v1/deployments/.*/pin-release$");
+        when.method(POST).path_contains("/pin-release");
         then.status(202).json_body(json!({"message": "unexpected"}));
     });
 
