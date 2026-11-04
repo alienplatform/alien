@@ -182,9 +182,23 @@ async fn automatic_profile_bounds_every_role_writer_and_cannot_change_the_bounda
                     .is_some_and(|arn| {
                         arn.starts_with("arn:aws:iam::aws:policy/") && !arn.contains('*')
                     });
+            // Runtime cleanup deletes a created network's VPC flow log delivery role. Setup
+            // creates that role without the boundary, so the delete cannot require it. Deleting
+            // the role or its inline policy only removes permissions, and the statement is
+            // limited to the flow log role name and this stack's runtime tags.
+            let deletes_flow_log_delivery_role = statement.resource
+                == ["arn:aws:iam::123456789012:role/sample-*-flow-logs"]
+                && statement
+                    .action
+                    .iter()
+                    .all(|a| matches!(a.as_str(), "iam:DeleteRolePolicy" | "iam:DeleteRole"))
+                && conditions
+                    .and_then(|c| c.get("aws:ResourceTag/managed-by"))
+                    .and_then(|value| value.as_string())
+                    == Some("runtime");
             for write in WRITES.iter().filter(|write| matches_action(write)) {
                 observed_writes.insert(*write);
-                if detaches_aws_managed_policy {
+                if detaches_aws_managed_policy || deletes_flow_log_delivery_role {
                     continue;
                 }
                 assert_eq!(

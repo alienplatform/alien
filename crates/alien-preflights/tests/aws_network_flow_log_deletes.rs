@@ -44,8 +44,29 @@ fn context(bounded: bool) -> PermissionContext {
     }
 }
 
-/// Every statement of the management identity's policy for a stack with a created network.
-async fn automatic_management(bounded: bool) -> Vec<AwsIamStatement> {
+/// Role writes on `role/${stackPrefix}-*` that a setup without a boundary already grants with no
+/// condition: `legacy-role-*` statements are kept only when unbounded, with the
+/// `iam:PermissionsBoundary` condition removed. They come from `service-account/provision`
+/// (legacy-role-1: CreateRole, PutRolePolicy), `ai/provision` (legacy-role-1: PutRolePolicy,
+/// DeleteRolePolicy), `artifact-registry/provision` (legacy-role-3: CreateRole, PutRolePolicy,
+/// DeleteRolePolicy; legacy-role-4: TagRole, DeleteRole) and `artifact-registry/management`
+/// (legacy-role-3: PutRolePolicy, DeleteRolePolicy). They reach the flow log role because its
+/// name has the stack prefix, whatever its tags.
+const LEGACY_UNBOUNDED_ROLE_WRITES: &[&str] = &[
+    "iam:CreateRole",
+    "iam:PutRolePolicy",
+    "iam:DeleteRolePolicy",
+    "iam:TagRole",
+    "iam:DeleteRole",
+];
+
+fn legacy_unbounded(bounded: bool, request: &Request) -> bool {
+    !bounded && request.resource == ROLE && LEGACY_UNBOUNDED_ROLE_WRITES.contains(&request.action)
+}
+
+/// The management identity's policy for a stack with a created network, as the statements of
+/// each permission set it grants.
+async fn automatic_management_sets(bounded: bool) -> Vec<(String, Vec<AwsIamStatement>)> {
     let config = DeploymentConfig::builder()
         .stack_settings(StackSettings {
             setup_management: SetupManagement::Automatic,
@@ -78,18 +99,25 @@ async fn automatic_management(bounded: bool) -> Vec<AwsIamStatement> {
     assert!(profile.0.keys().all(|scope| scope == "*"));
     profile.0["*"]
         .iter()
-        .flat_map(|grant| {
-            AwsRuntimePermissionsGenerator::new()
-                .generate_policy(
-                    &grant
-                        .resolve(|id| get_permission_set(id).cloned())
-                        .expect("management grant"),
-                    BindingTarget::Stack,
-                    &context(bounded),
-                )
+        .map(|grant| {
+            let set = grant
+                .resolve(|id| get_permission_set(id).cloned())
+                .expect("management grant");
+            let statements = AwsRuntimePermissionsGenerator::new()
+                .generate_policy(&set, BindingTarget::Stack, &context(bounded))
                 .unwrap()
-                .statement
+                .statement;
+            (set.id, statements)
         })
+        .collect()
+}
+
+/// Every statement of the management identity's policy for a stack with a created network.
+async fn automatic_management(bounded: bool) -> Vec<AwsIamStatement> {
+    automatic_management_sets(bounded)
+        .await
+        .into_iter()
+        .flat_map(|(_, statements)| statements)
         .collect()
 }
 
@@ -130,13 +158,12 @@ async fn automatic_management_deletes_the_flow_log_objects_of_its_network() {
             );
         }
         // A repeated delete reads objects that are gone and so have no tags: each read must
-        // reach them so they answer NotFound. No write may, except that a setup without a
-        // boundary keeps the legacy grant that deletes any role under the stack prefix.
+        // reach them so they answer NotFound. No write may, except the legacy role writes a
+        // setup without a boundary already grants.
         for request in delete_calls(&[]) {
-            let legacy_role_delete = !bounded && request.action == "iam:DeleteRole";
             assert_eq!(
                 evaluate(&policy, &request),
-                if is_read(&request) || legacy_role_delete {
+                if is_read(&request) || legacy_unbounded(bounded, &request) {
                     Decision::Allowed
                 } else {
                     Decision::NotAllowed
@@ -154,11 +181,9 @@ async fn automatic_management_cannot_delete_flow_log_objects_it_does_not_own() {
     for bounded in [false, true] {
         let policy = automatic_management(bounded).await;
         for tags in [TEMPLATE_SETUP, OTHER_STACK] {
-            // A setup without a boundary keeps the legacy grant that deletes any role under the
-            // stack prefix; the bounded profile requires this stack's runtime tags.
             for request in delete_calls(tags)
                 .into_iter()
-                .filter(|r| !is_read(r) && (bounded || r.action != "iam:DeleteRole"))
+                .filter(|r| !is_read(r) && !legacy_unbounded(bounded, r))
             {
                 assert_ne!(
                     evaluate(&policy, &request),
@@ -210,7 +235,7 @@ async fn automatic_management_creates_no_flow_log_objects() {
     ];
     for bounded in [false, true] {
         let policy = automatic_management(bounded).await;
-        for request in &creates {
+        for request in creates.iter().filter(|r| !legacy_unbounded(bounded, r)) {
             assert_ne!(
                 evaluate(&policy, request),
                 Decision::Allowed,
@@ -218,6 +243,38 @@ async fn automatic_management_creates_no_flow_log_objects() {
                 request.action,
                 request.resource
             );
+        }
+    }
+}
+
+/// The flow log statements in `network/provision` reach only this stack's runtime-tagged
+/// objects. Without them, the policy decides every other flow log call the same way, so what a
+/// setup without a boundary may do to an untagged or foreign object comes only from the legacy
+/// grants above.
+#[tokio::test]
+async fn flow_log_statements_add_nothing_for_objects_this_stack_does_not_own() {
+    for bounded in [false, true] {
+        let sets = automatic_management_sets(bounded).await;
+        assert!(
+            sets.iter().any(|(id, _)| id == "network/provision"),
+            "bounded={bounded}: the profile grants network/provision"
+        );
+        let all: Vec<_> = sets.iter().flat_map(|(_, s)| s.clone()).collect();
+        let without_network: Vec<_> = sets
+            .iter()
+            .filter(|(id, _)| id != "network/provision")
+            .flat_map(|(_, s)| s.clone())
+            .collect();
+        for tags in [&[][..], TEMPLATE_SETUP, OTHER_STACK] {
+            for request in delete_calls(tags).into_iter().filter(|r| !is_read(r)) {
+                assert_eq!(
+                    evaluate(&all, &request),
+                    evaluate(&without_network, &request),
+                    "bounded={bounded}: {} on {} with tags {tags:?}",
+                    request.action,
+                    request.resource
+                );
+            }
         }
     }
 }

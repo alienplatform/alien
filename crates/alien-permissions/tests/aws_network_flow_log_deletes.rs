@@ -16,7 +16,8 @@ use iam_policy::{evaluate, Decision, Request};
 const BOUNDARY: &str = "arn:aws:iam::123456789012:policy/my-stack-deployment-management-boundary";
 const FLOW_LOG: &str = "arn:aws:ec2:us-east-1:123456789012:vpc-flow-log/fl-0123456789abcdef0";
 const ROLE: &str = "arn:aws:iam::123456789012:role/my-stack-default-network-flow-logs";
-const GROUP: &str = "arn:aws:logs:us-east-1:123456789012:log-group:my-stack-default-network-flow-logs";
+const GROUP: &str =
+    "arn:aws:logs:us-east-1:123456789012:log-group:my-stack-default-network-flow-logs";
 const VPC: &str = "arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0123456789abcdef0";
 
 const RUNTIME: &[(&str, &str)] = &[("deployment", "my-stack"), ("managed-by", "runtime")];
@@ -89,8 +90,12 @@ fn setup_creates_and_deletes_the_flow_log_objects() {
 
 /// A setup teardown repeated after an object was deleted reads it again. A gone object has no
 /// tags, so these reads must not depend on them, or AWS answers AccessDenied instead of
-/// NotFound and the teardown fails. No write reaches an untagged object, except that a setup
-/// without a boundary keeps the legacy grant that deletes any role under the stack prefix.
+/// NotFound and the teardown fails. No write reaches an untagged object, except the role
+/// deletes that a setup without a boundary already grants on every role under the stack
+/// prefix: `legacy-role-*` statements are kept only when unbounded, with the
+/// `iam:PermissionsBoundary` condition removed. DeleteRolePolicy comes from `ai/provision`
+/// (legacy-role-1) and `artifact-registry/provision` (legacy-role-3), DeleteRole from
+/// `artifact-registry/provision` (legacy-role-4).
 #[test]
 fn setup_reads_flow_log_objects_that_are_gone() {
     for (bounded, setup) in setup_policies() {
@@ -99,7 +104,8 @@ fn setup_reads_flow_log_objects_that_are_gone() {
                 request.action,
                 "ec2:DescribeFlowLogs" | "iam:GetRole" | "logs:ListTagsForResource"
             );
-            let legacy_role_delete = !bounded && request.action == "iam:DeleteRole";
+            let legacy_role_delete =
+                !bounded && matches!(request.action, "iam:DeleteRolePolicy" | "iam:DeleteRole");
             assert_eq!(
                 evaluate(&setup, &request),
                 if read || legacy_role_delete {
