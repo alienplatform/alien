@@ -125,6 +125,10 @@ pub struct AwsSandboxController {
     /// still running. Bounds the wait for them to end.
     #[serde(default)]
     pub(crate) running_sessions_since: Option<chrono::DateTime<chrono::Utc>>,
+    /// Image deletes refused while the image settles, in this delete. Counted here rather than
+    /// through the framework's stay budget, which the running-sessions wait also draws on.
+    #[serde(default)]
+    pub(crate) settling_refusals: u32,
     /// Changes only after a build is observed failed, so retries do not
     /// replay an idempotency receipt for a deleted failed build.
     #[serde(default)]
@@ -974,8 +978,9 @@ impl AwsSandboxController {
         // The binding is a promise sessions can be created now; withdraw it before the first
         // delete rather than after the last one.
         self.active_version = None;
-        // A wait left by an earlier delete that ended another way must not count against this one.
+        // Waits left by an earlier delete that ended another way must not count against this one.
         self.running_sessions_since = None;
+        self.settling_refusals = 0;
 
         // A setup-baked image belongs to the setup stack and is removed by stack teardown;
         // deleting it here would act with credentials that were never granted it — and would
@@ -1069,9 +1074,16 @@ impl AwsSandboxController {
                     Some(CloudClientErrorData::RemoteResourceConflict { .. })
                 ) =>
             {
+                self.settling_refusals += 1;
+                if self.settling_refusals >= IMAGE_DELETE_MAX_POLLS {
+                    return Err(AlienError::new(ErrorData::PollingTimeout {
+                        state: format!("{:?}", self.state),
+                        max_times: IMAGE_DELETE_MAX_POLLS,
+                    }));
+                }
                 info!(sandbox_id = %config.id, image = %image_identifier, "MicroVM image cannot be deleted in its current state yet");
                 return Ok(HandlerAction::Stay {
-                    max_times: Some(IMAGE_DELETE_MAX_POLLS),
+                    max_times: None,
                     suggested_delay: Some(BUILD_POLL_INTERVAL),
                 });
             }
@@ -1085,6 +1097,7 @@ impl AwsSandboxController {
 
         self.active_version = None;
         self.running_sessions_since = None;
+        self.settling_refusals = 0;
         info!(sandbox_id = %config.id, "AWS sandbox image deleted");
 
         Ok(HandlerAction::Continue {
@@ -4763,6 +4776,42 @@ mod tests {
             rendered.contains("still has running sessions")
                 && rendered.contains("terminate the sessions"),
             "the failure names the cause and the fix: {rendered}"
+        );
+    }
+
+    /// Sessions ending and the image then settling is the order a real teardown sees. The
+    /// settling wait keeps its own budget, whatever the session wait already used.
+    #[tokio::test]
+    async fn an_image_that_settles_after_its_sessions_end_gets_the_full_settling_budget() {
+        let session_refusals = IMAGE_DELETE_MAX_POLLS + 1;
+        let settling_refusals = 3;
+        let mut client = MockLambdaMicrovmsApi::new();
+        let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let seen = calls.clone();
+        client
+            .expect_delete_microvm_image()
+            .times((session_refusals + settling_refusals + 1) as usize)
+            .returning(move |_| {
+                let call = seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if call < session_refusals {
+                    Err(running_sessions_refusal())
+                } else if call < session_refusals + settling_refusals {
+                    Err(settling_refusal())
+                } else {
+                    Ok(())
+                }
+            });
+
+        let mut executor = executor(ready_controller(), client).await;
+        executor.delete().expect("transition to delete");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("the delete succeeds once the image settles");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            session_refusals + settling_refusals + 1
         );
     }
 
