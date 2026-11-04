@@ -1102,6 +1102,55 @@ mod tests {
         assert!(refused.hits_async().await >= 1);
     }
 
+    /// The refusal AWS returned live when teardown deleted an image whose sessions were still
+    /// running. As a generic failure it ended teardown at once, although the same delete succeeds
+    /// once the sessions end, which AWS guarantees within eight hours.
+    #[tokio::test]
+    async fn an_image_delete_refused_for_running_microvms_is_a_conflict_to_wait_out() {
+        let server = MockServer::start_async().await;
+        let refused = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::DELETE)
+                    .path(format!("/{API_VERSION}/microvm-images/test-image"));
+                then.status(400)
+                    .header("x-amzn-ErrorType", "ValidationException")
+                    .json_body(serde_json::json!({
+                        "message": "Cannot delete microvm image with running microvms."
+                    }));
+            })
+            .await;
+        let client = LambdaMicrovmsClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(AwsClientConfig {
+                account_id: "111122223333".to_string(),
+                region: "us-east-1".to_string(),
+                credentials: AwsCredentials::AccessKeys {
+                    access_key_id: "test".to_string(),
+                    secret_access_key: "test".to_string(),
+                    session_token: None,
+                },
+                service_overrides: Some(ServiceOverrides {
+                    endpoints: HashMap::from([("lambda".to_string(), server.base_url())]),
+                }),
+            }),
+        );
+
+        let error = client
+            .delete_microvm_image("test-image")
+            .await
+            .expect_err("the service refused the delete");
+
+        assert!(
+            matches!(
+                &error.error,
+                Some(ErrorData::RemoteResourceConflict { message, .. })
+                    if message.contains("running MicroVMs")
+            ),
+            "expected a running-MicroVMs conflict, got {error:?}"
+        );
+        assert!(refused.hits_async().await >= 1);
+    }
+
     /// Only the settling refusal is a conflict; any other validation failure stays generic.
     #[test]
     fn another_validation_failure_is_not_a_conflict() {
