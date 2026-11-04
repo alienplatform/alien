@@ -592,7 +592,7 @@ pub(crate) fn failure_message(result: &QuotaResult) -> Option<String> {
     };
     let quota = &result.quota;
     let usage = if quota.provider_id.starts_with(GCP_VM_FAMILY_QUOTA_PREFIX) {
-        "usage not readable".to_string()
+        format!("usage not readable, this deployment holds {used}")
     } else {
         format!("used {used}")
     };

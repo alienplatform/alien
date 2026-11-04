@@ -663,6 +663,122 @@ mod tests {
         );
     }
 
+    async fn json_any(server: &MockServer) {
+        server
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body("{}");
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn gcp_quota_check_fails_a_machine_no_zone_of_the_region_offers() {
+        let server = MockServer::start_async().await;
+        let json = |path: &'static str, body: &'static str| {
+            let server = &server;
+            async move {
+                server
+                    .mock_async(|when, then| {
+                        when.method(GET).path(path);
+                        then.status(200)
+                            .header("content-type", "application/json")
+                            .body(body);
+                    })
+                    .await
+            }
+        };
+        json(
+            "/projects/test/regions/us-central1",
+            include_str!("fixtures/gcp-regional-quotas.json"),
+        )
+        .await;
+        json(
+            "/projects/test",
+            r#"{"quotas":[{"metric":"CPUS_ALL_REGIONS","limit":9999,"usage":0}]}"#,
+        )
+        .await;
+        json(
+            "/projects/test/locations/global/services/compute.googleapis.com/quotaInfos/CPUS-ALL-REGIONS-per-project",
+            include_str!("fixtures/gcp-cloud-quota-cpus.json"),
+        )
+        .await;
+        json(
+            "/projects/test/zones",
+            r#"{"items":[{"name":"us-central1-a","status":"UP"}]}"#,
+        )
+        .await;
+        let machine_type = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/projects/test/zones/us-central1-a/machineTypes/n2-standard-2");
+                then.status(404)
+                    .header("content-type", "application/json")
+                    .body(r#"{"error":{"code":404,"message":"The resource was not found","status":"NOT_FOUND"}}"#);
+            })
+            .await;
+        let stack = Stack::new("offerings".into())
+            .add(
+                ComputeCluster::new("compute".into())
+                    .capacity_group(alien_core::CapacityGroup {
+                        group_id: "general".into(),
+                        instance_type: Some("n2-standard-2".into()),
+                        profile: None,
+                        min_size: 0,
+                        max_size: 1,
+                        scale_policy: None,
+                        nested_virtualization: None,
+                        data_disk_gib_range: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(alien_core::StackSettings::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(alien_core::ExternalBindings::default())
+            .build();
+        // The IAM quota reads that follow get empty bodies and stay non-blocking.
+        json_any(&server).await;
+        let endpoint = server.base_url();
+        let client_config = ClientConfig::Gcp(Box::new(alien_core::GcpClientConfig {
+            project_id: "test".into(),
+            region: "us-central1".into(),
+            credentials: alien_core::GcpCredentials::AccessToken {
+                token: "test-token".into(),
+            },
+            service_overrides: Some(alien_core::GcpServiceOverrides {
+                endpoints: ["compute", "cloudquotas", "iam", "serviceusage"]
+                    .into_iter()
+                    .map(|service| (service.to_string(), endpoint.clone()))
+                    .collect(),
+            }),
+            project_number: None,
+        }));
+        let result = CloudQuotasCheck
+            .check(
+                &stack,
+                &StackState::new(Platform::Gcp),
+                &config,
+                &client_config,
+            )
+            .await
+            .unwrap();
+        machine_type.assert_hits_async(1).await;
+        assert!(!result.success);
+        assert!(result.errors.contains(
+            &"Machine type 'n2-standard-2' is not offered in any zone of GCP region 'us-central1'. Choose a machine type this region offers.".to_string()
+        ));
+    }
+
     #[test]
     fn late_resolved_replacements_warn_for_existing_cloud_clusters_without_blocking() {
         let cluster = ComputeCluster::new("compute".into()).build();

@@ -2,7 +2,7 @@
 use super::cloud_quotas::record;
 use crate::{
     quotas::{
-        evaluate_capacity, ComputeCapacity, QuotaDemand, QuotaIdentity, QuotaObservation,
+        evaluate, evaluate_capacity, ComputeCapacity, QuotaDemand, QuotaIdentity, QuotaObservation,
         QuotaOutcome, QuotaResult, GCP_VM_FAMILY_QUOTA_FAMILIES, GCP_VM_FAMILY_QUOTA_PREFIX,
     },
     CheckResult,
@@ -35,31 +35,35 @@ fn family_metric(machine: &str) -> Option<String> {
 
 const VM_FAMILY_QUOTA_ID: &str = "CPUS-PER-VM-FAMILY-per-project-region";
 
-/// Compute Engine reports no usage for the per-family quota, so only demand that
-/// exceeds the applied limit on its own is a certain shortfall.
+/// Compute Engine reports no usage for the per-family quota. This deployment's
+/// running machines of the family already count against it, so `held` is a known
+/// lower bound of usage: only demand beyond the limit at that usage is certain.
 fn limit_only_outcome(required: QuotaDemand, maximum: QuotaDemand, limit: f64) -> QuotaOutcome {
-    let (Some(needed), Some(maximum_needed)) = (required.additional(), maximum.additional()) else {
-        return QuotaOutcome::Unknown {
-            reason: "quota demand is not a finite non-negative amount".into(),
-        };
+    let at_least_held = |demand: QuotaDemand| {
+        evaluate(
+            demand,
+            Some(QuotaObservation {
+                used: demand.held,
+                limit,
+            }),
+        )
     };
-    if needed > limit {
-        // Usage is unknown; 0 is the lower bound and the failure text says usage is unreadable.
-        QuotaOutcome::Fail {
-            used: 0.0,
-            limit,
-            needed,
-        }
-    } else if maximum_needed > limit {
-        QuotaOutcome::Warn {
+    match at_least_held(required) {
+        QuotaOutcome::Pass { .. } => {}
+        outcome => return outcome,
+    }
+    match at_least_held(maximum) {
+        QuotaOutcome::Fail { used, needed, .. } => QuotaOutcome::Warn {
             message: format!(
-                "Cluster cannot scale to its configured maximum even with no current usage: applied limit {limit}, needs {maximum_needed} additional capacity."
+                "Cluster cannot scale to its configured maximum even if nothing else uses this quota: applied limit {limit}, this deployment holds {used}, needs {needed} additional capacity."
             ),
-        }
-    } else {
-        QuotaOutcome::Unknown {
-            reason: format!("applied limit is {limit}, but provider-reported usage is unavailable"),
-        }
+        },
+        QuotaOutcome::Pass { .. } => QuotaOutcome::Unknown {
+            reason: format!(
+                "applied limit is {limit}, but provider-reported usage is unavailable"
+            ),
+        },
+        outcome => outcome,
     }
 }
 
@@ -823,7 +827,7 @@ mod tests {
         assert!(!result.success);
         assert_eq!(
             result.errors,
-            ["Compute Engine vCPUs per VM family (CPUS_PER_VM_FAMILY/N4, test/us-central1): usage not readable, applied limit 200, additional needed 240. Request an increase: https://console.cloud.google.com/iam-admin/quotas?service=compute.googleapis.com"]
+            ["Compute Engine vCPUs per VM family (CPUS_PER_VM_FAMILY/N4, test/us-central1): usage not readable, this deployment holds 0, applied limit 200, additional needed 240. Request an increase: https://console.cloud.google.com/iam-admin/quotas?service=compute.googleapis.com"]
         );
         assert_eq!(
             *outcome(&result, "CPUS_ALL_REGIONS"),
@@ -866,8 +870,95 @@ mod tests {
         assert!(result.success);
         assert!(matches!(
             outcome(&result, "CPUS_PER_VM_FAMILY/N4"),
-            QuotaOutcome::Warn { message } if message.contains("applied limit 200, needs 240")
+            QuotaOutcome::Warn { message } if message.contains("applied limit 200, this deployment holds 0, needs 240")
         ));
+    }
+
+    // Two n4-standard-80 already run (160 vCPUs held, counted in CPUS_PER_VM_FAMILY/N4);
+    // the update asks for three (240). With an applied limit of 200 this must block.
+    #[tokio::test]
+    async fn scale_up_of_a_running_n4_pool_over_the_family_limit_blocks() {
+        let old = gpu_stack("n4-standard-80", 2);
+        let mut state = StackState::new(Platform::Gcp);
+        let mut current = StackResourceState::new_pending(
+            "cluster".into(),
+            old.resources["cluster"].config.clone(),
+            None,
+            vec![],
+        );
+        current.status = ResourceStatus::Running;
+        let outputs: ComputeClusterOutputs = serde_json::from_value(serde_json::json!({
+            "clusterId":"quota-test", "horizonReady":true, "totalMachines":2,
+            "capacityGroupStatuses": [{"groupId":"pool","instanceType":"n4-standard-80","currentMachines":2,"desiredMachines":2}]
+        })).unwrap();
+        current.outputs = Some(ResourceOutputs::new(outputs));
+        state.resources.insert("cluster".into(), current);
+
+        let mut compute = alien_gcp_clients::compute::MockComputeApi::new();
+        compute.expect_get_region_quotas().returning(|_| {
+            Ok(serde_json::from_str(include_str!("fixtures/gcp-regional-quotas.json")).unwrap())
+        });
+        compute.expect_get_project_quotas().returning(|| {
+            Ok(serde_json::from_str(
+                r#"{"quotas":[{"metric":"CPUS_ALL_REGIONS","limit":9999,"usage":160}]}"#,
+            )
+            .unwrap())
+        });
+        let mut quotas = alien_gcp_clients::cloud_quotas::MockCloudQuotasApi::new();
+        quotas
+            .expect_get_quota_info()
+            .returning(move |_, id| match id {
+                "CPUS-ALL-REGIONS-per-project" => Ok(serde_json::from_str(include_str!(
+                    "fixtures/gcp-cloud-quota-cpus.json"
+                ))
+                .unwrap()),
+                _ => Ok(serde_json::from_str(include_str!(
+                    "fixtures/gcp-cloud-quota-cpus-per-vm-family.json"
+                ))
+                .unwrap()),
+            });
+        let mut desired = gpu_stack("n4-standard-80", 3);
+        let entry = desired.resources.get_mut("cluster").unwrap();
+        let mut cluster = entry
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .unwrap()
+            .clone();
+        cluster.capacity_groups[0].min_size = 3;
+        entry.config = alien_core::Resource::new(cluster);
+        let mut result = CheckResult::success();
+        check(
+            &desired,
+            &state,
+            "test",
+            "us-central1",
+            &compute,
+            &quotas,
+            &mut result,
+        )
+        .await;
+        assert!(outcome(&result, "CPUS_PER_VM_FAMILY/N4").blocks());
+        assert_eq!(
+            *outcome(&result, "CPUS_PER_VM_FAMILY/N4"),
+            QuotaOutcome::Fail {
+                used: 160.0,
+                limit: 200.0,
+                needed: 80.0
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn family_demand_exactly_at_the_applied_limit_does_not_block() {
+        // Three c4a-standard-8 need 24 vCPUs; the applied C4A limit in us-central1 is 24.
+        let result = check_family_pool("c4a-standard-8", 3, 3, false).await;
+        assert!(result.success);
+        assert_eq!(
+            *outcome(&result, "CPUS_PER_VM_FAMILY/C4A"),
+            QuotaOutcome::Unknown {
+                reason: "applied limit is 24, but provider-reported usage is unavailable".into()
+            }
+        );
     }
 
     #[tokio::test]
