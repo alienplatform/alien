@@ -1952,6 +1952,18 @@ mod tests {
         assert_eq!(error.code, "REGISTRY_REPLICA_NOT_READY", "{error}");
         assert!(error.retryable, "a replica can still appear: {error}");
         assert!(error.to_string().contains("eu-west-1"), "{error}");
+        // A replica that never appears usually means no replication rule targets the region, so
+        // the error says how to end the wait.
+        assert!(
+            error
+                .to_string()
+                .contains("add an ECR replication rule for eu-west-1 in the registry's account"),
+            "{error}"
+        );
+        assert!(
+            error.to_string().contains("or deploy in us-east-1"),
+            "{error}"
+        );
         assert!(
             pending.hits_async().await >= 2,
             "the replica is polled until the bound"
