@@ -67,7 +67,7 @@ pub struct ComputePoolPlan {
     pub selected: ComputePoolSelection,
     /// Planner-recommended default.
     pub recommended: ComputePoolSelection,
-    /// Every catalog machine for the platform, in catalog order (category, series, vCPU).
+    /// Every catalog machine for the platform, in catalog order (config series order, then vCPU).
     /// `available` marks the ones that can run this pool. Empty for local and Kubernetes.
     pub machines: Vec<ComputeMachineOption>,
     /// Data disk sizes this deployment may choose, when the pool declares a data disk.
@@ -2007,6 +2007,7 @@ mod tests {
             let expected = instance_catalog::default_architecture(platform)
                 .expect("managed cloud should have a default architecture");
 
+            assert!(pool.machines.iter().any(|machine| machine.available));
             for machine in &pool.machines {
                 let spec = instance_catalog::find_instance_type(platform, &machine.machine)
                     .expect("every option is a catalog machine");
@@ -2314,7 +2315,7 @@ mod tests {
         );
         assert_eq!(spec.architecture, Architecture::X86_64);
 
-        // Every AWS machine is listed, in catalog order: category, series, then vCPU.
+        // Every AWS machine is listed, in catalog order.
         let catalog = instance_catalog::catalog_for_platform(Platform::Aws);
         assert_eq!(
             pool.machines

@@ -1,7 +1,7 @@
 # Which machines the instance catalog lists. `scripts/instance-catalog/generate.py` reads this
-# file and the clouds' machine APIs and writes `src/instance_catalog/catalog.rs`. Every vCPU,
-# memory, local storage and GPU number there comes from the API, except the values a series
-# lists under `overrides`.
+# file and the clouds' machine APIs and writes `src/instance_catalog/catalog.rs`. vCPU, memory,
+# local disk and GPU numbers come from the API; the rest comes from this file (labels, GPU
+# types the API doesn't name, `overrides`) or from the disk constants in generate.py.
 #
 # Each `[[<platform>.series]]` entry is one series of a category:
 #   series         The series name machines are grouped by.
@@ -13,14 +13,18 @@
 #   from, to       The smallest and the largest machine to include, by vCPU then memory.
 #                  `to` defaults to the largest one. Bare-metal machines never match.
 #   sizes          Explicit machine names, in place of `pattern`, `from` and `to`.
+#   machine        The provider machine type the `sizes` run on, when the catalog name adds an
+#                  accelerator to it (`n1-standard-4-t4` runs on `n1-standard-4`).
+#   attached_gpu   The accelerator such a row adds, by the provider's accelerator name.
+#   gpu_type       The GPU type for a series whose API names no GPU model (Azure).
 #   auto_select_to The largest machine automatic selection may pick; it may pick none of the
 #                  series without it. Automatic selection picks from a fixed set of machines, so
 #                  adding a series or a size never changes what an existing stack gets.
 #   nested_virt    Whether the series exposes nested virtualization, with the provider's page.
 #   overrides      Per machine name, values that replace the API's: `memory_gib`,
-#                  `ephemeral_storage_gib` and `nested_virt`. Only automatic picks use them,
-#                  where a stack that runs the machine must keep getting the same memory, disk
-#                  and nested-virtualization answer.
+#                  `ephemeral_storage_gib` and `nested_virt`. Only machines automatic selection
+#                  may pick can have them: they keep the values existing pools are sized and
+#                  validated with.
 #
 # Series order is the order a series appears in within its category, and the tie-break between
 # two machines of equal size in automatic selection.
@@ -63,8 +67,8 @@ category = "GeneralPurpose"
 label = "General purpose · Intel · 7th gen"
 from = "m7i.large"
 auto_select_to = "m7i.4xlarge"
-# The API reports nested virtualization for m7i, but automatic selection keeps ordinary x86
-# workloads on m7i and nested ones on m8i; flagging it would move both picks.
+# The API reports nested virtualization for m7i. The series keeps the flag it had before the
+# catalog was generated, so automatic picks and existing validation stay the same.
 
 # https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/amazon-ec2-nested-virtualization.html
 [[aws.series]]
@@ -392,7 +396,8 @@ category = "GpuCompute"
 label = "GPU · NVIDIA A100"
 sizes = ["a2-highgpu-1g", "a2-highgpu-8g"]
 auto_select_to = "a2-highgpu-8g"
-# The API reports 680 GiB.
+# The API reports 680 GiB. The size keeps the memory existing pools are sized and validated
+# with.
 overrides = { "a2-highgpu-8g" = { memory_gib = 1360 } }
 
 [[gcp.series]]
@@ -415,8 +420,8 @@ sizes = ["Standard_B1s", "Standard_B2s", "Standard_B2ms", "Standard_B4ms"]
 auto_select_to = "Standard_B4ms"
 
 # https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/general-purpose/dsv4-series says
-# nested virtualization is supported, but flagging it would move nested picks from
-# Standard_D2s_v5 to Standard_D2s_v4.
+# nested virtualization is supported. The series keeps the flag it had before the catalog was
+# generated, so automatic picks and existing validation stay the same.
 [[azure.series]]
 series = "Dsv4"
 category = "GeneralPurpose"
@@ -482,8 +487,8 @@ from = "Standard_E2s_v6"
 nested_virt = true
 
 # https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/storage-optimized/lsv3-series says
-# nested virtualization is supported, but flagging it would move nested storage-heavy picks
-# from a provider disk on Dsv5 to Lsv3.
+# nested virtualization is supported. The series keeps the flag it had before the catalog was
+# generated, so automatic picks and existing validation stay the same.
 [[azure.series]]
 series = "Lsv3"
 category = "StorageOptimized"

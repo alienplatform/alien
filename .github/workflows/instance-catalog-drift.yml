@@ -1,8 +1,9 @@
 name: Instance Catalog Drift
 
 # Regenerates the instance catalog from the clouds' machine APIs and fails when the committed
-# catalog no longer matches, for example when a provider corrects a size's memory or GPU. A
-# failed run is the alert: rerun the generator locally and commit the result.
+# catalog no longer matches, for example when a provider corrects a size's memory or GPU. GitHub
+# emails a failed scheduled run to whoever last edited the schedule; on drift, rerun the
+# generator locally and commit the result.
 
 on:
   schedule:
@@ -24,7 +25,9 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.TEST_AWS_TARGET_SECRET_ACCESS_KEY }}
     steps:
       - name: Mask non-secret infrastructure identifiers
-        run: echo "::add-mask::${{ vars.TEST_GCP_TARGET_3_PROJECT_ID }}"
+        env:
+          GCP_PROJECT_ID: ${{ vars.TEST_GCP_TARGET_3_PROJECT_ID }}
+        run: echo "::add-mask::$GCP_PROJECT_ID"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 

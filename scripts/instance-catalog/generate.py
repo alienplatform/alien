@@ -6,8 +6,9 @@ crates/alien-core/src/instance_catalog/catalog.rs. From the repository root:
   python3 scripts/instance-catalog/generate.py
 
 Needs the aws, gcloud and az CLIs signed in; it uses their current profile, project and
-subscription. Every number in the output comes from the APIs, so a rerun on unchanged clouds
-reproduces the file byte for byte, and `git diff --exit-code` afterwards shows drift.
+subscription. vCPU, memory, local disk and GPU numbers come from the APIs, the rest from the
+config or the disk constants below, so a rerun on unchanged clouds reproduces the file byte for
+byte, and `git diff --exit-code` afterwards shows drift.
 """
 
 from concurrent.futures import ThreadPoolExecutor
