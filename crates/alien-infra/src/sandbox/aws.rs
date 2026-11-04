@@ -974,6 +974,8 @@ impl AwsSandboxController {
         // The binding is a promise sessions can be created now; withdraw it before the first
         // delete rather than after the last one.
         self.active_version = None;
+        // A wait left by an earlier delete that ended another way must not count against this one.
+        self.running_sessions_since = None;
 
         // A setup-baked image belongs to the setup stack and is removed by stack teardown;
         // deleting it here would act with credentials that were never granted it — and would
@@ -4740,7 +4742,10 @@ mod tests {
             .expect_delete_microvm_image()
             .times(1)
             .returning(|_| Err(running_sessions_refusal()));
+        // Already waiting in the delete flow, since before the cap.
         let controller = AwsSandboxController {
+            state: AwsSandboxState::DeletingImage,
+            active_version: None,
             running_sessions_since: Some(
                 chrono::Utc::now()
                     - chrono::Duration::minutes(RUNNING_SESSIONS_MAX_WAIT_MINUTES + 1),
@@ -4749,7 +4754,6 @@ mod tests {
         };
 
         let mut executor = executor(controller, client).await;
-        executor.delete().expect("transition to delete");
         let error = executor
             .run_until_terminal()
             .await
@@ -4760,6 +4764,41 @@ mod tests {
                 && rendered.contains("terminate the sessions"),
             "the failure names the cause and the fix: {rendered}"
         );
+    }
+
+    /// A wait recorded by an earlier delete that failed some other way is not carried into a new
+    /// delete: its first refusal waits instead of failing on the old clock.
+    #[tokio::test]
+    async fn a_new_delete_does_not_inherit_an_earlier_running_sessions_wait() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let seen = calls.clone();
+        client
+            .expect_delete_microvm_image()
+            .times(2)
+            .returning(move |_| {
+                if seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    Err(running_sessions_refusal())
+                } else {
+                    Ok(())
+                }
+            });
+        let controller = AwsSandboxController {
+            running_sessions_since: Some(
+                chrono::Utc::now()
+                    - chrono::Duration::minutes(RUNNING_SESSIONS_MAX_WAIT_MINUTES + 60),
+            ),
+            ..ready_controller()
+        };
+
+        let mut executor = executor(controller, client).await;
+        executor.delete().expect("transition to delete");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("the new delete waits out its own refusal");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
     /// The wait is bounded: an image that never leaves its state fails the delete.
