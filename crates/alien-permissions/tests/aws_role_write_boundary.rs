@@ -229,7 +229,17 @@ fn catalog_management_role_writes_require_boundary_and_ownership() {
                             .is_some_and(|arn| {
                                 arn.starts_with("arn:aws:iam::aws:policy/") && !arn.contains('*')
                             });
-                    if !detaches_aws_managed_policy {
+                    // The VPC flow log delivery role is created by setup without the boundary,
+                    // trusts only the flow logs service, and deleting its inline policy only
+                    // removes that service's write to the log group. Its name and ownership tags
+                    // are still required below.
+                    let deletes_flow_log_delivery_role = id == "network/provision"
+                        && statement.resource
+                            == ["arn:aws:iam::123456789012:role/my-stack-*-flow-logs"]
+                        && statement.action.iter().all(|action| {
+                            action == "iam:DeleteRolePolicy" || action == "iam:DeleteRole"
+                        });
+                    if !detaches_aws_managed_policy && !deletes_flow_log_delivery_role {
                         assert_eq!(
                             conditions["iam:PermissionsBoundary"].as_string(),
                             Some(BOUNDARY),

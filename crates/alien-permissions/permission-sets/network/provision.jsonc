@@ -272,6 +272,89 @@
             "resources": ["*"]
           }
         }
+      },
+      // A created network's VPC flow log objects, which only setup creates (network/setup).
+      // Whoever deletes the network deletes them first, as it deletes the network's other
+      // children: the flow log, then its delivery role, then its log group, each only while it
+      // carries this network's tags. The controller reads the tags before changing anything.
+      {
+        "grant": {
+          "actions": ["ec2:DeleteFlowLogs"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc-flow-log/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // AWS requires Resource: "*" for this read-only discovery API.
+      {
+        "grant": {
+          "actions": ["ec2:DescribeFlowLogs"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          }
+        }
+      },
+      // The role trusts only the VPC flow logs service, so no identity of this stack runs as
+      // it, and its one inline policy only lets that service write to the log group. Deleting
+      // the policy, which DeleteRole requires first, removes permissions and grants none.
+      // Setup creates the role without the management boundary, so this delete cannot require
+      // it the way other management role writes do.
+      {
+        "grant": {
+          "actions": ["iam:DeleteRolePolicy", "iam:DeleteRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-flow-logs"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // Reading the tags tells this network's group from another with the same name.
+      {
+        "grant": {
+          "actions": ["logs:ListTagsForResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:${stackPrefix}-*-flow-logs"
+            ]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["logs:DeleteLogGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:${stackPrefix}-*-flow-logs"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
       }
     ],
     "gcp": [
