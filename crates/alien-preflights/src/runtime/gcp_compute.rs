@@ -195,14 +195,12 @@ fn family_vcpus(machine: &str) -> Option<(String, f64)> {
     ))
 }
 
-/// vCPUs per family over the controller's update phases. Each value is added to
-/// the phase's total when the machine is in a per-family quota.
+/// vCPUs per family in each of the controller's update phases.
 #[derive(Default)]
 struct FamilyPhases {
     resize: BTreeMap<String, f64>,
     create: BTreeMap<String, f64>,
     roll: BTreeMap<String, f64>,
-    surge: BTreeMap<String, f64>,
 }
 
 impl FamilyPhases {
@@ -212,21 +210,9 @@ impl FamilyPhases {
         }
     }
 
-    /// Machines that run in every phase.
-    fn add_throughout(&mut self, machine: &str, machines: u32) {
-        Self::add(&mut self.resize, machine, machines);
-        Self::add(&mut self.create, machine, machines);
-        Self::add(&mut self.roll, machine, machines);
-    }
-
     fn peaks(self) -> BTreeMap<String, f64> {
         let mut peaks = BTreeMap::<String, f64>::new();
-        for (code, value) in self
-            .resize
-            .into_iter()
-            .chain(self.create)
-            .chain(merge(self.roll, self.surge))
-        {
+        for (code, value) in self.resize.into_iter().chain(self.create).chain(self.roll) {
             let peak = peaks.entry(code).or_insert(0.0);
             *peak = peak.max(value);
         }
@@ -241,14 +227,69 @@ fn merge(mut into: BTreeMap<String, f64>, from: BTreeMap<String, f64>) -> BTreeM
     into
 }
 
+/// One capacity group's machines during the roll: its count, and the machine type
+/// it runs before and after.
+struct RollingGroup<'a> {
+    order: String,
+    machines: u32,
+    before: &'a str,
+    after: &'a str,
+}
+
+/// The largest vCPUs of each family while the controller rolls the cluster. It
+/// rolls one MIG at a time, in the order of its MIG keys: the group id, or
+/// `group/zone` for each zone of a zonal group. Before draining each old machine
+/// it adds one new one, so a group of `n` machines that has `r` old machines left
+/// runs `r` old and `n - r + 1` new; the family's usage is largest at the first or
+/// the last of those steps. Groups already rolled run their new machines, and the
+/// rest their old ones. The zones of one group roll in a row, so their split adds
+/// up to the same steps as a single MIG.
+fn roll_peaks(groups: &mut [RollingGroup<'_>]) -> BTreeMap<String, f64> {
+    groups.sort_by(|left, right| left.order.cmp(&right.order));
+    let vcpus = |machine: &str, code: &str| {
+        family_vcpus(machine)
+            .filter(|(family, _)| family == code)
+            .map_or(0.0, |(_, vcpus)| vcpus)
+    };
+    let codes = groups
+        .iter()
+        .flat_map(|group| [group.before, group.after])
+        .filter_map(|machine| family_vcpus(machine).map(|(code, _)| code))
+        .collect::<BTreeSet<_>>();
+    let mut peaks = BTreeMap::new();
+    for code in codes {
+        let mut peak = 0.0_f64;
+        for rolling in 0..groups.len() {
+            let mut usage = 0.0;
+            for (position, group) in groups.iter().enumerate() {
+                let machines = f64::from(group.machines);
+                let before = vcpus(group.before, &code);
+                let after = vcpus(group.after, &code);
+                usage += if position < rolling {
+                    machines * after
+                } else if position > rolling {
+                    machines * before
+                } else if group.machines == 0 {
+                    0.0
+                } else {
+                    (machines * before + after).max(before + machines * after)
+                };
+            }
+            peak = peak.max(usage);
+        }
+        peaks.insert(code, peak);
+    }
+    peaks
+}
+
 /// Peak vCPUs of each per-family quota while the update runs, in the GCP
 /// controller's update order for each cluster:
-/// 1. existing groups resize, on their current machine type, while removed groups
-///    still run;
+/// 1. existing groups resize, on the machine type they run now, while removed
+///    groups still run;
 /// 2. removed groups are deleted, and their deletion awaited, before new groups are
 ///    created at their initial size;
-/// 3. groups whose machine type or disks change roll one machine at a time; only
-///    one replacement surge is counted, since rolls may serialize.
+/// 3. when any group's machine type or disks change, every group of the cluster,
+///    including new ones, rolls onto new templates (`roll_peaks`).
 ///
 /// Clusters update independently, so their peaks add up. A cluster in state that
 /// the stack no longer has keeps its machines in every phase.
@@ -278,7 +319,11 @@ fn family_peaks(stack: &Stack, state: &StackState, required: bool) -> BTreeMap<S
         }
         let mut phases = FamilyPhases::default();
         for status in statuses(current) {
-            phases.add_throughout(&status.instance_type, status.current_machines);
+            FamilyPhases::add(
+                &mut phases.resize,
+                &status.instance_type,
+                status.current_machines,
+            );
         }
         total = merge(total, phases.peaks());
     }
@@ -301,19 +346,29 @@ fn family_peaks(stack: &Stack, state: &StackState, required: bool) -> BTreeMap<S
         }) {
             FamilyPhases::add(&mut phases.resize, &row.instance_type, row.current_machines);
         }
+        let mut rolling = Vec::new();
+        let mut inputs_change = false;
         for group in &cluster.capacity_groups {
             let Some(machine) = group.instance_type.as_deref() else {
                 continue;
             };
-            let existed = old.is_some_and(|old| {
+            let previous = old.and_then(|old| {
                 old.capacity_groups
                     .iter()
-                    .any(|old| old.group_id == group.group_id)
+                    .find(|old| old.group_id == group.group_id)
             });
+            let order = if cluster
+                .selected_failure_domains
+                .contains_key(&group.group_id)
+            {
+                format!("{}/", group.group_id)
+            } else {
+                group.group_id.clone()
+            };
             let Some(row) = rows.iter().find(|row| row.group_id == group.group_id) else {
                 // An existing group without a status row adds nothing; the known
                 // usage marks its held capacity unresolved.
-                if existed {
+                if previous.is_some() {
                     continue;
                 }
                 let initial = if required {
@@ -322,7 +377,12 @@ fn family_peaks(stack: &Stack, state: &StackState, required: bool) -> BTreeMap<S
                     group.max_size
                 };
                 FamilyPhases::add(&mut phases.create, machine, initial);
-                FamilyPhases::add(&mut phases.roll, machine, initial);
+                rolling.push(RollingGroup {
+                    order,
+                    machines: initial,
+                    before: machine,
+                    after: machine,
+                });
                 continue;
             };
             let target = if required {
@@ -330,48 +390,30 @@ fn family_peaks(stack: &Stack, state: &StackState, required: bool) -> BTreeMap<S
             } else {
                 group.max_size
             };
-            let old_machine = row.instance_type.as_str();
+            let running = row.instance_type.as_str();
             FamilyPhases::add(
                 &mut phases.resize,
-                old_machine,
+                running,
                 row.current_machines.max(target),
             );
-            FamilyPhases::add(&mut phases.create, old_machine, target);
-            let rolls = old
-                .and_then(|old| {
-                    old.capacity_groups
-                        .iter()
-                        .find(|old| old.group_id == group.group_id)
-                })
-                .map_or(old_machine != machine, |old| {
-                    old.instance_type.as_deref() != Some(machine) || old.disks_differ(group)
-                });
-            if !rolls {
-                FamilyPhases::add(&mut phases.roll, old_machine, target);
-                continue;
-            }
-            // The roll ends with the new machines. Within one family, a new machine
-            // starts before an old one stops, so one extra machine briefly runs.
-            let t = f64::from(target);
-            match (family_vcpus(old_machine), family_vcpus(machine)) {
-                (Some((old_code, old_vcpus)), Some((new_code, new_vcpus)))
-                    if old_code == new_code =>
-                {
-                    let settled = (t * old_vcpus).max(t * new_vcpus);
-                    *phases.roll.entry(old_code.clone()).or_insert(0.0) += settled;
-                    if target > 0 {
-                        let peak = (t * old_vcpus + new_vcpus).max(t * new_vcpus + old_vcpus);
-                        let surge = phases.surge.entry(old_code).or_insert(0.0);
-                        *surge = surge.max(peak - settled);
-                    }
-                }
-                (start, end) => {
-                    for (code, vcpus) in start.into_iter().chain(end) {
-                        *phases.roll.entry(code).or_insert(0.0) += t * vcpus;
-                    }
-                }
-            }
+            FamilyPhases::add(&mut phases.create, running, target);
+            // The controller compares the machine type it recorded, which the
+            // previous configuration holds, and the disks.
+            inputs_change |= previous.map_or(running != machine, |previous| {
+                previous.instance_type.as_deref() != Some(machine) || previous.disks_differ(group)
+            });
+            rolling.push(RollingGroup {
+                order,
+                machines: target,
+                before: running,
+                after: machine,
+            });
         }
+        phases.roll = if inputs_change {
+            roll_peaks(&mut rolling)
+        } else {
+            BTreeMap::new()
+        };
         total = merge(total, phases.peaks());
     }
     total
@@ -1359,7 +1401,8 @@ mod tests {
     #[test]
     fn a_pool_leaving_the_family_still_holds_its_old_machines_while_a_new_pool_launches() {
         // b moves to n2 but its n4 machine runs until the rolling update replaces it,
-        // after the controller creates c's group. N4 running: a 80 + b 80.
+        // after the controller creates c's group. N4 running: a 80 + b 80. b's change
+        // rolls every group, a first: a's surge machine runs beside a, b and c, 320.
         let old = pools(vec![
             pool_group("a", "n4-standard-80", 1, 1),
             pool_group("b", "n4-standard-80", 1, 1),
@@ -1378,7 +1421,150 @@ mod tests {
         ]);
         let demand = demands_for(&desired, &state, false, true).unwrap()["CPUS_PER_VM_FAMILY/N4"];
         assert_eq!(demand.held, 160.0, "{demand:?}");
-        assert_eq!(demand.additional(), Some(80.0), "{demand:?}");
+        assert_eq!(demand.additional(), Some(160.0), "{demand:?}");
+    }
+
+    /// The roll-phase peak of N4 for pools as they run now and as the update wants
+    /// them. Each tuple is (group, machine type, machines); `zonal` names groups
+    /// with failure domains.
+    fn n4_roll_peak(
+        running: &[(&str, &str, u32)],
+        desired: &[(&str, &str, u32)],
+        zonal: &[&str],
+    ) -> f64 {
+        let fixed = |groups: &[(&str, &str, u32)]| {
+            let mut cluster = ComputeCluster::new("cluster".into());
+            for (id, machine, machines) in groups {
+                cluster = cluster.capacity_group(pool_group(id, machine, *machines, *machines));
+            }
+            let mut cluster = cluster.build();
+            for id in zonal {
+                cluster.selected_failure_domains.insert(
+                    (*id).into(),
+                    vec!["us-central1-a".into(), "us-central1-b".into()],
+                );
+            }
+            Stack::new("quota-test".into())
+                .add(cluster, ResourceLifecycle::Live)
+                .build()
+        };
+        let state = running_state(
+            &fixed(running),
+            serde_json::Value::Array(
+                running
+                    .iter()
+                    .map(|(id, machine, machines)| group_status(id, machine, *machines))
+                    .collect(),
+            ),
+        );
+        family_peaks(&fixed(desired), &state, true)["CPUS_PER_VM_FAMILY/N4"]
+    }
+
+    #[test]
+    fn the_cluster_rolls_one_group_at_a_time_in_mig_key_order() {
+        // a shrinks 2 x n4-48 to n4-16 before b grows 2 x n4-16 to n4-48:
+        // a rolling 112 + b 32 = 144, then a 32 + b rolling 112 = 144.
+        assert_eq!(
+            n4_roll_peak(
+                &[("a", "n4-standard-48", 2), ("b", "n4-standard-16", 2)],
+                &[("a", "n4-standard-16", 2), ("b", "n4-standard-48", 2)],
+                &[],
+            ),
+            144.0
+        );
+        // The other way round, a grows while b still runs 96: 112 + 96 = 208.
+        assert_eq!(
+            n4_roll_peak(
+                &[("a", "n4-standard-16", 2), ("b", "n4-standard-48", 2)],
+                &[("a", "n4-standard-48", 2), ("b", "n4-standard-16", 2)],
+                &[],
+            ),
+            208.0
+        );
+        // a leaves N4 first (rolling 96 + b 32 = 128), then b grows (0 + 112): the
+        // peak is the resize phase, 96 + 32 = 128.
+        assert_eq!(
+            n4_roll_peak(
+                &[("a", "n4-standard-48", 2), ("b", "n4-standard-16", 2)],
+                &[("a", "n2-standard-48", 2), ("b", "n4-standard-48", 2)],
+                &[],
+            ),
+            128.0
+        );
+        // A group that does not change rolls too, with its own surge machine:
+        // a rolling 160 + 80 + b 2 = 242.
+        assert_eq!(
+            n4_roll_peak(
+                &[("a", "n4-standard-80", 2), ("b", "n4-standard-2", 1)],
+                &[("a", "n4-standard-80", 2), ("b", "n4-standard-4", 1)],
+                &[],
+            ),
+            242.0
+        );
+        // A zonal group's MIGs are keyed `a/<zone>`, after `a-x`: a-x shrinks first
+        // (112 + 32 = 144), then a grows (32 + 112). Aggregate, a would grow first: 208.
+        let running = [("a", "n4-standard-16", 2), ("a-x", "n4-standard-48", 2)];
+        let desired = [("a", "n4-standard-48", 2), ("a-x", "n4-standard-16", 2)];
+        assert_eq!(n4_roll_peak(&running, &desired, &["a"]), 144.0);
+        assert_eq!(n4_roll_peak(&running, &desired, &[]), 208.0);
+    }
+
+    #[tokio::test]
+    async fn rolls_that_fit_pass_and_rolls_over_the_limit_fail() {
+        let fail = |used, needed| QuotaOutcome::Fail {
+            used,
+            limit: 200.0,
+            needed,
+        };
+        let unknown = QuotaOutcome::Unknown {
+            reason: "applied limit is 200, but provider-reported usage is unavailable".into(),
+        };
+        for (running, desired, expected) in [
+            (
+                vec![("a", "n4-standard-48", 2), ("b", "n4-standard-16", 2)],
+                vec![
+                    pool_group("a", "n4-standard-16", 2, 2),
+                    pool_group("b", "n4-standard-48", 2, 2),
+                ],
+                unknown.clone(),
+            ),
+            (
+                vec![("a", "n4-standard-48", 2), ("b", "n4-standard-16", 2)],
+                vec![
+                    pool_group("a", "n2-standard-48", 2, 2),
+                    pool_group("b", "n4-standard-48", 2, 2),
+                ],
+                unknown.clone(),
+            ),
+            (
+                vec![("a", "n4-standard-16", 2), ("b", "n4-standard-48", 2)],
+                vec![
+                    pool_group("a", "n4-standard-48", 2, 2),
+                    pool_group("b", "n4-standard-16", 2, 2),
+                ],
+                fail(128.0, 80.0),
+            ),
+            (
+                vec![("a", "n4-standard-80", 2), ("b", "n4-standard-2", 1)],
+                vec![
+                    pool_group("a", "n4-standard-80", 2, 2),
+                    pool_group("b", "n4-standard-4", 1, 1),
+                ],
+                fail(162.0, 80.0),
+            ),
+            // a grows 1 x n4-8 to n4-16 and new c (2 x n4-64) rolls after it:
+            // a 16 + c rolling 128 + 64 = 208.
+            (
+                vec![("a", "n4-standard-8", 1)],
+                vec![
+                    pool_group("a", "n4-standard-16", 1, 1),
+                    pool_group("c", "n4-standard-64", 2, 2),
+                ],
+                fail(8.0, 200.0),
+            ),
+        ] {
+            assert_eq!(n4_outcome(running, desired).await, expected);
+        }
     }
 
     #[tokio::test]
