@@ -251,7 +251,13 @@ impl SigningApi {
                 url: Some(url),
             }));
         }
-        serde_json::from_str(&text)
+        // Writes that store something answer with an empty body.
+        let text = if text.trim().is_empty() {
+            "null"
+        } else {
+            text.as_str()
+        };
+        serde_json::from_str(text)
             .into_alien_error()
             .context(ErrorData::ApiRequestFailed {
                 message: format!("{method} {path}: the response is not the expected JSON"),
