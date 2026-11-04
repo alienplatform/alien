@@ -6,7 +6,7 @@
 
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
-use alien_commands_client::{CommandsClient, CommandsClientConfig, InvokeOptions};
+use alien_commands_client::{CommandError, CommandsClient, CommandsClientConfig, InvokeOptions};
 use alien_core::DeploymentStatus;
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Parser, Subcommand};
@@ -31,6 +31,9 @@ EXAMPLES:
     # Invoke against a standalone manager
     alien commands invoke --deployment acme-corp --command generate-report \\
       --params '{\"startDate\": \"2025-01-01\"}'
+
+    # Pick the resource when more than one handles commands
+    alien commands invoke --deployment acme-corp --command status --target alerts
 
 Commands are application RPC handled by your Worker, Container, or Daemon.
 See also: `alien operations --help` for Remote Operator operations, which carry
@@ -164,14 +167,36 @@ async fn invoke_command(
     let client =
         CommandsClient::with_http_client(&commands_url, &deployment_id, http_client, config);
 
-    let result: serde_json::Value = client
+    let result: serde_json::Value = match client
         .invoke_with_options(command, params, Some(options))
         .await
-        .into_alien_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: format!("Command '{}' failed", command),
-            url: Some(commands_url),
-        })?;
+    {
+        Ok(result) => result,
+        Err(error) if is_target_ambiguous(&error) => {
+            // The manager's message lists the targets; this layer says which
+            // flag picks one.
+            return Err(error)
+                .into_alien_error()
+                .context(ErrorData::CommandTargetRequired {
+                    deployment: deployment_name.to_string(),
+                    command: command.to_string(),
+                    invoke: if is_dev {
+                        "alien dev commands invoke"
+                    } else {
+                        "alien commands invoke"
+                    }
+                    .to_string(),
+                });
+        }
+        Err(error) => {
+            return Err(error)
+                .into_alien_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: format!("Command '{}' failed", command),
+                    url: Some(commands_url),
+                });
+        }
+    };
 
     println!(
         "{}",
@@ -179,6 +204,18 @@ async fn invoke_command(
     );
 
     Ok(())
+}
+
+/// Whether the manager rejected an untargeted invoke because the deployment
+/// has more than one command-capable resource.
+fn is_target_ambiguous(error: &CommandError) -> bool {
+    let CommandError::CreationFailed { body, .. } = error else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("code")?.as_str().map(str::to_owned))
+        .is_some_and(|code| code == "COMMAND_TARGET_AMBIGUOUS")
 }
 
 /// Resolve a deployment spec to its ID and assert it's ready for commands.
@@ -327,5 +364,69 @@ mod tests {
         .await
         .expect("targeted command completes");
         create.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn untargeted_invoke_on_several_targets_asks_for_target_flag() {
+        let server = MockServer::start_async().await;
+        server.mock_async(|when, then| {
+            when.method(GET).path("/v1/deployments/dep_test");
+            then.json_body(json!({"id":"dep_test", "name":"docproc", "platform":"test", "status":"running",
+                "deploymentGroupId":"dg_test", "deploymentProtocolVersion":1,"projectId":"prj_test",
+                "workspaceId":"ws_test","retryRequested":false,"updateBlocked":false,"createdAt":"2026-01-01T00:00:00Z"}));
+        }).await;
+        // The body a standalone manager returns for COMMAND_TARGET_AMBIGUOUS.
+        let rejected =
+            alien_error::AlienError::new(alien_commands::ErrorData::CommandTargetAmbiguous {
+                deployment_id: "dep_test".to_string(),
+                target_resource_ids: vec!["alerts".to_string(), "maintenance".to_string()],
+            });
+        let create = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/commands");
+                then.status(409)
+                    .json_body(serde_json::to_value(&rejected).expect("error serializes"));
+            })
+            .await;
+        let manager = alien_manager_api::Client::new(&server.base_url());
+
+        let error = invoke_command(
+            &manager,
+            &server.base_url(),
+            reqwest::Client::new(),
+            "dep_test",
+            "ping",
+            "{}",
+            InvokeOptions {
+                timeout: Some(Duration::from_secs(2)),
+                target_resource_id: None,
+                deadline: None,
+                idempotency_key: None,
+            },
+            true,
+        )
+        .await
+        .expect_err("an ambiguous invoke must fail");
+
+        create.assert_async().await;
+        assert_eq!(error.code, "COMMAND_TARGET_REQUIRED");
+        assert_eq!(error.http_status_code, Some(409));
+        assert!(!error.retryable);
+        assert_eq!(
+            error.hint.as_deref(),
+            Some(
+                "Pick one with `--target <resource-id>`: alien dev commands invoke \
+                 --deployment dep_test --command ping --target <resource-id>"
+            )
+        );
+        let source = error
+            .source
+            .as_ref()
+            .expect("the manager's error is kept as the source")
+            .to_string();
+        assert!(
+            source.contains(r#"["alerts", "maintenance"]"#),
+            "the manager's target list must reach the user: {source}"
+        );
     }
 }
