@@ -709,6 +709,45 @@
         ]
       }
     },
+    "/v1/deployments/{id}/config-statements": {
+      "post": {
+        "tags": [
+          "signing"
+        ],
+        "operationId": "add_config_statement",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Stored"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/deployments/{id}/delete": {
       "post": {
         "tags": [
@@ -1329,6 +1368,244 @@
                 }
               }
             }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/pending-changes/{id}": {
+      "get": {
+        "tags": [
+          "signing"
+        ],
+        "operationId": "get_pending_change",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pending change id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingChangeResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/pending-changes/{id}/signatures": {
+      "post": {
+        "tags": [
+          "signing"
+        ],
+        "operationId": "sign_pending_change",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pending change id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignPendingChangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingChangeResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{project}/pending-changes": {
+      "get": {
+        "tags": [
+          "signing"
+        ],
+        "operationId": "list_pending_changes",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pending changes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingChangesResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "signing"
+        ],
+        "operationId": "create_pending_change",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePendingChangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingChangeResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{project}/signer-lists": {
+      "get": {
+        "tags": [
+          "signing"
+        ],
+        "operationId": "list_signer_lists",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored signer list versions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerListsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "signing"
+        ],
+        "operationId": "add_signer_list",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The same version was already stored"
+          },
+          "201": {
+            "description": "Stored"
           }
         },
         "security": [
@@ -6913,6 +7190,42 @@
           }
         }
       },
+      "CreatePendingChangeRequest": {
+        "type": "object",
+        "description": "Body of `POST /v1/projects/{project}/pending-changes`.",
+        "required": [
+          "kind",
+          "summary"
+        ],
+        "properties": {
+          "deploymentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "device": {
+            "type": "object",
+            "description": "For device changes: the signer asking to be added.",
+            "nullable": true
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PendingChangeKind"
+          },
+          "payload": {
+            "type": "string",
+            "description": "For statement changes: base64 payload bytes to sign.",
+            "nullable": true
+          },
+          "signatures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Signature"
+            }
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      },
       "CreateReleaseChannelRequest": {
         "type": "object",
         "description": "Body of `POST /v1/release-channels`.",
@@ -6959,7 +7272,7 @@
             "type": "object",
             "description": "Signed statements keyed by platform, from `alien release` with a\nsigning key. Stored and returned exactly as received; deployments in\nprotected mode verify them and deploy only the stack they contain.",
             "additionalProperties": {
-              "$ref": "#/components/schemas/SignedRelease"
+              "$ref": "#/components/schemas/SignedStatement"
             }
           },
           "stack": {
@@ -13703,6 +14016,95 @@
           }
         }
       },
+      "PendingChangeKind": {
+        "type": "string",
+        "description": "What a pending change asks for.",
+        "enum": [
+          "device",
+          "statement"
+        ]
+      },
+      "PendingChangeResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "projectId",
+          "kind",
+          "status",
+          "summary",
+          "signatures",
+          "createdAt"
+        ],
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "deploymentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "device": {
+            "type": "object",
+            "nullable": true
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PendingChangeKind"
+          },
+          "payload": {
+            "type": "string",
+            "nullable": true
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "signatures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Signature"
+            }
+          },
+          "statement": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SignedStatement"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/PendingChangeStatus"
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      },
+      "PendingChangeStatus": {
+        "type": "string",
+        "description": "Where a pending change stands.",
+        "enum": [
+          "pending",
+          "approved",
+          "rejected"
+        ]
+      },
+      "PendingChangesResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PendingChangeResponse"
+            }
+          }
+        }
+      },
       "Platform": {
         "type": "string",
         "description": "Represents the target cloud platform.",
@@ -14784,7 +15186,7 @@
             "type": "object",
             "description": "Signed statements keyed by platform, exactly as they were created.",
             "additionalProperties": {
-              "$ref": "#/components/schemas/SignedRelease"
+              "$ref": "#/components/schemas/SignedStatement"
             }
           },
           "stack": {
@@ -17154,24 +17556,85 @@
           "automatic"
         ]
       },
-      "SignedRelease": {
+      "SignPendingChangeRequest": {
         "type": "object",
-        "description": "A signed release statement as it is stored and forwarded: the exact bytes\nthat were signed and the signature over them. Carriers pass both through\nunchanged; only a verifier reads them (see `release_signature`).",
+        "description": "Body of `POST /v1/pending-changes/{id}/signatures`.",
+        "required": [
+          "signatures"
+        ],
+        "properties": {
+          "signatures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Signature"
+            }
+          },
+          "statement": {
+            "nullable": true,
+            "description": "The complete signed statement, once it has every signature it needs.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SignedStatement"
+              }
+            ]
+          }
+        }
+      },
+      "Signature": {
+        "type": "object",
+        "description": "One signature over a statement's payload.",
+        "required": [
+          "signer",
+          "sig"
+        ],
+        "properties": {
+          "sig": {
+            "type": "string",
+            "description": "Base64 DER ECDSA P-256 signature over the payload bytes."
+          },
+          "signer": {
+            "type": "string",
+            "description": "Id of the signer on the signer list, or `components` for the\ncomponents key."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SignedStatement": {
+        "type": "object",
+        "description": "A statement as it is stored and carried.",
         "required": [
           "payload",
-          "signature"
+          "signatures"
         ],
         "properties": {
           "payload": {
             "type": "string",
-            "description": "Base64 of the statement's JSON bytes."
+            "description": "Base64 of the payload bytes."
           },
-          "signature": {
-            "type": "string",
-            "description": "Base64 DER ECDSA P-256 signature over SHA-256 of the payload bytes."
+          "signatures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Signature"
+            },
+            "description": "Signatures over the payload bytes."
           }
         },
         "additionalProperties": false
+      },
+      "SignerListsResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SignedStatement"
+            },
+            "description": "Every stored version, oldest first."
+          }
+        }
       },
       "SourceCredentials": {
         "type": "string",
@@ -17572,6 +18035,18 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/StackResourceState"
             }
+          }
+        }
+      },
+      "StatementRequest": {
+        "type": "object",
+        "description": "A body carrying one signed statement.",
+        "required": [
+          "statement"
+        ],
+        "properties": {
+          "statement": {
+            "$ref": "#/components/schemas/SignedStatement"
           }
         }
       },

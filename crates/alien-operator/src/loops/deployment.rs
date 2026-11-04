@@ -274,7 +274,10 @@ pub(crate) async fn run_deployment_continuously(
     // still exactly the signed release. Deleting needs no signature.
     if let Some(signing) = &state.config.release_signing {
         if operation == LoopOperation::Deploy {
-            if let Err(refusal) = signing.verify_release(current.platform, target_release) {
+            let accepted = state.db.get_accepted_release().await?;
+            if let Err(refusal) =
+                signing.verify_release(current.platform, target_release, accepted.as_ref())
+            {
                 error!(
                     release_id = %target_release_id,
                     reason = %refusal,
@@ -877,6 +880,7 @@ mod tests {
             description: None,
             stack: alien_core::Stack::new("observe".to_string()).build(),
             signed: None,
+            signer_lists: Vec::new(),
         };
         let state = |status, target: &str| DeploymentState {
             platform: Platform::Test,
@@ -988,6 +992,7 @@ mod tests {
             description: None,
             stack: stack.clone(),
             signed: None,
+            signer_lists: Vec::new(),
         };
         let current = DeploymentState {
             platform: Platform::Local,
@@ -1600,6 +1605,7 @@ mod tests {
             description: None,
             stack,
             signed: None,
+            signer_lists: Vec::new(),
         };
         db.set_deployment_state(&DeploymentState {
             status: DeploymentStatus::Pending,
@@ -1721,6 +1727,7 @@ mod tests {
                 description: None,
                 stack,
                 signed: None,
+                signer_lists: Vec::new(),
             }),
             stack_state: None,
             error: None,

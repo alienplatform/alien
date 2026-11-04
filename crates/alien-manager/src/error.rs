@@ -341,6 +341,26 @@ pub enum ErrorData {
     )]
     ServerInitFailed { reason: String },
 
+    /// A signed statement conflicts with one already stored.
+    #[error(
+        code = "SIGNED_STATEMENT_CONFLICT",
+        message = "{reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SignedStatementConflict { reason: String },
+
+    /// No pending change has this id.
+    #[error(
+        code = "PENDING_CHANGE_NOT_FOUND",
+        message = "Pending change '{id}' not found",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 404
+    )]
+    PendingChangeNotFound { id: String },
+
     /// Internal server error
     #[error(
         code = "INTERNAL_ERROR",

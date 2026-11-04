@@ -1,14 +1,16 @@
 //! Protected mode: run only releases the developer signed.
 //!
-//! An installer turns it on by pinning the developer's public keys and project
-//! (`OPERATOR_RELEASE_SIGNING_PUBLIC_KEYS`, `OPERATOR_RELEASE_SIGNING_PROJECT`).
-//! From then on the manager decides which signed release runs and when, and
-//! nothing else that runs code or redirects data:
+//! An installer turns it on with the anchor its setup writes
+//! (`OPERATOR_RELEASE_TRUST_ANCHOR`): the project, this deployment, and the
+//! fingerprint of the developer's first signer list. The manager delivers the
+//! signer list chain and the signed `release/v2` statements; this Operator
+//! verifies both against the anchor and decides nothing on the manager's
+//! word that runs code or redirects data:
 //!
 //! - a target's stack comes only from its verified statement; the manager may
 //!   move an image to another registry, never change its digest;
 //! - a release older than the one applied, or the applied sequence with other
-//!   bytes, is refused;
+//!   bytes, is refused, and so is a signer list older than the one accepted;
 //! - the deployment configuration is rebuilt here: environment variables only
 //!   for the input mappings the signed stack declares, deployer inputs only from
 //!   this installation, bindings and endpoints only from this installation;
@@ -19,44 +21,66 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use alien_core::release_signature::{
-    relocate_images, ReleaseRejection, TrustedKeys, VerifiedRelease,
-};
+use alien_core::release_statement::{relocate_images, signed_stack};
 use alien_core::sync::TargetDeployment;
 use alien_core::{
-    DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, Platform, ReleaseInfo, Stack,
-    StackInputProvider, StackSettings,
+    DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, Platform, ReleaseInfo,
+    SignedStatement, Stack, StackInputProvider, StackSettings,
 };
+use alien_release_trust::{Anchor, Kind, ReleaseBody, Trust};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-/// The keys and project an installation pinned.
+/// Component name of the Operator in a release's signed components.
+pub const OPERATOR_COMPONENT: &str = "operator";
+
+/// The anchor an installation pinned.
 #[derive(Debug, Clone)]
 pub struct ReleaseSigning {
-    /// Keys whose signatures this Operator accepts.
-    pub keys: TrustedKeys,
-    /// Project every signed release must name.
-    pub project: String,
+    /// What setup wrote.
+    pub anchor: Anchor,
 }
 
-/// The newest release this Operator accepted. Persisted so a restart can't
-/// be used to replay an older one.
+/// The newest release this Operator accepted, and the signer chain it was
+/// verified with. Persisted so a restart can't be used to replay an older
+/// release or an older signer list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcceptedRelease {
     /// Its sequence.
     pub sequence: u64,
-    /// SHA-256 of its statement bytes.
-    pub payload_sha256: String,
-    /// The operator image it allows, if any.
-    pub operator_image: Option<String>,
+    /// `sha256:<hex>` of its statement bytes.
+    pub digest: String,
+    /// The Operator image digest it allows, if any.
+    pub operator_digest: Option<String>,
+    /// The signer list chain, oldest first.
+    pub signer_lists: Vec<SignedStatement>,
+}
+
+/// A release that passed verification.
+#[derive(Debug, Clone)]
+pub struct VerifiedRelease {
+    /// The statement's sequence.
+    pub sequence: u64,
+    /// `sha256:<hex>` of its bytes.
+    pub digest: String,
+    /// The stack, read from the signed bytes.
+    pub stack: Stack,
+    /// The Operator image digest the release allows.
+    pub operator_digest: Option<String>,
+    /// The signer chain the release verified against.
+    pub signer_lists: Vec<SignedStatement>,
+    /// Signers whose signatures counted.
+    pub signers: Vec<String>,
 }
 
 impl From<&VerifiedRelease> for AcceptedRelease {
     fn from(verified: &VerifiedRelease) -> Self {
         Self {
             sequence: verified.sequence,
-            payload_sha256: verified.payload_sha256.clone(),
-            operator_image: verified.operator_image.clone(),
+            digest: verified.digest.clone(),
+            operator_digest: verified.operator_digest.clone(),
+            signer_lists: verified.signer_lists.clone(),
         }
     }
 }
@@ -64,9 +88,25 @@ impl From<&VerifiedRelease> for AcceptedRelease {
 /// Why a target was refused.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Refusal {
-    /// The release itself failed verification.
-    #[error(transparent)]
-    Release(#[from] ReleaseRejection),
+    /// The release carries no signed statement.
+    #[error("the release is not signed")]
+    Unsigned,
+    /// The statement or the signer chain failed verification.
+    #[error("{code}: {message}")]
+    Release {
+        /// Refusal code from the verifier.
+        code: String,
+        /// Its message.
+        message: String,
+    },
+    /// The release is older than the one applied, or reuses its sequence.
+    #[error("the release has sequence {actual}, and {applied} is already applied")]
+    OlderRelease {
+        /// Applied sequence.
+        applied: u64,
+        /// Refused sequence.
+        actual: u64,
+    },
     /// The manager set environment variables no signed input maps.
     #[error(
         "the manager set environment variables the signed release doesn't map from an input: {}",
@@ -81,23 +121,53 @@ pub enum Refusal {
     StackChanged,
 }
 
+impl<T: alien_error::AlienErrorData + Clone + std::fmt::Debug + Serialize>
+    From<alien_error::AlienError<T>> for Refusal
+{
+    fn from(error: alien_error::AlienError<T>) -> Self {
+        Self::Release {
+            code: error.code,
+            message: error.message,
+        }
+    }
+}
+
 impl ReleaseSigning {
     /// Verify `release` and return the stack to deploy: the signed stack, with
     /// image locations taken from the carried stack where the digest matches.
     /// The carried stack must then be exactly that stack, so a manager that
     /// changes anything else is refused rather than silently corrected. Sync,
     /// air-gapped bundles and the deployment loop all check releases here.
+    ///
+    /// The signer chain starts from the one this Operator accepted, so a
+    /// manager can deliver newer list versions but never an older one.
     pub fn verify_release(
         &self,
         platform: Platform,
         release: &ReleaseInfo,
+        accepted: Option<&AcceptedRelease>,
     ) -> Result<VerifiedRelease, Refusal> {
-        let signed = release.signed.as_ref().ok_or(ReleaseRejection::Unsigned)?;
-        let verified = self.keys.verify(&self.project, platform, signed)?;
-        if relocate_images(&verified.stack, &release.stack) != release.stack {
+        let signed = release.signed.as_ref().ok_or(Refusal::Unsigned)?;
+        let chain = match accepted {
+            Some(accepted) if !accepted.signer_lists.is_empty() => &accepted.signer_lists,
+            _ => &release.signer_lists,
+        };
+        let mut trust = Trust::new(self.anchor.clone(), chain)?;
+        trust.extend_chain(&release.signer_lists)?;
+        let verified = trust.verify::<ReleaseBody>(signed, Kind::Release, Utc::now())?;
+        verified.body.validate()?;
+        let stack = signed_stack(&verified.body, platform)?;
+        if relocate_images(&stack, &release.stack) != release.stack {
             return Err(Refusal::StackChanged);
         }
-        Ok(verified)
+        Ok(VerifiedRelease {
+            sequence: verified.sequence,
+            digest: verified.digest,
+            stack,
+            operator_digest: verified.body.components.get(OPERATOR_COMPONENT).cloned(),
+            signer_lists: trust.chain().statements().to_vec(),
+            signers: verified.signers.into_iter().collect(),
+        })
     }
 
     /// The target to store for `target`, and the release it verified. Refuses
@@ -109,9 +179,16 @@ impl ReleaseSigning {
         accepted: Option<&AcceptedRelease>,
         target: &TargetDeployment,
     ) -> Result<(TargetDeployment, VerifiedRelease), Refusal> {
-        let verified = self.verify_release(platform, &target.release_info)?;
+        let verified = self.verify_release(platform, &target.release_info, accepted)?;
         if let Some(accepted) = accepted {
-            verified.check_newer_than(accepted.sequence, &accepted.payload_sha256)?;
+            let older = verified.sequence < accepted.sequence
+                || (verified.sequence == accepted.sequence && verified.digest != accepted.digest);
+            if older {
+                return Err(Refusal::OlderRelease {
+                    applied: accepted.sequence,
+                    actual: verified.sequence,
+                });
+            }
         }
         let config = protect_config(
             platform,
@@ -200,6 +277,7 @@ fn protect_config(
 
     Ok(DeploymentConfig {
         setup_run: manager.setup_run,
+        setup_run_id: manager.setup_run_id.clone(),
         environment_variables: EnvironmentVariablesSnapshot {
             variables,
             hash: manager.environment_variables.hash.clone(),
@@ -235,26 +313,83 @@ fn protect_config(
     })
 }
 
+/// A protected configuration for tests: an anchor pinning a one-key signer
+/// list for `project`.
+#[cfg(test)]
+pub(crate) fn test_signing(project: &str) -> ReleaseSigning {
+    let key = alien_release_trust::SoftwareKey::from_secret_bytes(&[21; 32]).unwrap();
+    let list = test_signer_list(project, &key);
+    ReleaseSigning {
+        anchor: Anchor {
+            project: project.to_string(),
+            deployment: format!("dep_{project}"),
+            protected: true,
+            signing: alien_release_trust::fingerprint(&list.open().unwrap().digest),
+            components: alien_release_trust::SoftwareKey::from_secret_bytes(&[22; 32])
+                .unwrap()
+                .public_key()
+                .as_str()
+                .to_string(),
+            session_approval: Default::default(),
+            inputs: None,
+        },
+    }
+}
+
+/// Version 1 of a signer list with `key` as its one releaser and admin.
+#[cfg(test)]
+pub(crate) fn test_signer_list(
+    project: &str,
+    key: &alien_release_trust::SoftwareKey,
+) -> SignedStatement {
+    use alien_release_trust::{Envelope, Role, Signer, SignerKind, SignerListBody};
+    let envelope = Envelope {
+        kind: Kind::SignerList.as_str().to_string(),
+        project: Some(project.to_string()),
+        deployment: None,
+        sequence: 1,
+        not_after: None,
+        signer_list_version: 1,
+        body: SignerListBody {
+            previous: None,
+            admin_threshold: 1,
+            signers: vec![Signer {
+                id: "ci".to_string(),
+                key: key.public_key().as_str().to_string(),
+                kind: SignerKind::Ci,
+                roles: vec![Role::Release, Role::Admin],
+                label: None,
+            }],
+            deny: Vec::new(),
+        },
+    };
+    SignedStatement::new(&envelope.to_payload().unwrap())
+        .sign_with("ci", key)
+        .unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::release_signature::{ReleaseSigningKey, ReleaseStatement, STATEMENT_TYPE};
+    use alien_core::release_statement::{release_body, ReleaseOptions};
     use alien_core::{
         Container, ContainerCode, EnvironmentVariable, EnvironmentVariableType, ResourceLifecycle,
         ResourceSpec, StackInputDefinition,
     };
+    use alien_release_trust::{Envelope, SoftwareKey};
 
     const DIGEST: &str = "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
 
-    fn key() -> ReleaseSigningKey {
-        ReleaseSigningKey::from_secret_bytes(&[21; 32]).unwrap()
+    fn key() -> SoftwareKey {
+        SoftwareKey::from_secret_bytes(&[21; 32]).unwrap()
+    }
+
+    fn signer_list() -> SignedStatement {
+        test_signer_list("shop", &key())
     }
 
     fn signing() -> ReleaseSigning {
-        ReleaseSigning {
-            keys: TrustedKeys::parse(&[key().public_key()]).unwrap(),
-            project: "shop".to_string(),
-        }
+        test_signing("shop")
     }
 
     fn input(id: &str, provider: &str, env: &str) -> StackInputDefinition {
@@ -293,15 +428,17 @@ mod tests {
     }
 
     fn signed_release(sequence: u64, stack: &Stack) -> ReleaseInfo {
-        let signed = key()
-            .sign(&ReleaseStatement {
-                statement_type: STATEMENT_TYPE.to_string(),
-                project: "shop".to_string(),
-                platform: Platform::Kubernetes,
-                sequence,
-                stack: stack.clone(),
-                operator_image: None,
-            })
+        let envelope = Envelope {
+            kind: Kind::Release.as_str().to_string(),
+            project: Some("shop".to_string()),
+            deployment: None,
+            sequence,
+            not_after: None,
+            signer_list_version: 1,
+            body: release_body(Platform::Kubernetes, stack, &ReleaseOptions::default()).unwrap(),
+        };
+        let signed = SignedStatement::new(&envelope.to_payload().unwrap())
+            .sign_with("ci", &key())
             .unwrap();
         ReleaseInfo {
             release_id: Some(format!("rel_{sequence}")),
@@ -309,6 +446,7 @@ mod tests {
             description: None,
             stack: stack.clone(),
             signed: Some(signed),
+            signer_lists: vec![signer_list()],
         }
     }
 
@@ -410,7 +548,7 @@ mod tests {
                     &target(release, vec![])
                 )
                 .unwrap_err(),
-            Refusal::Release(ReleaseRejection::Unsigned)
+            Refusal::Unsigned
         );
     }
 
@@ -418,8 +556,9 @@ mod tests {
     fn an_older_release_is_refused() {
         let accepted = AcceptedRelease {
             sequence: 6,
-            payload_sha256: "other".to_string(),
-            operator_image: None,
+            digest: "sha256:other".to_string(),
+            operator_digest: None,
+            signer_lists: vec![signer_list()],
         };
         let release = signed_release(5, &stack(&pinned()));
         assert_eq!(
@@ -431,10 +570,10 @@ mod tests {
                     &target(release, vec![])
                 )
                 .unwrap_err(),
-            Refusal::Release(ReleaseRejection::OlderSequence {
+            Refusal::OlderRelease {
                 applied: 6,
                 actual: 5
-            })
+            }
         );
     }
 
@@ -524,7 +663,7 @@ mod tests {
         let signed = stack(&pinned());
         let release = signed_release(5, &signed);
         signing()
-            .verify_release(Platform::Kubernetes, &release)
+            .verify_release(Platform::Kubernetes, &release, None)
             .expect("the stack as signed is deployable");
 
         let mut changed = release.clone();
@@ -534,7 +673,7 @@ mod tests {
         ));
         assert_eq!(
             signing()
-                .verify_release(Platform::Kubernetes, &changed)
+                .verify_release(Platform::Kubernetes, &changed, None)
                 .unwrap_err(),
             Refusal::StackChanged
         );

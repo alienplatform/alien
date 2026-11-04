@@ -11,9 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
 
-use alien_core::release_signature::{ReleaseStatement, STATEMENT_TYPE};
-use alien_core::{Platform, SignedRelease, Stack};
+use alien_core::{Platform, SignedStatement, Stack};
 use alien_preflights::compile_time::endpoint_host_label_conflicts;
+use alien_release_trust::{Kind, ReleaseBody};
 
 use crate::error::ErrorData;
 use crate::traits::{CreateReleaseParams, ReleaseRecord};
@@ -70,7 +70,7 @@ pub struct CreateReleaseRequest {
     /// signing key. Stored and returned exactly as received; deployments in
     /// protected mode verify them and deploy only the stack they contain.
     #[serde(default)]
-    pub signed_stacks: HashMap<Platform, SignedRelease>,
+    pub signed_stacks: HashMap<Platform, SignedStatement>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,7 +92,7 @@ pub struct ReleaseResponse {
     pub stack: StackByPlatform,
     /// Signed statements keyed by platform, exactly as they were created.
     #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub signed_stacks: HashMap<Platform, SignedRelease>,
+    pub signed_stacks: HashMap<Platform, SignedStatement>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_metadata: Option<GitMetadataResponse>,
     pub created_at: String,
@@ -194,33 +194,43 @@ fn record_to_response(
 
 /// Refuse a signed statement that doesn't describe the stack sent beside it,
 /// so the stack this manager shows is the one a protected deployment runs.
-/// This doesn't verify the signature: the manager holds no trusted keys, and a
-/// deployment verifies the statement itself.
+/// This doesn't verify signatures: the manager is not trusted to, and every
+/// deployment verifies the statement against its own anchor.
 fn check_signed_stacks_match(
     project_id: &str,
     stacks: &HashMap<Platform, Stack>,
-    signed_stacks: &HashMap<Platform, SignedRelease>,
+    signed_stacks: &HashMap<Platform, SignedStatement>,
 ) -> std::result::Result<(), alien_error::AlienError<ErrorData>> {
     for (platform, signed) in signed_stacks {
-        let statement = base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            signed.payload.trim(),
-        )
-        .ok()
-        .and_then(|payload| serde_json::from_slice::<ReleaseStatement>(&payload).ok())
-        .filter(|statement| statement.statement_type == STATEMENT_TYPE)
-        .ok_or_else(|| {
-            ErrorData::bad_request(format!(
-                "The signed statement for {platform} is not a release statement"
-            ))
-        })?;
-        if statement.platform != *platform || statement.project != project_id {
+        let opened = signed
+            .open()
+            .ok()
+            .filter(|opened| opened.kind == Kind::Release)
+            .ok_or_else(|| {
+                ErrorData::bad_request(format!(
+                    "The signed statement for {platform} is not a release statement"
+                ))
+            })?;
+        if opened.project.as_deref() != Some(project_id) {
             return Err(ErrorData::bad_request(format!(
-                "The signed statement for {platform} is for project '{}' on {}",
-                statement.project, statement.platform
+                "The signed statement for {platform} is for project '{}'",
+                opened.project.as_deref().unwrap_or("none")
             )));
         }
-        if stacks.get(platform) != Some(&statement.stack) {
+        let body: ReleaseBody = opened.body().map_err(|error| {
+            ErrorData::bad_request(format!(
+                "The signed statement for {platform} has an invalid body: {}",
+                error.message
+            ))
+        })?;
+        let signed_stack =
+            alien_core::release_statement::signed_stack(&body, *platform).map_err(|error| {
+                ErrorData::bad_request(format!(
+                    "The signed statement for {platform} is refused: {}",
+                    error.message
+                ))
+            })?;
+        if stacks.get(platform) != Some(&signed_stack) {
             return Err(ErrorData::bad_request(format!(
                 "The signed statement for {platform} doesn't match the {platform} stack in the request"
             )));
@@ -555,18 +565,28 @@ mod tests {
         refuse_endpoint_host_label_conflicts(&stacks).map_err(|e| e.message)
     }
 
-    fn signed_kubernetes_release(project: &str, stack: &Stack) -> HashMap<Platform, SignedRelease> {
-        let key =
-            alien_core::release_signature::ReleaseSigningKey::from_secret_bytes(&[5; 32]).unwrap();
-        let signed = key
-            .sign(&ReleaseStatement {
-                statement_type: STATEMENT_TYPE.to_string(),
-                project: project.to_string(),
-                platform: Platform::Kubernetes,
-                sequence: 1,
-                stack: stack.clone(),
-                operator_image: None,
-            })
+    fn signed_kubernetes_release(
+        project: &str,
+        stack: &Stack,
+    ) -> HashMap<Platform, SignedStatement> {
+        let key = alien_release_trust::SoftwareKey::from_secret_bytes(&[5; 32]).unwrap();
+        let body = alien_core::release_statement::release_body(
+            Platform::Kubernetes,
+            stack,
+            &alien_core::release_statement::ReleaseOptions::default(),
+        )
+        .unwrap();
+        let envelope = alien_release_trust::Envelope {
+            kind: Kind::Release.as_str().to_string(),
+            project: Some(project.to_string()),
+            deployment: None,
+            sequence: 1,
+            not_after: None,
+            signer_list_version: 1,
+            body,
+        };
+        let signed = SignedStatement::new(&envelope.to_payload().unwrap())
+            .sign_with("ci", &key)
             .unwrap();
         HashMap::from([(Platform::Kubernetes, signed)])
     }
@@ -608,9 +628,9 @@ mod tests {
 
         let garbage = HashMap::from([(
             Platform::Kubernetes,
-            SignedRelease {
+            SignedStatement {
                 payload: "not base64".to_string(),
-                signature: String::new(),
+                signatures: Vec::new(),
             },
         )]);
         check_signed_stacks_match("default", &stacks, &garbage)

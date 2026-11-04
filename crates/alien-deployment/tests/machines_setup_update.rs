@@ -58,6 +58,7 @@ async fn new_frozen_machines_storage_requires_setup_even_before_binding_is_suppl
             description: None,
             stack: installed,
             signed: None,
+            signer_lists: Vec::new(),
         }),
         target_release: Some(ReleaseInfo {
             release_id: Some("rel_target".into()),
@@ -65,6 +66,7 @@ async fn new_frozen_machines_storage_requires_setup_even_before_binding_is_suppl
             description: None,
             stack: target_stack(),
             signed: None,
+            signer_lists: Vec::new(),
         }),
         stack_state: Some(StackState::new(Platform::Machines)),
         runtime_metadata: Some(metadata()),
@@ -154,6 +156,7 @@ async fn external_machines_storage_setup_and_repeat_never_create_a_storage_contr
             description: None,
             stack: installed_stack(),
             signed: None,
+            signer_lists: Vec::new(),
         }),
         target_release: Some(ReleaseInfo {
             release_id: Some("rel_target".into()),
@@ -161,6 +164,7 @@ async fn external_machines_storage_setup_and_repeat_never_create_a_storage_contr
             description: None,
             stack: target_stack(),
             signed: None,
+            signer_lists: Vec::new(),
         }),
         stack_state: Some(state),
         runtime_metadata: Some(prepared.clone()),

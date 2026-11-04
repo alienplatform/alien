@@ -1188,6 +1188,7 @@ mod tests {
             tunnels: None,
             charts: None,
             release_channels: None,
+            signing: None,
             bundle_signing_key: None,
             bundle_sources: None,
             log_buffer: Arc::new(crate::dev::LogBuffer::new()),
@@ -2269,6 +2270,7 @@ mod tests {
             description: None,
             stack: Stack::new("test".to_string()).build(),
             signed: None,
+            signer_lists: Vec::new(),
         });
         assert!(!agent_report_completes_claim(&deployment, &state));
 
@@ -3499,9 +3501,20 @@ pub(crate) async fn build_pull_target(
         config.monitoring = default_monitoring(&state.config, &deployment);
     }
 
+    // A signed release travels with the project's signer list chain, which
+    // the deployment verifies from the fingerprint its setup pinned.
+    let signed = r.signed_stacks.get(&release_stack_platform).cloned();
+    let signer_lists = match (&signed, &state.signing) {
+        (Some(_), Some(signing)) => signing
+            .signer_lists(&r.project_id)
+            .await
+            .map_err(|error| error.into_response())?,
+        _ => Vec::new(),
+    };
     Ok(TargetDeployment {
         release_info: ReleaseInfo {
-            signed: r.signed_stacks.get(&release_stack_platform).cloned(),
+            signed,
+            signer_lists,
             release_id: Some(r.id),
             version: None,
             description: None,
@@ -3873,6 +3886,7 @@ fn release_info_from_record(
         description: None,
         stack: release.stacks.get(&release_stack_platform)?.clone(),
         signed: release.signed_stacks.get(&release_stack_platform).cloned(),
+        signer_lists: Vec::new(),
     })
 }
 

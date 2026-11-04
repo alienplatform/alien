@@ -1798,6 +1798,7 @@ mod tests {
             tunnels: None,
             charts: None,
             release_channels: None,
+            signing: None,
             bundle_signing_key: None,
             bundle_sources: None,
             log_buffer: std::sync::Arc::new(crate::dev::LogBuffer::new()),

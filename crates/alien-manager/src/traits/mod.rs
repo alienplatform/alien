@@ -6,6 +6,7 @@ pub mod project_store;
 pub mod release_channel_store;
 pub mod release_store;
 pub mod server_bindings;
+pub mod signing_store;
 pub mod telemetry_backend;
 pub mod token_store;
 
@@ -41,5 +42,8 @@ pub use release_channel_store::{
 };
 pub use release_store::{CreateReleaseParams, ReleaseRecord, ReleaseStore};
 pub use server_bindings::ServerBindings;
+pub use signing_store::{
+    PendingChangeKind, PendingChangeRecord, PendingChangeStatus, SignerListWrite, SigningStore,
+};
 pub use telemetry_backend::{TelemetryBackend, TelemetryCaller, TelemetrySignal};
 pub use token_store::{CreateTokenParams, TokenRecord, TokenStore};

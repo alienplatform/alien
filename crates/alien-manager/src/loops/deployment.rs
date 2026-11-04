@@ -815,6 +815,7 @@ impl DeploymentLoop {
                 description: None,
                 stack,
                 signed: None,
+                signer_lists: Vec::new(),
             }),
             (Some(id), None) if Some(id.as_str()) == target_release_id => {
                 deployment_stack.as_ref().map(|stack| ReleaseInfo {
@@ -823,6 +824,7 @@ impl DeploymentLoop {
                     description: None,
                     stack: stack.clone(),
                     signed: None,
+                    signer_lists: Vec::new(),
                 })
             }
             (Some(id), None) => self
@@ -834,6 +836,7 @@ impl DeploymentLoop {
                     description: None,
                     stack,
                     signed: None,
+                    signer_lists: Vec::new(),
                 }),
         };
 
@@ -1396,6 +1399,7 @@ impl DeploymentLoop {
                 description: None,
                 stack,
                 signed: None,
+                signer_lists: Vec::new(),
             });
             if is_current {
                 state.current_release = release;
@@ -1983,6 +1987,7 @@ fn state_from_record(
                     description: None,
                     stack: stack.clone(),
                     signed: None,
+                    signer_lists: Vec::new(),
                 })
         }),
         target_release: deployment_stack.map(|stack| ReleaseInfo {
@@ -1991,6 +1996,7 @@ fn state_from_record(
             description: None,
             stack: stack.clone(),
             signed: None,
+            signer_lists: Vec::new(),
         }),
         stack_state: deployment.stack_state.clone(),
         error: None,

@@ -217,6 +217,7 @@ async fn state() -> (AppState, String, tempfile::TempDir) {
         tunnels: Some(TunnelRegistry::new()),
         charts: None,
         release_channels: None,
+        signing: None,
         bundle_signing_key: None,
         bundle_sources: None,
         log_buffer: Arc::new(alien_manager::LogBuffer::new()),

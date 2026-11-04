@@ -6537,6 +6537,7 @@ async fn fetch_setup_release(
         description: None,
         stack,
         signed: None,
+        signer_lists: Vec::new(),
     })
 }
 
@@ -8375,6 +8376,7 @@ pub async fn push_deletion(
                         description: None,
                         stack,
                         signed: None,
+                        signer_lists: Vec::new(),
                     })
             }
             Err(_) => None,

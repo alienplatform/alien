@@ -477,6 +477,7 @@ mod tests {
             description: None,
             stack: stack.clone(),
             signed: None,
+            signer_lists: Vec::new(),
         });
         assert!(!installed_compute_ready(&state, &stack));
         let mut resource = StackResourceState::new_pending(

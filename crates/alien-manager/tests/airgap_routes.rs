@@ -287,6 +287,7 @@ async fn fixture_with_site(delay: Duration, site: Site) -> Fixture {
         tunnels: None,
         charts: None,
         release_channels: None,
+        signing: None,
         bundle_signing_key: None,
         bundle_sources: None,
         log_buffer: Arc::new(alien_manager::LogBuffer::new()),

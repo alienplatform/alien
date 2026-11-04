@@ -280,9 +280,10 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
                 }));
             }
             info!(
-                project = %signing.project,
-                keys = ?signing.keys.fingerprints(),
-                "Protected mode: running only releases signed by these keys. Debug sessions, access requests, operations plugins, dynamic containers and manager-set environment variables are off"
+                project = %signing.anchor.project,
+                deployment = %signing.anchor.deployment,
+                fingerprint = %signing.anchor.signing,
+                "Protected mode: running only releases the pinned signer list signed. Debug sessions, access requests, operations plugins, dynamic containers and manager-set environment variables are off"
             );
             (None, None, None, None)
         } else {
@@ -1080,13 +1081,7 @@ mod tests {
             })
             .build();
         if protected {
-            let key = alien_core::release_signature::ReleaseSigningKey::from_secret_bytes(&[3; 32])
-                .unwrap();
-            config.release_signing = Some(protected::ReleaseSigning {
-                keys: alien_core::release_signature::TrustedKeys::parse(&[key.public_key()])
-                    .unwrap(),
-                project: "shop".to_string(),
-            });
+            config.release_signing = Some(protected::test_signing("shop"));
         }
         let debug = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let operations = Arc::new(std::sync::atomic::AtomicBool::new(false));

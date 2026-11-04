@@ -225,6 +225,7 @@ async fn deployment_with_queued_update(record_token: bool) -> Fixture {
         tunnels: None,
         charts: None,
         release_channels: None,
+        signing: None,
         bundle_signing_key: None,
         bundle_sources: None,
         log_buffer: Arc::new(alien_manager::LogBuffer::new()),

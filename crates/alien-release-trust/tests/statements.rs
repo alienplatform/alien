@@ -953,7 +953,11 @@ fn component_updates_verify_only_with_the_components_key() {
         "TRUST_BODY_REFUSED"
     );
     assert_eq!(
-        code(verified.body.check("machine-agent", "linux-aarch64", artifact)),
+        code(
+            verified
+                .body
+                .check("machine-agent", "linux-aarch64", artifact)
+        ),
         "TRUST_BODY_REFUSED"
     );
 

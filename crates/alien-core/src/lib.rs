@@ -40,8 +40,7 @@ pub use error::*;
 
 #[cfg(feature = "bundle-signature")]
 pub mod bundle_signature;
-#[cfg(feature = "release-signature")]
-pub mod release_signature;
+pub mod release_statement;
 mod resource;
 pub mod sandbox_capability;
 #[cfg(feature = "sandbox-capability")]

@@ -299,6 +299,7 @@ fn create_initial_state(stack: Stack) -> DeploymentState {
         description: None,
         stack,
         signed: None,
+        signer_lists: Vec::new(),
     };
 
     DeploymentState {
@@ -474,6 +475,7 @@ async fn initial_update_resumes_prepared_target_after_waiting_for_machines() {
         description: None,
         stack: target,
         signed: None,
+        signer_lists: Vec::new(),
     };
     start_update(&mut state, target_release.clone());
     state = run_until_status(state, config.clone(), &[DeploymentStatus::Updating]).await;
@@ -1052,6 +1054,7 @@ async fn test_update_flow_happy_path_promotes_release() {
         description: None,
         stack: stack_v2,
         signed: None,
+        signer_lists: Vec::new(),
     };
     start_update(&mut state, release_v2.clone());
 
@@ -1243,6 +1246,7 @@ async fn setup_authorized_update_clears_authority_only_on_success() {
         description: None,
         stack: create_test_stack("test-stack", "test-function"),
         signed: None,
+        signer_lists: Vec::new(),
     };
     state.target_release = Some(release_v2.clone());
     state.status = DeploymentStatus::UpdatePending;
@@ -1359,6 +1363,7 @@ async fn an_update_omitting_a_frozen_resource_waits_for_setup() {
             // The release omits the setup-owned frozen resource.
             stack: target,
             signed: None,
+            signer_lists: Vec::new(),
         },
     );
     // The update step refuses before changing anything; the runner records this as
@@ -1431,6 +1436,7 @@ async fn an_update_after_setup_removed_a_frozen_resource_does_not_recreate_it() 
         description: None,
         stack: create_test_stack("test-stack", "test-function"),
         signed: None,
+        signer_lists: Vec::new(),
     });
     state.status = DeploymentStatus::Updating;
 
@@ -1492,6 +1498,7 @@ async fn update_completes_after_removed_resource_is_deleted() {
             description: None,
             stack: stack_v2,
             signed: None,
+            signer_lists: Vec::new(),
         },
     );
 
@@ -1528,6 +1535,7 @@ async fn stale_waiting_for_machines_returns_to_updating() {
         description: None,
         stack: create_test_stack("test-stack", "test-function-v2"),
         signed: None,
+        signer_lists: Vec::new(),
     };
     start_update(&mut state, release_v2.clone());
     state = run_until_status(state, config.clone(), &[DeploymentStatus::Updating]).await;
@@ -1618,6 +1626,7 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
         description: None,
         stack: stack_v2,
         signed: None,
+        signer_lists: Vec::new(),
     };
     start_update(&mut state, release_v2);
     // Setup registration transitions the deployment directly to UpdatePending;
@@ -1782,6 +1791,7 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
         description: None,
         stack: create_test_stack("test-stack", "test-function-v2"),
         signed: None,
+        signer_lists: Vec::new(),
     });
     corrective_state
         .runtime_metadata
@@ -2904,6 +2914,7 @@ async fn test_deleted_is_noop() {
         description: None,
         stack,
         signed: None,
+        signer_lists: Vec::new(),
     });
 
     // Call step on Deleted
@@ -2964,6 +2975,7 @@ fn release_of(release_id: &str, stack: Stack) -> ReleaseInfo {
         description: None,
         stack,
         signed: None,
+        signer_lists: Vec::new(),
     }
 }
 
@@ -3382,6 +3394,7 @@ async fn an_update_introducing_a_gated_frozen_resource_refuses_instead_of_droppi
             description: None,
             stack: settled_stack.clone(),
             signed: None,
+            signer_lists: Vec::new(),
         }),
         target_release: Some(ReleaseInfo {
             release_id: Some("rel_v2".to_string()),
@@ -3389,6 +3402,7 @@ async fn an_update_introducing_a_gated_frozen_resource_refuses_instead_of_droppi
             description: None,
             stack: target_stack,
             signed: None,
+            signer_lists: Vec::new(),
         }),
         stack_state: Some(StackState::new(Platform::Test)),
         error: None,
@@ -3543,6 +3557,7 @@ async fn initial_update_resumes_prepared_target_after_waiting_for_secrets() {
         description: None,
         stack: target,
         signed: None,
+        signer_lists: Vec::new(),
     };
     start_update(&mut state, target_release.clone());
     let blocked = run_until_status(

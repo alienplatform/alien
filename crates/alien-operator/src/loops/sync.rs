@@ -301,6 +301,7 @@ async fn sync_with_manager(
                 description: None,
                 stack: alien_core::Stack::new("observed".to_string()).build(),
                 signed: None,
+                signer_lists: Vec::new(),
             });
         }
     }
@@ -667,7 +668,7 @@ pub(crate) async fn protect_target(
                 info!(
                     release_id,
                     sequence = verified.sequence,
-                    key = %verified.key_fingerprint,
+                    signers = ?verified.signers,
                     manager_supplied_inputs = ?crate::protected::manager_supplied_inputs(&verified.stack),
                     "Protected mode: accepted signed release. Values for these developer inputs come from the manager"
                 );
@@ -1260,6 +1261,7 @@ mod tests {
             description: None,
             stack: Stack::new("test".to_string()).build(),
             signed: None,
+            signer_lists: Vec::new(),
         };
         let mut state = DeploymentState {
             platform: Platform::Kubernetes,
@@ -1299,6 +1301,7 @@ mod tests {
             description: None,
             stack: Stack::new("corrected".into()).build(),
             signed: None,
+            signer_lists: Vec::new(),
         };
         let mut state = DeploymentState {
             platform: Platform::Kubernetes,
@@ -1343,6 +1346,7 @@ mod tests {
                 .add(storage, alien_core::ResourceLifecycle::Live)
                 .build(),
             signed: None,
+            signer_lists: Vec::new(),
         };
         let mut state = DeploymentState {
             platform: Platform::Test,
@@ -1405,6 +1409,7 @@ mod tests {
             description: None,
             stack: Stack::new("corrected".to_string()).build(),
             signed: None,
+            signer_lists: Vec::new(),
         };
         for status in [
             DeploymentStatus::UpdateFailed,
@@ -1904,6 +1909,7 @@ mod tests {
                 )
                 .build(),
             signed: None,
+            signer_lists: Vec::new(),
         };
         let config = alien_core::DeploymentConfig::builder()
             .stack_settings(Default::default())
@@ -3013,14 +3019,13 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let key =
-            alien_core::release_signature::ReleaseSigningKey::from_secret_bytes(&[7; 32]).unwrap();
         let installed = ReleaseInfo {
             release_id: Some("rel_installed".into()),
             version: None,
             description: None,
             stack: Stack::new("shop".into()).build(),
             signed: None,
+            signer_lists: Vec::new(),
         };
         let running = DeploymentState {
             platform: Platform::Kubernetes,
@@ -3043,11 +3048,7 @@ mod tests {
                 .platform(Platform::Kubernetes)
                 .data_dir(data_dir.path().to_str().unwrap())
                 .encryption_key(TEST_ENCRYPTION_KEY)
-                .release_signing(crate::protected::ReleaseSigning {
-                    keys: alien_core::release_signature::TrustedKeys::parse(&[key.public_key()])
-                        .unwrap(),
-                    project: "shop".into(),
-                })
+                .release_signing(crate::protected::test_signing("shop"))
                 .build(),
             db,
             service_provider: None,

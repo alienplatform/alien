@@ -693,6 +693,7 @@ async fn running_reconcile_cannot_erase_a_new_release_request() {
             description: None,
             stack: Stack::new("old".to_string()).build(),
             signed: None,
+            signer_lists: Vec::new(),
         });
         store.reconcile(&test_subject(), old.clone()).await.unwrap();
         // A heartbeat already holds the old Running state when a release arrives.
@@ -2224,9 +2225,12 @@ async fn signed_stacks_are_stored_exactly_as_received() {
     let store = SqliteReleaseStore::new(db);
     let subject = test_subject();
     // Opaque to the store: it must not parse, re-encode or normalize them.
-    let signed = alien_core::SignedRelease {
-        payload: " eyJ0eXBlIjoiYWxpZW4tcmVsZWFzZS92MSJ9 ".to_string(),
-        signature: "MEUCIQ==".to_string(),
+    let signed = alien_core::SignedStatement {
+        payload: " eyJ0eXBlIjoicmVsZWFzZS92MiJ9 ".to_string(),
+        signatures: vec![alien_release_trust::Signature {
+            signer: "ci".to_string(),
+            sig: "MEUCIQ==".to_string(),
+        }],
     };
 
     let created = store

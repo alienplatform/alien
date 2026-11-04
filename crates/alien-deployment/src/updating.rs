@@ -658,6 +658,7 @@ pub async fn handle_updating(
                     })
                 })?,
                 signed: None,
+                signer_lists: Vec::new(),
             });
             next.status = DeploymentStatus::UpdatePending;
             next.runtime_metadata = Some(runtime_metadata);
@@ -912,6 +913,7 @@ mod tests {
             description: None,
             stack,
             signed: None,
+            signer_lists: Vec::new(),
         };
         let current = DeploymentState {
             status: DeploymentStatus::UpdatePending,
@@ -1077,6 +1079,7 @@ mod tests {
                 description: None,
                 stack,
                 signed: None,
+                signer_lists: Vec::new(),
             }
         }
 

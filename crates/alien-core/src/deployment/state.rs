@@ -460,6 +460,7 @@ mod tests {
             description: None,
             stack: empty_stack(),
             signed: None,
+            signer_lists: Vec::new(),
         }
     }
 

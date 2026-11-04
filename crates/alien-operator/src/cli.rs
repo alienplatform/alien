@@ -198,18 +198,11 @@ pub struct Args {
     #[arg(long, env = "OPERATOR_SELF_UPDATE_DEPLOYMENT")]
     pub self_update_deployment: Option<String>,
 
-    /// Protected mode: public keys (`ecdsa-p256:<base64>`, comma-separated)
-    /// whose signed releases this Operator runs. Nothing else runs.
-    #[arg(
-        long,
-        env = "OPERATOR_RELEASE_SIGNING_PUBLIC_KEYS",
-        value_delimiter = ','
-    )]
-    pub release_signing_public_keys: Vec<String>,
-
-    /// Protected mode: the project signed releases must name.
-    #[arg(long, env = "OPERATOR_RELEASE_SIGNING_PROJECT")]
-    pub release_signing_project: Option<String>,
+    /// Protected mode: the anchor setup wrote, as JSON (project, deployment,
+    /// signing fingerprint, components key). With `"protected": true` this
+    /// Operator runs only what the developer's signer list signed.
+    #[arg(long, env = "OPERATOR_RELEASE_TRUST_ANCHOR")]
+    pub release_trust_anchor: Option<String>,
 
     /// Air-gapped: Secret that bundles write deployment targets into.
     #[arg(long, env = "AIRGAP_TARGET_SECRET")]
@@ -717,10 +710,7 @@ async fn run_operator_cli(
         "chart default bindings",
     )?;
     let operations = parse_operator_operations(args.operations)?;
-    let release_signing = release_signing(
-        &args.release_signing_public_keys,
-        args.release_signing_project,
-    )?;
+    let release_signing = release_signing(args.release_trust_anchor.as_deref())?;
 
     let operator_config = OperatorConfig::builder()
         .platform(args.platform)
@@ -891,32 +881,20 @@ fn observe_only_initial_state(
     }
 }
 
-/// Protected mode is on when keys are pinned; it needs the project too.
-fn release_signing(
-    public_keys: &[String],
-    project: Option<String>,
-) -> Result<Option<crate::protected::ReleaseSigning>> {
-    let public_keys: Vec<&str> = public_keys
-        .iter()
-        .map(|key| key.trim())
-        .filter(|key| !key.is_empty())
-        .collect();
-    let project = project.filter(|project| !project.trim().is_empty());
-    match (public_keys.is_empty(), project) {
-        (true, None) => Ok(None),
-        (false, Some(project)) => Ok(Some(crate::protected::ReleaseSigning {
-            keys: alien_core::release_signature::TrustedKeys::parse(&public_keys).context(
-                ErrorData::ConfigurationError {
-                    message: "OPERATOR_RELEASE_SIGNING_PUBLIC_KEYS holds an invalid key"
-                        .to_string(),
-                },
-            )?,
-            project,
-        })),
-        _ => Err(AlienError::new(ErrorData::ConfigurationError {
-            message: "Protected mode needs both OPERATOR_RELEASE_SIGNING_PUBLIC_KEYS and OPERATOR_RELEASE_SIGNING_PROJECT".to_string(),
-        })),
-    }
+/// Protected mode is on when the anchor says so. A malformed anchor fails
+/// startup rather than falling back to unprotected.
+fn release_signing(anchor: Option<&str>) -> Result<Option<crate::protected::ReleaseSigning>> {
+    let Some(anchor) = anchor.map(str::trim).filter(|anchor| !anchor.is_empty()) else {
+        return Ok(None);
+    };
+    let anchor = alien_release_trust::Anchor::parse(anchor.as_bytes()).context(
+        ErrorData::ConfigurationError {
+            message: "OPERATOR_RELEASE_TRUST_ANCHOR is not a valid anchor".to_string(),
+        },
+    )?;
+    Ok(anchor
+        .protected
+        .then_some(crate::protected::ReleaseSigning { anchor }))
 }
 
 #[cfg(unix)]

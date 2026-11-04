@@ -462,6 +462,7 @@ dependencies = [
  "alien-permissions",
  "alien-platform-api",
  "alien-preflights",
+ "alien-release-trust",
  "alien-terraform",
  "alien-worker-runtime",
  "async-trait",
@@ -661,6 +662,7 @@ dependencies = [
  "alien-error",
  "alien-macros",
  "alien-permission-types",
+ "alien-release-trust",
  "async-trait",
  "axum 0.8.9",
  "base64 0.22.1",
@@ -677,7 +679,6 @@ dependencies = [
  "libc",
  "lognorm",
  "nanoid",
- "p256",
  "proptest",
  "psl",
  "regex",
@@ -1075,6 +1076,7 @@ dependencies = [
  "alien-manager-api",
  "alien-permissions",
  "alien-preflights",
+ "alien-release-trust",
  "alien-tunnel",
  "async-trait",
  "axum 0.8.9",
@@ -1199,6 +1201,7 @@ dependencies = [
  "alien-k8s-clients",
  "alien-local",
  "alien-manager-api",
+ "alien-release-trust",
  "alien-tunnel",
  "async-trait",
  "aws-config",
@@ -1328,6 +1331,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "utoipa",
 ]
 
 [[package]]

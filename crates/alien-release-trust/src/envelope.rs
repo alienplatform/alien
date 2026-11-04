@@ -168,6 +168,7 @@ impl<B: Serialize> Envelope<B> {
 
 /// One signature over a statement's payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Signature {
     /// Id of the signer on the signer list, or `components` for the
@@ -179,6 +180,7 @@ pub struct Signature {
 
 /// A statement as it is stored and carried.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SignedStatement {
     /// Base64 of the payload bytes.

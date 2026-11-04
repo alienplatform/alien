@@ -57,15 +57,16 @@ pub async fn apply(state: &OperatorState, target_image: &str) -> Result<()> {
     if container.image.as_deref() == Some(target_image) {
         return Ok(());
     }
-    // Protected, the Operator moves only to the image its newest accepted
-    // release signed: the manager chooses when, not what.
+    // Protected, the Operator moves only to the image digest its newest
+    // accepted release signed: the manager chooses when and from where, not what.
     if state.config.is_protected() {
         let signed = state
             .db
             .get_accepted_release()
             .await?
-            .and_then(|accepted| accepted.operator_image);
-        if signed.as_deref() != Some(target_image) {
+            .and_then(|accepted| accepted.operator_digest);
+        let target_digest = alien_core::release_statement::image_digest(target_image);
+        if signed.is_none() || signed.as_deref() != target_digest {
             warn!(
                 image = target_image,
                 signed = signed.as_deref().unwrap_or("none"),

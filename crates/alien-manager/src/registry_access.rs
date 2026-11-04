@@ -2075,6 +2075,7 @@ mod tests {
                 description: None,
                 stack: worker_stack(image),
                 signed: None,
+                signer_lists: Vec::new(),
             };
             state.current_release = Some(release(if rejected_slot == 0 { &other } else { &own }));
             state.target_release = Some(release(if rejected_slot == 1 { &other } else { &own }));
@@ -2418,6 +2419,7 @@ mod tests {
                 description: None,
                 stack,
                 signed: None,
+                signer_lists: Vec::new(),
             }),
             target_release: None,
             stack_state: None,
@@ -2643,6 +2645,7 @@ mod tests {
                     None,
                 ),
                 signed: None,
+                signer_lists: Vec::new(),
             });
             assert_eq!(
                 any_refused(repository_access_with_proxy(
@@ -3524,6 +3527,7 @@ mod tests {
             description: None,
             stack: worker_stack(&format!("{RENAMED_HOST}/acme-artifacts-{PROJECT}:v1")),
             signed: None,
+            signer_lists: Vec::new(),
         });
 
         let (repositories, refused) = repository_access(&RenamedRegistry, &state, PROJECT);
@@ -4748,6 +4752,7 @@ mod tests {
             description: None,
             stack: sandbox_stack(Some(old_image)),
             signed: None,
+            signer_lists: Vec::new(),
         });
         state.target_release = Some(ReleaseInfo {
             release_id: Some("new".to_string()),
@@ -4755,6 +4760,7 @@ mod tests {
             description: None,
             stack: sandbox_stack(Some(cache_image)),
             signed: None,
+            signer_lists: Vec::new(),
         });
         let (repositories, refused) = repository_access(&registry, &state, PROJECT);
         assert!(refused.is_empty());

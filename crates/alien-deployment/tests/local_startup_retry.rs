@@ -34,6 +34,7 @@ fn release(id: &str, stack: Stack) -> ReleaseInfo {
         description: None,
         stack,
         signed: None,
+        signer_lists: Vec::new(),
     }
 }
 

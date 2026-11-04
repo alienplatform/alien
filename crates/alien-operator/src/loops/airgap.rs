@@ -461,6 +461,7 @@ mod tests {
                 description: None,
                 stack: Stack::new("site".into()).build(),
                 signed: None,
+                signer_lists: Vec::new(),
             },
             config: DeploymentConfig::builder()
                 .stack_settings(Default::default())
@@ -520,12 +521,7 @@ mod tests {
     async fn a_refused_bundle_reports_its_refusal_to_the_site() {
         let directory = tempfile::tempdir().unwrap();
         let mut state = retry_state(&directory).await;
-        let key =
-            alien_core::release_signature::ReleaseSigningKey::from_secret_bytes(&[7; 32]).unwrap();
-        state.config.release_signing = Some(crate::protected::ReleaseSigning {
-            keys: alien_core::release_signature::TrustedKeys::parse(&[key.public_key()]).unwrap(),
-            project: "site".into(),
-        });
+        state.config.release_signing = Some(crate::protected::test_signing("site"));
         let installed = retry_target();
         crate::loops::sync::accept_target(&state, &installed, false)
             .await

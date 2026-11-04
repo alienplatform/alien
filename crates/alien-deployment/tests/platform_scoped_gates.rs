@@ -11,6 +11,7 @@ fn release(stack: Stack, version: &str) -> ReleaseInfo {
         description: None,
         stack,
         signed: None,
+        signer_lists: Vec::new(),
     }
 }
 

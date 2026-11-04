@@ -450,6 +450,7 @@ impl CloudProxyTest {
                 description: None,
                 stack,
                 signed: None,
+                signer_lists: Vec::new(),
             }),
             target_release: None,
             stack_state: None,

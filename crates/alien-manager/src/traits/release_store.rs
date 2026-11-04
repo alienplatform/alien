@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use alien_core::{Platform, SignedRelease, Stack};
+use alien_core::{Platform, SignedStatement, Stack};
 use alien_error::AlienError;
 
 /// A release record. Contains stacks for one or more platforms.
@@ -22,7 +22,7 @@ pub struct ReleaseRecord {
     pub stacks: HashMap<Platform, Stack>,
     /// Per-platform signed statements, stored exactly as received.
     #[serde(default)]
-    pub signed_stacks: HashMap<Platform, SignedRelease>,
+    pub signed_stacks: HashMap<Platform, SignedStatement>,
     pub git_commit_sha: Option<String>,
     pub git_commit_ref: Option<String>,
     pub git_commit_message: Option<String>,
@@ -40,7 +40,7 @@ pub struct CreateReleaseParams {
     /// Per-platform stacks.
     pub stacks: HashMap<Platform, Stack>,
     /// Per-platform signed statements, stored exactly as received.
-    pub signed_stacks: HashMap<Platform, SignedRelease>,
+    pub signed_stacks: HashMap<Platform, SignedStatement>,
     pub git_commit_sha: Option<String>,
     pub git_commit_ref: Option<String>,
     pub git_commit_message: Option<String>,

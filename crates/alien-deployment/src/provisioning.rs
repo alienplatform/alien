@@ -257,6 +257,7 @@ pub async fn handle_provisioning(
                 description: None,
                 stack: target_stack,
                 signed: None,
+                signer_lists: Vec::new(),
             });
             next.status = DeploymentStatus::UpdatePending;
         } else {
@@ -524,6 +525,7 @@ mod tests {
                 description: None,
                 stack: target.clone(),
                 signed: None,
+                signer_lists: Vec::new(),
             }),
             stack_state: Some(state),
             error: None,

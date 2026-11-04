@@ -32,7 +32,8 @@ openapi = [
 [dependencies]
 bon = { workspace = true }
 # Core Alien crates
-alien-core = { workspace = true, features = ["bundle-signature", "release-signature"] }
+alien-core = { workspace = true, features = ["bundle-signature"] }
+alien-release-trust = { workspace = true }
 alien-error = { workspace = true, features = ["axum"] }
 alien-commands = { workspace = true, features = ["server"] }
 alien-bindings = { workspace = true, features = ["aws", "gcp", "azure", "test", "local-artifact-registry"] }
