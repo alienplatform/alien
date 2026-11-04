@@ -11,7 +11,7 @@ impl CompileTimeCheck for MachinesResourcesCheck {
     }
 
     fn description(&self) -> &'static str {
-        "Machines deployments support only Horizon-schedulable resources"
+        "Machines deployments support only resources the machine agent can run"
     }
 
     fn should_run(&self, stack: &Stack, platform: Platform) -> bool {
