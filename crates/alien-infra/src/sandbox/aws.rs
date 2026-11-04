@@ -122,13 +122,15 @@ pub struct AwsSandboxController {
     #[serde(default)]
     pub(crate) deleting_version: Option<String>,
     /// When the image delete was first refused because sessions started from the image were
-    /// still running. Bounds the wait for them to end.
+    /// still running. Bounds the wait for them to end. The `wait_for_*_started_at` name makes a
+    /// retry clear it, so a retried delete gets a fresh window.
     #[serde(default)]
-    pub(crate) running_sessions_since: Option<chrono::DateTime<chrono::Utc>>,
+    pub(crate) wait_for_running_sessions_started_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Image deletes refused while the image settles, in this delete. Counted here rather than
-    /// through the framework's stay budget, which the running-sessions wait also draws on.
+    /// through the framework's stay budget, which the running-sessions wait also draws on. The
+    /// `wait_for_*_iterations` name makes a retry reset it.
     #[serde(default)]
-    pub(crate) settling_refusals: u32,
+    pub(crate) wait_for_image_settle_iterations: u32,
     /// Changes only after a build is observed failed, so retries do not
     /// replay an idempotency receipt for a deleted failed build.
     #[serde(default)]
@@ -979,8 +981,8 @@ impl AwsSandboxController {
         // delete rather than after the last one.
         self.active_version = None;
         // Waits left by an earlier delete that ended another way must not count against this one.
-        self.running_sessions_since = None;
-        self.settling_refusals = 0;
+        self.wait_for_running_sessions_started_at = None;
+        self.wait_for_image_settle_iterations = 0;
 
         // A setup-baked image belongs to the setup stack and is removed by stack teardown;
         // deleting it here would act with credentials that were never granted it — and would
@@ -1042,10 +1044,10 @@ impl AwsSandboxController {
             // ends every session within eight hours. Wait them out, bounded by that cap.
             Err(error) if is_refused_for_running_microvms(&error) => {
                 let now = chrono::Utc::now();
-                let since = *self.running_sessions_since.get_or_insert(now);
+                let since = *self.wait_for_running_sessions_started_at.get_or_insert(now);
                 if now - since > chrono::Duration::minutes(RUNNING_SESSIONS_MAX_WAIT_MINUTES) {
                     // A retry starts a new wait rather than failing on this one at once.
-                    self.running_sessions_since = None;
+                    self.wait_for_running_sessions_started_at = None;
                     return Err(error).context(ErrorData::CloudPlatformError {
                         message: format!(
                             "MicroVM image '{image_identifier}' still has running sessions after \
@@ -1074,8 +1076,8 @@ impl AwsSandboxController {
                     Some(CloudClientErrorData::RemoteResourceConflict { .. })
                 ) =>
             {
-                self.settling_refusals += 1;
-                if self.settling_refusals >= IMAGE_DELETE_MAX_POLLS {
+                self.wait_for_image_settle_iterations += 1;
+                if self.wait_for_image_settle_iterations >= IMAGE_DELETE_MAX_POLLS {
                     return Err(AlienError::new(ErrorData::PollingTimeout {
                         state: format!("{:?}", self.state),
                         max_times: IMAGE_DELETE_MAX_POLLS,
@@ -1096,8 +1098,8 @@ impl AwsSandboxController {
         }
 
         self.active_version = None;
-        self.running_sessions_since = None;
-        self.settling_refusals = 0;
+        self.wait_for_running_sessions_started_at = None;
+        self.wait_for_image_settle_iterations = 0;
         info!(sandbox_id = %config.id, "AWS sandbox image deleted");
 
         Ok(HandlerAction::Continue {
@@ -4759,7 +4761,7 @@ mod tests {
         let controller = AwsSandboxController {
             state: AwsSandboxState::DeletingImage,
             active_version: None,
-            running_sessions_since: Some(
+            wait_for_running_sessions_started_at: Some(
                 chrono::Utc::now()
                     - chrono::Duration::minutes(RUNNING_SESSIONS_MAX_WAIT_MINUTES + 1),
             ),
@@ -4815,6 +4817,63 @@ mod tests {
         );
     }
 
+    /// A retry resumes the failed delete in `DeletingImage`, not at the flow entry. Both waits
+    /// must start over there: a delete that ran out of its settling budget, or failed while
+    /// sessions ran, is given a full budget again rather than failing on its first refusal.
+    #[tokio::test]
+    async fn a_retried_delete_gets_fresh_settling_and_session_waits() {
+        for (refusal, exhausted) in [
+            (
+                settling_refusal as fn() -> alien_error::AlienError<CloudClientErrorData>,
+                AwsSandboxController {
+                    state: AwsSandboxState::DeletingImage,
+                    active_version: None,
+                    wait_for_image_settle_iterations: IMAGE_DELETE_MAX_POLLS,
+                    ..ready_controller()
+                },
+            ),
+            (
+                running_sessions_refusal as fn() -> alien_error::AlienError<CloudClientErrorData>,
+                AwsSandboxController {
+                    state: AwsSandboxState::DeletingImage,
+                    active_version: None,
+                    wait_for_running_sessions_started_at: Some(
+                        chrono::Utc::now()
+                            - chrono::Duration::minutes(RUNNING_SESSIONS_MAX_WAIT_MINUTES + 60),
+                    ),
+                    ..ready_controller()
+                },
+            ),
+        ] {
+            // What the executor does to the last failed state before resuming it.
+            let mut retried = exhausted;
+            retried.reset_stay_count();
+            assert_eq!(retried.wait_for_image_settle_iterations, 0);
+            assert!(retried.wait_for_running_sessions_started_at.is_none());
+
+            let mut client = MockLambdaMicrovmsApi::new();
+            let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
+            let seen = calls.clone();
+            client
+                .expect_delete_microvm_image()
+                .times(2)
+                .returning(move |_| {
+                    if seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                        Err(refusal())
+                    } else {
+                        Ok(())
+                    }
+                });
+            let mut executor = executor(retried, client).await;
+            executor
+                .run_until_terminal()
+                .await
+                .expect("the retried delete waits out its first refusal");
+            assert_eq!(executor.status(), ResourceStatus::Deleted);
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+        }
+    }
+
     /// A wait recorded by an earlier delete that failed some other way is not carried into a new
     /// delete: its first refusal waits instead of failing on the old clock.
     #[tokio::test]
@@ -4833,7 +4892,7 @@ mod tests {
                 }
             });
         let controller = AwsSandboxController {
-            running_sessions_since: Some(
+            wait_for_running_sessions_started_at: Some(
                 chrono::Utc::now()
                     - chrono::Duration::minutes(RUNNING_SESSIONS_MAX_WAIT_MINUTES + 60),
             ),
