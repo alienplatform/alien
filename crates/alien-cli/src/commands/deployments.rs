@@ -23,10 +23,9 @@ use alien_platform_api::types::{
     CreateDeploymentTokenId, CreateDeploymentTokenRequest, CreateDeploymentTokenWorkspace,
     CreateDeploymentWorkspace, CreateVolumeRestoreRequest, DeploymentDetailResponse,
     DeploymentDetailResponseUpdateState, DeploymentListItemResponse,
-    DeploymentUpdateOperationStatus, DeploymentUpdateOperationSummaryInner, GetDeploymentId,
-    GetDeploymentWorkspace, ListDeploymentsIncludeItem, NewDeploymentRequest,
-    PinDeploymentReleaseId, PinDeploymentReleaseWorkspace, PinReleaseRequest,
-    PinReleaseRequestReleaseId, VolumeRestore,
+    DeploymentUpdateOperationStatus, DeploymentUpdateOperationSummaryInner,
+    ListDeploymentsIncludeItem, NewDeploymentRequest, PinDeploymentReleaseId,
+    PinDeploymentReleaseWorkspace, PinReleaseRequest, PinReleaseRequestReleaseId, VolumeRestore,
 };
 use alien_platform_api::SdkResultExt as _;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -489,7 +488,7 @@ pub enum DeploymentsCmd {
     },
     /// Pin a deployment to a specific release
     Pin {
-        /// Deployment ID
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
         id: String,
         /// Release ID to pin to (omit to unpin and use active release)
         release_id: Option<String>,
@@ -1226,9 +1225,13 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                 )
                 .await;
             }
+            let workspace = ctx.resolve_workspace_with_bootstrap(!json).await?;
             let client = ctx.sdk_client().await?;
-            let workspace_name = ctx.resolve_platform_workspace_context(true).await?.name;
-            pin_deployment_task(&client, &workspace_name, &id, release_id, json).await
+            let deployment = crate::platform_deployment_resolver::resolve(
+                &ctx, &client, &workspace, &id, None, !json,
+            )
+            .await?;
+            pin_deployment_task(&client, &workspace, &deployment, release_id, json).await
         }
         DeploymentsCmd::SetChannel { id, channel, json } => {
             if !ctx.is_platform() {
@@ -3905,35 +3908,11 @@ async fn create_deployment_task(
 async fn pin_deployment_task(
     client: &alien_platform_api::Client,
     workspace: &str,
-    deployment_id: &str,
+    deployment: &DeploymentDetailResponse,
     release_id: Option<String>,
     json: bool,
 ) -> Result<()> {
-    let workspace_param = GetDeploymentWorkspace::try_from(workspace)
-        .into_alien_error()
-        .context(ErrorData::ValidationError {
-            field: "workspace".to_string(),
-            message: "workspace name format is invalid".to_string(),
-        })?;
-    let deployment_id_param = GetDeploymentId::try_from(deployment_id)
-        .into_alien_error()
-        .context(ErrorData::ValidationError {
-            field: "deployment_id".to_string(),
-            message: "deployment ID format is invalid".to_string(),
-        })?;
-    let response = client
-        .get_deployment()
-        .id(&deployment_id_param)
-        .workspace(&workspace_param)
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "retrieving deployment details".to_string(),
-            url: None,
-        })?;
-    let deployment = response.into_inner();
-
+    let deployment_id: &str = &deployment.id;
     if !json {
         println!(
             "{}",
