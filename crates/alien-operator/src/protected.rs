@@ -332,6 +332,7 @@ pub(crate) fn test_signing(project: &str) -> ReleaseSigning {
                 .to_string(),
             session_approval: Default::default(),
             inputs: None,
+            resource_prefix: None,
         },
     }
 }

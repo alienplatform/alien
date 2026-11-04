@@ -39,6 +39,11 @@ pub struct Anchor {
     /// path, a secret name, a file).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inputs: Option<String>,
+    /// Prefix of the names, and value of the `deployment` tag, of what this
+    /// deployment creates in the cloud. Enforcers attach only volumes that
+    /// carry it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_prefix: Option<String>,
 }
 
 impl Anchor {

@@ -4108,6 +4108,7 @@ mod tests {
             components: key.public_key().as_str().to_string(),
             session_approval: Default::default(),
             inputs: None,
+            resource_prefix: None,
         };
         let verified = alien_release_trust::Trust::new(anchor, &[list])
             .unwrap()

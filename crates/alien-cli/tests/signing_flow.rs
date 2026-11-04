@@ -362,6 +362,7 @@ async fn signing_setup_approval_release_and_a_forged_list() {
             .to_string(),
         session_approval: Default::default(),
         inputs: None,
+        resource_prefix: None,
     };
     let verified = Trust::new(anchor.clone(), &stored_lists(&manager).await)
         .unwrap()

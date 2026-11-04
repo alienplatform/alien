@@ -193,6 +193,7 @@ pub fn anchor(keys: &Keys) -> Anchor {
         components: keys.components.public_key().as_str().to_string(),
         session_approval: SessionApproval::Developer,
         inputs: None,
+        resource_prefix: None,
     }
 }
 
