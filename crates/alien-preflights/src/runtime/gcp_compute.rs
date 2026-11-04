@@ -1048,12 +1048,12 @@ mod tests {
                 }
             });
         let mut result = CheckResult::success();
-        let machines = BTreeSet::from(["c4a-standard-72".to_string(), "n4-standard-2".to_string()]);
+        let machines = BTreeSet::from(["c4-standard-96".to_string(), "n4-standard-2".to_string()]);
         check_offerings(&machines, "us-central1", &compute, &mut result).await;
         assert!(!result.success);
         assert_eq!(
             result.errors,
-            ["Machine type 'c4a-standard-72' is not offered in any zone of GCP region 'us-central1'. Choose a machine type this region offers."]
+            ["Machine type 'c4-standard-96' is not offered in any zone of GCP region 'us-central1'. Choose a machine type this region offers."]
         );
     }
 
@@ -1122,7 +1122,7 @@ mod tests {
             .expect_get_machine_type()
             .times(3)
             .returning(|zone, machine| match machine.as_str() {
-                "c4a-standard-72" => Err(machine_type_error(&machine, |name| {
+                "c4-standard-96" => Err(machine_type_error(&machine, |name| {
                     ErrorData::RemoteResourceNotFound {
                         resource_type: "Compute Engine".into(),
                         resource_name: name,
@@ -1137,14 +1137,14 @@ mod tests {
             });
         let mut result = CheckResult::success();
         let machines = BTreeSet::from([
-            "c4a-standard-72".to_string(),
+            "c4-standard-96".to_string(),
             "n4-standard-2".to_string(),
             "n4-standard-4".to_string(),
         ]);
         check_offerings(&machines, "us-central1", &compute, &mut result).await;
         assert_eq!(
             result.errors,
-            ["Machine type 'c4a-standard-72' is not offered in any zone of GCP region 'us-central1'. Choose a machine type this region offers."]
+            ["Machine type 'c4-standard-96' is not offered in any zone of GCP region 'us-central1'. Choose a machine type this region offers."]
         );
         assert_eq!(
             result.warnings,
@@ -1967,11 +1967,11 @@ mod tests {
 
     #[tokio::test]
     async fn family_demand_exactly_at_the_applied_limit_does_not_block() {
-        // Three c4a-standard-8 need 24 vCPUs; the applied C4A limit in us-central1 is 24.
-        let result = check_family_pool("c4a-standard-8", 3, 3, false).await;
+        // Three c4-standard-8 need 24 vCPUs; the applied C4 limit in us-central1 is 24.
+        let result = check_family_pool("c4-standard-8", 3, 3, false).await;
         assert!(result.success);
         assert_eq!(
-            *outcome(&result, "CPUS_PER_VM_FAMILY/C4A"),
+            *outcome(&result, "CPUS_PER_VM_FAMILY/C4"),
             QuotaOutcome::Unknown {
                 reason: "applied limit is 24, but provider-reported usage is unavailable".into()
             }
@@ -1996,10 +1996,10 @@ mod tests {
 
     #[tokio::test]
     async fn denied_family_quota_read_warns() {
-        let result = check_family_pool("c4a-standard-72", 1, 1, true).await;
+        let result = check_family_pool("c4-standard-96", 1, 1, true).await;
         assert!(result.success);
         assert!(matches!(
-            outcome(&result, "CPUS_PER_VM_FAMILY/C4A"),
+            outcome(&result, "CPUS_PER_VM_FAMILY/C4"),
             QuotaOutcome::Unknown { reason } if reason.contains("grant cloudquotas.quotas.get")
         ));
     }
