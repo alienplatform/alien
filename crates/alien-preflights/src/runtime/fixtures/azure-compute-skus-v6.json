@@ -1,0 +1,38 @@
+[
+  {
+    "name": "Standard_D2as_v6",
+    "family": "standardDav6Family",
+    "resourceType": "virtualMachines",
+    "locationInfo": [
+      {
+        "location": "eastus",
+        "zones": ["1", "3", "2"]
+      }
+    ],
+    "restrictions": []
+  },
+  {
+    "name": "Standard_D2s_v6",
+    "family": "StandardDsv6Family",
+    "resourceType": "virtualMachines",
+    "locationInfo": [
+      {
+        "location": "eastus",
+        "zones": ["2", "3", "1"]
+      }
+    ],
+    "restrictions": []
+  },
+  {
+    "name": "Standard_E2s_v6",
+    "family": "StandardEsv6Family",
+    "resourceType": "virtualMachines",
+    "locationInfo": [
+      {
+        "location": "eastus",
+        "zones": ["2", "3", "1"]
+      }
+    ],
+    "restrictions": []
+  }
+]

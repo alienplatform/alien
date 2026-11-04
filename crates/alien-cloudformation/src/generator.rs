@@ -2024,6 +2024,7 @@ fn add_compute_parameters(
             .map(|pool| {
                 pool.machines
                     .iter()
+                    .filter(|machine| machine.available)
                     .map(|machine| CfExpression::from(machine.machine.as_str()))
                     .chain(std::iter::once(CfExpression::from("")))
                     .collect()

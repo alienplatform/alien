@@ -805,6 +805,8 @@
             "compute.instanceGroupManagers.update",
             "compute.globalOperations.get",
             "compute.zones.list",
+            // Public machine type metadata; preflight checks that a zone of the region offers each pool's machine.
+            "compute.machineTypes.get",
             // Quota values and usage only; project-scoped, no telemetry or instance inventory.
             "compute.regions.get",
             "compute.projects.get",

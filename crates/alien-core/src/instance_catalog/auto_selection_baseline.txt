@@ -1,0 +1,360 @@
+aws default nested=false tiny -> t4g.micro min=1 max=1 memory=1073741824 storage=21474836480
+aws default nested=false burstable -> t4g.medium min=1 max=1 memory=4294967296 storage=21474836480
+aws default nested=false burstable-big-memory -> t4g.xlarge min=1 max=1 memory=17179869184 storage=21474836480
+aws default nested=false small -> m7g.large min=2 max=4 memory=8589934592 storage=21474836480
+aws default nested=false medium -> m7g.2xlarge min=1 max=1 memory=34359738368 storage=21474836480
+aws default nested=false general -> m7g.2xlarge min=2 max=4 memory=34359738368 storage=21474836480
+aws default nested=false many-replicas -> m7g.2xlarge min=2 max=10 memory=34359738368 storage=21474836480
+aws default nested=false large-replica -> m7g.4xlarge min=1 max=2 memory=68719476736 storage=21474836480
+aws default nested=false huge-replica -> error: no aws machine can fit one replica with system reserve and workload headroom
+aws default nested=false memory-heavy -> error: no aws machine can fit one replica with system reserve and workload headroom
+aws default nested=false storage-300g -> m7g.xlarge min=2 max=2 memory=17179869184 storage=322122547200
+aws default nested=false storage-1t -> m7g.2xlarge min=2 max=3 memory=34359738368 storage=1073741824000
+aws default nested=false storage-2t -> m7g.2xlarge min=2 max=3 memory=34359738368 storage=2147483648000
+aws default nested=false storage-8t -> m7g.xlarge min=2 max=2 memory=17179869184 storage=8589934592000
+aws default nested=false storage-100t -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws default nested=false gpu-t4 -> g5.xlarge min=1 max=1 memory=17179869184 storage=268435456000
+aws default nested=false gpu-a10g -> error: Arm64: architecture Arm64 is unavailable for this workload on platform aws; X86_64: no instance type for GPU type 'nvidia-a10g' x1 on platform aws
+aws default nested=false gpu-a100 -> p4d.24xlarge min=1 max=1 memory=1236950581248 storage=8589934592000
+aws default nested=false gpu-a100x8 -> p4d.24xlarge min=1 max=1 memory=1236950581248 storage=8589934592000
+aws default nested=false gpu-h100x8 -> p5.48xlarge min=1 max=1 memory=2199023255552 storage=8589934592000
+aws default nested=true tiny -> m8i.large min=1 max=1 memory=8589934592 storage=21474836480
+aws default nested=true burstable -> m8i.large min=1 max=1 memory=8589934592 storage=21474836480
+aws default nested=true burstable-big-memory -> m8i.xlarge min=1 max=1 memory=17179869184 storage=21474836480
+aws default nested=true small -> m8i.large min=2 max=4 memory=8589934592 storage=21474836480
+aws default nested=true medium -> m8i.2xlarge min=1 max=1 memory=34359738368 storage=21474836480
+aws default nested=true general -> m8i.2xlarge min=2 max=4 memory=34359738368 storage=21474836480
+aws default nested=true many-replicas -> m8i.2xlarge min=2 max=10 memory=34359738368 storage=21474836480
+aws default nested=true large-replica -> m8i.4xlarge min=1 max=2 memory=68719476736 storage=21474836480
+aws default nested=true huge-replica -> error: Arm64: architecture Arm64 is unavailable for this workload on platform aws; X86_64: no aws machine can fit one replica with system reserve and workload headroom
+aws default nested=true memory-heavy -> error: Arm64: architecture Arm64 is unavailable for this workload on platform aws; X86_64: no aws machine can fit one replica with system reserve and workload headroom
+aws default nested=true storage-300g -> m8i.xlarge min=2 max=2 memory=17179869184 storage=322122547200
+aws default nested=true storage-1t -> m8i.2xlarge min=2 max=3 memory=34359738368 storage=1073741824000
+aws default nested=true storage-2t -> m8i.2xlarge min=2 max=3 memory=34359738368 storage=2147483648000
+aws default nested=true storage-8t -> m8i.xlarge min=2 max=2 memory=17179869184 storage=8589934592000
+aws default nested=true storage-100t -> error: Arm64: architecture Arm64 is unavailable for this workload on platform aws; X86_64: architecture X86_64 is unavailable for this workload on platform aws
+aws default nested=true gpu-t4 -> error: Arm64: no nested-virt-capable GpuCompute instance types in catalog for platform aws; X86_64: no nested-virt-capable GpuCompute instance types in catalog for platform aws
+aws default nested=true gpu-a10g -> error: Arm64: no nested-virt-capable GpuCompute instance types in catalog for platform aws; X86_64: no nested-virt-capable GpuCompute instance types in catalog for platform aws
+aws default nested=true gpu-a100 -> error: Arm64: no nested-virt-capable GpuCompute instance types in catalog for platform aws; X86_64: no nested-virt-capable GpuCompute instance types in catalog for platform aws
+aws default nested=true gpu-a100x8 -> error: Arm64: no nested-virt-capable GpuCompute instance types in catalog for platform aws; X86_64: no nested-virt-capable GpuCompute instance types in catalog for platform aws
+aws default nested=true gpu-h100x8 -> error: Arm64: no nested-virt-capable GpuCompute instance types in catalog for platform aws; X86_64: no nested-virt-capable GpuCompute instance types in catalog for platform aws
+aws Arm64 nested=false tiny -> t4g.micro min=1 max=1 memory=1073741824 storage=21474836480
+aws Arm64 nested=false burstable -> t4g.medium min=1 max=1 memory=4294967296 storage=21474836480
+aws Arm64 nested=false burstable-big-memory -> t4g.xlarge min=1 max=1 memory=17179869184 storage=21474836480
+aws Arm64 nested=false small -> m7g.large min=2 max=4 memory=8589934592 storage=21474836480
+aws Arm64 nested=false medium -> m7g.2xlarge min=1 max=1 memory=34359738368 storage=21474836480
+aws Arm64 nested=false general -> m7g.2xlarge min=2 max=4 memory=34359738368 storage=21474836480
+aws Arm64 nested=false many-replicas -> m7g.2xlarge min=2 max=10 memory=34359738368 storage=21474836480
+aws Arm64 nested=false large-replica -> m7g.4xlarge min=1 max=2 memory=68719476736 storage=21474836480
+aws Arm64 nested=false huge-replica -> error: no aws machine can fit one replica with system reserve and workload headroom
+aws Arm64 nested=false memory-heavy -> error: no aws machine can fit one replica with system reserve and workload headroom
+aws Arm64 nested=false storage-300g -> m7g.xlarge min=2 max=2 memory=17179869184 storage=322122547200
+aws Arm64 nested=false storage-1t -> m7g.2xlarge min=2 max=3 memory=34359738368 storage=1073741824000
+aws Arm64 nested=false storage-2t -> m7g.2xlarge min=2 max=3 memory=34359738368 storage=2147483648000
+aws Arm64 nested=false storage-8t -> m7g.xlarge min=2 max=2 memory=17179869184 storage=8589934592000
+aws Arm64 nested=false storage-100t -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws Arm64 nested=false gpu-t4 -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws Arm64 nested=false gpu-a10g -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws Arm64 nested=false gpu-a100 -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws Arm64 nested=false gpu-a100x8 -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws Arm64 nested=false gpu-h100x8 -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws Arm64 nested=true tiny -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws Arm64 nested=true burstable -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws Arm64 nested=true burstable-big-memory -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws Arm64 nested=true small -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws Arm64 nested=true medium -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws Arm64 nested=true general -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws Arm64 nested=true many-replicas -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws Arm64 nested=true large-replica -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws Arm64 nested=true huge-replica -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws Arm64 nested=true memory-heavy -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws Arm64 nested=true storage-300g -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws Arm64 nested=true storage-1t -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws Arm64 nested=true storage-2t -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws Arm64 nested=true storage-8t -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws Arm64 nested=true storage-100t -> error: architecture Arm64 is unavailable for this workload on platform aws
+aws Arm64 nested=true gpu-t4 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform aws
+aws Arm64 nested=true gpu-a10g -> error: no nested-virt-capable GpuCompute instance types in catalog for platform aws
+aws Arm64 nested=true gpu-a100 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform aws
+aws Arm64 nested=true gpu-a100x8 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform aws
+aws Arm64 nested=true gpu-h100x8 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform aws
+aws X86_64 nested=false tiny -> t3.xlarge min=1 max=1 memory=17179869184 storage=21474836480
+aws X86_64 nested=false burstable -> t3.xlarge min=1 max=1 memory=17179869184 storage=21474836480
+aws X86_64 nested=false burstable-big-memory -> t3.xlarge min=1 max=1 memory=17179869184 storage=21474836480
+aws X86_64 nested=false small -> m7i.large min=2 max=4 memory=8589934592 storage=21474836480
+aws X86_64 nested=false medium -> m7i.2xlarge min=1 max=1 memory=34359738368 storage=21474836480
+aws X86_64 nested=false general -> m7i.2xlarge min=2 max=4 memory=34359738368 storage=21474836480
+aws X86_64 nested=false many-replicas -> m7i.2xlarge min=2 max=10 memory=34359738368 storage=21474836480
+aws X86_64 nested=false large-replica -> m7i.4xlarge min=1 max=2 memory=68719476736 storage=21474836480
+aws X86_64 nested=false huge-replica -> error: no aws machine can fit one replica with system reserve and workload headroom
+aws X86_64 nested=false memory-heavy -> error: no aws machine can fit one replica with system reserve and workload headroom
+aws X86_64 nested=false storage-300g -> i4i.xlarge min=2 max=2 memory=34359738368 storage=1006096089088
+aws X86_64 nested=false storage-1t -> i4i.2xlarge min=2 max=3 memory=68719476736 storage=2013265920000
+aws X86_64 nested=false storage-2t -> i4i.4xlarge min=1 max=2 memory=137438953472 storage=4026531840000
+aws X86_64 nested=false storage-8t -> m7i.xlarge min=2 max=2 memory=17179869184 storage=8589934592000
+aws X86_64 nested=false storage-100t -> error: architecture X86_64 is unavailable for this workload on platform aws
+aws X86_64 nested=false gpu-t4 -> g5.xlarge min=1 max=1 memory=17179869184 storage=268435456000
+aws X86_64 nested=false gpu-a10g -> error: no instance type for GPU type 'nvidia-a10g' x1 on platform aws
+aws X86_64 nested=false gpu-a100 -> p4d.24xlarge min=1 max=1 memory=1236950581248 storage=8589934592000
+aws X86_64 nested=false gpu-a100x8 -> p4d.24xlarge min=1 max=1 memory=1236950581248 storage=8589934592000
+aws X86_64 nested=false gpu-h100x8 -> p5.48xlarge min=1 max=1 memory=2199023255552 storage=8589934592000
+aws X86_64 nested=true tiny -> m8i.large min=1 max=1 memory=8589934592 storage=21474836480
+aws X86_64 nested=true burstable -> m8i.large min=1 max=1 memory=8589934592 storage=21474836480
+aws X86_64 nested=true burstable-big-memory -> m8i.xlarge min=1 max=1 memory=17179869184 storage=21474836480
+aws X86_64 nested=true small -> m8i.large min=2 max=4 memory=8589934592 storage=21474836480
+aws X86_64 nested=true medium -> m8i.2xlarge min=1 max=1 memory=34359738368 storage=21474836480
+aws X86_64 nested=true general -> m8i.2xlarge min=2 max=4 memory=34359738368 storage=21474836480
+aws X86_64 nested=true many-replicas -> m8i.2xlarge min=2 max=10 memory=34359738368 storage=21474836480
+aws X86_64 nested=true large-replica -> m8i.4xlarge min=1 max=2 memory=68719476736 storage=21474836480
+aws X86_64 nested=true huge-replica -> error: no aws machine can fit one replica with system reserve and workload headroom
+aws X86_64 nested=true memory-heavy -> error: no aws machine can fit one replica with system reserve and workload headroom
+aws X86_64 nested=true storage-300g -> m8i.xlarge min=2 max=2 memory=17179869184 storage=322122547200
+aws X86_64 nested=true storage-1t -> m8i.2xlarge min=2 max=3 memory=34359738368 storage=1073741824000
+aws X86_64 nested=true storage-2t -> m8i.2xlarge min=2 max=3 memory=34359738368 storage=2147483648000
+aws X86_64 nested=true storage-8t -> m8i.xlarge min=2 max=2 memory=17179869184 storage=8589934592000
+aws X86_64 nested=true storage-100t -> error: architecture X86_64 is unavailable for this workload on platform aws
+aws X86_64 nested=true gpu-t4 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform aws
+aws X86_64 nested=true gpu-a10g -> error: no nested-virt-capable GpuCompute instance types in catalog for platform aws
+aws X86_64 nested=true gpu-a100 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform aws
+aws X86_64 nested=true gpu-a100x8 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform aws
+aws X86_64 nested=true gpu-h100x8 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform aws
+gcp default nested=false tiny -> e2-micro min=1 max=1 memory=1073741824 storage=21474836480
+gcp default nested=false burstable -> e2-medium min=1 max=1 memory=4294967296 storage=21474836480
+gcp default nested=false burstable-big-memory -> n2-standard-4 min=1 max=1 memory=17179869184 storage=21474836480
+gcp default nested=false small -> n2-standard-2 min=2 max=4 memory=8589934592 storage=21474836480
+gcp default nested=false medium -> n2-standard-8 min=1 max=1 memory=34359738368 storage=21474836480
+gcp default nested=false general -> n2-standard-8 min=2 max=4 memory=34359738368 storage=21474836480
+gcp default nested=false many-replicas -> n2-standard-8 min=2 max=10 memory=34359738368 storage=21474836480
+gcp default nested=false large-replica -> n2-standard-16 min=1 max=2 memory=68719476736 storage=21474836480
+gcp default nested=false huge-replica -> error: no gcp machine can fit one replica with system reserve and workload headroom
+gcp default nested=false memory-heavy -> error: no gcp machine can fit one replica with system reserve and workload headroom
+gcp default nested=false storage-300g -> c3d-standard-8 min=1 max=1 memory=34359738368 storage=515396075520
+gcp default nested=false storage-1t -> c3d-standard-30 min=1 max=1 memory=128849018880 storage=2061584302080
+gcp default nested=false storage-2t -> n2-standard-8 min=2 max=3 memory=34359738368 storage=2147483648000
+gcp default nested=false storage-8t -> n2-standard-4 min=2 max=2 memory=17179869184 storage=8589934592000
+gcp default nested=false storage-100t -> error: architecture X86_64 is unavailable for this workload on platform gcp
+gcp default nested=false gpu-t4 -> n1-standard-4-t4 min=1 max=1 memory=16106127360 storage=107374182400
+gcp default nested=false gpu-a10g -> error: X86_64: no instance type for GPU type 'nvidia-a10g' x1 on platform gcp; Arm64: architecture Arm64 is unavailable for this workload on platform gcp
+gcp default nested=false gpu-a100 -> a2-highgpu-1g min=1 max=1 memory=91268055040 storage=107374182400
+gcp default nested=false gpu-a100x8 -> a2-highgpu-8g min=1 max=1 memory=1460288880640 storage=107374182400
+gcp default nested=false gpu-h100x8 -> a3-highgpu-8g min=1 max=1 memory=2010044694528 storage=107374182400
+gcp default nested=true tiny -> n2-standard-2 min=1 max=1 memory=8589934592 storage=21474836480
+gcp default nested=true burstable -> n2-standard-2 min=1 max=1 memory=8589934592 storage=21474836480
+gcp default nested=true burstable-big-memory -> n2-standard-4 min=1 max=1 memory=17179869184 storage=21474836480
+gcp default nested=true small -> n2-standard-2 min=2 max=4 memory=8589934592 storage=21474836480
+gcp default nested=true medium -> n2-standard-8 min=1 max=1 memory=34359738368 storage=21474836480
+gcp default nested=true general -> n2-standard-8 min=2 max=4 memory=34359738368 storage=21474836480
+gcp default nested=true many-replicas -> n2-standard-8 min=2 max=10 memory=34359738368 storage=21474836480
+gcp default nested=true large-replica -> n2-standard-16 min=1 max=2 memory=68719476736 storage=21474836480
+gcp default nested=true huge-replica -> error: X86_64: no gcp machine can fit one replica with system reserve and workload headroom; Arm64: architecture Arm64 is unavailable for this workload on platform gcp
+gcp default nested=true memory-heavy -> error: X86_64: no gcp machine can fit one replica with system reserve and workload headroom; Arm64: architecture Arm64 is unavailable for this workload on platform gcp
+gcp default nested=true storage-300g -> n2-standard-4 min=2 max=2 memory=17179869184 storage=322122547200
+gcp default nested=true storage-1t -> n2-standard-8 min=2 max=3 memory=34359738368 storage=1073741824000
+gcp default nested=true storage-2t -> n2-standard-8 min=2 max=3 memory=34359738368 storage=2147483648000
+gcp default nested=true storage-8t -> n2-standard-4 min=2 max=2 memory=17179869184 storage=8589934592000
+gcp default nested=true storage-100t -> error: X86_64: architecture X86_64 is unavailable for this workload on platform gcp; Arm64: architecture Arm64 is unavailable for this workload on platform gcp
+gcp default nested=true gpu-t4 -> error: X86_64: no nested-virt-capable GpuCompute instance types in catalog for platform gcp; Arm64: no nested-virt-capable GpuCompute instance types in catalog for platform gcp
+gcp default nested=true gpu-a10g -> error: X86_64: no nested-virt-capable GpuCompute instance types in catalog for platform gcp; Arm64: no nested-virt-capable GpuCompute instance types in catalog for platform gcp
+gcp default nested=true gpu-a100 -> error: X86_64: no nested-virt-capable GpuCompute instance types in catalog for platform gcp; Arm64: no nested-virt-capable GpuCompute instance types in catalog for platform gcp
+gcp default nested=true gpu-a100x8 -> error: X86_64: no nested-virt-capable GpuCompute instance types in catalog for platform gcp; Arm64: no nested-virt-capable GpuCompute instance types in catalog for platform gcp
+gcp default nested=true gpu-h100x8 -> error: X86_64: no nested-virt-capable GpuCompute instance types in catalog for platform gcp; Arm64: no nested-virt-capable GpuCompute instance types in catalog for platform gcp
+gcp Arm64 nested=false tiny -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=false burstable -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=false burstable-big-memory -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=false small -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=false medium -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=false general -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=false many-replicas -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=false large-replica -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=false huge-replica -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=false memory-heavy -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=false storage-300g -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=false storage-1t -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=false storage-2t -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=false storage-8t -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=false storage-100t -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=false gpu-t4 -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=false gpu-a10g -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=false gpu-a100 -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=false gpu-a100x8 -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=false gpu-h100x8 -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=true tiny -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=true burstable -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=true burstable-big-memory -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=true small -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=true medium -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=true general -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=true many-replicas -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=true large-replica -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=true huge-replica -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=true memory-heavy -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=true storage-300g -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=true storage-1t -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=true storage-2t -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=true storage-8t -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=true storage-100t -> error: architecture Arm64 is unavailable for this workload on platform gcp
+gcp Arm64 nested=true gpu-t4 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform gcp
+gcp Arm64 nested=true gpu-a10g -> error: no nested-virt-capable GpuCompute instance types in catalog for platform gcp
+gcp Arm64 nested=true gpu-a100 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform gcp
+gcp Arm64 nested=true gpu-a100x8 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform gcp
+gcp Arm64 nested=true gpu-h100x8 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform gcp
+gcp X86_64 nested=false tiny -> e2-micro min=1 max=1 memory=1073741824 storage=21474836480
+gcp X86_64 nested=false burstable -> e2-medium min=1 max=1 memory=4294967296 storage=21474836480
+gcp X86_64 nested=false burstable-big-memory -> n2-standard-4 min=1 max=1 memory=17179869184 storage=21474836480
+gcp X86_64 nested=false small -> n2-standard-2 min=2 max=4 memory=8589934592 storage=21474836480
+gcp X86_64 nested=false medium -> n2-standard-8 min=1 max=1 memory=34359738368 storage=21474836480
+gcp X86_64 nested=false general -> n2-standard-8 min=2 max=4 memory=34359738368 storage=21474836480
+gcp X86_64 nested=false many-replicas -> n2-standard-8 min=2 max=10 memory=34359738368 storage=21474836480
+gcp X86_64 nested=false large-replica -> n2-standard-16 min=1 max=2 memory=68719476736 storage=21474836480
+gcp X86_64 nested=false huge-replica -> error: no gcp machine can fit one replica with system reserve and workload headroom
+gcp X86_64 nested=false memory-heavy -> error: no gcp machine can fit one replica with system reserve and workload headroom
+gcp X86_64 nested=false storage-300g -> c3d-standard-8 min=1 max=1 memory=34359738368 storage=515396075520
+gcp X86_64 nested=false storage-1t -> c3d-standard-30 min=1 max=1 memory=128849018880 storage=2061584302080
+gcp X86_64 nested=false storage-2t -> n2-standard-8 min=2 max=3 memory=34359738368 storage=2147483648000
+gcp X86_64 nested=false storage-8t -> n2-standard-4 min=2 max=2 memory=17179869184 storage=8589934592000
+gcp X86_64 nested=false storage-100t -> error: architecture X86_64 is unavailable for this workload on platform gcp
+gcp X86_64 nested=false gpu-t4 -> n1-standard-4-t4 min=1 max=1 memory=16106127360 storage=107374182400
+gcp X86_64 nested=false gpu-a10g -> error: no instance type for GPU type 'nvidia-a10g' x1 on platform gcp
+gcp X86_64 nested=false gpu-a100 -> a2-highgpu-1g min=1 max=1 memory=91268055040 storage=107374182400
+gcp X86_64 nested=false gpu-a100x8 -> a2-highgpu-8g min=1 max=1 memory=1460288880640 storage=107374182400
+gcp X86_64 nested=false gpu-h100x8 -> a3-highgpu-8g min=1 max=1 memory=2010044694528 storage=107374182400
+gcp X86_64 nested=true tiny -> n2-standard-2 min=1 max=1 memory=8589934592 storage=21474836480
+gcp X86_64 nested=true burstable -> n2-standard-2 min=1 max=1 memory=8589934592 storage=21474836480
+gcp X86_64 nested=true burstable-big-memory -> n2-standard-4 min=1 max=1 memory=17179869184 storage=21474836480
+gcp X86_64 nested=true small -> n2-standard-2 min=2 max=4 memory=8589934592 storage=21474836480
+gcp X86_64 nested=true medium -> n2-standard-8 min=1 max=1 memory=34359738368 storage=21474836480
+gcp X86_64 nested=true general -> n2-standard-8 min=2 max=4 memory=34359738368 storage=21474836480
+gcp X86_64 nested=true many-replicas -> n2-standard-8 min=2 max=10 memory=34359738368 storage=21474836480
+gcp X86_64 nested=true large-replica -> n2-standard-16 min=1 max=2 memory=68719476736 storage=21474836480
+gcp X86_64 nested=true huge-replica -> error: no gcp machine can fit one replica with system reserve and workload headroom
+gcp X86_64 nested=true memory-heavy -> error: no gcp machine can fit one replica with system reserve and workload headroom
+gcp X86_64 nested=true storage-300g -> n2-standard-4 min=2 max=2 memory=17179869184 storage=322122547200
+gcp X86_64 nested=true storage-1t -> n2-standard-8 min=2 max=3 memory=34359738368 storage=1073741824000
+gcp X86_64 nested=true storage-2t -> n2-standard-8 min=2 max=3 memory=34359738368 storage=2147483648000
+gcp X86_64 nested=true storage-8t -> n2-standard-4 min=2 max=2 memory=17179869184 storage=8589934592000
+gcp X86_64 nested=true storage-100t -> error: architecture X86_64 is unavailable for this workload on platform gcp
+gcp X86_64 nested=true gpu-t4 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform gcp
+gcp X86_64 nested=true gpu-a10g -> error: no nested-virt-capable GpuCompute instance types in catalog for platform gcp
+gcp X86_64 nested=true gpu-a100 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform gcp
+gcp X86_64 nested=true gpu-a100x8 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform gcp
+gcp X86_64 nested=true gpu-h100x8 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform gcp
+azure default nested=false tiny -> Standard_B1s min=1 max=1 memory=1073741824 storage=21474836480
+azure default nested=false burstable -> Standard_B2s min=1 max=1 memory=4294967296 storage=21474836480
+azure default nested=false burstable-big-memory -> Standard_B4ms min=1 max=1 memory=17179869184 storage=21474836480
+azure default nested=false small -> Standard_D2s_v4 min=2 max=4 memory=8589934592 storage=21474836480
+azure default nested=false medium -> Standard_D8s_v5 min=1 max=1 memory=34359738368 storage=21474836480
+azure default nested=false general -> Standard_D8s_v5 min=2 max=4 memory=34359738368 storage=21474836480
+azure default nested=false many-replicas -> Standard_D8s_v5 min=2 max=10 memory=34359738368 storage=21474836480
+azure default nested=false large-replica -> Standard_D16s_v5 min=1 max=2 memory=68719476736 storage=21474836480
+azure default nested=false huge-replica -> error: no azure machine can fit one replica with system reserve and workload headroom
+azure default nested=false memory-heavy -> error: no azure machine can fit one replica with system reserve and workload headroom
+azure default nested=false storage-300g -> Standard_L8s_v3 min=1 max=1 memory=68719476736 storage=1919850381312
+azure default nested=false storage-1t -> Standard_L8s_v3 min=2 max=3 memory=68719476736 storage=1919850381312
+azure default nested=false storage-2t -> Standard_L16s_v3 min=1 max=2 memory=137438953472 storage=3839700762624
+azure default nested=false storage-8t -> error: architecture X86_64 is unavailable for this workload on platform azure
+azure default nested=false storage-100t -> error: architecture X86_64 is unavailable for this workload on platform azure
+azure default nested=false gpu-t4 -> Standard_NC4as_T4_v3 min=1 max=1 memory=30064771072 storage=188978561024
+azure default nested=false gpu-a10g -> error: X86_64: no instance type for GPU type 'nvidia-a10g' x1 on platform azure; Arm64: architecture Arm64 is unavailable for this workload on platform azure
+azure default nested=false gpu-a100 -> Standard_NC24ads_A100_v4 min=1 max=1 memory=236223201280 storage=1028644667392
+azure default nested=false gpu-a100x8 -> error: X86_64: no instance type for GPU type 'nvidia-a100' x8 on platform azure; Arm64: architecture Arm64 is unavailable for this workload on platform azure
+azure default nested=false gpu-h100x8 -> Standard_ND96isr_H100_v5 min=1 max=1 memory=2040109465600 storage=1073741824000
+azure default nested=true tiny -> Standard_D2s_v5 min=1 max=1 memory=8589934592 storage=21474836480
+azure default nested=true burstable -> Standard_D2s_v5 min=1 max=1 memory=8589934592 storage=21474836480
+azure default nested=true burstable-big-memory -> Standard_D4s_v5 min=1 max=1 memory=17179869184 storage=21474836480
+azure default nested=true small -> Standard_D2s_v5 min=2 max=4 memory=8589934592 storage=21474836480
+azure default nested=true medium -> Standard_D8s_v5 min=1 max=1 memory=34359738368 storage=21474836480
+azure default nested=true general -> Standard_D8s_v5 min=2 max=4 memory=34359738368 storage=21474836480
+azure default nested=true many-replicas -> Standard_D8s_v5 min=2 max=10 memory=34359738368 storage=21474836480
+azure default nested=true large-replica -> Standard_D16s_v5 min=1 max=2 memory=68719476736 storage=21474836480
+azure default nested=true huge-replica -> error: X86_64: no azure machine can fit one replica with system reserve and workload headroom; Arm64: architecture Arm64 is unavailable for this workload on platform azure
+azure default nested=true memory-heavy -> error: X86_64: no azure machine can fit one replica with system reserve and workload headroom; Arm64: architecture Arm64 is unavailable for this workload on platform azure
+azure default nested=true storage-300g -> Standard_D4s_v5 min=2 max=2 memory=17179869184 storage=322122547200
+azure default nested=true storage-1t -> Standard_D8s_v5 min=2 max=3 memory=34359738368 storage=1073741824000
+azure default nested=true storage-2t -> Standard_D8s_v5 min=2 max=3 memory=34359738368 storage=2147483648000
+azure default nested=true storage-8t -> error: X86_64: architecture X86_64 is unavailable for this workload on platform azure; Arm64: architecture Arm64 is unavailable for this workload on platform azure
+azure default nested=true storage-100t -> error: X86_64: architecture X86_64 is unavailable for this workload on platform azure; Arm64: architecture Arm64 is unavailable for this workload on platform azure
+azure default nested=true gpu-t4 -> error: X86_64: no nested-virt-capable GpuCompute instance types in catalog for platform azure; Arm64: no nested-virt-capable GpuCompute instance types in catalog for platform azure
+azure default nested=true gpu-a10g -> error: X86_64: no nested-virt-capable GpuCompute instance types in catalog for platform azure; Arm64: no nested-virt-capable GpuCompute instance types in catalog for platform azure
+azure default nested=true gpu-a100 -> error: X86_64: no nested-virt-capable GpuCompute instance types in catalog for platform azure; Arm64: no nested-virt-capable GpuCompute instance types in catalog for platform azure
+azure default nested=true gpu-a100x8 -> error: X86_64: no nested-virt-capable GpuCompute instance types in catalog for platform azure; Arm64: no nested-virt-capable GpuCompute instance types in catalog for platform azure
+azure default nested=true gpu-h100x8 -> error: X86_64: no nested-virt-capable GpuCompute instance types in catalog for platform azure; Arm64: no nested-virt-capable GpuCompute instance types in catalog for platform azure
+azure Arm64 nested=false tiny -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=false burstable -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=false burstable-big-memory -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=false small -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=false medium -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=false general -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=false many-replicas -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=false large-replica -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=false huge-replica -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=false memory-heavy -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=false storage-300g -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=false storage-1t -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=false storage-2t -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=false storage-8t -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=false storage-100t -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=false gpu-t4 -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=false gpu-a10g -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=false gpu-a100 -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=false gpu-a100x8 -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=false gpu-h100x8 -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=true tiny -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=true burstable -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=true burstable-big-memory -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=true small -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=true medium -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=true general -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=true many-replicas -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=true large-replica -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=true huge-replica -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=true memory-heavy -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=true storage-300g -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=true storage-1t -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=true storage-2t -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=true storage-8t -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=true storage-100t -> error: architecture Arm64 is unavailable for this workload on platform azure
+azure Arm64 nested=true gpu-t4 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform azure
+azure Arm64 nested=true gpu-a10g -> error: no nested-virt-capable GpuCompute instance types in catalog for platform azure
+azure Arm64 nested=true gpu-a100 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform azure
+azure Arm64 nested=true gpu-a100x8 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform azure
+azure Arm64 nested=true gpu-h100x8 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform azure
+azure X86_64 nested=false tiny -> Standard_B1s min=1 max=1 memory=1073741824 storage=21474836480
+azure X86_64 nested=false burstable -> Standard_B2s min=1 max=1 memory=4294967296 storage=21474836480
+azure X86_64 nested=false burstable-big-memory -> Standard_B4ms min=1 max=1 memory=17179869184 storage=21474836480
+azure X86_64 nested=false small -> Standard_D2s_v4 min=2 max=4 memory=8589934592 storage=21474836480
+azure X86_64 nested=false medium -> Standard_D8s_v5 min=1 max=1 memory=34359738368 storage=21474836480
+azure X86_64 nested=false general -> Standard_D8s_v5 min=2 max=4 memory=34359738368 storage=21474836480
+azure X86_64 nested=false many-replicas -> Standard_D8s_v5 min=2 max=10 memory=34359738368 storage=21474836480
+azure X86_64 nested=false large-replica -> Standard_D16s_v5 min=1 max=2 memory=68719476736 storage=21474836480
+azure X86_64 nested=false huge-replica -> error: no azure machine can fit one replica with system reserve and workload headroom
+azure X86_64 nested=false memory-heavy -> error: no azure machine can fit one replica with system reserve and workload headroom
+azure X86_64 nested=false storage-300g -> Standard_L8s_v3 min=1 max=1 memory=68719476736 storage=1919850381312
+azure X86_64 nested=false storage-1t -> Standard_L8s_v3 min=2 max=3 memory=68719476736 storage=1919850381312
+azure X86_64 nested=false storage-2t -> Standard_L16s_v3 min=1 max=2 memory=137438953472 storage=3839700762624
+azure X86_64 nested=false storage-8t -> error: architecture X86_64 is unavailable for this workload on platform azure
+azure X86_64 nested=false storage-100t -> error: architecture X86_64 is unavailable for this workload on platform azure
+azure X86_64 nested=false gpu-t4 -> Standard_NC4as_T4_v3 min=1 max=1 memory=30064771072 storage=188978561024
+azure X86_64 nested=false gpu-a10g -> error: no instance type for GPU type 'nvidia-a10g' x1 on platform azure
+azure X86_64 nested=false gpu-a100 -> Standard_NC24ads_A100_v4 min=1 max=1 memory=236223201280 storage=1028644667392
+azure X86_64 nested=false gpu-a100x8 -> error: no instance type for GPU type 'nvidia-a100' x8 on platform azure
+azure X86_64 nested=false gpu-h100x8 -> Standard_ND96isr_H100_v5 min=1 max=1 memory=2040109465600 storage=1073741824000
+azure X86_64 nested=true tiny -> Standard_D2s_v5 min=1 max=1 memory=8589934592 storage=21474836480
+azure X86_64 nested=true burstable -> Standard_D2s_v5 min=1 max=1 memory=8589934592 storage=21474836480
+azure X86_64 nested=true burstable-big-memory -> Standard_D4s_v5 min=1 max=1 memory=17179869184 storage=21474836480
+azure X86_64 nested=true small -> Standard_D2s_v5 min=2 max=4 memory=8589934592 storage=21474836480
+azure X86_64 nested=true medium -> Standard_D8s_v5 min=1 max=1 memory=34359738368 storage=21474836480
+azure X86_64 nested=true general -> Standard_D8s_v5 min=2 max=4 memory=34359738368 storage=21474836480
+azure X86_64 nested=true many-replicas -> Standard_D8s_v5 min=2 max=10 memory=34359738368 storage=21474836480
+azure X86_64 nested=true large-replica -> Standard_D16s_v5 min=1 max=2 memory=68719476736 storage=21474836480
+azure X86_64 nested=true huge-replica -> error: no azure machine can fit one replica with system reserve and workload headroom
+azure X86_64 nested=true memory-heavy -> error: no azure machine can fit one replica with system reserve and workload headroom
+azure X86_64 nested=true storage-300g -> Standard_D4s_v5 min=2 max=2 memory=17179869184 storage=322122547200
+azure X86_64 nested=true storage-1t -> Standard_D8s_v5 min=2 max=3 memory=34359738368 storage=1073741824000
+azure X86_64 nested=true storage-2t -> Standard_D8s_v5 min=2 max=3 memory=34359738368 storage=2147483648000
+azure X86_64 nested=true storage-8t -> error: architecture X86_64 is unavailable for this workload on platform azure
+azure X86_64 nested=true storage-100t -> error: architecture X86_64 is unavailable for this workload on platform azure
+azure X86_64 nested=true gpu-t4 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform azure
+azure X86_64 nested=true gpu-a10g -> error: no nested-virt-capable GpuCompute instance types in catalog for platform azure
+azure X86_64 nested=true gpu-a100 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform azure
+azure X86_64 nested=true gpu-a100x8 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform azure
+azure X86_64 nested=true gpu-h100x8 -> error: no nested-virt-capable GpuCompute instance types in catalog for platform azure

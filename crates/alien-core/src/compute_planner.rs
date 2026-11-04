@@ -5,7 +5,7 @@
 //! stack and does not require database access.
 
 use crate::{
-    instance_catalog::{self, Architecture, WorkloadRequirements},
+    instance_catalog::{self, Architecture, InstanceFamily, WorkloadRequirements},
     CapacityGroup, CapacityGroupScalePolicy, ComputeChoiceRange, ComputePoolSelection, Container,
     Daemon, ErrorData, FailureDomainSelection, GpuSpec, MachineProfile, Platform, ResourceSpec,
     Stack, StackState,
@@ -67,7 +67,8 @@ pub struct ComputePoolPlan {
     pub selected: ComputePoolSelection,
     /// Planner-recommended default.
     pub recommended: ComputePoolSelection,
-    /// Valid cloud machine choices. Empty for local and Kubernetes.
+    /// Every catalog machine for the platform, in catalog order (config series order, then vCPU).
+    /// `available` marks the ones that can run this pool. Empty for local and Kubernetes.
     pub machines: Vec<ComputeMachineOption>,
     /// Data disk sizes this deployment may choose, when the pool declares a data disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -101,10 +102,46 @@ pub struct ComputePoolDataDiskPlan {
 pub struct ComputeMachineOption {
     /// Provider machine name.
     pub machine: String,
+    /// Provider series the machine belongs to, such as `m8i` or `n2-standard`.
+    pub series: String,
+    /// Category the machine's series belongs to.
+    pub category: InstanceFamily,
+    /// How the series is shown to people choosing a machine.
+    pub label: String,
     /// Machine hardware profile.
     pub profile: MachineProfile,
+    /// Whether the machine exposes nested virtualization to guest VMs.
+    pub nested_virtualization: bool,
+    /// Local instance disk the provider reports for the machine, in bytes. Absent when the
+    /// machine has none and its storage is a provider disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_storage: Option<u64>,
+    /// Whether the machine can run this pool.
+    pub available: bool,
+    /// Why the machine cannot run this pool. Empty when `available` is true.
+    pub unavailable_reasons: Vec<MachineUnavailableReason>,
     /// Whether this machine is the planner's default recommendation.
     pub recommended: bool,
+}
+
+/// A pool requirement a machine does not meet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum MachineUnavailableReason {
+    /// The machine's CPU architecture differs from the pool's.
+    Architecture,
+    /// The pool needs nested virtualization and the machine does not expose it.
+    NestedVirtualization,
+    /// The machine has fewer vCPUs than one workload replica needs.
+    Cpu,
+    /// The machine has less memory than one workload replica needs.
+    Memory,
+    /// The machine's local storage, or the largest disk the provider allows, is smaller
+    /// than one workload replica needs.
+    EphemeralStorage,
+    /// The machine lacks the GPU type or count the pool needs.
+    Gpu,
 }
 
 /// Failure-domain policy for a pool that hosts persistent stateful workloads when the
@@ -362,6 +399,7 @@ pub fn plan_compute_with_state(
         let machines = machine_options(
             platform,
             &requirements,
+            group.workload_requirements.as_ref(),
             selected_choice.machine(),
             recommended.machine(),
         )?;
@@ -741,6 +779,7 @@ pub fn capacity_group_requirements(group: &CapacityGroup) -> WorkloadRequirement
 fn machine_options(
     platform: Platform,
     requirements: &WorkloadRequirements,
+    workload_requirements: Option<&WorkloadRequirements>,
     selected_machine: Option<&str>,
     recommended_machine: Option<&str>,
 ) -> Result<Vec<ComputeMachineOption>, ErrorData> {
@@ -766,18 +805,34 @@ fn machine_options(
             })
         })?;
 
-    let mut options: Vec<ComputeMachineOption> = instance_catalog::catalog_for_platform(platform)
+    Ok(instance_catalog::catalog_for_platform(platform)
         .into_iter()
-        .filter(|spec| instance_satisfies(spec, requirements, resolved_architecture))
-        .map(|spec| ComputeMachineOption {
-            machine: spec.name.to_string(),
-            profile: spec.to_machine_profile_for_storage(requirements.max_ephemeral_storage_bytes),
-            recommended: Some(spec.name) == recommended_machine
-                || Some(spec.name) == selected_machine,
+        .map(|spec| {
+            let unavailable_reasons = unavailable_reasons(
+                spec,
+                requirements,
+                resolved_architecture,
+                match workload_requirements {
+                    Some(workloads) => Fit::OneReplica(workloads),
+                    None => Fit::Hardware,
+                },
+            );
+            ComputeMachineOption {
+                machine: spec.name.to_string(),
+                series: spec.series.to_string(),
+                category: spec.family,
+                label: spec.label.to_string(),
+                profile: spec
+                    .to_machine_profile_for_storage(requirements.max_ephemeral_storage_bytes),
+                nested_virtualization: spec.is_nested_virt_capable(),
+                local_storage: (spec.local_disk_bytes > 0).then_some(spec.local_disk_bytes),
+                available: unavailable_reasons.is_empty(),
+                unavailable_reasons,
+                recommended: Some(spec.name) == recommended_machine
+                    || Some(spec.name) == selected_machine,
+            }
         })
-        .collect();
-    options.sort_by(|a, b| a.machine.cmp(&b.machine));
-    Ok(options)
+        .collect())
 }
 
 fn instance_satisfies(
@@ -785,35 +840,71 @@ fn instance_satisfies(
     requirements: &WorkloadRequirements,
     resolved_architecture: Architecture,
 ) -> bool {
+    unavailable_reasons(spec, requirements, resolved_architecture, Fit::Hardware).is_empty()
+}
+
+/// How `unavailable_reasons` compares a replica's CPU and memory with a machine.
+#[derive(Clone, Copy)]
+enum Fit<'a> {
+    /// Against the machine's hardware totals: what selection validation has always accepted,
+    /// so an explicit choice that validated before still does.
+    Hardware,
+    /// Also against what is left after the host reserve for one replica of the pool's
+    /// workloads, as the pool capacity check does. A pool without workloads carries only its
+    /// machine profile, which describes the machine itself, so it uses `Hardware`.
+    OneReplica(&'a WorkloadRequirements),
+}
+
+/// Every pool requirement `spec` fails, in a fixed order. The fit rule behind both the
+/// machine list and selection validation.
+fn unavailable_reasons(
+    spec: &instance_catalog::InstanceTypeSpec,
+    requirements: &WorkloadRequirements,
+    resolved_architecture: Architecture,
+    fit: Fit<'_>,
+) -> Vec<MachineUnavailableReason> {
+    let mut reasons = Vec::new();
     if spec.architecture != resolved_architecture {
-        return false;
+        reasons.push(MachineUnavailableReason::Architecture);
     }
     if requirements.nested_virt && !spec.is_nested_virt_capable() {
-        return false;
+        reasons.push(MachineUnavailableReason::NestedVirtualization);
     }
-    if spec.vcpu < requirements.max_cpu_per_container.ceil() as u32 {
-        return false;
+    let mut cpu_fits = spec.vcpu >= requirements.max_cpu_per_container.ceil() as u32;
+    let mut memory_fits = spec.memory_bytes >= requirements.max_memory_per_container;
+    if let Fit::OneReplica(workloads) = fit {
+        cpu_fits &= instance_catalog::allocatable_cpu(spec) + f64::EPSILON
+            >= workloads.max_cpu_per_container;
+        memory_fits &=
+            instance_catalog::allocatable_memory_bytes(spec) >= workloads.max_memory_per_container;
     }
-    if spec.memory_bytes < requirements.max_memory_per_container {
-        return false;
+    if !cpu_fits {
+        reasons.push(MachineUnavailableReason::Cpu);
     }
-    if spec.has_configurable_ephemeral_storage() {
-        if crate::instance_catalog::max_configurable_ephemeral_storage_bytes(spec.platform)
-            .is_none_or(|max| requirements.max_ephemeral_storage_bytes > max)
-        {
-            return false;
-        }
-    } else if spec.ephemeral_storage_bytes < requirements.max_ephemeral_storage_bytes {
-        return false;
+    if !memory_fits {
+        reasons.push(MachineUnavailableReason::Memory);
     }
-    match (&requirements.gpu, spec.gpu) {
+    let storage_fits = if spec.has_configurable_ephemeral_storage() {
+        crate::instance_catalog::max_configurable_ephemeral_storage_bytes(spec.platform)
+            .is_some_and(|max| requirements.max_ephemeral_storage_bytes <= max)
+    } else {
+        spec.ephemeral_storage_bytes >= requirements.max_ephemeral_storage_bytes
+    };
+    if !storage_fits {
+        reasons.push(MachineUnavailableReason::EphemeralStorage);
+    }
+    let gpu_fits = match (&requirements.gpu, spec.gpu) {
         (Some(required), Some(actual)) => {
             (required.gpu_type == "any" || required.gpu_type == actual.gpu_type)
                 && actual.count >= required.count
         }
         (Some(_), None) => false,
         (None, _) => true,
+    };
+    if !gpu_fits {
+        reasons.push(MachineUnavailableReason::Gpu);
     }
+    reasons
 }
 
 #[derive(Debug, Clone)]
@@ -1944,10 +2035,22 @@ mod tests {
             let expected = instance_catalog::default_architecture(platform)
                 .expect("managed cloud should have a default architecture");
 
-            assert!(pool.machines.iter().all(|machine| {
-                instance_catalog::find_instance_type(platform, &machine.machine)
-                    .is_some_and(|spec| spec.architecture == expected)
-            }));
+            assert!(pool.machines.iter().any(|machine| machine.available));
+            for machine in &pool.machines {
+                let spec = instance_catalog::find_instance_type(platform, &machine.machine)
+                    .expect("every option is a catalog machine");
+                if machine.available {
+                    assert_eq!(spec.architecture, expected, "{}", machine.machine);
+                }
+                assert_eq!(
+                    machine
+                        .unavailable_reasons
+                        .contains(&MachineUnavailableReason::Architecture),
+                    spec.architecture != expected,
+                    "{}",
+                    machine.machine
+                );
+            }
         }
     }
 
@@ -2036,10 +2139,12 @@ mod tests {
 
         let pool = plan.pools.first().expect("general pool should exist");
         assert!(pool.errors.is_empty());
-        assert!(pool.machines.iter().all(|machine| {
-            instance_catalog::find_instance_type(Platform::Aws, &machine.machine)
-                .is_some_and(|spec| spec.architecture == Architecture::X86_64)
-        }));
+        assert!(pool.machines.iter().any(|machine| machine.available));
+        assert!(pool
+            .machines
+            .iter()
+            .filter(|machine| machine.available)
+            .all(|machine| machine.profile.architecture == Some(Architecture::X86_64)));
     }
 
     #[test]
@@ -2126,6 +2231,86 @@ mod tests {
     /// The pool path deployment packages plan: a nested-virtualization pool that
     /// leaves the architecture unset must resolve to the x86_64 machines AWS
     /// offers for it, the same machine the image build resolves.
+    /// A machine the plan marks available is one a pin of it accepts: one replica of the
+    /// pool's workloads fits after the host reserve.
+    #[test]
+    fn available_machines_fit_one_replica_after_the_host_reserve() {
+        let mut stack = stack_with_container();
+        stack
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .cpu = ResourceSpec {
+            min: "4".into(),
+            desired: "4".into(),
+        };
+        let plan = plan_compute(&stack, Platform::Aws, None).expect("plan should build");
+        let available: Vec<_> = plan.pools[0]
+            .machines
+            .iter()
+            .filter(|option| option.available)
+            .map(|option| option.machine.clone())
+            .collect();
+        assert!(!available.is_empty());
+        assert!(!available.contains(&"t3.xlarge".to_string()));
+        for machine in available {
+            let settings: ComputeSettings = serde_json::from_value(serde_json::json!({
+                "pools":{"general":{"mode":"fixed","machines":1,"machine":machine}}
+            }))
+            .unwrap();
+            let pinned = plan_compute(&stack, Platform::Aws, Some(&settings)).unwrap();
+            assert!(
+                pinned.pools[0].errors.is_empty(),
+                "{machine} is listed as available: {:?}",
+                pinned.pools[0].errors
+            );
+        }
+    }
+
+    /// A pool without workloads carries only its machine's profile, so that machine stays
+    /// available: the host reserve applies to workload demand, not to the machine itself.
+    #[test]
+    fn a_pool_without_workloads_keeps_its_own_machine_available() {
+        let spec = instance_catalog::find_instance_type(Platform::Aws, "m7g.large").unwrap();
+        let mut stack = stack_with_container();
+        stack.resources.remove("api");
+        stack.resources.insert(
+            "compute".to_string(),
+            ResourceEntry {
+                config: Resource::new(
+                    ComputeCluster::new("compute".to_string())
+                        .capacity_group(CapacityGroup {
+                            group_id: "general".to_string(),
+                            instance_type: Some("m7g.large".to_string()),
+                            profile: Some(spec.to_machine_profile()),
+                            min_size: 1,
+                            max_size: 1,
+                            scale_policy: None,
+                            nested_virtualization: None,
+                            data_disk_gib_range: None,
+                        })
+                        .build(),
+                ),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                display_name: None,
+                description: None,
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        let plan = plan_compute(&stack, Platform::Aws, None).expect("plan should build");
+        let option = plan.pools[0]
+            .machines
+            .iter()
+            .find(|option| option.machine == "m7g.large")
+            .expect("m7g.large should be listed");
+        assert!(option.available, "{:?}", option.unavailable_reasons);
+    }
+
     #[test]
     fn nested_pool_without_architecture_plans_an_aws_machine() {
         let mut stack = stack_with_container();
@@ -2173,12 +2358,101 @@ mod tests {
             .expect("selected machine should exist in the catalog");
         assert!(spec.is_nested_virt_capable(), "{machine} is not nested-capable");
         assert_eq!(spec.architecture, Architecture::X86_64);
-        assert!(!pool.machines.is_empty());
-        assert!(pool.machines.iter().all(|option| {
-            instance_catalog::find_instance_type(Platform::Aws, &option.machine).is_some_and(
-                |spec| spec.is_nested_virt_capable() && spec.architecture == Architecture::X86_64,
-            )
-        }));
+
+        // Every AWS machine is listed, in catalog order: category, series, then vCPU.
+        let catalog = instance_catalog::catalog_for_platform(Platform::Aws);
+        assert_eq!(
+            pool.machines
+                .iter()
+                .map(|option| option.machine.as_str())
+                .collect::<Vec<_>>(),
+            catalog.iter().map(|spec| spec.name).collect::<Vec<_>>()
+        );
+        // The pool needs 4 vCPU and 16 GiB per replica, on a nested-capable x86 machine.
+        for (option, spec) in pool.machines.iter().zip(&catalog) {
+            let fits = spec.is_nested_virt_capable()
+                && spec.architecture == Architecture::X86_64
+                && spec.vcpu >= 4
+                && spec.memory_bytes >= 16 * GIB
+                && (spec.has_configurable_ephemeral_storage()
+                    || spec.ephemeral_storage_bytes >= 20 * GIB);
+            assert_eq!(option.available, fits, "{}", option.machine);
+            assert_eq!(
+                option.available,
+                option.unavailable_reasons.is_empty(),
+                "{}",
+                option.machine
+            );
+        }
+
+        let option = |name: &str| {
+            pool.machines
+                .iter()
+                .find(|option| option.machine == name)
+                .unwrap_or_else(|| panic!("{name} should be listed"))
+        };
+        let reasons = |name: &str| option(name).unavailable_reasons.clone();
+        assert_eq!(reasons("m8i.xlarge"), vec![]);
+        assert_eq!(
+            reasons("m8i.large"),
+            vec![
+                MachineUnavailableReason::Cpu,
+                MachineUnavailableReason::Memory
+            ]
+        );
+        assert_eq!(
+            reasons("c8i.xlarge"),
+            vec![MachineUnavailableReason::Memory]
+        );
+        assert_eq!(
+            reasons("m7g.xlarge"),
+            vec![
+                MachineUnavailableReason::Architecture,
+                MachineUnavailableReason::NestedVirtualization
+            ]
+        );
+        assert_eq!(
+            reasons("t3.xlarge"),
+            vec![MachineUnavailableReason::NestedVirtualization]
+        );
+        assert_eq!(
+            reasons("t4g.micro"),
+            vec![
+                MachineUnavailableReason::Architecture,
+                MachineUnavailableReason::NestedVirtualization,
+                MachineUnavailableReason::Cpu,
+                MachineUnavailableReason::Memory
+            ]
+        );
+
+        let large = option("m8i.24xlarge");
+        assert!(large.available);
+        assert_eq!(large.series, "m8i");
+        assert_eq!(large.category, InstanceFamily::GeneralPurpose);
+        assert_eq!(large.label, "General purpose · Intel · 8th gen");
+        assert!(large.nested_virtualization);
+        assert_eq!(large.local_storage, None);
+        let local = option("i7i.xlarge");
+        assert!(local.available);
+        assert_eq!(local.category, InstanceFamily::StorageOptimized);
+        // AWS reports 937 decimal GB of local NVMe.
+        assert_eq!(local.local_storage, Some(893_592 * 1024 * 1024));
+
+        let wire = serde_json::to_value(large).expect("option should serialize");
+        assert_eq!(wire["category"], "generalPurpose");
+        assert_eq!(wire["nestedVirtualization"], true);
+        assert_eq!(wire["unavailableReasons"], serde_json::json!([]));
+        assert!(wire.get("localStorage").is_none());
+        let wire = serde_json::to_value(option("m7g.xlarge")).expect("option should serialize");
+        assert_eq!(wire["available"], false);
+        assert_eq!(
+            wire["unavailableReasons"],
+            serde_json::json!(["architecture", "nestedVirtualization"])
+        );
+        assert_eq!(
+            serde_json::to_value(local).expect("option should serialize")["localStorage"],
+            893_592u64 * 1024 * 1024
+        );
     }
 
     const GIB: u64 = 1024 * 1024 * 1024;
@@ -2200,8 +2474,9 @@ mod tests {
                     ephemeral_storage_bytes: 20 * GIB,
                     architecture: None,
                     gpu: None,
-                    data_disk: data_disk_gib
-                        .map(|gib| crate::DataDiskRequirement { size_bytes: gib * GIB }),
+                    data_disk: data_disk_gib.map(|gib| crate::DataDiskRequirement {
+                        size_bytes: gib * GIB,
+                    }),
                 }),
                 min_size: 1,
                 max_size: 1,
@@ -2262,7 +2537,11 @@ mod tests {
                 let settings = data_disk_selection(selected);
                 let plan = plan_compute(&stack, platform, Some(&settings)).expect("plan");
                 let pool = general_pool(&plan);
-                assert!(pool.errors.is_empty(), "{platform} {selected:?}: {:?}", pool.errors);
+                assert!(
+                    pool.errors.is_empty(),
+                    "{platform} {selected:?}: {:?}",
+                    pool.errors
+                );
                 assert_eq!(
                     pool.data_disk,
                     Some(ComputePoolDataDiskPlan {
@@ -2304,7 +2583,10 @@ mod tests {
             .expect("plan");
         assert_eq!(
             general_pool(&plan).errors,
-            vec!["pool 'general' has a fixed 100 GiB data disk; dataDiskGib 200 cannot be chosen".to_string()]
+            vec![
+                "pool 'general' has a fixed 100 GiB data disk; dataDiskGib 200 cannot be chosen"
+                    .to_string()
+            ]
         );
 
         let absent = stack_with_data_disk_pool(None, None);
@@ -2316,7 +2598,10 @@ mod tests {
             .expect("plan");
         assert_eq!(
             general_pool(&plan).errors,
-            vec!["pool 'general' declares no data disk, so dataDiskGib 50 cannot be chosen".to_string()]
+            vec![
+                "pool 'general' declares no data disk, so dataDiskGib 50 cannot be chosen"
+                    .to_string()
+            ]
         );
     }
 
@@ -2457,10 +2742,19 @@ mod tests {
                 },
             }
         );
-        assert!(!pool
+        let graviton = pool
             .machines
             .iter()
-            .any(|option| option.machine == "m7g.2xlarge"));
+            .find(|option| option.machine == "m7g.2xlarge")
+            .expect("every AWS machine is listed");
+        assert!(!graviton.available);
+        assert_eq!(
+            graviton.unavailable_reasons,
+            vec![
+                MachineUnavailableReason::Architecture,
+                MachineUnavailableReason::NestedVirtualization
+            ]
+        );
 
         let invalid_settings = ComputeSettings {
             containers: Default::default(),
@@ -2478,7 +2772,10 @@ mod tests {
         };
         let invalid_plan = plan_compute(&stack, Platform::Aws, Some(&invalid_settings))
             .expect("plan should build");
-        assert!(!invalid_plan.pools[0].errors.is_empty());
+        assert_eq!(
+            invalid_plan.pools[0].errors,
+            vec!["aws machine 'm7g.2xlarge' does not satisfy pool 'general' requirements"]
+        );
     }
 
     fn declared_pool_errors(

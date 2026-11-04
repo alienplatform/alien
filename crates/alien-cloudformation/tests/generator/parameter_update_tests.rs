@@ -283,6 +283,27 @@ fn every_parameter_stays_live_for_updates_that_reuse_the_template() {
             .get("ComputeStatefulDataDiskGib")
             .is_none());
 
+        // The machine override lists only machines that can run the pool: the Graviton
+        // pick fixes its architecture, so x86 machines are left out.
+        let machines: Vec<&str> = rendered["Parameters"]["ComputeGeneralMachine"]["AllowedValues"]
+            .as_array()
+            .expect("the machine override lists its allowed values")
+            .iter()
+            .map(|value| value.as_str().expect("machine names are strings"))
+            .collect();
+        assert!(machines.contains(&"m7g.large"));
+        assert!(machines.contains(&""));
+        assert!(!machines.contains(&"m8i.large"));
+        for machine in machines.iter().filter(|machine| !machine.is_empty()) {
+            let spec = alien_core::instance_catalog::find_instance_type(Platform::Aws, machine)
+                .unwrap_or_else(|| panic!("{machine} is not a catalog machine"));
+            assert_eq!(
+                spec.architecture,
+                alien_core::instance_catalog::Architecture::Arm64,
+                "{machine}"
+            );
+        }
+
         let yaml = to_yaml(&template).expect("template should serialize");
         alien_cloudformation::test_utils::cfn_lint(&yaml).assert_ok("parameter updates");
     }
