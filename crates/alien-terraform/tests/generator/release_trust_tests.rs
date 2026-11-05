@@ -74,6 +74,23 @@ fn attribute<'a>(block: &'a hcl::Block, name: &str) -> &'a hcl::Expression {
         .expr()
 }
 
+/// The addresses the registration resource in `registration.tf` names in `depends_on`.
+fn registration_depends_on(module: &ModuleFiles) -> Vec<String> {
+    let body: hcl::Body =
+        hcl::parse(&module.files["registration.tf"]).expect("registration parses");
+    let registration = body
+        .into_blocks()
+        .find(|block| block.identifier() == "resource")
+        .expect("registration.tf declares the registration resource");
+    let hcl::Expression::Array(depends_on) = attribute(&registration, "depends_on") else {
+        panic!("depends_on is a list");
+    };
+    depends_on
+        .iter()
+        .map(|address| hcl::format::to_string(address).expect("an address formats"))
+        .collect()
+}
+
 #[test]
 fn setup_writes_an_anchor_the_enforcers_accept() {
     let module = render(&stack(), TerraformTarget::Aws, protected());
@@ -130,10 +147,10 @@ fn setup_writes_an_anchor_the_enforcers_accept() {
 
     // Registration waits for the anchor, so the control plane never sees the deployment
     // before it exists.
-    let registration = &module.files["registration.tf"];
+    let depends_on = registration_depends_on(&module);
     assert!(
-        registration.contains("aws_ssm_parameter.release_trust_anchor"),
-        "{registration}"
+        depends_on.contains(&"aws_ssm_parameter.release_trust_anchor".to_string()),
+        "{depends_on:?}"
     );
 }
 
@@ -199,10 +216,11 @@ fn gcp_setup_writes_the_anchor_into_a_secret_only_setup_writes() {
             resource_prefix: Some("orders-prod".to_string()),
         }
     );
-    let registration = &module.files["registration.tf"];
+    let depends_on = registration_depends_on(&module);
     assert!(
-        registration.contains("google_secret_manager_secret_version.release_trust_anchor"),
-        "{registration}"
+        depends_on
+            .contains(&"google_secret_manager_secret_version.release_trust_anchor".to_string()),
+        "{depends_on:?}"
     );
 }
 
