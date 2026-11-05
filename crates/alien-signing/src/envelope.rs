@@ -28,22 +28,14 @@ pub const MAX_SIGNATURES: usize = 16;
 /// they are stored in the customer's environment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Kind {
-    /// A release: every workload of one platform, exactly.
+    /// A release: every workload of one platform on one channel, exactly.
     Release,
-    /// Developer config values for one deployment.
+    /// Developer config values for one install.
     Config,
-    /// One exec or debug session.
+    /// One exec session on one install.
     Session,
-    /// An approved operations plan.
-    Approval,
-    /// One dynamic container spec.
-    Dynamic,
-    /// One signed command payload.
-    Command,
     /// The next version of the signer list.
     SignerList,
-    /// A build of an enforcer or other component, signed by the components key.
-    Component,
 }
 
 /// A key's authority on the signer list.
@@ -52,10 +44,8 @@ pub enum Kind {
 pub enum Role {
     /// Releases and developer config.
     Release,
-    /// Exec and debug sessions, access approvals and plugin runs.
+    /// Exec sessions.
     Operate,
-    /// Dynamic container specs and signed command payloads.
-    Runtime,
     /// The next version of the signer list.
     Admin,
 }
@@ -66,7 +56,6 @@ impl Role {
         match self {
             Self::Release => "release",
             Self::Operate => "operate",
-            Self::Runtime => "runtime",
             Self::Admin => "admin",
         }
     }
@@ -74,16 +63,7 @@ impl Role {
 
 impl Kind {
     /// Every kind.
-    pub const ALL: [Kind; 8] = [
-        Kind::Release,
-        Kind::Config,
-        Kind::Session,
-        Kind::Approval,
-        Kind::Dynamic,
-        Kind::Command,
-        Kind::SignerList,
-        Kind::Component,
-    ];
+    pub const ALL: [Kind; 4] = [Kind::Release, Kind::Config, Kind::Session, Kind::SignerList];
 
     /// The `type` string.
     pub fn as_str(self) -> &'static str {
@@ -91,11 +71,7 @@ impl Kind {
             Self::Release => "release/v2",
             Self::Config => "config/v1",
             Self::Session => "session/v1",
-            Self::Approval => "approval/v1",
-            Self::Dynamic => "dynamic/v1",
-            Self::Command => "command/v1",
             Self::SignerList => "signer-list/v1",
-            Self::Component => "component/v1",
         }
     }
 
@@ -104,24 +80,19 @@ impl Kind {
         Self::ALL.into_iter().find(|kind| kind.as_str() == text)
     }
 
-    /// Role a signer needs to sign this kind. Components are signed by the
-    /// components key in the anchor, not by the signer list.
-    pub fn role(self) -> Option<Role> {
+    /// Role a signer needs to sign this kind.
+    pub fn role(self) -> Role {
         match self {
-            Self::Release | Self::Config => Some(Role::Release),
-            Self::Session | Self::Approval => Some(Role::Operate),
-            Self::Dynamic | Self::Command => Some(Role::Runtime),
-            Self::SignerList => Some(Role::Admin),
-            Self::Component => None,
+            Self::Release | Self::Config => Role::Release,
+            Self::Session => Role::Operate,
+            Self::SignerList => Role::Admin,
         }
     }
 
-    /// Whether statements of this kind name exactly one deployment.
-    pub fn is_deployment_bound(self) -> bool {
-        matches!(
-            self,
-            Self::Config | Self::Session | Self::Approval | Self::Dynamic | Self::Command
-        )
+    /// Whether statements of this kind name exactly one install. Releases
+    /// and signer lists are the same for every install of a project.
+    pub fn is_install_bound(self) -> bool {
+        matches!(self, Self::Config | Self::Session)
     }
 }
 
@@ -138,11 +109,12 @@ pub struct Envelope<B> {
     /// Statement kind, one of [`Kind`]'s `type` strings.
     #[serde(rename = "type")]
     pub kind: String,
-    /// Project the statement belongs to. Absent only on component statements,
-    /// which are the same for every project.
-    pub project: Option<String>,
-    /// Deployment the statement is for, on deployment-bound kinds.
-    pub deployment: Option<String>,
+    /// Project the statement belongs to, as named by signer list version 1.
+    pub project: String,
+    /// Install the statement is for, on install-bound kinds, in the form
+    /// [`crate::InstallId`] prints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install: Option<String>,
     /// Grows with every statement of a kind; for signer lists, the version.
     pub sequence: u64,
     /// When the statement stops being valid, if ever.
@@ -171,8 +143,7 @@ impl<B: Serialize> Envelope<B> {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Signature {
-    /// Id of the signer on the signer list, or `components` for the
-    /// components key.
+    /// Id of the signer on the signer list.
     pub signer: String,
     /// Base64 DER ECDSA P-256 signature over the payload bytes.
     pub sig: String,
@@ -229,7 +200,7 @@ impl SignedStatement {
         Ok(Opened {
             kind,
             project: header.project,
-            deployment: header.deployment,
+            install: header.install,
             sequence: header.sequence,
             not_after: header.not_after,
             signer_list_version: header.signer_list_version,
@@ -246,9 +217,9 @@ pub struct Opened {
     /// Statement kind.
     pub kind: Kind,
     /// Project the statement names.
-    pub project: Option<String>,
-    /// Deployment the statement names.
-    pub deployment: Option<String>,
+    pub project: String,
+    /// Install the statement names.
+    pub install: Option<String>,
     /// Sequence.
     pub sequence: u64,
     /// Expiry.

@@ -1,5 +1,5 @@
-//! Feed arbitrary bytes to an enforcer as a statement, a signer list, an
-//! anchor and a workload request. Nothing may panic, and nothing may verify
+//! Feed arbitrary bytes to an enforcer as a statement, a signer list, signing
+//! settings, a ledger and a workload request. Nothing may panic, and nothing may verify
 //! unless its payload is one the fixture keys really signed: the fuzzer can
 //! reorder or duplicate signatures, but it can't forge one.
 
@@ -11,9 +11,10 @@ mod common;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
-use alien_signing::kinds::{ConfigBody, SessionBody};
+use alien_signing::session::SessionBody;
 use alien_signing::{
-    build_workload, Anchor, Kind, ReleaseBody, SignedStatement, Trust, WorkloadRequest,
+    build_workload, ConfigBody, Kind, Ledger, LocalValues, SignedStatement, SigningSettings,
+    Trust, WorkloadRequest,
 };
 use common::*;
 use libfuzzer_sys::fuzz_target;
@@ -27,7 +28,14 @@ fn fixture() -> &'static Fixture {
     static FIXTURE: OnceLock<Fixture> = OnceLock::new();
     FIXTURE.get_or_init(|| {
         let keys = keys();
-        let trust = Trust::new(anchor(&keys), &[genesis(&keys), version_2(&keys)]).unwrap();
+        let trust = Trust::new(
+            settings(&keys),
+            install(),
+            &[genesis(&keys), version_2(&keys)],
+            &Ledger::new(PREFIX),
+            now(),
+        )
+        .unwrap();
         // Every payload the fixture keys sign, including the corpus's.
         let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/corpus");
         let mut signed: BTreeSet<String> =
@@ -50,7 +58,11 @@ fn fixture() -> &'static Fixture {
 
 fuzz_target!(|data: &[u8]| {
     let fixture = fixture();
-    let _ = Anchor::parse(data);
+    let _ = SigningSettings::parse(data, PREFIX);
+    if let Ok(mut ledger) = Ledger::parse(data, PREFIX) {
+        let _ = ledger.merge(&Ledger::new(PREFIX));
+        let _ = fixture.trust.record(&mut ledger);
+    }
 
     // Corpus files wrap the statement in a case; accept both forms.
     let statement = serde_json::from_slice::<serde_json::Value>(data)
@@ -63,7 +75,7 @@ fuzz_target!(|data: &[u8]| {
 
     let mut trust = fixture.trust.clone();
     if trust
-        .extend_chain(std::slice::from_ref(&statement))
+        .extend_chain(std::slice::from_ref(&statement), now())
         .unwrap_or(false)
     {
         let digest = statement.open().unwrap().digest;
@@ -73,25 +85,37 @@ fuzz_target!(|data: &[u8]| {
         );
     }
 
-    if let Ok(verified) = fixture
-        .trust
-        .verify::<ReleaseBody>(&statement, Kind::Release, now())
-    {
+    if let Ok(verified) = fixture.trust.verify_release(&statement, now()) {
         assert!(
             fixture.signed.contains(&verified.digest),
             "a forged release was accepted"
         );
-        if verified.body.validate().is_ok() {
-            for workload in &verified.body.workloads {
-                let request = WorkloadRequest {
-                    env: workload.env.clone(),
-                    ..WorkloadRequest::default()
-                };
-                let built =
-                    build_workload(&verified.body, &workload.name, &BTreeMap::new(), &request)
-                        .expect("a request carrying only signed values builds");
-                assert_eq!(built.image, workload.image);
-            }
+        for workload in &verified.body.workloads {
+            let request = WorkloadRequest {
+                env: workload.env.clone(),
+                ..WorkloadRequest::default()
+            };
+            let local = LocalValues {
+                deployer_inputs: workload
+                    .deployer_env
+                    .values()
+                    .map(|input| (input.clone(), String::new()))
+                    .collect(),
+                bindings: workload
+                    .bindings
+                    .keys()
+                    .map(|id| (alien_signing::binding_env_name(id), "{}".to_string()))
+                    .collect(),
+            };
+            let built = build_workload(
+                &verified.body,
+                &workload.name,
+                &BTreeMap::new(),
+                &local,
+                &request,
+            )
+            .expect("a request carrying only signed values builds");
+            assert_eq!(built.image, workload.image);
         }
     }
     for kind in [Kind::Config, Kind::Session] {

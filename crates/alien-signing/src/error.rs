@@ -1,7 +1,7 @@
 use alien_error::AlienErrorData;
 use serde::{Deserialize, Serialize};
 
-/// Why a statement, signer list, anchor or workload was refused.
+/// Why a statement, signer list, setting, ledger or workload was refused.
 ///
 /// Every variant is a refusal an enforcer reports back to whoever sent the
 /// input, so none of them is internal.
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 pub enum ErrorData {
     /// A key is not a valid ECDSA P-256 key in the expected encoding.
     #[error(
-        code = "TRUST_KEY_INVALID",
+        code = "SIGNING_KEY_INVALID",
         message = "Invalid signing key: {reason}",
         retryable = "false",
         internal = "false",
@@ -23,7 +23,7 @@ pub enum ErrorData {
 
     /// The bytes are not a well-formed signed statement.
     #[error(
-        code = "TRUST_STATEMENT_MALFORMED",
+        code = "SIGNING_STATEMENT_MALFORMED",
         message = "Malformed statement: {reason}",
         retryable = "false",
         internal = "false",
@@ -36,7 +36,7 @@ pub enum ErrorData {
 
     /// The statement is of another kind than the one expected.
     #[error(
-        code = "TRUST_WRONG_KIND",
+        code = "SIGNING_WRONG_KIND",
         message = "Expected a '{expected}' statement, got '{actual}'",
         retryable = "false",
         internal = "false",
@@ -51,37 +51,52 @@ pub enum ErrorData {
 
     /// The statement names another project.
     #[error(
-        code = "TRUST_WRONG_PROJECT",
+        code = "SIGNING_WRONG_PROJECT",
         message = "The statement is for project '{actual}', not '{expected}'",
         retryable = "false",
         internal = "false",
         http_status_code = 403
     )]
     WrongProject {
-        /// Project the anchor pins.
+        /// Project of the pinned signer list.
         expected: String,
         /// Project the statement names.
         actual: String,
     },
 
-    /// The statement names another deployment, or none where one is required.
+    /// The statement names another install, or none where one is required.
     #[error(
-        code = "TRUST_WRONG_DEPLOYMENT",
-        message = "The statement is for deployment '{actual}', not '{expected}'",
+        code = "SIGNING_WRONG_INSTALL",
+        message = "The statement is for install '{actual}', not '{expected}'",
         retryable = "false",
         internal = "false",
         http_status_code = 403
     )]
-    WrongDeployment {
-        /// Deployment the anchor pins, or `none` for project-wide kinds.
+    WrongInstall {
+        /// This install, or `none` for project-wide kinds.
         expected: String,
-        /// Deployment the statement names, or `none`.
+        /// Install the statement names, or `none`.
+        actual: String,
+    },
+
+    /// A release is for another channel than the one setup pinned.
+    #[error(
+        code = "SIGNING_WRONG_CHANNEL",
+        message = "The release is for channel '{actual}', but this install follows '{expected}'",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 403
+    )]
+    WrongChannel {
+        /// Channel setup pinned.
+        expected: String,
+        /// Channel the release names.
         actual: String,
     },
 
     /// A signature does not verify, or names a signer that may not sign.
     #[error(
-        code = "TRUST_SIGNATURE_REFUSED",
+        code = "SIGNING_SIGNATURE_REFUSED",
         message = "Signature by '{signer}' refused: {reason}",
         retryable = "false",
         internal = "false",
@@ -96,7 +111,7 @@ pub enum ErrorData {
 
     /// The statement carries no signature that counts.
     #[error(
-        code = "TRUST_UNSIGNED",
+        code = "SIGNING_UNSIGNED",
         message = "The statement is not signed by a key holding the '{role}' role",
         retryable = "false",
         internal = "false",
@@ -107,10 +122,11 @@ pub enum ErrorData {
         role: String,
     },
 
-    /// The statement's sequence is not above the stored floor for its kind.
+    /// The statement is older than what this install already accepted, or a
+    /// different statement with the same sequence.
     #[error(
-        code = "TRUST_SEQUENCE_REPLAYED",
-        message = "The '{kind}' statement has sequence {sequence}, which is not above the accepted {floor}",
+        code = "SIGNING_SEQUENCE_REPLAYED",
+        message = "The '{kind}' statement has sequence {sequence}, below or beside the accepted {floor}",
         retryable = "false",
         internal = "false",
         http_status_code = 409
@@ -126,7 +142,7 @@ pub enum ErrorData {
 
     /// The statement's `notAfter` has passed.
     #[error(
-        code = "TRUST_EXPIRED",
+        code = "SIGNING_EXPIRED",
         message = "The statement expired at {not_after}",
         retryable = "false",
         internal = "false",
@@ -139,7 +155,7 @@ pub enum ErrorData {
 
     /// The statement's digest is on the signer list's deny-list.
     #[error(
-        code = "TRUST_DENIED",
+        code = "SIGNING_DENIED",
         message = "The statement {digest} is on the signer list's deny-list",
         retryable = "false",
         internal = "false",
@@ -152,7 +168,7 @@ pub enum ErrorData {
 
     /// A signer list does not extend the trusted chain.
     #[error(
-        code = "TRUST_SIGNER_LIST_REFUSED",
+        code = "SIGNING_SIGNER_LIST_REFUSED",
         message = "Signer list version {version} refused: {reason}",
         retryable = "false",
         internal = "false",
@@ -168,7 +184,7 @@ pub enum ErrorData {
     /// The statement was signed against a signer list version the enforcer
     /// has not been given.
     #[error(
-        code = "TRUST_SIGNER_LIST_MISSING",
+        code = "SIGNING_SIGNER_LIST_MISSING",
         message = "The statement needs signer list version {needed}, but only version {current} is trusted",
         retryable = "true",
         internal = "false",
@@ -181,22 +197,67 @@ pub enum ErrorData {
         current: u64,
     },
 
-    /// The anchor is missing, malformed or contradicts itself.
+    /// The signing settings setup wrote are malformed or contradict where
+    /// they were found.
     #[error(
-        code = "TRUST_ANCHOR_INVALID",
-        message = "Invalid anchor: {reason}",
+        code = "SIGNING_SETTINGS_INVALID",
+        message = "Invalid signing settings: {reason}",
         retryable = "false",
         internal = "false",
         http_status_code = 400
     )]
-    AnchorInvalid {
-        /// What is wrong with the anchor.
+    SettingsInvalid {
+        /// What is wrong with the settings.
+        reason: String,
+    },
+
+    /// Whether this install is protected can't be decided from what the
+    /// enforcer could read, so it runs nothing new.
+    #[error(
+        code = "SIGNING_SETTINGS_UNDECIDED",
+        message = "Can't tell whether this install is protected: {reason}",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 503
+    )]
+    SettingsUndecided {
+        /// What the enforcer saw.
+        reason: String,
+    },
+
+    /// The install accepted signed state under one trust root and now finds
+    /// another, or none. Only a local operator command resets it.
+    #[error(
+        code = "SIGNING_TRUST_ROOT_CHANGED",
+        message = "This install accepted state under {accepted} and now finds {found}; it runs nothing new until an operator resets it",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    TrustRootChanged {
+        /// The fingerprint or install id the install accepted state under.
+        accepted: String,
+        /// What it finds now, or `none`.
+        found: String,
+    },
+
+    /// The install's ledger is missing, malformed or forks from what this
+    /// enforcer holds.
+    #[error(
+        code = "SIGNING_LEDGER_REFUSED",
+        message = "The install's ledger was refused: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    LedgerRefused {
+        /// Why.
         reason: String,
     },
 
     /// A workload asked for something its signed release does not allow.
     #[error(
-        code = "TRUST_WORKLOAD_REFUSED",
+        code = "SIGNING_WORKLOAD_REFUSED",
         message = "Workload '{workload}' refused: {reason}",
         retryable = "false",
         internal = "false",
@@ -211,7 +272,7 @@ pub enum ErrorData {
 
     /// A statement body breaks a rule of its kind.
     #[error(
-        code = "TRUST_BODY_REFUSED",
+        code = "SIGNING_BODY_REFUSED",
         message = "The '{kind}' statement was refused: {reason}",
         retryable = "false",
         internal = "false",

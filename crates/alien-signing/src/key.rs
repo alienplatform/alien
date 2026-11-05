@@ -87,19 +87,19 @@ impl PublicKey {
     }
 }
 
-/// A private key held in memory: the CI key, the recovery key, or the
-/// `software` fallback for machines without secure hardware.
-pub struct SoftwareKey(SigningKey);
+/// A private key held in memory: the CI key, or the recovery key while it
+/// signs. Device keys never take this form; they stay in secure hardware.
+pub struct SecretKey(SigningKey);
 
-impl fmt::Debug for SoftwareKey {
+impl fmt::Debug for SecretKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("SoftwareKey")
+        f.debug_tuple("SecretKey")
             .field(&self.public_key())
             .finish()
     }
 }
 
-impl SoftwareKey {
+impl SecretKey {
     /// A new random key from the operating system's generator.
     pub fn generate() -> Result<Self> {
         // Random bytes are a valid scalar except with negligible probability.
@@ -167,8 +167,8 @@ mod tests {
 
     #[test]
     fn a_signature_verifies_only_for_its_key_and_message() {
-        let key = SoftwareKey::generate().unwrap();
-        let other = SoftwareKey::generate().unwrap();
+        let key = SecretKey::generate().unwrap();
+        let other = SecretKey::generate().unwrap();
         let signature = key.sign(b"hello");
         key.public_key().verify(b"hello", &signature).unwrap();
         key.public_key()
@@ -182,16 +182,16 @@ mod tests {
 
     #[test]
     fn public_keys_round_trip_through_text_and_pem() {
-        let key = SoftwareKey::generate().unwrap();
+        let key = SecretKey::generate().unwrap();
         let text = key.public_key().as_str().to_string();
         assert_eq!(PublicKey::parse(&text).unwrap(), key.public_key());
-        let restored = SoftwareKey::from_pkcs8_pem(&key.to_pkcs8_pem().unwrap()).unwrap();
+        let restored = SecretKey::from_pkcs8_pem(&key.to_pkcs8_pem().unwrap()).unwrap();
         assert_eq!(restored.public_key(), key.public_key());
     }
 
     #[test]
     fn points_off_the_curve_are_refused() {
-        let key = SoftwareKey::generate().unwrap();
+        let key = SecretKey::generate().unwrap();
         let der = STANDARD
             .decode(
                 key.public_key()
@@ -206,7 +206,7 @@ mod tests {
         off_curve[last] ^= 0x01;
         let text = format!("{PUBLIC_KEY_PREFIX}{}", STANDARD.encode(&off_curve));
         let error = PublicKey::parse(&text).expect_err("off-curve point");
-        assert_eq!(error.code, "TRUST_KEY_INVALID");
+        assert_eq!(error.code, "SIGNING_KEY_INVALID");
 
         PublicKey::parse("ed25519:AAAA").expect_err("other algorithm");
     }

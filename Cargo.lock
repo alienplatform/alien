@@ -1412,6 +1412,7 @@ dependencies = [
  "chrono",
  "getrandom 0.3.4",
  "hex",
+ "hmac 0.12.1",
  "p256",
  "serde",
  "serde_json",
