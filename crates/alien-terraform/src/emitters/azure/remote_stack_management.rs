@@ -26,8 +26,8 @@ use alien_core::{
 use alien_error::Context;
 use alien_permissions::{
     generators::{
-        azure_role_assignment_allowlist_conditions, azure_runtime_roles,
-        dedupe_azure_role_bindings, management_roles_by_scope,
+        azure_role_assignment_allowlist_conditions, azure_runs_no_code, azure_runtime_roles,
+        azure_write_or_delete, dedupe_azure_role_bindings, management_roles_by_scope,
         protected_management_assignable_scopes, AzureGrantPlan, AzureManagementRoles,
         AzureManagementScopeKind, AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator,
         AzureRuntimeRoleHolder, AzureRuntimeRoles, AzureScopedCustomRole,
@@ -99,7 +99,7 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
             .map(|profile| management_permission_refs(ctx, profile))
             .unwrap_or_default();
         let grant_plan =
-            generate_management_grant_plan(label, &global_refs, &resource_scoped_refs)?;
+            generate_management_grant_plan(ctx, label, &global_refs, &resource_scoped_refs)?;
         // The role definition stays ungated: a definition nothing is assigned
         // to grants nothing, so leaving it is the same unbound shell a shared
         // custom role leaves. The assignment is the grant, and that is what
@@ -142,6 +142,9 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
             });
         }
         emit_management_roles(&mut fragment, label, &roles, conditions.len());
+        if ctx.stack_settings.release_trust.is_some() {
+            emit_protection(ctx, &mut fragment, label, &roles)?;
+        }
         let merged_gates = merged_grant_gates(ctx, &resource_scoped_refs);
         emit_management_assignments(
             &mut fragment,
@@ -238,6 +241,179 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
         ];
         Ok(expr::object(fields))
     }
+}
+
+/// Deployment stack deny settings hold at most this many excluded actions.
+const DENY_SETTINGS_MAX_EXCLUDED_ACTIONS: usize = 200;
+
+/// Protect a deployment's resource group: a subscription-scoped deployment stack manages the group
+/// and denies every write and delete in it, to every principal but two: the gate, which alone
+/// writes what runs code, and the principal running setup, so setup can run again. Removing the
+/// deny needs `Microsoft.Resources/deploymentStacks/manageDenySetting/action` at the
+/// subscription, which the management identity never holds. Its own writes and deletes that
+/// change only infrastructure running no code are excluded from the deny, so it keeps them.
+///
+/// A deny cannot refuse an `/action`; the management roles leave out the actions that run code
+/// (see `alien_permissions::generators::gate_owned`).
+///
+/// To check a change here against Azure, render a protected stack, run `terraform apply` in a
+/// subscription, and as the management identity try to update the scale set and create a
+/// Container Apps job in the group: both must fail with `DenyAssignmentAuthorizationFailed`.
+fn emit_protection(
+    ctx: &EmitContext<'_>,
+    fragment: &mut TfFragment,
+    label: &str,
+    roles: &AzureManagementRoles,
+) -> Result<()> {
+    let resource_group = ctx
+        .stack
+        .resources()
+        .find(|(_, entry)| {
+            entry.config.resource_type() == alien_core::AzureResourceGroup::RESOURCE_TYPE
+        })
+        .and_then(|(resource_id, _)| ctx.name_for(resource_id))
+        .ok_or_else(|| {
+            alien_error::AlienError::new(ErrorData::OperationNotSupported {
+                operation: "protect an Azure deployment whose resource group setup does not create"
+                    .to_string(),
+                reason: "the deny settings are held by a deployment stack that manages the group"
+                    .to_string(),
+            })
+        })?;
+    let excluded_actions = deny_excluded_actions(roles)?;
+    let gate = format!("{label}_gate");
+    fragment.resource_blocks.push(resource_block(
+        "azurerm_user_assigned_identity",
+        &gate,
+        [
+            attr(
+                "name",
+                expr::template("${local.resource_prefix}-gate-identity".to_string()),
+            ),
+            attr(
+                "resource_group_name",
+                expr::raw("var.azure_resource_group_name"),
+            ),
+            attr("location", expr::raw("var.azure_location")),
+            attr("tags", tags(ctx, "gate")),
+        ],
+    ));
+    let group =
+        |attribute: &str| expr::traversal(["azurerm_resource_group", resource_group, attribute]);
+    let template = expr::object([
+        (
+            "$schema",
+            Expression::String(
+                "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#"
+                    .to_string(),
+            ),
+        ),
+        ("contentVersion", Expression::String("1.0.0.0".to_string())),
+        (
+            "resources",
+            Expression::Array(vec![expr::object([
+                (
+                    "type",
+                    Expression::String("Microsoft.Resources/resourceGroups".to_string()),
+                ),
+                ("apiVersion", Expression::String("2022-09-01".to_string())),
+                ("name", group("name")),
+                ("location", group("location")),
+                ("tags", group("tags")),
+            ])]),
+        ),
+    ]);
+    let detach = Expression::String("detach".to_string());
+    fragment.resource_blocks.push(resource_block(
+        "azapi_resource",
+        &format!("{label}_protection"),
+        [
+            attr(
+                "type",
+                Expression::String("Microsoft.Resources/deploymentStacks@2024-03-01".to_string()),
+            ),
+            attr(
+                "name",
+                expr::template("${local.resource_prefix}-protection".to_string()),
+            ),
+            attr(
+                "parent_id",
+                expr::template("/subscriptions/${var.azure_subscription_id}".to_string()),
+            ),
+            attr("location", expr::raw("var.azure_location")),
+            attr(
+                "body",
+                expr::object([(
+                    "properties",
+                    expr::object([
+                        (
+                            "description",
+                            Expression::String(
+                                "Only the gate writes what runs code in this deployment."
+                                    .to_string(),
+                            ),
+                        ),
+                        (
+                            "actionOnUnmanage",
+                            expr::object([
+                                ("resources", detach.clone()),
+                                ("resourceGroups", detach.clone()),
+                                ("managementGroups", detach),
+                            ]),
+                        ),
+                        (
+                            "denySettings",
+                            expr::object([
+                                ("mode", Expression::String("denyWriteAndDelete".to_string())),
+                                ("applyToChildScopes", Expression::Bool(true)),
+                                (
+                                    "excludedPrincipals",
+                                    Expression::Array(vec![
+                                        expr::traversal([
+                                            "azurerm_user_assigned_identity",
+                                            &gate,
+                                            "principal_id",
+                                        ]),
+                                        expr::traversal([
+                                            "data",
+                                            "azurerm_client_config",
+                                            &format!("{label}_current"),
+                                            "object_id",
+                                        ]),
+                                    ]),
+                                ),
+                                ("excludedActions", string_array(excluded_actions)),
+                            ]),
+                        ),
+                        ("template", template),
+                    ]),
+                )]),
+            ),
+        ],
+    ));
+    Ok(())
+}
+
+/// The writes and deletes the management roles grant that change only infrastructure running no
+/// code, which the deny leaves to the management identity.
+fn deny_excluded_actions(roles: &AzureManagementRoles) -> Result<Vec<String>> {
+    let actions: BTreeSet<String> = roles
+        .roles
+        .iter()
+        .flat_map(|role| role.actions.iter())
+        .filter(|action| azure_write_or_delete(action) && azure_runs_no_code(action))
+        .cloned()
+        .collect();
+    if actions.len() > DENY_SETTINGS_MAX_EXCLUDED_ACTIONS {
+        return Err(alien_error::AlienError::new(ErrorData::OperationNotSupported {
+            operation: "protect this Azure deployment".to_string(),
+            reason: format!(
+                "the management identity keeps {} write and delete actions, more than the {DENY_SETTINGS_MAX_EXCLUDED_ACTIONS} a deny setting can exclude",
+                actions.len()
+            ),
+        }));
+    }
+    Ok(actions.into_iter().collect())
 }
 
 fn emit_existing_network_reader_assignments(fragment: &mut TfFragment, label: &str) {
@@ -798,13 +974,19 @@ fn merged_grant_gates(
 }
 
 fn generate_management_grant_plan(
+    ctx: &EmitContext<'_>,
     label: &str,
     global_refs: &[&PermissionSetReference],
     resource_scoped_refs: &[(&String, &PermissionSetReference)],
 ) -> Result<ManagementGrants> {
     let mut custom_roles = Vec::new();
     let mut bindings = Vec::new();
-    let context = permission_context(label);
+    let context = permission_context(label)
+        .with_setup_pins(ctx.stack_settings)
+        .context(ErrorData::GenericError {
+            message: "failed to apply setup-pinned values to the Azure management roles"
+                .to_string(),
+        })?;
     let generator = AzureRuntimePermissionsGenerator::new();
 
     for permission_set in global_refs.iter().filter_map(resolve_permission_set) {

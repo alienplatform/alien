@@ -517,10 +517,8 @@ pub(crate) fn render_terraform_module(
     if let Some(barrier) = &gcp_iam_propagation_barrier {
         import_depends_on.push(barrier.clone());
     }
-    let release_trust_anchor = release_trust_anchor_block(&stack_settings, target)?;
-    if let Some(anchor) = &release_trust_anchor {
-        import_depends_on.extend(resource_address(anchor));
-    }
+    let release_trust_anchor = release_trust_anchor_blocks(&stack_settings, target, &labels)?;
+    import_depends_on.extend(release_trust_anchor.iter().filter_map(resource_address));
 
     let network_vars = network_extra_variables(stack, &labels);
     let include_kubernetes_provider = target.is_kubernetes()
@@ -732,10 +730,15 @@ pub(crate) fn render_terraform_module(
             files.insert(file_name, render_body(body)?);
         }
     }
-    if let Some(anchor) = release_trust_anchor {
+    if !release_trust_anchor.is_empty() {
         files.insert(
             "release_trust.tf".to_string(),
-            render_body(Body::from(vec![Structure::Block(anchor)]))?,
+            render_body(Body::from(
+                release_trust_anchor
+                    .into_iter()
+                    .map(Structure::Block)
+                    .collect::<Vec<_>>(),
+            ))?,
         );
     }
     if !gcp_iam_propagation_dependencies.is_empty() {
@@ -1784,54 +1787,108 @@ fn body_is_empty(body: &Body) -> bool {
     body.iter().next().is_none()
 }
 
-/// The parameter that holds a protected deployment's anchor: setup alone writes it. The
-/// management role has no grant on its path, and its guard denies writes there. It carries no
-/// deployment tag, so no grant conditioned on that tag reaches it.
-fn release_trust_anchor_block(
+/// The blocks that hold a protected deployment's anchor: setup alone writes it. The
+/// management identity has no grant on its name, and on AWS its guard denies writes there. It
+/// carries no deployment tag or label, so no grant conditioned on one reaches it.
+///
+/// On Azure the anchor is not written yet; the Azure management emitter writes the deny
+/// settings that keep the management identity away from what runs code.
+fn release_trust_anchor_blocks(
     settings: &StackSettings,
     target: TerraformTarget,
-) -> Result<Option<Block>> {
+    labels: &IndexMap<String, String>,
+) -> Result<Vec<Block>> {
     let Some(release_trust) = &settings.release_trust else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
-    if target != TerraformTarget::Aws {
-        return Err(AlienError::new(ErrorData::OperationNotSupported {
-            operation: format!("protect a {} deployment through Terraform", target.name()),
-            reason: "Terraform writes the anchor only for AWS; on Kubernetes the chart's releaseSigning values hold it".to_string(),
-        }));
-    }
     let prefix = "${local.resource_prefix}";
-    let anchor = release_trust.anchor(prefix)?;
-    let value = serde_json::to_value(&anchor).into_alien_error().context(
+    let description =
+        "What this deployment trusts: the signer list, the component key and protection. Written by setup only.";
+    match target {
+        TerraformTarget::Aws => {
+            let anchor = release_trust.anchor(alien_core::Platform::Aws, prefix)?;
+            Ok(vec![resource_block(
+                "aws_ssm_parameter",
+                "release_trust_anchor",
+                [
+                    attr(
+                        "name",
+                        expr::template(alien_core::release_trust_parameter_name(prefix)),
+                    ),
+                    attr("type", Expression::String("String".to_string())),
+                    attr("tier", Expression::String("Standard".to_string())),
+                    attr("description", Expression::String(description.to_string())),
+                    attr("value", anchor_value(&anchor)?),
+                ],
+            )])
+        }
+        TerraformTarget::Gcp => {
+            let anchor = release_trust.anchor(alien_core::Platform::Gcp, prefix)?;
+            let mut secret = vec![
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "secret_id",
+                    expr::template(alien_core::release_trust_secret_name(prefix)),
+                ),
+                attr(
+                    "annotations",
+                    expr::object([("description", Expression::String(description.to_string()))]),
+                ),
+                nested(block("replication", [nested(block("auto", []))])),
+            ];
+            if let Some(activation) = labels.get("enable-secret-manager") {
+                secret.push(attr(
+                    "depends_on",
+                    Expression::Array(vec![expr::traversal([
+                        "google_project_service",
+                        activation,
+                    ])]),
+                ));
+            }
+            Ok(vec![
+                resource_block(
+                    "google_secret_manager_secret",
+                    "release_trust_anchor",
+                    secret,
+                ),
+                resource_block(
+                    "google_secret_manager_secret_version",
+                    "release_trust_anchor",
+                    [
+                        attr(
+                            "secret",
+                            expr::traversal([
+                                "google_secret_manager_secret",
+                                "release_trust_anchor",
+                                "id",
+                            ]),
+                        ),
+                        attr("secret_data", anchor_value(&anchor)?),
+                    ],
+                ),
+            ])
+        }
+        TerraformTarget::Azure => Ok(Vec::new()),
+        TerraformTarget::Eks | TerraformTarget::Gke | TerraformTarget::Aks => {
+            Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: format!("protect a {} deployment through Terraform", target.name()),
+                reason: "on Kubernetes the chart's releaseSigning values hold the anchor"
+                    .to_string(),
+            }))
+        }
+    }
+}
+
+/// The anchor as the JSON text enforcers parse.
+fn anchor_value(anchor: &impl serde::Serialize) -> Result<Expression> {
+    let value = serde_json::to_value(anchor).into_alien_error().context(
         ErrorData::JsonSerializationFailed {
             reason: "cannot serialize the anchor".to_string(),
         },
     )?;
-    Ok(Some(resource_block(
-        "aws_ssm_parameter",
-        "release_trust_anchor",
-        [
-            attr(
-                "name",
-                expr::template(alien_core::release_trust_parameter_name(prefix)),
-            ),
-            attr("type", Expression::String("String".to_string())),
-            attr("tier", Expression::String("Standard".to_string())),
-            attr(
-                "description",
-                Expression::String(
-                    "What this deployment trusts: the signer list, the component key and protection. Written by setup only."
-                        .to_string(),
-                ),
-            ),
-            attr(
-                "value",
-                expr::jsonencode(crate::emitters::aws::helpers::json_value_to_expression(
-                    value,
-                )),
-            ),
-        ],
-    )))
+    Ok(expr::jsonencode(
+        crate::emitters::aws::helpers::json_value_to_expression(value),
+    ))
 }
 
 fn resource_label_for_file<'a>(

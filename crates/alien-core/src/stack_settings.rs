@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::{ErrorData, KubernetesCloudReference, KubernetesClusterOwnership, Result};
+use crate::{ErrorData, KubernetesCloudReference, KubernetesClusterOwnership, Platform, Result};
 use alien_error::AlienError;
 use alien_release_trust::Anchor;
 
@@ -1013,9 +1013,10 @@ pub struct ReleaseTrustSettings {
 }
 
 impl ReleaseTrustSettings {
-    /// The anchor setup writes for the deployment whose resource prefix is `resource_prefix`,
-    /// checked the way enforcers check it when they read it.
-    pub fn anchor(&self, resource_prefix: &str) -> Result<Anchor> {
+    /// The anchor setup writes on `platform` for the deployment whose resource prefix is
+    /// `resource_prefix`, checked the way enforcers check it when they read it. It names the
+    /// deployer inputs store of that platform.
+    pub fn anchor(&self, platform: Platform, resource_prefix: &str) -> Result<Anchor> {
         for (field, value) in [("project", &self.project), ("deployment", &self.deployment)] {
             if value.is_empty()
                 || value.len() > 128
@@ -1037,10 +1038,7 @@ impl ReleaseTrustSettings {
             signing: self.signing.clone(),
             components: self.components.clone(),
             session_approval: self.session_approval,
-            inputs: Some(format!(
-                "{DEPLOYER_INPUTS_STORE_SSM}{}",
-                deployer_inputs_parameter_name(resource_prefix)
-            )),
+            inputs: Some(deployer_inputs_store(platform, resource_prefix)?),
             resource_prefix: Some(resource_prefix.to_string()),
         };
         anchor.validate().map_err(|error| {
@@ -1068,6 +1066,41 @@ pub fn deployer_inputs_parameter_name(resource_prefix: &str) -> String {
 /// How an anchor names an inputs store that is an AWS SSM parameter: this prefix, then the
 /// parameter name.
 pub const DEPLOYER_INPUTS_STORE_SSM: &str = "aws-ssm:";
+
+/// Name of the GCP Secret Manager secret that holds the anchor of the deployment whose resource
+/// prefix is `resource_prefix`. Resource prefixes start with a letter and every secret grant is
+/// conditioned on a name that starts with the prefix, so none reaches a name that starts with
+/// `_`.
+pub fn release_trust_secret_name(resource_prefix: &str) -> String {
+    format!("_release-trust-{resource_prefix}")
+}
+
+/// Name of the GCP Secret Manager secret that holds, as one JSON object, the deployer's inputs
+/// for the deployment whose resource prefix is `resource_prefix`. Only the deployer writes it.
+pub fn deployer_inputs_secret_name(resource_prefix: &str) -> String {
+    format!("_deployer-inputs-{resource_prefix}")
+}
+
+/// How an anchor names an inputs store that is a GCP Secret Manager secret: this prefix, then
+/// the secret name.
+pub const DEPLOYER_INPUTS_STORE_GCP_SECRET: &str = "gcp-secret:";
+
+/// The deployer inputs store an anchor names on `platform`.
+fn deployer_inputs_store(platform: Platform, resource_prefix: &str) -> Result<String> {
+    match platform {
+        Platform::Aws => Ok(format!(
+            "{DEPLOYER_INPUTS_STORE_SSM}{}",
+            deployer_inputs_parameter_name(resource_prefix)
+        )),
+        Platform::Gcp => Ok(format!(
+            "{DEPLOYER_INPUTS_STORE_GCP_SECRET}{}",
+            deployer_inputs_secret_name(resource_prefix)
+        )),
+        other => Err(AlienError::new(ErrorData::ReleaseTrustSettingsInvalid {
+            reason: format!("setup writes an anchor only on AWS and GCP, not on {other}"),
+        })),
+    }
+}
 
 /// The publisher of the machine images compute clusters boot.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

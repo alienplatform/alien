@@ -86,11 +86,18 @@ impl StackMutation for GcpServiceActivationMutation {
         &self,
         mut stack: Stack,
         stack_state: &StackState,
-        _config: &DeploymentConfig,
+        config: &DeploymentConfig,
     ) -> Result<Stack> {
         info!("Adding GCP ServiceActivation resources");
 
-        let required_services = self.get_required_services(&stack, stack_state);
+        let mut required_services = self.get_required_services(&stack, stack_state);
+        // Setup writes a protected deployment's anchor into Secret Manager.
+        if config.stack_settings.release_trust.is_some() {
+            required_services.insert(
+                "enable-secret-manager".to_string(),
+                "secretmanager.googleapis.com".to_string(),
+            );
+        }
 
         for (service_id, service_name) in required_services {
             // Check if this service activation already exists
