@@ -23,6 +23,7 @@ use crate::traits::DeploymentStore;
 pub struct ManagerTransport {
     deployment_store: Arc<dyn DeploymentStore>,
     telemetry_backend: Option<Arc<dyn crate::traits::TelemetryBackend>>,
+    workspace_id: Option<String>,
     bindings_provider: Option<Arc<dyn BindingsProviderApi>>,
     target_bindings_providers: HashMap<Platform, Arc<dyn BindingsProviderApi>>,
     project_id: String,
@@ -45,6 +46,7 @@ impl ManagerTransport {
         Self {
             deployment_store,
             telemetry_backend: None,
+            workspace_id: None,
             bindings_provider,
             target_bindings_providers,
             project_id,
@@ -53,6 +55,11 @@ impl ManagerTransport {
             supported_aws_regions,
         }
     }
+    pub fn with_workspace_id(mut self, workspace_id: String) -> Self {
+        self.workspace_id = Some(workspace_id);
+        self
+    }
+
     /// Attach the manager's trusted ingestion backend for scheduler-owned metrics.
     pub fn with_telemetry_backend(
         mut self,
@@ -88,7 +95,7 @@ impl DeploymentLoopTransport for ManagerTransport {
                 &crate::traits::TelemetryCaller {
                     deployment_id: Some(deployment_id.into()),
                     project_id: Some(self.project_id.clone()),
-                    workspace_id: None,
+                    workspace_id: self.workspace_id.clone(),
                     gateway_log_source: None,
                 },
                 data.into(),

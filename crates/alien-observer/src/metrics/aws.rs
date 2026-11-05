@@ -70,6 +70,7 @@ pub async fn collect(
     let mut batch = MetricBatch::default();
     let mut token = None;
     let mut seen = std::collections::BTreeSet::new();
+    let mut completed = std::collections::BTreeSet::new();
     for _ in 0..100 {
         let response = client
             .get_metric_data(
@@ -108,6 +109,11 @@ pub async fn collect(
                     "CloudWatch returned incomplete or malformed series",
                 ));
             }
+            if result.status_code.as_deref() == Some("Complete") {
+                completed.insert(index);
+            } else {
+                completed.remove(&index);
+            }
             let source = &sources[index];
             let mut labels = source.dimensions.clone();
             labels.insert("source.statistic".into(), source.statistic.clone());
@@ -131,7 +137,11 @@ pub async fn collect(
                 format!("{}/{}", source.namespace, source.metric_name),
                 source.unit.clone(),
                 if source.statistic == "Sum" || source.statistic == "SampleCount" {
-                    ScalarKind::DeltaSum
+                    if source.monotonic {
+                        ScalarKind::DeltaCounter
+                    } else {
+                        ScalarKind::DeltaSum
+                    }
                 } else {
                     ScalarKind::Gauge
                 },
@@ -140,7 +150,12 @@ pub async fn collect(
         }
         token = response.next_token.filter(|token| !token.is_empty());
         match token.as_ref() {
-            None => return Ok(batch),
+            None if completed.len() == sources.len() => return Ok(batch),
+            None => {
+                return Err(invalid(
+                    "CloudWatch omitted or incompletely returned a requested series",
+                ))
+            }
             Some(token) if !seen.insert(token.clone()) => {
                 return Err(invalid("CloudWatch pagination repeated a token"))
             }
@@ -168,6 +183,7 @@ pub fn lambda(function_name: &str) -> Vec<AwsMetricSource> {
         statistic: stat.into(),
         period_seconds: 60,
         unit: unit.into(),
+        monotonic: stat == "Sum" || stat == "SampleCount",
     })
     .collect()
 }
@@ -325,5 +341,88 @@ fn source(
         unit: unit.into(),
         period_seconds,
         dimensions,
+        monotonic: statistic == "Sum" || statistic == "SampleCount",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_aws_clients::cloudwatch::{
+        GetMetricDataResponse, ListMetricsRequest, ListMetricsResponse, PutMetricAlarmRequest,
+    };
+    use async_trait::async_trait;
+    use opentelemetry_proto::tonic::metrics::v1::{metric::Data, AggregationTemporality};
+    use std::sync::Mutex;
+
+    #[derive(Debug)]
+    struct PagedClient(Mutex<Vec<GetMetricDataResponse>>);
+    #[async_trait]
+    impl CloudWatchApi for PagedClient {
+        async fn get_metric_data(
+            &self,
+            request: GetMetricDataRequest,
+        ) -> alien_client_core::Result<GetMetricDataResponse> {
+            assert_eq!(request.metric_data_queries.len(), 1);
+            let mut responses = self.0.lock().unwrap();
+            if responses.len() == 2 {
+                assert!(request.next_token.is_none());
+            } else {
+                assert_eq!(request.next_token.as_deref(), Some("page-2"));
+            }
+            Ok(responses.remove(0))
+        }
+        async fn list_metrics(
+            &self,
+            _: ListMetricsRequest,
+        ) -> alien_client_core::Result<ListMetricsResponse> {
+            unreachable!()
+        }
+        async fn put_metric_alarm(
+            &self,
+            _: PutMetricAlarmRequest,
+        ) -> alien_client_core::Result<()> {
+            panic!("collector cannot mutate alarms")
+        }
+        async fn delete_alarms(&self, _: Vec<String>) -> alien_client_core::Result<()> {
+            panic!("collector cannot mutate alarms")
+        }
+    }
+
+    #[tokio::test]
+    async fn paginates_partial_data_preserving_interval_sum_semantics() {
+        let client = PagedClient(Mutex::new(vec![
+            serde_json::from_value(serde_json::json!({"MetricDataResults":[{"Id":"m0","StatusCode":"PartialData","Timestamps":[60],"Values":[7]}],"NextToken":"page-2"})).unwrap(),
+            serde_json::from_value(serde_json::json!({"MetricDataResults":[{"Id":"m0","StatusCode":"Complete","Timestamps":[120],"Values":[9]}]})).unwrap(),
+        ]));
+        let source = source(
+            "AWS/Lambda",
+            "Invocations",
+            "Sum",
+            "{invocation}",
+            60,
+            BTreeMap::from([("FunctionName".into(), "api".into())]),
+        );
+        let batch = collect(
+            &client,
+            &[source],
+            &CollectionWindow {
+                start: chrono::DateTime::from_timestamp(60, 0).unwrap(),
+                end: chrono::DateTime::from_timestamp(180, 0).unwrap(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(batch.metrics.len(), 2);
+        let Some(Data::Sum(sum)) = &batch.metrics[0].data else {
+            panic!("sum type lost")
+        };
+        assert_eq!(
+            sum.aggregation_temporality,
+            AggregationTemporality::Delta as i32
+        );
+        assert_eq!(sum.data_points[0].start_time_unix_nano, 60_000_000_000);
+        assert_eq!(sum.data_points[0].time_unix_nano, 120_000_000_000);
+        assert_eq!(client.0.lock().unwrap().len(), 0);
     }
 }

@@ -111,7 +111,11 @@ pub async fn collect(
                 format!("{}/{}", source.metric_namespace, name),
                 metric.unit.clone().unwrap_or_default(),
                 if matches!(source.aggregation.as_str(), "Total" | "Count") {
-                    ScalarKind::DeltaSum
+                    if source.monotonic {
+                        ScalarKind::DeltaCounter
+                    } else {
+                        ScalarKind::DeltaSum
+                    }
                 } else {
                     ScalarKind::Gauge
                 },
@@ -224,6 +228,7 @@ fn native(
         metric_namespace: namespace.into(),
         metric_names: metrics.iter().map(|name| (*name).into()).collect(),
         aggregation: aggregation.into(),
+        monotonic: matches!(aggregation, "Total" | "Count"),
         interval_seconds: 60,
         filter: None,
     }

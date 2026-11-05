@@ -13,6 +13,9 @@ pub struct AwsMetricSource {
     pub statistic: String,
     pub period_seconds: i32,
     pub unit: String,
+    /// True only for non-negative count/byte totals; arbitrary sums may decrease.
+    #[serde(default)]
+    pub monotonic: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +26,9 @@ pub struct AzureMetricSource {
     pub metric_namespace: String,
     pub metric_names: Vec<String>,
     pub aggregation: String,
+    /// True for count/byte totals, false for arbitrary aggregated values.
+    #[serde(default)]
+    pub monotonic: bool,
     pub interval_seconds: u32,
     /// Explicit dimension filter, for example `EntityName eq 'approved-queue'`.
     pub filter: Option<String>,
@@ -34,6 +40,9 @@ pub struct AzureMetricSource {
 pub struct GcpMetricSource {
     pub project_id: String,
     pub filter: String,
+    /// Whether numeric DELTA points are known non-negative counter increments.
+    #[serde(default)]
+    pub monotonic: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

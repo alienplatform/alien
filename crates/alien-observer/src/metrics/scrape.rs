@@ -171,7 +171,9 @@ pub fn parse(
                 _ => None,
             })
             .unwrap_or_default();
-        if let Some((name, MetricType::Histogram)) = descriptor {
+        // nom-openmetrics 0.3 retains the standard histogram keyword as Unknown;
+        // recognize that descriptor before validating and reconstructing its buckets.
+        if let Some((name, MetricType::Histogram | MetricType::Unknown("histogram"))) = descriptor {
             let mut groups: BTreeMap<BTreeMap<String, String>, HistogramParts> = BTreeMap::new();
             for sample in family.samples {
                 let mut labels = labels(sample.labels(), replica_id)?;

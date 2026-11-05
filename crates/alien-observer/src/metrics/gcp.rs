@@ -78,7 +78,13 @@ pub async fn collect(
             }
             let kind = match series.metric_kind.as_deref() {
                 Some("GAUGE") => ScalarKind::Gauge,
-                Some("DELTA") => ScalarKind::DeltaSum,
+                Some("DELTA") => {
+                    if source.monotonic {
+                        ScalarKind::DeltaCounter
+                    } else {
+                        ScalarKind::DeltaSum
+                    }
+                }
                 Some("CUMULATIVE") => ScalarKind::CumulativeSum,
                 _ => return Err(invalid("GCP series missing or unsupported metricKind")),
             };
@@ -127,7 +133,9 @@ pub async fn collect(
                     data: Some(Data::Histogram(Histogram {
                         data_points: histograms,
                         aggregation_temporality: match kind {
-                            ScalarKind::DeltaSum => AggregationTemporality::Delta as i32,
+                            ScalarKind::DeltaSum | ScalarKind::DeltaCounter => {
+                                AggregationTemporality::Delta as i32
+                            }
                             ScalarKind::CumulativeSum => AggregationTemporality::Cumulative as i32,
                             ScalarKind::Gauge => {
                                 return Err(invalid(
@@ -171,7 +179,7 @@ fn distribution_point(
         .get("count")
         .and_then(integer)
         .ok_or_else(|| invalid("GCP distribution missing count"))?;
-    let buckets: Vec<u64> = value
+    let mut buckets: Vec<u64> = value
         .get("bucketCounts")
         .and_then(|value| value.as_array())
         .ok_or_else(|| invalid("GCP distribution missing buckets"))?
@@ -226,6 +234,10 @@ fn distribution_point(
     } else {
         return Err(invalid("Unsupported GCP distribution bucket options"));
     };
+    // The provider omits trailing zero buckets; expand them before OTLP export.
+    if buckets.len() <= bounds.len() + 1 {
+        buckets.resize(bounds.len() + 1, 0);
+    }
     if start > end
         || buckets.len() != bounds.len() + 1
         || buckets
@@ -328,5 +340,35 @@ fn resource_source(
     GcpMetricSource {
         project_id: project.into(),
         filter,
+        monotonic: metric.ends_with("_count"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expands_omitted_trailing_buckets_without_changing_population() {
+        let sample = serde_json::json!({"count":"5", "mean":1.5, "bucketOptions":{"explicitBuckets":{"bounds":[1.0,2.0,3.0]}}, "bucketCounts":["1","4"]});
+        let point = distribution_point(&sample, 1, 2, &BTreeMap::new()).unwrap();
+        assert_eq!(point.bucket_counts, [1, 4, 0, 0]);
+        assert_eq!(point.explicit_bounds, [1.0, 2.0, 3.0]);
+        assert_eq!(point.sum, Some(7.5));
+        assert_eq!(point.count, 5);
+    }
+
+    #[test]
+    fn preserves_exponential_buckets_as_exact_explicit_bounds() {
+        let sample = serde_json::json!({"count":"5", "mean":1.5, "bucketOptions":{"exponentialBuckets":{"numFiniteBuckets":2,"growthFactor":2.0,"scale":1.0}}, "bucketCounts":["1","2","2"]});
+        let point = distribution_point(&sample, 1, 2, &BTreeMap::new()).unwrap();
+        assert_eq!(point.bucket_counts, [1, 2, 2, 0]);
+        assert_eq!(point.explicit_bounds, [1.0, 2.0, 4.0]);
+    }
+
+    #[test]
+    fn rejects_distribution_when_counts_do_not_add_up() {
+        let sample = serde_json::json!({"count":"6", "mean":1.5, "bucketOptions":{"explicitBuckets":{"bounds":[1.0,2.0]}}, "bucketCounts":["1","4"]});
+        assert!(distribution_point(&sample, 1, 2, &BTreeMap::new()).is_err());
     }
 }

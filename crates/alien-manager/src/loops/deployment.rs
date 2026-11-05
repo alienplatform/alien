@@ -1208,7 +1208,9 @@ impl DeploymentLoop {
         );
 
         if let Some(backend) = &self.telemetry_backend {
-            transport = transport.with_telemetry_backend(backend.clone());
+            transport = transport
+                .with_telemetry_backend(backend.clone())
+                .with_workspace_id(deployment.workspace_id.clone());
         }
 
         let mut config = config;

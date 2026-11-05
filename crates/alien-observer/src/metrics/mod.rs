@@ -56,6 +56,7 @@ impl CollectionWindow {
 pub enum ScalarKind {
     Gauge,
     DeltaSum,
+    DeltaCounter,
     CumulativeSum,
 }
 
@@ -131,16 +132,21 @@ pub(crate) fn scalar(
         ScalarKind::Gauge => Data::Gauge(Gauge {
             data_points: points,
         }),
-        ScalarKind::DeltaSum | ScalarKind::CumulativeSum => Data::Sum(Sum {
-            data_points: points,
-            aggregation_temporality: if kind == ScalarKind::DeltaSum {
-                AggregationTemporality::Delta as i32
-            } else {
-                AggregationTemporality::Cumulative as i32
-            },
-            // Cloud interval totals may include corrections and are not assumed monotonic.
-            is_monotonic: kind == ScalarKind::CumulativeSum,
-        }),
+        ScalarKind::DeltaSum | ScalarKind::DeltaCounter | ScalarKind::CumulativeSum => {
+            Data::Sum(Sum {
+                data_points: points,
+                aggregation_temporality: if matches!(
+                    kind,
+                    ScalarKind::DeltaSum | ScalarKind::DeltaCounter
+                ) {
+                    AggregationTemporality::Delta as i32
+                } else {
+                    AggregationTemporality::Cumulative as i32
+                },
+                // Cloud interval totals may include corrections and are not assumed monotonic.
+                is_monotonic: matches!(kind, ScalarKind::CumulativeSum | ScalarKind::DeltaCounter),
+            })
+        }
     };
     Metric {
         name,

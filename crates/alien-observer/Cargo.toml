@@ -35,3 +35,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
+
+[[example]]
+name = "collect_metrics"
+required-features = ["aws", "gcp", "azure"]
