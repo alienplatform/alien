@@ -193,7 +193,10 @@ fn azure_verifier() -> Result<Verifier> {
             resource_group: group.clone(),
         }),
         store: Arc::new(AzureInstall(client.clone())),
-        backend: Arc::new(AzureBackend(client)),
+        backend: Arc::new(AzureBackend(
+            client,
+            alien_gate::machines::ImagePins::azure(),
+        )),
         vpc: None,
         machine_network: None,
     })

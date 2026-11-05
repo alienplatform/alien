@@ -25,6 +25,7 @@
 
 pub mod aws;
 pub mod azure;
+pub mod azure_machines;
 pub mod cloud_run;
 pub mod container_apps;
 pub mod error;
