@@ -27,6 +27,8 @@ async fn main() -> ExitCode {
             SetupPins {
                 aws_publisher: Some(publisher.clone()),
                 aws_verifier_image: Some(verifier.clone()),
+                gcp_verifier_image: Some(format!("gcr.example/verifier@sha256:{}", "6e".repeat(32))),
+                azure_verifier_image: Some(format!("registry.example/verifier@sha256:{}", "7f".repeat(32))),
                 operator_digest: Some(format!("sha256:{}", "ef".repeat(32))),
             },
         ),

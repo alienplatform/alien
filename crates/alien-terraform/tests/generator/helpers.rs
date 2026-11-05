@@ -128,6 +128,8 @@ pub fn test_pins() -> alien_core::SetupPins {
     alien_core::SetupPins {
         aws_publisher: Some("111122223333".to_string()),
         aws_verifier_image: Some(format!("verifier@sha256:{}", "ab".repeat(32))),
+        gcp_verifier_image: Some(format!("gcr.example/verifier@sha256:{}", "6e".repeat(32))),
+        azure_verifier_image: Some(format!("registry.example/verifier@sha256:{}", "7f".repeat(32))),
         operator_digest: Some(format!("sha256:{}", "cd".repeat(32))),
     }
 }

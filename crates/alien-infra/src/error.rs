@@ -69,6 +69,22 @@ pub enum ErrorData {
         resource_id: Option<String>,
     },
 
+    /// The install holds signing settings, but the deployment config it was handed has none, so
+    /// rendering its management permissions would treat a protected install as unprotected.
+    #[error(
+        code = "SIGNING_SETTINGS_MISSING_FROM_CONFIG",
+        message = "Resource '{resource_id}' belongs to a protected install (signing settings at '{settings_location}'), but the deployment config has no signing settings",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SigningSettingsMissingFromConfig {
+        /// The resource whose permissions were about to be rendered
+        resource_id: String,
+        /// Where the install's signing settings are
+        settings_location: String,
+    },
+
     /// A required vault-native deployer secret is not in the deployment's
     /// secrets vault, so the workload does not start.
     #[error(

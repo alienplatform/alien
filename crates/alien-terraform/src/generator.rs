@@ -491,7 +491,7 @@ pub(crate) fn render_terraform_module(
         apply_aws_network_iam_dependency(stack, &mut per_resource);
     }
     if matches!(platform, alien_core::Platform::Azure) {
-        emit_azure_setup_resource_role_definitions(&mut per_resource, stack)?;
+        emit_azure_setup_resource_role_definitions(&mut per_resource, stack, &stack_settings)?;
         apply_azure_resource_group_dependency(stack, &labels, &mut per_resource);
     }
     // Every fragment is emitted and every generator-injected block exists by
@@ -549,7 +549,8 @@ pub(crate) fn render_terraform_module(
             _ => None,
         })
         .collect();
-    let verifier_machine_network = verifier_machine_network(stack, &stack_settings, &labels, target)?;
+    let verifier_machine_network =
+        verifier_machine_network(stack, &stack_settings, &labels, target)?;
     let signing = signing_blocks(
         &stack_settings,
         target,
@@ -1114,12 +1115,17 @@ fn append_permission_entry(
 fn emit_azure_setup_resource_role_definitions(
     per_resource: &mut IndexMap<String, TfFragment>,
     stack: &Stack,
+    settings: &StackSettings,
 ) -> Result<()> {
     let Some((_resource_id, fragment)) = per_resource.iter_mut().next() else {
         return Ok(());
     };
 
-    crate::emitters::azure::helpers::emit_setup_resource_role_definitions(stack, fragment)
+    crate::emitters::azure::helpers::emit_setup_resource_role_definitions(
+        stack,
+        fragment,
+        settings.signing.is_some(),
+    )
 }
 
 fn dedupe_gcp_support_resources(per_resource: &mut IndexMap<String, TfFragment>) -> Result<()> {
@@ -1839,8 +1845,8 @@ fn body_is_empty(body: &Body) -> bool {
 /// The fingerprint and channel are literals, so the module's digest pins them; the
 /// `signing_fingerprint` variable only shows the fingerprint and refuses any other value.
 ///
-/// On Azure the settings are not written yet; the Azure management emitter writes the deny
-/// settings that keep the management identity away from what runs code.
+/// On Azure the resource group emitter writes the settings tag and the management emitter the
+/// ledger, the verifier identity and the deny settings; this adds the verifier's Container App.
 fn signing_blocks(
     settings: &StackSettings,
     target: TerraformTarget,
@@ -1860,7 +1866,10 @@ fn signing_blocks(
     let ledger_json = alien_signing::Ledger::new(prefix).to_json();
     // Standard SSM parameters and Parameter Manager versions hold far more than this; the
     // ledger keeps heads only. A prefix is at most 128 characters.
-    for (name, json) in [("settings", signing_settings.to_json()), ("ledger", ledger_json.clone())] {
+    for (name, json) in [
+        ("settings", signing_settings.to_json()),
+        ("ledger", ledger_json.clone()),
+    ] {
         if json.replace(prefix, &"x".repeat(128)).len() > 4096 {
             return Err(AlienError::new(ErrorData::TemplateSerializationFailed {
                 format: "Terraform".to_string(),
@@ -1874,32 +1883,32 @@ fn signing_blocks(
             vec![fingerprint_variable],
             aws_verifier_blocks(pins, management_label, verifier_machine_network)?,
             vec![
-            resource_block(
-                "aws_ssm_parameter",
-                "signing_fingerprint",
-                [
-                    attr(
-                        "name",
-                        expr::template(alien_signing::settings::names::aws_settings(prefix)),
-                    ),
-                    attr("type", Expression::String("String".to_string())),
-                    attr("tier", Expression::String("Standard".to_string())),
-                    attr("value", settings_value),
-                ],
-            ),
-            resource_block(
-                "aws_ssm_parameter",
-                "signing_state",
-                [
-                    attr(
-                        "name",
-                        expr::template(alien_signing::settings::names::aws_ledger(prefix)),
-                    ),
-                    attr("type", Expression::String("String".to_string())),
-                    attr("tier", Expression::String("Standard".to_string())),
-                    attr("value", ledger_value),
-                ],
-            ),
+                resource_block(
+                    "aws_ssm_parameter",
+                    "signing_fingerprint",
+                    [
+                        attr(
+                            "name",
+                            expr::template(alien_signing::settings::names::aws_settings(prefix)),
+                        ),
+                        attr("type", Expression::String("String".to_string())),
+                        attr("tier", Expression::String("Standard".to_string())),
+                        attr("value", settings_value),
+                    ],
+                ),
+                resource_block(
+                    "aws_ssm_parameter",
+                    "signing_state",
+                    [
+                        attr(
+                            "name",
+                            expr::template(alien_signing::settings::names::aws_ledger(prefix)),
+                        ),
+                        attr("type", Expression::String("String".to_string())),
+                        attr("tier", Expression::String("Standard".to_string())),
+                        attr("value", ledger_value),
+                    ],
+                ),
             ],
         ]
         .concat()),
@@ -1942,7 +1951,11 @@ fn signing_blocks(
             }
             Ok(blocks)
         }
-        TerraformTarget::Azure => Ok(vec![fingerprint_variable]),
+        TerraformTarget::Azure => Ok([
+            vec![fingerprint_variable],
+            azure_verifier_blocks(pins, management_label)?,
+        ]
+        .concat()),
         TerraformTarget::Eks | TerraformTarget::Gke | TerraformTarget::Aks => {
             Err(AlienError::new(ErrorData::OperationNotSupported {
                 operation: format!("protect a {} install through Terraform", target.name()),
@@ -2105,7 +2118,10 @@ fn aws_verifier_blocks(
             "aws_iam_role_policy_attachment",
             "management_limits",
             [
-                attr("role", expr::traversal(["aws_iam_role", management, "name"])),
+                attr(
+                    "role",
+                    expr::traversal(["aws_iam_role", management, "name"]),
+                ),
                 attr(
                     "policy_arn",
                     expr::traversal(["aws_iam_policy", "management_limits", "arn"]),
@@ -2114,6 +2130,148 @@ fn aws_verifier_blocks(
         ));
     }
     Ok(blocks)
+}
+
+/// A protected Azure install's verifier: the Container App `<prefix>-verifier` in a managed
+/// environment of its own, running as the verifier identity the management emitter creates
+/// (the deny's second excluded principal) and reading the signing vault. The management roles
+/// hold no Container App writes on a protected install, so only setup changes its image and
+/// environment.
+///
+/// Its ingress is public: whoever calls it can only hand it statements the vendor signed,
+/// which it checks against the install's settings and ledger itself.
+fn azure_verifier_blocks(
+    pins: &alien_core::SetupPins,
+    management_label: Option<&str>,
+) -> Result<Vec<Block>> {
+    let image = pins
+        .azure_verifier_image
+        .as_deref()
+        .filter(|image| alien_core::is_pinned_image(image))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::OperationNotSupported {
+                operation: "render a protected Azure setup".to_string(),
+                reason: "this CLI build has no Azure verifier image pinned by digest; protected setups come from released CLI builds".to_string(),
+            })
+        })?;
+    let management = management_label.ok_or_else(|| {
+        AlienError::new(ErrorData::OperationNotSupported {
+            operation: "render a protected Azure setup".to_string(),
+            reason: "the stack has no remote management, which creates the verifier identity"
+                .to_string(),
+        })
+    })?;
+    let identity = format!("{management}_verifier");
+    let vault = format!("{management}_signing");
+    let name = expr::template("${local.resource_prefix}-verifier".to_string());
+    let setup_tags = || expr::object([("managed-by", Expression::String("setup".to_string()))]);
+    let env = |name: &str, value: Expression| {
+        nested(block(
+            "env",
+            [
+                attr("name", Expression::String(name.to_string())),
+                attr("value", value),
+            ],
+        ))
+    };
+    Ok(vec![
+        resource_block(
+            "azurerm_container_app_environment",
+            "signing_verifier",
+            [
+                attr("name", name.clone()),
+                attr("resource_group_name", expr::raw("var.azure_resource_group_name")),
+                attr("location", expr::raw("var.azure_location")),
+                attr("tags", setup_tags()),
+            ],
+        ),
+        resource_block(
+            "azurerm_container_app",
+            "signing_verifier",
+            [
+                attr("name", name),
+                attr("resource_group_name", expr::raw("var.azure_resource_group_name")),
+                attr(
+                    "container_app_environment_id",
+                    expr::traversal(["azurerm_container_app_environment", "signing_verifier", "id"]),
+                ),
+                attr("revision_mode", Expression::String("Single".to_string())),
+                nested(block(
+                    "identity",
+                    [
+                        attr("type", Expression::String("UserAssigned".to_string())),
+                        attr(
+                            "identity_ids",
+                            Expression::Array(vec![expr::traversal([
+                                "azurerm_user_assigned_identity",
+                                &identity,
+                                "id",
+                            ])]),
+                        ),
+                    ],
+                )),
+                nested(block(
+                    "template",
+                    [
+                        attr("min_replicas", Expression::Number(0.into())),
+                        attr("max_replicas", Expression::Number(1.into())),
+                        nested(block(
+                            "container",
+                            [
+                                attr("name", Expression::String("verifier".to_string())),
+                                attr("image", Expression::String(image.to_string())),
+                                attr("cpu", expr::raw("0.25")),
+                                attr("memory", Expression::String("0.5Gi".to_string())),
+                                env("VERIFIER_CLOUD", Expression::String("azure".to_string())),
+                                env(
+                                    "VERIFIER_AZURE_RESOURCE_GROUP",
+                                    expr::template(
+                                        "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+                                            .to_string(),
+                                    ),
+                                ),
+                                env(
+                                    "VERIFIER_AZURE_VAULT",
+                                    expr::traversal(["azurerm_key_vault", &vault, "vault_uri"]),
+                                ),
+                                env(
+                                    "VERIFIER_AZURE_CLIENT_ID",
+                                    expr::traversal([
+                                        "azurerm_user_assigned_identity",
+                                        &identity,
+                                        "client_id",
+                                    ]),
+                                ),
+                            ],
+                        )),
+                    ],
+                )),
+                nested(block(
+                    "ingress",
+                    [
+                        attr("external_enabled", Expression::Bool(true)),
+                        attr("target_port", Expression::Number(8080.into())),
+                        attr("transport", Expression::String("auto".to_string())),
+                        nested(block(
+                            "traffic_weight",
+                            [
+                                attr("latest_revision", Expression::Bool(true)),
+                                attr("percentage", Expression::Number(100.into())),
+                            ],
+                        )),
+                    ],
+                )),
+                attr("tags", setup_tags()),
+                attr(
+                    "depends_on",
+                    Expression::Array(vec![
+                        expr::traversal(["azurerm_role_assignment", &identity]),
+                        expr::traversal(["azurerm_role_assignment", &format!("{vault}_verifier")]),
+                    ]),
+                ),
+            ],
+        ),
+    ])
 }
 
 /// What the GCP verifier may change: the install's own machine templates and groups, the
@@ -2169,7 +2327,10 @@ fn gcp_verifier_blocks(runtime_service_accounts: &[String]) -> Vec<Block> {
                         "format(\"%s_{suffix}\", replace(local.resource_prefix, \"-\", \"_\"))"
                     )),
                 ),
-                attr("title", expr::template(format!("${{local.resource_prefix}} {title}"))),
+                attr(
+                    "title",
+                    expr::template(format!("${{local.resource_prefix}} {title}")),
+                ),
                 attr(
                     "permissions",
                     Expression::Array(
@@ -2315,7 +2476,10 @@ fn gcp_verifier_blocks(runtime_service_accounts: &[String]) -> Vec<Block> {
                     "service_account_id",
                     expr::traversal(["google_service_account", label, "name"]),
                 ),
-                attr("role", Expression::String("roles/iam.serviceAccountUser".to_string())),
+                attr(
+                    "role",
+                    Expression::String("roles/iam.serviceAccountUser".to_string()),
+                ),
                 attr("member", member.clone()),
             ],
         ));
@@ -2352,7 +2516,10 @@ fn verifier_machine_network(
         .find(|(_, entry)| entry.config.downcast_ref::<Network>().is_some())
         .ok_or_else(refuse)?;
     if matches!(
-        entry.config.downcast_ref::<Network>().map(|network| &network.settings),
+        entry
+            .config
+            .downcast_ref::<Network>()
+            .map(|network| &network.settings),
         Some(NetworkSettings::UseDefault)
     ) {
         return Err(refuse());
@@ -3532,10 +3699,9 @@ fn advanced_settings_default_json(
         object.remove("telemetry");
         object.remove("heartbeats");
         object.remove("endpointAccess");
-        // Setup writes these into the anchor and the management policy. A later change to
-        // the registered settings changes neither, so they are not offered as one.
-        object.remove("releaseTrust");
-        object.remove("machineImagePublisher");
+        // Setup writes the signing settings into the install and pins them in this module; a
+        // later change to the registered settings changes neither, so they are not offered as one.
+        object.remove("signing");
         if (matches!(target.cloud_platform(), alien_core::Platform::Aws)
             && has_dynamic_aws_network_settings(stack_settings.network.as_ref()))
             || (matches!(target.cloud_platform(), alien_core::Platform::Gcp)
