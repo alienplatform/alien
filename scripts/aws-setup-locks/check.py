@@ -81,6 +81,7 @@ class Run:
         self.evidence = Path(args.evidence)
         self.evidence.mkdir(parents=True, exist_ok=True)
         self.cleanups = []
+        self.extra_grants = {}
         self.results = []
 
     # Evidence
@@ -289,7 +290,16 @@ class Run:
         ], "Resource": "*"}]}
         role = f"{stack_name}-management"
         self.iam.put_role_policy(RoleName=role, PolicyName="extra-grant", PolicyDocument=json.dumps(extra))
-        self.cleanups.append(lambda: self.iam.delete_role_policy(RoleName=role, PolicyName="extra-grant"))
+        remove = lambda: self.iam.delete_role_policy(RoleName=role, PolicyName="extra-grant")
+        self.cleanups.append(remove)
+        self.extra_grants[stack_name] = remove
+
+    def remove_extra_grant(self, stack_name):
+        """Before deleting the stack: its role goes with it, and the stack can't delete a role that
+        still has a policy it didn't create."""
+        remove = self.extra_grants.pop(stack_name)
+        remove()
+        self.cleanups.remove(remove)
 
     def attempts(self, variant, session, stack_name, things, subnet, neighbor):
         protected = variant == "protected"
@@ -324,7 +334,7 @@ class Run:
         if protected:
             verifier = f"{stack_name}-verifier"
             for case, call, request in [
-                ("verifier-update-configuration", lam.update_function_configuration, {"FunctionName": verifier, "Environment": {"Variables": {"VERIFIER_CLOUD": "aws", "X": "1"}}}),
+                ("verifier-update-configuration", lam.update_function_configuration, {"FunctionName": verifier, "Environment": {"Variables": {"VERIFIER_CLOUD": "aws", "VERIFIER_EXTRA": "1"}}}),
                 ("verifier-update-code", lam.update_function_code, {"FunctionName": verifier, "ImageUri": f"{self.account}.dkr.ecr.{self.args.region}.amazonaws.com/{self.args.prefix}-verifier:latest"}),
             ]:
                 code, detail = self.call(call, **request)
@@ -478,6 +488,7 @@ def main():
             run.quick_create_override(url, caller_role)
 
             # Delete and recreate under the same name: nothing is retained, so the create succeeds.
+            run.remove_extra_grant(protected)
             run.delete_stack(protected)
             run.deploy(protected, url, caller_role)
             run.check_settings(protected)

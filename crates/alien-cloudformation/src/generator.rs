@@ -689,6 +689,9 @@ pub fn generate_cloudformation_template_with_profile(
     consolidate_role_inline_policies(&mut template)?;
     // After consolidation, so the count of managed policies on the management role is final.
     add_verifier_and_limits(&mut template, &stack_settings_value, &options.pins)?;
+    if stack_settings_value.signing.is_some() {
+        refuse_unverifiable_code(&template)?;
+    }
 
     add_deployer_secret_outputs(
         &mut template,
@@ -2155,6 +2158,52 @@ fn add_verifier_and_limits(
         CfExpression::list([CfExpression::ref_(management_role)]),
     );
     insert_resource(template, limits)
+}
+
+/// A protected template must say everything it runs, so its digest covers it: no transforms
+/// or nested stacks (their content lives elsewhere), no function or layer code from S3, and
+/// images only by digest.
+fn refuse_unverifiable_code(template: &CfTemplate) -> Result<()> {
+    let refuse = |what: String| {
+        Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "render a protected setup template".to_string(),
+            reason: format!("{what}; a signed template must contain everything it runs"),
+        }))
+    };
+    if !template.transform.is_empty() {
+        return refuse(format!("it uses the transforms {:?}", template.transform));
+    }
+    for (id, resource) in &template.resources {
+        let kind = resource.resource_type.as_str();
+        if kind == "AWS::CloudFormation::Stack" || kind.starts_with("AWS::Serverless::") {
+            return refuse(format!("resource '{id}' is a {kind}"));
+        }
+        let code = match kind {
+            "AWS::Lambda::Function" => resource.properties.get("Code"),
+            "AWS::Lambda::LayerVersion" => resource.properties.get("Content"),
+            _ => None,
+        };
+        let Some(CfExpression::Object(code)) = code else {
+            continue;
+        };
+        if let Some(key) = code.keys().find(|key| key.starts_with("S3")) {
+            return refuse(format!("resource '{id}' takes its code from {key}"));
+        }
+        if let Some(image) = code.get("ImageUri") {
+            let text = match image {
+                CfExpression::String(text) => Some(text.as_str()),
+                CfExpression::Object(fields) => match fields.get("Fn::Sub") {
+                    Some(CfExpression::String(text)) => Some(text.as_str()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if !text.is_some_and(|text| text.contains("@sha256:")) {
+                return refuse(format!("resource '{id}' runs an image not pinned by digest"));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The logical ID of the role named `<prefix>-management`, if the template creates it.
@@ -4680,5 +4729,71 @@ mod tests {
             is_cloudformation_intrinsic(network),
             "intrinsic overlay should replace the structured base"
         );
+    }
+}
+
+#[cfg(test)]
+mod unverifiable_code_tests {
+    use super::*;
+
+    fn function(code: CfExpression) -> CfTemplate {
+        let mut template = CfTemplate::default();
+        let mut function = CfResource::new("Fn".to_string(), "AWS::Lambda::Function".to_string());
+        function.properties.insert("Code".to_string(), code);
+        template.resources.insert("Fn".to_string(), function);
+        template
+    }
+
+    fn reason(template: &CfTemplate) -> String {
+        refuse_unverifiable_code(template)
+            .expect_err("a protected template must refuse this")
+            .message
+    }
+
+    #[test]
+    fn inline_code_and_digest_images_pass() {
+        refuse_unverifiable_code(&function(CfExpression::object([(
+            "ZipFile",
+            CfExpression::from("def handler(e, c): pass"),
+        )])))
+        .expect("inline code is in the template");
+        refuse_unverifiable_code(&function(CfExpression::object([(
+            "ImageUri",
+            CfExpression::sub("1.dkr.ecr.${AWS::Region}.amazonaws.com/v@sha256:00"),
+        )])))
+        .expect("an image by digest is pinned by the template");
+    }
+
+    #[test]
+    fn code_from_s3_is_refused() {
+        let template = function(CfExpression::object([
+            ("S3Bucket", CfExpression::from("bucket")),
+            ("S3Key", CfExpression::from("code.zip")),
+        ]));
+        assert!(reason(&template).contains("takes its code from S3Bucket"));
+    }
+
+    #[test]
+    fn images_by_tag_are_refused() {
+        let template = function(CfExpression::object([(
+            "ImageUri",
+            CfExpression::from("1.dkr.ecr.us-east-1.amazonaws.com/v:latest"),
+        )]));
+        assert!(reason(&template).contains("not pinned by digest"));
+    }
+
+    #[test]
+    fn transforms_and_nested_stacks_are_refused() {
+        let mut template = CfTemplate {
+            transform: vec!["AWS::Serverless-2016-10-31".to_string()],
+            ..CfTemplate::default()
+        };
+        assert!(reason(&template).contains("transforms"));
+        template.transform.clear();
+        template.resources.insert(
+            "Nested".to_string(),
+            CfResource::new("Nested".to_string(), "AWS::CloudFormation::Stack".to_string()),
+        );
+        assert!(reason(&template).contains("AWS::CloudFormation::Stack"));
     }
 }

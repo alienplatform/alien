@@ -31,6 +31,7 @@ use alien_core::{
     TelemetryMode, UpdatesMode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_permissions::generators::signing_limits;
 use hcl::{
     expr::Expression,
     structure::{Block, BlockLabel, Body, Structure},
@@ -520,7 +521,16 @@ pub(crate) fn render_terraform_module(
     if let Some(barrier) = &gcp_iam_propagation_barrier {
         import_depends_on.push(barrier.clone());
     }
-    let signing = signing_blocks(&stack_settings, target)?;
+    let management_label = stack
+        .resources()
+        .find(|(_, entry)| entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
+        .map(|(id, _)| resource_label_for_file(&labels, id).to_string());
+    let signing = signing_blocks(
+        &stack_settings,
+        target,
+        &options.pins,
+        management_label.as_deref(),
+    )?;
     import_depends_on.extend(signing.iter().filter_map(resource_address));
 
     let network_vars = network_extra_variables(stack, &labels);
@@ -1799,7 +1809,12 @@ fn body_is_empty(body: &Body) -> bool {
 ///
 /// On Azure the settings are not written yet; the Azure management emitter writes the deny
 /// settings that keep the management identity away from what runs code.
-fn signing_blocks(settings: &StackSettings, target: TerraformTarget) -> Result<Vec<Block>> {
+fn signing_blocks(
+    settings: &StackSettings,
+    target: TerraformTarget,
+    pins: &alien_core::SetupPins,
+    management_label: Option<&str>,
+) -> Result<Vec<Block>> {
     let Some(signing) = &settings.signing else {
         return Ok(Vec::new());
     };
@@ -1810,8 +1825,10 @@ fn signing_blocks(settings: &StackSettings, target: TerraformTarget) -> Result<V
     let settings_value = json_template(&signing_settings.to_json());
     let ledger_value = json_template(&alien_signing::Ledger::new(prefix).to_json());
     match target {
-        TerraformTarget::Aws => Ok(vec![
-            fingerprint_variable,
+        TerraformTarget::Aws => Ok([
+            vec![fingerprint_variable],
+            aws_verifier_blocks(pins, management_label)?,
+            vec![
             resource_block(
                 "aws_ssm_parameter",
                 "signing_fingerprint",
@@ -1838,7 +1855,9 @@ fn signing_blocks(settings: &StackSettings, target: TerraformTarget) -> Result<V
                     attr("value", ledger_value),
                 ],
             ),
-        ]),
+            ],
+        ]
+        .concat()),
         TerraformTarget::Gcp => {
             let mut blocks = vec![fingerprint_variable];
             for (label, name, value) in [
@@ -1885,6 +1904,162 @@ fn signing_blocks(settings: &StackSettings, target: TerraformTarget) -> Result<V
             }))
         }
     }
+}
+
+/// A protected AWS install's verifier, `<prefix>-verifier`, and the limits on its management
+/// role, `<prefix>-management-limits`; the same as the CloudFormation template's.
+fn aws_verifier_blocks(
+    pins: &alien_core::SetupPins,
+    management_label: Option<&str>,
+) -> Result<Vec<Block>> {
+    let missing = |what: &str| {
+        AlienError::new(ErrorData::OperationNotSupported {
+            operation: "render a protected AWS setup".to_string(),
+            reason: format!(
+                "this CLI build has no {what}; protected setups come from released CLI builds"
+            ),
+        })
+    };
+    let publisher = pins
+        .aws_publisher
+        .as_deref()
+        .ok_or_else(|| missing("machine-image publisher"))?;
+    let image = pins
+        .aws_verifier_image
+        .as_deref()
+        .filter(|image| alien_core::is_pinned_image(image))
+        .ok_or_else(|| missing("verifier image pinned by digest"))?;
+    let prefix = "${local.resource_prefix}";
+    let account = "${data.aws_caller_identity.current.account_id}";
+    let region = "${data.aws_region.current.region}";
+    let verifier = signing_limits::aws_verifier_name(prefix);
+    let setup_tags = || {
+        expr::object([
+            ("managed-by", Expression::String("setup".to_string())),
+            ("Name", expr::template(verifier.clone())),
+        ])
+    };
+    let lambda_trust = serde_json::json!({
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Effect": "Allow",
+            "Principal": { "Service": "lambda.amazonaws.com" },
+            "Action": "sts:AssumeRole"
+        }]
+    });
+    let mut blocks = vec![
+        resource_block(
+            "aws_iam_role",
+            "signing_verifier",
+            [
+                attr("name", expr::template(verifier.clone())),
+                attr(
+                    "description",
+                    Expression::String("The verifier's role. Only setup changes it.".to_string()),
+                ),
+                attr(
+                    "assume_role_policy",
+                    crate::emitters::aws::helpers::jsonencode_policy_value(lambda_trust),
+                ),
+                attr("tags", setup_tags()),
+            ],
+        ),
+        resource_block(
+            "aws_iam_role_policy",
+            "signing_verifier",
+            [
+                attr("name", Expression::String("verifier".to_string())),
+                attr(
+                    "role",
+                    expr::traversal(["aws_iam_role", "signing_verifier", "id"]),
+                ),
+                attr(
+                    "policy",
+                    crate::emitters::aws::helpers::jsonencode_policy_value(
+                        signing_limits::aws_verifier_policy(prefix, account, region, publisher),
+                    ),
+                ),
+            ],
+        ),
+        resource_block(
+            "aws_lambda_function",
+            "signing_verifier",
+            [
+                attr("function_name", expr::template(verifier.clone())),
+                attr(
+                    "description",
+                    Expression::String(
+                        "Applies only releases the vendor signed. The management role can't change what runs here."
+                            .to_string(),
+                    ),
+                ),
+                attr("package_type", Expression::String("Image".to_string())),
+                attr(
+                    "image_uri",
+                    expr::template(format!(
+                        "{publisher}.dkr.ecr.${{data.aws_region.current.region}}.amazonaws.com/{image}"
+                    )),
+                ),
+                attr(
+                    "role",
+                    expr::traversal(["aws_iam_role", "signing_verifier", "arn"]),
+                ),
+                attr("timeout", Expression::Number(300.into())),
+                attr("memory_size", Expression::Number(512.into())),
+                nested(block(
+                    "environment",
+                    [attr(
+                        "variables",
+                        expr::object([("VERIFIER_CLOUD", Expression::String("aws".to_string()))]),
+                    )],
+                )),
+                attr("tags", setup_tags()),
+                attr(
+                    "depends_on",
+                    Expression::Array(vec![expr::traversal([
+                        "aws_iam_role_policy",
+                        "signing_verifier",
+                    ])]),
+                ),
+            ],
+        ),
+    ];
+    if let Some(management) = management_label {
+        blocks.push(resource_block(
+            "aws_iam_policy",
+            "management_limits",
+            [
+                attr(
+                    "name",
+                    expr::template(signing_limits::aws_management_limits_name(prefix)),
+                ),
+                attr(
+                    "description",
+                    expr::template(format!(
+                        "Limits that hold even if another policy grants more: only this module changes what the install trusts; only {verifier} changes what runs; machines boot only the publisher's images."
+                    )),
+                ),
+                attr(
+                    "policy",
+                    crate::emitters::aws::helpers::jsonencode_policy_value(
+                        signing_limits::aws_management_limits(prefix, account, region),
+                    ),
+                ),
+            ],
+        ));
+        blocks.push(resource_block(
+            "aws_iam_role_policy_attachment",
+            "management_limits",
+            [
+                attr("role", expr::traversal(["aws_iam_role", management, "name"])),
+                attr(
+                    "policy_arn",
+                    expr::traversal(["aws_iam_policy", "management_limits", "arn"]),
+                ),
+            ],
+        ));
+    }
+    Ok(blocks)
 }
 
 /// A quoted template whose value is `json`, keeping its `${...}` interpolations.
