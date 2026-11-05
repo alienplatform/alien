@@ -2305,10 +2305,17 @@ const GCP_VERIFIER_OWN_RESOURCE_PERMISSIONS: &[&str] = &[
     "run.jobs.run",
 ];
 
-/// What the GCP verifier uses that the install doesn't name: the network its machines join and
-/// the images they boot.
-const GCP_VERIFIER_SHARED_PERMISSIONS: &[&str] =
-    &["compute.subnetworks.use", "compute.images.useReadOnly"];
+/// What the GCP verifier uses that the install doesn't name: the network its machines join, the
+/// images they boot, the template list (it picks the next template number) and the operations
+/// it waits on.
+const GCP_VERIFIER_SHARED_PERMISSIONS: &[&str] = &[
+    "compute.subnetworks.use",
+    "compute.images.useReadOnly",
+    "compute.instanceTemplates.list",
+    "compute.globalOperations.get",
+    "compute.regionOperations.get",
+    "compute.zoneOperations.get",
+];
 
 /// A protected GCP install's verifier identity: a service account with one custom role on the
 /// install's own resources, `actAs` on each runtime service account only, and reads of the
