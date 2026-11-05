@@ -857,6 +857,8 @@ dependencies = [
  "alien-error",
  "alien-release-trust",
  "async-trait",
+ "axum 0.8.9",
+ "base64 0.22.1",
  "chrono",
  "lambda_runtime",
  "reqwest 0.12.28",

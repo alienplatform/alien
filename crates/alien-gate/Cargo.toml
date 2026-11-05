@@ -15,6 +15,8 @@ alien-client-core = { workspace = true }
 alien-error = { workspace = true }
 alien-release-trust = { workspace = true }
 async-trait = { workspace = true }
+axum = { workspace = true, features = ["http1", "json", "tokio"] }
+base64 = { workspace = true }
 chrono = { workspace = true }
 lambda_runtime = { workspace = true }
 reqwest = { workspace = true }

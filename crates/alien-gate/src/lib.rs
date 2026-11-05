@@ -8,6 +8,7 @@
 //!
 //! - [`plan`]: from a request and the trusted state to the function to write;
 //! - [`function`]: apply a planned function and check it reads back the same;
+//! - [`cloud_run`] and [`gcp`]: the same for Cloud Run services on GCP;
 //! - [`state`]: the signer chain and floors the gate keeps between calls.
 
 #![expect(
@@ -15,8 +16,10 @@
     reason = "Alien errors retain structured metadata and causal context"
 )]
 
+pub mod cloud_run;
 pub mod error;
 pub mod function;
+pub mod gcp;
 pub mod plan;
 pub mod state;
 

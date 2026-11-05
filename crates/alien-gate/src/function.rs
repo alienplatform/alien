@@ -54,7 +54,7 @@ impl<T: LambdaApi> FunctionStore for T {
         self.update_function_configuration(
             &spec.name,
             UpdateFunctionConfigurationRequest::builder()
-                .role(spec.role_arn.clone())
+                .role(spec.run_as.clone())
                 .timeout(spec.timeout_seconds as i32)
                 .memory_size(spec.memory_mb as i32)
                 .environment(Environment {
@@ -223,7 +223,7 @@ pub fn check_read_back(spec: &FunctionSpec, function: &Value) -> Result<()> {
     if !resolved.ends_with(&format!("@{}", spec.digest)) {
         return Err(mismatch(format!("its image resolves to {resolved}")));
     }
-    if configuration["Role"].as_str() != Some(spec.role_arn.as_str()) {
+    if configuration["Role"].as_str() != Some(spec.run_as.as_str()) {
         return Err(mismatch(format!(
             "it runs as {}",
             text(&configuration["Role"])
@@ -294,7 +294,7 @@ mod tests {
             memory_mb: 512,
             timeout_seconds: 30,
             architecture: "x86_64".into(),
-            role_arn: "arn:aws:iam::123456789012:role/acme-execution".into(),
+            run_as: "arn:aws:iam::123456789012:role/acme-execution".into(),
         }
     }
 
@@ -305,7 +305,7 @@ mod tests {
             "Configuration": {
                 "FunctionName": spec.name,
                 "FunctionArn": format!("arn:aws:lambda:us-east-1:123456789012:function:{}", spec.name),
-                "Role": spec.role_arn,
+                "Role": spec.run_as,
                 "CodeSize": 0,
                 "Description": "",
                 "Timeout": spec.timeout_seconds,
@@ -424,7 +424,7 @@ mod tests {
                 .push(format!("configuration {}", spec.name));
             let mut function = self.function.lock().unwrap();
             function["Configuration"]["Environment"]["Variables"] = json!(spec.env);
-            function["Configuration"]["Role"] = json!(spec.role_arn);
+            function["Configuration"]["Role"] = json!(spec.run_as);
             function["Configuration"]["MemorySize"] = json!(spec.memory_mb);
             function["Configuration"]["Timeout"] = json!(spec.timeout_seconds);
             function["Configuration"]["Layers"] = json!([]);

@@ -70,7 +70,8 @@ pub struct GateConfig {
     pub function_prefix: String,
     /// Repository prefix a relocated image must start with.
     pub registry: String,
-    /// The role ARN for each permission profile.
+    /// What each permission profile runs as: an IAM role ARN on AWS, a
+    /// service account email on GCP.
     pub roles: BTreeMap<String, String>,
 }
 
@@ -92,8 +93,9 @@ pub struct FunctionSpec {
     pub timeout_seconds: u32,
     /// `x86_64` or `arm64`.
     pub architecture: String,
-    /// Execution role.
-    pub role_arn: String,
+    /// What it runs as: the execution role ARN on AWS, the service account
+    /// email on GCP.
+    pub run_as: String,
 }
 
 /// A planned write and the state to store once it succeeds.
@@ -209,7 +211,7 @@ pub fn plan(
             workload.name
         ))
     })?;
-    let role_arn = config.roles.get(identity).ok_or_else(|| {
+    let run_as = config.roles.get(identity).ok_or_else(|| {
         refuse(format!(
             "permission profile '{identity}' has no role in this deployment"
         ))
@@ -271,7 +273,7 @@ pub fn plan(
             memory_mb: settings.memory_mb,
             timeout_seconds: settings.timeout_seconds,
             architecture: architecture.to_string(),
-            role_arn: role_arn.clone(),
+            run_as: run_as.clone(),
         },
         state: GateState {
             signer_lists: trust.chain().statements().to_vec(),
@@ -460,7 +462,7 @@ pub(crate) mod tests {
                 memory_mb: 512,
                 timeout_seconds: 30,
                 architecture: "x86_64".into(),
-                role_arn: "arn:aws:iam::123456789012:role/acme-execution".into(),
+                run_as: "arn:aws:iam::123456789012:role/acme-execution".into(),
             }
         );
         assert_eq!(planned.state.floors.get(RELEASE_FLOOR), Some(10));
