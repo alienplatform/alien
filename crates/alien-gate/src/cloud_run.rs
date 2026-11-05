@@ -395,6 +395,30 @@ mod tests {
         );
     }
 
+    /// What Cloud Run returned for a service with two revisions, before and
+    /// after the verifier's PATCH (us-central1, 2026-11-05).
+    #[test]
+    fn real_traffic_reports_read_as_cloud_run_returns_them() {
+        let revisions = "projects/p/locations/us-central1/services/acme-fn-api/revisions";
+        let mut split = service(&spec());
+        split["latestCreatedRevision"] = json!(format!("{revisions}/acme-fn-api-00002-cqd"));
+        split["latestReadyRevision"] = split["latestCreatedRevision"].clone();
+        split["terminalCondition"] = json!({"type": "Ready", "state": "CONDITION_SUCCEEDED", "lastTransitionTime": "2026-11-05T14:28:54.447929Z"});
+        split["trafficStatuses"] = json!([
+            {"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION", "revision": "acme-fn-api-00001-k95", "percent": 90},
+            {"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", "revision": "acme-fn-api-00002-cqd", "percent": 10},
+        ]);
+        assert!(check_read_back(&spec(), &split).is_err());
+
+        let mut patched = split;
+        patched["latestCreatedRevision"] = json!(format!("{revisions}/acme-fn-api-00003-bj6"));
+        patched["latestReadyRevision"] = patched["latestCreatedRevision"].clone();
+        patched["trafficStatuses"] = json!([
+            {"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", "revision": "acme-fn-api-00003-bj6", "percent": 100},
+        ]);
+        check_read_back(&spec(), &patched).unwrap();
+    }
+
     #[test]
     fn a_field_the_verifier_does_not_know_refuses_the_service() {
         let mut service = service(&spec());
