@@ -19,6 +19,12 @@ The **Release qualification** check then:
 - packs every Cargo and npm package;
 - records the source Git tree plus every artifact checksum and image digest.
 
+Qualification fails at once unless the repository variables
+`MACHINE_IMAGE_PUBLISHER_AWS_ACCOUNT`, `MACHINE_IMAGE_PUBLISHER_GCP_PROJECT`,
+`MACHINE_IMAGE_PUBLISHER_AZURE_GALLERY` and `MACHINE_IMAGE_MINIMUM_CREATED`
+are set: `scripts/write-machine-image-pins.sh` compiles them into the
+verifier, which otherwise refuses every protected machine roll.
+
 Qualification artifacts are retained for 30 days. If they expire, rerun
 **Release qualification** with the version pull request's exact head commit.
 

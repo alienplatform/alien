@@ -1685,6 +1685,16 @@ jobs:
           path: .ci-tool-versions
           persist-credentials: false
 
+      # The verifier (alien-gate) compiles in the machine images protected
+      # installs may boot; without them it refuses every protected roll.
+      - name: Write machine-image pins
+        env:
+          MACHINE_IMAGE_PUBLISHER_AWS_ACCOUNT: ${{ vars.MACHINE_IMAGE_PUBLISHER_AWS_ACCOUNT }}
+          MACHINE_IMAGE_PUBLISHER_GCP_PROJECT: ${{ vars.MACHINE_IMAGE_PUBLISHER_GCP_PROJECT }}
+          MACHINE_IMAGE_PUBLISHER_AZURE_GALLERY: ${{ vars.MACHINE_IMAGE_PUBLISHER_AZURE_GALLERY }}
+          MACHINE_IMAGE_MINIMUM_CREATED: ${{ vars.MACHINE_IMAGE_MINIMUM_CREATED }}
+        run: scripts/write-machine-image-pins.sh
+
       - name: Restore binaries from cache
         id: binary-cache
         uses: actions/cache@v6
@@ -1698,7 +1708,7 @@ jobs:
             target/x86_64-unknown-linux-musl/release/alien-egress-gateway
             target/x86_64-unknown-linux-musl/release/alien-gate
           # Bump the -bN suffix whenever the set of cached binaries changes.
-          key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b4-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
+          key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b4-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml', 'crates/alien-core/machine-image-*.txt') }}
 
       - uses: ./.ci-tool-versions/.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'
