@@ -3699,10 +3699,9 @@ fn advanced_settings_default_json(
         object.remove("telemetry");
         object.remove("heartbeats");
         object.remove("endpointAccess");
-        // Setup writes these into the anchor and the management policy. A later change to
-        // the registered settings changes neither, so they are not offered as one.
-        object.remove("releaseTrust");
-        object.remove("machineImagePublisher");
+        // Setup writes the signing settings into the install and pins them in this module; a
+        // later change to the registered settings changes neither, so they are not offered as one.
+        object.remove("signing");
         if (matches!(target.cloud_platform(), alien_core::Platform::Aws)
             && has_dynamic_aws_network_settings(stack_settings.network.as_ref()))
             || (matches!(target.cloud_platform(), alien_core::Platform::Gcp)
