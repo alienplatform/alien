@@ -524,7 +524,19 @@ async fn add_config_statement(
         return error.into_response();
     }
     // The deployment's enforcers take developer values only from this
-    // statement, so it is delivered with the next target.
+    // statement, so it is delivered with the next target: the release it
+    // runs, again.
+    if deployment.desired_release_id.is_none() {
+        if let Some(current) = deployment.current_release_id.as_deref() {
+            if let Err(error) = state
+                .deployment_store
+                .set_deployment_desired_release(&subject, &deployment.id, current)
+                .await
+            {
+                return error.into_response();
+            }
+        }
+    }
     match state.deployment_store.set_redeploy(&subject, &deployment.id).await {
         Ok(()) => StatusCode::CREATED.into_response(),
         Err(error) => error.into_response(),
