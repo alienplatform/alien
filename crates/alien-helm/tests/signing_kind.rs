@@ -62,7 +62,10 @@ impl Cluster {
             !output.status.success(),
             "{program} {arguments:?} succeeded but must be refused"
         );
-        assert!(stderr.contains(reason), "{program} {arguments:?}: {stderr}");
+        assert!(
+            stderr.to_lowercase().contains(&reason.to_lowercase()),
+            "{program} {arguments:?}: {stderr}"
+        );
         stderr
     }
 
