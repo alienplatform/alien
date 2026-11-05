@@ -1225,35 +1225,63 @@ async fn a_release_that_supersedes_an_in_flight_update_is_applied_before_it_is_r
     );
 }
 
-/// A release whose worker update never succeeds, as a rollout whose new version is
-/// never healthy.
-fn failing_worker_image_release(image: &str, release_id: &str) -> ReleaseInfo {
-    let mut release = worker_image_release(image, release_id);
-    let entry = release.stack.resources.get_mut("test-function").unwrap();
-    let mut worker = entry.config.downcast_ref::<Worker>().unwrap().clone();
-    worker
-        .environment
-        .insert("SIMULATE_UPDATE_FAILURE".to_string(), "true".to_string());
-    entry.config = alien_core::Resource::new(worker);
-    release
+/// A release whose only resource is the image worker `worker_id`. A failing release's
+/// worker update never succeeds, as a rollout whose new version is never healthy.
+fn superseding_worker_release(
+    worker_id: &str,
+    image: &str,
+    release_id: &str,
+    failing: bool,
+) -> ReleaseInfo {
+    let mut worker = Worker::new(worker_id.to_string())
+        .code(WorkerCode::Image {
+            image: image.to_string(),
+        })
+        .permissions("default".to_string())
+        .build();
+    if failing {
+        worker
+            .environment
+            .insert("SIMULATE_UPDATE_FAILURE".to_string(), "true".to_string());
+    }
+    let mut stack = create_test_stack("test-stack", worker_id);
+    stack.resources.get_mut(worker_id).unwrap().config = alien_core::Resource::new(worker);
+    release_of(release_id, stack)
 }
 
 fn release_id(release: Option<&ReleaseInfo>) -> Option<&str> {
     release.and_then(|release| release.release_id.as_deref())
 }
 
+/// The images the worker actually received, in order, without repeats of the same send.
+fn images_sent(worker_id: &str) -> Vec<String> {
+    let mut images: Vec<String> =
+        alien_infra::test_worker_configs_deployed(&format!("test:worker:{worker_id}"))
+            .into_iter()
+            .map(|config| match config.code {
+                WorkerCode::Image { image } => image,
+                other => panic!("expected an image worker, got {other:?}"),
+            })
+            .collect();
+    images.dedup();
+    images
+}
+
 /// Runs a deployment to Running on v1, then starts an update to a v2 that never
 /// succeeds and returns it while v2 is still applying.
-async fn updating_to_a_failing_release(config: &DeploymentConfig) -> DeploymentState {
+async fn updating_to_a_failing_release(
+    config: &DeploymentConfig,
+    worker_id: &str,
+) -> DeploymentState {
     let mut state = run_to_completion(
-        create_initial_state(create_test_stack("test-stack", "test-function")),
+        create_initial_state(create_test_stack("test-stack", worker_id)),
         config.clone(),
     )
     .await;
     assert_eq!(state.status, DeploymentStatus::Running);
     start_update(
         &mut state,
-        failing_worker_image_release("test:v2", "rel_v2"),
+        superseding_worker_release(worker_id, "test:v2", "rel_v2", true),
     );
     run_until_status(state, config.clone(), &[DeploymentStatus::Updating]).await
 }
@@ -1264,10 +1292,13 @@ async fn updating_to_a_failing_release(config: &DeploymentConfig) -> DeploymentS
 #[tokio::test]
 async fn a_release_that_supersedes_a_failing_update_is_applied_without_a_retry() {
     let _vault = test_vault_env().await;
+    let worker_id = "superseded-failing-update-fn";
     let config = create_test_config("hash_v1", false);
-    let mut state = updating_to_a_failing_release(&config).await;
+    let mut state = updating_to_a_failing_release(&config, worker_id).await;
     let installed_release = state.current_release.clone();
-    state.target_release = Some(worker_image_release("test:v3", "rel_v3"));
+    state.target_release = Some(superseding_worker_release(
+        worker_id, "test:v3", "rel_v3", false,
+    ));
 
     state = run_until_status(
         state,
@@ -1303,7 +1334,7 @@ async fn a_release_that_supersedes_a_failing_update_is_applied_without_a_retry()
     assert!(
         serde_json::to_string(&cause.context)
             .unwrap()
-            .contains("test-function"),
+            .contains(worker_id),
         "{cause:?}"
     );
     assert_eq!(
@@ -1326,7 +1357,12 @@ async fn a_release_that_supersedes_a_failing_update_is_applied_without_a_retry()
     assert!(state.error.is_none(), "{:?}", state.error);
     assert_eq!(release_id(state.current_release.as_ref()), Some("rel_v3"));
     assert_eq!(state.target_release, None);
-    assert_eq!(deployed_worker_image(&state, "test-function"), "test:v3");
+    assert_eq!(deployed_worker_image(&state, worker_id), "test:v3");
+    assert_eq!(
+        images_sent(worker_id),
+        vec!["test:latest", "test:v2", "test:v3"],
+        "the worker must receive v3, not only record it"
+    );
 }
 
 /// The engine applies only the target it is given. The manager never moves the target
@@ -1335,8 +1371,9 @@ async fn a_release_that_supersedes_a_failing_update_is_applied_without_a_retry()
 #[tokio::test]
 async fn a_failed_update_of_the_current_target_waits_for_a_retry() {
     let _vault = test_vault_env().await;
+    let worker_id = "failed-current-target-fn";
     let config = create_test_config("hash_v1", false);
-    let state = updating_to_a_failing_release(&config).await;
+    let state = updating_to_a_failing_release(&config, worker_id).await;
 
     let state = run_to_completion(state, config).await;
 
@@ -1350,6 +1387,7 @@ async fn a_failed_update_of_the_current_target_waits_for_a_retry() {
         "{:?}",
         state.error
     );
+    assert_eq!(images_sent(worker_id), vec!["test:latest", "test:v2"]);
 }
 
 /// A release that supersedes the newer target while that target is still being prepared
@@ -1357,21 +1395,31 @@ async fn a_failed_update_of_the_current_target_waits_for_a_retry() {
 #[tokio::test]
 async fn a_release_that_supersedes_the_next_target_while_it_prepares_is_applied() {
     let _vault = test_vault_env().await;
+    let worker_id = "superseded-while-preparing-fn";
     let config = create_test_config("hash_v1", false);
-    let mut state = updating_to_a_failing_release(&config).await;
-    state.target_release = Some(worker_image_release("test:v3", "rel_v3"));
+    let mut state = updating_to_a_failing_release(&config, worker_id).await;
+    state.target_release = Some(superseding_worker_release(
+        worker_id, "test:v3", "rel_v3", false,
+    ));
     state = run_until_status(state, config.clone(), &[DeploymentStatus::UpdatePending]).await;
     assert_eq!(
         state.error.as_ref().map(|error| error.code.as_str()),
         Some("SUPERSEDED_UPDATE_FAILED")
     );
 
-    state.target_release = Some(worker_image_release("test:v4", "rel_v4"));
+    state.target_release = Some(superseding_worker_release(
+        worker_id, "test:v4", "rel_v4", false,
+    ));
     state = run_to_completion(state, config).await;
 
     assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
     assert_eq!(release_id(state.current_release.as_ref()), Some("rel_v4"));
-    assert_eq!(deployed_worker_image(&state, "test-function"), "test:v4");
+    assert_eq!(deployed_worker_image(&state, worker_id), "test:v4");
+    assert_eq!(
+        images_sent(worker_id),
+        vec!["test:latest", "test:v2", "test:v4"],
+        "v3 was superseded before it was applied"
+    );
 }
 
 /// When the newer release fails too, its failure is its own: the deployment stops at
@@ -1379,10 +1427,13 @@ async fn a_release_that_supersedes_the_next_target_while_it_prepares_is_applied(
 #[tokio::test]
 async fn a_superseding_release_that_also_fails_stops_at_update_failed() {
     let _vault = test_vault_env().await;
+    let worker_id = "superseding-release-also-fails-fn";
     let config = create_test_config("hash_v1", false);
-    let mut state = updating_to_a_failing_release(&config).await;
+    let mut state = updating_to_a_failing_release(&config, worker_id).await;
     let installed_release = state.current_release.clone();
-    state.target_release = Some(failing_worker_image_release("test:v3", "rel_v3"));
+    state.target_release = Some(superseding_worker_release(
+        worker_id, "test:v3", "rel_v3", true,
+    ));
 
     let state = run_to_completion(state, config).await;
 
@@ -1409,6 +1460,10 @@ async fn a_superseding_release_that_also_fails_stops_at_update_failed() {
             .is_none_or(|error| error.code != "SUPERSEDED_UPDATE_FAILED"),
         "{:?}",
         state.error
+    );
+    assert_eq!(
+        images_sent(worker_id),
+        vec!["test:latest", "test:v2", "test:v3"]
     );
 }
 
