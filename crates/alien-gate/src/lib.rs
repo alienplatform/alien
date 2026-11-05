@@ -9,6 +9,7 @@
 //! - [`plan`]: from a request and the trusted state to the function to write;
 //! - [`function`]: apply a planned function and check it reads back the same;
 //! - [`cloud_run`] and [`gcp`]: the same for Cloud Run services on GCP;
+//! - [`container_apps`] and [`azure`]: the same for Container Apps on Azure;
 //! - [`state`]: the signer chain and floors the gate keeps between calls.
 
 #![expect(
@@ -16,7 +17,9 @@
     reason = "Alien errors retain structured metadata and causal context"
 )]
 
+pub mod azure;
 pub mod cloud_run;
+pub mod container_apps;
 pub mod error;
 pub mod function;
 pub mod gcp;

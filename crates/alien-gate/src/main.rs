@@ -3,17 +3,21 @@
 //! Setup creates it with this configuration, which only the gate's own
 //! identity can change:
 //!
-//! - `ALIEN_GATE_CLOUD`: `aws` (the default) or `gcp`;
+//! - `ALIEN_GATE_CLOUD`: `aws` (the default), `gcp` or `azure`;
 //! - `ALIEN_GATE_ANCHOR`: the deployment's anchor, as JSON;
 //! - `ALIEN_GATE_FUNCTION_PREFIX`: the functions it owns are `<prefix><workload>`;
 //! - `ALIEN_GATE_REGISTRY`: repository prefix relocated images must start with;
 //! - `ALIEN_GATE_ROLES`: `{"<permission profile>": "<role ARN or service account>"}`;
 //! - on AWS, `ALIEN_GATE_STATE_PARAMETER`: SSM parameter holding the gate's state;
 //! - on GCP, `ALIEN_GATE_STATE_SECRET`: Secret Manager secret holding it, and
-//!   `ALIEN_GATE_GCP_PROJECT` and `ALIEN_GATE_GCP_REGION`.
+//!   `ALIEN_GATE_GCP_PROJECT` and `ALIEN_GATE_GCP_REGION`;
+//! - on Azure, `ALIEN_GATE_STATE_SECRET`: Key Vault secret holding it,
+//!   `ALIEN_GATE_AZURE_RESOURCE_GROUP` (`/subscriptions/<id>/resourceGroups/<name>`),
+//!   `ALIEN_GATE_AZURE_VAULT` (`https://<vault>.vault.azure.net`) and, when the
+//!   gate has several identities, `ALIEN_GATE_AZURE_CLIENT_ID`.
 //!
-//! On GCP the gate serves `POST /` on `$PORT`; Cloud Run's IAM decides who
-//! may call it.
+//! On GCP and Azure the gate serves `POST /` on `$PORT`; the platform's own
+//! authentication decides who may call it.
 
 #![expect(
     clippy::result_large_err,
@@ -28,10 +32,11 @@ use alien_aws_clients::ssm::{GetParameterRequest, SsmApi, SsmClient};
 use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt, AwsCredentialProvider};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_gate::azure::Azure;
 use alien_gate::gcp::{Gcp, TokenSource};
 use alien_gate::{
-    cloud_run, plan, Action, ErrorData, FunctionStore, GateConfig, GateRequest, GateState,
-    Result,
+    cloud_run, container_apps, plan, Action, ErrorData, FunctionStore, GateConfig, GateRequest,
+    GateState, Result,
 };
 use alien_release_trust::Anchor;
 use axum::http::StatusCode;
@@ -44,6 +49,8 @@ use tracing::info;
 const SSM_INPUTS_PREFIX: &str = "aws-ssm:";
 /// Anchor `inputs` prefix naming a Secret Manager secret.
 const GCP_SECRET_INPUTS_PREFIX: &str = "gcp-secret:";
+/// Anchor `inputs` prefix naming a Key Vault secret.
+const AZURE_SECRET_INPUTS_PREFIX: &str = "azure-keyvault:";
 
 enum Cloud {
     Aws {
@@ -54,6 +61,10 @@ enum Cloud {
     Gcp {
         state_secret: String,
         gcp: Gcp,
+    },
+    Azure {
+        state_secret: String,
+        azure: Azure,
     },
 }
 
@@ -100,6 +111,14 @@ impl Gate {
                     env("ALIEN_GATE_GCP_REGION")?,
                 ),
             },
+            Ok("azure") => Cloud::Azure {
+                state_secret: env("ALIEN_GATE_STATE_SECRET")?,
+                azure: Azure::new(
+                    env("ALIEN_GATE_AZURE_RESOURCE_GROUP")?,
+                    env("ALIEN_GATE_AZURE_VAULT")?,
+                    std::env::var("ALIEN_GATE_AZURE_CLIENT_ID").ok(),
+                ),
+            },
             Ok("aws") | Err(_) => {
                 let aws = AwsClientConfig::from_std_env().await.context(
                     ErrorData::ConfigurationInvalid {
@@ -120,7 +139,7 @@ impl Gate {
             }
             Ok(other) => {
                 return Err(AlienError::new(ErrorData::ConfigurationInvalid {
-                    message: format!("ALIEN_GATE_CLOUD '{other}' is not aws or gcp"),
+                    message: format!("ALIEN_GATE_CLOUD '{other}' is not aws, gcp or azure"),
                 }))
             }
         };
@@ -135,6 +154,10 @@ impl Gate {
                 ..
             } => GateState::load(ssm, state_parameter).await,
             Cloud::Gcp { state_secret, gcp } => gcp.load_state(state_secret).await,
+            Cloud::Azure {
+                state_secret,
+                azure,
+            } => azure.load_state(state_secret).await,
         }
     }
 
@@ -146,6 +169,10 @@ impl Gate {
                 ..
             } => state.store(ssm, state_parameter).await,
             Cloud::Gcp { state_secret, gcp } => gcp.store_state(state_secret, state).await,
+            Cloud::Azure {
+                state_secret,
+                azure,
+            } => azure.store_state(state_secret, state).await,
         }
     }
 
@@ -159,6 +186,10 @@ impl Gate {
             },
             Cloud::Gcp { gcp, .. } => match inputs.strip_prefix(GCP_SECRET_INPUTS_PREFIX) {
                 Some(secret) => gcp.deployer_inputs(secret).await,
+                None => Ok(BTreeMap::new()),
+            },
+            Cloud::Azure { azure, .. } => match inputs.strip_prefix(AZURE_SECRET_INPUTS_PREFIX) {
+                Some(secret) => azure.deployer_inputs(secret).await,
                 None => Ok(BTreeMap::new()),
             },
         }
@@ -194,6 +225,18 @@ impl Gate {
             (Cloud::Gcp { gcp, .. }, Action::Check) => {
                 let back = cloud_run::ServiceStore::get(gcp, &function.name).await?;
                 cloud_run::check_read_back(function, &back)?;
+            }
+            (Cloud::Azure { azure, .. }, Action::Apply) => {
+                if function.architecture != "x86_64" {
+                    return Err(AlienError::new(ErrorData::Refused {
+                        reason: "Container Apps runs only x86_64".to_string(),
+                    }));
+                }
+                container_apps::apply(azure, function).await?;
+            }
+            (Cloud::Azure { azure, .. }, Action::Check) => {
+                let back = container_apps::AppStore::get(azure, &function.name).await?;
+                container_apps::check_read_back(function, &back)?;
             }
         }
         if request.action == Action::Apply {
@@ -263,7 +306,10 @@ async fn serve_http(gate: Arc<Gate>) -> std::result::Result<(), lambda_runtime::
                     Err(error) => {
                         let status = StatusCode::from_u16(error.http_status_code.unwrap_or(500))
                             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-                        (status, axum::Json(json!({"errorMessage": describe(&error)})))
+                        (
+                            status,
+                            axum::Json(json!({"errorMessage": describe(&error)})),
+                        )
                             .into_response()
                     }
                 }
@@ -279,8 +325,7 @@ async fn serve_http(gate: Arc<Gate>) -> std::result::Result<(), lambda_runtime::
 async fn main() -> std::result::Result<(), lambda_runtime::Error> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .json()
         .init();
@@ -289,7 +334,7 @@ async fn main() -> std::result::Result<(), lambda_runtime::Error> {
             .await
             .map_err(|error| lambda_runtime::Error::from(describe(&error)))?,
     );
-    if matches!(gate.cloud, Cloud::Gcp { .. }) {
+    if matches!(gate.cloud, Cloud::Gcp { .. } | Cloud::Azure { .. }) {
         return serve_http(gate).await;
     }
     let gate = &gate;

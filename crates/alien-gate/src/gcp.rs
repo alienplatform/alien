@@ -137,7 +137,12 @@ impl Gcp {
             self.project
         );
         let Some(response) = self
-            .call(reqwest::Method::GET, &url, None, &format!("secretmanager access {secret}"))
+            .call(
+                reqwest::Method::GET,
+                &url,
+                None,
+                &format!("secretmanager access {secret}"),
+            )
             .await?
         else {
             return Ok(None);

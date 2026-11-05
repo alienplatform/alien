@@ -12,8 +12,8 @@ use alien_release_trust::release::{
     Bounds, Configurable, FunctionSettings, ProvidedEnv, Runtime, WorkloadKind,
 };
 use alien_release_trust::{
-    fingerprint, Anchor, Kind, ReleaseBody, Role, SessionApproval, Signer, SignerKind,
-    SignerListBody, SignedStatement, SoftwareKey, Workload,
+    fingerprint, Anchor, Kind, ReleaseBody, Role, SessionApproval, SignedStatement, Signer,
+    SignerKind, SignerListBody, SoftwareKey, Workload,
 };
 use serde::Serialize;
 
