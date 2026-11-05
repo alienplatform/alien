@@ -24,7 +24,7 @@ fn context(protected: bool) -> PermissionContext {
         .with_region("us-central1")
         .with_managing_project_id("vendor-project")
         .with_service_account_name("orders-management")
-        .with_release_trust_protected(protected)
+        .with_signing_protected(protected)
 }
 
 /// The sets an automatic management grant holds on GCP: every resource type's provision,

@@ -248,10 +248,7 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
     let boundary_arn = "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${AWS::StackName}-deployment-management-boundary";
     let context = permission_context()
         .with_aws_permissions_boundary_arn(boundary_arn)
-        .with_setup_pins(ctx.stack_settings)
-        .context(ErrorData::GenericError {
-            message: "failed to apply setup-pinned values to the AWS management policy".to_string(),
-        })?;
+        .with_signing(ctx.stack_settings);
 
     if let Some(profile) = ctx.stack.management().profile() {
         for permission_set_ref in global_permission_refs(ctx, profile) {

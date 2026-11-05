@@ -129,12 +129,7 @@ pub(super) async fn prepare_for_setup_template(stack: Stack, settings: &StackSet
         .expect("template preflights pass");
     let config = DeploymentConfig::builder()
         .deployment_name(stack.id().to_string())
-        .stack_settings(StackSettings {
-            machine_image_publisher: Some(alien_core::MachineImagePublisher {
-                aws_account_id: super::helpers::MACHINE_IMAGE_PUBLISHER.to_string(),
-            }),
-            ..settings.clone()
-        })
+        .stack_settings(settings.clone())
         .management_config(ManagementConfig::Aws(AwsManagementConfig {
             managing_role_arn: String::new(),
         }))
@@ -155,14 +150,9 @@ pub(super) async fn prepare_for_setup_template(stack: Stack, settings: &StackSet
 fn render(
     stack: &Stack,
     source_stack: &Stack,
-    mut settings: StackSettings,
+    settings: StackSettings,
     description: &str,
 ) -> Result<CfTemplate> {
-    settings
-        .machine_image_publisher
-        .get_or_insert_with(|| alien_core::MachineImagePublisher {
-            aws_account_id: super::helpers::MACHINE_IMAGE_PUBLISHER.to_string(),
-        });
     let mut registry = CfRegistry::built_in();
     registry.register(
         ComputeCluster::RESOURCE_TYPE,

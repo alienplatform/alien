@@ -111,7 +111,7 @@ pub struct SyncArgs {
     /// The vendor's bundle key (`ed25519:...`). Needed for the first install.
     #[arg(long, env = "ALIEN_TRUSTED_KEY")]
     pub trusted_key: Option<String>,
-    /// With `releaseSigning` set, install this chart (`sha256:...`, as
+    /// With release signing pinned, install this chart (`sha256:...`, as
     /// `--dry-run` prints it). Without it, a new chart isn't installed.
     #[arg(long)]
     pub accept_chart: Option<String>,
@@ -153,7 +153,7 @@ struct SiteState {
     /// trusts the key pinned in its install, not this one.
     #[serde(default)]
     bundle_key: Option<String>,
-    /// The site's values set `releaseSigning`. Written by the site; the
+    /// The site's chart pins release signing. Written by the site; the
     /// online side then carries no `alien-deploy` builds from the manager.
     #[serde(default)]
     protected: bool,
@@ -510,7 +510,7 @@ pub async fn rollback_command(args: RollbackArgs) -> Result<()> {
     ) {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "rollback".to_string(),
-            message: "releaseSigning is set, so this site runs only newer signed releases. Ask the vendor to release the previous version again".to_string(),
+            message: "This site runs only signed releases newer than the one it has. Ask the vendor to release the previous version again".to_string(),
         }));
     }
     let trusted_key = pinned_key(&settings, &record.stack_id, &namespace)
@@ -4270,11 +4270,11 @@ fn merged_value<'a>(
         .find_map(|v| v.get(section).and_then(|s| s.get(key)))
 }
 
-/// Whether the customer's values turn on protected mode (`releaseSigning`).
+/// Whether the site's chart pins release signing (`signing.fingerprint`).
 fn protected_site(values: &[serde_json::Value]) -> bool {
-    merged_value(values, "releaseSigning", "protected")
-        .and_then(|protected| protected.as_bool())
-        .unwrap_or(false)
+    merged_value(values, "signing", "fingerprint")
+        .and_then(|fingerprint| fingerprint.as_str())
+        .is_some_and(|fingerprint| !fingerprint.is_empty())
 }
 
 /// A protected site's Operator runs only signed releases, but the chart
@@ -4303,7 +4303,7 @@ fn decide_chart(
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "accept-chart".to_string(),
             message: format!(
-                "releaseSigning is set, so the chart must be accepted. Review it with --dry-run, confirm {digest} with the vendor, then pass --accept-chart {digest}"
+                "This site runs only signed releases, so the chart must be accepted. Review it with --dry-run, confirm {digest} with the vendor, then pass --accept-chart {digest}"
             ),
         }));
     }
@@ -4927,7 +4927,7 @@ mod tests {
         external.unwrap();
     }
     /// Strings from the bundle reach Helm as values, never as assignments: a
-    /// tag carrying `,releaseSigning...=` stays a tag.
+    /// tag carrying `,signing...=` stays a tag.
     #[tokio::test]
     #[ignore = "requires Helm, kubectl and ALIEN_SYNC_TEST_CONTEXT for a disposable Kind cluster"]
     async fn bundle_strings_cannot_assign_other_values() {
@@ -4939,11 +4939,11 @@ mod tests {
             "apiVersion: v2\nname: app\nversion: 0.1.0\n",
         )
         .unwrap();
-        std::fs::write(chart.path().join("values.yaml"), "runtime:\n  image:\n    repository: registry.example.com/operator\n    tag: fixture\nreleaseSigning:\n  protected: false\n  project: \"\"\n").unwrap();
+        std::fs::write(chart.path().join("values.yaml"), "runtime:\n  image:\n    repository: registry.example.com/operator\n    tag: fixture\nsigning:\n  fingerprint: \"\"\n  channel: \"\"\n").unwrap();
         let values = chart.path().join("site.yaml");
         std::fs::write(
             &values,
-            "releaseSigning:\n  protected: true\n  project: shop\n",
+            "signing:\n  fingerprint: \"SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n  channel: production\n",
         )
         .unwrap();
         let mut package = Command::new("helm");
@@ -4961,7 +4961,7 @@ mod tests {
             values: vec![values],
             kube_context: Some(context),
         };
-        let injected = "v1,releaseSigning.protected=false@sha256:aa";
+        let injected = "v1,signing.fingerprint=@sha256:aa";
         let record = InstalledBundle {
             rollout_succeeded: false,
             sequence: None,
@@ -4989,7 +4989,7 @@ mod tests {
             None,
             "fixture",
             "dep_fixture",
-            "site,releaseSigning.project=attacker",
+            "site,signing.channel=attacker",
             None,
             None,
         )
@@ -5006,12 +5006,12 @@ mod tests {
         run(cleanup, "removing injection fixture").await.unwrap();
         installed.unwrap();
         let values = values.unwrap().unwrap();
-        assert_eq!(values["releaseSigning"]["protected"], true);
-        assert_eq!(values["releaseSigning"]["project"], "shop");
+        assert_eq!(values["signing"]["fingerprint"], "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        assert_eq!(values["signing"]["channel"], "production");
         assert_eq!(values["runtime"]["image"]["tag"], injected);
         assert_eq!(
             values["management"]["name"],
-            "site,releaseSigning.project=attacker"
+            "site,signing.channel=attacker"
         );
     }
 
@@ -5026,8 +5026,8 @@ mod tests {
             ["postgres", "orders-db", "image"]
         );
         for key in [
-            "releaseSigning",
-            "releaseSigning.protected",
+            "signing",
+            "signing.fingerprint",
             "postgres.a,b.image",
             "postgres..image",
             "runtime.image.tag",
@@ -5260,15 +5260,15 @@ stringData:
         // Keys set in the saved values and cleared by a later values file
         // turn protected mode off, as Helm merges them.
         let cleared = [
-            serde_json::json!({"releaseSigning": {"protected": true}}),
-            serde_json::json!({"releaseSigning": {"protected": false}}),
+            serde_json::json!({"signing": {"fingerprint": "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}),
+            serde_json::json!({"signing": {"fingerprint": ""}}),
         ];
         assert_eq!(
             decide_chart(&cleared, true, digest, None).unwrap(),
             ChartDecision::Install(None)
         );
 
-        let keys = serde_json::json!({"releaseSigning": {"protected": true, "project": "p"}});
+        let keys = serde_json::json!({"signing": {"fingerprint": "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}});
         let first = decide_chart(std::slice::from_ref(&keys), false, digest, None).unwrap_err();
         assert_eq!(first.code, "VALIDATION_ERROR");
         assert!(

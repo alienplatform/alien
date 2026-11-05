@@ -20,9 +20,9 @@ use alien_cloudformation::{
 };
 use alien_core::{
     AwsManagementConfig, Build, Container, ContainerCode, DeploymentConfig,
-    EnvironmentVariablesSnapshot, ExternalBindings, Kv, MachineImagePublisher, ManagementConfig,
-    NetworkSettings, Platform, Queue, ReleaseTrustSettings, ResourceLifecycle, ResourceSpec,
-    SetupManagement, Stack, StackSettings, StackState, Storage, Vault, Worker, WorkerCode,
+    EnvironmentVariablesSnapshot, ExternalBindings, Kv, ManagementConfig,
+    NetworkSettings, Platform, Queue, ResourceLifecycle, ResourceSpec,
+    SetupManagement, Stack, StackSettings, StackSigning, StackState, Storage, Vault, Worker, WorkerCode,
     WorkerTrigger,
 };
 use alien_permissions::{
@@ -30,7 +30,6 @@ use alien_permissions::{
     BindingTarget, PermissionContext,
 };
 use alien_preflights::runner::PreflightRunner;
-use alien_signing::{SessionApproval, SoftwareKey};
 use alien_terraform::TerraformTarget;
 use serde_json::Value;
 
@@ -50,19 +49,9 @@ fn settings(setup_management: SetupManagement) -> StackSettings {
             cidr: Some("10.44.0.0/16".to_string()),
             availability_zones: 2,
         }),
-        release_trust: Some(ReleaseTrustSettings {
-            project: "prj_123".to_string(),
-            deployment: "dep_456".to_string(),
-            signing: format!("SHA256:{}", "9f".repeat(32)),
-            components: SoftwareKey::from_secret_bytes(&[22; 32])
-                .expect("a valid test key")
-                .public_key()
-                .as_str()
-                .to_string(),
-            session_approval: SessionApproval::Developer,
-        }),
-        machine_image_publisher: Some(MachineImagePublisher {
-            aws_account_id: "345678901234".to_string(),
+        signing: Some(StackSigning {
+            fingerprint: format!("SHA256:{}", "9f".repeat(32)),
+            channel: "production".to_string(),
         }),
         ..StackSettings::default()
     }
@@ -244,7 +233,6 @@ fn runtime_policies(found: &mut BTreeSet<Occurrence>) {
         .with_aws_region("us-east-1")
         .with_managing_account_id("210987654321")
         .with_managing_role_arn("arn:aws:iam::210987654321:role/manager")
-        .with_machine_image_owner("345678901234")
         .with_aws_permissions_boundary_arn(
             "arn:aws:iam::123456789012:policy/orders-prod-deployment-management-boundary",
         )

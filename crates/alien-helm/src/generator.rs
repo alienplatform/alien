@@ -423,6 +423,14 @@ fn generate_helm_chart_internal(
         "files/stack-settings.json".to_string(),
         ensure_trailing_newline(stack_settings_json),
     );
+    if options.stack_settings.signing.is_some() && has_remote_operator {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: "A chart with release signing runs only signed releases through its own \
+                      Operator; it can't include the remote Operator"
+                .to_string(),
+        }));
+    }
+    crate::signing::add_signing(&mut files, &options.stack_settings)?;
 
     Ok(HelmChart {
         name: chart_name,
@@ -4163,34 +4171,12 @@ airgapped:
   # Public key (ed25519:...) bundles must be signed with. Set by the first
   # `alien-deploy sync --trusted-key`, and checked on every later one.
   bundleSigningKey: ""
-  # With releaseSigning, the chart digest the site admin accepted
-  # (`alien-deploy sync --accept-chart`). A bundle with another chart keeps
-  # this one installed.
-  acceptedChart: ""
 
 tunnel:
   # Serve requests the control plane sends through the manager to the stack's
   # declared tunnel endpoints, over the Operator's outbound connection.
   # false closes the tunnel; nothing else changes.
   enabled: true
-
-releaseSigning:
-  # Protected mode. With protected: true the Operator runs only releases the
-  # developer's signer list signed, and refuses the rest of what the manager
-  # could change: environment variables, bindings, debug sessions, access
-  # requests, operations plugins and dynamic containers. Get the signing
-  # fingerprint from the developer's install guide, not from the manager.
-  # Deployer inputs come only from inputValues.
-  protected: false
-  # Project and deployment the signed statements must name.
-  project: ""
-  deployment: ""
-  # SHA256:<hex> fingerprint of the developer's signer list version 1.
-  signing: ""
-  # ecdsa-p256:<base64> key that signs Operator builds.
-  components: ""
-  # developer, or developer+customer to also require your approval of exec.
-  sessionApproval: developer
 
 clusterBootstrap:
   metricsServer:
@@ -5080,8 +5066,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
       "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean" },
-        "bundleSigningKey": { "type": "string" },
-        "acceptedChart": { "type": "string" }
+        "bundleSigningKey": { "type": "string" }
       }
     },
     "tunnel": {
@@ -5089,18 +5074,6 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
       "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean" }
-      }
-    },
-    "releaseSigning": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "protected": { "type": "boolean" },
-        "project": { "type": "string" },
-        "deployment": { "type": "string" },
-        "signing": { "type": "string", "pattern": "^(SHA256:[0-9a-f]{64})?$" },
-        "components": { "type": "string", "pattern": "^(ecdsa-p256:[A-Za-z0-9+/=]+)?$" },
-        "sessionApproval": { "type": "string", "enum": ["developer", "developer+customer"] }
       }
     },
     "heartbeat": {
@@ -6821,17 +6794,6 @@ spec:
             {{- if dig "selfUpdate" true .Values.runtime.image }}
             - name: OPERATOR_SELF_UPDATE_DEPLOYMENT
               value: {{ include "deployment.fullname" . | quote }}
-            {{- end }}
-            {{- $releaseSigning := default dict .Values.releaseSigning }}
-            {{- if $releaseSigning.protected }}
-            {{- if not (and $releaseSigning.project $releaseSigning.deployment $releaseSigning.signing $releaseSigning.components) }}
-              {{- fail "releaseSigning.protected needs project, deployment, signing and components" }}
-            {{- end }}
-            {{- if dig "enabled" false (default dict .Values.remoteOperator) }}
-              {{- fail "releaseSigning runs only signed releases; it can't be combined with remoteOperator.enabled" }}
-            {{- end }}
-            - name: OPERATOR_RELEASE_TRUST_ANCHOR
-              value: {{ toJson $releaseSigning | quote }}
             {{- end }}
             - name: OTLP_PORT
               value: {{ .Values.runtime.api.port | quote }}

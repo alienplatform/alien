@@ -18,6 +18,7 @@ mod generator;
 mod package;
 mod postgres;
 mod registry;
+mod signing;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 

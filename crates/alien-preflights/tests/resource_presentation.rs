@@ -82,12 +82,7 @@ async fn generated_resources_keep_names_across_preparation() {
             _ => None,
         };
         let config = DeploymentConfig::builder()
-            .stack_settings(StackSettings {
-                machine_image_publisher: Some(alien_core::MachineImagePublisher {
-                    aws_account_id: "345678901234".to_string(),
-                }),
-                ..StackSettings::default()
-            })
+            .stack_settings(StackSettings::default())
             .maybe_management_config(management)
             .environment_variables(EnvironmentVariablesSnapshot {
                 variables: vec![],

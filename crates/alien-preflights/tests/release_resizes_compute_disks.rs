@@ -82,9 +82,6 @@ fn deployment_config(machine: &str) -> DeploymentConfig {
                 )]
                 .into(),
             }),
-            machine_image_publisher: Some(alien_core::MachineImagePublisher {
-                aws_account_id: "345678901234".to_string(),
-            }),
             ..StackSettings::default()
         })
         .management_config(ManagementConfig::Aws(AwsManagementConfig {

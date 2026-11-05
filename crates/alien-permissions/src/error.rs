@@ -66,23 +66,10 @@ pub enum ErrorData {
         permission_set_id: String,
     },
 
-    /// The machine image publisher in the deployment's settings is not usable.
-    #[error(
-        code = "MACHINE_IMAGE_PUBLISHER_INVALID",
-        message = "Invalid machine image publisher: {reason}",
-        retryable = "false",
-        internal = "false",
-        http_status_code = 400
-    )]
-    MachineImagePublisherInvalid {
-        /// Why the publisher was refused
-        reason: String,
-    },
-
-    /// A protected deployment would receive the grants kept for setups without a boundary.
+    /// A protected install would receive the grants kept for setups without a boundary.
     #[error(
         code = "PROTECTED_DEPLOYMENT_WITHOUT_BOUNDARY",
-        message = "Permission set '{permission_set_id}' grants '{label}' only to setups that recorded no permissions boundary, and a protected deployment never receives it. Rerun setup so it records the boundary.",
+        message = "Permission set '{permission_set_id}' grants '{label}' only to setups that recorded no permissions boundary, and a protected install never receives it. Rerun setup so it records the boundary.",
         retryable = "false",
         internal = "false",
         http_status_code = 400
@@ -94,11 +81,11 @@ pub enum ErrorData {
         label: String,
     },
 
-    /// A protected deployment's management identity would receive a predefined role that holds
-    /// what only the gate may do.
+    /// A protected install's management identity would receive a predefined role that holds
+    /// what only the verifier may do.
     #[error(
         code = "PROTECTED_MANAGEMENT_ROLE_REFUSED",
-        message = "Permission set '{permission_set_id}' grants '{role}', which holds what only the gate may do in a protected deployment",
+        message = "Permission set '{permission_set_id}' grants '{role}', which holds what only the verifier may do on a protected install",
         retryable = "false",
         internal = "false",
         http_status_code = 400

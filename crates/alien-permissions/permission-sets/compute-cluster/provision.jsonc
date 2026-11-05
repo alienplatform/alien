@@ -385,6 +385,7 @@
         "binding": {
           "stack": {
             "resources": [
+              "arn:aws:ec2:${awsRegion}::image/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
@@ -392,33 +393,11 @@
           },
           "resource": {
             "resources": [
+              "arn:aws:ec2:${awsRegion}::image/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
             ]
-          }
-        }
-      },
-      // Machines boot only the images of the publisher setup recorded. ec2:Owner is the
-      // owner's alias when it has one (`amazon`, `aws-marketplace`), so the publisher is an
-      // account without an alias.
-      {
-        "label": "boot-publisher-machine-images",
-        "grant": {
-          "actions": ["ec2:RunInstances"]
-        },
-        "binding": {
-          "stack": {
-            "resources": ["arn:aws:ec2:${awsRegion}::image/*"],
-            "condition": {
-              "StringEquals": { "ec2:Owner": "${machineImageOwner}" }
-            }
-          },
-          "resource": {
-            "resources": ["arn:aws:ec2:${awsRegion}::image/*"],
-            "condition": {
-              "StringEquals": { "ec2:Owner": "${machineImageOwner}" }
-            }
           }
         }
       },
@@ -775,10 +754,9 @@
           }
         }
       },
-      // EC2 may receive only the compute roles. CloudFormation setup names the node role
-      // `<prefix>-compute`, Terraform setup `<prefix>-<cluster>-instances`, and both name the
-      // isolated node role `<prefix>-<cluster>-isolation-v1`. Roles created at runtime end in
-      // `-role`. The management role and the `-sa` workload roles match none of these.
+      // Only EC2 can receive these stack-prefixed instance roles.
+      // CloudFormation role names are based on logical IDs and generated
+      // suffixes, so they do not reliably end in a fixed role suffix.
       {
         "label": "bounded-role-pass",
         "grant": {
@@ -786,24 +764,13 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-compute",
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-instances",
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-isolation-v1",
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"
-            ],
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
             "condition": {
               "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" }
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-compute",
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-instances",
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-isolation-v1",
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-role",
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-isolation-v1-role"
-            ],
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
             "condition": {
               "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" }
             }

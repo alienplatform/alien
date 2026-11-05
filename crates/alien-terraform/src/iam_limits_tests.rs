@@ -918,12 +918,7 @@ async fn prepare_for_render(stack: Stack) -> Stack {
         .expect("template preflights pass");
     let config = DeploymentConfig::builder()
         .deployment_name(stack.id().to_string())
-        .stack_settings(StackSettings {
-            machine_image_publisher: Some(alien_core::MachineImagePublisher {
-                aws_account_id: "345678901234".to_string(),
-            }),
-            ..StackSettings::default()
-        })
+        .stack_settings(StackSettings::default())
         .management_config(ManagementConfig::Aws(AwsManagementConfig {
             managing_role_arn: "rendered-from-template-parameter".to_string(),
         }))
@@ -945,12 +940,7 @@ fn options(registry: &TfRegistry) -> TerraformOptions<'_> {
     TerraformOptions {
         registry,
         display_name: None,
-        stack_settings: StackSettings {
-            machine_image_publisher: Some(alien_core::MachineImagePublisher {
-                aws_account_id: "345678901234".to_string(),
-            }),
-            ..StackSettings::default()
-        },
+        stack_settings: StackSettings::default(),
         registration: None,
         helm_install: None,
         supported_aws_regions: Vec::new(),

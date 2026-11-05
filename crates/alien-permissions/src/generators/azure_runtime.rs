@@ -1,7 +1,7 @@
 use crate::{
     error::{ErrorData, Result},
     generators::{
-        gate_owned::azure_gate_owned_action,
+        verifier_owned::azure_verifier_owned_action,
         labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
     },
     variables::VariableInterpolator,
@@ -789,11 +789,11 @@ impl Default for AzureRuntimePermissionsGenerator {
 }
 
 /// The actions of a catalog entry the rendered identity receives: all of them, except that a
-/// protected deployment's management identity never receives what only the gate may do.
+/// protected install's management identity never receives what only the verifier may do.
 fn granted_actions(actions: &[String], context: &PermissionContext) -> Vec<String> {
     actions
         .iter()
-        .filter(|action| !(context.release_trust_protected && azure_gate_owned_action(action)))
+        .filter(|action| !(context.signing_protected && azure_verifier_owned_action(action)))
         .cloned()
         .collect()
 }

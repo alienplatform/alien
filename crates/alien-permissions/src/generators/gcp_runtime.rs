@@ -1,7 +1,7 @@
 use crate::{
     error::{ErrorData, Result},
     generators::{
-        gate_owned::{gcp_gate_owned, gcp_refused_predefined_role},
+        verifier_owned::{gcp_verifier_owned, gcp_refused_predefined_role},
         labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
     },
     variables::VariableInterpolator,
@@ -374,7 +374,7 @@ impl GcpRuntimePermissionsGenerator {
 
             if let Some(predefined_roles) = &platform_permission.grant.predefined_roles {
                 for predefined_role in predefined_roles {
-                    if context.release_trust_protected
+                    if context.signing_protected
                         && gcp_refused_predefined_role(predefined_role)
                     {
                         return Err(alien_error::AlienError::new(
@@ -473,12 +473,12 @@ impl GcpRuntimePermissionsGenerator {
 }
 
 /// The permissions of a catalog entry the rendered identity receives: all of them, except that a
-/// protected deployment's management identity never receives what only the gate may do. The
+/// protected install's management identity never receives what only the verifier may do. The
 /// entry keeps its role ID either way, so a role loses permissions instead of being replaced.
 fn granted_permissions(permissions: &[String], context: &PermissionContext) -> Vec<String> {
     permissions
         .iter()
-        .filter(|permission| !(context.release_trust_protected && gcp_gate_owned(permission)))
+        .filter(|permission| !(context.signing_protected && gcp_verifier_owned(permission)))
         .cloned()
         .collect()
 }

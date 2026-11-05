@@ -26,7 +26,6 @@ pub fn create_test_context() -> PermissionContext {
         .with_aws_account_id("123456789012")
         .with_aws_region("us-east-1")
         .with_managing_account_id("210987654321")
-        .with_machine_image_owner("345678901234")
 }
 
 /// Test helper to create AWS storage data read permission set

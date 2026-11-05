@@ -78,27 +78,16 @@ pub fn render_built_ins_template(
     (template, yaml)
 }
 
-/// AWS account that publishes the machine images in these fixtures.
-pub const MACHINE_IMAGE_PUBLISHER: &str = "345678901234";
-
 /// Render without asserting success, for the tests that assert on the refusal.
 /// Skips `cfn-lint` because there may be no template to lint.
-///
-/// A fixture that names no machine image publisher renders as a setup that names
-/// [`MACHINE_IMAGE_PUBLISHER`], the way every setup that launches machines must.
 pub fn try_render_built_ins(
     stack: &Stack,
-    mut settings: StackSettings,
+    settings: StackSettings,
     registration: RegistrationMode,
     target: CloudFormationTarget,
     setup_target: &str,
     description: &str,
 ) -> Result<CfTemplate> {
-    settings
-        .machine_image_publisher
-        .get_or_insert_with(|| alien_core::MachineImagePublisher {
-            aws_account_id: MACHINE_IMAGE_PUBLISHER.to_string(),
-        });
     let registry = CfRegistry::built_in();
     generate_cloudformation_template(
         stack,
