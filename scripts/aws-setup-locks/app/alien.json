@@ -1,0 +1,22 @@
+{
+  "id": "setup-locks",
+  "permissions": { "profiles": { "execution": { "*": [] } } },
+  "resources": {
+    "app": {
+      "config": {
+        "id": "app",
+        "type": "container",
+        "code": { "type": "image", "image": "public.ecr.aws/docker/library/busybox:latest" },
+        "cpu": { "min": "0.25", "desired": "0.25" },
+        "memory": { "min": "256Mi", "desired": "256Mi" },
+        "environment": {},
+        "links": [],
+        "permissions": "execution",
+        "ports": [],
+        "stateful": false
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  }
+}
