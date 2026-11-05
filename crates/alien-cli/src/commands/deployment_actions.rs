@@ -580,6 +580,8 @@ pub(crate) struct InputChanges {
     pub inputs: Vec<String>,
     /// `ID=VALUE`, sent as text, as `alien deploy --secret-input` sends it.
     pub secret_inputs: Vec<String>,
+    /// Secret values read by [`read_secret_input_files`], as `(ID, contents)`.
+    pub secret_input_files: Vec<(String, String)>,
     /// Input IDs to reset.
     pub clear: Vec<String>,
 }
@@ -597,10 +599,15 @@ pub(crate) fn input_values_to_save(
             message,
         })
     };
-    if changes.inputs.is_empty() && changes.secret_inputs.is_empty() && changes.clear.is_empty() {
+    if changes.inputs.is_empty()
+        && changes.secret_inputs.is_empty()
+        && changes.secret_input_files.is_empty()
+        && changes.clear.is_empty()
+    {
         return Err(invalid(
             "input",
-            "Pass at least one --input ID=VALUE, --secret-input ID=VALUE, or --clear ID."
+            "Pass at least one --input ID=VALUE, --secret-input ID=VALUE, \
+             --secret-input-file ID=PATH, or --clear ID."
                 .to_string(),
         ));
     }
@@ -621,21 +628,25 @@ pub(crate) fn input_values_to_save(
         ))
     };
 
+    let mut parsed = Vec::new();
+    for arg in &changes.inputs {
+        let (id, raw) = crate::commands::deploy::parse_stack_input_arg(arg, "--input")?;
+        parsed.push((
+            id,
+            crate::commands::deploy::parse_raw_stack_input_value(&raw),
+        ));
+    }
+    for arg in &changes.secret_inputs {
+        let (id, raw) = crate::commands::deploy::parse_stack_input_arg(arg, "--secret-input")?;
+        parsed.push((id, Value::String(raw)));
+    }
+    for (id, contents) in &changes.secret_input_files {
+        parsed.push((id.clone(), Value::String(contents.clone())));
+    }
+
     let mut values = Map::new();
-    let parsed = changes.inputs.iter().map(|arg| (arg, "--input")).chain(
-        changes
-            .secret_inputs
-            .iter()
-            .map(|arg| (arg, "--secret-input")),
-    );
-    for (arg, flag) in parsed {
-        let (id, raw) = crate::commands::deploy::parse_stack_input_arg(arg, flag)?;
+    for (id, value) in parsed {
         check_declared(&id)?;
-        let value = if flag == "--secret-input" {
-            Value::String(raw)
-        } else {
-            crate::commands::deploy::parse_raw_stack_input_value(&raw)
-        };
         if values.insert(id.clone(), value).is_some() {
             return Err(invalid("input", format!("Input '{id}' was given twice.")));
         }
@@ -648,6 +659,45 @@ pub(crate) fn input_values_to_save(
                 format!("Input '{id}' can't be both set and cleared."),
             ));
         }
+    }
+    Ok(values)
+}
+
+/// Reads `--secret-input-file ID=PATH` arguments into `(ID, contents)`. A
+/// `PATH` of `-` reads stdin, which only one argument can do. Contents are
+/// sent unchanged, line breaks included: a PEM certificate or key keeps its
+/// format, and the secret stays out of the command line.
+pub(crate) fn read_secret_input_files(args: &[String]) -> Result<Vec<(String, String)>> {
+    let mut stdin_read = false;
+    let mut values = Vec::with_capacity(args.len());
+    for arg in args {
+        let (id, path) =
+            crate::commands::deploy::parse_stack_input_arg(arg, "--secret-input-file")?;
+        let contents = if path == "-" {
+            if stdin_read {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "secret-input-file".to_string(),
+                    message: "Only one --secret-input-file can read stdin (-).".to_string(),
+                }));
+            }
+            stdin_read = true;
+            std::io::read_to_string(std::io::stdin())
+                .into_alien_error()
+                .context(ErrorData::FileOperationFailed {
+                    operation: "read".to_string(),
+                    file_path: "stdin".to_string(),
+                    reason: format!("reading secret input '{id}'"),
+                })?
+        } else {
+            std::fs::read_to_string(&path).into_alien_error().context(
+                ErrorData::FileOperationFailed {
+                    operation: "read".to_string(),
+                    file_path: path.clone(),
+                    reason: format!("reading secret input '{id}'"),
+                },
+            )?
+        };
+        values.push((id, contents));
     }
     Ok(values)
 }
@@ -1577,6 +1627,7 @@ mod tests {
                 .iter()
                 .map(|value| value.to_string())
                 .collect(),
+            secret_input_files: Vec::new(),
             clear: clear.iter().map(|value| value.to_string()).collect(),
         };
 
@@ -1613,5 +1664,44 @@ mod tests {
                 .expect("clear only")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn secret_input_files_keep_their_contents_and_conflicts_are_rejected() {
+        let pem = "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmg\n-----END CERTIFICATE-----\n";
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("tls.pem");
+        std::fs::write(&path, pem).expect("write pem");
+
+        let files =
+            read_secret_input_files(&[format!("token={}", path.display())]).expect("file is read");
+        assert_eq!(files, vec![("token".to_string(), pem.to_string())]);
+
+        let declared = ["token", "region"];
+        let with_files = |secret_inputs: &[&str]| InputChanges {
+            secret_inputs: secret_inputs
+                .iter()
+                .map(|value| value.to_string())
+                .collect(),
+            secret_input_files: files.clone(),
+            ..InputChanges::default()
+        };
+        let values = input_values_to_save(&declared, &with_files(&[])).expect("file value saves");
+        assert_eq!(values["token"], serde_json::json!(pem));
+        assert_eq!(values.len(), 1);
+        let twice = input_values_to_save(&declared, &with_files(&["token=inline"]))
+            .expect_err("same input from argv and a file")
+            .to_string();
+        assert!(twice.contains("'token' was given twice"), "{twice}");
+
+        let missing = dir.path().join("missing.pem");
+        let error = read_secret_input_files(&[format!("token={}", missing.display())])
+            .expect_err("missing file")
+            .to_string();
+        assert!(error.contains(&missing.display().to_string()), "{error}");
+        let error = read_secret_input_files(&["tls.pem".to_string()])
+            .expect_err("no id")
+            .to_string();
+        assert!(error.contains("id=value"), "{error}");
     }
 }
