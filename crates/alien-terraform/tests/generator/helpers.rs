@@ -425,3 +425,29 @@ pub fn statement_grants(documents: &[serde_json::Value]) -> std::collections::BT
     }
     grants
 }
+
+/// Every `aws_subnet` in the module (`<file>: <label>`), each with whether it assigns a
+/// public IP address to instances launched into it.
+pub fn subnet_public_ip_assignment(module: &ModuleFiles) -> Vec<(String, bool)> {
+    let mut subnets = Vec::new();
+    for (path, contents) in module.iter().filter(|(path, _)| path.ends_with(".tf")) {
+        let body = hcl::parse(contents).unwrap_or_else(|error| panic!("{path} parses: {error}"));
+        for block in body.blocks().filter(|block| {
+            block.identifier() == "resource" && block.labels()[0].as_str() == "aws_subnet"
+        }) {
+            let label = format!("{path}: {}", block.labels()[1].as_str());
+            let assigns = match block
+                .body()
+                .attributes()
+                .find(|attribute| attribute.key() == "map_public_ip_on_launch")
+                .map(|attribute| attribute.expr())
+            {
+                None => false,
+                Some(hcl::Expression::Bool(assigns)) => *assigns,
+                Some(other) => panic!("{label}: unexpected map_public_ip_on_launch {other:?}"),
+            };
+            subnets.push((label, assigns));
+        }
+    }
+    subnets
+}

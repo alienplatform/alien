@@ -1,6 +1,8 @@
 //! EKS CloudFormation target coverage.
 
-use super::helpers::{render_built_ins_target, render_built_ins_template};
+use super::helpers::{
+    render_built_ins_target, render_built_ins_template, subnet_public_ip_assignment,
+};
 use alien_cloudformation::{CloudFormationTarget, RegistrationMode};
 use alien_core::{
     CapacityGroup, ComputeCluster, ComputePoolSelection, ComputeSettings,
@@ -134,6 +136,36 @@ fn eks_target_renders_managed_cluster_and_kubernetes_import_payload() {
     assert!(yaml.contains("NodePools:"));
     assert!(yaml.contains("- system"));
     assert!(yaml.contains("- general-purpose"));
+}
+
+/// The VPC a managed EKS cluster brings when the stack has no network: nodes run in the
+/// private subnets, and no subnet assigns public IP addresses on launch.
+#[test]
+fn eks_cluster_subnets_do_not_assign_public_ips() {
+    let stack = Stack::new("kubernetes".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("alien".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let (template, _) = render_built_ins_template(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        CloudFormationTarget::Eks,
+        "kubernetes",
+        "eks cluster subnets",
+    );
+
+    let subnets = subnet_public_ip_assignment(&template);
+    assert_eq!(subnets.len(), 4, "{subnets:?}");
+    assert!(subnets.iter().all(|(_, assigns)| !assigns), "{subnets:?}");
 }
 
 #[test]

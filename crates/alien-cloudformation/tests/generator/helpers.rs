@@ -534,3 +534,23 @@ fn evaluate_text(
         other => Some(other.clone()),
     }
 }
+
+/// Logical ids of every `AWS::EC2::Subnet` in the template, each with whether it
+/// assigns a public IP address to instances launched into it.
+pub fn subnet_public_ip_assignment(template: &CfTemplate) -> Vec<(String, bool)> {
+    let template = serde_json::to_value(template).expect("template should serialize");
+    template["Resources"]
+        .as_object()
+        .expect("template should have resources")
+        .iter()
+        .filter(|(_, resource)| resource["Type"] == "AWS::EC2::Subnet")
+        .map(|(id, resource)| {
+            let assigns = match &resource["Properties"]["MapPublicIpOnLaunch"] {
+                serde_json::Value::Null => false,
+                serde_json::Value::Bool(assigns) => *assigns,
+                other => panic!("{id}: unexpected MapPublicIpOnLaunch {other}"),
+            };
+            (id.clone(), assigns)
+        })
+        .collect()
+}

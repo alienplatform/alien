@@ -3,7 +3,8 @@
 
 use super::helpers::{
     assert_terraform_valid, assert_terraform_variable_plan_invalid_contains, gate_input, render,
-    role_policy_documents, snapshot_module, statement_grants, try_render,
+    role_policy_documents, snapshot_module, statement_grants, subnet_public_ip_assignment,
+    try_render,
 };
 use alien_core::{
     sandbox_build_role::{SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME},
@@ -264,6 +265,32 @@ fn aws_network_create_two_az() {
     let module = render(&stack, TerraformTarget::Aws, settings);
     snapshot_module("aws_network_create_two_az", &module);
     assert_terraform_valid(&module, "aws_network_create_two_az");
+}
+
+/// Instances launched into the network's subnets get no public IP address unless
+/// they ask for one; public subnets still route to the internet gateway.
+#[test]
+fn aws_network_subnets_do_not_assign_public_ips() {
+    let settings = StackSettings {
+        network: Some(NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        }),
+        ..StackSettings::default()
+    };
+    let stack = Stack::new("acme-net".to_string())
+        .add(
+            Network::new("default-network".to_string())
+                .settings(settings.network.clone().expect("network"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, settings);
+
+    let subnets = subnet_public_ip_assignment(&module);
+    assert!(!subnets.is_empty(), "the network declares subnets");
+    assert!(subnets.iter().all(|(_, assigns)| !assigns), "{subnets:?}");
 }
 
 #[test]

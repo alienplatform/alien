@@ -254,7 +254,7 @@ fn subnet(
     if id.contains("Public") {
         resource
             .properties
-            .insert("MapPublicIpOnLaunch".to_string(), CfExpression::from(true));
+            .insert("MapPublicIpOnLaunch".to_string(), CfExpression::from(false));
     }
     let mut tag_values = match tags(ctx) {
         CfExpression::List(items) => items,
