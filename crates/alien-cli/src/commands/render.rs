@@ -496,6 +496,7 @@ pub(crate) async fn setup_files(
                 registration: None,
                 helm_install: None,
                 supported_aws_regions: Vec::new(),
+                pins: alien_core::SetupPins::compiled_in(),
             },
         )
         .map(|module| {
@@ -525,6 +526,7 @@ pub(crate) async fn setup_files(
                     registration: alien_cloudformation::RegistrationMode::OutputsFallback,
                     description: None,
                     management_trust: Default::default(),
+                    pins: alien_core::SetupPins::compiled_in(),
                 },
             )
             .map_err(render_error)?;
