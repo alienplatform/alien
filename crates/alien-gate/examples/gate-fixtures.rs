@@ -160,10 +160,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &release(image_b, "release-60-ld-preload", "production", "LD_PRELOAD"),
         &ci,
     )?;
-    // A machine cluster: one group of one t3.micro, booting the machine
-    // agent build `agent`.
+    // A machine cluster: one group booting the machine agent build `agent`.
+    // One machine on AWS; one to two on GCP and Azure, so scale and
+    // removeMachines have room to move inside the signed bounds.
     let agent = format!("sha256:{}", "a".repeat(64));
-    let machines = |platform: Platform, instance_type: &str| {
+    let machines = |platform: Platform, instance_type: &str, max_size: u32| {
         let stack = Stack::new("machines".to_string())
             .add(
                 ComputeCluster::new("compute".to_string())
@@ -172,7 +173,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         instance_type: Some(instance_type.to_string()),
                         profile: None,
                         min_size: 1,
-                        max_size: 1,
+                        max_size,
                         scale_policy: None,
                         nested_virtualization: None,
                         data_disk_gib_range: None,
@@ -197,19 +198,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     signed(
         "release-70-machines",
         70,
-        &machines(Platform::Aws, "t3.micro")?,
+        &machines(Platform::Aws, "t3.micro", 1)?,
         &ci,
     )?;
     signed(
         "release-71-machines-gcp",
         71,
-        &machines(Platform::Gcp, "e2-small")?,
+        &machines(Platform::Gcp, "e2-small", 2)?,
         &ci,
     )?;
     signed(
         "release-72-machines-azure",
         72,
-        &machines(Platform::Azure, "Standard_B2s")?,
+        &machines(Platform::Azure, "Standard_B2s", 2)?,
         &ci,
     )?;
 

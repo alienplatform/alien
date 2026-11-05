@@ -22,7 +22,14 @@ the publisher's". Then, each refusal checked to write nothing:
      tag written straight into an instance template lands);
   4. a zone outside the verifier's region is refused;
   5. a publisher image older than the build's minimum is refused;
-  6. a second roll adds template 2 and points the MIG at it.
+  6. a second roll adds template 2 and points the MIG at it;
+  7. each roll writes the ledger back as a new parameter version;
+  8. `scale` resizes the MIG the verifier names, clamped to the signed
+     bounds; a caller-named target or a foreign zone is refused (off: a
+     resize past the maximum written straight to Compute Engine lands);
+  9. `removeMachines` deletes only members and never below the signed
+     minimum (off: deleting the last machine directly lands);
+  10. a disabled newest ledger version refuses; enabled again, it works.
 
 Usage (an access token for the project in --token-file):
     scripts/gate-e2e/gcp_machines.py --verifier-local <example> --fixtures <gate-fixtures> \\
@@ -126,11 +133,13 @@ class Run:
 
     # --- calls --------------------------------------------------------------
 
-    def invoke(self, **overrides):
-        request = {"rollMachines": {"cluster": "compute", "group": "general",
-                                    "release": self.statements["release-71-machines-gcp"],
-                                    "signerLists": [self.statements["signer-list"]],
-                                    "machineImage": self.image, "zone": self.zone, **overrides}}
+    def invoke(self, kind="rollMachines", **overrides):
+        base = {"cluster": "compute", "group": "general",
+                "release": self.statements["release-71-machines-gcp"],
+                "signerLists": [self.statements["signer-list"]], "zone": self.zone}
+        if kind == "rollMachines":
+            base["machineImage"] = self.image
+        request = {kind: {**base, **overrides}}
         network = json.dumps({"subnetIds": [self.subnetwork], "securityGroupIds": [self.tag], "identity": self.email})
         result = subprocess.run([self.args.verifier_local, "gcp", self.project, self.region, f"{self.prefix}-verifier",
                                  PUBLISHER, MINIMUM_CREATED, network], input=json.dumps(request), capture_output=True, text=True,
@@ -138,6 +147,24 @@ class Run:
         body = json.loads(result.stdout or "{}")
         self.calls.append({"request": request, "ok": result.returncode == 0, "response": body, "stderr": result.stderr[-2000:]})
         return result.returncode == 0, body if result.returncode == 0 else body.get("errorMessage", result.stderr[-500:])
+
+    def members(self):
+        listed = self.compute("POST", f"projects/{self.project}/zones/{self.zone}/instanceGroupManagers/{self.group}/listManagedInstances", {})
+        return sorted(i["instance"].rsplit("/", 1)[-1] for i in listed.get("managedInstances", []))
+
+    def settle(self, size):
+        """Wait until the MIG is stable with `size` members."""
+        for _ in range(60):
+            mig = self.mig()
+            if mig["status"].get("isStable") and len(self.members()) == size:
+                return True
+            time.sleep(5)
+        return False
+
+    def ledger_versions(self):
+        base = f"https://parametermanager.googleapis.com/v1/projects/{self.project}/locations/global/parameters/signed-{self.prefix}-state"
+        versions = self.call("GET", f"{base}/versions").get("parameterVersions", [])
+        return sorted(versions, key=lambda v: v["createTime"])
 
     def templates(self):
         listed = self.compute("GET", f"projects/{self.project}/global/instanceTemplates?filter=" + urllib.request.quote(f'name eq "{self.group}-[0-9]+"'))
@@ -209,6 +236,58 @@ class Run:
         self.record("6 a second roll adds template 2 and points the MIG at it", ok and body.get("version") == 2
                     and mig["instanceTemplate"].endswith(f"instanceTemplates/{self.group}-2"), str(body)[:300])
 
+        # 7 the ledger: the roll wrote a new version holding the release.
+        versions = self.ledger_versions()
+        newest = json.loads(base64.b64decode(self.call("GET", f"https://parametermanager.googleapis.com/v1/{versions[-1]['name']}")["payload"]["data"]))
+        self.record("7 the roll wrote the ledger back as a new parameter version", len(versions) >= 2
+                    and newest.get("release", {}).get("sequence") == 71, json.dumps({"versions": len(versions), "release": newest.get("release")}))
+
+        # 8 scale: clamped to the signed bounds, in the group the verifier names.
+        self.settle(1)
+        ok, body = self.invoke("scale", desired=5)
+        self.record("8 scale to 5 resizes to the signed maximum 2 (on)", ok and body == {"target": self.group, "size": 2}
+                    and self.mig()["targetSize"] == 2, str(body)[:300])
+        ok, body = self.invoke("scale", desired=0)
+        self.record("8 scale to 0 resizes to the signed minimum 1 (on)", ok and body.get("size") == 1 and self.mig()["targetSize"] == 1, str(body)[:300])
+        before = self.mig()["targetSize"]
+        ok, body = self.invoke("scale", desired=2, target=f"{self.prefix}-other")
+        self.record("8 a caller-named scale target is refused (on)", not ok and "target" in str(body) and self.mig()["targetSize"] == before, str(body)[:300])
+        ok, body = self.invoke("scale", desired=2, zone="europe-west1-b")
+        self.record("8 a scale zone outside the verifier's region is refused (on)", not ok and "is not a zone of the verifier's region" in str(body)
+                    and self.mig()["targetSize"] == before, str(body)[:300])
+        self.wait(self.compute("POST", f"projects/{self.project}/zones/{self.zone}/instanceGroupManagers/{self.group}/resize?size=3"))
+        self.record("8 a resize past the signed maximum (off: written straight to Compute Engine)", self.mig()["targetSize"] == 3, "landed: targetSize 3")
+
+        # 9 removeMachines: only members, never below the signed minimum.
+        ok, body = self.invoke("scale", desired=2)
+        settled = self.settle(2)
+        members = self.members()
+        self.record("9 two machines to remove from", ok and settled and len(members) == 2, json.dumps(members))
+        ok, body = self.invoke("removeMachines", machines=[f"{self.prefix}-not-a-member"])
+        self.record("9 removing a machine that isn't a member is refused (on)", not ok and "not a member" in str(body)
+                    and self.members() == members, str(body)[:300])
+        ok, body = self.invoke("removeMachines", machines=members)
+        self.record("9 removing both machines (below the signed minimum 1) is refused (on)", not ok and "minimum" in str(body)
+                    and self.members() == members, str(body)[:300])
+        ok, body = self.invoke("removeMachines", machines=members[:1])
+        gone = self.settle(1) and self.members() == members[1:]
+        self.record("9 removing one member lands", ok and body == {"group": self.group, "removed": members[:1], "size": 1} and gone,
+                    json.dumps({"body": body, "members": self.members()}))
+        ok, body = self.invoke("removeMachines", machines=members[1:])
+        self.record("9 removing the last machine is refused (on)", not ok and "minimum" in str(body) and self.members() == members[1:], str(body)[:300])
+        self.wait(self.compute("POST", f"projects/{self.project}/zones/{self.zone}/instanceGroupManagers/{self.group}/deleteInstances",
+                               {"instances": [f"zones/{self.zone}/instances/{members[1]}"], "skipInstancesOnValidationError": False}))
+        self.record("9 removing the last machine (off: written straight to Compute Engine)", self.mig()["targetSize"] == 0, "landed: targetSize 0")
+
+        # 10 a disabled newest ledger version is an error, never a skip.
+        newest = self.ledger_versions()[-1]["name"]
+        self.call("PATCH", f"https://parametermanager.googleapis.com/v1/{newest}?updateMask=disabled", {"disabled": True})
+        ok, body = self.invoke("scale", desired=1)
+        self.record("10 a disabled newest ledger version refuses (on)", not ok and "is disabled" in str(body) and self.mig()["targetSize"] == 0, str(body)[:300])
+        self.call("PATCH", f"https://parametermanager.googleapis.com/v1/{newest}?updateMask=disabled", {"disabled": False})
+        ok, body = self.invoke("scale", desired=1)
+        self.record("10 enabled again, scale lands", ok and body.get("size") == 1, str(body)[:300])
+
     # --- teardown -------------------------------------------------------------
 
     def cleanup(self):
@@ -239,7 +318,12 @@ class Run:
         left += [f"template {t}" for t in self.templates()]
         if self.compute("GET", f"projects/{self.project}/global/instanceTemplates/{self.prefix}-direct", ok_missing=True):
             left.append("template direct")
-        if self.call("GET", f"https://iam.googleapis.com/v1/projects/{self.project}/serviceAccounts/{self.email}", ok_missing=True):
+        # IAM reads lag a delete by a few seconds.
+        for _ in range(12):
+            if not self.call("GET", f"https://iam.googleapis.com/v1/projects/{self.project}/serviceAccounts/{self.email}", ok_missing=True):
+                break
+            time.sleep(5)
+        else:
             left.append(f"service account {self.email}")
         return left
 
