@@ -489,14 +489,12 @@ pub fn hosting_summary(hosting: &SetupHostingOptions) -> String {
             .join(", ")
     };
     format!(
-        "Setup as the control plane hosts it · registers through {registration} · managed by {management}{} · setup {} v{}",
+        "Setup as the control plane hosts it · registers through {registration} · managed by {management}{}",
         if hosting.management_trust.require_external_id {
             " with an external id"
         } else {
             ""
-        },
-        hosting.setup_fingerprint,
-        hosting.setup_fingerprint_version
+        }
     )
 }
 
@@ -638,15 +636,13 @@ mod tests {
         }
     }
 
-    fn hosting(fingerprint: &str) -> SetupHostingOptions {
+    fn hosting(require_external_id: bool) -> SetupHostingOptions {
         serde_json::from_value(serde_json::json!({
             "registration": { "mode": "outputsFallback" },
             "managementTrust": {
-                "requireExternalId": true,
+                "requireExternalId": require_external_id,
                 "allowedManagingRoleArns": ["arn:aws:iam::999988887777:role/manager"]
-            },
-            "setupFingerprint": fingerprint,
-            "setupFingerprintVersion": 1
+            }
         }))
         .unwrap()
     }
@@ -669,7 +665,7 @@ mod tests {
             .cloudformation_registry(&cloudformation)
             .terraform_registry(&terraform)
             .helm_registry(&helm)
-            .hosting(hosting("sha256:setup"))
+            .hosting(hosting(true))
             .pins(pins())
             .build();
         let settings = StackSettings {
@@ -694,7 +690,7 @@ mod tests {
         let mut signed = BTreeMap::new();
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
             signed.extend(
-                setup_templates(&stack, platform, &signing, &hosting("sha256:setup"), pins())
+                setup_templates(&stack, platform, &signing, &hosting(true), pins())
                     .await
                     .unwrap(),
             );
@@ -704,18 +700,18 @@ mod tests {
             &stack,
             Platform::Kubernetes,
             &signing,
-            &hosting("sha256:setup"),
+            &hosting(true),
             pins(),
         )
         .await
-        .expect_err("the helm setup template doesn't render signed yet");
+        .expect("the helm setup template renders signed");
 
-        // Hosting reaches the bytes: another setup fingerprint is another template.
+        // Hosting reaches the bytes: other management trust is another template.
         let other = setup_templates(
             &stack,
             Platform::Aws,
             &signing,
-            &hosting("sha256:other"),
+            &hosting(false),
             pins(),
         )
         .await
