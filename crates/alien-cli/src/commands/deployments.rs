@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
@@ -1378,11 +1379,11 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                         message: "This deployment is protected: it takes only plain --env values, signed by you. Deployer secrets are set by the customer with `inputs set`.".to_string(),
                     }));
                 }
-                let body = alien_signing::ConfigBody {
-                    env: parse_pairs(&env, "env", "KEY=VALUE")?.into_iter().collect(),
-                    ..Default::default()
-                };
-                return sign_config(&ctx, &target, &install, body, json).await;
+                // Replaces the whole env set, as without protection; the
+                // signed inputs stay as they are.
+                let env: BTreeMap<String, String> =
+                    parse_pairs(&env, "env", "KEY=VALUE")?.into_iter().collect();
+                return sign_config(&ctx, &target, &install, json, |body| body.env = env).await;
             }
             deployment_actions::set_environment_variables_task(
                 &target.client,
@@ -1420,18 +1421,21 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                         message: "This deployment is protected: it takes only --input values, signed by you. Deployer secrets are set by the customer with `inputs set`.".to_string(),
                     }));
                 }
-                let body = alien_signing::ConfigBody {
-                    inputs: parse_pairs(&inputs, "input", "ID=VALUE")?
+                // Sets the given inputs over the signed ones; the signed env
+                // stays as it is.
+                let inputs: Vec<(String, serde_json::Value)> =
+                    parse_pairs(&inputs, "input", "ID=VALUE")?
                         .into_iter()
                         .map(|(key, value)| {
                             let value = serde_json::from_str(&value)
                                 .unwrap_or(serde_json::Value::String(value));
                             (key, value)
                         })
-                        .collect(),
-                    ..Default::default()
-                };
-                return sign_config(&ctx, &target, &install, body, json).await;
+                        .collect();
+                return sign_config(&ctx, &target, &install, json, |body| {
+                    body.inputs.extend(inputs)
+                })
+                .await;
             }
             deployment_actions::set_inputs_task(
                 &target.client,
@@ -1569,20 +1573,25 @@ async fn protected_install(
     crate::signing::install_id(&deployment).map(Some)
 }
 
-/// Sign `body` as the deployment's `config/v1` statement and send it. The
-/// signer list is verified from the fingerprint in `.alien/signing.json`
-/// first. The statement replaces the deployment's previous signed config.
+/// Sign the deployment's next `config/v1` statement: its latest signed
+/// config, checked here, with `change` applied. The signer list is verified
+/// from the fingerprint in `.alien/signing.json` first. The statement
+/// replaces the deployment's previous signed config.
 async fn sign_config(
     ctx: &ExecutionMode,
     target: &PlatformTarget,
     install: &alien_signing::InstallId,
-    body: alien_signing::ConfigBody,
     json: bool,
+    change: impl FnOnce(&mut alien_signing::ConfigBody),
 ) -> Result<()> {
     let deployment = target.deployment.id.to_string();
     let api = crate::signing::api::SigningApi::from_context(ctx).await?;
     let (chain, signer) =
         crate::signing::project_signer(&api, alien_signing::Role::Release).await?;
+    let stored = api.config_statements(&deployment).await?;
+    let mut body = crate::signing::latest_config(&chain, install, &stored, chrono::Utc::now())?
+        .unwrap_or_default();
+    change(&mut body);
     let envelope =
         crate::signing::envelope(alien_signing::Kind::Config, &chain, Some(install), body);
     if let Some(gesture) = signer.gesture() {

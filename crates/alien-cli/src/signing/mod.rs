@@ -602,9 +602,169 @@ fn file_failed(path: &Path, reason: &str) -> ErrorData {
     }
 }
 
+/// The body of the newest config statement the server holds for `install`,
+/// checked here: a config statement of this project for this install, not
+/// deny-listed, signed with the release role by the list version it names.
+/// `None` when there is none. A newest statement that doesn't check out is
+/// refused, so a change never drops what the last signed config set.
+pub fn latest_config(
+    chain: &SignerChain,
+    install: &alien_signing::InstallId,
+    statements: &[SignedStatement],
+    now: DateTime<Utc>,
+) -> Result<Option<alien_signing::ConfigBody>> {
+    let refused = |reason: String| {
+        AlienError::new(ErrorData::SigningFailed {
+            message: format!(
+                "The deployment's latest signed config doesn't check out: {reason}. Nothing was signed."
+            ),
+        })
+    };
+    let mut opened = statements
+        .iter()
+        .map(SignedStatement::open)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| refused(format!("a stored statement doesn't parse ({error})")))?;
+    opened.sort_by_key(|opened| opened.sequence);
+    let Some(newest) = opened.pop() else {
+        return Ok(None);
+    };
+    if newest.kind != Kind::Config || newest.project != chain.project() {
+        return Err(refused(format!(
+            "it is a {} statement of project {}",
+            newest.kind.as_str(),
+            newest.project
+        )));
+    }
+    if newest.install.as_deref() != Some(install.to_string().as_str()) {
+        return Err(refused(format!(
+            "it is for install {}, not {install}",
+            newest.install.as_deref().unwrap_or("none")
+        )));
+    }
+    if chain.current().denies(&newest.digest) {
+        return Err(refused("it is deny-listed".to_string()));
+    }
+    let version = newest.signer_list_version;
+    let first = chain
+        .digest_of(1)
+        .ok_or_else(|| refused("the signer list chain is empty".to_string()))?;
+    if version == 0 || version > chain.current().version {
+        return Err(refused(format!("it names signer list v{version}")));
+    }
+    let named = SignerChain::from_statements(
+        &alien_signing::fingerprint(first),
+        &chain.statements()[..version as usize],
+        now,
+    )
+    .map_err(|error| refused(format!("signer list v{version} doesn't verify ({error})")))?;
+    named
+        .current()
+        .check_signatures(&newest, Role::Release)
+        .map_err(|error| refused(format!("it isn't signed by a release key ({error})")))?;
+    newest
+        .body()
+        .map(Some)
+        .map_err(|error| refused(format!("its body doesn't parse ({error})")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn list_v1(now: DateTime<Utc>) -> SignedStatement {
+        let alice = SecretKey::from_secret_bytes(&[1; 32]).unwrap();
+        SignedStatement::new(
+            &Envelope {
+                kind: Kind::SignerList.as_str().to_string(),
+                project: "prj".to_string(),
+                install: None,
+                sequence: 1,
+                not_after: Some(now + Duration::days(30)),
+                signer_list_version: 1,
+                body: SignerListBody {
+                    previous: None,
+                    admin_threshold: 1,
+                    signers: vec![Signer {
+                        id: "alice".to_string(),
+                        key: alice.public_key().as_str().to_string(),
+                        kind: SignerKind::Device,
+                        roles: vec![Role::Admin, Role::Release],
+                        label: None,
+                    }],
+                    deny: Vec::new(),
+                    recovered: false,
+                },
+            }
+            .to_payload()
+            .unwrap(),
+        )
+        .sign_with("alice", &alice)
+        .unwrap()
+    }
+
+    fn config(
+        chain: &SignerChain,
+        install: &alien_signing::InstallId,
+        sequence: u64,
+        body: alien_signing::ConfigBody,
+        seed: u8,
+    ) -> SignedStatement {
+        let mut envelope = envelope(Kind::Config, chain, Some(install), body);
+        envelope.sequence = sequence;
+        SignedStatement::new(&envelope.to_payload().unwrap())
+            .sign_with("alice", &SecretKey::from_secret_bytes(&[seed; 32]).unwrap())
+            .unwrap()
+    }
+
+    #[test]
+    fn a_config_change_keeps_what_the_last_signed_config_set() {
+        let now = Utc::now();
+        let v1 = list_v1(now);
+        let fingerprint = alien_signing::fingerprint(&v1.open().unwrap().digest);
+        let chain = SignerChain::from_statements(&fingerprint, &[v1], now).unwrap();
+        let install = alien_signing::InstallId::parse("aws:111122223333:us-east-1:acme").unwrap();
+        assert_eq!(latest_config(&chain, &install, &[], now).unwrap(), None);
+
+        // set-env, then set-inputs built on it: both halves are kept.
+        let env = alien_signing::ConfigBody {
+            env: [("LOG_LEVEL".to_string(), "debug".to_string())].into(),
+            ..Default::default()
+        };
+        let first = config(&chain, &install, 10, env.clone(), 1);
+        let mut next = latest_config(&chain, &install, &[first.clone()], now)
+            .unwrap()
+            .unwrap();
+        assert_eq!(next, env);
+        next.inputs
+            .insert("region".to_string(), serde_json::json!("eu"));
+        let second = config(&chain, &install, 11, next, 1);
+        let latest = latest_config(&chain, &install, &[second.clone(), first.clone()], now)
+            .unwrap()
+            .unwrap();
+        assert_eq!(latest.env["LOG_LEVEL"], "debug");
+        assert_eq!(latest.inputs["region"], "eu");
+
+        // A newer statement the server made up, or one for another install,
+        // is refused rather than built on.
+        let forged = config(&chain, &install, 12, Default::default(), 9);
+        let error = latest_config(&chain, &install, &[first.clone(), forged], now).unwrap_err();
+        assert!(
+            error.message.contains("isn't signed by a release key"),
+            "{}",
+            error.message
+        );
+        let other = alien_signing::InstallId::parse("aws:111122223333:us-east-1:other").unwrap();
+        let elsewhere = config(&chain, &other, 13, Default::default(), 1);
+        let error = latest_config(&chain, &install, &[first, elsewhere], now).unwrap_err();
+        assert!(
+            error
+                .message
+                .contains("not aws:111122223333:us-east-1:acme"),
+            "{}",
+            error.message
+        );
+    }
 
     fn signer(roles: Vec<Role>, label: Option<&str>) -> Signer {
         Signer {

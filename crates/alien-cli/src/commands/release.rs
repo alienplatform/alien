@@ -359,6 +359,9 @@ struct SigningState {
     /// release, so with any of them a release that can't be signed fails.
     protected: u64,
     channel: String,
+    /// Whether the release goes to the channel now. With `--no-promote` it is
+    /// signed for the channel but no deployment runs it until it's promoted.
+    promoted: bool,
     /// Prints to stderr in JSON mode, so stdout stays one JSON document.
     json: bool,
     /// Local development: releases there are unsigned and say nothing about it.
@@ -385,7 +388,7 @@ impl SigningState {
             SigningPlan::Sign(_) => return Ok(()),
             SigningPlan::Unsigned(reason) | SigningPlan::Requested(reason) => reason,
         };
-        if self.protected == 0 {
+        if self.protected == 0 || !self.promoted {
             return Ok(());
         }
         Err(AlienError::new(ErrorData::ReleaseFailed {
@@ -684,21 +687,19 @@ async fn plan_signing(
             plan: SigningPlan::Unsigned("local development is unsigned".to_string()),
             protected: 0,
             channel,
+            promoted: !args.no_promote,
             json: args.json,
             quiet: true,
         });
     }
     let api = SigningApi::from_context(ctx).await?;
-    let protected = if args.no_promote {
-        0
-    } else {
-        protected_following(ctx, project_id, &channel).await?
-    };
+    let protected = protected_following(ctx, project_id, &channel).await?;
     let plan = signing::release::plan(&api, dir, project_id, interactive).await?;
     Ok(SigningState {
         plan,
         protected,
         channel,
+        promoted: !args.no_promote,
         json: args.json,
         quiet: false,
     })
@@ -1061,12 +1062,19 @@ async fn sign_release(
         }
         return Ok(Vec::new());
     };
-    signing.say(&format!(
-        "  Releasing to {} · {} protected deployment{} will run it",
-        signing.channel,
+    let deployments = format!(
+        "{} protected deployment{}",
         signing.protected,
         if signing.protected == 1 { "" } else { "s" }
-    ));
+    );
+    signing.say(&if signing.promoted {
+        format!("  Releasing to {} · {deployments} will run it", signing.channel)
+    } else {
+        format!(
+            "  Signing for {} without promoting it · no deployment runs it until it's promoted ({deployments} follow {})",
+            signing.channel, signing.channel
+        )
+    });
     if let Some(gesture) = signer.signer.gesture() {
         let prompt = format!("  {gesture} to sign ▸ ");
         if signing.json {
@@ -3383,6 +3391,7 @@ mod tests {
                 plan: SigningPlan::Unsigned("not under test".to_string()),
                 protected: 0,
                 channel: "production".to_string(),
+                promoted: true,
                 json: false,
                 quiet: true,
             },
