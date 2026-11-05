@@ -606,15 +606,6 @@ async fn verify_reads_a_real_stack_and_catches_a_changed_template() {
                 .json_body(serde_json::json!({ "items": [genesis()] }));
         })
         .await;
-    let args = VerifyArgs {
-        stack: stack.clone(),
-        change_set: None,
-        lock: false,
-        manager_url: Some(control_plane.base_url()),
-        token: None,
-        token_file: None,
-    };
-
     let run = {
         let (aws, cloudformation, stack, url) = (
             aws.clone(),
@@ -624,7 +615,7 @@ async fn verify_reads_a_real_stack_and_catches_a_changed_template() {
         );
         tokio::spawn(async move {
             apply_stack(&cloudformation, &stack, &template(), &tag, false).await;
-            let observed = observe(&args, &aws, &cloudformation, &url, None)
+            let observed = observe(&stack, None, &aws, &cloudformation, &url, None)
                 .await
                 .unwrap();
             let lines = check(&observed, Utc::now()).unwrap();
@@ -645,7 +636,7 @@ async fn verify_reads_a_real_stack_and_catches_a_changed_template() {
                 "Resources:\n  Extra:\n    Type: AWS::SSM::Parameter\n    Properties:\n      Type: String\n      Value: extra\n",
             );
             apply_stack(&cloudformation, &stack, &changed, &tag, true).await;
-            let observed = observe(&args, &aws, &cloudformation, &url, None)
+            let observed = observe(&stack, None, &aws, &cloudformation, &url, None)
                 .await
                 .unwrap();
             let lines = check(&observed, Utc::now()).unwrap();

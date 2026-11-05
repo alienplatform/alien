@@ -24,6 +24,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use super::up::resolve_optional_token;
+use super::verify_terraform::{directory_files, ModuleCloud, ModuleInstall};
 use crate::error::{ErrorData, Result};
 
 /// The template parameter that pins the fingerprint.
@@ -35,20 +36,63 @@ const CLOUDFORMATION: &str = "cloudformation";
 
 #[derive(Args, Debug, Clone)]
 #[command(about = "Check that this install runs only what the vendor signed")]
+#[command(group(clap::ArgGroup::new("install").required(true).args(["stack", "terraform", "helm"])))]
 pub struct VerifyArgs {
     /// The CloudFormation stack of the install.
     #[arg(long)]
-    pub stack: String,
+    pub stack: Option<String>,
 
     /// Check a pending setup update (a change set of the stack) before you
     /// execute it.
-    #[arg(long)]
+    #[arg(long, requires = "stack")]
     pub change_set: Option<String>,
 
     /// After the checks pass, add a stack policy that refuses updates to the
     /// signing settings and the verifier.
-    #[arg(long)]
+    #[arg(long, requires = "stack")]
     pub lock: bool,
+
+    /// A Terraform module directory, exactly as downloaded, to check before
+    /// you apply it. Keep it apart from your own configuration: every file
+    /// in it counts.
+    #[arg(long, value_name = "DIR", requires_all = ["platform", "prefix"])]
+    pub terraform: Option<std::path::PathBuf>,
+
+    /// Cloud the Terraform module installs into.
+    #[arg(long, value_enum, requires = "terraform")]
+    pub platform: Option<ModuleCloud>,
+
+    /// The module's resource_prefix (see `terraform output`).
+    #[arg(long, requires = "terraform")]
+    pub prefix: Option<String>,
+
+    /// GCP project of the install.
+    #[arg(long, requires = "terraform")]
+    pub project: Option<String>,
+
+    /// Azure subscription id of the install.
+    #[arg(long, requires = "terraform")]
+    pub subscription: Option<String>,
+
+    /// Azure resource group of the install.
+    #[arg(long, requires = "terraform")]
+    pub resource_group: Option<String>,
+
+    /// The install's inputs Key Vault (Azure), which holds its ledger.
+    #[arg(long, requires = "terraform")]
+    pub vault: Option<String>,
+
+    /// A Helm release to check, with the kubeconfig's cluster and credentials.
+    #[arg(long, value_name = "RELEASE", requires = "chart")]
+    pub helm: Option<String>,
+
+    /// Namespace of the Helm release.
+    #[arg(long, default_value = "default", requires = "helm")]
+    pub namespace: String,
+
+    /// The chart directory, exactly as downloaded (extract the archive first).
+    #[arg(long, value_name = "DIR", requires = "helm")]
+    pub chart: Option<std::path::PathBuf>,
 
     /// Where to fetch the vendor's signed releases. Defaults to the one this
     /// CLI was built for. What it returns is checked, not trusted.
@@ -107,7 +151,7 @@ pub struct Line {
     pub mark: Mark,
 }
 
-fn line(label: &'static str, text: impl Into<String>, mark: Mark) -> Line {
+pub(crate) fn line(label: &'static str, text: impl Into<String>, mark: Mark) -> Line {
     Line {
         label,
         text: text.into(),
@@ -561,10 +605,6 @@ pub async fn verify_command(
     args: VerifyArgs,
     embedded_config: Option<&DeployCliConfig>,
 ) -> Result<()> {
-    let aws = aws_config::defaults(aws_config::BehaviorVersion::latest())
-        .load()
-        .await;
-    let cloudformation = aws_sdk_cloudformation::Client::new(&aws);
     let token = resolve_optional_token(
         args.token.clone(),
         args.token_file.as_ref(),
@@ -581,16 +621,67 @@ pub async fn verify_command(
             })
         })?;
 
-    let observed = observe(&args, &aws, &cloudformation, &url, token.as_deref()).await?;
-    let lines = check(&observed, Utc::now())?;
-    print!("{}", render(&lines));
+    let token = token.as_deref();
+    if let Some(stack) = &args.stack {
+        let aws = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .load()
+            .await;
+        let cloudformation = aws_sdk_cloudformation::Client::new(&aws);
+        let observed = observe(
+            stack,
+            args.change_set.as_deref(),
+            &aws,
+            &cloudformation,
+            &url,
+            token,
+        )
+        .await?;
+        show(&check(&observed, Utc::now())?)?;
+        if args.lock {
+            lock(&cloudformation, stack).await?;
+        }
+        return Ok(());
+    }
+    if let (Some(dir), Some(cloud), Some(prefix)) = (&args.terraform, args.platform, &args.prefix) {
+        let installed = super::verify_terraform::installed_module(dir, cloud)?;
+        let mut signed = super::verify_terraform::read_install(&ModuleInstall {
+            cloud,
+            prefix: prefix.clone(),
+            project: args.project.clone(),
+            subscription: args.subscription.clone(),
+            resource_group: args.resource_group.clone(),
+            vault: args.vault.clone(),
+        })
+        .await?;
+        (signed.signer_lists, signed.releases) =
+            signed_releases(&url, token, cloud.platform()).await?;
+        return show(&check_signed(&signed, &installed, Vec::new(), Utc::now())?);
+    }
+    if let (Some(release), Some(chart)) = (&args.helm, &args.chart) {
+        let files = directory_files(chart)?;
+        let observed = super::verify_helm::observe(release, &args.namespace).await?;
+        let (mut signed, installed, chart_line) =
+            super::verify_helm::helm_install(&observed, &files)?;
+        (signed.signer_lists, signed.releases) = signed_releases(&url, token, "kubernetes").await?;
+        return show(&check_signed(
+            &signed,
+            &installed,
+            vec![chart_line],
+            Utc::now(),
+        )?);
+    }
+    Err(failed(
+        "pass --stack, --terraform with --platform and --prefix, or --helm with --chart",
+    ))
+}
+
+/// Print the screen; any failed line fails the command.
+fn show(lines: &[Line]) -> Result<()> {
+    print!("{}", render(lines));
     if lines.iter().any(|line| line.mark == Mark::Fail) {
         return Err(failed(
             "this install does not match what the vendor signed; don't create or update it",
         ));
-    }
-    if args.lock {
-        lock(&cloudformation, &args.stack).await?;
     }
     Ok(())
 }
@@ -619,6 +710,16 @@ async fn ssm_client(aws: &aws_config::SdkConfig, stack_id: &str) -> Result<SsmCl
             "the stack is in {stack_region}, but the credentials are for {region}"
         )));
     }
+    ssm_client_for(aws, account, region).await
+}
+
+/// An SSM client on the credentials the SDK chain resolves, for `account`
+/// and `region`.
+pub(crate) async fn ssm_client_for(
+    aws: &aws_config::SdkConfig,
+    account: String,
+    region: String,
+) -> Result<SsmClient> {
     let provider = aws
         .credentials_provider()
         .ok_or_else(|| failed("no AWS credentials were found"))?;
@@ -656,13 +757,13 @@ fn aws_failed(operation: &str, stack: &str) -> ErrorData {
 }
 
 async fn observe(
-    args: &VerifyArgs,
+    stack: &str,
+    change_set: Option<&str>,
     aws: &aws_config::SdkConfig,
     cloudformation: &aws_sdk_cloudformation::Client,
     url: &str,
     token: Option<&str>,
 ) -> Result<Observed> {
-    let stack = args.stack.as_str();
     let described = cloudformation
         .describe_stacks()
         .stack_name(stack)
@@ -680,7 +781,7 @@ async fn observe(
         .to_string();
     let stack_name = found.stack_name().unwrap_or(stack).to_string();
 
-    let (parameters, template_request) = match &args.change_set {
+    let (parameters, template_request) = match change_set {
         Some(change_set) => {
             let described = cloudformation
                 .describe_change_set()
@@ -749,7 +850,7 @@ fn parameters_of(
         .collect()
 }
 
-async fn parameter(
+pub(crate) async fn parameter(
     ssm: &SsmClient,
     name: &str,
 ) -> Result<Option<(Vec<u8>, Option<DateTime<Utc>>)>> {

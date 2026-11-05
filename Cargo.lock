@@ -707,6 +707,7 @@ name = "alien-deploy-cli"
 version = "3.3.54"
 dependencies = [
  "alien-aws-clients",
+ "alien-azure-clients",
  "alien-cli-common",
  "alien-client-core",
  "alien-core",
@@ -715,6 +716,7 @@ dependencies = [
  "alien-gcp-clients",
  "alien-helm",
  "alien-infra",
+ "alien-k8s-clients",
  "alien-local",
  "alien-manager-api",
  "alien-operator",
@@ -724,6 +726,7 @@ dependencies = [
  "aws-config",
  "aws-credential-types",
  "aws-sdk-cloudformation",
+ "aws-sdk-sts",
  "base64 0.22.1",
  "bon",
  "chrono",
@@ -752,6 +755,7 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "walkdir",
  "which 7.0.3",
 ]
 
