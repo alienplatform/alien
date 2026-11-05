@@ -123,6 +123,15 @@ pub fn assert_ungated_registration_list_is_a_plain_array(main: &str) {
     );
 }
 
+/// What a released CLI build pins, so protected setups render in tests.
+pub fn test_pins() -> alien_core::SetupPins {
+    alien_core::SetupPins {
+        aws_publisher: Some("111122223333".to_string()),
+        aws_verifier_image: Some(format!("verifier@sha256:{}", "ab".repeat(32))),
+        operator_digest: Some(format!("sha256:{}", "cd".repeat(32))),
+    }
+}
+
 /// Render `stack` for `target` against the built-in registry with the given
 /// settings. Panics on render failure so test bodies stay short.
 pub fn render(stack: &Stack, target: TerraformTarget, settings: StackSettings) -> ModuleFiles {
@@ -149,7 +158,7 @@ pub fn render_with_registry(
         stack,
         target,
         TerraformOptions {
-            pins: alien_core::SetupPins::compiled_in(),
+            pins: test_pins(),
             display_name: None,
             registry,
             stack_settings: settings,

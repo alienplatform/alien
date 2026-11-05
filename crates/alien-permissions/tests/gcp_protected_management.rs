@@ -138,7 +138,7 @@ fn protected_management_holds_nothing_only_the_verifier_may_do() {
             let (before, before_condition) = unprotected
                 .get(role_id)
                 .unwrap_or_else(|| panic!("{id}: {role_id} is new in the protected rendering"));
-            let exclusion = r#"!resource.name.matches(".*/secrets/signed-.*")"#;
+            let exclusion = r#"!resource.name.extract("/secrets/{name}").startsWith("signed-")"#;
             let expected = if permissions.iter().any(|p| p.starts_with("secretmanager.")) {
                 Some(match before_condition {
                     Some(before) => format!("({before}) && {exclusion}"),
@@ -320,12 +320,26 @@ impl Condition<'_> {
             assert!(self.eat(")"));
             return self.name.starts_with(&prefix);
         }
-        if self.eat("resource.name.matches(") {
-            let pattern = self.string();
+        if self.eat("resource.name.extract(") {
+            // `extract("<before>{name}<after>")`: the text between, or "" when absent.
+            let template = self.string();
             assert!(self.eat(")"));
-            return regex::Regex::new(&format!("^(?:{pattern})$"))
-                .expect("valid RE2 pattern")
-                .is_match(self.name);
+            assert!(self.eat(".startsWith("));
+            let prefix = self.string();
+            assert!(self.eat(")"));
+            let (before, after) = template.split_once("{name}").expect("one {name}");
+            let extracted = self
+                .name
+                .find(before)
+                .map(|start| {
+                    let rest = &self.name[start + before.len()..];
+                    match after {
+                        "" => rest,
+                        after => rest.split(after).next().unwrap_or(""),
+                    }
+                })
+                .unwrap_or("");
+            return extracted.starts_with(&prefix);
         }
         if self.eat("resource.type ==") {
             return self.string() == self.kind;

@@ -498,7 +498,9 @@ fn granted_permissions(permissions: &[String], context: &PermissionContext) -> V
 /// Secrets named `signed-…` hold a protected install's inputs; only setup writes them. On a
 /// protected install, every binding that grants Secret Manager permissions excludes them, for
 /// any prefix, so an install whose prefix extends this one's can't reach them either.
-const SIGNED_SECRETS_EXCLUDED: &str = r#"!resource.name.matches(".*/secrets/signed-.*")"#;
+/// IAM conditions don't support `matches`; `extract` returns the empty string for other names.
+const SIGNED_SECRETS_EXCLUDED: &str =
+    r#"!resource.name.extract("/secrets/{name}").startsWith("signed-")"#;
 
 fn protected_secret_condition(
     condition: Option<GcpIamCondition>,

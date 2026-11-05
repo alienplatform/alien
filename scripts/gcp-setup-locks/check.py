@@ -1,27 +1,32 @@
 #!/usr/bin/env python3
 """Check on real GCP that a protected setup keeps from the management identity what only the
-gate may do.
+verifier may do.
 
 Renders `app/` (an automatic setup, so the management identity holds every set it can) as a
-GCP Terraform module twice: protected (with releaseTrust) and unprotected. From each module it
+GCP Terraform module twice with the `render_setup` example of alien-cli-common: protected (with
+signing) and unprotected. From each module it
 takes the project-level roles bound to the management service account, exactly as rendered
 (permissions, predefined roles and IAM conditions), and grants them to a test service account.
 As that account it then tries what a compromised control plane would try:
 
-  * update a Cloud Run service the gate owns (validate only);
+  * update a Cloud Run service the verifier owns (validate only);
   * set an instance's metadata (on an instance that does not exist);
   * act as the node service account (IAM's own answer for that one permission);
   * create an instance template that runs as the node service account;
   * create an instance that runs as the node service account (from an image that does not
     exist, so no machine can start);
   * replace the startup metadata of a managed instance group's machines;
+  * point the group at another instance template;
+  * resize the group (scaling goes through the verifier on protected installs);
   * write the project's IAM policy (the policy it already has, so nothing changes);
-  * write the anchor secret's IAM policy and add a version to it.
+  * write a signed input secret's IAM policy and add a version to it;
+  * add a version to the signing settings parameter in Parameter Manager.
 
 The protected account must be refused each attempt. The unprotected account must pass the
 permission check (succeed, or fail for a reason other than permission), so the check cannot
-pass on attempts GCP refuses for an unrelated reason. Writing the anchor is refused to both.
-Both must still resize a managed instance group (to zero) and read the Cloud Run service.
+pass on attempts GCP refuses for an unrelated reason. The signing settings parameter is refused
+to both (management never holds Parameter Manager writes), and so is a signed input secret
+(no grant reaches `signed-` names; protected bindings also exclude them by name). Both must still read the Cloud Run service.
 Compute Engine names every permission a refused request lacks, so for instance creation and
 group metadata the check compares those lists: the protected account must lack creating and
 reconfiguring machines, the unprotected one must hold both.
@@ -34,7 +39,7 @@ roles stay soft-deleted for a while, which GCP does not let a run avoid.
 No machine starts: the instance group has no instances and the instance cannot be created. A
 run costs a few cents at most.
 
-    python3 scripts/gcp-setup-locks/check.py --alien target/debug/alien \\
+    python3 scripts/gcp-setup-locks/check.py --renderer target/debug/examples/render_setup \\
         --project my-test-project --region us-central1 --token-file /path/to/token \\
         --prefix locks-check --label purpose=locks-check --evidence /tmp/gcp-locks
 
@@ -108,11 +113,12 @@ def management_grants(module_dir):
     text = (module_dir / "management.tf").read_text()
     roles = {}
     for label, body in blocks(text, "google_project_iam_custom_role"):
-        listed = re.search(r"permissions = \[\n(.*?)\n  \]", body, re.S)
+        listed = re.search(r"permissions\s+=\s+\[\n(.*?)\n  \]", body, re.S)
         roles[label] = [hcl_string(line.strip().rstrip(",")) for line in listed.group(1).splitlines()]
     custom, predefined = [], set()
     for _, body in blocks(text, "google_project_iam_member"):
-        if 'member  = "serviceAccount:${google_service_account.management.email}"' not in body:
+        # Protected modules are not run through `terraform fmt`, so spacing differs.
+        if not re.search(r'member\s+=\s+"serviceAccount:\$\{google_service_account\.management\.email\}"', body):
             continue
         role = re.search(r"^  role +=(.*)$", body, re.M).group(1).strip()
         condition = re.search(r'expression += (".*")$', body, re.M)
@@ -145,7 +151,8 @@ class Run:
         self.number = None
         self.node = f"{self.name}-node@{self.project}.iam.gserviceaccount.com"
         self.service = f"{self.name}-fn-api"
-        self.anchor = f"_release-trust-{self.name}"
+        self.input_secret = f"signed-{self.name}-input-api-key"
+        self.settings_parameter = f"signed-{self.name}-fingerprint"
         self.mig = f"{self.name}-mig"
         self.template = f"{self.name}-tpl"
 
@@ -225,29 +232,21 @@ class Run:
     # Rendering
 
     def render(self):
-        der = subprocess.run(
-            "openssl ecparam -name prime256v1 -genkey -noout | openssl ec -pubout -outform DER",
-            shell=True, check=True, capture_output=True,
-        ).stdout
-        release_trust = {
-            "project": "prj_setup_locks",
-            "deployment": "dep_setup_locks",
-            "signing": "SHA256:" + "0123456789abcdef" * 4,
-            "components": "ecdsa-p256:" + base64.b64encode(der).decode(),
-            "sessionApproval": "developer",
-        }
         modules = {}
-        for variant, settings in [("protected", {"setupManagement": "automatic", "releaseTrust": release_trust}),
+        signing = {"fingerprint": "SHA256:" + "0123456789abcdef" * 4, "channel": "production"}
+        for variant, settings in [("protected", {"setupManagement": "automatic", "signing": signing}),
                                   ("unprotected", {"setupManagement": "automatic"})]:
             path = self.work / f"{variant}.json"
             path.write_text(json.dumps(settings))
+            rendered = self.work / f"{variant}-module.json"
+            subprocess.run([str(self.args.renderer), "terraform-gcp", str(HERE / "app" / "alien.json"),
+                            str(path), str(rendered)], check=True, capture_output=True)
             output = self.work / variant
-            subprocess.run([str(self.args.alien), "render", "--format", "terraform", "--target", "gcp",
-                            "--stack", str(HERE / "app"), "--stack-settings", str(path), "--output", str(output)],
-                           check=True, capture_output=True)
+            output.mkdir()
+            for name, contents in json.loads(rendered.read_text()).items():
+                (output / name).write_text(contents)
             modules[variant] = output
-        anchor = (modules["protected"] / "release_trust.tf").read_text()
-        self.record("rendered-anchor", {"release_trust.tf": anchor})
+        self.record("rendered-signing", {"signing.tf": (modules["protected"] / "signing.tf").read_text()})
         return modules
 
     def substitute(self, expression):
@@ -341,9 +340,9 @@ class Run:
         return sorted({p for ps in groups.values() for p in ps})
 
     def setup(self):
-        log(f"creating the node account, the gate-owned service, the anchor and a group of no machines ({self.name})")
+        log(f"creating the node account, the verifier-owned service, the signing values and a group of no machines ({self.name})")
         self.service_account(f"{self.name}-node", "Stands in for the node service account.")
-        # The Cloud Run service the gate owns, created as setup would.
+        # The Cloud Run service the verifier owns, created as setup would.
         run_base = f"https://run.googleapis.com/v2/projects/{self.project}/locations/{self.region}/services"
         operation = self.call("POST", f"{run_base}?serviceId={self.service}", {
             "labels": self.labels, "ingress": "INGRESS_TRAFFIC_INTERNAL_ONLY",
@@ -352,15 +351,23 @@ class Run:
         })
         self.cleanups.append(("cloud run service", lambda: self.call("DELETE", f"{run_base}/{self.service}")))
         self.wait_lro(operation, "https://run.googleapis.com/v2")
-        # The anchor, as protected setup writes it.
+        # A signed input stored as a secret, and the settings parameter, as protected setup
+        # writes them.
         secrets = f"https://secretmanager.googleapis.com/v1/projects/{self.project}/secrets"
-        self.call("POST", f"{secrets}?secretId={self.anchor}", {"labels": self.labels, "replication": {"automatic": {}}})
-        self.cleanups.append(("anchor secret", lambda: self.call("DELETE", f"{secrets}/{self.anchor}")))
-        self.call("POST", f"{secrets}/{self.anchor}:addVersion", {"payload": {"data": base64.b64encode(b'{"protected":true}').decode()}})
+        self.call("POST", f"{secrets}?secretId={self.input_secret}", {"labels": self.labels, "replication": {"automatic": {}}})
+        self.cleanups.append(("input secret", lambda: self.call("DELETE", f"{secrets}/{self.input_secret}")))
+        self.call("POST", f"{secrets}/{self.input_secret}:addVersion", {"payload": {"data": base64.b64encode(b"vendor value").decode()}})
+        parameters = f"https://parametermanager.googleapis.com/v1/projects/{self.project}/locations/global/parameters"
+        self.call("POST", f"{parameters}?parameterId={self.settings_parameter}", {"labels": self.labels, "format": "JSON"})
+        self.cleanups.append(("settings parameter", lambda: self.call("DELETE", f"{parameters}/{self.settings_parameter}")))
+        self.call("POST", f"{parameters}/{self.settings_parameter}/versions?parameterVersionId=v1",
+                  {"payload": {"data": base64.b64encode(json.dumps({"fingerprint": "SHA256:" + "0123456789abcdef" * 4, "prefix": self.name, "channel": "production"}).encode()).decode()}})
+        self.cleanups.append(("settings version", lambda: self.call("DELETE", f"{parameters}/{self.settings_parameter}/versions/v1")))
         # An instance template running as the node account and a group of zero machines from it.
-        self.wait_operation(self.call("POST", self.compute("global/instanceTemplates"), self.template_body(self.template)))
-        self.cleanups.append(("instance template", lambda: self.wait_operation(
-            self.call("DELETE", self.compute(f"global/instanceTemplates/{self.template}")))))
+        for template in [self.template, f"{self.template}-other"]:
+            self.wait_operation(self.call("POST", self.compute("global/instanceTemplates"), self.template_body(template)))
+            self.cleanups.append(("instance template", lambda template=template: self.wait_operation(
+                self.call("DELETE", self.compute(f"global/instanceTemplates/{template}")))))
         self.wait_operation(self.call("POST", self.compute(f"zones/{self.zone}/instanceGroupManagers"), {
             "name": self.mig, "baseInstanceName": self.mig, "targetSize": 0,
             "instanceTemplate": f"projects/{self.project}/global/instanceTemplates/{self.template}",
@@ -391,8 +398,8 @@ class Run:
 
     def attempts(self, variant, token):
         run_url = f"https://run.googleapis.com/v2/projects/{self.project}/locations/{self.region}/services/{self.service}"
-        self.expect(variant, "read-gate-service", "allowed", self.attempt("GET", run_url, token=token)[1])
-        self.expect(variant, "update-gate-service", "denied" if variant == "protected" else "allowed",
+        self.expect(variant, "read-verifier-service", "allowed", self.attempt("GET", run_url, token=token)[1])
+        self.expect(variant, "update-verifier-service", "denied" if variant == "protected" else "allowed",
                     self.run_service_update(token))
         # The instance does not exist: a caller that may set metadata gets "not found".
         _, error = self.attempt("POST", self.compute(f"zones/{self.zone}/instances/{self.name}-none/setMetadata"),
@@ -425,17 +432,34 @@ class Run:
         policy["version"] = 3
         self.expect(variant, "set-project-iam-policy", "denied" if variant == "protected" else "allowed",
                     self.attempt("POST", f"{base}:setIamPolicy", {"policy": policy}, token)[1])
-        secret = f"https://secretmanager.googleapis.com/v1/projects/{self.project}/secrets/{self.anchor}"
+        secret = f"https://secretmanager.googleapis.com/v1/projects/{self.project}/secrets/{self.input_secret}"
         secret_policy = self.call("GET", f"{secret}:getIamPolicy")
-        self.expect(variant, "set-anchor-iam-policy", "denied",
+        self.expect(variant, "set-input-secret-iam-policy", "denied",
                     self.attempt("POST", f"{secret}:setIamPolicy", {"policy": secret_policy}, token)[1])
-        self.expect(variant, "write-anchor", "denied", self.attempt(
-            "POST", f"{secret}:addVersion", {"payload": {"data": base64.b64encode(b"{}").decode()}}, token)[1])
+        added, error = self.attempt("POST", f"{secret}:addVersion", {"payload": {"data": base64.b64encode(b"cp value").decode()}}, token)
+        # No management grant reaches `signed-` names; protected bindings also exclude them.
+        self.expect(variant, "write-input-secret", "denied", error)
+        parameter = (f"https://parametermanager.googleapis.com/v1/projects/{self.project}/locations/global/"
+                     f"parameters/{self.settings_parameter}")
+        version = f"cp{variant[:4]}"
+        _, error = self.attempt("POST", f"{parameter}/versions?parameterVersionId={version}", {"payload": {
+            "data": base64.b64encode(b'{"fingerprint":"SHA256:00"}').decode()}}, token)
+        if error is None:
+            self.cleanups.append(("settings version", lambda: self.call("DELETE", f"{parameter}/versions/{version}")))
+        self.expect(variant, "write-signing-settings", "denied", error)
         mig = self.compute(f"zones/{self.zone}/instanceGroupManagers/{self.mig}")
         resized, error = self.attempt("POST", f"{mig}/resize?size=0", None, token)
         if resized is not None:
             self.wait_operation(resized, token)
-        self.expect(variant, "resize-group", "allowed", error)
+        self.expect(variant, "resize-group", "denied" if variant == "protected" else "allowed", error)
+        other = f"projects/{self.project}/global/instanceTemplates/{self.template}-other"
+        pointed, error = self.attempt("POST", f"{mig}/setInstanceTemplate", {"instanceTemplate": other}, token)
+        if pointed is not None:
+            self.wait_operation(pointed, token)
+            self.wait_operation(self.call("POST", f"{mig}/setInstanceTemplate", {
+                "instanceTemplate": f"projects/{self.project}/global/instanceTemplates/{self.template}"}))
+        # Compute Engine names what the caller lacks; unprotected management lacks only labels here.
+        self.expect_missing(variant, "point-group-at-another-template", {"compute.instanceGroupManagers.update"}, error)
         patched, error = self.attempt("PATCH", mig, {"allInstancesConfig": {"properties": {
             "metadata": {"startup-script": "true"}}}}, token)
         if patched is not None:
@@ -488,6 +512,8 @@ class Run:
         found["cloud run services"] = [s["name"] for s in services.get("services", []) if self.args.prefix in s["name"]]
         secrets = self.call("GET", f"https://secretmanager.googleapis.com/v1/projects/{self.project}/secrets")
         found["secrets"] = [s["name"] for s in secrets.get("secrets", []) if self.args.prefix in s["name"]]
+        parameters = self.call("GET", f"https://parametermanager.googleapis.com/v1/projects/{self.project}/locations/global/parameters")
+        found["parameters"] = [p["name"] for p in parameters.get("parameters", []) if self.args.prefix in p["name"]]
         for kind, path in [("instance templates", "global/instanceTemplates"),
                            ("instance groups", f"zones/{self.zone}/instanceGroupManagers"),
                            ("instances", f"zones/{self.zone}/instances")]:
@@ -532,6 +558,7 @@ class Run:
                 self.attempts(variant, token)
         finally:
             self.cleanup()
+            time.sleep(30)  # Deletions reach the listing APIs after a short delay.
             clean = self.audit()
             self.record("results", self.results)
         failed = [r for r in self.results if not r["ok"]]
@@ -541,7 +568,7 @@ class Run:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--alien", required=True, type=pathlib.Path)
+    parser.add_argument("--renderer", required=True, type=pathlib.Path, help="the render_setup example of alien-cli-common")
     parser.add_argument("--project", required=True)
     parser.add_argument("--region", default="us-central1")
     parser.add_argument("--token-file", required=True)

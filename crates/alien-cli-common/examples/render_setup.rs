@@ -55,8 +55,6 @@ async fn main() -> ExitCode {
             management_trust: ManagementTrustOptions::default(),
             supported_aws_regions: Vec::new(),
             terraform_registration: None,
-            setup_fingerprint: "render-setup-example".to_string(),
-            setup_fingerprint_version: 1,
         })
         .pins(pins)
         .build();

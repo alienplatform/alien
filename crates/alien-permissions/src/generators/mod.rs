@@ -37,7 +37,8 @@ pub use azure_setup_owned::{
     AZURE_SERVICE_BUS_DATA_SENDER_ROLE_ID,
 };
 pub use verifier_owned::{
-    aws_management_actions, aws_verifier_owned, azure_runs_no_code, azure_verifier_owned_action,
+    aws_management_actions, aws_verifier_owned, azure_changes_what_runs, azure_runs_no_code,
+    azure_verifier_owned_action,
     azure_write_or_delete, gcp_refused_predefined_role, gcp_verifier_owned, AWS_VERIFIER_OWNED,
 };
 pub use gcp_runtime::{
