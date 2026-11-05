@@ -10035,6 +10035,7 @@ infrastructureExistingSecret: customer-bindings
     fn helm_rejects_unknown_or_wrongly_typed_deployer_inputs() {
         let stack = Stack::new("input-stack".to_string())
             .inputs(vec![alien_core::StackInputDefinition {
+                files: Vec::new(),
                 id: "ingestUrl".to_string(),
                 kind: alien_core::StackInputKind::String,
                 when: None,
@@ -10121,6 +10122,7 @@ infrastructureExistingSecret: customer-bindings
     #[test]
     fn deployer_secrets_are_kubernetes_secrets_not_helm_values() {
         let secret = |id: &str, label: &str, required: bool| alien_core::StackInputDefinition {
+            files: Vec::new(),
             id: id.to_string(),
             kind: alien_core::StackInputKind::Secret,
             when: None,

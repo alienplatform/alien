@@ -394,6 +394,13 @@ impl SigningState {
             SigningPlan::Sign(_) => return Ok(()),
             SigningPlan::Unsigned(reason) | SigningPlan::Requested(reason) => reason,
         };
+        if self.private_machine_api_url.is_some() {
+            return Err(AlienError::new(ErrorData::ReleaseFailed {
+                message: format!(
+                    "Private machine setup cannot fall back to an unsigned release: {reason}"
+                ),
+            }));
+        }
         if self.protected == 0 || !self.promoted {
             return Ok(());
         }
@@ -1060,6 +1067,16 @@ async fn sign_release(
     signing: &mut SigningState,
     pushed: Vec<(Platform, Stack)>,
 ) -> Result<Vec<(Platform, alien_core::SignedStatement, SetupUpload)>> {
+    if pushed
+        .iter()
+        .any(|(_, stack)| stack.inputs.iter().any(|input| !input.files.is_empty()))
+        && (signing.signing().is_none() || signing.private_machine_api_url.is_none())
+    {
+        return Err(AlienError::new(ErrorData::SigningFailed {
+            message: "Private file inputs require a signed release with --private-machine-api-url"
+                .to_string(),
+        }));
+    }
     let mut bodies = Vec::new();
     let mut uploads: HashMap<Platform, SetupUpload> = HashMap::new();
     if let Some(signer) = signing.signing() {
@@ -3401,6 +3418,23 @@ mod tests {
             format!("{}/cloud/artifacts-prj-a/prj_a", server.address())
         );
         assert_eq!(unexpected.hits_async().await, 0);
+    }
+
+    #[test]
+    fn private_setup_cannot_publish_unsigned_even_without_existing_deployments() {
+        let mut state = SigningState {
+            plan: SigningPlan::Unsigned("setup renderer unavailable".to_string()),
+            protected: 0,
+            channel: "production".to_string(),
+            private_machine_api_url: Some("https://instance.example/v1/horizon".to_string()),
+            promoted: false,
+            json: false,
+            quiet: false,
+        };
+        assert!(state.refuse_unsigned().is_err());
+        assert!(state.cannot_sign("signing device disconnected").is_err());
+        state.private_machine_api_url = None;
+        state.refuse_unsigned().unwrap();
     }
 
     #[test]

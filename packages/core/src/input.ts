@@ -6,6 +6,7 @@ import type {
   StackInputDefaultValue,
   StackInputDefinition,
   StackInputEnvironmentMapping,
+  StackInputFileMapping,
   StackInputEnvironmentVariableType,
   StackInputGenerate,
   StackInputKind,
@@ -54,6 +55,7 @@ interface CommonInputOptions<TDefault extends StackInputValue> {
   when?: StackInputCondition
   platforms?: readonly Platform[]
   env?: OneOrMany<StackInputEnvMapping>
+  files?: readonly StackInputFileMapping[]
 }
 
 export interface StringInputOptions extends CommonInputOptions<string> {
@@ -177,6 +179,18 @@ export function inputs<const T extends Record<string, StackInputDraft>>(
       }
     }
 
+    if (draft.options.files?.length) {
+      const providers = normalizeArray(draft.options.providedBy)
+      if (draft.kind !== "secret" || providers.length !== 1 || providers[0] !== "deployer" || draft.options.when || draft.generate || draft.options.default !== undefined) {
+        throw new Error(`Private files for '${id}' require an unconditional deployer-only secret input`)
+      }
+      for (const file of draft.options.files) {
+        if (!file.path.startsWith("/") || file.path.endsWith("/") || file.path.includes("\0") || file.path.split("/").some(part => part === "." || part === "..")) {
+          throw new Error(`Private file destination for '${id}' must be an absolute file path without traversal`)
+        }
+      }
+    }
+
     result[id] = { id, kind: draft.kind }
     definitions.push({
       id,
@@ -192,6 +206,7 @@ export function inputs<const T extends Record<string, StackInputDraft>>(
       validation: Object.keys(draft.validation).length > 0 ? draft.validation : undefined,
       generate: draft.generate ? { length: draft.generate.length } : undefined,
       env: normalizeEnv(draft.options.env),
+      files: draft.options.files ? [...draft.options.files] : undefined,
     })
   }
 

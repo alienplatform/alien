@@ -1881,6 +1881,7 @@ mod tests {
 
     fn input(id: &str, kind: StackInputKind, required: bool) -> StackInputDefinition {
         StackInputDefinition {
+            files: Vec::new(),
             id: id.to_string(),
             kind,
             when: None,
@@ -1899,6 +1900,7 @@ mod tests {
 
     fn deployer_input(id: &str, kind: StackInputKind, required: bool) -> StackInputDefinition {
         StackInputDefinition {
+            files: Vec::new(),
             when: None,
             provided_by: vec![StackInputProvider::Deployer],
             label: format!("Deployer {id}"),
@@ -1975,6 +1977,7 @@ mod tests {
         platforms: Vec<Platform>,
     ) -> StackInputDefinition {
         StackInputDefinition {
+            files: Vec::new(),
             platforms: Some(platforms),
             ..input(id, kind, required)
         }
@@ -2341,6 +2344,7 @@ mod tests {
     #[test]
     fn generated_inputs_are_not_required_but_can_be_overridden() {
         let generated = StackInputDefinition {
+            files: Vec::new(),
             generate: Some(alien_core::StackInputGenerate { length: 64 }),
             ..input("signingKey", StackInputKind::Secret, true)
         };

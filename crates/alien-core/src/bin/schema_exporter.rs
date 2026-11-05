@@ -72,6 +72,7 @@ use utoipa::OpenApi;
     StackInputDefaultValue,
     StackInputDefinition,
     StackInputEnvironmentMapping,
+    StackInputFileMapping,
     StackInputEnvironmentVariableType,
     StackInputGenerate,
     StackInputKind,

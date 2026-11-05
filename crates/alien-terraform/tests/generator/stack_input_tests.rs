@@ -11,6 +11,7 @@ use hcl::Value;
 fn plain_input_stack() -> Stack {
     Stack::new("input-stack".to_string())
         .inputs(vec![StackInputDefinition {
+            files: Vec::new(),
             id: "apiBaseUrl".to_string(),
             kind: StackInputKind::String,
             when: None,
@@ -68,6 +69,7 @@ fn terraform_emits_non_secret_stack_input_variables_and_registration_values() {
 fn deployer_secret_stack(provided_by: Vec<StackInputProvider>) -> Stack {
     Stack::new("secret-input-stack".to_string())
         .inputs(vec![StackInputDefinition {
+            files: Vec::new(),
             id: "apiKey".to_string(),
             kind: StackInputKind::Secret,
             when: None,
@@ -191,6 +193,7 @@ fn deployer_secrets_never_reach_terraform_variables_or_state() {
 fn inputs_colliding_after_normalization_are_refused() {
     fn boolean_input(id: &str) -> StackInputDefinition {
         StackInputDefinition {
+            files: Vec::new(),
             id: id.to_string(),
             kind: StackInputKind::Boolean,
             when: None,

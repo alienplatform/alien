@@ -34,6 +34,22 @@ pub enum StackInputKind {
     StringList,
 }
 
+/// A file delivered from the install-owned input store after a signed release
+/// authorizes its exact destination. Values are never part of the release.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StackInputFileMapping {
+    /// Absolute destination inside the workload.
+    pub path: String,
+    /// Resource IDs or prefix patterns; absent selects all workloads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_resources: Option<Vec<String>>,
+    /// Optional environment variable containing the destination path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_name: Option<String>,
+}
+
 /// How a resolved stack input is injected into runtime environment variables.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -199,6 +215,10 @@ pub struct StackInputDefinition {
     /// developer-provided inputs only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generate: Option<StackInputGenerate>,
+    /// Private file projections. Supported only for unconditional, deployer-only
+    /// secret inputs in a protected private installation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<StackInputFileMapping>,
     /// Runtime env-var mappings for v1 input resolution.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env: Vec<StackInputEnvironmentMapping>,
@@ -436,6 +456,7 @@ mod environment_tests {
 
     fn input(id: &str, kind: StackInputKind, env: &str) -> StackInputDefinition {
         StackInputDefinition {
+            files: Vec::new(),
             id: id.to_string(),
             kind,
             when: None,

@@ -89,6 +89,7 @@ mod tests {
 
     fn generated(id: &str, length: u32, platforms: Option<Vec<Platform>>) -> StackInputDefinition {
         StackInputDefinition {
+            files: Vec::new(),
             id: id.to_string(),
             kind: StackInputKind::Secret,
             when: None,

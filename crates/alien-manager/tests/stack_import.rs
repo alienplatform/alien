@@ -2309,6 +2309,7 @@ async fn an_import_whose_input_values_contradict_the_delivered_resources_is_refu
 async fn an_import_carrying_a_deployer_secret_value_is_refused() {
     let mut stack = stack_with_storage("assets");
     stack.inputs = vec![alien_core::StackInputDefinition {
+        files: Vec::new(),
         id: "apiKey".to_string(),
         kind: alien_core::StackInputKind::Secret,
         when: None,
@@ -2557,6 +2558,7 @@ fn stack_with_storage_and_generated_secret(resource_id: &str) -> Stack {
             ResourceLifecycle::Frozen,
         )
         .inputs(vec![alien_core::StackInputDefinition {
+            files: Vec::new(),
             id: "databasePassword".to_string(),
             kind: alien_core::StackInputKind::Secret,
             when: None,

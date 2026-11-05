@@ -1406,6 +1406,7 @@ mod tests {
         assert!(!DeployerSecretsVaultMutation.should_run(&stack, &stack_state, &config));
 
         let mut input = StackInputDefinition {
+            files: Vec::new(),
             id: "databasePassword".to_string(),
             kind: StackInputKind::Secret,
             when: None,
@@ -1808,6 +1809,7 @@ mod tests {
             },
             supported_platforms: None,
             inputs: vec![StackInputDefinition {
+                files: Vec::new(),
                 id: "apiKey".to_string(),
                 kind: StackInputKind::Secret,
                 when: None,
