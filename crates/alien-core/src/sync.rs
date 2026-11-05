@@ -489,6 +489,11 @@ pub struct SyncResponse {
     /// manage their own workload update to it; None means no opinion.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_operator_image: Option<String>,
+    /// This deployment's newest signed `config/v1`, on every sync. A
+    /// protected Operator applies its installed release again when it is
+    /// newer than the config it last applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_config: Option<crate::SignedStatement>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

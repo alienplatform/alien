@@ -803,6 +803,11 @@ class Suite:
     def run_signed_developer_input(self):
         """The developer signs a config/v1 setting logLevel; it reaches the workload."""
         name = "signed-developer-input"
+        # Sign on a settled deployment: a config stored while an update is
+        # in flight waits for the next change (a known gap in the manager).
+        wait_until("the deployment to settle", lambda: all(
+            d["status"] == "running" and not d.get("desiredReleaseId")
+            for d in self.manager_get("/v1/deployments").get("items", [])), timeout=300)
         log(f"{name}: the developer signs logLevel=warn for this deployment")
         self.manager_post(f"/v1/deployments/{self.deployment_id()}/config-statements",
                           {"statement": self.signed_config({"logLevel": "warn"})})

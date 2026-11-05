@@ -517,27 +517,11 @@ async fn add_config_statement(
         return ErrorData::bad_request("The config statement names another deployment")
             .into_response();
     }
-    if let Err(error) = store
+    // Sync hands the newest config to the deployment on its next pass.
+    match store
         .add_config_statement(&deployment.id, opened.sequence, &request.statement)
         .await
     {
-        return error.into_response();
-    }
-    // The deployment's enforcers take developer values only from this
-    // statement, so it is delivered with the next target: the release it
-    // runs, again.
-    if deployment.desired_release_id.is_none() {
-        if let Some(current) = deployment.current_release_id.as_deref() {
-            if let Err(error) = state
-                .deployment_store
-                .set_deployment_desired_release(&subject, &deployment.id, current)
-                .await
-            {
-                return error.into_response();
-            }
-        }
-    }
-    match state.deployment_store.set_redeploy(&subject, &deployment.id).await {
         Ok(()) => StatusCode::CREATED.into_response(),
         Err(error) => error.into_response(),
     }

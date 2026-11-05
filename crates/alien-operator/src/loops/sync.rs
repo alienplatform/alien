@@ -449,6 +449,7 @@ async fn sync_with_manager(
                 message: "Failed to parse sync response".to_string(),
             })?;
 
+    let signed_config = sync_response.signed_config.clone();
     let durable_target = sync_response.target.clone().or_else(|| {
         (sync_response.execution_claim == durable_execution.claim)
             .then(|| durable_execution.target.clone())
@@ -603,8 +604,63 @@ async fn sync_with_manager(
         }
     }
 
+    // A newer signed config with no new release: apply the installed
+    // release again with it.
+    let config_update = !has_update && reapply_with_signed_config(state, signed_config).await?;
+
     secret_refresh?;
-    Ok(has_update || state_hydrated)
+    Ok(has_update || state_hydrated || config_update)
+}
+
+/// Apply the installed release again when `signed` is a newer `config/v1`
+/// than the one this protected Operator applied. Developer values change
+/// without a release, so they can't wait for the next target.
+async fn reapply_with_signed_config(
+    state: &OperatorState,
+    signed: Option<alien_core::SignedStatement>,
+) -> crate::error::Result<bool> {
+    let (Some(_), Some(signed)) = (&state.config.release_signing, signed) else {
+        return Ok(false);
+    };
+    let Ok(opened) = signed.open() else {
+        warn!("Protected mode: the manager sent a config statement that doesn't open; ignoring it");
+        return Ok(false);
+    };
+    let applied = state
+        .db
+        .get_accepted_release()
+        .await?
+        .and_then(|accepted| accepted.config_sequence);
+    if applied.is_some_and(|applied| applied >= opened.sequence) {
+        return Ok(false);
+    }
+    let (Some(deployment), Some(config)) = (
+        state.db.get_deployment_state().await?,
+        state.db.get_deployment_config().await?,
+    ) else {
+        return Ok(false);
+    };
+    // Mid-update, the new config waits for the update to finish.
+    if deployment.status != DeploymentStatus::Running {
+        return Ok(false);
+    }
+    let Some(release_info) = deployment.current_release else {
+        return Ok(false);
+    };
+    let target = alien_core::sync::TargetDeployment {
+        release_info,
+        config,
+        signed_config: Some(signed),
+    };
+    let Some(protected) = protect_target(state, &target).await? else {
+        return Ok(false);
+    };
+    info!(
+        config_sequence = opened.sequence,
+        "Protected mode: applying the installed release again with newer signed config"
+    );
+    accept_target(state, &protected, false).await?;
+    Ok(true)
 }
 
 /// Start an empty deployment state with the resource prefix this installation

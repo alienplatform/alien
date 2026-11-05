@@ -242,6 +242,10 @@ pub struct AgentSyncResponse {
     /// charts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_operator_image: Option<String>,
+    /// The deployment's newest signed config, on every sync, so a protected
+    /// Operator applies new developer values without a new release.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signed_config: Option<alien_core::SignedStatement>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -2727,6 +2731,7 @@ async fn acknowledge_completed_claim(
         target_dynamic_containers: None,
         tunnel_url,
         target_operator_image: None,
+        signed_config: None,
     }))
 }
 
@@ -3259,6 +3264,14 @@ async fn agent_sync(
         None
     };
 
+    // The deployment's newest signed config travels with every sync.
+    let signed_config = match &state.signing {
+        Some(signing) => match signing.latest_config_statement(&deployment.id).await {
+            Ok(config) => config,
+            Err(error) => return error.into_response(),
+        },
+        None => None,
+    };
     Json(AgentSyncResponse {
         execution_claim,
         current_state,
@@ -3278,6 +3291,7 @@ async fn agent_sync(
             .charts
             .as_ref()
             .map(|charts| charts.deployed_operator_image(&state.config.base_url())),
+        signed_config,
     })
     .into_response()
 }
