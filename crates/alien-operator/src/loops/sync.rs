@@ -647,8 +647,14 @@ async fn reapply_with_signed_config(
     ) else {
         return Ok(false);
     };
-    // Mid-update, the new config waits for the update to finish.
-    if deployment.status != DeploymentStatus::Running {
+    // Mid-update, the new config waits for the update to finish. A refused
+    // target leaves the installed release running, so it doesn't block one.
+    let refused_only = deployment.status == DeploymentStatus::UpdateFailed
+        && deployment
+            .error
+            .as_ref()
+            .is_some_and(|error| error.code == "RELEASE_REFUSED");
+    if deployment.status != DeploymentStatus::Running && !refused_only {
         return Ok(false);
     }
     let Some(release_info) = deployment.current_release else {
@@ -3155,6 +3161,69 @@ mod tests {
 
     /// A newer signed config reaches the installed release with no new
     /// release; the same config again changes nothing.
+    #[tokio::test]
+    async fn a_refused_target_does_not_block_a_newer_signed_config() {
+        use crate::protected::tests as fixtures;
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(data_dir.path().to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .release_signing(crate::protected::test_signing("shop"))
+                .build(),
+            db: db.clone(),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let release = fixtures::signed_release(5, &fixtures::stack(&fixtures::pinned()));
+        let installed = super::protect_target(&state, &fixtures::target(release.clone(), vec![]))
+            .await
+            .unwrap()
+            .expect("the signed release is accepted");
+        super::accept_target(&state, &installed, false)
+            .await
+            .unwrap();
+        let mut deployed = db.get_deployment_state().await.unwrap().unwrap();
+        deployed.status = DeploymentStatus::Running;
+        deployed.current_release = deployed.target_release.clone();
+        db.set_deployment_state(&deployed).await.unwrap();
+
+        // The manager sends an unsigned target: refused, the release keeps running.
+        let mut unsigned = release;
+        unsigned.signed = None;
+        assert!(
+            super::protect_target(&state, &fixtures::target(unsigned, vec![]))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let refused = db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(refused.status, DeploymentStatus::UpdateFailed);
+
+        let config = fixtures::signed_config(
+            3,
+            &fixtures::this_install(),
+            serde_json::json!({"inputs": {"logLevel": "warn"}}),
+        );
+        assert!(super::reapply_with_signed_config(&state, Some(config))
+            .await
+            .unwrap());
+        let applied = db.get_deployment_config().await.unwrap().unwrap();
+        assert!(applied
+            .environment_variables
+            .variables
+            .iter()
+            .any(|variable| variable.name == "LOG_LEVEL" && variable.value == "warn"));
+    }
+
     #[tokio::test]
     async fn a_newer_signed_config_may_drop_a_configurable_variable() {
         use crate::protected::tests as fixtures;
