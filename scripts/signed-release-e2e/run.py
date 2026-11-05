@@ -268,6 +268,31 @@ class Suite:
         log(f"released {message} ({'signed' if signed else 'unsigned'}) as {output['releaseId']}: {image}")
         return release
 
+    def deployment_id(self):
+        """The customer's deployment, once the installation registered it."""
+        items = self.manager_get("/v1/deployments").get("items", [])
+        return items[0]["id"] if items else "dep_customer"
+
+    def manager_post(self, path, body):
+        result = run(["curl", "-sf", "-X", "POST", "-H", f"Authorization: Bearer {self.admin_token}",
+                      "-H", "content-type: application/json", "--data-binary", "@-",
+                      f"http://localhost:{MANAGER_PORT}{path}"], input=json.dumps(body))
+        return result.stdout
+
+    def signed_config(self, inputs):
+        """A config/v1 for the customer's deployment, signed with the CI key the
+        way `alien deployments set-inputs --sign` signs it."""
+        key = serialization.load_pem_private_key(self.key_file.read_bytes(), password=None)
+        release = json.loads(base64.b64decode(self.manager_get(
+            f"/v1/releases/{self.releases[-1]['id']}")["signedStacks"]["kubernetes"]["payload"]))
+        envelope = {"type": "config/v1", "project": release["project"], "deployment": self.deployment_id(),
+                    "sequence": int(time.time() * 1000), "signerListVersion": release["signerListVersion"],
+                    "body": {"inputs": inputs}}
+        payload = json.dumps(envelope).encode()
+        sig = key.sign(payload, ec.ECDSA(hashes.SHA256()))
+        return {"payload": base64.b64encode(payload).decode(),
+                "signatures": [{"signer": "ci", "sig": base64.b64encode(sig).decode()}]}
+
     def manager_get(self, path):
         result = run(["curl", "-sf", "-H", f"Authorization: Bearer {self.admin_token}",
                       f"http://localhost:{MANAGER_PORT}{path}"])
@@ -290,9 +315,12 @@ class Suite:
             "tunnel": {"enabled": False},
         }
         if protected:
-            # The anchor the customer's setup pins, from the vendor's install guide.
+            # The anchor the customer's setup pins, from the vendor's install
+            # guide. It names the deployment the installation registered as, so
+            # config signed for this deployment verifies and config signed for
+            # another doesn't.
             values["releaseSigning"] = {
-                "protected": True, "project": "default", "deployment": "dep_customer",
+                "protected": True, "project": "default", "deployment": self.deployment_id(),
                 "signing": self.fingerprint, "components": self.components_key,
             }
         values_file = self.work / "values.yaml"
@@ -680,7 +708,7 @@ class Suite:
         for attack in self.attacks():
             self.run_attack(attack)
 
-        log("developer input: a manager-changed developer input does take effect (residual risk)")
+        log("developer input: the manager changes a developer input")
         self.run_developer_input()
         self.run_registry_swap()
         self.run_unsigned_release()
@@ -761,13 +789,37 @@ class Suite:
                 effect = False
         finally:
             self.clear_attack()
-        result = {"attack": name, "took_effect": effect, "changed": [], "passed": effect,
-                  "summary": "a developer input stays manager-controlled: the documented residual risk"}
+        passed = effect if not self.protected else not effect
+        result = {"attack": name, "took_effect": effect, "changed": [], "passed": passed,
+                  "summary": "a protected deployment takes developer inputs only from signed config"}
         self.save(f"attacks/{name}/operator.log", self.operator_logs(since))
         self.save(f"attacks/{name}/result.json", result)
-        log(f"attack {name}: {'PASS' if effect else 'FAIL'} (took effect: {effect}, expected in both modes)")
+        log(f"attack {name}: {'PASS' if passed else 'FAIL'} (took effect: {effect})")
         self.results.append(result)
         self.restore()
+        if self.protected:
+            self.run_signed_developer_input()
+
+    def run_signed_developer_input(self):
+        """The developer signs a config/v1 setting logLevel; it reaches the workload."""
+        name = "signed-developer-input"
+        log(f"{name}: the developer signs logLevel=warn for this deployment")
+        self.manager_post(f"/v1/deployments/{self.deployment_id()}/config-statements",
+                          {"statement": self.signed_config({"logLevel": "warn"})})
+        def level():
+            workload = self.app_workload()
+            return any(e["name"] == "LOG_LEVEL" and e.get("value") == "warn"
+                       for c in workload["spec"]["template"]["spec"]["containers"] for e in c.get("env", []))
+        try:
+            wait_until("LOG_LEVEL=warn", level, timeout=240)
+            effect = True
+        except TimeoutError:
+            effect = False
+        result = {"attack": name, "took_effect": effect, "changed": [], "passed": effect,
+                  "summary": "a signed developer input reaches the workload"}
+        self.save(f"attacks/{name}/result.json", result)
+        log(f"{name}: {'PASS' if effect else 'FAIL'} (took effect: {effect})")
+        self.results.append(result)
 
     def run_registry_swap(self):
         """The registry serves other bytes for the release's image; the node has to pull again."""

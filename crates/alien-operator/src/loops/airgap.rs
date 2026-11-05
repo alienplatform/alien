@@ -233,6 +233,7 @@ async fn apply_target_data(
                     target_hash(&TargetDeployment {
                         release_info: release.clone(),
                         config,
+                        signed_config: None,
                     })? == receipt.target_hash
                 }
                 _ => false,
@@ -455,6 +456,7 @@ mod tests {
 
     fn retry_target() -> TargetDeployment {
         TargetDeployment {
+            signed_config: None,
             release_info: ReleaseInfo {
                 release_id: Some("release".into()),
                 version: None,

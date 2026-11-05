@@ -506,6 +506,11 @@ pub struct TargetDeployment {
     pub release_info: ReleaseInfo,
     /// Full deployment configuration (settings, env vars, etc.).
     pub config: DeploymentConfig,
+    /// This deployment's newest signed `config/v1`: the developer's input
+    /// values and env, for a protected deployment that takes them only from
+    /// a signed statement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_config: Option<crate::SignedStatement>,
 }
 
 #[cfg(test)]

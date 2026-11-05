@@ -3512,7 +3512,17 @@ pub(crate) async fn build_pull_target(
             .map_err(|error| error.into_response())?,
         _ => Vec::new(),
     };
+    // The deployment's newest signed config: a protected deployment takes
+    // developer inputs and configurable env only from it.
+    let signed_config = match (&signed, &state.signing) {
+        (Some(_), Some(signing)) => signing
+            .latest_config_statement(&deployment.id)
+            .await
+            .map_err(|error| error.into_response())?,
+        _ => None,
+    };
     Ok(TargetDeployment {
+        signed_config,
         release_info: ReleaseInfo {
             signed,
             signer_lists,

@@ -333,8 +333,8 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
             .and_then(|state| state.target_release.or(state.current_release))
         {
             info!(
-                manager_supplied_inputs = ?protected::manager_supplied_inputs(&release.stack),
-                "Protected mode: values for these developer inputs of the installed release come from the manager"
+                developer_inputs = ?protected::developer_inputs(&release.stack),
+                "Protected mode: values for these developer inputs of the installed release come only from the deployment's signed config"
             );
         }
     }

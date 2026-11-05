@@ -669,8 +669,9 @@ pub(crate) async fn protect_target(
                     release_id,
                     sequence = verified.sequence,
                     signers = ?verified.signers,
-                    manager_supplied_inputs = ?crate::protected::manager_supplied_inputs(&verified.stack),
-                    "Protected mode: accepted signed release. Values for these developer inputs come from the manager"
+                    developer_inputs = ?crate::protected::developer_inputs(&verified.stack),
+                    config_sequence = ?verified.config_sequence,
+                    "Protected mode: accepted signed release. Values for these developer inputs come only from the deployment's signed config"
                 );
             }
             state
@@ -3057,6 +3058,7 @@ mod tests {
             cancel: CancellationToken::new(),
         };
         let unsigned = alien_core::sync::TargetDeployment {
+            signed_config: None,
             release_info: ReleaseInfo {
                 release_id: Some("rel_unsigned".into()),
                 ..installed.clone()

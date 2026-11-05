@@ -12,21 +12,25 @@
 //! - a release older than the one applied, or the applied sequence with other
 //!   bytes, is refused, and so is a signer list older than the one accepted;
 //! - the deployment configuration is rebuilt here: environment variables only
-//!   for the input mappings the signed stack declares, deployer inputs only from
-//!   this installation, bindings and endpoints only from this installation;
+//!   for the input mappings the signed stack declares, developer inputs and
+//!   configurable env only from the deployment's signed `config/v1`, deployer
+//!   inputs only from this installation, bindings and endpoints only from this
+//!   installation;
 //! - the stored target is verified again before every deployment pass, so no
 //!   other path that writes a stack can deploy it.
 //!
 //! Refused targets change nothing: they are logged and left unapplied.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use alien_core::release_statement::{relocate_images, signed_stack};
 use alien_core::sync::TargetDeployment;
 use alien_core::{
-    DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, Platform, ReleaseInfo,
-    SignedStatement, Stack, StackInputProvider, StackSettings,
+    DeploymentConfig, EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot,
+    ExternalBindings, Platform, ReleaseInfo, SignedStatement, Stack, StackInputProvider,
+    StackSettings,
 };
+use alien_release_trust::kinds::ConfigBody;
 use alien_release_trust::{Anchor, Kind, ReleaseBody, Trust};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -55,6 +59,9 @@ pub struct AcceptedRelease {
     pub operator_digest: Option<String>,
     /// The signer list chain, oldest first.
     pub signer_lists: Vec<SignedStatement>,
+    /// The sequence of the newest `config/v1` it applied, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_sequence: Option<u64>,
 }
 
 /// A release that passed verification.
@@ -72,6 +79,10 @@ pub struct VerifiedRelease {
     pub signer_lists: Vec<SignedStatement>,
     /// Signers whose signatures counted.
     pub signers: Vec<String>,
+    /// The verified release body.
+    pub body: ReleaseBody,
+    /// The sequence of the `config/v1` applied with it, if any.
+    pub config_sequence: Option<u64>,
 }
 
 impl From<&VerifiedRelease> for AcceptedRelease {
@@ -81,6 +92,7 @@ impl From<&VerifiedRelease> for AcceptedRelease {
             digest: verified.digest.clone(),
             operator_digest: verified.operator_digest.clone(),
             signer_lists: verified.signer_lists.clone(),
+            config_sequence: verified.config_sequence,
         }
     }
 }
@@ -102,6 +114,14 @@ pub enum Refusal {
     /// The release is older than the one applied, or reuses its sequence.
     #[error("the release has sequence {actual}, and {applied} is already applied")]
     OlderRelease {
+        /// Applied sequence.
+        applied: u64,
+        /// Refused sequence.
+        actual: u64,
+    },
+    /// The config statement is older than the one applied.
+    #[error("the config has sequence {actual}, and {applied} is already applied")]
+    OlderConfig {
         /// Applied sequence.
         applied: u64,
         /// Refused sequence.
@@ -167,6 +187,8 @@ impl ReleaseSigning {
             operator_digest: verified.body.components.get(OPERATOR_COMPONENT).cloned(),
             signer_lists: trust.chain().statements().to_vec(),
             signers: verified.signers.into_iter().collect(),
+            body: verified.body,
+            config_sequence: None,
         })
     }
 
@@ -190,16 +212,37 @@ impl ReleaseSigning {
                 });
             }
         }
+        let mut verified = verified;
+        let signed_config = match &target.signed_config {
+            None => ConfigBody::default(),
+            Some(signed) => {
+                let trust = Trust::new(self.anchor.clone(), &verified.signer_lists)?;
+                let config = trust.verify::<ConfigBody>(signed, Kind::Config, Utc::now())?;
+                if let Some(applied) = accepted.and_then(|accepted| accepted.config_sequence) {
+                    if config.sequence < applied {
+                        return Err(Refusal::OlderConfig {
+                            applied,
+                            actual: config.sequence,
+                        });
+                    }
+                }
+                config.body.check(&verified.body)?;
+                verified.config_sequence = Some(config.sequence);
+                config.body
+            }
+        };
         let config = protect_config(
             platform,
             &target.release_info.stack,
             local_input_values,
+            &signed_config,
             &target.config,
         )?;
         Ok((
             TargetDeployment {
                 release_info: target.release_info.clone(),
                 config,
+                signed_config: target.signed_config.clone(),
             },
             verified,
         ))
@@ -220,8 +263,8 @@ fn deployer_supplied(input: &alien_core::StackInputDefinition) -> bool {
     input.provided_by.contains(&StackInputProvider::Deployer)
 }
 
-/// Developer inputs whose values the manager supplies, for the startup log.
-pub fn manager_supplied_inputs(stack: &Stack) -> Vec<&str> {
+/// Developer inputs, whose values come from signed config, for the startup log.
+pub fn developer_inputs(stack: &Stack) -> Vec<&str> {
     stack
         .inputs
         .iter()
@@ -237,9 +280,11 @@ fn protect_config(
     platform: Platform,
     stack: &Stack,
     local_input_values: &serde_json::Map<String, serde_json::Value>,
+    signed_config: &ConfigBody,
     manager: &DeploymentConfig,
 ) -> Result<DeploymentConfig, Refusal> {
-    let allowed = input_environment_names(stack);
+    let mut allowed = input_environment_names(stack);
+    allowed.extend(signed_config.env.keys().map(String::as_str));
     let unexpected: BTreeSet<String> = manager
         .environment_variables
         .variables
@@ -254,8 +299,9 @@ fn protect_config(
     }
 
     // Deployer inputs come from this installation, developer inputs from the
-    // manager. The developer declared where each one is used, so a developer
-    // input can only reach the variables the signed stack maps it to.
+    // deployment's signed config, never from the manager. The developer
+    // declared where each one is used, so an input can only reach the
+    // variables the signed stack maps it to.
     let input_values: HashMap<String, serde_json::Value> = stack
         .inputs
         .iter()
@@ -263,17 +309,27 @@ fn protect_config(
             let value = if deployer_supplied(input) {
                 local_input_values.get(&input.id)
             } else {
-                manager.input_values.get(&input.id)
+                signed_config.inputs.get(&input.id)
             };
             value.map(|value| (input.id.clone(), value.clone()))
         })
         .collect();
-    let variables = alien_core::resolve_stack_input_environment_variables(
+    let mut variables = alien_core::resolve_stack_input_environment_variables(
         &stack.inputs,
         &input_values,
         platform,
     )
     .map_err(|error| Refusal::Inputs(error.message))?;
+    // Configurable env the signed config sets, which the release already
+    // limited to names it lists.
+    let configured: BTreeMap<&String, &String> = signed_config.env.iter().collect();
+    variables.retain(|variable| !configured.contains_key(&variable.name));
+    variables.extend(configured.into_iter().map(|(name, value)| EnvironmentVariable {
+        name: name.clone(),
+        value: value.clone(),
+        var_type: EnvironmentVariableType::Plain,
+        target_resources: None,
+    }));
 
     Ok(DeploymentConfig {
         setup_run: manager.setup_run,
@@ -463,6 +519,7 @@ mod tests {
 
     fn target(release_info: ReleaseInfo, variables: Vec<EnvironmentVariable>) -> TargetDeployment {
         TargetDeployment {
+            signed_config: None,
             release_info,
             config: DeploymentConfig::builder()
                 .stack_settings(StackSettings::default())
@@ -557,6 +614,7 @@ mod tests {
     #[test]
     fn an_older_release_is_refused() {
         let accepted = AcceptedRelease {
+            config_sequence: None,
             sequence: 6,
             digest: "sha256:other".to_string(),
             operator_digest: None,
@@ -606,39 +664,103 @@ mod tests {
         );
     }
 
-    #[test]
-    fn deployer_inputs_come_from_the_installation_and_developer_inputs_from_the_manager() {
-        let release = signed_release(5, &stack(&pinned()));
-        let (protected, _) = signing()
-            .protect_target(
-                Platform::Kubernetes,
-                &local_inputs(),
-                None,
-                &target(
-                    release,
-                    vec![
-                        variable("LOG_LEVEL", "debug"),
-                        variable("DATABASE_URL", "postgres://attacker.example/db"),
-                    ],
-                ),
-            )
-            .unwrap();
-        let values: HashMap<&str, &str> = protected
+    /// A `config/v1` for the test deployment, signed by the release key.
+    fn signed_config(sequence: u64, deployment: &str, body: serde_json::Value) -> SignedStatement {
+        let envelope = Envelope {
+            kind: Kind::Config.as_str().to_string(),
+            project: Some("shop".to_string()),
+            deployment: Some(deployment.to_string()),
+            sequence,
+            not_after: None,
+            signer_list_version: 1,
+            body,
+        };
+        SignedStatement::new(&envelope.to_payload().unwrap())
+            .sign_with("ci", &key())
+            .unwrap()
+    }
+
+    fn values(target: &TargetDeployment) -> HashMap<String, String> {
+        target
             .config
             .environment_variables
             .variables
             .iter()
-            .map(|variable| (variable.name.as_str(), variable.value.as_str()))
-            .collect();
-        assert_eq!(values["DATABASE_URL"], "postgres://db.internal/shop");
-        assert_eq!(
-            values["LOG_LEVEL"], "debug",
-            "a developer input takes the manager's value"
+            .map(|variable| (variable.name.clone(), variable.value.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn deployer_inputs_come_from_the_installation_and_developer_inputs_from_signed_config() {
+        let release = signed_release(5, &stack(&pinned()));
+        // The manager sets both inputs; neither value may run.
+        let mut target = target(
+            release,
+            vec![
+                variable("LOG_LEVEL", "debug"),
+                variable("DATABASE_URL", "postgres://attacker.example/db"),
+            ],
+        );
+        let (protected, _) = signing()
+            .protect_target(Platform::Kubernetes, &local_inputs(), None, &target)
+            .unwrap();
+        let unsigned = values(&protected);
+        assert_eq!(unsigned["DATABASE_URL"], "postgres://db.internal/shop");
+        assert!(
+            !unsigned.contains_key("LOG_LEVEL"),
+            "without signed config, the manager's developer input value is dropped: {unsigned:?}"
         );
         assert_eq!(
             protected.config.input_values["databaseUrl"],
             serde_json::json!("postgres://db.internal/shop")
         );
+
+        target.signed_config = Some(signed_config(
+            3,
+            "dep_shop",
+            serde_json::json!({"inputs": {"logLevel": "warn"}}),
+        ));
+        let (protected, verified) = signing()
+            .protect_target(Platform::Kubernetes, &local_inputs(), None, &target)
+            .unwrap();
+        assert_eq!(values(&protected)["LOG_LEVEL"], "warn", "the signed value runs");
+        assert_eq!(verified.config_sequence, Some(3));
+
+        // An older config can't come back once a newer one was applied.
+        let accepted = AcceptedRelease::from(&verified);
+        target.signed_config = Some(signed_config(
+            2,
+            "dep_shop",
+            serde_json::json!({"inputs": {"logLevel": "trace"}}),
+        ));
+        assert_eq!(
+            signing()
+                .protect_target(Platform::Kubernetes, &local_inputs(), Some(&accepted), &target)
+                .unwrap_err(),
+            Refusal::OlderConfig {
+                applied: 3,
+                actual: 2
+            }
+        );
+
+        // Config signed for another deployment, or setting what the release
+        // doesn't make configurable, is refused.
+        target.signed_config = Some(signed_config(
+            4,
+            "dep_other",
+            serde_json::json!({"inputs": {"logLevel": "warn"}}),
+        ));
+        assert!(signing()
+            .protect_target(Platform::Kubernetes, &local_inputs(), None, &target)
+            .is_err());
+        target.signed_config = Some(signed_config(
+            4,
+            "dep_shop",
+            serde_json::json!({"inputs": {"databaseUrl": "postgres://attacker.example/db"}}),
+        ));
+        assert!(signing()
+            .protect_target(Platform::Kubernetes, &local_inputs(), None, &target)
+            .is_err());
     }
 
     #[test]
