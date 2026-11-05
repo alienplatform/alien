@@ -950,6 +950,40 @@
       }
     },
     "/v1/deployments/{id}/config-statements": {
+      "get": {
+        "tags": [
+          "signing"
+        ],
+        "operationId": "list_config_statements",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored config statements",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigStatementsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
       "post": {
         "tags": [
           "signing"
@@ -1969,6 +2003,42 @@
           },
           "409": {
             "description": "SIGNING_ALREADY_ON: another version 1 is stored; SIGNER_LIST_CONFLICT: the version skips one or differs from the stored one"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{project}/signing": {
+      "get": {
+        "tags": [
+          "signing"
+        ],
+        "operationId": "get_project_signing",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Setup hosting for signed releases",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectSigningResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -7999,6 +8069,22 @@
             "propertyNames": {
               "type": "string"
             }
+          }
+        }
+      },
+      "ConfigStatementsResponse": {
+        "type": "object",
+        "description": "Config statements stored for a deployment.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SignedStatement"
+            },
+            "description": "Every stored statement, lowest sequence first."
           }
         }
       },
@@ -16561,6 +16647,19 @@
           }
         ],
         "description": "Storage backend representation for different presigned request types"
+      },
+      "ProjectSigningResponse": {
+        "type": "object",
+        "description": "What a release of the project needs to know to sign its setup templates.",
+        "required": [
+          "setupHosting"
+        ],
+        "properties": {
+          "setupHosting": {
+            "type": "object",
+            "description": "What this manager renders setup templates with, so the digests a\nrelease signs are of the templates installs get."
+          }
+        }
       },
       "PromoteReleaseRequest": {
         "type": "object",

@@ -14,7 +14,7 @@ use std::process::{Command, Stdio};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_signing::{
     display_fingerprint, Kind, PublicKey, RecoveryCode, Role, SecretKey, SignedStatement, Signer,
-    SignerChain, SignerKind, SignerListBody, TrustedList,
+    SignerChain, SignerKind, SignerListBody,
 };
 use chrono::Utc;
 use clap::{Args, Subcommand};

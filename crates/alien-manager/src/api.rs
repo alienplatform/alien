@@ -42,6 +42,7 @@ impl Modify for BearerSecurity {
         crate::routes::airgap::target,
         crate::routes::airgap::bundle_sources,
         crate::routes::channels::list_channels,
+        crate::routes::signing::project_signing,
         crate::routes::signing::list_signer_lists,
         crate::routes::signing::add_signer_list,
         crate::routes::signing::list_pending_changes,
@@ -100,6 +101,7 @@ impl Modify for BearerSecurity {
     components(schemas(
         // Signing
         crate::routes::signing::SignerListsResponse,
+        crate::routes::signing::ProjectSigningResponse,
         crate::routes::signing::ConfigStatementsResponse,
         crate::routes::signing::StatementRequest,
         crate::routes::signing::CreatePendingChangeRequest,

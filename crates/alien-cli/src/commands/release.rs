@@ -1025,8 +1025,31 @@ async fn sign_release(
         };
         let components = signing::release::enforcer_digests()?;
         let mut refused = None;
+        let api = signing::api::SigningApi::from_context(ctx).await?;
+        let hosting = match api.setup_hosting(project_id).await {
+            Ok(hosting) => {
+                signing.say(&format!(
+                    "  {}",
+                    signing::release::hosting_summary(&hosting)
+                ));
+                Some(hosting)
+            }
+            Err(error) => {
+                refused = Some(error_reason(&error));
+                None
+            }
+        };
         for (platform, stack) in pushed {
-            let built = match signing::release::setup_templates(&stack, platform, &settings).await {
+            let Some(hosting) = &hosting else { break };
+            let built = match signing::release::setup_templates(
+                &stack,
+                platform,
+                &settings,
+                hosting,
+                alien_core::SetupPins::compiled_in(),
+            )
+            .await
+            {
                 Ok(setup) => {
                     signing::release::body(platform, &stack, &signing.channel, &components, setup)
                 }
