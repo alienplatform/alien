@@ -12,6 +12,7 @@
 use serde_json::{json, Value};
 
 use super::verifier_owned::AWS_VERIFIER_OWNED;
+use super::{AwsIamPolicy, AwsIamStatement};
 
 /// Lambda writes: what code a function runs, how, and who may call it.
 fn lambda_writes() -> Vec<&'static str> {
@@ -377,5 +378,43 @@ mod tests {
         {
             assert!(denied.iter().any(|denied| denied == action), "{action}");
         }
+    }
+}
+
+/// A protected machine reads only its install's signing settings and inputs,
+/// and advances only that install's anti-replay ledger. The cloud account,
+/// region and prefix come from customer-owned setup, never a machine token.
+/// No input writes or signing-fingerprint writes are granted.
+pub fn aws_machine_signing_policy(prefix: &str, account: &str, region: &str) -> AwsIamPolicy {
+    let root = format!("arn:aws:ssm:{region}:{account}:parameter/signed/{prefix}");
+    let allow = |sid: &str, actions: &[&str], resources: Vec<String>| AwsIamStatement {
+        sid: sid.to_string(),
+        effect: "Allow".to_string(),
+        action: actions.iter().map(|action| (*action).to_string()).collect(),
+        resource: resources,
+        not_resource: Vec::new(),
+        condition: None,
+    };
+    AwsIamPolicy {
+        version: "2012-10-17".to_string(),
+        statement: vec![
+            allow(
+                "ReadThisInstallsSigningState",
+                &["ssm:GetParameter"],
+                vec![format!("{root}/fingerprint"), format!("{root}/state")],
+            ),
+            allow(
+                "AdvanceThisInstallsSigningState",
+                &["ssm:PutParameter"],
+                vec![format!("{root}/state")],
+            ),
+            // The input reader requests this exact path, not its parents.
+            // Keep both path forms because SSM normalizes a trailing slash.
+            allow(
+                "ReadThisInstallsInputs",
+                &["ssm:GetParametersByPath"],
+                vec![format!("{root}/inputs"), format!("{root}/inputs/*")],
+            ),
+        ],
     }
 }

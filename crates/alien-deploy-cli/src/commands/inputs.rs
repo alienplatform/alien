@@ -8,6 +8,8 @@
 //! `signed-<prefix>-input-<name>` on GCP. A change takes effect on the next
 //! check, with no stack update.
 
+use std::io::Read;
+
 use alien_aws_clients::ssm::{PutParameterRequest, SsmApi, SsmClient};
 use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt, AwsCredentialProvider};
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -56,6 +58,10 @@ pub struct InputsSetArgs {
     /// An input to set, as `name=value`. Repeat for more.
     #[arg(long = "input", value_name = "NAME=VALUE")]
     pub inputs: Vec<String>,
+    /// Read one input value verbatim from stdin, keeping it out of process
+    /// arguments and shell history. Redirect a protected file for secrets.
+    #[arg(long, value_name = "NAME", conflicts_with_all = ["inputs", "unset"])]
+    pub input_stdin: Option<String>,
     /// An input to remove. Repeat for more.
     #[arg(long, value_name = "NAME")]
     pub unset: Vec<String>,
@@ -82,7 +88,7 @@ fn changes(set: &[String], unset: &[String]) -> Result<Vec<Change>> {
         let (name, value) = pair.split_once('=').ok_or_else(|| {
             AlienError::new(ErrorData::ValidationError {
                 field: "input".to_string(),
-                message: format!("'{pair}' is not name=value"),
+                message: "an input must be name=value".to_string(),
             })
         })?;
         check_name(name)?;
@@ -114,6 +120,36 @@ fn check_name(name: &str) -> Result<()> {
             ),
         }))
     }
+}
+
+/// Read a single UTF-8 value without interpreting or trimming it. Limit the
+/// read before allocation; providers enforce their smaller per-value limits.
+fn stdin_change(name: String, reader: impl Read) -> Result<Change> {
+    check_name(&name)?;
+    const MAX_BYTES: usize = 64 * 1024;
+    let mut value = Vec::new();
+    reader
+        .take((MAX_BYTES + 1) as u64)
+        .read_to_end(&mut value)
+        .map_err(|_| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "input-stdin".to_string(),
+                message: "could not read input value from stdin".to_string(),
+            })
+        })?;
+    if value.len() > MAX_BYTES {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "input-stdin".to_string(),
+            message: "stdin input exceeds 64 KiB".to_string(),
+        }));
+    }
+    let value = String::from_utf8(value).map_err(|_| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "input-stdin".to_string(),
+            message: "stdin input must be UTF-8".to_string(),
+        })
+    })?;
+    Ok(Change::Set { name, value })
 }
 
 /// Where each input of the install lives.
@@ -264,7 +300,10 @@ fn not_found(error: &AlienError<CloudClientErrorData>) -> bool {
 pub async fn inputs_command(args: InputsArgs) -> Result<()> {
     match args.command {
         InputsCommand::Set(args) => {
-            let changes = changes(&args.inputs, &args.unset)?;
+            let changes = match args.input_stdin {
+                Some(name) => vec![stdin_change(name, std::io::stdin().lock())?],
+                None => changes(&args.inputs, &args.unset)?,
+            };
             let store = Store::open(args.platform, &args.prefix).await?;
             for change in &changes {
                 store.apply(change).await?;
@@ -319,6 +358,26 @@ mod tests {
             "VALIDATION_ERROR"
         );
         assert_eq!(changes(&[], &[]).unwrap_err().code, "VALIDATION_ERROR");
+    }
+
+    #[test]
+    fn stdin_preserves_secret_bytes_and_refuses_invalid_input_without_echoing() {
+        let value = "password=with\nnewlines\n";
+        assert_eq!(
+            stdin_change("password".to_string(), value.as_bytes()).unwrap(),
+            Change::Set {
+                name: "password".to_string(),
+                value: value.to_string()
+            }
+        );
+        let invalid = b"sensitive-prefix\xff";
+        let error = stdin_change("password".to_string(), &invalid[..]).unwrap_err();
+        assert!(!format!("{error:?}").contains("sensitive-prefix"));
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(stdin_change("password".to_string(), &vec![b'x'; 65537][..]).is_err());
+        assert!(stdin_change("../state".to_string(), value.as_bytes()).is_err());
+        let error = changes(&strings(&["sensitive-without-equals"]), &[]).unwrap_err();
+        assert!(!format!("{error:?}").contains("sensitive-without-equals"));
     }
 
     /// Writes, overwrites and removes an input in a real SSM account the way
