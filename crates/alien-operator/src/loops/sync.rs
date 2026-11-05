@@ -639,12 +639,27 @@ async fn reapply_with_signed_config(
         .await?
         .and_then(|stored| stored.config_sequence());
     if applied.is_some_and(|applied| applied >= opened.sequence) {
+        debug!(
+            ?applied,
+            sequence = opened.sequence,
+            "Protected mode: the signed config is not newer than the applied one"
+        );
         return Ok(false);
     }
-    let (Some(deployment), Some(config)) = (
-        state.db.get_deployment_state().await?,
-        state.db.get_deployment_config().await?,
-    ) else {
+    // A finished update clears the stored configuration; the manager's
+    // values then come from the last target it sent, kept with the claim.
+    // Either way they are rebuilt from the signed release and config.
+    let config = match state.db.get_deployment_config().await? {
+        Some(config) => Some(config),
+        None => state
+            .db
+            .get_sync_execution()
+            .await?
+            .and_then(|execution| execution.target)
+            .map(|target| target.config),
+    };
+    let (Some(deployment), Some(config)) = (state.db.get_deployment_state().await?, config) else {
+        debug!("Protected mode: no deployment applied yet to apply newer signed config to");
         return Ok(false);
     };
     // Mid-update, the new config waits for the update to finish. A refused
@@ -655,9 +670,11 @@ async fn reapply_with_signed_config(
             .as_ref()
             .is_some_and(|error| error.code == "RELEASE_REFUSED");
     if deployment.status != DeploymentStatus::Running && !refused_only {
+        debug!(status = ?deployment.status, "Protected mode: newer signed config waits for the deployment to settle");
         return Ok(false);
     }
     let Some(release_info) = deployment.current_release else {
+        debug!("Protected mode: newer signed config waits for a running release");
         return Ok(false);
     };
     let target = alien_core::sync::TargetDeployment {
@@ -3207,6 +3224,12 @@ mod tests {
         );
         let refused = db.get_deployment_state().await.unwrap().unwrap();
         assert_eq!(refused.status, DeploymentStatus::UpdateFailed);
+        // A finished update clears the stored configuration; the last
+        // target the manager sent is what remains.
+        db.clear_deployment_config().await.unwrap();
+        db.set_sync_execution("pull-operator-test", None, Some(&installed))
+            .await
+            .unwrap();
 
         let config = fixtures::signed_config(
             3,

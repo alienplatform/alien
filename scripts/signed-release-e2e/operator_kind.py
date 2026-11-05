@@ -83,6 +83,8 @@ class Suite:
         self.binaries = Path(args.binaries).resolve()
         self.results = []
         self.accounts = set()
+        self.only = args.only
+        self.rust_log = "info,alien_operator::loops::sync=debug" if args.only else "info"
 
     def kubectl(self, *args, check=True, input=None):
         return run(["kubectl", "--context", self.context, *args], check=check, input=input)
@@ -201,7 +203,7 @@ class Suite:
                                               "OPERATOR_ENCRYPTION_KEY_FILE": "/files/encryption-key",
                                               "STACK_INPUT_VALUES_FILE": "/files/inputs.json",
                                               "STACK_SETTINGS_FILE": "/files/stack-settings.json",
-                                              "TUNNEL_ENABLED": "false", "SYNC_INTERVAL": "5", "RUST_LOG": "info",
+                                              "TUNNEL_ENABLED": "false", "SYNC_INTERVAL": "5", "RUST_LOG": self.rust_log,
                                               "OPERATOR_SELF_UPDATE_DEPLOYMENT": "operator",
                                           }.items()],
                                           "volumeMounts": [{"name": "files", "mountPath": "/files"},
@@ -373,6 +375,15 @@ class Suite:
         self.kubectl("-n", NAMESPACE, "rollout", "status", "deployment/operator", "--timeout=180s")
         self.lands("settings restored: the install runs on", "config-2", "release-10", "a", {"LOG_LEVEL": "warn"})
 
+    def config_after_refusal(self):
+        """Only the newer-config-after-a-refused-target path."""
+        self.lands("release 1 lands", "release-1", "release-1", "a")
+        self.lands("release 2 with config 1 lands", "release-2-config-1", "release-2", "b", {"LOG_LEVEL": "debug"})
+        self.attack("ci-removed: the accepted release keeps running", "ci-removed-accepted-release", None, lambda app: False)
+        self.lands("ci-removed: the next release lands", "ci-removed-next-release", "release-10", "a", {"LOG_LEVEL": "debug"})
+        self.attack("ci-removed: a release CI signs after removal", "ci-removed-ci-release", r"refused the target", lambda app: False)
+        self.lands("newer signed config applies without a release", "config-2-only", "release-10", "a", {"LOG_LEVEL": "warn"}, timeout=120)
+
     def write_signing_settings_only(self):
         self.apply({"apiVersion": "v1", "kind": "ConfigMap",
                     "metadata": {"name": f"{RELEASE}-signing", "namespace": NAMESPACE,
@@ -387,6 +398,7 @@ def main():
     parser.add_argument("--binaries", default=str(Path(os.environ.get("CARGO_TARGET_DIR", HERE.parent.parent / "target")) / "debug"))
     parser.add_argument("--prefix", help="when TEST_RESOURCE_PREFIX is unset")
     parser.add_argument("--down", action="store_true")
+    parser.add_argument("--only", choices=["config"], help="run one path, with debug logs")
     args = parser.parse_args()
     suite = Suite(args)
     if args.down:
@@ -394,7 +406,7 @@ def main():
         return
     try:
         suite.up()
-        suite.suite()
+        suite.config_after_refusal() if args.only == "config" else suite.suite()
     except Exception as error:
         suite.record("the run itself", False, f"{type(error).__name__}: {error}")
     finally:
