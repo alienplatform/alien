@@ -51,6 +51,29 @@
             "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-management"]
           }
         }
+      },
+      {
+        // Signing settings, ledgers and signed inputs live under `/signed/`, and only setup
+        // writes them. No grant reaches the path today; this holds if a later one does, and is
+        // harmless on installs without signing.
+        "label": "only-setup-changes-signing-settings",
+        "effect": "Deny",
+        "grant": {
+          "actions": [
+            "ssm:PutParameter",
+            "ssm:DeleteParameter",
+            "ssm:DeleteParameters",
+            "ssm:LabelParameterVersion",
+            "ssm:UnlabelParameterVersion",
+            "ssm:AddTagsToResource",
+            "ssm:RemoveTagsFromResource"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ssm:*:*:parameter/signed/*"]
+          }
+        }
       }
     ]
   }

@@ -249,6 +249,7 @@ fn azure_storage_profile_permissions_fail_for_unknown_permission_set() {
         &stack,
         TerraformTarget::Azure,
         TerraformOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             display_name: None,
             registry: &registry,
             stack_settings: StackSettings::default(),

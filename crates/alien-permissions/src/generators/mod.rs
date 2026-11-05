@@ -5,6 +5,7 @@ pub mod aws_cloudformation;
 pub mod aws_runtime;
 pub mod azure_runtime;
 pub mod azure_setup_owned;
+pub mod signing_limits;
 pub mod verifier_owned;
 pub mod gcp_runtime;
 mod labels;

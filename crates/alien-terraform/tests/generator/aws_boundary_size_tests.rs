@@ -293,6 +293,7 @@ async fn many_secret_consumers_fit_the_boundary_in_both_setup_packages() {
     generate_cloudformation_template(
         &prepared,
         CloudFormationOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             registry: &cf_registry,
             source_stack: &stack(),
             target: CloudFormationTarget::Aws,

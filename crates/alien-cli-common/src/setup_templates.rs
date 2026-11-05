@@ -2,7 +2,7 @@
 //!
 //! `alien release` signs the digest of each template in
 //! [`alien_signing::release::SETUP_TEMPLATES`] together with the parameters a customer may
-//! choose, and the platform that hosts the templates renders them again for installs. Both
+//! choose, and the service that hosts the templates renders them again for installs. Both
 //! must produce the same bytes, so [`render_setup_templates`] depends only on its inputs: the
 //! stack, its signing settings, the emitter registries and the hosting options, rendered by
 //! the alien version that is running. It reads no environment, clock, or cloud.
@@ -15,13 +15,13 @@ use alien_cloudformation::{
 };
 use alien_core::{
     AwsManagementConfig, AzureManagementConfig, DeploymentConfig, EnvironmentVariablesSnapshot,
-    ExternalBindings, GcpManagementConfig, ManagementConfig, Platform, Stack, StackSettings,
-    StackSigning, StackState,
+    ExternalBindings, GcpManagementConfig, ManagementConfig, Platform, SetupPins, Stack,
+    StackSettings, StackSigning, StackState,
 };
 use alien_error::{AlienError, AlienErrorData, Context, IntoAlienError};
 use alien_helm::{HelmOptions, HelmRegistry};
 use alien_signing::release::{SetupTemplate, SETUP_TEMPLATES};
-use alien_terraform::{TerraformOptions, TerraformTarget, TfRegistry};
+use alien_terraform::{TerraformOptions, TerraformRegistration, TerraformTarget, TfRegistry};
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -48,11 +48,34 @@ pub enum ErrorData {
 /// Result type for setup template rendering.
 pub type Result<T> = alien_error::Result<T, ErrorData>;
 
+/// What the service that hosts the setup templates renders them with: who manages the install
+/// and how setup reports back. The CLI takes these from that service, so both render the same
+/// bytes. None of them is trusted: on a protected install the management limits hold whoever
+/// management is, and `verify` prints the management principal from the installed template.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetupHostingOptions {
+    /// How the CloudFormation stack reports itself after it is created.
+    pub registration: RegistrationMode,
+    /// CloudFormation template description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Who may manage the stack.
+    #[serde(default)]
+    pub management_trust: ManagementTrustOptions,
+    /// AWS regions the templates accept; empty accepts any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_aws_regions: Vec<String>,
+    /// How Terraform modules report themselves; none for modules registered out of band.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terraform_registration: Option<TerraformRegistration>,
+    /// The hosting service's fingerprint of this setup's shape, reported at registration.
+    pub setup_fingerprint: String,
+    /// Version of the scheme behind `setup_fingerprint`.
+    pub setup_fingerprint_version: u32,
+}
+
 /// Everything a setup template depends on besides the stack.
-///
-/// The hosting options (`registration`, `description`, `management_trust`,
-/// `supported_aws_regions`) belong to the platform that hosts the templates; the CLI must
-/// use the values that platform renders with, or the digests won't match.
 #[derive(Builder)]
 pub struct SetupRenderOptions<'a> {
     /// Fingerprint and channel the templates pin.
@@ -60,15 +83,12 @@ pub struct SetupRenderOptions<'a> {
     pub cloudformation_registry: &'a CfRegistry,
     pub terraform_registry: &'a TfRegistry,
     pub helm_registry: &'a HelmRegistry,
-    /// How the CloudFormation stack reports itself after it is created.
-    pub registration: RegistrationMode,
-    /// CloudFormation template description.
-    pub description: Option<String>,
-    #[builder(default)]
-    pub management_trust: ManagementTrustOptions,
-    /// AWS regions the Terraform AWS module accepts; empty accepts any.
-    #[builder(default)]
-    pub supported_aws_regions: Vec<String>,
+    /// What the hosting service renders with.
+    pub hosting: SetupHostingOptions,
+    /// Machine-image publisher and verifier image. Leave the default, this build's own, except
+    /// in tests: a release records templates rendered with it.
+    #[builder(default = SetupPins::compiled_in())]
+    pub pins: SetupPins,
 }
 
 /// One rendered setup template.
@@ -104,7 +124,7 @@ pub async fn render_setup_templates(
     };
     let mut rendered = BTreeMap::new();
     for &name in SETUP_TEMPLATES {
-        let template = render_one(name, stack, &settings, &options)
+        let template = render_setup_template(name, stack, &settings, &options)
             .await
             .context(ErrorData::RenderFailed {
                 template: name.to_string(),
@@ -115,7 +135,10 @@ pub async fn render_setup_templates(
     Ok(rendered)
 }
 
-async fn render_one(
+/// Render the setup template `name` (from [`SETUP_TEMPLATES`]) for `stack` with `settings`.
+/// [`render_setup_templates`] calls this with signing on and nothing else set; other settings
+/// make templates a release does not record. `options.signing` is not used here.
+pub async fn render_setup_template(
     name: &str,
     source: &Stack,
     settings: &StackSettings,
@@ -138,16 +161,17 @@ async fn render_one(
             let template = alien_cloudformation::generate_cloudformation_template(
                 &stack,
                 CloudFormationOptions {
+                    pins: options.pins.clone(),
                     registry: options.cloudformation_registry,
                     source_stack: &source_stack,
                     target: CloudFormationTarget::Aws,
                     stack_settings: settings.clone(),
                     setup_target: "aws".to_string(),
-                    setup_fingerprint: "render-preview".to_string(),
-                    setup_fingerprint_version: 1,
-                    registration: options.registration.clone(),
-                    description: options.description.clone(),
-                    management_trust: options.management_trust.clone(),
+                    setup_fingerprint: options.hosting.setup_fingerprint.clone(),
+                    setup_fingerprint_version: options.hosting.setup_fingerprint_version,
+                    registration: options.hosting.registration.clone(),
+                    description: options.hosting.description.clone(),
+                    management_trust: options.hosting.management_trust.clone(),
                 },
             )
             .context(step(name, "generate the template"))?;
@@ -165,17 +189,34 @@ async fn render_one(
             })
         }
         "helm" => {
-            let chart = alien_helm::generate_helm_chart(
-                &stack,
-                HelmOptions {
-                    registry: options.helm_registry,
-                    stack_settings: settings.clone(),
-                    chart_name: stack.id().to_string(),
-                },
-            )
+            let helm_options = HelmOptions {
+                registry: options.helm_registry,
+                stack_settings: settings.clone(),
+                chart_name: stack.id().to_string(),
+            };
+            let chart = match &settings.signing {
+                Some(_) => {
+                    let operator_digest = options.pins.operator_digest.clone().ok_or_else(|| {
+                        render_failed(
+                            name,
+                            "this CLI build has no Operator digest; protected setups come from released CLI builds",
+                        )
+                    })?;
+                    alien_helm::generate_signed_helm_chart(
+                        &stack,
+                        helm_options,
+                        &alien_helm::SignedChartPins { operator_digest },
+                    )
+                }
+                None => alien_helm::generate_helm_chart(&stack, helm_options),
+            }
             .context(step(name, "generate the chart"))?;
+            let allowed = match &settings.signing {
+                Some(_) => alien_helm::allowed_values(&chart)
+                    .context(step(name, "list the values customers may set"))?,
+                None => Vec::new(),
+            };
             let files: BTreeMap<String, String> = chart.files.into_iter().collect();
-            let allowed = helm_allowed_values(name, &files)?;
             Ok(RenderedSetupTemplate {
                 bytes: file_map_bytes(name, &files)?,
                 allowed,
@@ -191,12 +232,13 @@ async fn render_one(
                 &stack,
                 target,
                 TerraformOptions {
+                    pins: options.pins.clone(),
                     display_name: None,
                     registry: options.terraform_registry,
                     stack_settings: settings.clone(),
-                    registration: None,
+                    registration: options.hosting.terraform_registration.clone(),
                     helm_install: None,
-                    supported_aws_regions: options.supported_aws_regions.clone(),
+                    supported_aws_regions: options.hosting.supported_aws_regions.clone(),
                 },
             )
             .context(step(name, "generate the module"))?;
@@ -275,22 +317,6 @@ fn file_map_bytes(name: &str, files: &BTreeMap<String, String>) -> Result<Vec<u8
     serde_json::to_vec(files)
         .into_alien_error()
         .context(step(name, "encode the files as JSON"))
-}
-
-/// Top-level keys of the chart's `values.yaml`, except `signing`.
-fn helm_allowed_values(name: &str, files: &BTreeMap<String, String>) -> Result<Vec<String>> {
-    let values = files
-        .get("values.yaml")
-        .ok_or_else(|| render_failed(name, "the chart has no values.yaml"))?;
-    let values: serde_yaml::Mapping = serde_yaml::from_str(values)
-        .into_alien_error()
-        .context(step(name, "parse values.yaml"))?;
-    Ok(values
-        .keys()
-        .filter_map(|key| key.as_str())
-        .filter(|key| *key != "signing")
-        .map(str::to_string)
-        .collect())
 }
 
 fn step(name: &str, what: &str) -> ErrorData {

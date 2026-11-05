@@ -27,6 +27,7 @@ fn module(registration: Option<TerraformRegistration>) -> ModuleFiles {
         &stack,
         TerraformTarget::Aws,
         TerraformOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             display_name: None,
             registry: &registry,
             stack_settings: StackSettings::default(),

@@ -70,6 +70,7 @@ async fn main() {
         .expect("fixtures dir")
         .map(|entry| entry.expect("fixture entry").path())
         .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .filter(|path| !path.to_string_lossy().ends_with(".settings.json"))
         .collect();
     entries.sort();
     for path in entries {
@@ -77,15 +78,27 @@ async fn main() {
         let stack: Stack =
             serde_json::from_str(&fs::read_to_string(&path).expect("read fixture"))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
+        // `<name>.settings.json`, when present, holds the stack settings the fixture renders with.
+        let settings_path = path.with_file_name(format!("{name}.settings.json"));
+        let settings: StackSettings = if settings_path.exists() {
+            serde_json::from_str(&fs::read_to_string(&settings_path).expect("read settings"))
+                .unwrap_or_else(|error| panic!("{name} settings: {error}"))
+        } else {
+            StackSettings::default()
+        };
         for format in FORMATS {
-            let rendered = render(&stack, format).await;
+            let rendered = render(&stack, &settings, format)
+                .await
+                .unwrap_or_else(|error| panic!("{name} {format}: {error}"));
             let file = Path::new(out).join(format!("{name}.{format}.txt"));
             fs::write(&file, rendered).expect("write output");
         }
     }
 }
 
-async fn render(source: &Stack, format: &str) -> String {
+/// Render one fixture; an error fails the whole comparison, since two equal errors would
+/// otherwise compare equal.
+async fn render(source: &Stack, settings: &StackSettings, format: &str) -> Result<String, String> {
     let (platform, base_platform, target) = match format {
         "cloudformation" => (Platform::Aws, None, None),
         "terraform-aws" => (Platform::Aws, None, Some(alien_terraform::TerraformTarget::Aws)),
@@ -97,15 +110,14 @@ async fn render(source: &Stack, format: &str) -> String {
         ),
         _ => (Platform::Kubernetes, None, None),
     };
-    let settings = StackSettings::default();
+    let settings = settings.clone();
     let mut stack = source.clone();
     let mut compute = settings.compute.clone();
     alien_core::remove_off_platform_gated_resources(&mut stack, platform, compute.as_mut());
     let source_stack = stack.clone();
-    let stack = match prepare(stack, platform, base_platform, &settings).await {
-        Ok(stack) => stack,
-        Err(error) => return format!("PREFLIGHT ERROR: {error}\n"),
-    };
+    let stack = prepare(stack, platform, base_platform, &settings)
+        .await
+        .map_err(|error| format!("preflights: {error}"))?;
     let result = match format {
         "cloudformation" => {
             let mut registry = alien_cloudformation::CfRegistry::built_in();
@@ -127,6 +139,8 @@ async fn render(source: &Stack, format: &str) -> String {
                     },
                     description: None,
                     management_trust: Default::default(),
+                    #[cfg(feature = "pins")]
+                    pins: Default::default(),
                 },
             )
             .and_then(|template| alien_cloudformation::to_yaml(&template))
@@ -158,6 +172,8 @@ async fn render(source: &Stack, format: &str) -> String {
                     registration: None,
                     helm_install: None,
                     supported_aws_regions: Vec::new(),
+                    #[cfg(feature = "pins")]
+                    pins: Default::default(),
                 },
             )
             .map(|module| {
@@ -169,10 +185,7 @@ async fn render(source: &Stack, format: &str) -> String {
             })
         }
     };
-    match result {
-        Ok(text) => text,
-        Err(error) => format!("RENDER ERROR: {error}\n"),
-    }
+    result.map_err(|error| format!("render: {error}"))
 }
 
 fn join_files(files: impl Iterator<Item = (String, String)>) -> String {

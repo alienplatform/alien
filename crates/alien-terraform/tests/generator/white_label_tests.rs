@@ -207,6 +207,7 @@ fn cloudformation(stack: &Stack, source: &Stack, settings: &StackSettings) -> Va
     let template = generate_cloudformation_template(
         stack,
         CloudFormationOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             registry: &registry,
             source_stack: source,
             target: CloudFormationTarget::Aws,

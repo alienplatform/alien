@@ -176,11 +176,17 @@ pub fn gcp_refused_predefined_role(role: &str) -> bool {
 /// but they cannot refuse an `/action`, so these go from its roles:
 /// - starting a Container Apps job takes a template that replaces the job's containers;
 /// - activating a revision runs an older release than the one the verifier applied;
-/// - assigning a user-assigned identity lets a resource outside that group run as it.
+/// - assigning a user-assigned identity lets a resource outside that group run as it;
+/// - deactivating or restarting a revision decides which signed revision serves;
+/// - a run command runs a script on a machine.
 const AZURE_VERIFIER_OWNED_ACTIONS: &[&str] = &[
     "Microsoft.App/jobs/start/action",
     "Microsoft.App/containerApps/revisions/activate/action",
+    "Microsoft.App/containerApps/revisions/deactivate/action",
+    "Microsoft.App/containerApps/revisions/restart/action",
     "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
+    "Microsoft.Compute/virtualMachines/runCommand/action",
+    "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/runCommand/action",
 ];
 
 /// Whether only the verifier may hold the Azure `action` in a protected install's roles.
