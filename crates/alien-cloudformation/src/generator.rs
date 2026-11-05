@@ -1875,7 +1875,7 @@ fn add_release_trust_anchor(
         }));
     }
     let prefix = "${AWS::StackName}";
-    let anchor = release_trust.anchor(prefix)?;
+    let anchor = release_trust.anchor(alien_core::Platform::Aws, prefix)?;
     // The anchor checks every field it holds: hex, base64, an enum and plain IDs. The only
     // substitutions in the text are the stack name.
     let value = serde_json::to_string(&anchor).map_err(|error| {

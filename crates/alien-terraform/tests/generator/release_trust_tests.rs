@@ -145,10 +145,86 @@ fn an_unprotected_deployment_has_no_anchor() {
 }
 
 #[test]
-fn only_aws_modules_take_the_cloud_anchor() {
-    for target in [TerraformTarget::Eks, TerraformTarget::Gcp] {
+fn gcp_setup_writes_the_anchor_into_a_secret_only_setup_writes() {
+    let module = render(&stack(), TerraformTarget::Gcp, protected());
+    assert_terraform_valid(&module, "protected GCP deployment anchor");
+    let blocks = release_trust_blocks(&module);
+    let [secret, version] = blocks.as_slice() else {
+        panic!("a secret and its version, got {}", blocks.len());
+    };
+    assert_eq!(secret.labels()[0].as_str(), "google_secret_manager_secret");
+    assert_eq!(
+        version.labels()[0].as_str(),
+        "google_secret_manager_secret_version"
+    );
+    assert!(
+        secret
+            .body()
+            .attributes()
+            .all(|attribute| attribute.key() != "labels"),
+        "no deployment label, so no grant conditioned on it reaches the anchor"
+    );
+
+    let mut context = Context::new();
+    context.declare_var(
+        "local",
+        hcl::value::Value::from_iter([("resource_prefix", hcl::value::Value::from("orders-prod"))]),
+    );
+    // Every secret grant is conditioned on a name starting with the resource prefix.
+    assert_eq!(
+        attribute(secret, "secret_id").evaluate(&context).unwrap(),
+        hcl::value::Value::from("_release-trust-orders-prod")
+    );
+    assert_eq!(
+        hcl::format::to_string(attribute(version, "secret")).unwrap(),
+        "google_secret_manager_secret.release_trust_anchor.id"
+    );
+    let hcl::Expression::FuncCall(call) = attribute(version, "secret_data") else {
+        panic!("the value is jsonencode(...)");
+    };
+    let document = call.args[0]
+        .evaluate(&context)
+        .expect("the anchor document evaluates");
+    let written = serde_json::to_vec(&document).expect("the document serializes");
+    assert_eq!(
+        Anchor::parse(&written).expect("the enforcers accept the anchor"),
+        Anchor {
+            project: "prj_123".to_string(),
+            deployment: "dep_456".to_string(),
+            protected: true,
+            signing: SIGNING.to_string(),
+            components: components(),
+            session_approval: SessionApproval::Developer,
+            inputs: Some("gcp-secret:_deployer-inputs-orders-prod".to_string()),
+            resource_prefix: Some("orders-prod".to_string()),
+        }
+    );
+    let registration = &module.files["registration.tf"];
+    assert!(
+        registration.contains("google_secret_manager_secret_version.release_trust_anchor"),
+        "{registration}"
+    );
+}
+
+#[test]
+fn kubernetes_modules_take_no_cloud_anchor() {
+    for target in [
+        TerraformTarget::Eks,
+        TerraformTarget::Gke,
+        TerraformTarget::Aks,
+    ] {
         let error = try_render(&stack(), target, protected())
-            .expect_err("Terraform writes the anchor only for AWS");
+            .expect_err("the chart's values hold a Kubernetes deployment's anchor");
         assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{target:?}");
     }
+}
+
+/// The resource blocks of `release_trust.tf`.
+fn release_trust_blocks(module: &ModuleFiles) -> Vec<hcl::Block> {
+    let contents = &module.files["release_trust.tf"];
+    hcl::parse(contents)
+        .expect("release_trust.tf parses")
+        .into_blocks()
+        .filter(|block| block.identifier() == "resource")
+        .collect()
 }
