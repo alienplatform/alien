@@ -764,6 +764,7 @@ async fn release_task_core(
                 &project_link.project_id,
                 workspace_query.as_deref(),
                 stack_by_platform,
+                signed_stacks,
                 git_metadata,
                 (!args.no_promote).then_some(args.channel.as_str()),
                 args.title.as_deref(),
@@ -969,6 +970,7 @@ async fn create_platform_release(
     project_id: &str,
     workspace: Option<&str>,
     stack: ManagerStackByPlatform,
+    signed_stacks: HashMap<String, alien_manager_api::types::SignedStatement>,
     git_metadata: Option<GitMetadata>,
     channel: Option<&str>,
     title: Option<&str>,
@@ -1005,6 +1007,20 @@ async fn create_platform_release(
         .promote(promote)
         .git_metadata(git_metadata)
         .title(parse_release_title(title)?);
+    // Signed statements are the same two strings in either SDK.
+    let body = if signed_stacks.is_empty() {
+        body
+    } else {
+        let signed: alien_platform_api::types::SignedStacksByPlatform =
+            serde_json::to_value(&signed_stacks)
+                .and_then(serde_json::from_value)
+                .into_alien_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: "Failed to carry the signed statements".to_string(),
+                    url: None,
+                })?;
+        body.signed_stacks(signed)
+    };
 
     let body = alien_platform_api::types::CreateReleaseRequest::try_from(body).map_err(|e| {
         AlienError::new(ErrorData::ApiRequestFailed {

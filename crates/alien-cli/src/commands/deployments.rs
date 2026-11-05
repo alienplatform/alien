@@ -3910,6 +3910,7 @@ async fn create_deployment_task(
 
     let environment_variable_count = variables.len();
     let request = NewDeploymentRequest {
+            release_protected: Default::default(),
         deployment_group_external_id: None,
         installation: None,
         base_platform: None,
