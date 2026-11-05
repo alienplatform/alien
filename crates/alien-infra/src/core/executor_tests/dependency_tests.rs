@@ -468,3 +468,154 @@ fn dependency_updates_respect_setup_authority() -> Result<()> {
     }
     Ok(())
 }
+
+/// A stack where `daemon` depends on `cluster`, both Running at v1, then a desired stack that
+/// changes both to v2 while `cluster` is still in the middle of its own update (or failed it).
+mod update_during_dependency_change {
+    use super::*;
+    use crate::core::state_utils::StackResourceStateExt;
+    use crate::worker::{TestWorkerController, TestWorkerState};
+    use alien_core::StackState;
+
+    fn stack(version: &str) -> Stack {
+        Stack::new("update-during-dependency-change".to_owned())
+            .add(
+                test_function_with_image("cluster", &format!("cluster-{version}")),
+                ResourceLifecycle::Live,
+            )
+            .add_with_dependencies(
+                test_function_with_image("daemon", &format!("daemon-{version}")),
+                ResourceLifecycle::Live,
+                vec![ResourceRef::new(Worker::RESOURCE_TYPE, "cluster")],
+            )
+            .build()
+    }
+
+    /// `cluster` is updating to v2 (or failed that update); `daemon` still runs v1.
+    async fn cluster_changing(
+        cluster_status: ResourceStatus,
+        dependents_may_update: bool,
+        updates_during_dependency_change: bool,
+    ) -> Result<StackState> {
+        let mut state = run_to_synced(&new_executor(&stack("v1"))?, new_test_state()).await?;
+        assert_all_running(&state, &["cluster", "daemon"]);
+
+        let cluster = state.resources.get_mut("cluster").expect("cluster state");
+        let mut controller = cluster.get_internal_controller_typed::<TestWorkerController>()?;
+        controller.dependents_may_update = dependents_may_update;
+        controller.state = TestWorkerState::UpdateCodePolling;
+        cluster.config = Resource::new(test_function_with_image("cluster", "cluster-v2"));
+        cluster.status = ResourceStatus::Updating;
+        if cluster_status == ResourceStatus::UpdateFailed {
+            let polling = controller.clone();
+            controller.state = TestWorkerState::UpdateFailed;
+            cluster.status = ResourceStatus::UpdateFailed;
+            cluster.set_last_failed_controller(Some(Box::new(polling)))?;
+        }
+        cluster.set_internal_controller(Some(Box::new(controller)))?;
+        assert_eq!(cluster.status, cluster_status);
+
+        let daemon = state.resources.get_mut("daemon").expect("daemon state");
+        let mut controller = daemon.get_internal_controller_typed::<TestWorkerController>()?;
+        controller.updates_during_dependency_change = updates_during_dependency_change;
+        daemon.set_internal_controller(Some(Box::new(controller)))?;
+        Ok(state)
+    }
+
+    fn daemon_image(state: &StackState) -> String {
+        match &state.resources["daemon"]
+            .config
+            .downcast_ref::<Worker>()
+            .expect("daemon is a worker")
+            .code
+        {
+            alien_core::WorkerCode::Image { image } => image.clone(),
+            other => panic!("expected an image worker, got {other:?}"),
+        }
+    }
+
+    /// Only both controllers together open the edge: the dependency says its dependents may
+    /// update now, and the dependent says it can update against it. Then the dependent's
+    /// update is planned and stepped while the dependency is still Updating. Either side
+    /// alone keeps today's order, where the dependent waits for its dependency to be Running.
+    #[tokio::test]
+    async fn dependent_updates_during_dependency_update_only_when_both_opt_in() -> Result<()> {
+        for (dependents_may_update, updates_during_dependency_change) in
+            [(true, true), (true, false), (false, true), (false, false)]
+        {
+            let both = dependents_may_update && updates_during_dependency_change;
+            let state = cluster_changing(
+                ResourceStatus::Updating,
+                dependents_may_update,
+                updates_during_dependency_change,
+            )
+            .await?;
+            let executor = new_executor(&stack("v2"))?;
+
+            let plan = executor.plan(&state)?;
+            assert_eq!(
+                plan.updates.contains_key("daemon"),
+                both,
+                "dependency opts in: {dependents_may_update}, dependent opts in: \
+                 {updates_during_dependency_change}"
+            );
+
+            let next = executor.step(state).await?.next_state;
+            assert_eq!(get_status(&next, "cluster"), Some(ResourceStatus::Updating));
+            if both {
+                assert_eq!(get_status(&next, "daemon"), Some(ResourceStatus::Updating));
+                assert_eq!(daemon_image(&next), "daemon-v2");
+            } else {
+                assert_eq!(get_status(&next, "daemon"), Some(ResourceStatus::Running));
+                assert_eq!(daemon_image(&next), "daemon-v1");
+            }
+        }
+
+        // Without both opt-ins the dependent still updates once its dependency is Running.
+        let mut state = cluster_changing(ResourceStatus::Updating, true, false).await?;
+        let cluster = state.resources.get_mut("cluster").expect("cluster state");
+        let mut controller = cluster.get_internal_controller_typed::<TestWorkerController>()?;
+        controller.state = TestWorkerState::Ready;
+        cluster.status = ResourceStatus::Running;
+        cluster.set_internal_controller(Some(Box::new(controller)))?;
+        assert!(new_executor(&stack("v2"))?
+            .plan(&state)?
+            .updates
+            .contains_key("daemon"));
+        Ok(())
+    }
+
+    /// The dependency failed its update and is open; so is a Retry of it. The dependent's
+    /// update is planned in both, also when its own earlier attempt failed.
+    #[tokio::test]
+    async fn dependent_updates_against_a_failed_dependency_and_its_retry() -> Result<()> {
+        let mut state = cluster_changing(ResourceStatus::UpdateFailed, true, true).await?;
+        let daemon = state.resources.get_mut("daemon").expect("daemon state");
+        let mut controller = daemon.get_internal_controller_typed::<TestWorkerController>()?;
+        controller.state = TestWorkerState::UpdateFailed;
+        daemon.status = ResourceStatus::UpdateFailed;
+        daemon.set_internal_controller(Some(Box::new(controller)))?;
+        let executor = new_executor(&stack("v2"))?;
+
+        assert!(
+            executor.plan(&state)?.updates.contains_key("daemon"),
+            "an open, failed dependency must not block the dependent"
+        );
+
+        let cluster = state.resources.get_mut("cluster").expect("cluster state");
+        assert!(
+            cluster.retry_failed()?,
+            "the failed cluster update is retried"
+        );
+        assert_eq!(cluster.status, ResourceStatus::Updating);
+        assert!(
+            executor.plan(&state)?.updates.contains_key("daemon"),
+            "the retried, open dependency must not block the dependent"
+        );
+        let next = executor.step(state).await?.next_state;
+        assert_eq!(get_status(&next, "cluster"), Some(ResourceStatus::Updating));
+        assert_eq!(get_status(&next, "daemon"), Some(ResourceStatus::Updating));
+        assert_eq!(daemon_image(&next), "daemon-v2");
+        Ok(())
+    }
+}

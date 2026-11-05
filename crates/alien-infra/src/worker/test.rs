@@ -216,6 +216,12 @@ pub struct TestWorkerController {
     /// Delete polls failed so far under SIMULATE_DELETE_POLL_FAILURE_COUNT.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub(crate) delete_poll_failures_count: u32,
+    /// As a dependency: its dependents may apply their updates in its current state.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) dependents_may_update: bool,
+    /// As a dependent: it can update against a dependency that is not Running.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) updates_during_dependency_change: bool,
 }
 
 #[controller]
