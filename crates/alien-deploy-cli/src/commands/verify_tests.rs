@@ -230,7 +230,7 @@ fn a_protected_stack_that_matches_its_signed_release_passes_on_one_screen() {
         render(&lines),
         format!(
             "Install              aws:111122223333:us-east-1:acme-prod\n\
-             Signing fingerprint  {display}   (set by this stack, 2026-11-04)\n\
+             Signing fingerprint  {display}   (set by setup, 2026-11-04)\n\
              Template             matches release 2026-11-04.3 · production · {template}  ✓\n\
              Parameters           fingerprint pinned · 4 customer choices allowed  ✓\n\
              Managed by           arn:aws:iam::999988887777:role/vendor-manager · with an external id\n\
@@ -250,7 +250,7 @@ fn a_tampered_template_fails() {
     assert_eq!(marks(&lines)[2], ("Template", Mark::Fail));
     assert!(lines[2]
         .text
-        .contains("is not the template of any release signed for production"));
+        .contains("is not the cloudformation template of any release signed for production"));
     // With no signed template to compare against, no parameter is a choice.
     assert_eq!(marks(&lines)[3], ("Parameters", Mark::Fail));
 }
@@ -341,7 +341,7 @@ fn a_stack_without_settings_or_ledger_is_not_reported_as_protected() {
     unprotected.settings = None;
     let error = check(&unprotected, now()).unwrap_err();
     assert!(
-        error.message.contains("this stack is not protected"),
+        error.message.contains("this install is not protected"),
         "{}",
         error.message
     );

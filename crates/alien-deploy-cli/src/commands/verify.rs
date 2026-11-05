@@ -137,30 +137,133 @@ fn failed(message: impl Into<String>) -> AlienError<ErrorData> {
     })
 }
 
-/// Check what was read. Errors are reasons nothing could be checked; a
-/// mismatch is a failed line.
+/// What a protected install holds of its signing state, and the signed
+/// statements the control plane serves for its platform.
+#[derive(Debug, Clone)]
+pub struct Signed {
+    /// The install id, derived from where the install was read.
+    pub install: InstallId,
+    /// The install's prefix (stack name, Helm release, ...).
+    pub prefix: String,
+    /// Where the signing settings live, for messages.
+    pub settings_name: String,
+    /// The signing settings, with when they were last written if known.
+    pub settings: Option<(Vec<u8>, Option<DateTime<Utc>>)>,
+    /// Where the ledger lives, for messages.
+    pub ledger_name: String,
+    /// The ledger.
+    pub ledger: Option<Vec<u8>>,
+    /// Signer lists, as the control plane serves them.
+    pub signer_lists: Vec<SignedStatement>,
+    /// Release ids and their statements for this platform, as the control
+    /// plane serves them.
+    pub releases: Vec<(String, SignedStatement)>,
+    /// The platform the statements must be for (`aws`, `gcp`, `azure`, `kubernetes`).
+    pub platform: &'static str,
+}
+
+/// The setup an install was created from, as read from it.
+#[derive(Debug, Clone)]
+pub struct Installed {
+    /// The setup template it must be (`cloudformation`, `terraform-gcp`, `helm`, ...).
+    pub template: &'static str,
+    /// `sha256:<hex>` of the installed template bytes.
+    pub digest: String,
+    /// What the customer chose.
+    pub choices: Choices,
+}
+
+/// What the customer chose when installing, checked against the signed allow-list.
+#[derive(Debug, Clone)]
+pub enum Choices {
+    /// CloudFormation parameters: the fingerprint parameter must hold the
+    /// pinned fingerprint, every other parameter must be allowed.
+    Parameters(BTreeMap<String, String>),
+    /// Helm values the installer set: each must be allowed, or equal the
+    /// chart's own default.
+    Values {
+        /// Values the installer set (`helm get values`).
+        set: serde_json::Map<String, serde_json::Value>,
+        /// The chart's `values.yaml`.
+        defaults: serde_json::Map<String, serde_json::Value>,
+    },
+    /// Not readable from the install (Terraform variables live in the
+    /// customer's own configuration); the reason is shown.
+    NotRead(&'static str),
+}
+
+/// Check what was read from a CloudFormation stack.
 pub fn check(observed: &Observed, now: DateTime<Utc>) -> Result<Vec<Line>> {
     let prefix = observed.stack_name.as_str();
-    let install = install_of(&observed.stack_id, prefix)?;
-    let mut lines = vec![line("Install", install.to_string(), Mark::Info)];
+    let signed = Signed {
+        install: install_of(&observed.stack_id, prefix)?,
+        prefix: prefix.to_string(),
+        settings_name: names::aws_settings(prefix),
+        settings: observed.settings.clone(),
+        ledger_name: names::aws_ledger(prefix),
+        ledger: observed.ledger.clone(),
+        signer_lists: observed.signer_lists.clone(),
+        releases: observed.releases.clone(),
+        platform: "aws",
+    };
+    let installed = Installed {
+        template: CLOUDFORMATION,
+        digest: sha256_digest(observed.template.as_bytes()),
+        choices: Choices::Parameters(observed.parameters.clone()),
+    };
+    // Who manages the install is the customer's choice; whoever it is, the
+    // signing limits hold. Shown so they know whom they let in.
+    let managing = observed
+        .parameters
+        .get("ManagingRoleArn")
+        .filter(|arn| !arn.is_empty());
+    let external_id = observed
+        .parameters
+        .get("ManagementExternalId")
+        .is_some_and(|id| !id.is_empty());
+    let managed_by = line(
+        "Managed by",
+        match managing {
+            Some(arn) if external_id => format!("{arn} · with an external id"),
+            Some(arn) => arn.clone(),
+            None => "no management role".to_string(),
+        },
+        Mark::Info,
+    );
+    check_signed(&signed, &installed, vec![managed_by], now)
+}
 
-    let (settings_bytes, set_at) = observed.settings.as_ref().ok_or_else(|| {
+/// `sha256:<hex>` of `bytes`.
+pub fn sha256_digest(bytes: &[u8]) -> String {
+    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+}
+
+/// Check an install against the releases signed for it. Errors are reasons
+/// nothing could be checked; a mismatch is a failed line. `extra` lines go
+/// after the customer's choices.
+pub fn check_signed(
+    signed: &Signed,
+    installed: &Installed,
+    extra: Vec<Line>,
+    now: DateTime<Utc>,
+) -> Result<Vec<Line>> {
+    let prefix = signed.prefix.as_str();
+    let mut lines = vec![line("Install", signed.install.to_string(), Mark::Info)];
+
+    let (settings_bytes, set_at) = signed.settings.as_ref().ok_or_else(|| {
         failed(format!(
-            "{} does not exist, so this stack is not protected: it runs whatever the vendor's control plane sends",
-            names::aws_settings(prefix)
+            "{} does not exist, so this install is not protected: it runs whatever the vendor's control plane sends",
+            signed.settings_name
         ))
     })?;
     let settings =
         SigningSettings::parse(settings_bytes, prefix).context(ErrorData::VerifyFailed {
-            message: format!(
-                "{} is not valid signing settings",
-                names::aws_settings(prefix)
-            ),
+            message: format!("{} is not valid signing settings", signed.settings_name),
         })?;
     lines.push(line(
         "Signing fingerprint",
         format!(
-            "{}   (set by this stack{})",
+            "{}   (set by setup{})",
             display_fingerprint(&settings.fingerprint),
             set_at
                 .map(|at| format!(", {}", at.format("%Y-%m-%d")))
@@ -169,19 +272,19 @@ pub fn check(observed: &Observed, now: DateTime<Utc>) -> Result<Vec<Line>> {
         Mark::Info,
     ));
 
-    let ledger_bytes = observed.ledger.as_ref().ok_or_else(|| {
+    let ledger_bytes = signed.ledger.as_ref().ok_or_else(|| {
         failed(format!(
-            "{} is missing; setup creates it, so the stack was changed outside setup",
-            names::aws_ledger(prefix)
+            "{} is missing; setup creates it, so the install was changed outside setup",
+            signed.ledger_name
         ))
     })?;
     let ledger = Ledger::parse(ledger_bytes, prefix).context(ErrorData::VerifyFailed {
-        message: format!("{} is not a valid ledger", names::aws_ledger(prefix)),
+        message: format!("{} is not a valid ledger", signed.ledger_name),
     })?;
     let trust = Trust::new(
         settings.clone(),
-        install.clone(),
-        &observed.signer_lists,
+        signed.install.clone(),
+        &signed.signer_lists,
         &ledger,
         now,
     )
@@ -194,30 +297,27 @@ pub fn check(observed: &Observed, now: DateTime<Utc>) -> Result<Vec<Line>> {
 
     // Only statements that verify here count; the rest are the control
     // plane's word.
-    let verified: Vec<(&str, alien_signing::Verified<ReleaseBody>)> = observed
+    let verified: Vec<(&str, alien_signing::Verified<ReleaseBody>)> = signed
         .releases
         .iter()
         .filter_map(|(id, statement)| {
             trust
                 .verify_release(statement, now)
                 .ok()
-                .filter(|verified| verified.body.platform == "aws")
+                .filter(|verified| verified.body.platform == signed.platform)
                 .map(|verified| (id.as_str(), verified))
         })
         .collect();
 
-    let digest = format!(
-        "sha256:{}",
-        hex::encode(Sha256::digest(observed.template.as_bytes()))
-    );
+    let digest = &installed.digest;
     let matching = verified
         .iter()
         .filter(|(_, verified)| {
             verified
                 .body
                 .setup
-                .get(CLOUDFORMATION)
-                .is_some_and(|template| template.sha256 == digest)
+                .get(installed.template)
+                .is_some_and(|template| template.sha256 == *digest)
         })
         .max_by_key(|(_, verified)| verified.sequence);
     let allowed: Vec<String> = match matching {
@@ -230,69 +330,22 @@ pub fn check(observed: &Observed, now: DateTime<Utc>) -> Result<Vec<Line>> {
                 ),
                 Mark::Pass,
             ));
-            verified.body.setup[CLOUDFORMATION].allowed.clone()
+            verified.body.setup[installed.template].allowed.clone()
         }
         None => {
             lines.push(line(
                 "Template",
                 format!(
-                    "{digest} is not the template of any release signed for {}",
-                    settings.channel
+                    "{digest} is not the {} template of any release signed for {}",
+                    installed.template, settings.channel
                 ),
                 Mark::Fail,
             ));
             Vec::new()
         }
     };
-
-    let mut refused = Vec::new();
-    let mut choices = 0;
-    for (name, value) in &observed.parameters {
-        if name == FINGERPRINT_PARAMETER {
-            if *value != settings.fingerprint {
-                refused.push(format!("{name} is {value}, not the pinned fingerprint"));
-            }
-        } else if allowed.contains(name) {
-            choices += 1;
-        } else {
-            refused.push(format!("{name} is not a choice the signed release allows"));
-        }
-    }
-    if !observed.parameters.contains_key(FINGERPRINT_PARAMETER) {
-        refused.push(format!("{FINGERPRINT_PARAMETER} is missing"));
-    }
-    lines.push(if refused.is_empty() {
-        line(
-            "Parameters",
-            format!(
-                "fingerprint pinned · {choices} customer choice{} allowed",
-                if choices == 1 { "" } else { "s" }
-            ),
-            Mark::Pass,
-        )
-    } else {
-        line("Parameters", refused.join("; "), Mark::Fail)
-    });
-
-    // Who manages the install is the customer's choice; whoever it is, the
-    // signing limits hold. Shown so they know whom they let in.
-    let managing = observed
-        .parameters
-        .get("ManagingRoleArn")
-        .filter(|arn| !arn.is_empty());
-    let external_id = observed
-        .parameters
-        .get("ManagementExternalId")
-        .is_some_and(|id| !id.is_empty());
-    lines.push(line(
-        "Managed by",
-        match managing {
-            Some(arn) if external_id => format!("{arn} · with an external id"),
-            Some(arn) => arn.clone(),
-            None => "no management role".to_string(),
-        },
-        Mark::Info,
-    ));
+    lines.push(choices_line(&installed.choices, &allowed, &settings));
+    lines.extend(extra);
 
     let list = trust.chain().current();
     let label = |id: &str| {
@@ -313,7 +366,7 @@ pub fn check(observed: &Observed, now: DateTime<Utc>) -> Result<Vec<Line>> {
         })?;
     lines.push(match running {
         None => line("Running", "nothing yet: no release has been accepted", Mark::Info),
-        Some(entry) => match running_release(&trust, &settings, observed, &entry.digest, now) {
+        Some(entry) => match running_release(&trust, &settings, &signed.releases, &entry.digest, now) {
             Ok((id, signers, still_trusted)) => {
                 let signed_by = signers
                     .iter()
@@ -370,6 +423,56 @@ pub fn check(observed: &Observed, now: DateTime<Utc>) -> Result<Vec<Line>> {
     Ok(lines)
 }
 
+/// The line for what the customer chose, against the signed `allowed` list.
+fn choices_line(choices: &Choices, allowed: &[String], settings: &SigningSettings) -> Line {
+    let mut refused = Vec::new();
+    let mut chosen = 0;
+    let (label, what) = match choices {
+        Choices::Parameters(parameters) => {
+            for (name, value) in parameters {
+                if name == FINGERPRINT_PARAMETER {
+                    if *value != settings.fingerprint {
+                        refused.push(format!("{name} is {value}, not the pinned fingerprint"));
+                    }
+                } else if allowed.contains(name) {
+                    chosen += 1;
+                } else {
+                    refused.push(format!("{name} is not a choice the signed release allows"));
+                }
+            }
+            if !parameters.contains_key(FINGERPRINT_PARAMETER) {
+                refused.push(format!("{FINGERPRINT_PARAMETER} is missing"));
+            }
+            ("Parameters", "fingerprint pinned · ")
+        }
+        Choices::Values { set, defaults } => {
+            for (name, value) in set {
+                if allowed.contains(name) {
+                    chosen += 1;
+                } else if defaults.get(name) != Some(value) {
+                    refused.push(format!(
+                        "{name} is set, and it is not a value the signed release allows"
+                    ));
+                }
+            }
+            ("Values", "")
+        }
+        Choices::NotRead(reason) => return line("Variables", *reason, Mark::Info),
+    };
+    if refused.is_empty() {
+        line(
+            label,
+            format!(
+                "{what}{chosen} customer choice{} allowed",
+                if chosen == 1 { "" } else { "s" }
+            ),
+            Mark::Pass,
+        )
+    } else {
+        line(label, refused.join("; "), Mark::Fail)
+    }
+}
+
 /// The release the ledger says runs, checked from the statement the control
 /// plane returned for its digest: not deny-listed, a release of this project
 /// for this install's channel, signed with the release role by the list
@@ -378,15 +481,14 @@ pub fn check(observed: &Observed, now: DateTime<Utc>) -> Result<Vec<Line>> {
 fn running_release<'a>(
     trust: &Trust,
     settings: &SigningSettings,
-    observed: &'a Observed,
+    releases: &'a [(String, SignedStatement)],
     digest: &str,
     now: DateTime<Utc>,
 ) -> std::result::Result<(&'a str, Vec<String>, bool), String> {
     trust
         .keeps(digest)
         .map_err(|_| "it is deny-listed on the current signer list".to_string())?;
-    let (id, opened) = observed
-        .releases
+    let (id, opened) = releases
         .iter()
         .find_map(|(id, statement)| {
             statement
@@ -616,7 +718,7 @@ async fn observe(
     let ledger = parameter(ssm, &names::aws_ledger(&stack_name))
         .await?
         .map(|(bytes, _)| bytes);
-    let (signer_lists, releases) = signed_releases(url, token).await?;
+    let (signer_lists, releases) = signed_releases(url, token, "aws").await?;
     Ok(Observed {
         stack_id,
         stack_name,
@@ -707,11 +809,12 @@ struct Lists {
     items: Vec<SignedStatement>,
 }
 
-/// The project's signer lists and its signed AWS releases, as the control
-/// plane serves them.
-async fn signed_releases(
+/// The project's signer lists and its releases signed for `platform`, as
+/// the control plane serves them.
+pub(crate) async fn signed_releases(
     url: &str,
     token: Option<&str>,
+    platform: &str,
 ) -> Result<(Vec<SignedStatement>, Vec<(String, SignedStatement)>)> {
     let client = reqwest::Client::new();
     let base = url.trim_end_matches('/');
@@ -757,7 +860,7 @@ async fn signed_releases(
                     reason: "the release list".to_string(),
                 })?;
         for item in page.items {
-            if let Some(statement) = item.signed_stacks.get("aws") {
+            if let Some(statement) = item.signed_stacks.get(platform) {
                 releases.push((item.id, statement.clone()));
             }
         }
@@ -772,9 +875,9 @@ async fn signed_releases(
         .iter()
         .find_map(|(_, statement)| statement.open().ok().map(|opened| opened.project))
     else {
-        return Err(failed(
-            "the control plane returned no signed AWS release to check this stack against",
-        ));
+        return Err(failed(format!(
+            "the control plane returned no release signed for {platform} to check this install against"
+        )));
     };
     let lists: Lists = serde_json::from_slice(
         &get(format!("/v1/projects/{project}/signer-lists"), Vec::new()).await?,
