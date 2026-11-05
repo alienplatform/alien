@@ -1,5 +1,6 @@
 /**
- * Private wire marker understood by alien-worker-runtime.
+ * Private wire marker understood by alien-worker-runtime. Must equal
+ * `ALIEN_SYSTEM_LOG_LINE_PREFIX` in alien-core.
  *
  * The runtime removes this marker before forwarding the message and, when the
  * log path supports structured metadata, records `alien.system=true`.

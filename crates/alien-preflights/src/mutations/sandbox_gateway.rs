@@ -169,9 +169,37 @@ mod tests {
     use super::*;
     use crate::{compile_time::AllowedUserResourcesCheck, CompileTimeCheck};
     use alien_core::{
-        EnvironmentVariablesSnapshot, ExternalBindings, SandboxCode, SandboxLifecyclePolicy,
-        StackSettings,
+        sandbox_egress::is_managed_gateway, EnvironmentVariablesSnapshot, ExternalBindings,
+        SandboxCode, SandboxLifecyclePolicy, StackSettings,
     };
+
+    fn application_container(id: &str) -> ResourceEntry {
+        ResourceEntry {
+            config: Resource::new(
+                Container::new(id.into())
+                    .code(ContainerCode::Image {
+                        image: "example.invalid/app:1".into(),
+                    })
+                    .cpu(ResourceSpec {
+                        min: "0.5".into(),
+                        desired: "1".into(),
+                    })
+                    .memory(ResourceSpec {
+                        min: "512Mi".into(),
+                        desired: "1Gi".into(),
+                    })
+                    .port(8080)
+                    .permissions("app".into())
+                    .build(),
+            ),
+            lifecycle: ResourceLifecycle::Live,
+            dependencies: vec![],
+            enabled_when: None,
+            display_name: None,
+            description: None,
+            remote_access: false,
+        }
+    }
 
     fn fixture() -> (Stack, StackState, DeploymentConfig) {
         let sandbox = Sandbox::new("subject".into())
@@ -252,6 +280,54 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(prepared, repeated);
+    }
+
+    /// Log consumers hide a managed gateway's output as Alien's own, so only the gateway
+    /// preparation installs may count as managed, never an application's container.
+    #[tokio::test]
+    async fn only_the_prepared_gateway_counts_as_managed() {
+        let (stack, state, config) = fixture();
+        let mut claiming = stack.clone();
+        claiming.resources.insert(
+            SANDBOX_EGRESS_GATEWAY_ID.into(),
+            application_container(SANDBOX_EGRESS_GATEWAY_ID),
+        );
+        let refused = AllowedUserResourcesCheck
+            .check(&claiming, Platform::Aws)
+            .await
+            .unwrap();
+        assert!(!refused.success);
+        assert_eq!(
+            refused.errors,
+            vec![format!(
+                "Resource ID '{SANDBOX_EGRESS_GATEWAY_ID}' is reserved for the sandbox gateway"
+            )]
+        );
+
+        let prepared = SandboxGatewayMutation
+            .mutate(stack, &state, &config)
+            .await
+            .unwrap();
+        assert!(is_managed_gateway(&prepared, SANDBOX_EGRESS_GATEWAY_ID));
+        assert!(!is_managed_gateway(&prepared, "subject"));
+
+        // Without an internet sandbox the id is an ordinary application id.
+        let mut application_stack = Stack::new("example".into()).build();
+        application_stack.resources.insert(
+            SANDBOX_EGRESS_GATEWAY_ID.into(),
+            application_container(SANDBOX_EGRESS_GATEWAY_ID),
+        );
+        assert!(
+            AllowedUserResourcesCheck
+                .check(&application_stack, Platform::Aws)
+                .await
+                .unwrap()
+                .success
+        );
+        assert!(!is_managed_gateway(
+            &application_stack,
+            SANDBOX_EGRESS_GATEWAY_ID
+        ));
     }
 
     #[tokio::test]
