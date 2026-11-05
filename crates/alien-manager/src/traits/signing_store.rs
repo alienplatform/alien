@@ -99,6 +99,12 @@ pub trait SigningStore: Send + Sync {
         statement: &SignedStatement,
     ) -> Result<(), AlienError>;
 
+    /// Every config statement stored for a deployment, lowest sequence first.
+    async fn config_statements(
+        &self,
+        deployment_id: &str,
+    ) -> Result<Vec<SignedStatement>, AlienError>;
+
     /// The config statement with the highest sequence for a deployment.
     async fn latest_config_statement(
         &self,

@@ -48,6 +48,7 @@ impl Modify for BearerSecurity {
         crate::routes::signing::create_pending_change,
         crate::routes::signing::get_pending_change,
         crate::routes::signing::resolve_pending_change,
+        crate::routes::signing::list_config_statements,
         crate::routes::signing::add_config_statement,
         crate::routes::channels::create_channel,
         crate::routes::channels::delete_channel,
@@ -99,6 +100,7 @@ impl Modify for BearerSecurity {
     components(schemas(
         // Signing
         crate::routes::signing::SignerListsResponse,
+        crate::routes::signing::ConfigStatementsResponse,
         crate::routes::signing::StatementRequest,
         crate::routes::signing::CreatePendingChangeRequest,
         crate::routes::signing::ResolvePendingChangeRequest,

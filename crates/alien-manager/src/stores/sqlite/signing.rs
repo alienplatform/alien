@@ -230,6 +230,20 @@ impl SigningStore for SqliteSigningStore {
         Ok(())
     }
 
+    async fn config_statements(
+        &self,
+        deployment_id: &str,
+    ) -> Result<Vec<SignedStatement>, AlienError> {
+        self.rows(
+            "SELECT statement FROM config_statements WHERE deployment_id = ?1 ORDER BY sequence ASC",
+            (deployment_id,),
+        )
+        .await?
+        .iter()
+        .map(|row| from_json(&RowParser::new(row).string(0, "statement")?))
+        .collect()
+    }
+
     async fn latest_config_statement(
         &self,
         deployment_id: &str,

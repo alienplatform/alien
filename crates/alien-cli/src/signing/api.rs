@@ -217,6 +217,19 @@ impl SigningApi {
         .await
     }
 
+    /// Every config statement stored for a deployment, lowest sequence
+    /// first. Untrusted: the caller verifies what it uses.
+    pub async fn config_statements(&self, deployment: &str) -> Result<Vec<SignedStatement>> {
+        let items: Items<SignedStatement> = self
+            .send(
+                Method::GET,
+                &format!("/v1/deployments/{deployment}/config-statements"),
+                None::<&()>,
+            )
+            .await?;
+        Ok(items.items)
+    }
+
     /// Store a signed config statement for a deployment.
     pub async fn publish_config(
         &self,

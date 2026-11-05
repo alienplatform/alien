@@ -741,7 +741,9 @@ mod tests {
         )
         .expect_err("a statement for another channel is refused");
         assert!(
-            error.message.contains("channel 'production', but the release goes to 'dev'"),
+            error
+                .message
+                .contains("channel 'production', but the release goes to 'dev'"),
             "{}",
             error.message
         );

@@ -739,7 +739,7 @@ async fn rotate_ci(ctx: &ExecutionMode, revoke: bool, repository: Option<&str>) 
         message: format!("CI key '{}' on the list doesn't parse", old.id),
     })?;
     let deny = if revoke {
-        signed_by(ctx, admin.chain.project(), &old.id, &old_key).await?
+        signed_by(ctx, &admin.api, admin.chain.project(), &old.id, &old_key).await?
     } else {
         Vec::new()
     };
@@ -760,7 +760,7 @@ async fn rotate_ci(ctx: &ExecutionMode, revoke: bool, repository: Option<&str>) 
     println!("Replacing the CI key of {repository}.");
     if revoke {
         println!(
-            "  Protected deployments will refuse the {} release(s) the old key signed.",
+            "  Protected deployments will refuse the {} release and config statement(s) the old key signed.",
             deny.len()
         );
     }
@@ -770,38 +770,82 @@ async fn rotate_ci(ctx: &ExecutionMode, revoke: bool, repository: Option<&str>) 
     Ok(())
 }
 
-/// Digests of the release statements the server lists that `key` signed as
-/// `signer`. Only signatures that verify count, so a server can't get other
-/// releases refused this way.
+/// Digests of the release and config statements the server holds that
+/// `key` signed as `signer`: every release of the project and every config
+/// statement of its deployments. Only signatures that verify count, so a
+/// server can't get other statements refused this way.
 async fn signed_by(
     ctx: &ExecutionMode,
+    api: &SigningApi,
     project: &str,
     signer: &str,
     key: &PublicKey,
 ) -> Result<Vec<String>> {
     let query = api::project_query(ctx, project).await?;
-    let releases = api::get_json(ctx, "/v1/releases", &query).await?;
-    let mut digests = Vec::new();
+    let releases = whole_page(
+        api::get_json(ctx, "/v1/releases", &query).await?,
+        "releases",
+    )?;
+    let mut statements = Vec::new();
     for release in releases["items"].as_array().into_iter().flatten() {
-        for statement in release["signedStacks"].as_object().into_iter().flatten() {
-            let Ok(statement) = serde_json::from_value::<SignedStatement>(statement.1.clone())
-            else {
-                continue;
-            };
-            let Ok(opened) = statement.open() else {
-                continue;
-            };
-            let ours = opened.kind == Kind::Release
-                && opened.project == project
-                && opened.signatures.iter().any(|signature| {
-                    signature.signer == signer && key.verify(&opened.bytes, &signature.sig).is_ok()
-                });
-            if ours && !digests.contains(&opened.digest) {
-                digests.push(opened.digest);
+        for (_, statement) in release["signedStacks"].as_object().into_iter().flatten() {
+            if let Ok(statement) = serde_json::from_value::<SignedStatement>(statement.clone()) {
+                statements.push(statement);
             }
         }
     }
-    Ok(digests)
+    let deployments = whole_page(
+        api::get_json(ctx, "/v1/deployments", &query).await?,
+        "deployments",
+    )?;
+    for deployment in deployments["items"].as_array().into_iter().flatten() {
+        let id = deployment["id"].as_str().ok_or_else(|| {
+            AlienError::new(ErrorData::SigningFailed {
+                message: "The server listed a deployment without an id".to_string(),
+            })
+        })?;
+        statements.extend(api.config_statements(id).await?);
+    }
+    Ok(digests_signed_by(&statements, project, signer, key))
+}
+
+/// `page` if it holds every item: revoking from part of a list would leave
+/// the rest accepted.
+fn whole_page(page: serde_json::Value, what: &str) -> Result<serde_json::Value> {
+    if page["nextCursor"].is_null() {
+        Ok(page)
+    } else {
+        Err(AlienError::new(ErrorData::SigningFailed {
+            message: format!(
+                "The server returned the project's {what} in pages; revoking needs all of them, so nothing was changed"
+            ),
+        }))
+    }
+}
+
+/// Digests of the release and config statements in `statements` that `key`
+/// signed as `signer`, each once.
+fn digests_signed_by(
+    statements: &[SignedStatement],
+    project: &str,
+    signer: &str,
+    key: &PublicKey,
+) -> Vec<String> {
+    let mut digests = Vec::new();
+    for statement in statements {
+        let Ok(opened) = statement.open() else {
+            continue;
+        };
+        let ours = matches!(opened.kind, Kind::Release | Kind::Config)
+            && opened.project == project
+            && opened.signatures.iter().any(|signature| {
+                signature.signer == signer && key.verify(&opened.bytes, &signature.sig).is_ok()
+            });
+        if ours && !digests.contains(&opened.digest) {
+            digests.push(opened.digest);
+        }
+    }
+    digests
 }
 
 async fn recover(ctx: &ExecutionMode) -> Result<()> {
@@ -1396,6 +1440,63 @@ mod tests {
                 "~ alice (alice@example.com): roles manage devices, release → release",
             ]
         );
+    }
+
+    fn statement(kind: Kind, project: &str, sequence: u64, by: &[(&str, u8)]) -> SignedStatement {
+        let mut statement = SignedStatement::new(
+            &alien_signing::Envelope {
+                kind: kind.as_str().to_string(),
+                project: project.to_string(),
+                install: (kind == Kind::Config)
+                    .then(|| "aws:111122223333:us-east-1:acme".to_string()),
+                sequence,
+                not_after: None,
+                signer_list_version: 1,
+                body: serde_json::json!({}),
+            }
+            .to_payload()
+            .unwrap(),
+        );
+        for (id, seed) in by {
+            statement = statement
+                .sign_with(id, &SecretKey::from_secret_bytes(&[*seed; 32]).unwrap())
+                .unwrap();
+        }
+        statement
+    }
+
+    #[test]
+    fn revoking_a_ci_key_refuses_its_releases_and_configs_only() {
+        let old = SecretKey::from_secret_bytes(&[7; 32]).unwrap().public_key();
+        let digest = |statement: &SignedStatement| statement.open().unwrap().digest;
+        let release = statement(Kind::Release, "prj", 1, &[("ci", 7)]);
+        let config = statement(Kind::Config, "prj", 2, &[("ci", 7), ("alice", 1)]);
+        let statements = vec![
+            release.clone(),
+            config.clone(),
+            release.clone(),
+            // Under the CI id, but another key: a server can't get it refused.
+            statement(Kind::Release, "prj", 3, &[("ci", 8)]),
+            // Signed by the old key for another project.
+            statement(Kind::Release, "other", 4, &[("ci", 7)]),
+            // Not a release or config.
+            statement(Kind::SignerList, "prj", 5, &[("ci", 7)]),
+            statement(Kind::Config, "prj", 6, &[("alice", 1)]),
+        ];
+        assert_eq!(
+            digests_signed_by(&statements, "prj", "ci", &old),
+            [digest(&release), digest(&config)]
+        );
+        assert!(whole_page(
+            serde_json::json!({"items": [], "nextCursor": null}),
+            "deployments"
+        )
+        .is_ok());
+        whole_page(
+            serde_json::json!({"items": [], "nextCursor": "c2"}),
+            "deployments",
+        )
+        .expect_err("a partial list is refused");
     }
 
     #[test]

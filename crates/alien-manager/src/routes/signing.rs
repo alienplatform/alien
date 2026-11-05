@@ -3,7 +3,7 @@
 //! - `GET/POST /v1/projects/{project}/signer-lists`
 //! - `GET/POST /v1/projects/{project}/pending-changes`
 //! - `GET /v1/pending-changes/{id}`, `POST /v1/pending-changes/{id}/resolution`
-//! - `POST /v1/deployments/{id}/config-statements`
+//! - `GET/POST /v1/deployments/{id}/config-statements`
 //!
 //! The manager stores and forwards these statements; it never verifies a
 //! signature, because enforcers in each deployment do, and the CLI verifies
@@ -52,7 +52,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/v1/deployments/{id}/config-statements",
-            post(add_config_statement),
+            get(list_config_statements).post(add_config_statement),
         )
 }
 
@@ -516,6 +516,48 @@ async fn resolve_pending_change(
     record.resolved_at = Some(Utc::now());
     match store.update_pending_change(&record).await {
         Ok(()) => Json(PendingChangeResponse::from(record)).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+/// Config statements stored for a deployment.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigStatementsResponse {
+    /// Every stored statement, lowest sequence first.
+    pub items: Vec<SignedStatement>,
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/v1/deployments/{id}/config-statements",
+    operation_id = "list_config_statements",
+    tag = "signing",
+    params(("id" = String, Path, description = "Deployment id")),
+    responses((status = 200, description = "Stored config statements", body = ConfigStatementsResponse)),
+    security(("bearer" = []))
+))]
+async fn list_config_statements(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let subject = match auth::require_auth(&state, &headers).await {
+        Ok(subject) => subject,
+        Err(error) => return error.into_response(),
+    };
+    let Some(store) = state.signing.clone() else {
+        return ErrorData::bad_request("signing is not available on this manager").into_response();
+    };
+    match state.deployment_store.get_deployment(&subject, &id).await {
+        Ok(Some(deployment)) if state.authz.can_read_deployment(&subject, &deployment) => {}
+        Ok(Some(_)) => return ErrorData::forbidden("Cannot read this deployment").into_response(),
+        Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
+        Err(error) => return error.into_response(),
+    }
+    match store.config_statements(&id).await {
+        Ok(items) => Json(ConfigStatementsResponse { items }).into_response(),
         Err(error) => error.into_response(),
     }
 }
