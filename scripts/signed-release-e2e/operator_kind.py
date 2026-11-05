@@ -135,7 +135,7 @@ class Suite:
         (self.sync_dir / "config-2-only.json").write_text(json.dumps(config_only))
         self.settings = (fixtures / "settings.json").read_text()
         self.ledger_seed = (fixtures / "ledger.json").read_text()
-        self.serve("release-1")
+        self.serve("binding-signed" if self.only == "bindings" else "release-1")
 
         run(["docker", "rm", "-f", self.manager], check=False)
         run(["docker", "run", "-d", "--name", self.manager, "--network", "kind",
@@ -308,6 +308,29 @@ class Suite:
         (self.evidence / "attacks").mkdir(exist_ok=True)
         (self.evidence / "attacks" / f"{name}.log").write_text(self.operator_logs(since))
 
+    @staticmethod
+    def data_bucket(app):
+        """The bucket the app's `data` binding names, if it has one."""
+        value = (app or {}).get("env", {}).get("ALIEN_DATA_BINDING")
+        try:
+            return json.loads(value).get("bucketName") if value else None
+        except ValueError:
+            return None
+
+    def bindings(self):
+        """A fresh install whose first release binds `data`, a resource
+        outside the cluster (frozen resources are added only at install).
+        Protected: the binding comes from signed config, never the manager.
+        Unprotected: the manager's binding lands."""
+        redirected = lambda app: self.data_bucket(app) == "attacker-bucket"
+        if not self.protected:
+            self.attack("binding-redirect", "binding-redirect", None, redirected)
+            return
+        self.lands("signed config binds a resource outside the cluster", "binding-signed", "release-12", "b")
+        bucket = self.data_bucket(self.app())
+        self.record("the app's binding is the signed one", bucket == "shop-data", f"bucket={bucket}")
+        self.attack("binding-redirect", "binding-redirect", None, redirected)
+
     def suite(self):
         message = lambda app: (app or {}).get("env", {}).get("MESSAGE")
         env = lambda app: (app or {}).get("env", {})
@@ -398,7 +421,7 @@ def main():
     parser.add_argument("--binaries", default=str(Path(os.environ.get("CARGO_TARGET_DIR", HERE.parent.parent / "target")) / "debug"))
     parser.add_argument("--prefix", help="when TEST_RESOURCE_PREFIX is unset")
     parser.add_argument("--down", action="store_true")
-    parser.add_argument("--only", choices=["config"], help="run one path, with debug logs")
+    parser.add_argument("--only", choices=["config", "bindings"], help="run one path, with debug logs")
     args = parser.parse_args()
     suite = Suite(args)
     if args.down:
@@ -406,7 +429,12 @@ def main():
         return
     try:
         suite.up()
-        suite.config_after_refusal() if args.only == "config" else suite.suite()
+        if args.only == "config":
+            suite.config_after_refusal()
+        elif args.only == "bindings":
+            suite.bindings()
+        else:
+            suite.suite()
     except Exception as error:
         suite.record("the run itself", False, f"{type(error).__name__}: {error}")
     finally:
