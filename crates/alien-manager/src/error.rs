@@ -351,6 +351,31 @@ pub enum ErrorData {
     )]
     SignedStatementConflict { reason: String },
 
+    /// Signing was already turned on for the project: a different signer
+    /// list version 1 is stored.
+    #[error(
+        code = "SIGNING_ALREADY_ON",
+        message = "Signing was already turned on for project '{project}' by {enabled_by}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SigningAlreadyOn {
+        project: String,
+        enabled_by: String,
+        enabled_at: String,
+    },
+
+    /// A signer list version skips one, or differs from the stored version.
+    #[error(
+        code = "SIGNER_LIST_CONFLICT",
+        message = "{reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SignerListConflict { reason: String },
+
     /// No pending change has this id.
     #[error(
         code = "PENDING_CHANGE_NOT_FOUND",

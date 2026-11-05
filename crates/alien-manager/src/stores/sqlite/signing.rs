@@ -72,31 +72,61 @@ fn parse_pending(row: &turso::Row) -> Result<PendingChangeRecord, AlienError> {
     from_json(&p.string(0, "record")?)
 }
 
+fn parse_signer_list(row: &turso::Row) -> Result<SignerListRecord, AlienError> {
+    let p = RowParser::new(row);
+    let version = p.i64(0, "version")?;
+    let created_at = p.string(3, "created_at")?;
+    Ok(SignerListRecord {
+        version: u64::try_from(version).map_err(|_| {
+            AlienError::new(GenericError {
+                message: format!("Stored signer list version {version} is negative"),
+            })
+        })?,
+        statement: from_json(&p.string(1, "statement")?)?,
+        created_by: p.string(2, "created_by")?,
+        created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
+            .into_alien_error()
+            .context(GenericError {
+                message: format!("Stored signer list time '{created_at}' is not RFC 3339"),
+            })?
+            .with_timezone(&chrono::Utc),
+    })
+}
+
 #[async_trait]
 impl SigningStore for SqliteSigningStore {
-    async fn signer_lists(&self, project_id: &str) -> Result<Vec<SignedStatement>, AlienError> {
+    async fn signer_lists(&self, project_id: &str) -> Result<Vec<SignerListRecord>, AlienError> {
         self.rows(
-            "SELECT statement FROM signer_lists WHERE project_id = ?1 ORDER BY version",
+            "SELECT version, statement, created_by, created_at FROM signer_lists WHERE project_id = ?1 ORDER BY version",
             (project_id,),
         )
         .await?
         .iter()
-        .map(|row| from_json(&RowParser::new(row).string(0, "statement")?))
+        .map(parse_signer_list)
         .collect()
     }
 
     async fn add_signer_list(
         &self,
         project_id: &str,
-        version: u64,
-        statement: &SignedStatement,
+        record: &SignerListRecord,
     ) -> Result<SignerListWrite, AlienError> {
-        let text = to_json(statement)?;
-        let version = version as i64;
+        let text = to_json(&record.statement)?;
+        let version = i64::try_from(record.version).map_err(|_| {
+            AlienError::new(GenericError {
+                message: format!("Signer list version {} is too large", record.version),
+            })
+        })?;
         let inserted = self
             .run(
-                "INSERT OR IGNORE INTO signer_lists (project_id, version, statement, created_at) VALUES (?1, ?2, ?3, ?4)",
-                (project_id, version, text.clone(), chrono::Utc::now().to_rfc3339()),
+                "INSERT OR IGNORE INTO signer_lists (project_id, version, statement, created_by, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                (
+                    project_id,
+                    version,
+                    text.clone(),
+                    record.created_by.as_str(),
+                    record.created_at.to_rfc3339(),
+                ),
             )
             .await?;
         if inserted == 1 {
@@ -104,17 +134,26 @@ impl SigningStore for SqliteSigningStore {
         }
         let stored = self
             .rows(
-                "SELECT statement FROM signer_lists WHERE project_id = ?1 AND version = ?2",
+                "SELECT version, statement, created_by, created_at FROM signer_lists WHERE project_id = ?1 AND version = ?2",
                 (project_id, version),
             )
             .await?;
         let stored = stored
             .first()
-            .map(|row| RowParser::new(row).string(0, "statement"))
-            .transpose()?;
-        Ok(match stored {
-            Some(stored) if stored == text => SignerListWrite::AlreadyStored,
-            _ => SignerListWrite::Conflict,
+            .map(parse_signer_list)
+            .transpose()?
+            .ok_or_else(|| {
+                AlienError::new(GenericError {
+                    message: format!(
+                        "Signer list version {} was neither stored nor found",
+                        record.version
+                    ),
+                })
+            })?;
+        Ok(if stored.statement == record.statement {
+            SignerListWrite::AlreadyStored
+        } else {
+            SignerListWrite::Conflict(stored)
         })
     }
 
@@ -189,6 +228,20 @@ impl SigningStore for SqliteSigningStore {
         )
         .await?;
         Ok(())
+    }
+
+    async fn config_statements(
+        &self,
+        deployment_id: &str,
+    ) -> Result<Vec<SignedStatement>, AlienError> {
+        self.rows(
+            "SELECT statement FROM config_statements WHERE deployment_id = ?1 ORDER BY sequence ASC",
+            (deployment_id,),
+        )
+        .await?
+        .iter()
+        .map(|row| from_json(&RowParser::new(row).string(0, "statement")?))
+        .collect()
     }
 
     async fn latest_config_statement(

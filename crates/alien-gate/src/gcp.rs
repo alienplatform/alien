@@ -1,5 +1,7 @@
-//! The gate's GCP calls: Cloud Run services and Secret Manager, with the
-//! token of the service account the gate runs as.
+//! The verifier's GCP calls: Parameter Manager for the signing settings and
+//! ledger, Secret Manager for deployer inputs, Cloud Run services and
+//! managed instance groups, with the token of the service account the
+//! verifier runs as.
 
 use std::collections::BTreeMap;
 
@@ -8,19 +10,25 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use serde_json::{json, Value};
 
+use alien_signing::settings::names;
+use alien_signing::{Ledger, Lookup, Workload};
+
 use crate::cloud_run::ServiceStore;
 use crate::error::{ErrorData, Result};
-use crate::state::GateState;
+use crate::machines;
+use crate::plan::{FunctionSpec, Place};
+use crate::trust::InstallStore;
+use crate::verifier::Backend;
 
 const METADATA_TOKEN: &str =
     "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
 
-/// Where the gate's token comes from.
+/// Where the verifier's token comes from.
 #[derive(Debug, Clone)]
 pub enum TokenSource {
-    /// The metadata server of the Cloud Run instance the gate runs on.
+    /// The metadata server of the Cloud Run instance the verifier runs on.
     Metadata,
-    /// A file holding an access token, for running the gate elsewhere.
+    /// A file holding an access token, for running the verifier elsewhere.
     File(String),
 }
 
@@ -147,7 +155,9 @@ impl Gcp {
         else {
             return Ok(None);
         };
-        let data = response["payload"]["data"].as_str().unwrap_or_default();
+        let data = response["payload"]["data"].as_str().ok_or_else(|| {
+            AlienError::new(failed(format!("secret {secret} carries no payload")))
+        })?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(data)
             .into_alien_error()
@@ -178,39 +188,298 @@ impl Gcp {
         Ok(())
     }
 
-    /// The gate's state from `secret`; empty when it has no version yet.
-    pub async fn load_state(&self, secret: &str) -> Result<GateState> {
-        match self.secret(secret).await? {
-            None => Ok(GateState::default()),
-            Some(text) => serde_json::from_str(&text).into_alien_error().context(
-                ErrorData::ConfigurationInvalid {
-                    message: format!("secret {secret} does not hold the gate's state"),
-                },
-            ),
+    /// Read `url`: what it holds, absent on 404, denied on 403.
+    async fn lookup(&self, url: &str, operation: &str) -> Result<Option<Value>> {
+        let response = self
+            .http
+            .get(url)
+            .bearer_auth(self.token().await?)
+            .send()
+            .await
+            .into_alien_error()
+            .context(failed(operation))?;
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .into_alien_error()
+            .context(failed(operation))?;
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
         }
+        if status == reqwest::StatusCode::FORBIDDEN {
+            return Err(AlienError::new(ErrorData::Refused {
+                reason: format!("{operation}: denied"),
+            }));
+        }
+        if !status.is_success() {
+            return Err(AlienError::new(failed(format!(
+                "{operation}: HTTP {status}: {}",
+                text.chars().take(2000).collect::<String>()
+            ))));
+        }
+        serde_json::from_str(&text)
+            .map(Some)
+            .into_alien_error()
+            .context(failed(format!("{operation}: the response is not JSON")))
     }
 
-    /// Store the gate's state as a new version of `secret`.
-    pub async fn store_state(&self, secret: &str, state: &GateState) -> Result<()> {
-        let value = serde_json::to_string(state).into_alien_error().context(
-            ErrorData::ConfigurationInvalid {
-                message: "the gate's state does not serialize".to_string(),
-            },
-        )?;
-        self.add_secret_version(secret, &value).await
+    fn parameter_url(&self, parameter: &str) -> String {
+        format!(
+            "https://parametermanager.googleapis.com/v1/projects/{}/locations/global/parameters/{parameter}",
+            self.project
+        )
     }
 
-    /// Deployer inputs from `secret`, a JSON object of strings.
-    pub async fn deployer_inputs(&self, secret: &str) -> Result<BTreeMap<String, String>> {
-        match self.secret(secret).await? {
-            None => Ok(BTreeMap::new()),
-            Some(text) => serde_json::from_str(&text).into_alien_error().context(
-                ErrorData::ConfigurationInvalid {
-                    message: format!("secret {secret} is not a JSON object of strings"),
-                },
-            ),
+    /// The newest version of Parameter Manager parameter `parameter`.
+    pub async fn parameter(&self, parameter: &str) -> Result<Lookup> {
+        let mut versions = Vec::new();
+        let mut page: Option<String> = None;
+        loop {
+            let mut url = format!("{}/versions?pageSize=100", self.parameter_url(parameter));
+            if let Some(token) = &page {
+                url.push_str(&format!("&pageToken={token}"));
+            }
+            let listed = match self
+                .lookup(&url, &format!("parametermanager list {parameter}"))
+                .await
+            {
+                Ok(Some(listed)) => listed,
+                Ok(None) => return Ok(Lookup::Absent),
+                Err(error) if matches!(error.error, Some(ErrorData::Refused { .. })) => {
+                    return Ok(Lookup::Denied)
+                }
+                Err(error) => return Err(error),
+            };
+            versions.extend(
+                listed["parameterVersions"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default(),
+            );
+            match listed["nextPageToken"].as_str() {
+                Some(token) if !token.is_empty() => page = Some(token.to_string()),
+                _ => break,
+            }
+        }
+        let Some(name) = newest_version(parameter, &versions)? else {
+            return Ok(Lookup::Absent);
+        };
+        let url = format!("https://parametermanager.googleapis.com/v1/{name}?view=FULL");
+        let version = self
+            .lookup(&url, &format!("parametermanager get {name}"))
+            .await?
+            .ok_or_else(|| AlienError::new(failed(format!("version {name} disappeared"))))?;
+        let data = version["payload"]["data"]
+            .as_str()
+            .ok_or_else(|| AlienError::new(failed(format!("version {name} carries no payload"))))?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .into_alien_error()
+            .context(failed(format!("parameter {parameter} is not base64")))?;
+        Ok(Lookup::Found(bytes))
+    }
+
+    /// Add a version holding `value` to parameter `parameter`.
+    pub async fn add_parameter_version(&self, parameter: &str, value: &str) -> Result<()> {
+        let id = format!("v{}", chrono::Utc::now().timestamp_millis());
+        let url = format!(
+            "{}/versions?parameterVersionId={id}",
+            self.parameter_url(parameter)
+        );
+        let body = json!({"payload": {
+            "data": base64::engine::general_purpose::STANDARD.encode(value),
+        }});
+        self.call(
+            reqwest::Method::POST,
+            &url,
+            Some(&body),
+            &format!("parametermanager create version {parameter}"),
+        )
+        .await?
+        .ok_or_else(|| AlienError::new(failed(format!("parameter {parameter} does not exist"))))?;
+        Ok(())
+    }
+
+    /// Resize managed instance group `name`, zonal when `zone` is given.
+    pub async fn resize_group(&self, name: &str, zone: Option<&str>, size: u32) -> Result<()> {
+        let url = resize_url(&self.project, &self.region, name, zone, size)?;
+        self.call(
+            reqwest::Method::POST,
+            url.as_str(),
+            None,
+            &format!("compute instanceGroupManagers.resize {name}"),
+        )
+        .await?
+        .ok_or_else(|| AlienError::new(failed(format!("instance group {name} does not exist"))))?;
+        Ok(())
+    }
+}
+
+/// The `instanceGroupManagers.resize` URL for MIG `name`: zonal in `zone`,
+/// which must be a zone of `region`, or regional in `region`.
+fn resize_url(
+    project: &str,
+    region: &str,
+    name: &str,
+    zone: Option<&str>,
+    size: u32,
+) -> Result<reqwest::Url> {
+    let (scope, place) = match zone {
+        Some(zone) => {
+            machines::check_zone(zone, region)?;
+            ("zones", zone)
+        }
+        None => ("regions", region),
+    };
+    let mut url = machines::segments_url(
+        "https://compute.googleapis.com/compute/v1",
+        &[
+            "projects",
+            project,
+            scope,
+            place,
+            "instanceGroupManagers",
+            name,
+            "resize",
+        ],
+    )?;
+    url.query_pairs_mut().append_pair("size", &size.to_string());
+    Ok(url)
+}
+
+/// The name of the newest of `versions`, or `None` when there are none.
+/// The newest being disabled is an error, never a reason to read an older
+/// one: disabling the latest ledger would otherwise bring back an older one.
+fn newest_version(parameter: &str, versions: &[Value]) -> Result<Option<String>> {
+    let mut newest: Option<(chrono::DateTime<chrono::FixedOffset>, &str, bool)> = None;
+    for version in versions {
+        let created = version["createTime"]
+            .as_str()
+            .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok());
+        let (Some(created), Some(name)) = (created, version["name"].as_str()) else {
+            return Err(AlienError::new(failed(format!(
+                "parameter {parameter} lists a version without a name or create time"
+            ))));
+        };
+        let disabled = version["disabled"].as_bool().unwrap_or(false);
+        if newest.is_none_or(|(newest_created, ..)| created > newest_created) {
+            newest = Some((created, name, disabled));
         }
     }
+    match newest {
+        None => Ok(None),
+        Some((_, name, true)) => Err(AlienError::new(ErrorData::Refused {
+            reason: format!(
+                "the newest version of parameter {parameter}, {name}, is disabled; an administrator must enable it or add a new one"
+            ),
+        })),
+        Some((_, name, false)) => Ok(Some(name.to_string())),
+    }
+}
+
+/// The install's Parameter Manager parameters and Secret Manager inputs.
+pub struct GcpInstall(pub Gcp);
+
+#[async_trait]
+impl InstallStore for GcpInstall {
+    async fn settings(&self, prefix: &str) -> Result<Lookup> {
+        self.0.parameter(&names::gcp_settings(prefix)).await
+    }
+
+    async fn ledger(&self, prefix: &str) -> Result<Lookup> {
+        self.0.parameter(&names::gcp_ledger(prefix)).await
+    }
+
+    async fn store_ledger(&self, prefix: &str, ledger: &Ledger) -> Result<()> {
+        self.0
+            .add_parameter_version(&names::gcp_ledger(prefix), &ledger.to_json())
+            .await
+    }
+
+    async fn input(&self, prefix: &str, name: &str) -> Result<Option<String>> {
+        self.0.secret(&names::gcp_input(prefix, name)).await
+    }
+
+    fn settings_name(&self, prefix: &str) -> String {
+        names::gcp_settings(prefix)
+    }
+
+    fn ledger_name(&self, prefix: &str) -> String {
+        names::gcp_ledger(prefix)
+    }
+}
+
+/// Cloud Run services and managed instance groups.
+pub struct GcpBackend(pub Gcp);
+
+#[async_trait]
+impl Backend for GcpBackend {
+    async fn binding_reads(
+        &self,
+        _place: &Place,
+        _workload: &Workload,
+    ) -> Result<BTreeMap<String, String>> {
+        Ok(BTreeMap::new())
+    }
+
+    async fn apply(&self, spec: &FunctionSpec) -> Result<()> {
+        if spec.architecture != "x86_64" {
+            return Err(AlienError::new(ErrorData::Refused {
+                reason: "Cloud Run runs only x86_64".to_string(),
+            }));
+        }
+        crate::cloud_run::apply(&self.0, spec).await.map(|_| ())
+    }
+
+    async fn check(&self, spec: &FunctionSpec) -> Result<()> {
+        let back = ServiceStore::get(&self.0, &spec.name).await?;
+        crate::cloud_run::check_read_back(spec, &back)
+    }
+
+    async fn resize(&self, target: &str, zone: Option<&str>, size: u32) -> Result<()> {
+        self.0.resize_group(target, zone, size).await
+    }
+}
+
+/// The project the verifier runs in and its region, from the metadata server.
+pub async fn metadata_identity() -> Result<(String, String)> {
+    let http = reqwest::Client::new();
+    let get = |path: &'static str| {
+        let http = http.clone();
+        async move {
+            http.get(format!(
+                "http://metadata.google.internal/computeMetadata/v1/{path}"
+            ))
+            .header("Metadata-Flavor", "Google")
+            .send()
+            .await
+            .into_alien_error()
+            .context(failed(format!("metadata {path}")))?
+            .text()
+            .await
+            .into_alien_error()
+            .context(failed(format!("metadata {path}")))
+        }
+    };
+    let project = get("project/project-id").await?;
+    // `projects/<number>/regions/<region>`.
+    let region = get("instance/region").await?;
+    let region = match region.trim().rsplit_once("/regions/") {
+        Some((_, region)) if !region.is_empty() && !region.contains('/') => region.to_string(),
+        _ => {
+            return Err(AlienError::new(failed(format!(
+                "metadata instance/region '{region}' is not projects/<number>/regions/<region>"
+            ))))
+        }
+    };
+    let project = project.trim();
+    if project.is_empty() {
+        return Err(AlienError::new(failed(
+            "metadata project/project-id is empty",
+        )));
+    }
+    Ok((project.to_string(), region))
 }
 
 #[async_trait]
@@ -244,5 +513,102 @@ impl ServiceStore for Gcp {
             })
         })?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn version(name: &str, created: &str, disabled: bool) -> Value {
+        json!({"name": name, "createTime": created, "disabled": disabled})
+    }
+
+    #[test]
+    fn the_newest_parameter_version_is_read_and_a_disabled_one_refuses() {
+        let older = version("p/versions/v1", "2026-11-01T00:00:00Z", false);
+        let newer = version("p/versions/v2", "2026-11-02T00:00:00Z", false);
+        assert_eq!(
+            newest_version("p", &[newer.clone(), older.clone()]).unwrap(),
+            Some("p/versions/v2".to_string())
+        );
+        assert_eq!(newest_version("p", &[]).unwrap(), None);
+
+        // Attack: disable the newest ledger so an older one is read.
+        let disabled = version("p/versions/v2", "2026-11-02T00:00:00Z", true);
+        let error = newest_version("p", &[older.clone(), disabled.clone()]).unwrap_err();
+        assert_eq!(
+            error.message,
+            "Refused: the newest version of parameter p, p/versions/v2, is disabled; an administrator must enable it or add a new one"
+        );
+        // Every version disabled is the same error, not an absent parameter.
+        let both = [
+            version("p/versions/v1", "2026-11-01T00:00:00Z", true),
+            disabled,
+        ];
+        assert!(newest_version("p", &both).is_err());
+        // A version the listing doesn't describe is an error too.
+        assert!(newest_version("p", &[json!({"name": "p/versions/v3"})]).is_err());
+        // Create times compare as times, whatever their precision.
+        let fractional = version("p/versions/v3", "2026-11-02T00:00:00.5Z", false);
+        assert_eq!(
+            newest_version("p", &[fractional, newer]).unwrap(),
+            Some("p/versions/v3".to_string())
+        );
+    }
+
+    #[test]
+    fn a_zonal_resize_goes_to_a_zone_of_the_verifiers_region() {
+        let url = resize_url(
+            "shop-prod",
+            "us-central1",
+            "acme-prod-compute-general",
+            Some("us-central1-a"),
+            4,
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://compute.googleapis.com/compute/v1/projects/shop-prod/zones/us-central1-a/instanceGroupManagers/acme-prod-compute-general/resize?size=4"
+        );
+        let url = resize_url(
+            "shop-prod",
+            "us-central1",
+            "acme-prod-compute-general",
+            None,
+            4,
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://compute.googleapis.com/compute/v1/projects/shop-prod/regions/us-central1/instanceGroupManagers/acme-prod-compute-general/resize?size=4"
+        );
+    }
+
+    #[test]
+    fn a_zone_that_is_not_one_of_the_verifiers_region_is_refused() {
+        for zone in [
+            // Attack: the zone carries the rest of a URL with its own size.
+            "us-central1-a/instanceGroupManagers/acme-prod-compute-big/resize?size=100&",
+            "us-central1-a?size=100",
+            "../../regions/us-central1",
+            "europe-west1-b",
+            "us-central1",
+            "us-central1-ab",
+            "US-CENTRAL1-A",
+        ] {
+            let error = resize_url(
+                "shop-prod",
+                "us-central1",
+                "acme-prod-compute-general",
+                Some(zone),
+                4,
+            )
+            .expect_err(zone);
+            assert_eq!(
+                error.message,
+                format!("Refused: '{zone}' is not a zone of the verifier's region us-central1"),
+            );
+        }
     }
 }

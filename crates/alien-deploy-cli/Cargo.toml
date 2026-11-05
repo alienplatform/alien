@@ -18,10 +18,12 @@ path = "src/main.rs"
 # Alien crates
 alien-core = { workspace = true }
 alien-aws-clients = { workspace = true }
+alien-gcp-clients = { workspace = true }
 alien-client-core = { workspace = true }
 alien-preflights = { workspace = true }
 alien-cli-common = { workspace = true }
 alien-error = { workspace = true }
+alien-signing = { workspace = true }
 alien-deployment = { workspace = true }
 alien-helm = { workspace = true }
 alien-signing = { workspace = true }

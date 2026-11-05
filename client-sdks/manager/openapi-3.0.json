@@ -1413,12 +1413,12 @@
         ]
       }
     },
-    "/v1/pending-changes/{id}/signatures": {
+    "/v1/pending-changes/{id}/resolution": {
       "post": {
         "tags": [
           "signing"
         ],
-        "operationId": "sign_pending_change",
+        "operationId": "resolve_pending_change",
         "parameters": [
           {
             "name": "id",
@@ -1434,7 +1434,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SignPendingChangeRequest"
+                "$ref": "#/components/schemas/ResolvePendingChangeRequest"
               }
             }
           },
@@ -1442,7 +1442,7 @@
         },
         "responses": {
           "200": {
-            "description": "Updated",
+            "description": "Resolved",
             "content": {
               "application/json": {
                 "schema": {
@@ -1474,11 +1474,25 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only changes with this status.",
+            "required": false,
+            "schema": {
+              "nullable": true,
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/PendingChangeStatus"
+                }
+              ]
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Pending changes",
+            "description": "Pending changes, newest first",
             "content": {
               "application/json": {
                 "schema": {
@@ -1602,10 +1616,24 @@
         },
         "responses": {
           "200": {
-            "description": "The same version was already stored"
+            "description": "The same version was already stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerListStored"
+                }
+              }
+            }
           },
           "201": {
-            "description": "Stored"
+            "description": "Stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerListStored"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2445,6 +2473,15 @@
             "allOf": [
               {
                 "$ref": "#/components/schemas/ExecutionClaim"
+              }
+            ]
+          },
+          "signedConfig": {
+            "nullable": true,
+            "description": "The deployment's newest signed config, on every sync, so a protected\nOperator applies new developer values without a new release.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SignedStatement"
               }
             ]
           },
@@ -7192,39 +7229,29 @@
       },
       "CreatePendingChangeRequest": {
         "type": "object",
-        "description": "Body of `POST /v1/projects/{project}/pending-changes`.",
+        "description": "Body of `POST /v1/projects/{project}/pending-changes`: the body of the\nnext signer list, for an admin to review and sign.",
         "required": [
-          "kind",
-          "summary"
+          "summary",
+          "basedOnVersion",
+          "body"
         ],
         "properties": {
-          "deploymentId": {
-            "type": "string",
-            "nullable": true
+          "basedOnVersion": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Signer list version the body was prepared from.",
+            "minimum": 0
           },
-          "device": {
+          "body": {
             "type": "object",
-            "description": "For device changes: the signer asking to be added.",
-            "nullable": true
-          },
-          "kind": {
-            "$ref": "#/components/schemas/PendingChangeKind"
-          },
-          "payload": {
-            "type": "string",
-            "description": "For statement changes: base64 payload bytes to sign.",
-            "nullable": true
-          },
-          "signatures": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Signature"
-            }
+            "description": "The next list's body (`previous`, `adminThreshold`, `signers`,\n`deny`, `recovered`)."
           },
           "summary": {
-            "type": "string"
+            "type": "string",
+            "description": "One line for lists, such as `bob-thinkpad asks to: release`."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "CreateReleaseChannelRequest": {
         "type": "object",
@@ -7719,6 +7746,7 @@
           "deploymentProtocolVersion",
           "projectId",
           "workspaceId",
+          "protected",
           "retryRequested",
           "createdAt"
         ],
@@ -7774,10 +7802,19 @@
             "type": "string",
             "description": "Required by the platform-SDK Deployment schema. Standalone is\nsingle-tenant; reuse the same synthetic project id used in the\ndeployment-groups route."
           },
+          "protected": {
+            "type": "boolean",
+            "description": "Whether the deployment's setup pins a signing fingerprint, so it runs\nonly signed releases. Only the install's own verification proves it."
+          },
           "retryRequested": {
             "type": "boolean"
           },
           "runtimeMetadata": {},
+          "signingFingerprint": {
+            "type": "string",
+            "description": "The fingerprint the deployment's setup pins.",
+            "nullable": true
+          },
           "stackSettings": {},
           "stackState": {},
           "status": {
@@ -12647,20 +12684,6 @@
           }
         }
       },
-      "MachineImagePublisher": {
-        "type": "object",
-        "description": "The publisher of the machine images compute clusters boot.",
-        "required": [
-          "awsAccountId"
-        ],
-        "properties": {
-          "awsAccountId": {
-            "type": "string",
-            "description": "The 12-digit AWS account ID that owns the machine images. IAM sees an image owner's\nalias in place of its ID when it has one, so this account must have none."
-          }
-        },
-        "additionalProperties": false
-      },
       "MachinesComputeClusterHeartbeatData": {
         "type": "object",
         "required": [
@@ -14030,69 +14053,60 @@
           }
         }
       },
-      "PendingChangeKind": {
-        "type": "string",
-        "description": "What a pending change asks for.",
-        "enum": [
-          "device",
-          "statement"
-        ]
-      },
       "PendingChangeResponse": {
         "type": "object",
         "required": [
           "id",
           "projectId",
-          "kind",
           "status",
           "summary",
-          "signatures",
+          "basedOnVersion",
+          "body",
           "createdAt"
         ],
         "properties": {
+          "basedOnVersion": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Signer list version the body was prepared from.",
+            "minimum": 0
+          },
+          "body": {
+            "type": "object",
+            "description": "The next list's body."
+          },
           "createdAt": {
             "type": "string"
           },
-          "deploymentId": {
-            "type": "string",
-            "nullable": true
-          },
-          "device": {
-            "type": "object",
-            "nullable": true
-          },
           "id": {
-            "type": "string"
-          },
-          "kind": {
-            "$ref": "#/components/schemas/PendingChangeKind"
-          },
-          "payload": {
             "type": "string",
-            "nullable": true
+            "description": "Also the request id the pairing code covers."
           },
           "projectId": {
             "type": "string"
           },
-          "signatures": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Signature"
-            }
+          "requestedBy": {
+            "type": "string",
+            "description": "Who filed it, display only.",
+            "nullable": true
           },
-          "statement": {
-            "nullable": true,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/SignedStatement"
-              }
-            ]
+          "resolvedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "signerListVersion": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Set when approved.",
+            "minimum": 0,
+            "nullable": true
           },
           "status": {
             "$ref": "#/components/schemas/PendingChangeStatus"
           },
           "summary": {
-            "type": "string"
+            "type": "string",
+            "description": "Display only."
           }
         }
       },
@@ -15203,6 +15217,15 @@
               "$ref": "#/components/schemas/SignedStatement"
             }
           },
+          "signing": {
+            "nullable": true,
+            "description": "Who signed the release and for which channel, decoded from the stored\nstatements for display. `null` when the release is unsigned.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReleaseSigning"
+              }
+            ]
+          },
           "stack": {
             "$ref": "#/components/schemas/StackByPlatform"
           },
@@ -15211,38 +15234,47 @@
           }
         }
       },
-      "ReleaseTrustSettings": {
+      "ReleaseSigner": {
         "type": "object",
-        "description": "What setup pins for a protected deployment.\n\nSetup copies these values into the anchor. Take them from the developer's install\nguide, not from the control plane.",
+        "description": "One signer of a release.",
         "required": [
-          "project",
-          "deployment",
-          "signing",
-          "components"
+          "id"
         ],
         "properties": {
-          "components": {
-            "type": "string",
-            "description": "`ecdsa-p256:<base64 SPKI>` key that signs enforcer and component builds."
+          "id": {
+            "type": "string"
           },
-          "deployment": {
+          "kind": {
             "type": "string",
-            "description": "This deployment's ID, which every deployment-bound statement must name."
+            "description": "`device`, `ci` or `recovery`; absent when the signer list doesn't name it.",
+            "nullable": true
           },
-          "project": {
+          "label": {
             "type": "string",
-            "description": "Project whose signed statements the deployment accepts."
-          },
-          "sessionApproval": {
-            "type": "string",
-            "description": "Who approves exec and debug sessions."
-          },
-          "signing": {
-            "type": "string",
-            "description": "`SHA256:<64 hex>` fingerprint of the developer's signer list version 1."
+            "nullable": true
           }
-        },
-        "additionalProperties": false
+        }
+      },
+      "ReleaseSigning": {
+        "type": "object",
+        "description": "A signed release's channel and signers, for the release badge. Display\nonly: decoded, never verified, because the manager isn't trusted to.",
+        "required": [
+          "channel",
+          "signers"
+        ],
+        "properties": {
+          "channel": {
+            "type": "string",
+            "description": "Channel the statements sign, such as `production`."
+          },
+          "signers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReleaseSigner"
+            },
+            "description": "Signers of the statements, with their label and kind from the signer\nlist version they name."
+          }
+        }
       },
       "RemoteAwsBedrockAiBinding": {
         "type": "object",
@@ -15976,6 +16008,14 @@
           }
         }
       },
+      "ResolutionStatus": {
+        "type": "string",
+        "description": "How a pending change ended.",
+        "enum": [
+          "approved",
+          "rejected"
+        ]
+      },
       "ResolveBindingKind": {
         "type": "string",
         "enum": [
@@ -16512,6 +16552,26 @@
           }
         ],
         "description": "One approved remote Storage binding paired with credentials for the same\nprovider. The discriminant makes cross-provider combinations impossible."
+      },
+      "ResolvePendingChangeRequest": {
+        "type": "object",
+        "description": "Body of `POST /v1/pending-changes/{id}/resolution`.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "signerListVersion": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The signer list version that carries the change; required when approved.",
+            "minimum": 0,
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/ResolutionStatus"
+          }
+        },
+        "additionalProperties": false
       },
       "ResourceEntry": {
         "type": "object",
@@ -17603,30 +17663,6 @@
           "automatic"
         ]
       },
-      "SignPendingChangeRequest": {
-        "type": "object",
-        "description": "Body of `POST /v1/pending-changes/{id}/signatures`.",
-        "required": [
-          "signatures"
-        ],
-        "properties": {
-          "signatures": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Signature"
-            }
-          },
-          "statement": {
-            "nullable": true,
-            "description": "The complete signed statement, once it has every signature it needs.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/SignedStatement"
-              }
-            ]
-          }
-        }
-      },
       "Signature": {
         "type": "object",
         "description": "One signature over a statement's payload.",
@@ -17641,7 +17677,7 @@
           },
           "signer": {
             "type": "string",
-            "description": "Id of the signer on the signer list, or `components` for the\ncomponents key."
+            "description": "Id of the signer on the signer list."
           }
         },
         "additionalProperties": false
@@ -17667,6 +17703,21 @@
           }
         },
         "additionalProperties": false
+      },
+      "SignerListStored": {
+        "type": "object",
+        "description": "Answer to storing a signer list version.",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The version stored.",
+            "minimum": 0
+          }
+        }
       },
       "SignerListsResponse": {
         "type": "object",
@@ -18018,15 +18069,6 @@
               }
             ]
           },
-          "machineImagePublisher": {
-            "nullable": true,
-            "description": "Who publishes the machine images compute clusters boot. Setup writes it into the\nmanagement identity's policy, so the control plane can boot no other image.\nRequired on AWS when the management identity can launch machines.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/MachineImagePublisher"
-              }
-            ]
-          },
           "network": {
             "nullable": true,
             "description": "Network configuration for the stack (VPC/VNet settings).\nIf `None`, an isolated VPC with NAT is auto-created when the stack has resources\nthat require networking (e.g., containers). Set explicitly to customize:\n`UseDefault` for the provider's default network (fast, dev/test only),\n`Create` for an isolated VPC with managed NAT (production), or `ByoVpc*`\nto reference an existing customer-managed VPC.",
@@ -18054,18 +18096,18 @@
             },
             "description": "Provider quota identities whose preflight failures become visible warnings\nfor this deployment. Checks still run; deploy-time provider limits still apply.\nUnknown identities are rejected. An empty list restores normal blocking."
           },
-          "releaseTrust": {
-            "nullable": true,
-            "description": "Protection for this deployment. When set, setup writes the anchor the deployment's\nenforcers read, and they run only what the developer signed. Setup alone writes it:\na later change here does not change the installed anchor.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/ReleaseTrustSettings"
-              }
-            ]
-          },
           "setupManagement": {
             "$ref": "#/components/schemas/SetupManagement",
             "description": "Ongoing authority over infrastructure normally owned by setup. Automatic requires\nan explicit CLI setup grant; changing this setting alone never grants that authority."
+          },
+          "signing": {
+            "nullable": true,
+            "description": "Release signing for this install. When set, setup writes the signing settings\n(the fingerprint, the install's prefix and the channel) where only setup can change\nthem, and the install's enforcers run only what the vendor signed. Setup alone writes\nthem: changing this later does not change what an install already pinned.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StackSigning"
+              }
+            ]
           },
           "telemetry": {
             "$ref": "#/components/schemas/TelemetryMode",
@@ -18076,6 +18118,25 @@
             "description": "How updates are delivered.\n- auto: Updates deploy automatically (default)\n- approval-required: Updates wait for explicit approval"
           }
         }
+      },
+      "StackSigning": {
+        "type": "object",
+        "description": "What setup pins for a protected install.\n\nTake the values from the vendor's install guide or signed release, not from the\ncontrol plane.",
+        "required": [
+          "fingerprint",
+          "channel"
+        ],
+        "properties": {
+          "channel": {
+            "type": "string",
+            "description": "Release channel the install follows, such as `production`."
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "`SHA256:<64 hex>` fingerprint of the vendor's signer list version 1."
+          }
+        },
+        "additionalProperties": false
       },
       "StackState": {
         "type": "object",

@@ -476,6 +476,123 @@ fn render_helm(
     write_files_or_stdout(args.output.as_deref(), &files)
 }
 
+/// Every setup template a release names for `platform`, rendered from
+/// `stack` with `settings`: `(template name, files, customer parameters)`.
+/// The files are the bytes customers install; a release signs their digest.
+pub(crate) async fn setup_files(
+    stack: &alien_core::Stack,
+    platform: Platform,
+    settings: &StackSettings,
+) -> Result<Vec<(String, Vec<(String, String)>, Vec<String>)>> {
+    let terraform = |target: alien_terraform::TerraformTarget, stack: &alien_core::Stack| {
+        let registry = terraform_registry();
+        alien_terraform::generate_terraform_module(
+            stack,
+            target,
+            alien_terraform::TerraformOptions {
+                display_name: None,
+                registry: &registry,
+                stack_settings: settings.clone(),
+                registration: None,
+                helm_install: None,
+                supported_aws_regions: Vec::new(),
+            },
+        )
+        .map(|module| {
+            module
+                .iter()
+                .map(|(path, contents)| (path.to_string(), contents.to_string()))
+                .collect::<Vec<_>>()
+        })
+        .map_err(render_error)
+    };
+    match platform {
+        Platform::Aws => {
+            let prepared =
+                prepare_stack_for_render(stack.clone(), Platform::Aws, None, settings, false)
+                    .await?;
+            let registry = cloudformation_registry();
+            let template = alien_cloudformation::generate_cloudformation_template(
+                &prepared,
+                alien_cloudformation::CloudFormationOptions {
+                    registry: &registry,
+                    source_stack: stack,
+                    target: alien_cloudformation::CloudFormationTarget::Aws,
+                    stack_settings: settings.clone(),
+                    setup_target: "aws".to_string(),
+                    setup_fingerprint: "release".to_string(),
+                    setup_fingerprint_version: 1,
+                    registration: alien_cloudformation::RegistrationMode::OutputsFallback,
+                    description: None,
+                    management_trust: Default::default(),
+                },
+            )
+            .map_err(render_error)?;
+            // Every parameter but the pinned fingerprint is a customer choice.
+            let allowed = template
+                .parameters
+                .keys()
+                .filter(|name| name.as_str() != "SigningFingerprint")
+                .cloned()
+                .collect();
+            let yaml = alien_cloudformation::to_yaml(&template).map_err(render_error)?;
+            Ok(vec![
+                (
+                    "cloudformation".to_string(),
+                    vec![("template.yaml".to_string(), yaml)],
+                    allowed,
+                ),
+                (
+                    "terraform-aws".to_string(),
+                    terraform(alien_terraform::TerraformTarget::Aws, &prepared)?,
+                    Vec::new(),
+                ),
+            ])
+        }
+        Platform::Gcp | Platform::Azure => {
+            let (target, name) = if platform == Platform::Gcp {
+                (alien_terraform::TerraformTarget::Gcp, "terraform-gcp")
+            } else {
+                (alien_terraform::TerraformTarget::Azure, "terraform-azure")
+            };
+            let prepared =
+                prepare_stack_for_render(stack.clone(), platform, None, settings, false).await?;
+            Ok(vec![(
+                name.to_string(),
+                terraform(target, &prepared)?,
+                Vec::new(),
+            )])
+        }
+        Platform::Kubernetes => {
+            let prepared = prepare_stack_for_render(
+                stack.clone(),
+                Platform::Kubernetes,
+                None,
+                settings,
+                false,
+            )
+            .await?;
+            let registry = alien_helm::HelmRegistry::built_in();
+            let chart = alien_helm::generate_helm_chart(
+                &prepared,
+                alien_helm::HelmOptions {
+                    registry: &registry,
+                    stack_settings: settings.clone(),
+                    chart_name: prepared.id().to_string(),
+                },
+            )
+            .map_err(render_error)?;
+            Ok(vec![(
+                "helm".to_string(),
+                chart.files.into_iter().collect(),
+                Vec::new(),
+            )])
+        }
+        // Machines join with `join`, and local and test stacks have no setup.
+        Platform::Machines | Platform::Local | Platform::Test => Ok(Vec::new()),
+    }
+}
+
 fn write_single_or_stdout(
     output_dir: Option<&Path>,
     file_name: &str,

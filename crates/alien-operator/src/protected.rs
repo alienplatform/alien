@@ -1,16 +1,29 @@
 //! Protected mode: run only releases the developer signed.
 //!
-//! An installer turns it on with the anchor its setup writes
-//! (`OPERATOR_RELEASE_TRUST_ANCHOR`): the project, this deployment, and the
-//! fingerprint of the developer's first signer list. The manager delivers the
-//! signer list chain and the signed `release/v2` statements; this Operator
-//! verifies both against the anchor and decides nothing on the manager's
-//! word that runs code or redirects data:
+//! A chart whose stack pins signing writes the signing settings to the kept
+//! ConfigMap `<release>-signing`. At start the Operator reads it itself and
+//! derives the install id from the cluster (`k8s:<kube-system uid>:<ns>/<release>`);
+//! nothing here comes from the manager or the Operator's own environment.
+//! The install's ledger (the trust root it accepted state under, the signer
+//! list version, and the release and config floors) lives in the kept
+//! ConfigMap `<release>-signing-ledger`, which setup creates beside the
+//! settings, and is copied to the Operator's database. At start the two
+//! merge, entry by entry, to the higher; every accepted target raises both,
+//! the ConfigMap first. So losing the database never lowers a floor. Once
+//! the ledger holds a trust root, settings that are missing or different
+//! stop the Operator (protection is sticky).
+//!
+//! The manager delivers the signer list chain and the signed `release/v2`
+//! statements; this Operator verifies both and decides nothing on the
+//! manager's word that runs code or redirects data:
 //!
 //! - a target's stack comes only from its verified statement; the manager may
 //!   move an image to another registry, never change its digest;
-//! - a release older than the one applied, or the applied sequence with other
+//! - a release below the ledger's floor, or the floor's sequence with other
 //!   bytes, is refused, and so is a signer list older than the one accepted;
+//! - the release this install accepted keeps running after its signer leaves
+//!   the list (only the list's deny-list stops it), so removing a key never
+//!   stops the Operator from deploying what it already accepted;
 //! - the deployment configuration is rebuilt here: environment variables only
 //!   for the input mappings the signed stack declares, developer inputs and
 //!   configurable env only from the deployment's signed `config/v1`, deployer
@@ -22,20 +35,31 @@
 //! Refused targets change nothing: they are logged and left unapplied.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
 
 use alien_core::release_statement::{relocate_images, signed_stack};
 use alien_core::sync::TargetDeployment;
 use alien_core::{
     DeploymentConfig, EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot,
-    ExternalBindings, Platform, ReleaseInfo, SignedStatement, Stack, StackInputProvider,
-    StackSettings,
+    ExternalBindings, OtlpConfig, Platform, ReleaseInfo, SignedStatement, Stack,
+    StackInputProvider, StackSettings,
 };
-use alien_signing::{ConfigBody, InstallId, Kind, Ledger, ReleaseBody, SigningSettings, Trust};
+use alien_error::{AlienError, Context};
+use alien_signing::settings::names;
+use alien_signing::{
+    ConfigBody, InstallId, Kind, Ledger, Lookup, ReleaseBody, SigningSettings, Trust,
+};
+use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
+use crate::error::ErrorData;
+
 /// Component name of the Operator in a release's signed components.
 pub const OPERATOR_COMPONENT: &str = "operator";
+
+/// Key of the settings JSON in the `<release>-signing` ConfigMap.
+pub const SETTINGS_KEY: &str = "settings";
 
 /// What an installation pinned, and who it is.
 #[derive(Debug, Clone)]
@@ -44,25 +68,314 @@ pub struct ReleaseSigning {
     pub settings: SigningSettings,
     /// This install.
     pub install: InstallId,
+    /// The install's ledger outside the Operator's database.
+    pub ledger: Arc<dyn InstallLedger>,
 }
 
-/// The newest release this Operator accepted, and the signer chain it was
-/// verified with. Persisted so a restart can't be used to replay an older
-/// release or an older signer list.
+/// What this Operator keeps between passes and restarts: the install's
+/// ledger, the signer chain it verified (the ledger holds only its head),
+/// and the Operator build the accepted release allows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AcceptedRelease {
-    /// Its sequence.
-    pub sequence: u64,
-    /// `sha256:<hex>` of its statement bytes.
-    pub digest: String,
-    /// The Operator image digest it allows, if any.
-    pub operator_digest: Option<String>,
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OperatorTrust {
+    /// The install's ledger.
+    pub ledger: Ledger,
     /// The signer list chain, oldest first.
     pub signer_lists: Vec<SignedStatement>,
-    /// The sequence of the newest `config/v1` it applied, if any.
+    /// The Operator image digest the accepted release allows, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_sequence: Option<u64>,
+    pub operator_digest: Option<String>,
+}
+
+impl OperatorTrust {
+    /// What an install that accepted nothing yet keeps.
+    pub fn new(prefix: &str) -> Self {
+        Self {
+            ledger: Ledger::new(prefix),
+            signer_lists: Vec::new(),
+            operator_digest: None,
+        }
+    }
+
+    /// The sequence of the newest config applied, if any.
+    pub fn config_sequence(&self) -> Option<u64> {
+        self.ledger.config.as_ref().map(|entry| entry.sequence)
+    }
+}
+
+/// Key of the ledger JSON in ConfigMap `<release>-signing-ledger`.
+pub const LEDGER_KEY: &str = "ledger";
+
+/// The kept ConfigMap holding the install's ledger.
+pub fn ledger_config_map(release: &str) -> String {
+    format!("{release}-signing-ledger")
+}
+
+/// Where the install keeps its ledger outside the Operator's database.
+#[async_trait]
+pub trait InstallLedger: Send + Sync + std::fmt::Debug {
+    /// The stored ledger JSON.
+    async fn load(&self) -> crate::error::Result<Lookup>;
+    /// Raise the stored ledger to `ledger`: each entry keeps the higher of
+    /// the two, and a fork is an error. The ledger must already exist.
+    async fn store(&self, ledger: &Ledger) -> crate::error::Result<()>;
+}
+
+/// The install ledger in a ConfigMap.
+#[derive(Debug)]
+pub struct ConfigMapLedger {
+    /// The Kubernetes API.
+    pub client: Arc<dyn alien_k8s_clients::ConfigMapApi>,
+    /// The Operator's namespace.
+    pub namespace: String,
+    /// `<release>-signing-ledger`.
+    pub name: String,
+}
+
+impl ConfigMapLedger {
+    fn failed(&self, what: &str) -> ErrorData {
+        ErrorData::ConfigurationError {
+            message: format!("{what} ConfigMap {}/{}", self.namespace, self.name),
+        }
+    }
+}
+
+#[async_trait]
+impl InstallLedger for ConfigMapLedger {
+    async fn load(&self) -> crate::error::Result<Lookup> {
+        use alien_k8s_clients::ErrorData as K8sError;
+        match self
+            .client
+            .get_config_map(&self.namespace, &self.name)
+            .await
+        {
+            Ok(config_map) => Ok(Lookup::Found(
+                ledger_entry(&self.namespace, &self.name, config_map.data)?.into_bytes(),
+            )),
+            Err(error) => match error.error {
+                Some(K8sError::RemoteResourceNotFound { .. }) => Ok(Lookup::Absent),
+                Some(K8sError::RemoteAccessDenied { .. }) => Ok(Lookup::Denied),
+                _ => Err(error).context(self.failed("reading")),
+            },
+        }
+    }
+
+    async fn store(&self, ledger: &Ledger) -> crate::error::Result<()> {
+        let mut config_map = self
+            .client
+            .get_config_map(&self.namespace, &self.name)
+            .await
+            .context(self.failed("reading"))?;
+        let stored = ledger_entry(&self.namespace, &self.name, config_map.data.clone())?;
+        let mut merged = Ledger::parse(stored.as_bytes(), &ledger.prefix).context(
+            ErrorData::ConfigurationError {
+                message: format!(
+                    "ConfigMap {}/{} does not hold this install's ledger",
+                    self.namespace, self.name
+                ),
+            },
+        )?;
+        let before = merged.clone();
+        merged
+            .merge(ledger)
+            .context(ErrorData::ConfigurationError {
+                message: format!(
+                    "the ledger in ConfigMap {}/{} forks from the one being written",
+                    self.namespace, self.name
+                ),
+            })?;
+        if merged == before {
+            return Ok(());
+        }
+        config_map
+            .data
+            .get_or_insert_with(Default::default)
+            .insert(LEDGER_KEY.to_string(), merged.to_json());
+        // The resourceVersion read above makes a concurrent write a conflict.
+        self.client
+            .replace_config_map(&self.namespace, &self.name, &config_map)
+            .await
+            .context(self.failed("writing"))?;
+        Ok(())
+    }
+}
+
+fn ledger_entry(
+    namespace: &str,
+    name: &str,
+    data: Option<BTreeMap<String, String>>,
+) -> crate::error::Result<String> {
+    data.and_then(|mut data| data.remove(LEDGER_KEY))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: format!("ConfigMap {namespace}/{name} has no '{LEDGER_KEY}' entry"),
+            })
+        })
+}
+
+/// Where the Operator reads its settings and its cluster's identity.
+#[async_trait]
+pub trait ClusterReads: Send + Sync {
+    /// The settings JSON in ConfigMap `name` of `namespace`.
+    async fn settings(&self, namespace: &str, name: &str) -> crate::error::Result<Lookup>;
+    /// UID of the `kube-system` namespace.
+    async fn cluster_uid(&self) -> crate::error::Result<String>;
+}
+
+/// Find this Operator's signing settings: the ConfigMap `<release>-signing`
+/// in its own namespace, and what it keeps: the install's ledger merged
+/// with `stored`, what the Operator's database holds. Missing settings mean
+/// an unprotected install, unless a ledger holds a trust root (D8); a
+/// ConfigMap the Operator may not read is an error, never "unprotected".
+pub async fn find_signing(
+    reads: &dyn ClusterReads,
+    ledger: Arc<dyn InstallLedger>,
+    namespace: &str,
+    release: &str,
+    stored: Option<&OperatorTrust>,
+) -> crate::error::Result<Option<(ReleaseSigning, OperatorTrust)>> {
+    let name = names::kubernetes_settings(release);
+    let ledger_name = ledger_config_map(release);
+    let refused = |message: String| AlienError::new(ErrorData::ConfigurationError { message });
+    let settings = match reads.settings(namespace, &name).await? {
+        Lookup::Found(bytes) => SigningSettings::parse(&bytes, release).context(
+            ErrorData::ConfigurationError {
+                message: format!("the signing settings in ConfigMap {namespace}/{name} are not valid"),
+            },
+        )?,
+        Lookup::Absent => {
+            // An unprotected chart grants no read of the ledger ConfigMap,
+            // so only a ledger that reads back can say protection is gone.
+            let kept = match ledger.load().await? {
+                Lookup::Found(bytes) => Some(serde_json::from_slice::<Ledger>(&bytes).map_err(
+                    |error| {
+                        refused(format!(
+                            "ConfigMap {namespace}/{ledger_name} does not hold a ledger: {error}"
+                        ))
+                    },
+                )?),
+                Lookup::Absent | Lookup::Denied => None,
+            };
+            let sticky = kept
+                .iter()
+                .chain(stored.map(|stored| &stored.ledger))
+                .find(|ledger| ledger.is_sticky());
+            if let Some(sticky) = sticky {
+                return Err(refused(format!(
+                    "ConfigMap {namespace}/{name} with the signing settings is gone, and this install accepted signed state under fingerprint {}; nothing new runs until an administrator restores it",
+                    sticky.fingerprint.as_deref().unwrap_or_default()
+                )));
+            }
+            return Ok(None);
+        }
+        Lookup::Denied => {
+            return Err(refused(format!(
+                "the Operator may not read ConfigMap {namespace}/{name}, so it can't tell whether this install is protected"
+            )))
+        }
+    };
+    let mut merged = match ledger.load().await? {
+        Lookup::Found(bytes) => Ledger::parse(&bytes, &settings.prefix).context(
+            ErrorData::ConfigurationError {
+                message: format!("ConfigMap {namespace}/{ledger_name} does not hold this install's ledger"),
+            },
+        )?,
+        Lookup::Absent => {
+            return Err(refused(format!(
+                "ConfigMap {namespace}/{ledger_name} with the install's ledger is missing; setup creates it with the signing settings, and the Operator never starts a protected install from an empty ledger"
+            )))
+        }
+        Lookup::Denied => {
+            return Err(refused(format!(
+                "the Operator may not read ConfigMap {namespace}/{ledger_name} with the install's ledger"
+            )))
+        }
+    };
+    if let Some(stored) = stored {
+        merged
+            .merge(&stored.ledger)
+            .context(ErrorData::ConfigurationError {
+                message: "the Operator's database holds a ledger that forks from the install's"
+                    .to_string(),
+            })?;
+    }
+    let install = InstallId::Kubernetes {
+        cluster: reads.cluster_uid().await?,
+        namespace: namespace.to_string(),
+        release: release.to_string(),
+    };
+    merged
+        .check_root(Some(&settings.fingerprint), &install)
+        .context(ErrorData::ConfigurationError {
+            message: "the signing settings differ from the ones this install accepted state under"
+                .to_string(),
+        })?;
+    let kept = OperatorTrust {
+        ledger: merged,
+        signer_lists: stored
+            .map(|stored| stored.signer_lists.clone())
+            .unwrap_or_default(),
+        operator_digest: stored.and_then(|stored| stored.operator_digest.clone()),
+    };
+    Ok(Some((
+        ReleaseSigning {
+            settings,
+            install,
+            ledger,
+        },
+        kept,
+    )))
+}
+
+/// The cluster reads through the Kubernetes API.
+pub struct KubernetesReads<'a>(pub &'a dyn alien_k8s_clients::ConfigMapApi);
+
+#[async_trait]
+impl ClusterReads for KubernetesReads<'_> {
+    async fn settings(&self, namespace: &str, name: &str) -> crate::error::Result<Lookup> {
+        use alien_k8s_clients::ErrorData as K8sError;
+        match self.0.get_config_map(namespace, name).await {
+            Ok(config_map) => {
+                let value = config_map
+                    .data
+                    .and_then(|mut data| data.remove(SETTINGS_KEY))
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::ConfigurationError {
+                            message: format!(
+                                "ConfigMap {namespace}/{name} has no '{SETTINGS_KEY}' entry"
+                            ),
+                        })
+                    })?;
+                Ok(Lookup::Found(value.into_bytes()))
+            }
+            Err(error) => match error.error {
+                Some(K8sError::RemoteResourceNotFound { .. }) => Ok(Lookup::Absent),
+                Some(K8sError::RemoteAccessDenied { .. }) => Ok(Lookup::Denied),
+                _ => Err(error).context(ErrorData::ConfigurationError {
+                    message: format!("reading ConfigMap {namespace}/{name}"),
+                }),
+            },
+        }
+    }
+
+    async fn cluster_uid(&self) -> crate::error::Result<String> {
+        let namespace =
+            self.0
+                .get_namespace("kube-system")
+                .await
+                .context(ErrorData::ConfigurationError {
+                    message: "reading the kube-system namespace for the install id".to_string(),
+                })?;
+        namespace
+            .metadata
+            .uid
+            .filter(|uid| !uid.is_empty())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: "the kube-system namespace has no UID".to_string(),
+                })
+            })
+    }
 }
 
 /// A release that passed verification.
@@ -74,28 +387,13 @@ pub struct VerifiedRelease {
     pub digest: String,
     /// The stack, read from the signed bytes.
     pub stack: Stack,
-    /// The Operator image digest the release allows.
-    pub operator_digest: Option<String>,
-    /// The signer chain the release verified against.
-    pub signer_lists: Vec<SignedStatement>,
-    /// Signers whose signatures counted.
+    /// Signers whose signatures counted; empty for the release the install
+    /// already accepted, which is kept rather than verified again.
     pub signers: Vec<String>,
     /// The verified release body.
     pub body: ReleaseBody,
-    /// The sequence of the `config/v1` applied with it, if any.
-    pub config_sequence: Option<u64>,
-}
-
-impl From<&VerifiedRelease> for AcceptedRelease {
-    fn from(verified: &VerifiedRelease) -> Self {
-        Self {
-            sequence: verified.sequence,
-            digest: verified.digest.clone(),
-            operator_digest: verified.operator_digest.clone(),
-            signer_lists: verified.signer_lists.clone(),
-            config_sequence: verified.config_sequence,
-        }
-    }
+    /// The trust it verified under.
+    pub trust: Trust,
 }
 
 /// Why a target was refused.
@@ -140,6 +438,13 @@ pub enum Refusal {
     /// The carried stack differs from the one its statement signs.
     #[error("the stack the manager sent differs from the signed release")]
     StackChanged,
+    /// The manager asked to replace volumes with snapshots. A snapshot holds
+    /// whatever the manager chose, so a protected installation takes none.
+    #[error(
+        "the manager asked to restore volumes ({}); a protected installation takes no volume restores from its manager",
+        .0.join(", ")
+    )]
+    VolumeRestores(Vec<String>),
 }
 
 impl<T: alien_error::AlienErrorData + Clone + std::fmt::Debug + Serialize>
@@ -161,79 +466,94 @@ impl ReleaseSigning {
     /// air-gapped bundles and the deployment loop all check releases here.
     ///
     /// The signer chain starts from the one this Operator accepted, so a
-    /// manager can deliver newer list versions but never an older one.
+    /// manager can deliver newer list versions but never an older one. The
+    /// release at the ledger's floor is the one this install accepted: it is
+    /// kept unless the current list denies it, even if its signer has left
+    /// the list since. Any other release must verify under the current list
+    /// and be above the floor.
     pub fn verify_release(
         &self,
         platform: Platform,
         release: &ReleaseInfo,
-        accepted: Option<&AcceptedRelease>,
+        stored: &OperatorTrust,
     ) -> Result<VerifiedRelease, Refusal> {
         let signed = release.signed.as_ref().ok_or(Refusal::Unsigned)?;
-        let chain = match accepted {
-            Some(accepted) if !accepted.signer_lists.is_empty() => &accepted.signer_lists,
-            _ => &release.signer_lists,
+        let chain = if stored.signer_lists.is_empty() {
+            &release.signer_lists
+        } else {
+            &stored.signer_lists
         };
         let now = Utc::now();
-        let ledger = Ledger::new(&self.settings.prefix);
         let mut trust = Trust::new(
             self.settings.clone(),
             self.install.clone(),
             chain,
-            &ledger,
+            &stored.ledger,
             now,
         )?;
         trust.extend_chain(&release.signer_lists, now)?;
-        let verified = trust.verify_release(signed, now)?;
-        let stack = signed_stack(&verified.body, platform)?;
+        let opened = signed.open()?;
+        let accepted = stored.ledger.release.as_ref();
+        let (sequence, digest, body, signers) =
+            if accepted.is_some_and(|floor| floor.digest == opened.digest) {
+                trust.keeps(&opened.digest)?;
+                let body: ReleaseBody = opened.body()?;
+                (opened.sequence, opened.digest, body, Vec::new())
+            } else {
+                if let Some(floor) = accepted {
+                    if opened.sequence <= floor.sequence {
+                        return Err(Refusal::OlderRelease {
+                            applied: floor.sequence,
+                            actual: opened.sequence,
+                        });
+                    }
+                }
+                let verified = trust.verify_release(signed, now)?;
+                (
+                    verified.sequence,
+                    verified.digest,
+                    verified.body,
+                    verified.signers.into_iter().collect(),
+                )
+            };
+        let stack = signed_stack(&body, platform)?;
         if relocate_images(&stack, &release.stack) != release.stack {
             return Err(Refusal::StackChanged);
         }
         Ok(VerifiedRelease {
-            sequence: verified.sequence,
-            digest: verified.digest,
+            sequence,
+            digest,
             stack,
-            operator_digest: verified.body.components.get(OPERATOR_COMPONENT).cloned(),
-            signer_lists: trust.chain().statements().to_vec(),
-            signers: verified.signers.into_iter().collect(),
-            body: verified.body,
-            config_sequence: None,
+            signers,
+            body,
+            trust,
         })
     }
 
-    /// The target to store for `target`, and the release it verified. Refuses
-    /// a release older than `accepted`.
+    /// The target to store for `target`, the release it verified, and what
+    /// the Operator keeps after accepting it. Refuses a release or config
+    /// below the ledger's floors, and a target without config once the
+    /// install accepted one.
     pub fn protect_target(
         &self,
         platform: Platform,
         local_input_values: &serde_json::Map<String, serde_json::Value>,
-        accepted: Option<&AcceptedRelease>,
+        stored: &OperatorTrust,
         target: &TargetDeployment,
-    ) -> Result<(TargetDeployment, VerifiedRelease), Refusal> {
-        let verified = self.verify_release(platform, &target.release_info, accepted)?;
-        if let Some(accepted) = accepted {
-            let older = verified.sequence < accepted.sequence
-                || (verified.sequence == accepted.sequence && verified.digest != accepted.digest);
-            if older {
-                return Err(Refusal::OlderRelease {
-                    applied: accepted.sequence,
-                    actual: verified.sequence,
-                });
-            }
-        }
-        let mut verified = verified;
+    ) -> Result<(TargetDeployment, VerifiedRelease, OperatorTrust), Refusal> {
+        let verified = self.verify_release(platform, &target.release_info, stored)?;
+        let mut ledger = stored.ledger.clone();
+        ledger.raise(Kind::Release, verified.sequence, &verified.digest)?;
         let signed_config = match &target.signed_config {
-            None => ConfigBody::default(),
+            None => {
+                ledger.require(Kind::Config, false)?;
+                ConfigBody::default()
+            }
             Some(signed) => {
-                let now = Utc::now();
-                let trust = Trust::new(
-                    self.settings.clone(),
-                    self.install.clone(),
-                    &verified.signer_lists,
-                    &Ledger::new(&self.settings.prefix),
-                    now,
-                )?;
-                let config = trust.verify::<ConfigBody>(signed, Kind::Config, now)?;
-                if let Some(applied) = accepted.and_then(|accepted| accepted.config_sequence) {
+                let config = verified
+                    .trust
+                    .verify_config(signed, &verified.body, Utc::now())?;
+                if let Some(applied) = stored.config_sequence() {
                     if config.sequence < applied {
                         return Err(Refusal::OlderConfig {
                             applied,
@@ -241,14 +561,20 @@ impl ReleaseSigning {
                         });
                     }
                 }
-                config.body.check(&verified.body)?;
-                verified.config_sequence = Some(config.sequence);
+                ledger.raise(Kind::Config, config.sequence, &config.digest)?;
                 config.body
             }
+        };
+        verified.trust.record(&mut ledger)?;
+        let kept = OperatorTrust {
+            ledger,
+            signer_lists: verified.trust.chain().statements().to_vec(),
+            operator_digest: verified.body.components.get(OPERATOR_COMPONENT).cloned(),
         };
         let config = protect_config(
             platform,
             &target.release_info.stack,
+            &verified.body.configurable.env,
             local_input_values,
             &signed_config,
             &target.config,
@@ -260,6 +586,7 @@ impl ReleaseSigning {
                 signed_config: target.signed_config.clone(),
             },
             verified,
+            kept,
         ))
     }
 }
@@ -288,18 +615,44 @@ pub fn developer_inputs(stack: &Stack) -> Vec<&str> {
         .collect()
 }
 
+/// OTLP export to `endpoint`, the signed config's OTLP/HTTP base URL, which
+/// the signing crate already limited to `https://`.
+fn signed_telemetry(endpoint: &str) -> OtlpConfig {
+    let base = endpoint.trim_end_matches('/');
+    OtlpConfig {
+        logs_endpoint: format!("{base}/v1/logs"),
+        logs_auth_header: String::new(),
+        metrics_endpoint: Some(format!("{base}/v1/metrics")),
+        metrics_auth_header: None,
+        resource_attributes: HashMap::new(),
+    }
+}
+
 /// Rebuild the manager's configuration from what this installation and the
 /// signed stack allow. Every field is decided here, so a field added later must
 /// be decided too.
 fn protect_config(
     platform: Platform,
     stack: &Stack,
+    configurable_env: &[String],
     local_input_values: &serde_json::Map<String, serde_json::Value>,
     signed_config: &ConfigBody,
     manager: &DeploymentConfig,
 ) -> Result<DeploymentConfig, Refusal> {
+    if !manager.volume_restores.is_empty() {
+        return Err(Refusal::VolumeRestores(
+            manager
+                .volume_restores
+                .iter()
+                .map(|restore| restore.request_id.clone())
+                .collect(),
+        ));
+    }
+    // Names the release lets a signed config set may arrive too: the
+    // configuration applied under an older config still carries them. Their
+    // values are rebuilt below from the signed config, which may drop them.
     let mut allowed = input_environment_names(stack);
-    allowed.extend(signed_config.env.keys().map(String::as_str));
+    allowed.extend(configurable_env.iter().map(String::as_str));
     let unexpected: BTreeSet<String> = manager
         .environment_variables
         .variables
@@ -361,12 +714,17 @@ fn protect_config(
         input_values,
         // Secret inputs are resolved from the deployment's own vault.
         stored_secret_input_ids: manager.stored_secret_input_ids.clone(),
-        // Timing, telemetry, pull credentials and deletion: an outage at worst.
+        // Logs can carry customer data, so they go only where the signed
+        // config says, with no headers the manager chose.
+        monitoring: signed_config
+            .telemetry_endpoint
+            .as_deref()
+            .map(signed_telemetry),
+        volume_restores: Vec::new(),
+        // Timing, pull credentials and deletion: an outage at worst.
         allow_frozen_changes: manager.allow_frozen_changes,
-        monitoring: manager.monitoring.clone(),
         manager_url: manager.manager_url.clone(),
         deployment_token: manager.deployment_token.clone(),
-        volume_restores: manager.volume_restores.clone(),
         deletion_policy: manager.deletion_policy,
         // Where data goes and what the deployment is called come from this
         // installation; the deployment loop fills these from its settings.
@@ -389,57 +747,164 @@ fn protect_config(
     })
 }
 
-/// A protected configuration for tests: an anchor pinning a one-key signer
-/// list for `project`.
+/// The release key of the test project.
 #[cfg(test)]
-pub(crate) fn test_signing(project: &str) -> ReleaseSigning {
-    let key = alien_signing::SoftwareKey::from_secret_bytes(&[21; 32]).unwrap();
-    let list = test_signer_list(project, &key);
-    ReleaseSigning {
-        anchor: Anchor {
-            project: project.to_string(),
-            deployment: format!("dep_{project}"),
-            protected: true,
-            signing: alien_signing::fingerprint(&list.open().unwrap().digest),
-            components: alien_signing::SoftwareKey::from_secret_bytes(&[22; 32])
-                .unwrap()
-                .public_key()
-                .as_str()
-                .to_string(),
-            session_approval: Default::default(),
-            inputs: None,
-            resource_prefix: None,
-        },
+pub(crate) fn test_key(seed: u8) -> alien_signing::SecretKey {
+    let mut secret = [seed; 32];
+    secret[0] = 1;
+    alien_signing::SecretKey::from_secret_bytes(&secret).unwrap()
+}
+
+/// One `notAfter` for every test signer list in this process, so building
+/// the same list twice gives the same digest.
+#[cfg(test)]
+fn test_not_after() -> chrono::DateTime<Utc> {
+    static NOT_AFTER: std::sync::OnceLock<chrono::DateTime<Utc>> = std::sync::OnceLock::new();
+    *NOT_AFTER.get_or_init(|| Utc::now() + chrono::Duration::days(60))
+}
+
+/// A statement of `kind` for `project`, unsigned.
+#[cfg(test)]
+pub(crate) fn test_statement<B: Serialize>(
+    project: &str,
+    kind: Kind,
+    install: Option<&str>,
+    sequence: u64,
+    signer_list_version: u64,
+    body: B,
+) -> SignedStatement {
+    let envelope = alien_signing::envelope::Envelope {
+        kind: kind.as_str().to_string(),
+        project: project.to_string(),
+        install: install.map(str::to_string),
+        sequence,
+        not_after: (kind == Kind::SignerList).then(test_not_after),
+        signer_list_version,
+        body,
+    };
+    SignedStatement::new(&envelope.to_payload().unwrap())
+}
+
+/// Version 1 of a signer list for `project`: CI may release, a device may
+/// release and administer the list.
+#[cfg(test)]
+pub(crate) fn test_signer_list(project: &str) -> SignedStatement {
+    test_statement(
+        project,
+        Kind::SignerList,
+        None,
+        1,
+        1,
+        test_list_body(None, true),
+    )
+    .sign_with("alice-laptop", &test_key(2))
+    .unwrap()
+}
+
+#[cfg(test)]
+fn test_list_body(previous: Option<String>, with_ci: bool) -> alien_signing::SignerListBody {
+    use alien_signing::{Role, Signer, SignerKind, SignerListBody};
+    let signer = |id: &str, seed: u8, kind: SignerKind, roles: Vec<Role>| Signer {
+        id: id.to_string(),
+        key: test_key(seed).public_key().as_str().to_string(),
+        kind,
+        roles,
+        label: None,
+    };
+    let mut signers = vec![signer(
+        "alice-laptop",
+        2,
+        SignerKind::Device,
+        vec![Role::Release, Role::Admin],
+    )];
+    if with_ci {
+        signers.push(signer("ci", 4, SignerKind::Ci, vec![Role::Release]));
+    }
+    SignerListBody {
+        previous,
+        admin_threshold: 1,
+        signers,
+        deny: Vec::new(),
+        recovered: false,
     }
 }
 
-/// Version 1 of a signer list with `key` as its one releaser and admin.
+/// Version 2 of the test signer list, which removes the CI key.
 #[cfg(test)]
-pub(crate) fn test_signer_list(project: &str, key: &alien_signing::SoftwareKey) -> SignedStatement {
-    use alien_signing::{Envelope, Role, Signer, SignerKind, SignerListBody};
-    let envelope = Envelope {
-        kind: Kind::SignerList.as_str().to_string(),
-        project: Some(project.to_string()),
-        deployment: None,
-        sequence: 1,
-        not_after: None,
-        signer_list_version: 1,
-        body: SignerListBody {
-            previous: None,
-            admin_threshold: 1,
-            signers: vec![Signer {
-                id: "ci".to_string(),
-                key: key.public_key().as_str().to_string(),
-                kind: SignerKind::Ci,
-                roles: vec![Role::Release, Role::Admin],
-                label: None,
-            }],
-            deny: Vec::new(),
+pub(crate) fn test_signer_list_without_ci(project: &str) -> SignedStatement {
+    let previous = test_signer_list(project).open().unwrap().digest;
+    test_statement(
+        project,
+        Kind::SignerList,
+        None,
+        2,
+        1,
+        test_list_body(Some(previous), false),
+    )
+    .sign_with("alice-laptop", &test_key(2))
+    .unwrap()
+}
+
+/// A protected configuration for tests: settings pinning the test signer
+/// list of `project`, for release `project` in namespace `apps`.
+#[cfg(test)]
+pub(crate) fn test_signing(project: &str) -> ReleaseSigning {
+    ReleaseSigning {
+        settings: SigningSettings {
+            fingerprint: alien_signing::fingerprint(
+                &test_signer_list(project).open().unwrap().digest,
+            ),
+            prefix: project.to_string(),
+            channel: "production".to_string(),
         },
-    };
-    SignedStatement::new(&envelope.to_payload().unwrap())
-        .sign_with("ci", key)
-        .unwrap()
+        install: InstallId::Kubernetes {
+            cluster: "8a2f0c4e-1111-2222-3333-444455556666".to_string(),
+            namespace: "apps".to_string(),
+            release: project.to_string(),
+        },
+        ledger: Arc::new(MemoryLedger::created(project)),
+    }
+}
+
+/// An install ledger held in memory, as setup creates it or absent.
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct MemoryLedger(pub(crate) std::sync::Mutex<Option<Ledger>>);
+
+#[cfg(test)]
+impl MemoryLedger {
+    /// The ledger setup creates for `prefix`.
+    pub(crate) fn created(prefix: &str) -> Self {
+        Self(std::sync::Mutex::new(Some(Ledger::new(prefix))))
+    }
+
+    /// What it holds now.
+    pub(crate) fn held(&self) -> Option<Ledger> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl InstallLedger for MemoryLedger {
+    async fn load(&self) -> crate::error::Result<Lookup> {
+        Ok(match self.held() {
+            Some(ledger) => Lookup::Found(ledger.to_json().into_bytes()),
+            None => Lookup::Absent,
+        })
+    }
+
+    async fn store(&self, ledger: &Ledger) -> crate::error::Result<()> {
+        let mut held = self.0.lock().unwrap();
+        let stored = held.as_mut().ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: "the install ledger does not exist".to_string(),
+            })
+        })?;
+        stored.merge(ledger).context(ErrorData::ConfigurationError {
+            message: "the install ledger forks".to_string(),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -450,20 +915,20 @@ pub(crate) mod tests {
         Container, ContainerCode, EnvironmentVariable, EnvironmentVariableType, ResourceLifecycle,
         ResourceSpec, StackInputDefinition,
     };
-    use alien_signing::{Envelope, SoftwareKey};
+    use std::sync::Mutex;
 
     const DIGEST: &str = "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
 
-    pub(crate) fn key() -> SoftwareKey {
-        SoftwareKey::from_secret_bytes(&[21; 32]).unwrap()
-    }
-
     pub(crate) fn signer_list() -> SignedStatement {
-        test_signer_list("shop", &key())
+        test_signer_list("shop")
     }
 
     pub(crate) fn signing() -> ReleaseSigning {
         test_signing("shop")
+    }
+
+    fn fresh() -> OperatorTrust {
+        OperatorTrust::new("shop")
     }
 
     pub(crate) fn input(id: &str, provider: &str, env: &str) -> StackInputDefinition {
@@ -501,18 +966,36 @@ pub(crate) mod tests {
         stack
     }
 
-    pub(crate) fn signed_release(sequence: u64, stack: &Stack) -> ReleaseInfo {
-        let envelope = Envelope {
-            kind: Kind::Release.as_str().to_string(),
-            project: Some("shop".to_string()),
-            deployment: None,
+    /// A release of `stack` on `channel`, signed by `signer` (`ci`: seed 4,
+    /// `alice-laptop`: seed 2).
+    pub(crate) fn release_by(
+        sequence: u64,
+        stack: &Stack,
+        channel: &str,
+        signer: &str,
+    ) -> ReleaseInfo {
+        release_with(
             sequence,
-            not_after: None,
-            signer_list_version: 1,
-            body: release_body(Platform::Kubernetes, stack, &ReleaseOptions::default()).unwrap(),
-        };
-        let signed = SignedStatement::new(&envelope.to_payload().unwrap())
-            .sign_with("ci", &key())
+            stack,
+            ReleaseOptions {
+                channel: channel.to_string(),
+                ..ReleaseOptions::default()
+            },
+            signer,
+        )
+    }
+
+    /// A release of `stack` built with `options`, signed by `signer`.
+    pub(crate) fn release_with(
+        sequence: u64,
+        stack: &Stack,
+        options: ReleaseOptions,
+        signer: &str,
+    ) -> ReleaseInfo {
+        let seed = if signer == "ci" { 4 } else { 2 };
+        let body = release_body(Platform::Kubernetes, stack, &options).unwrap();
+        let signed = test_statement("shop", Kind::Release, None, sequence, 1, body)
+            .sign_with(signer, &test_key(seed))
             .unwrap();
         ReleaseInfo {
             release_id: Some(format!("rel_{sequence}")),
@@ -522,6 +1005,10 @@ pub(crate) mod tests {
             signed: Some(signed),
             signer_lists: vec![signer_list()],
         }
+    }
+
+    pub(crate) fn signed_release(sequence: u64, stack: &Stack) -> ReleaseInfo {
+        release_by(sequence, stack, "production", "ci")
     }
 
     pub(crate) fn variable(name: &str, value: &str) -> EnvironmentVariable {
@@ -569,15 +1056,21 @@ pub(crate) mod tests {
         format!("registry.example.com/shop/api@{DIGEST}")
     }
 
+    fn accept(stored: &OperatorTrust, target: &TargetDeployment) -> Result<OperatorTrust, Refusal> {
+        signing()
+            .protect_target(Platform::Kubernetes, &local_inputs(), stored, target)
+            .map(|(_, _, kept)| kept)
+    }
+
     #[test]
     fn a_stack_other_than_the_signed_one_is_refused() {
         let signed = stack(&pinned());
         let release = signed_release(5, &signed);
-        let (protected, verified) = signing()
+        let (protected, verified, _) = signing()
             .protect_target(
                 Platform::Kubernetes,
                 &local_inputs(),
-                None,
+                &fresh(),
                 &target(release.clone(), vec![]),
             )
             .unwrap();
@@ -586,13 +1079,7 @@ pub(crate) mod tests {
 
         let mut moved = release.clone();
         moved.stack = stack(&format!("mirror.example.com/shop/api@{DIGEST}"));
-        signing()
-            .protect_target(
-                Platform::Kubernetes,
-                &local_inputs(),
-                None,
-                &target(moved, vec![]),
-            )
+        accept(&fresh(), &target(moved, vec![]))
             .expect("an image may move to another registry under the same digest");
 
         let mut changed = release;
@@ -601,14 +1088,7 @@ pub(crate) mod tests {
             "e".repeat(64)
         ));
         assert_eq!(
-            signing()
-                .protect_target(
-                    Platform::Kubernetes,
-                    &local_inputs(),
-                    None,
-                    &target(changed, vec![])
-                )
-                .unwrap_err(),
+            accept(&fresh(), &target(changed, vec![])).unwrap_err(),
             Refusal::StackChanged
         );
     }
@@ -618,62 +1098,114 @@ pub(crate) mod tests {
         let mut release = signed_release(5, &stack(&pinned()));
         release.signed = None;
         assert_eq!(
-            signing()
-                .protect_target(
-                    Platform::Kubernetes,
-                    &local_inputs(),
-                    None,
-                    &target(release, vec![])
-                )
-                .unwrap_err(),
+            accept(&fresh(), &target(release, vec![])).unwrap_err(),
             Refusal::Unsigned
         );
     }
 
     #[test]
-    fn an_older_release_is_refused() {
-        let accepted = AcceptedRelease {
-            config_sequence: None,
-            sequence: 6,
-            digest: "sha256:other".to_string(),
-            operator_digest: None,
-            signer_lists: vec![signer_list()],
-        };
-        let release = signed_release(5, &stack(&pinned()));
+    fn the_ledger_only_rises_and_refuses_older_releases() {
+        let stored = accept(
+            &fresh(),
+            &target(signed_release(6, &stack(&pinned())), vec![]),
+        )
+        .unwrap();
+        assert_eq!(stored.ledger.release.as_ref().unwrap().sequence, 6);
+        assert!(stored.ledger.is_sticky());
+
+        // The same release passes again; an older one, or another with its
+        // sequence, doesn't.
+        accept(
+            &stored,
+            &target(signed_release(6, &stack(&pinned())), vec![]),
+        )
+        .expect("the accepted release passes again");
         assert_eq!(
-            signing()
-                .protect_target(
-                    Platform::Kubernetes,
-                    &local_inputs(),
-                    Some(&accepted),
-                    &target(release, vec![])
-                )
-                .unwrap_err(),
+            accept(
+                &stored,
+                &target(signed_release(5, &stack(&pinned())), vec![])
+            )
+            .unwrap_err(),
             Refusal::OlderRelease {
                 applied: 6,
                 actual: 5
             }
         );
+        let other = stack(&format!(
+            "registry.example.com/shop/api@sha256:{}",
+            "e".repeat(64)
+        ));
+        assert_eq!(
+            accept(&stored, &target(signed_release(6, &other), vec![])).unwrap_err(),
+            Refusal::OlderRelease {
+                applied: 6,
+                actual: 6
+            }
+        );
+    }
+
+    #[test]
+    fn a_release_for_another_channel_is_refused() {
+        let refusal = accept(
+            &fresh(),
+            &target(release_by(5, &stack(&pinned()), "dev", "ci"), vec![]),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&refusal, Refusal::Release { message, .. } if message.contains("dev")),
+            "{refusal}"
+        );
+    }
+
+    /// v7 verified the stored target again under the current list on every
+    /// pass, so removing the CI key that signed it stopped every deployment
+    /// pass. The ledger keeps the accepted release instead.
+    #[test]
+    fn removing_the_ci_key_keeps_the_accepted_release_and_lands_the_next() {
+        let accepted_release = signed_release(5, &stack(&pinned()));
+        let stored = accept(&fresh(), &target(accepted_release.clone(), vec![])).unwrap();
+
+        let mut without_ci = accepted_release.clone();
+        without_ci.signer_lists = vec![signer_list(), test_signer_list_without_ci("shop")];
+
+        // Without the ledger (the old check), the accepted release no longer verifies.
+        let verified_again = signing().verify_release(Platform::Kubernetes, &without_ci, &fresh());
+        assert!(verified_again.is_err(), "the CI key is gone from the list");
+
+        // With it, the deployment loop still deploys the accepted release.
+        let kept = signing()
+            .verify_release(Platform::Kubernetes, &without_ci, &stored)
+            .expect("the accepted release keeps running after its signer leaves");
+        assert_eq!(kept.sequence, 5);
+
+        // The next release, signed by a key still on the list, lands.
+        let mut next = release_by(6, &stack(&pinned()), "production", "alice-laptop");
+        next.signer_lists = without_ci.signer_lists.clone();
+        let stored =
+            accept(&stored, &target(next, vec![])).expect("a release signed by the device lands");
+        assert_eq!(stored.ledger.signer_list.as_ref().unwrap().sequence, 2);
+
+        // A newer release signed by the removed CI key is refused.
+        let mut by_ci = signed_release(7, &stack(&pinned()));
+        by_ci.signer_lists = without_ci.signer_lists;
+        assert!(accept(&stored, &target(by_ci, vec![])).is_err());
     }
 
     #[test]
     fn manager_environment_variables_are_refused_by_name() {
         let release = signed_release(5, &stack(&pinned()));
-        let refusal = signing()
-            .protect_target(
-                Platform::Kubernetes,
-                &local_inputs(),
-                None,
-                &target(
-                    release,
-                    vec![
-                        variable("LD_PRELOAD", "/tmp/evil.so"),
-                        variable("LOG_LEVEL", "debug"),
-                        variable("NODE_OPTIONS", "--import=data:text/javascript,evil"),
-                    ],
-                ),
-            )
-            .unwrap_err();
+        let refusal = accept(
+            &fresh(),
+            &target(
+                release,
+                vec![
+                    variable("LD_PRELOAD", "/tmp/evil.so"),
+                    variable("LOG_LEVEL", "debug"),
+                    variable("NODE_OPTIONS", "--import=data:text/javascript,evil"),
+                ],
+            ),
+        )
+        .unwrap_err();
         assert_eq!(
             refusal,
             Refusal::EnvironmentVariables(vec![
@@ -683,24 +1215,19 @@ pub(crate) mod tests {
         );
     }
 
-    /// A `config/v1` for the test deployment, signed by the release key.
+    /// A `config/v1` for `install`, signed by the CI key.
     pub(crate) fn signed_config(
         sequence: u64,
-        deployment: &str,
+        install: &str,
         body: serde_json::Value,
     ) -> SignedStatement {
-        let envelope = Envelope {
-            kind: Kind::Config.as_str().to_string(),
-            project: Some("shop".to_string()),
-            deployment: Some(deployment.to_string()),
-            sequence,
-            not_after: None,
-            signer_list_version: 1,
-            body,
-        };
-        SignedStatement::new(&envelope.to_payload().unwrap())
-            .sign_with("ci", &key())
+        test_statement("shop", Kind::Config, Some(install), sequence, 1, body)
+            .sign_with("ci", &test_key(4))
             .unwrap()
+    }
+
+    pub(crate) fn this_install() -> String {
+        signing().install.to_string()
     }
 
     pub(crate) fn values(target: &TargetDeployment) -> HashMap<String, String> {
@@ -724,8 +1251,8 @@ pub(crate) mod tests {
                 variable("DATABASE_URL", "postgres://attacker.example/db"),
             ],
         );
-        let (protected, _) = signing()
-            .protect_target(Platform::Kubernetes, &local_inputs(), None, &target)
+        let (protected, _, _) = signing()
+            .protect_target(Platform::Kubernetes, &local_inputs(), &fresh(), &target)
             .unwrap();
         let unsigned = values(&protected);
         assert_eq!(unsigned["DATABASE_URL"], "postgres://db.internal/shop");
@@ -740,59 +1267,54 @@ pub(crate) mod tests {
 
         target.signed_config = Some(signed_config(
             3,
-            "dep_shop",
+            &this_install(),
             serde_json::json!({"inputs": {"logLevel": "warn"}}),
         ));
-        let (protected, verified) = signing()
-            .protect_target(Platform::Kubernetes, &local_inputs(), None, &target)
+        let (protected, _, stored) = signing()
+            .protect_target(Platform::Kubernetes, &local_inputs(), &fresh(), &target)
             .unwrap();
         assert_eq!(
             values(&protected)["LOG_LEVEL"],
             "warn",
             "the signed value runs"
         );
-        assert_eq!(verified.config_sequence, Some(3));
+        assert_eq!(stored.config_sequence(), Some(3));
 
-        // An older config can't come back once a newer one was applied.
-        let accepted = AcceptedRelease::from(&verified);
+        // An older config can't come back once a newer one was applied, and
+        // withholding the config is refused too.
         target.signed_config = Some(signed_config(
             2,
-            "dep_shop",
+            &this_install(),
             serde_json::json!({"inputs": {"logLevel": "trace"}}),
         ));
         assert_eq!(
-            signing()
-                .protect_target(
-                    Platform::Kubernetes,
-                    &local_inputs(),
-                    Some(&accepted),
-                    &target
-                )
-                .unwrap_err(),
+            accept(&stored, &target).unwrap_err(),
             Refusal::OlderConfig {
                 applied: 3,
                 actual: 2
             }
         );
+        target.signed_config = None;
+        let withheld = accept(&stored, &target).unwrap_err();
+        assert!(
+            matches!(&withheld, Refusal::Release { message, .. } if message.contains("none was delivered")),
+            "{withheld}"
+        );
 
-        // Config signed for another deployment, or setting what the release
+        // Config signed for another install, or setting what the release
         // doesn't make configurable, is refused.
         target.signed_config = Some(signed_config(
             4,
-            "dep_other",
+            "k8s:8a2f0c4e-1111-2222-3333-444455556666:other/shop",
             serde_json::json!({"inputs": {"logLevel": "warn"}}),
         ));
-        assert!(signing()
-            .protect_target(Platform::Kubernetes, &local_inputs(), None, &target)
-            .is_err());
+        assert!(accept(&fresh(), &target).is_err());
         target.signed_config = Some(signed_config(
             4,
-            "dep_shop",
+            &this_install(),
             serde_json::json!({"inputs": {"databaseUrl": "postgres://attacker.example/db"}}),
         ));
-        assert!(signing()
-            .protect_target(Platform::Kubernetes, &local_inputs(), None, &target)
-            .is_err());
+        assert!(accept(&fresh(), &target).is_err());
     }
 
     #[test]
@@ -806,8 +1328,8 @@ pub(crate) mod tests {
             alien_core::ExternalBinding::Storage(alien_core::StorageBinding::s3("attacker-bucket")),
         );
 
-        let (protected, _) = signing()
-            .protect_target(Platform::Kubernetes, &local_inputs(), None, &target)
+        let (protected, _, _) = signing()
+            .protect_target(Platform::Kubernetes, &local_inputs(), &fresh(), &target)
             .unwrap();
         assert_eq!(protected.config.native_image_host, None);
         assert_eq!(protected.config.observe_label_selector, None);
@@ -815,11 +1337,72 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn telemetry_goes_only_where_the_signed_config_says() {
+        let release = signed_release(5, &stack(&pinned()));
+        let mut target = target(release, vec![]);
+        // Attack: the manager points logs at its own collector.
+        target.config.monitoring = Some(OtlpConfig {
+            logs_endpoint: "https://collector.attacker.example/v1/logs".to_string(),
+            logs_auth_header: "authorization=Bearer attacker".to_string(),
+            metrics_endpoint: None,
+            metrics_auth_header: None,
+            resource_attributes: HashMap::new(),
+        });
+        let (protected, _, _) = signing()
+            .protect_target(Platform::Kubernetes, &local_inputs(), &fresh(), &target)
+            .unwrap();
+        assert_eq!(
+            protected.config.monitoring, None,
+            "no signed endpoint, no export"
+        );
+
+        target.signed_config = Some(signed_config(
+            1,
+            &this_install(),
+            serde_json::json!({"telemetryEndpoint": "https://otel.shop.example/"}),
+        ));
+        let (protected, _, _) = signing()
+            .protect_target(Platform::Kubernetes, &local_inputs(), &fresh(), &target)
+            .unwrap();
+        assert_eq!(
+            protected.config.monitoring,
+            Some(OtlpConfig {
+                logs_endpoint: "https://otel.shop.example/v1/logs".to_string(),
+                logs_auth_header: String::new(),
+                metrics_endpoint: Some("https://otel.shop.example/v1/metrics".to_string()),
+                metrics_auth_header: None,
+                resource_attributes: HashMap::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn volume_restores_from_the_manager_are_refused() {
+        let release = signed_release(5, &stack(&pinned()));
+        let mut target = target(release, vec![]);
+        // Off: without restores the target is accepted.
+        accept(&fresh(), &target).expect("no restores, accepted");
+        // Attack: replace the database volume with a snapshot the manager chose.
+        target.config.volume_restores = vec![alien_core::VolumeRestoreRequest {
+            request_id: "vr_1".to_string(),
+            resource_id: "api".to_string(),
+            ordinal: 0,
+            snapshot_id: "snap-0123456789abcdef0".to_string(),
+        }];
+        let refusal = accept(&fresh(), &target).unwrap_err();
+        assert_eq!(refusal, Refusal::VolumeRestores(vec!["vr_1".to_string()]));
+        assert_eq!(
+            refusal.to_string(),
+            "the manager asked to restore volumes (vr_1); a protected installation takes no volume restores from its manager"
+        );
+    }
+
+    #[test]
     fn a_stack_written_after_verification_is_caught_before_deploying() {
         let signed = stack(&pinned());
         let release = signed_release(5, &signed);
         signing()
-            .verify_release(Platform::Kubernetes, &release, None)
+            .verify_release(Platform::Kubernetes, &release, &fresh())
             .expect("the stack as signed is deployable");
 
         let mut changed = release.clone();
@@ -829,9 +1412,170 @@ pub(crate) mod tests {
         ));
         assert_eq!(
             signing()
-                .verify_release(Platform::Kubernetes, &changed, None)
+                .verify_release(Platform::Kubernetes, &changed, &fresh())
                 .unwrap_err(),
             Refusal::StackChanged
+        );
+    }
+
+    /// A cluster with a settings ConfigMap, or none, or one the Operator may
+    /// not read.
+    pub(crate) struct Cluster {
+        settings: Mutex<Lookup>,
+        uid: String,
+    }
+
+    #[async_trait]
+    impl ClusterReads for Cluster {
+        async fn settings(&self, namespace: &str, name: &str) -> crate::error::Result<Lookup> {
+            assert_eq!((namespace, name), ("apps", "shop-signing"));
+            Ok(match &*self.settings.lock().unwrap() {
+                Lookup::Found(bytes) => Lookup::Found(bytes.clone()),
+                Lookup::Absent => Lookup::Absent,
+                Lookup::Denied => Lookup::Denied,
+            })
+        }
+        async fn cluster_uid(&self) -> crate::error::Result<String> {
+            Ok(self.uid.clone())
+        }
+    }
+
+    fn cluster(settings: Lookup) -> Cluster {
+        Cluster {
+            settings: Mutex::new(settings),
+            uid: "8a2f0c4e-1111-2222-3333-444455556666".to_string(),
+        }
+    }
+
+    /// A cluster holding the test settings.
+    pub(crate) fn cluster_with_settings() -> Cluster {
+        cluster(settings_bytes())
+    }
+
+    fn settings_bytes() -> Lookup {
+        Lookup::Found(signing().settings.to_json().into_bytes())
+    }
+
+    async fn find(
+        cluster: &Cluster,
+        stored: Option<&OperatorTrust>,
+    ) -> crate::error::Result<Option<ReleaseSigning>> {
+        find_with(cluster, Arc::new(MemoryLedger::created("shop")), stored)
+            .await
+            .map(|found| found.map(|(signing, _)| signing))
+    }
+
+    async fn find_with(
+        cluster: &Cluster,
+        ledger: Arc<MemoryLedger>,
+        stored: Option<&OperatorTrust>,
+    ) -> crate::error::Result<Option<(ReleaseSigning, OperatorTrust)>> {
+        find_signing(cluster, ledger, "apps", "shop", stored).await
+    }
+
+    #[tokio::test]
+    async fn the_settings_and_install_id_come_from_the_cluster() {
+        let found = find(&cluster(settings_bytes()), None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.settings, signing().settings);
+        assert_eq!(found.install, signing().install);
+        assert!(find(&cluster(Lookup::Absent), None)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn a_protected_install_never_starts_from_an_empty_ledger() {
+        let error = find_with(
+            &cluster(settings_bytes()),
+            Arc::new(MemoryLedger(Mutex::new(None))),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error.message,
+            "ConfigMap apps/shop-signing-ledger with the install's ledger is missing; setup creates it with the signing settings, and the Operator never starts a protected install from an empty ledger"
+        );
+
+        // The install's ledger and the database merge to the higher entries.
+        let five = accept(
+            &fresh(),
+            &target(signed_release(5, &stack(&pinned())), vec![]),
+        )
+        .unwrap();
+        let six = accept(&five, &target(signed_release(6, &stack(&pinned())), vec![])).unwrap();
+        let ledger = Arc::new(MemoryLedger::created("shop"));
+        ledger.store(&six.ledger).await.unwrap();
+        let (_, kept) = find_with(&cluster(settings_bytes()), ledger, Some(&five))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(kept.ledger, six.ledger);
+        assert_eq!(kept.signer_lists, five.signer_lists);
+    }
+
+    #[tokio::test]
+    async fn settings_the_operator_may_not_read_are_not_unprotected() {
+        let error = find(&cluster(Lookup::Denied), None).await.unwrap_err();
+        assert!(
+            error.message.contains("can't tell whether"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[tokio::test]
+    async fn protection_is_sticky() {
+        let stored = accept(
+            &fresh(),
+            &target(signed_release(5, &stack(&pinned())), vec![]),
+        )
+        .unwrap();
+
+        // Deleting the ConfigMap after acceptance stops the Operator.
+        assert!(find(&cluster(Lookup::Absent), Some(&fresh()))
+            .await
+            .unwrap()
+            .is_none());
+        let error = find(&cluster(Lookup::Absent), Some(&stored))
+            .await
+            .unwrap_err();
+        assert!(error.message.contains("is gone"), "{}", error.message);
+
+        // So does another fingerprint, or the install moving to another cluster.
+        let mut other = signing().settings;
+        other.fingerprint = alien_signing::fingerprint(&format!("sha256:{}", "ab".repeat(32)));
+        let error = find(
+            &cluster(Lookup::Found(other.to_json().into_bytes())),
+            Some(&stored),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.message.contains("differ"), "{}", error.message);
+        let mut moved = cluster(settings_bytes());
+        moved.uid = "ffffffff-1111-2222-3333-444455556666".to_string();
+        assert!(find(&moved, Some(&stored)).await.is_err());
+
+        // Losing the database doesn't lose protection: the install's
+        // ledger still holds the trust root.
+        let kept = Arc::new(MemoryLedger::created("shop"));
+        kept.store(&stored.ledger).await.unwrap();
+        let error = find_with(&cluster(Lookup::Absent), kept, None)
+            .await
+            .unwrap_err();
+        assert!(error.message.contains("is gone"), "{}", error.message);
+
+        // Settings copied from another release are refused.
+        let mut copied = signing().settings;
+        copied.prefix = "other".to_string();
+        assert!(
+            find(&cluster(Lookup::Found(copied.to_json().into_bytes())), None)
+                .await
+                .is_err()
         );
     }
 }
