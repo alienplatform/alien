@@ -788,6 +788,29 @@ fn releases_that_break_the_rules_are_refused() {
         "SIGNING_WORKLOAD_REFUSED"
     );
 
+    for owned in ["ALIEN_SECRETS", "WORKLOAD_SECRETS", "ALIEN_CACHE_BINDING"] {
+        let mut provided_owned = release_body();
+        provided_owned.workloads[0]
+            .provided_env
+            .push(owned.to_string());
+        let error = provided_owned
+            .validate()
+            .expect_err("the control plane can't fill a name the enforcer sets");
+        assert!(
+            error.message.contains("set by the enforcer"),
+            "{owned}: {}",
+            error.message
+        );
+
+        let mut configurable_owned = release_body();
+        configurable_owned.configurable.env.push(owned.to_string());
+        assert_eq!(
+            code(configurable_owned.validate()),
+            "SIGNING_BODY_REFUSED",
+            "{owned}"
+        );
+    }
+
     let mut unknown_component = release_body();
     unknown_component
         .components
