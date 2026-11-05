@@ -230,16 +230,37 @@ fn main() -> Result<(), Error> {
         let body = release_body(Platform::Kubernetes, stack, &release_options(channel))?;
         Ok(statement(Kind::Release, None, sequence, list_version, body)?.sign_with(id, key)?)
     };
-    let config = |sequence: u64, body: serde_json::Value| -> Result<SignedStatement, Error> {
+    let config = |sequence: u64,
+                  list_version: u64,
+                  id: &str,
+                  key: &SecretKey,
+                  body: serde_json::Value|
+     -> Result<SignedStatement, Error> {
         let body: ConfigBody = serde_json::from_value(body)?;
-        Ok(statement(Kind::Config, Some(install), sequence, 1, body)?.sign_with("ci", &ci)?)
+        Ok(
+            statement(Kind::Config, Some(install), sequence, list_version, body)?
+                .sign_with(id, key)?,
+        )
     };
     let one = stack(image_a, "release-1", "DATABASE_URL")?;
     let two = stack(image_b, "release-2", "DATABASE_URL")?;
     let r1 = signed(&one, "production", 1, 1, "ci", &ci)?;
     let r2 = signed(&two, "production", 2, 1, "ci", &ci)?;
-    let c1 = config(1, serde_json::json!({"inputs": {"logLevel": "debug"}}))?;
-    let c2 = config(2, serde_json::json!({"inputs": {"logLevel": "warn"}}))?;
+    let c1 = config(
+        1,
+        1,
+        "ci",
+        &ci,
+        serde_json::json!({"inputs": {"logLevel": "debug"}}),
+    )?;
+    // After CI leaves the list, the laptop signs the next config.
+    let c2 = config(
+        2,
+        2,
+        "alice-laptop",
+        &laptop,
+        serde_json::json!({"inputs": {"logLevel": "warn"}}),
+    )?;
     let v1_only = [v1.clone()];
     let both = [v1.clone(), v2.clone()];
 
