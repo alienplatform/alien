@@ -6,6 +6,8 @@
 //! install id comes from the verifier's own identity. Nothing here comes from
 //! the request or the verifier's environment.
 
+use std::collections::BTreeSet;
+
 use alien_error::{AlienError, Context};
 use alien_signing::settings::names;
 use alien_signing::{
@@ -146,6 +148,74 @@ impl Accepted {
     }
 }
 
+/// The statement at the install's floor for `kind`, kept: it passed when
+/// it was accepted, and removing its signer from the list doesn't stop it
+/// (only the deny-list does). `None` when `statement` isn't the one there.
+fn kept<B: serde::de::DeserializeOwned>(
+    trust: &Trust,
+    ledger: &Ledger,
+    kind: Kind,
+    statement: &SignedStatement,
+) -> alien_signing::Result<Option<Verified<B>>> {
+    let opened = statement.open()?;
+    let floor = match kind {
+        Kind::Release => ledger.release.as_ref(),
+        Kind::Config => ledger.config.as_ref(),
+        _ => None,
+    };
+    if opened.kind != kind || floor.is_none_or(|floor| floor.digest != opened.digest) {
+        return Ok(None);
+    }
+    trust.keeps(&opened.digest)?;
+    Ok(Some(Verified {
+        kind,
+        sequence: opened.sequence,
+        digest: opened.digest.clone(),
+        not_after: opened.not_after,
+        signers: BTreeSet::new(),
+        body: opened.body()?,
+    }))
+}
+
+/// `release` verified for this install, or kept at its floor.
+fn verify_or_keep_release(
+    trust: &Trust,
+    ledger: &Ledger,
+    release: &SignedStatement,
+    now: DateTime<Utc>,
+) -> alien_signing::Result<Verified<ReleaseBody>> {
+    match kept::<ReleaseBody>(trust, ledger, Kind::Release, release)? {
+        Some(kept) => {
+            if kept.body.channel != trust.settings().channel {
+                return Err(AlienError::new(alien_signing::ErrorData::WrongChannel {
+                    expected: trust.settings().channel.clone(),
+                    actual: kept.body.channel.clone(),
+                }));
+            }
+            kept.body.validate()?;
+            Ok(kept)
+        }
+        None => trust.verify_release(release, now),
+    }
+}
+
+/// `config` verified for this install and `release`, or kept at its floor.
+fn verify_or_keep_config(
+    trust: &Trust,
+    ledger: &Ledger,
+    config: &SignedStatement,
+    release: &ReleaseBody,
+    now: DateTime<Utc>,
+) -> alien_signing::Result<Verified<ConfigBody>> {
+    match kept::<ConfigBody>(trust, ledger, Kind::Config, config)? {
+        Some(kept) => {
+            kept.body.check(release)?;
+            Ok(kept)
+        }
+        None => trust.verify_config(config, release, now),
+    }
+}
+
 /// Verify `release` (and `config`) for `install` on `platform`, against
 /// the signer chain `signer_lists` (from version 1) and the install's
 /// ledger.
@@ -167,11 +237,11 @@ pub fn accept(
     .context(ErrorData::Refused {
         reason: "the signer lists were refused".to_string(),
     })?;
-    let release = trust
-        .verify_release(release, now)
-        .context(ErrorData::Refused {
+    let release = verify_or_keep_release(&trust, &install.ledger, release, now).context(
+        ErrorData::Refused {
             reason: "the release was refused".to_string(),
-        })?;
+        },
+    )?;
     if release.body.platform != platform {
         return Err(refused(format!(
             "the release is for platform '{}', not '{platform}'",
@@ -186,12 +256,10 @@ pub fn accept(
         })?;
     let config = match config {
         Some(config) => {
-            let config =
-                trust
-                    .verify_config(config, &release.body, now)
-                    .context(ErrorData::Refused {
-                        reason: "the config was refused".to_string(),
-                    })?;
+            let config = verify_or_keep_config(&trust, &install.ledger, config, &release.body, now)
+                .context(ErrorData::Refused {
+                    reason: "the config was refused".to_string(),
+                })?;
             ledger
                 .raise(Kind::Config, config.sequence, &config.digest)
                 .context(ErrorData::Refused {
@@ -248,6 +316,7 @@ pub async fn store_ledger(store: &dyn InstallStore, prefix: &str, accepted: &Led
 pub(crate) mod tests {
     use super::*;
     use crate::fixtures::*;
+    use alien_signing::{Role, SecretKey, Signer, SignerKind, SignerListBody};
     use std::collections::BTreeMap;
     use std::sync::Mutex;
 
@@ -430,6 +499,147 @@ pub(crate) mod tests {
             .unwrap_err(),
         );
         assert!(error.contains("signer lists were refused"), "{error}");
+    }
+
+    /// Signer list version 1 with a laptop (admin, release) and CI
+    /// (release), and version 2 without CI.
+    fn lists_removing_ci() -> (SignedStatement, SignedStatement, SigningSettings) {
+        let laptop = key(2);
+        let signer = |id: &str, key: &SecretKey, kind: SignerKind, roles: Vec<Role>| Signer {
+            id: id.to_string(),
+            key: key.public_key().as_str().to_string(),
+            kind,
+            roles,
+            label: None,
+        };
+        let laptop_signer = signer(
+            "laptop",
+            &laptop,
+            SignerKind::Device,
+            vec![Role::Admin, Role::Release],
+        );
+        let body = |previous: Option<String>, signers: Vec<Signer>| SignerListBody {
+            previous,
+            admin_threshold: 1,
+            signers,
+            deny: Vec::new(),
+            recovered: false,
+        };
+        let v1 = statement(
+            PROJECT,
+            Kind::SignerList,
+            None,
+            1,
+            Some(Utc::now() + chrono::Duration::days(60)),
+            body(
+                None,
+                vec![
+                    laptop_signer.clone(),
+                    signer("ci", &ci(), SignerKind::Ci, vec![Role::Release]),
+                ],
+            ),
+        )
+        .sign_with("laptop", &laptop)
+        .unwrap();
+        let v2 = statement_under(
+            PROJECT,
+            Kind::SignerList,
+            None,
+            2,
+            Some(Utc::now() + chrono::Duration::days(60)),
+            1,
+            body(Some(v1.open().unwrap().digest), vec![laptop_signer]),
+        )
+        .sign_with("laptop", &laptop)
+        .unwrap();
+        let settings = settings_for(&v1, PREFIX, CHANNEL);
+        (v1, v2, settings)
+    }
+
+    #[tokio::test]
+    async fn removing_the_ci_key_keeps_what_it_signed_and_refuses_what_it_signs_next() {
+        let (v1, v2, settings) = lists_removing_ci();
+        let store = MemoryStore::protected(&settings);
+        let install = found(&store).await.unwrap();
+        let ten = release(10, function_workload());
+        let configured = config(
+            1,
+            ConfigBody {
+                env: BTreeMap::from([("LOG_LEVEL".to_string(), "info".to_string())]),
+                ..ConfigBody::default()
+            },
+        );
+        let accepted = accept(
+            &install,
+            &[v1.clone()],
+            &ten,
+            Some(&configured),
+            "aws",
+            Utc::now(),
+        )
+        .unwrap();
+        store_ledger(&store, PREFIX, &accepted.ledger)
+            .await
+            .unwrap();
+
+        // CI leaves the list. What it signed and the install accepted keeps
+        // passing, so the verifier can still check and re-apply it.
+        let install = found(&store).await.unwrap();
+        let both = [v1, v2];
+        let kept = accept(&install, &both, &ten, Some(&configured), "aws", Utc::now()).unwrap();
+        assert_eq!(kept.release.sequence, 10);
+        assert!(kept.release.signers.is_empty(), "kept, not verified again");
+        store_ledger(&store, PREFIX, &kept.ledger).await.unwrap();
+
+        // A release CI signs now is refused.
+        let install = found(&store).await.unwrap();
+        let by_ci = statement_under(
+            PROJECT,
+            Kind::Release,
+            None,
+            11,
+            None,
+            2,
+            &release_body(vec![function_workload()]),
+        )
+        .sign_with("ci", &ci())
+        .unwrap();
+        let error = reason(
+            accept(
+                &install,
+                &both,
+                &by_ci,
+                Some(&configured),
+                "aws",
+                Utc::now(),
+            )
+            .unwrap_err(),
+        );
+        assert!(error.contains("not on signer list version 2"), "{error}");
+
+        // The laptop's next release lands with the config CI signed before.
+        let by_laptop = statement_under(
+            PROJECT,
+            Kind::Release,
+            None,
+            11,
+            None,
+            2,
+            &release_body(vec![function_workload()]),
+        )
+        .sign_with("laptop", &key(2))
+        .unwrap();
+        let next = accept(
+            &install,
+            &both,
+            &by_laptop,
+            Some(&configured),
+            "aws",
+            Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(next.release.sequence, 11);
+        assert_eq!(next.config.unwrap().sequence, 1);
     }
 
     #[tokio::test]
