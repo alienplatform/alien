@@ -1,6 +1,81 @@
+diff -ru base/automatic.cloudformation.txt head/automatic.cloudformation.txt
+--- base/automatic.cloudformation.txt
++++ head/automatic.cloudformation.txt
+@@ -2305,15 +2305,6 @@
+           - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*-build
+           Sid: BoundedRolePass3
+         - Action:
+-          - iam:PassRole
+-          Condition:
+-            StringEquals:
+-              iam:PassedToService: lambda.amazonaws.com
+-          Effect: Allow
+-          Resource:
+-          - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*-sa
+-          Sid: BoundedRolePass4
+-        - Action:
+           - ecr:BatchGetImage
+           - ecr:GetDownloadUrlForLayer
+           - ecr:GetRepositoryPolicy
+@@ -2341,6 +2332,18 @@
+           Resource:
+           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
+           Sid: TagHttpApiEndpoints
++        - Action:
++          - ssm:AddTagsToResource
++          - ssm:DeleteParameter
++          - ssm:DeleteParameters
++          - ssm:LabelParameterVersion
++          - ssm:PutParameter
++          - ssm:RemoveTagsFromResource
++          - ssm:UnlabelParameterVersion
++          Effect: Deny
++          Resource:
++          - Fn::Sub: arn:${AWS::Partition}:ssm:*:*:parameter/signed/*
++          Sid: OnlySetupChangesSigningSettings
+       Roles:
+       - Ref: ManagementRole
+     DependsOn:
+@@ -2425,6 +2428,15 @@
+           - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-*
+           Sid: VaultProvision
+         - Action:
++          - iam:PassRole
++          Condition:
++            StringEquals:
++              iam:PassedToService: lambda.amazonaws.com
++          Effect: Allow
++          Resource:
++          - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*-sa
++          Sid: BoundedRolePass4
++        - Action:
+           - acm:DescribeCertificate
+           Condition:
+             'Null':
+diff -ru base/automatic.terraform-aws.txt head/automatic.terraform-aws.txt
+--- base/automatic.terraform-aws.txt
++++ head/automatic.terraform-aws.txt
+@@ -286,7 +286,7 @@
+ 
+ resource "aws_iam_policy" "management_managed_policy_10" {
+   name   = length(format("%s-%s", local.resource_prefix, "deployment-management-10")) <= 128 ? format("%s-%s", local.resource_prefix, "deployment-management-10") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "deployment-management-10"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "deployment-management-10")), 0, 8))
+-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "AiProvisionIamGetRolePolicyPermissions", Effect = "Allow", Action = ["iam:GetRolePolicy", "iam:ListRolePolicies", "iam:GetRole", "iam:ListAttachedRolePolicies", "iam:ListRoleTags"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"] }, { Sid = "BoundedRolePass", Effect = "Allow", Action = ["iam:PassRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*-sa"], Condition = { StringEquals = { "iam:PassedToService" = "codebuild.amazonaws.com" } } }, { Sid = "ContainerProvisionElasticloadbalancingAddTags", Effect = "Allow", Action = ["elasticloadbalancing:AddTags"], Resource = ["*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" }, StringLike = { "elasticloadbalancing:CreateAction" = "Create*" } } }, { Sid = "ContainerProvisionEc2CreateSnapshot2", Effect = "Allow", Action = ["ec2:CreateSnapshot"], Resource = ["arn:aws:ec2:${data.aws_region.current.region}::snapshot/*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" } } }, { Sid = "ContainerProvisionEc2CreateTags3", Effect = "Allow", Action = ["ec2:CreateTags"], Resource = ["arn:aws:ec2:${data.aws_region.current.region}::snapshot/*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime", "ec2:CreateAction" = "CreateSnapshot" } } }, { Sid = "ContainerProvisionEc2DeleteSnapshot", Effect = "Allow", Action = ["ec2:DeleteSnapshot", "ec2:CreateVolume"], Resource = ["arn:aws:ec2:${data.aws_region.current.region}::snapshot/*"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "runtime" } } }, { Sid = "ContainerProvisionIamPassRole", Effect = "Allow", Action = ["iam:PassRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-volume-backups-*"], Condition = { StringEquals = { "iam:PassedToService" = "dlm.amazonaws.com" } } }, { Sid = "BoundedRoleDelete24", Effect = "Allow", Action = ["iam:DeleteRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-dlm-*"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "runtime" } } }, { Sid = "ContainerProvisionEc2CreateSecurityGroup", Effect = "Allow", Action = ["ec2:CreateSecurityGroup"], Resource = ["arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*", "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:vpc/*"] }, { Sid = "NetworkProvisionLogsListTagsForResource", Effect = "Allow", Action = ["logs:ListTagsForResource"], Resource = ["arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:${local.resource_prefix}-*-flow-logs"] }, { Sid = "CreateAuroraCluster", Effect = "Allow", Action = ["rds:CreateDBCluster"], Resource = ["arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster:${local.resource_prefix}-*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}" } } }, { Sid = "CreateAuroraInstances", Effect = "Allow", Action = ["rds:CreateDBInstance"], Resource = ["arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:db:${local.resource_prefix}-*"], Condition = { StringEqualsIfExists = { "aws:RequestTag/deployment" = "${local.resource_prefix}" } } }, { Sid = "CreateRdsServiceLinkedRole", Effect = "Allow", Action = ["iam:CreateServiceLinkedRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS"], Condition = { StringEquals = { "iam:AWSServiceName" = "rds.amazonaws.com" } } }, { Sid = "BoundedRolePass3", Effect = "Allow", Action = ["iam:PassRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*-build"], Condition = { StringEquals = { "iam:PassedToService" = "lambda.amazonaws.com" } } }, { Sid = "ReadGoneLambdaFunctions", Effect = "Allow", Action = ["lambda:GetFunctionConcurrency"], Resource = ["arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${local.resource_prefix}-*"], Condition = { Null = { "aws:ResourceTag/deployment" = "true" } } }, { Sid = "TagHttpApiEndpoints", Effect = "Allow", Action = ["apigateway:POST", "apigateway:PUT"], Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/tags/*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" } } }, { Sid = "ManageLambdaLogGroups", Effect = "Allow", Action = ["logs:CreateLogGroup", "logs:PutRetentionPolicy", "logs:DeleteLogGroup"], Resource = ["arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${local.resource_prefix}-*"] }] })
++  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "AiProvisionIamGetRolePolicyPermissions", Effect = "Allow", Action = ["iam:GetRolePolicy", "iam:ListRolePolicies", "iam:GetRole", "iam:ListAttachedRolePolicies", "iam:ListRoleTags"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"] }, { Sid = "ContainerProvisionElasticloadbalancingAddTags", Effect = "Allow", Action = ["elasticloadbalancing:AddTags"], Resource = ["*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" }, StringLike = { "elasticloadbalancing:CreateAction" = "Create*" } } }, { Sid = "ContainerProvisionEc2CreateSnapshot2", Effect = "Allow", Action = ["ec2:CreateSnapshot"], Resource = ["arn:aws:ec2:${data.aws_region.current.region}::snapshot/*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" } } }, { Sid = "ContainerProvisionEc2CreateTags3", Effect = "Allow", Action = ["ec2:CreateTags"], Resource = ["arn:aws:ec2:${data.aws_region.current.region}::snapshot/*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime", "ec2:CreateAction" = "CreateSnapshot" } } }, { Sid = "ContainerProvisionEc2DeleteSnapshot", Effect = "Allow", Action = ["ec2:DeleteSnapshot", "ec2:CreateVolume"], Resource = ["arn:aws:ec2:${data.aws_region.current.region}::snapshot/*"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "runtime" } } }, { Sid = "ContainerProvisionIamPassRole", Effect = "Allow", Action = ["iam:PassRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-volume-backups-*"], Condition = { StringEquals = { "iam:PassedToService" = "dlm.amazonaws.com" } } }, { Sid = "BoundedRoleDelete24", Effect = "Allow", Action = ["iam:DeleteRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-dlm-*"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "runtime" } } }, { Sid = "ContainerProvisionEc2CreateSecurityGroup", Effect = "Allow", Action = ["ec2:CreateSecurityGroup"], Resource = ["arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*", "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:vpc/*"] }, { Sid = "NetworkProvisionLogsListTagsForResource", Effect = "Allow", Action = ["logs:ListTagsForResource"], Resource = ["arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:${local.resource_prefix}-*-flow-logs"] }, { Sid = "CreateAuroraCluster", Effect = "Allow", Action = ["rds:CreateDBCluster"], Resource = ["arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster:${local.resource_prefix}-*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}" } } }, { Sid = "CreateAuroraInstances", Effect = "Allow", Action = ["rds:CreateDBInstance"], Resource = ["arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:db:${local.resource_prefix}-*"], Condition = { StringEqualsIfExists = { "aws:RequestTag/deployment" = "${local.resource_prefix}" } } }, { Sid = "CreateRdsServiceLinkedRole", Effect = "Allow", Action = ["iam:CreateServiceLinkedRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS"], Condition = { StringEquals = { "iam:AWSServiceName" = "rds.amazonaws.com" } } }, { Sid = "BoundedRolePass3", Effect = "Allow", Action = ["iam:PassRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*-build"], Condition = { StringEquals = { "iam:PassedToService" = "lambda.amazonaws.com" } } }, { Sid = "ReadGoneLambdaFunctions", Effect = "Allow", Action = ["lambda:GetFunctionConcurrency"], Resource = ["arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${local.resource_prefix}-*"], Condition = { Null = { "aws:ResourceTag/deployment" = "true" } } }, { Sid = "TagHttpApiEndpoints", Effect = "Allow", Action = ["apigateway:POST", "apigateway:PUT"], Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/tags/*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" } } }, { Sid = "ManageLambdaLogGroups", Effect = "Allow", Action = ["logs:CreateLogGroup", "logs:PutRetentionPolicy", "logs:DeleteLogGroup"], Resource = ["arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${local.resource_prefix}-*"] }, { Sid = "OnlySetupChangesSigningSettings", Effect = "Deny", Action = ["ssm:PutParameter", "ssm:DeleteParameter", "ssm:DeleteParameters", "ssm:LabelParameterVersion", "ssm:UnlabelParameterVersion", "ssm:AddTagsToResource", "ssm:RemoveTagsFromResource"], Resource = ["arn:aws:ssm:*:*:parameter/signed/*"] }] })
+ }
+ 
+ resource "aws_iam_role_policy_attachment" "management_managed_policy_10_attachment" {
+@@ -296,7 +296,7 @@
+ 
+ resource "aws_iam_policy" "management_managed_policy_11" {
+   name   = length(format("%s-%s", local.resource_prefix, "deployment-management-11")) <= 128 ? format("%s-%s", local.resource_prefix, "deployment-management-11") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "deployment-management-11"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "deployment-management-11")), 0, 8))
+-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "ArtifactRegistryHeartbeatEcrDescribeRepositories", Effect = "Allow", Action = ["ecr:DescribeRepositories"], Resource = ["arn:aws:ecr:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:repository/*"] }, { Sid = "ComputeClusterManagementIamGetInstanceProfile", Effect = "Allow", Action = ["iam:GetInstanceProfile"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/*"] }, { Sid = "BoundedRolePass2", Effect = "Allow", Action = ["iam:PassRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"], Condition = { StringEquals = { "iam:PassedToService" = "ec2.amazonaws.com" } } }, { Sid = "ContainerProvisionIamGetRole", Effect = "Allow", Action = ["iam:GetRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-volume-backups-*"] }, { Sid = "DenyPassingLegacyVolumeBackupRoles", Effect = "Deny", Action = ["iam:PassRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-dlm-*"] }, { Sid = "ContainerProvisionIamGetRole2", Effect = "Allow", Action = ["iam:GetRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-dlm-*"] }, { Sid = "ContainerProvisionIamCreateServiceLinkedRole", Effect = "Allow", Action = ["iam:CreateServiceLinkedRole"], Resource = ["*"], Condition = { StringEquals = { "iam:AWSServiceName" = "elasticloadbalancing.amazonaws.com" } } }, { Sid = "KubernetesClusterHeartbeat", Effect = "Allow", Action = ["eks:DescribeCluster"], Resource = ["arn:aws:eks:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster/${local.resource_prefix}-*"] }, { Sid = "NetworkProvisionEc2DeleteNetworkInterface", Effect = "Allow", Action = ["ec2:DeleteNetworkInterface"], Resource = ["arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*"] }, { Sid = "SandboxProvisionLambdaTagResource", Effect = "Allow", Action = ["lambda:TagResource"], NotResource = ["arn:*:lambda:*:*:*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" } } }, { Sid = "SandboxProvisionLambdaCreateMicrovmImage2", Effect = "Allow", Action = ["lambda:CreateMicrovmImage"], Resource = ["*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "setup" } } }, { Sid = "SandboxProvisionLambdaTagResource2", Effect = "Allow", Action = ["lambda:TagResource"], NotResource = ["arn:*:lambda:*:*:*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "setup" } } }, { Sid = "VaultProvision", Effect = "Allow", Action = ["ssm:PutParameter", "ssm:DeleteParameter", "ssm:GetParameter"], Resource = ["arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/${local.resource_prefix}-*"] }, { Sid = "BoundedRolePass4", Effect = "Allow", Action = ["iam:PassRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*-sa"], Condition = { StringEquals = { "iam:PassedToService" = "lambda.amazonaws.com" } } }, { Sid = "ReadDeploymentContainerImages", Effect = "Allow", Action = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:GetRepositoryPolicy", "ecr:SetRepositoryPolicy"], Resource = ["arn:aws:ecr:*:${var.managing_account_id}:repository/*"] }, { Sid = "ReadGoneTlsCertificates", Effect = "Allow", Action = ["acm:DescribeCertificate"], Resource = ["arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"], Condition = { Null = { "aws:ResourceTag/deployment" = "true" } } }, { Sid = "DenyUntaggedDomainMappingReads", Effect = "Deny", Action = ["apigateway:GET"], Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/*"], Condition = { Null = { "aws:ResourceTag/deployment" = "true" } } }, { Sid = "VaultProtectDeployerSecretsStsAssumeRole", Effect = "Deny", Action = ["sts:AssumeRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"] }] })
++  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "ArtifactRegistryHeartbeatEcrDescribeRepositories", Effect = "Allow", Action = ["ecr:DescribeRepositories"], Resource = ["arn:aws:ecr:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:repository/*"] }, { Sid = "BoundedRolePass", Effect = "Allow", Action = ["iam:PassRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*-sa"], Condition = { StringEquals = { "iam:PassedToService" = "codebuild.amazonaws.com" } } }, { Sid = "ComputeClusterManagementIamGetInstanceProfile", Effect = "Allow", Action = ["iam:GetInstanceProfile"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/*"] }, { Sid = "BoundedRolePass2", Effect = "Allow", Action = ["iam:PassRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"], Condition = { StringEquals = { "iam:PassedToService" = "ec2.amazonaws.com" } } }, { Sid = "ContainerProvisionIamGetRole", Effect = "Allow", Action = ["iam:GetRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-volume-backups-*"] }, { Sid = "DenyPassingLegacyVolumeBackupRoles", Effect = "Deny", Action = ["iam:PassRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-dlm-*"] }, { Sid = "ContainerProvisionIamGetRole2", Effect = "Allow", Action = ["iam:GetRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-dlm-*"] }, { Sid = "ContainerProvisionIamCreateServiceLinkedRole", Effect = "Allow", Action = ["iam:CreateServiceLinkedRole"], Resource = ["*"], Condition = { StringEquals = { "iam:AWSServiceName" = "elasticloadbalancing.amazonaws.com" } } }, { Sid = "KubernetesClusterHeartbeat", Effect = "Allow", Action = ["eks:DescribeCluster"], Resource = ["arn:aws:eks:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster/${local.resource_prefix}-*"] }, { Sid = "NetworkProvisionEc2DeleteNetworkInterface", Effect = "Allow", Action = ["ec2:DeleteNetworkInterface"], Resource = ["arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*"] }, { Sid = "SandboxProvisionLambdaTagResource", Effect = "Allow", Action = ["lambda:TagResource"], NotResource = ["arn:*:lambda:*:*:*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" } } }, { Sid = "SandboxProvisionLambdaCreateMicrovmImage2", Effect = "Allow", Action = ["lambda:CreateMicrovmImage"], Resource = ["*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "setup" } } }, { Sid = "SandboxProvisionLambdaTagResource2", Effect = "Allow", Action = ["lambda:TagResource"], NotResource = ["arn:*:lambda:*:*:*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "setup" } } }, { Sid = "VaultProvision", Effect = "Allow", Action = ["ssm:PutParameter", "ssm:DeleteParameter", "ssm:GetParameter"], Resource = ["arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/${local.resource_prefix}-*"] }, { Sid = "BoundedRolePass4", Effect = "Allow", Action = ["iam:PassRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*-sa"], Condition = { StringEquals = { "iam:PassedToService" = "lambda.amazonaws.com" } } }, { Sid = "ReadDeploymentContainerImages", Effect = "Allow", Action = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:GetRepositoryPolicy", "ecr:SetRepositoryPolicy"], Resource = ["arn:aws:ecr:*:${var.managing_account_id}:repository/*"] }, { Sid = "ReadGoneTlsCertificates", Effect = "Allow", Action = ["acm:DescribeCertificate"], Resource = ["arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"], Condition = { Null = { "aws:ResourceTag/deployment" = "true" } } }, { Sid = "DenyUntaggedDomainMappingReads", Effect = "Deny", Action = ["apigateway:GET"], Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/*"], Condition = { Null = { "aws:ResourceTag/deployment" = "true" } } }, { Sid = "VaultProtectDeployerSecretsStsAssumeRole", Effect = "Deny", Action = ["sts:AssumeRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"] }] })
+ }
+ 
+ resource "aws_iam_role_policy_attachment" "management_managed_policy_11_attachment" {
 diff -ru base/containers.cloudformation.txt head/containers.cloudformation.txt
---- base/containers.cloudformation.txt	2026-11-05 13:12:43.890417076 +0000
-+++ head/containers.cloudformation.txt	2026-11-05 13:15:53.590417076 +0000
+--- base/containers.cloudformation.txt
++++ head/containers.cloudformation.txt
 @@ -1755,6 +1755,12 @@
            - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling
            Sid: ComputeClusterManagementIamCreateServiceLinkedRole
@@ -94,8 +169,8 @@ diff -ru base/containers.cloudformation.txt head/containers.cloudformation.txt
            Effect: Allow
            Action: iam:GetRole
 diff -ru base/containers.terraform-aws.txt head/containers.terraform-aws.txt
---- base/containers.terraform-aws.txt	2026-11-05 13:12:44.330417076 +0000
-+++ head/containers.terraform-aws.txt	2026-11-05 13:15:54.038417076 +0000
+--- base/containers.terraform-aws.txt
++++ head/containers.terraform-aws.txt
 @@ -776,7 +776,7 @@
  
  resource "aws_iam_policy" "management_managed_policy_3" {
@@ -115,8 +190,8 @@ diff -ru base/containers.terraform-aws.txt head/containers.terraform-aws.txt
  
  resource "aws_iam_role_policy_attachment" "management_managed_policy_4_attachment" {
 diff -ru base/functions.cloudformation.txt head/functions.cloudformation.txt
---- base/functions.cloudformation.txt	2026-11-05 13:12:44.758417076 +0000
-+++ head/functions.cloudformation.txt	2026-11-05 13:15:54.522417076 +0000
+--- base/functions.cloudformation.txt
++++ head/functions.cloudformation.txt
 @@ -759,15 +759,6 @@
            - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
            Sid: ReadGoneLambdaFunctions
@@ -169,8 +244,8 @@ diff -ru base/functions.cloudformation.txt head/functions.cloudformation.txt
            Condition:
              'Null':
 diff -ru base/functions.terraform-aws.txt head/functions.terraform-aws.txt
---- base/functions.terraform-aws.txt	2026-11-05 13:12:44.982417076 +0000
-+++ head/functions.terraform-aws.txt	2026-11-05 13:15:54.790417076 +0000
+--- base/functions.terraform-aws.txt
++++ head/functions.terraform-aws.txt
 @@ -491,7 +491,7 @@
  
  resource "aws_iam_policy" "management_managed_policy_1" {
@@ -190,8 +265,8 @@ diff -ru base/functions.terraform-aws.txt head/functions.terraform-aws.txt
  
  resource "aws_iam_role_policy_attachment" "management_managed_policy_2_attachment" {
 diff -ru base/minimal.cloudformation.txt head/minimal.cloudformation.txt
---- base/minimal.cloudformation.txt	2026-11-05 13:12:45.378417076 +0000
-+++ head/minimal.cloudformation.txt	2026-11-05 13:15:55.258417076 +0000
+--- base/minimal.cloudformation.txt
++++ head/minimal.cloudformation.txt
 @@ -477,6 +477,18 @@
            Resource:
            - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-management
@@ -212,8 +287,8 @@ diff -ru base/minimal.cloudformation.txt head/minimal.cloudformation.txt
            Effect: Allow
            Action: iam:GetRole
 diff -ru base/minimal.terraform-aws.txt head/minimal.terraform-aws.txt
---- base/minimal.terraform-aws.txt	2026-11-05 13:12:45.518417076 +0000
-+++ head/minimal.terraform-aws.txt	2026-11-05 13:15:55.426417076 +0000
+--- base/minimal.terraform-aws.txt
++++ head/minimal.terraform-aws.txt
 @@ -259,7 +259,7 @@
  
  resource "aws_iam_policy" "management_managed_policy_0" {
@@ -224,8 +299,8 @@ diff -ru base/minimal.terraform-aws.txt head/minimal.terraform-aws.txt
  
  resource "aws_iam_role_policy_attachment" "management_managed_policy_0_attachment" {
 diff -ru base/mixed.cloudformation.txt head/mixed.cloudformation.txt
---- base/mixed.cloudformation.txt	2026-11-05 13:12:46.086417076 +0000
-+++ head/mixed.cloudformation.txt	2026-11-05 13:15:55.986417076 +0000
+--- base/mixed.cloudformation.txt
++++ head/mixed.cloudformation.txt
 @@ -2332,6 +2332,18 @@
            Resource:
            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/*
@@ -246,8 +321,8 @@ diff -ru base/mixed.cloudformation.txt head/mixed.cloudformation.txt
            Effect: Allow
            Action: iam:GetRole
 diff -ru base/mixed.terraform-aws.txt head/mixed.terraform-aws.txt
---- base/mixed.terraform-aws.txt	2026-11-05 13:12:46.634417076 +0000
-+++ head/mixed.terraform-aws.txt	2026-11-05 13:15:56.522417076 +0000
+--- base/mixed.terraform-aws.txt
++++ head/mixed.terraform-aws.txt
 @@ -877,7 +877,7 @@
  
  resource "aws_iam_policy" "management_managed_policy_5" {

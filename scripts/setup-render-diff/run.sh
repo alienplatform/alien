@@ -51,7 +51,9 @@ cp "$repo/Cargo.toml" "$work/Cargo.toml"
 cp "$repo/Cargo.lock" "$work/Cargo.lock"
 render "$repo" "$out/head" pins
 
-(cd "$out" && diff -ru base head || true) > "$out/actual.diff"
+# Without the timestamps diff puts on file headers, so equal renders give equal diffs.
+(cd "$out" && diff -ru base head || true) |
+  sed -E 's/^(---|\+\+\+) ([^\t]+)\t.*/\1 \2/' > "$out/actual.diff"
 if [ "${UPDATE:-}" = 1 ]; then
   cp "$out/actual.diff" "$here/expected.diff"
   echo "wrote $here/expected.diff"
