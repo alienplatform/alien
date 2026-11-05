@@ -56,6 +56,7 @@ impl ResourceImporter for GcpNetworkImporter {
             region: None,
             cidr_block: data.cidr_block,
             is_byo_vpc: data.is_byo_vpc,
+            builtin_metric_sources: Vec::new(),
             pending_operation_name: None,
             pending_operation_region: None,
             _internal_stay_count: None,

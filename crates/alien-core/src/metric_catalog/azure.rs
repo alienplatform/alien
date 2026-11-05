@@ -85,6 +85,45 @@ pub fn postgres(resource_uri: &str) -> Vec<AzureMetricSource> {
     )]
 }
 
+pub fn nat_gateway(resource_uri: &str) -> Vec<AzureMetricSource> {
+    vec![
+        native(
+            resource_uri,
+            "Microsoft.Network/natGateways",
+            &["ByteCount", "PacketCount", "PacketDropCount"],
+            "Total",
+        ),
+        native(
+            resource_uri,
+            "Microsoft.Network/natGateways",
+            &["DatapathAvailability"],
+            "Average",
+        ),
+    ]
+}
+
+pub fn scale_set(resource_uri: &str) -> Vec<AzureMetricSource> {
+    vec![
+        native(
+            resource_uri,
+            "Microsoft.Compute/virtualMachineScaleSets",
+            &["Percentage CPU"],
+            "Average",
+        ),
+        native(
+            resource_uri,
+            "Microsoft.Compute/virtualMachineScaleSets",
+            &[
+                "Network In Total",
+                "Network Out Total",
+                "Disk Read Bytes",
+                "Disk Write Bytes",
+            ],
+            "Total",
+        ),
+    ]
+}
+
 fn native(
     resource_uri: &str,
     namespace: &str,

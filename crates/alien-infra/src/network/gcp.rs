@@ -45,6 +45,8 @@ pub struct GcpNetworkController {
     pub(crate) region: Option<String>,
     pub cidr_block: Option<String>,
     pub is_byo_vpc: bool,
+    #[serde(default)]
+    pub(crate) builtin_metric_sources: Vec<alien_core::MetricsSource>,
 
     // Operation tracking
     pub(crate) pending_operation_name: Option<String>,
@@ -180,6 +182,7 @@ impl GcpNetworkController {
             region: Some(region),
             cidr_block: Some("10.0.0.0/16".to_string()),
             is_byo_vpc: false,
+            builtin_metric_sources: Vec::new(),
             pending_operation_name: None,
             pending_operation_region: None,
             _internal_stay_count: None,
@@ -742,6 +745,18 @@ impl GcpNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
+        if let Some(router_id) = router.id.as_deref() {
+            self.builtin_metric_sources = alien_core::metric_catalog::gcp::nat_gateway(
+                &gcp_config.project_id,
+                &region,
+                router_id,
+                &cloud_nat_name,
+            )
+            .into_iter()
+            .map(alien_core::MetricsSource::Gcp)
+            .collect();
+        }
+
         // Add Cloud NAT configuration to router
         let nat_config = RouterNat::builder()
             .name(cloud_nat_name.clone())
@@ -993,6 +1008,20 @@ impl GcpNetworkController {
             state: Ready,
             suggested_delay: Some(std::time::Duration::from_secs(60)),
         })
+    }
+
+    fn build_outputs(&self) -> Option<alien_core::ResourceOutputs> {
+        Some(
+            alien_core::ResourceOutputs::new(alien_core::NetworkOutputs {
+                network_id: self.network_self_link.clone()?,
+                availability_zones: 1,
+                has_public_subnets: false,
+                has_nat_gateway: self.cloud_nat_name.is_some(),
+                egress_public_ips: Vec::new(),
+                cidr: self.cidr_block.clone(),
+            })
+            .with_builtin_metric_sources(self.builtin_metric_sources.clone()),
+        )
     }
 
     // ─────────────── UPDATE FLOW ──────────────────────────────

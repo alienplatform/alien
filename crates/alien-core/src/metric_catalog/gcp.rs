@@ -76,6 +76,44 @@ pub fn cloud_sql(project: &str, instance: &str) -> Vec<GcpMetricSource> {
     .collect()
 }
 
+/// Native pool size, without enabling predictive autoscaling or guest agents.
+pub fn instance_group(project: &str, group: &str, location: &str) -> Vec<GcpMetricSource> {
+    vec![resource_source(
+        project,
+        "compute.googleapis.com/instance_group/size",
+        "instance_group",
+        &[("instance_group_name", group), ("location", location)],
+    )]
+}
+
+pub fn nat_gateway(
+    project: &str,
+    region: &str,
+    router_id: &str,
+    gateway: &str,
+) -> Vec<GcpMetricSource> {
+    [
+        "nat/sent_bytes_count",
+        "nat/received_bytes_count",
+        "nat/dropped_sent_packets_count",
+        "nat/allocated_ports",
+    ]
+    .into_iter()
+    .map(|metric| {
+        resource_source(
+            project,
+            &format!("router.googleapis.com/{metric}"),
+            "nat_gateway",
+            &[
+                ("region", region),
+                ("router_id", router_id),
+                ("gateway_name", gateway),
+            ],
+        )
+    })
+    .collect()
+}
+
 fn resource_source(
     project: &str,
     metric: &str,

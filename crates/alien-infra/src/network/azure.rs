@@ -1058,7 +1058,9 @@ impl AzureNetworkController {
             Some(SubnetProvisioningState::Succeeded) => {}
             Some(SubnetProvisioningState::Failed) => {
                 return Err(AlienError::new(ErrorData::InfrastructureError {
-                    message: format!("Azure failed to provision Container Apps subnet '{subnet_name}'"),
+                    message: format!(
+                        "Azure failed to provision Container Apps subnet '{subnet_name}'"
+                    ),
                     operation: Some("get_subnet".to_string()),
                     resource_id: Some(config.id.clone()),
                 }));
@@ -2092,6 +2094,17 @@ impl AzureNetworkController {
                 egress_public_ips: self.egress_public_ips.clone(),
                 cidr: self.cidr_block.clone(),
             })
+            .with_builtin_metric_sources(
+                self.nat_gateway_id
+                    .as_ref()
+                    .map(|id| {
+                        alien_core::metric_catalog::azure::nat_gateway(id)
+                            .into_iter()
+                            .map(alien_core::MetricsSource::Azure)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            )
         })
     }
 
@@ -2101,8 +2114,8 @@ impl AzureNetworkController {
 #[cfg(test)]
 mod tests {
     use super::AzureNetworkController;
+    use crate::core::controller_test::{test_azure_resource_group, SingleControllerExecutor};
     use crate::core::MockPlatformServiceProvider;
-    use crate::core::controller_test::{SingleControllerExecutor, test_azure_resource_group};
     use crate::infra_requirements::AzureResourceGroupController;
     use alien_azure_clients::azure::models::{
         nat_gateway::NatGateway,

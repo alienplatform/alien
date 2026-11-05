@@ -180,3 +180,13 @@ fn source(
         monotonic: statistic == "Sum" || statistic == "SampleCount",
     }
 }
+
+/// EC2 host measurements aggregated by an exact owned Auto Scaling group.
+/// Five-minute resolution preserves basic monitoring; this never enables group metrics.
+pub fn ec2_group(group_name: &str) -> Vec<AwsMetricSource> {
+    let mut sources = ec2(group_name);
+    for source in &mut sources {
+        source.dimensions = BTreeMap::from([("AutoScalingGroupName".into(), group_name.into())]);
+    }
+    sources
+}

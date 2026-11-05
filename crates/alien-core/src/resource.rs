@@ -177,13 +177,6 @@ impl<'de> Deserialize<'de> for Resource {
             .ok_or_else(|| serde::de::Error::missing_field("type"))?
             .to_string();
 
-        let builtin_metric_sources = value
-            .as_object_mut()
-            .and_then(|obj| obj.remove("builtinMetricSources"))
-            .map(serde_json::from_value)
-            .transpose()
-            .map_err(serde::de::Error::custom)?
-            .unwrap_or_default();
         // Remove the "type" tag before passing to concrete deserializer
         // (structs with deny_unknown_fields would reject it)
         if let Some(obj) = value.as_object_mut() {
@@ -582,6 +575,13 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
             .ok_or_else(|| serde::de::Error::missing_field("type"))?
             .to_string();
 
+        let builtin_metric_sources: Vec<crate::MetricsSource> = value
+            .as_object_mut()
+            .and_then(|obj| obj.remove("builtinMetricSources"))
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(serde::de::Error::custom)?
+            .unwrap_or_default();
         // Remove the "type" tag before passing to concrete deserializer
         // (structs with deny_unknown_fields would reject it)
         if let Some(obj) = value.as_object_mut() {
