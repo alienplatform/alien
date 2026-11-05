@@ -189,17 +189,34 @@ pub async fn render_setup_template(
             })
         }
         "helm" => {
-            let chart = alien_helm::generate_helm_chart(
-                &stack,
-                HelmOptions {
-                    registry: options.helm_registry,
-                    stack_settings: settings.clone(),
-                    chart_name: stack.id().to_string(),
-                },
-            )
+            let helm_options = HelmOptions {
+                registry: options.helm_registry,
+                stack_settings: settings.clone(),
+                chart_name: stack.id().to_string(),
+            };
+            let chart = match &settings.signing {
+                Some(_) => {
+                    let operator_digest = options.pins.operator_digest.clone().ok_or_else(|| {
+                        render_failed(
+                            name,
+                            "this CLI build has no Operator digest; protected setups come from released CLI builds",
+                        )
+                    })?;
+                    alien_helm::generate_signed_helm_chart(
+                        &stack,
+                        helm_options,
+                        &alien_helm::SignedChartPins { operator_digest },
+                    )
+                }
+                None => alien_helm::generate_helm_chart(&stack, helm_options),
+            }
             .context(step(name, "generate the chart"))?;
+            let allowed = match &settings.signing {
+                Some(_) => alien_helm::allowed_values(&chart)
+                    .context(step(name, "list the values customers may set"))?,
+                None => Vec::new(),
+            };
             let files: BTreeMap<String, String> = chart.files.into_iter().collect();
-            let allowed = helm_allowed_values(name, &files)?;
             Ok(RenderedSetupTemplate {
                 bytes: file_map_bytes(name, &files)?,
                 allowed,
@@ -300,22 +317,6 @@ fn file_map_bytes(name: &str, files: &BTreeMap<String, String>) -> Result<Vec<u8
     serde_json::to_vec(files)
         .into_alien_error()
         .context(step(name, "encode the files as JSON"))
-}
-
-/// Top-level keys of the chart's `values.yaml`, except `signing`.
-fn helm_allowed_values(name: &str, files: &BTreeMap<String, String>) -> Result<Vec<String>> {
-    let values = files
-        .get("values.yaml")
-        .ok_or_else(|| render_failed(name, "the chart has no values.yaml"))?;
-    let values: serde_yaml::Mapping = serde_yaml::from_str(values)
-        .into_alien_error()
-        .context(step(name, "parse values.yaml"))?;
-    Ok(values
-        .keys()
-        .filter_map(|key| key.as_str())
-        .filter(|key| *key != "signing")
-        .map(str::to_string)
-        .collect())
 }
 
 fn step(name: &str, what: &str) -> ErrorData {

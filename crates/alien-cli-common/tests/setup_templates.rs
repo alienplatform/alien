@@ -19,6 +19,7 @@ fn pins() -> SetupPins {
     SetupPins {
         aws_publisher: Some(PUBLISHER.to_string()),
         aws_verifier_image: Some(VERIFIER.to_string()),
+        operator_digest: Some(format!("sha256:{}", "ef".repeat(32))),
     }
 }
 
