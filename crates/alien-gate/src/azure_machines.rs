@@ -88,7 +88,7 @@ pub fn image_facts(image: &str, definition: &Value, version: &Value) -> Result<I
         Some(other) => other,
         None => return Err(missing("architecture")),
     };
-    let created = version["properties"]["publishingProfile"]["publishedDate"]
+    let created = version["properties"]["publishedDate"]
         .as_str()
         .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
         .ok_or_else(|| missing("published date"))?;
@@ -534,9 +534,17 @@ mod tests {
                     set
                 })
             } else if path.contains("/versions/") {
-                Some(
-                    json!({"properties": {"publishingProfile": {"publishedDate": self.published}}}),
-                )
+                // As a real community gallery version read returned it.
+                Some(json!({
+                    "properties": {
+                        "publishedDate": self.published,
+                        "excludeFromLatest": false,
+                        "storageProfile": {"osDiskImage": {"diskSizeGB": 30, "hostCaching": "ReadWrite"}},
+                        "imageState": "Active"
+                    },
+                    "location": "westeurope",
+                    "name": "1.0.0"
+                }))
             } else if path.contains("/communityGalleries/") {
                 Some(json!({"properties": {"architecture": "x64", "osType": "Linux"}}))
             } else {
