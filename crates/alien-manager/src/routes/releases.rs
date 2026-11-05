@@ -202,15 +202,17 @@ fn check_signed_stacks_match(
     signed_stacks: &HashMap<Platform, SignedStatement>,
 ) -> std::result::Result<(), alien_error::AlienError<ErrorData>> {
     for (platform, signed) in signed_stacks {
-        let opened = signed
-            .open()
-            .ok()
-            .filter(|opened| opened.kind == Kind::Release)
-            .ok_or_else(|| {
-                ErrorData::bad_request(format!(
-                    "The signed statement for {platform} is not a release statement"
-                ))
-            })?;
+        let opened = signed.open().map_err(|error| {
+            ErrorData::bad_request(format!(
+                "The signed statement for {platform} can't be read: {}",
+                error.message
+            ))
+        })?;
+        if opened.kind != Kind::Release {
+            return Err(ErrorData::bad_request(format!(
+                "The signed statement for {platform} is not a release statement"
+            )));
+        }
         if opened.project.as_deref() != Some(project_id) {
             return Err(ErrorData::bad_request(format!(
                 "The signed statement for {platform} is for project '{}'",
