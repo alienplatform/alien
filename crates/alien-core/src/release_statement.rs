@@ -3,6 +3,8 @@
 //! A signed release is a `release/v2` statement from `alien-signing`.
 //! Its body names every workload exactly, for enforcers that build workloads
 //! one by one, and carries the whole stack, for enforcers that deploy from it.
+//! It also names its channel, the enforcer builds it runs with, and the
+//! digests of the setup templates rendered for it.
 //! [`release_body`] builds that body from a pushed stack; [`signed_stack`]
 //! reads the stack back out of a verified body and checks it agrees with the
 //! workloads beside it.
@@ -11,14 +13,15 @@ use std::collections::BTreeMap;
 
 use alien_error::AlienError;
 use alien_signing::release::{
-    Bounds, Configurable, FunctionSettings, Mount, ProvidedEnv, Runtime, Security, WorkloadKind,
+    Bounds, Configurable, FunctionSettings, Mount, Runtime, Security, WorkloadKind,
 };
-use alien_signing::{ReleaseBody, Workload};
+use alien_signing::{ReleaseBody, SetupTemplate, Workload};
 
 use crate::error::{ErrorData, Result};
+use crate::runtime_environment::*;
 use crate::{
-    Container, ContainerCode, Daemon, DaemonCode, Platform, Resource, Sandbox, SandboxCode, Stack,
-    Worker, WorkerCode,
+    Container, ContainerCode, Daemon, DaemonCode, Platform, Resource, ResourceRef, Sandbox,
+    SandboxCode, Stack, Worker, WorkerCode,
 };
 
 /// Resource types that run no code of their own. A type missing from this
@@ -44,19 +47,62 @@ const RESOURCE_TYPES_WITHOUT_CODE: &[&str] = &[
     "resource-access",
 ];
 
-/// Environment names the deployment fills in for every workload: binding and
-/// runtime variables, telemetry endpoints and the listening port. Their values
-/// depend on resources that don't exist when the release is signed.
-const PROVIDED_ENV_PREFIXES: &[&str] = &["ALIEN_", "OTEL_"];
-const PROVIDED_ENV_NAMES: &[&str] = &["PORT"];
+/// Environment names the deployment fills in for every workload, exactly:
+/// runtime variables and the listening port. Their values depend on the
+/// deployment, and none of them chooses code or a resource. Bindings are not
+/// here: the enforcer computes them, and the secrets list it builds itself.
+const PROVIDED_ENV_NAMES: &[&str] = &[
+    "PORT",
+    ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME,
+    ENV_ALIEN_CURRENT_WORKER_BINDING_NAME,
+    ENV_ALIEN_DEPLOYMENT_TYPE,
+    ENV_ALIEN_LAMBDA_MODE,
+    ENV_ALIEN_TRANSPORT,
+    ENV_AWS_ACCOUNT_ID,
+    ENV_AWS_REGION,
+    ENV_AZURE_CLIENT_ID,
+    ENV_AZURE_REGION,
+    ENV_AZURE_SUBSCRIPTION_ID,
+    ENV_AZURE_TENANT_ID,
+    ENV_GCP_PROJECT_ID,
+    ENV_GCP_REGION,
+    ENV_GOOGLE_CLOUD_PROJECT,
+    ENV_ALIEN_WORKER_GRPC_ADDRESS,
+    ENV_ALIEN_QUEUE_BATCH_CONFIG,
+    ENV_ALIEN_WORKER_TIMEOUT_SECONDS,
+    ENV_ALIEN_COMMANDS_TOKEN,
+    ENV_ALIEN_COMMANDS_TOKEN_FILE,
+    ENV_ALIEN_COMMANDS_LEASE_SECONDS,
+    ENV_ALIEN_COMMANDS_MAX_LEASES,
+    ENV_ALIEN_COMMANDS_POLL_INTERVAL_MS,
+    ENV_ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS,
+    ENV_ALIEN_COMMANDS_POLL_JITTER,
+    ENV_ALIEN_COMMANDS_DRAIN_TIMEOUT_MS,
+    ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID,
+    ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE,
+    ENV_ALIEN_COMMANDS_URL,
+    ENV_ALIEN_DEPLOYMENT_ID,
+    ENV_ALIEN_DEPLOYMENT_NAME,
+    ENV_ALIEN_DEPLOYMENT_TOKEN,
+    ENV_ALIEN_MANAGER_URL,
+    ENV_ALIEN_RESOURCE_ID,
+    ENV_ALIEN_PUBLIC_ENDPOINTS_JSON,
+    ENV_ALIEN_SECRET_ENV_REVISION,
+];
 
-/// What a release lets deployment config change.
+/// What a release carries beyond the stack.
 #[derive(Debug, Clone, Default)]
 pub struct ReleaseOptions {
+    /// Release channel, such as `production`.
+    pub channel: String,
     /// Environment names `config/v1` statements may set on every workload.
     pub configurable_env: Vec<String>,
     /// Developer input ids `config/v1` statements may set.
     pub configurable_inputs: Vec<String>,
+    /// Digest of each enforcer build, by component name.
+    pub components: BTreeMap<String, String>,
+    /// Digests of the rendered setup templates, by template name.
+    pub setup: BTreeMap<String, SetupTemplate>,
 }
 
 /// The `release/v2` body for `stack` on `platform`. Every image must be
@@ -98,16 +144,14 @@ pub fn release_body(
     }
     let body = ReleaseBody {
         platform: platform.as_str().to_string(),
+        channel: options.channel.clone(),
         workloads,
         configurable: Configurable {
             env: configurable_env,
             inputs: configurable_inputs,
         },
-        components: BTreeMap::new(),
-        remote_access: Vec::new(),
-        dynamic: None,
-        plugins: BTreeMap::new(),
-        signed_commands: Vec::new(),
+        components: options.components.clone(),
+        setup: options.setup.clone(),
         stack: Some(serde_json::to_value(stack).map_err(|error| {
             statement_invalid(format!("the stack could not be serialized: {error}"))
         })?),
@@ -138,8 +182,11 @@ pub fn signed_stack(body: &ReleaseBody, platform: Platform) -> Result<Stack> {
         platform,
         &stack,
         &ReleaseOptions {
+            channel: body.channel.clone(),
             configurable_env: body.configurable.env.clone(),
             configurable_inputs: body.configurable.inputs.clone(),
+            components: body.components.clone(),
+            setup: body.setup.clone(),
         },
     )?;
     if expected.workloads != body.workloads {
@@ -198,16 +245,11 @@ fn workload(id: &str, config: &Resource, options: &ReleaseOptions) -> Result<Opt
         image: image.to_string(),
         command: None,
         env: BTreeMap::new(),
-        provided_env: ProvidedEnv {
-            names: PROVIDED_ENV_NAMES
-                .iter()
-                .map(|name| name.to_string())
-                .collect(),
-            prefixes: PROVIDED_ENV_PREFIXES
-                .iter()
-                .map(|prefix| prefix.to_string())
-                .collect(),
-        },
+        provided_env: PROVIDED_ENV_NAMES
+            .iter()
+            .map(|name| name.to_string())
+            .collect(),
+        bindings: BTreeMap::new(),
         configurable_env: options.configurable_env.clone(),
         deployer_env: BTreeMap::new(),
         secrets: Vec::new(),
@@ -220,6 +262,7 @@ fn workload(id: &str, config: &Resource, options: &ReleaseOptions) -> Result<Opt
     if let Some(container) = config.downcast_ref::<Container>() {
         let image = pinned_image(id, container_image(id, container)?)?;
         let mut workload = base(WorkloadKind::Container, image);
+        workload.bindings = bindings(&container.links);
         workload.command = container.command.clone();
         workload.env = container.environment.clone().into_iter().collect();
         workload.runtime = Runtime {
@@ -269,6 +312,7 @@ fn workload(id: &str, config: &Resource, options: &ReleaseOptions) -> Result<Opt
             DaemonCode::Source { .. } => return Err(source_code(id)),
         };
         let mut workload = base(WorkloadKind::Daemon, image);
+        workload.bindings = bindings(&daemon.links);
         workload.command = daemon.command.clone();
         workload.env = daemon.environment.clone().into_iter().collect();
         if let Some(runtime) = &daemon.runtime {
@@ -304,6 +348,7 @@ fn workload(id: &str, config: &Resource, options: &ReleaseOptions) -> Result<Opt
             WorkerCode::Source { .. } => return Err(source_code(id)),
         };
         let mut workload = base(WorkloadKind::Function, image);
+        workload.bindings = bindings(&worker.links);
         workload.env = worker.environment.clone().into_iter().collect();
         workload.identity = Some(worker.permissions.clone());
         workload.function = Some(FunctionSettings {
@@ -325,6 +370,14 @@ fn workload(id: &str, config: &Resource, options: &ReleaseOptions) -> Result<Opt
     Err(statement_invalid(format!(
         "resource '{id}' has type '{resource_type}', which a signed release can't carry"
     )))
+}
+
+/// The resources a workload links to, by id, with their type.
+fn bindings(links: &[ResourceRef]) -> BTreeMap<String, String> {
+    links
+        .iter()
+        .map(|link| (link.id.clone(), link.resource_type.to_string()))
+        .collect()
 }
 
 fn container_image<'a>(id: &str, container: &'a Container) -> Result<&'a str> {
@@ -483,10 +536,17 @@ mod tests {
         format!("registry.example.com/shop/api@{DIGEST}")
     }
 
+    fn production() -> ReleaseOptions {
+        ReleaseOptions {
+            channel: "production".to_string(),
+            ..ReleaseOptions::default()
+        }
+    }
+
     #[test]
     fn a_pushed_stack_becomes_workloads_that_build_back_to_the_stack() {
         let stack = stack(&pinned());
-        let body = release_body(Platform::Aws, &stack, &ReleaseOptions::default()).unwrap();
+        let body = release_body(Platform::Aws, &stack, &production()).unwrap();
         assert_eq!(body.workloads.len(), 1);
         let api = &body.workloads[0];
         assert_eq!(api.name, "api");
@@ -495,8 +555,19 @@ mod tests {
         assert_eq!(api.identity.as_deref(), Some("execution"));
         assert_eq!(api.bounds.max_cpu.as_deref(), Some("1"));
         assert_eq!(api.bounds.max_memory.as_deref(), Some("1Gi"));
-        assert!(api.provided_env.allows("ALIEN_STORAGE_BINDING"));
-        assert!(!api.provided_env.allows("NODE_OPTIONS"));
+        assert_eq!(body.channel, "production");
+        assert!(api
+            .provided_env
+            .contains(&"ALIEN_DEPLOYMENT_ID".to_string()));
+        assert!(
+            !api.provided_env
+                .iter()
+                .any(|name| name.ends_with("_BINDING")
+                    || name == ENV_ALIEN_SECRETS
+                    || name.starts_with("OTEL_")),
+            "bindings, the secrets list and telemetry are never the control plane's: {:?}",
+            api.provided_env
+        );
         assert_eq!(signed_stack(&body, Platform::Aws).unwrap(), stack);
     }
 
@@ -515,7 +586,7 @@ mod tests {
         let mut container = container(&pinned());
         container.environment.clear();
         stack.resources.get_mut("api").unwrap().config = alien_core_resource(container);
-        let body = release_body(Platform::Aws, &stack, &ReleaseOptions::default()).unwrap();
+        let body = release_body(Platform::Aws, &stack, &production()).unwrap();
         let api = &body.workloads[0];
         assert_eq!(api.deployer_env["DATABASE_URL"], "databaseUrl");
         assert!(api.configurable_env.contains(&"LOG_LEVEL".to_string()));
@@ -532,14 +603,14 @@ mod tests {
         let error = release_body(
             Platform::Aws,
             &stack("registry.example.com/shop/api:latest"),
-            &ReleaseOptions::default(),
+            &production(),
         )
         .expect_err("a tag is refused");
         assert!(error.message.contains("not pinned"), "{}", error.message);
 
         let options = ReleaseOptions {
             configurable_env: vec!["LD_PRELOAD".to_string()],
-            configurable_inputs: Vec::new(),
+            ..production()
         };
         release_body(Platform::Aws, &stack(&pinned()), &options)
             .expect_err("a loader variable can't be configurable");
@@ -547,15 +618,35 @@ mod tests {
 
     #[test]
     fn a_stack_that_disagrees_with_its_workloads_is_refused() {
-        let mut body =
-            release_body(Platform::Aws, &stack(&pinned()), &ReleaseOptions::default()).unwrap();
+        let mut body = release_body(Platform::Aws, &stack(&pinned()), &production()).unwrap();
         let other = format!("registry.example.com/shop/other@{DIGEST}");
         body.stack = Some(serde_json::to_value(stack(&other)).unwrap());
         signed_stack(&body, Platform::Aws).expect_err("a swapped stack is refused");
 
-        let body =
-            release_body(Platform::Aws, &stack(&pinned()), &ReleaseOptions::default()).unwrap();
+        let body = release_body(Platform::Aws, &stack(&pinned()), &production()).unwrap();
         signed_stack(&body, Platform::Gcp).expect_err("another platform is refused");
+    }
+
+    #[test]
+    fn links_become_bindings_the_enforcer_computes() {
+        let mut container = container(&pinned());
+        container.links.push(ResourceRef::new(
+            crate::ResourceType::from("storage"),
+            "uploads".to_string(),
+        ));
+        let stack = Stack::new("shop".to_string())
+            .add(container, ResourceLifecycle::Live)
+            .build();
+        let body = release_body(Platform::Aws, &stack, &production()).unwrap();
+        assert_eq!(
+            body.workloads[0].bindings,
+            BTreeMap::from([("uploads".to_string(), "storage".to_string())])
+        );
+        let mut released_without_channel = body.clone();
+        released_without_channel.channel = String::new();
+        released_without_channel
+            .validate()
+            .expect_err("a release names its channel");
     }
 
     #[test]

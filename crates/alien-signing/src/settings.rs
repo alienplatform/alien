@@ -321,3 +321,58 @@ fn undecided(reason: impl Into<String>) -> AlienError<ErrorData> {
         reason: reason.into(),
     })
 }
+
+/// Where setup writes the signing settings, the ledger and deployer inputs.
+///
+/// Every name sits under a root no management grant reaches: grants are on
+/// `<prefix>-*`, and these start with `/signed/` or `signed-`, so a neighbor
+/// install whose prefix overlaps this one's can't write them.
+pub mod names {
+    /// AWS SSM parameter holding the signing settings.
+    pub fn aws_settings(prefix: &str) -> String {
+        format!("/signed/{prefix}/fingerprint")
+    }
+
+    /// AWS SSM parameter holding the ledger.
+    pub fn aws_ledger(prefix: &str) -> String {
+        format!("/signed/{prefix}/state")
+    }
+
+    /// AWS SSM path under which each deployer input is one parameter.
+    pub fn aws_inputs(prefix: &str) -> String {
+        format!("/signed/{prefix}/inputs/")
+    }
+
+    /// GCP Parameter Manager parameter holding the signing settings.
+    pub fn gcp_settings(prefix: &str) -> String {
+        format!("signed-{prefix}-fingerprint")
+    }
+
+    /// GCP Parameter Manager parameter holding the ledger.
+    pub fn gcp_ledger(prefix: &str) -> String {
+        format!("signed-{prefix}-state")
+    }
+
+    /// GCP Secret Manager secret holding deployer input `name`.
+    pub fn gcp_input(prefix: &str, name: &str) -> String {
+        format!("signed-{prefix}-input-{name}")
+    }
+
+    /// Azure resource-group tag holding the signing settings.
+    pub const AZURE_SETTINGS_TAG: &str = "signing-fingerprint";
+
+    /// Azure Key Vault secret, in the install's inputs vault, holding the ledger.
+    pub const AZURE_LEDGER_SECRET: &str = "signing-state";
+
+    /// Kubernetes ConfigMap holding the signing settings of Helm release `release`.
+    pub fn kubernetes_settings(release: &str) -> String {
+        format!("{release}-signing")
+    }
+
+    /// File on a machine holding its signing settings. `join` writes it, and
+    /// nothing configures another path.
+    pub const MACHINE_SETTINGS: &str = "/etc/horizond/signing.toml";
+
+    /// File on a machine holding its ledger.
+    pub const MACHINE_LEDGER: &str = "/var/lib/horizond/state";
+}

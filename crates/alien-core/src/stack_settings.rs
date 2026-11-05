@@ -5,9 +5,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::{ErrorData, KubernetesCloudReference, KubernetesClusterOwnership, Platform, Result};
+use crate::{ErrorData, KubernetesCloudReference, KubernetesClusterOwnership, Result};
 use alien_error::AlienError;
-use alien_signing::Anchor;
+use alien_signing::SigningSettings;
 
 /// AWS management configuration extracted from stack settings
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -977,153 +977,43 @@ pub struct StackSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_bindings: Option<crate::ExternalBindings>,
 
-    /// Protection for this deployment. When set, setup writes the anchor the deployment's
-    /// enforcers read, and they run only what the developer signed. Setup alone writes it:
-    /// a later change here does not change the installed anchor.
+    /// Release signing for this install. When set, setup writes the signing settings
+    /// (the fingerprint, the install's prefix and the channel) where only setup can change
+    /// them, and the install's enforcers run only what the vendor signed. Setup alone writes
+    /// them: changing this later does not change what an install already pinned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub release_trust: Option<ReleaseTrustSettings>,
-
-    /// Who publishes the machine images compute clusters boot. Setup writes it into the
-    /// management identity's policy, so the control plane can boot no other image.
-    /// Required on AWS when the management identity can launch machines.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub machine_image_publisher: Option<MachineImagePublisher>,
+    pub signing: Option<StackSigning>,
 }
 
-/// What setup pins for a protected deployment.
+/// What setup pins for a protected install.
 ///
-/// Setup copies these values into the anchor. Take them from the developer's install
-/// guide, not from the control plane.
+/// Take the values from the vendor's install guide or signed release, not from the
+/// control plane.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReleaseTrustSettings {
-    /// Project whose signed statements the deployment accepts.
-    pub project: String,
-    /// This deployment's ID, which every deployment-bound statement must name.
-    pub deployment: String,
-    /// `SHA256:<64 hex>` fingerprint of the developer's signer list version 1.
-    pub signing: String,
-    /// `ecdsa-p256:<base64 SPKI>` key that signs enforcer and component builds.
-    pub components: String,
-    /// Who approves exec and debug sessions.
-    #[serde(default)]
-    #[cfg_attr(feature = "openapi", schema(value_type = String))]
-    pub session_approval: alien_signing::SessionApproval,
+pub struct StackSigning {
+    /// `SHA256:<64 hex>` fingerprint of the vendor's signer list version 1.
+    pub fingerprint: String,
+    /// Release channel the install follows, such as `production`.
+    pub channel: String,
 }
 
-impl ReleaseTrustSettings {
-    /// The anchor setup writes on `platform` for the deployment whose resource prefix is
-    /// `resource_prefix`, checked the way enforcers check it when they read it. It names the
-    /// deployer inputs store of that platform.
-    pub fn anchor(&self, platform: Platform, resource_prefix: &str) -> Result<Anchor> {
-        for (field, value) in [("project", &self.project), ("deployment", &self.deployment)] {
-            if value.is_empty()
-                || value.len() > 128
-                || !value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-            {
-                return Err(AlienError::new(ErrorData::ReleaseTrustSettingsInvalid {
-                    reason: format!(
-                        "{field} '{value}' must be 1 to 128 letters, digits, '_' or '-'"
-                    ),
-                }));
-            }
-        }
-        let anchor = Anchor {
-            project: self.project.clone(),
-            deployment: self.deployment.clone(),
-            protected: true,
-            signing: self.signing.clone(),
-            components: self.components.clone(),
-            session_approval: self.session_approval,
-            inputs: Some(deployer_inputs_store(platform, resource_prefix)?),
-            resource_prefix: Some(resource_prefix.to_string()),
+impl StackSigning {
+    /// The settings setup writes for the install whose resource prefix is `prefix`, checked
+    /// the way enforcers check them when they read them.
+    pub fn settings(&self, prefix: &str) -> Result<SigningSettings> {
+        let settings = SigningSettings {
+            fingerprint: self.fingerprint.clone(),
+            prefix: prefix.to_string(),
+            channel: self.channel.clone(),
         };
-        anchor.validate().map_err(|error| {
-            AlienError::new(ErrorData::ReleaseTrustSettingsInvalid {
+        settings.validate().map_err(|error| {
+            AlienError::new(ErrorData::SigningSettingsInvalid {
                 reason: error.message,
             })
         })?;
-        Ok(anchor)
-    }
-}
-
-/// Name of the AWS SSM parameter that holds the anchor of the deployment whose resource prefix
-/// is `resource_prefix`. Resource prefixes start with a letter, so no grant on `<prefix>-*`
-/// reaches a name that starts with `/_`.
-pub fn release_trust_parameter_name(resource_prefix: &str) -> String {
-    format!("/_release-trust/{resource_prefix}")
-}
-
-/// Name of the AWS SSM parameter that holds, as one JSON object, the deployer's inputs for the
-/// deployment whose resource prefix is `resource_prefix`. Only the customer writes it.
-pub fn deployer_inputs_parameter_name(resource_prefix: &str) -> String {
-    format!("/_deployer-inputs/{resource_prefix}")
-}
-
-/// How an anchor names an inputs store that is an AWS SSM parameter: this prefix, then the
-/// parameter name.
-pub const DEPLOYER_INPUTS_STORE_SSM: &str = "aws-ssm:";
-
-/// Name of the GCP Secret Manager secret that holds the anchor of the deployment whose resource
-/// prefix is `resource_prefix`. Resource prefixes start with a letter and every secret grant is
-/// conditioned on a name that starts with the prefix, so none reaches a name that starts with
-/// `_`.
-pub fn release_trust_secret_name(resource_prefix: &str) -> String {
-    format!("_release-trust-{resource_prefix}")
-}
-
-/// Name of the GCP Secret Manager secret that holds, as one JSON object, the deployer's inputs
-/// for the deployment whose resource prefix is `resource_prefix`. Only the deployer writes it.
-pub fn deployer_inputs_secret_name(resource_prefix: &str) -> String {
-    format!("_deployer-inputs-{resource_prefix}")
-}
-
-/// How an anchor names an inputs store that is a GCP Secret Manager secret: this prefix, then
-/// the secret name.
-pub const DEPLOYER_INPUTS_STORE_GCP_SECRET: &str = "gcp-secret:";
-
-/// The deployer inputs store an anchor names on `platform`.
-fn deployer_inputs_store(platform: Platform, resource_prefix: &str) -> Result<String> {
-    match platform {
-        Platform::Aws => Ok(format!(
-            "{DEPLOYER_INPUTS_STORE_SSM}{}",
-            deployer_inputs_parameter_name(resource_prefix)
-        )),
-        Platform::Gcp => Ok(format!(
-            "{DEPLOYER_INPUTS_STORE_GCP_SECRET}{}",
-            deployer_inputs_secret_name(resource_prefix)
-        )),
-        other => Err(AlienError::new(ErrorData::ReleaseTrustSettingsInvalid {
-            reason: format!("setup writes an anchor only on AWS and GCP, not on {other}"),
-        })),
-    }
-}
-
-/// The publisher of the machine images compute clusters boot.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MachineImagePublisher {
-    /// The 12-digit AWS account ID that owns the machine images. IAM sees an image owner's
-    /// alias in place of its ID when it has one, so this account must have none.
-    pub aws_account_id: String,
-}
-
-impl MachineImagePublisher {
-    /// The AWS account ID, checked to be 12 digits so it can be written into an IAM
-    /// condition as is.
-    pub fn checked_aws_account_id(&self) -> std::result::Result<&str, String> {
-        let id = self.aws_account_id.as_str();
-        if id.len() == 12 && id.bytes().all(|byte| byte.is_ascii_digit()) {
-            Ok(id)
-        } else {
-            Err(format!(
-                "machine image publisher AWS account ID '{id}' is not 12 digits"
-            ))
-        }
+        Ok(settings)
     }
 }
 

@@ -325,15 +325,15 @@ pub enum ErrorData {
         reason: String,
     },
 
-    /// The protection settings of a deployment cannot become its anchor.
+    /// The stack's signing setting can't become the install's signing settings.
     #[error(
-        code = "RELEASE_TRUST_SETTINGS_INVALID",
-        message = "Release trust settings invalid: {reason}",
+        code = "SIGNING_SETTINGS_INVALID",
+        message = "Signing settings invalid: {reason}",
         retryable = "false",
         internal = "false",
         http_status_code = 400
     )]
-    ReleaseTrustSettingsInvalid {
+    SigningSettingsInvalid {
         /// Why the settings were refused
         reason: String,
     },

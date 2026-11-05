@@ -569,6 +569,7 @@ mod tests {
     #[test]
     fn test_sync_response_empty() {
         let resp = SyncResponse {
+            signed_config: None,
             execution_claim: None,
             current_state: None,
             target: None,
@@ -588,6 +589,7 @@ mod tests {
     #[test]
     fn test_sync_response_roundtrip_no_target() {
         let resp = SyncResponse {
+            signed_config: None,
             execution_claim: None,
             current_state: None,
             target: None,
@@ -684,6 +686,7 @@ mod tests {
         assert!(!state.has_desired());
 
         let resp = SyncResponse {
+            signed_config: None,
             execution_claim: None,
             current_state: Some(state),
             target: None,
@@ -907,6 +910,7 @@ mod tests {
     #[test]
     fn test_sync_response_target_operations_bundle_set_roundtrip() {
         let resp = SyncResponse {
+            signed_config: None,
             execution_claim: None,
             current_state: None,
             target: None,
@@ -955,6 +959,7 @@ mod tests {
         assert!(old_manager_response.target_dynamic_containers.is_none());
 
         let empty_target = SyncResponse {
+            signed_config: None,
             execution_claim: None,
             current_state: None,
             target: None,
