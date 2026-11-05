@@ -53,6 +53,8 @@ permissions:
   contents: write
   packages: write
   id-token: write
+  # Build provenance for the verifier image (actions/attest-build-provenance).
+  attestations: write
 
 env:
   # Fall back to local compilation when the shared sccache backend returns a
@@ -1694,8 +1696,9 @@ jobs:
             target/x86_64-unknown-linux-musl/release/alien-manager
             target/x86_64-unknown-linux-musl/release/alien-sandbox-agent
             target/x86_64-unknown-linux-musl/release/alien-egress-gateway
+            target/x86_64-unknown-linux-musl/release/alien-gate
           # Bump the -bN suffix whenever the set of cached binaries changes.
-          key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b3-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
+          key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b4-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
 
       - uses: ./.ci-tool-versions/.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -1712,13 +1715,14 @@ jobs:
         run: |
           depot cargo build --release \
             -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager -p alien-sandbox-agent -p alien-egress-gateway \
+            -p alien-gate \
             --features alien-egress-gateway/cloud,alien-egress-gateway/local \
             --target x86_64-unknown-linux-musl
 
       - name: Stage binaries for upload
         run: |
           mkdir -p staged/x86_64-unknown-linux-musl
-          for binary in alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent alien-egress-gateway; do
+          for binary in alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent alien-egress-gateway alien-gate; do
             cp "target/x86_64-unknown-linux-musl/release/${binary}" "staged/x86_64-unknown-linux-musl/${binary}"
           done
 
@@ -2076,6 +2080,9 @@ jobs:
               chmod +x "target/${target}/release/${binary}"
             done
           done
+          # The verifier runs on x86_64 only (Lambda's default, Cloud Run, Container Apps).
+          cp ./linux-bins/binaries-x86_64-unknown-linux-musl/alien-gate target/x86_64-unknown-linux-musl/release/alien-gate
+          chmod +x target/x86_64-unknown-linux-musl/release/alien-gate
 
       - name: Download Linux AI gateway binaries
         uses: actions/download-artifact@v8
@@ -2222,6 +2229,38 @@ jobs:
           provenance: true
           sbom: true
 
+      - name: Metadata (alien-verifier)
+        id: meta_verifier
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/alienplatform/alien-verifier
+          tags: |
+            type=raw,value=qualification-${{ inputs.source_ref }}
+
+      # One linux/amd64 manifest, not an index: Lambda takes image manifests,
+      # and the same digest runs on Cloud Run and Container Apps. Provenance
+      # is attached by the attestation below instead of inside the image.
+      - name: Publish alien-verifier
+        id: publish_verifier
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: .
+          file: docker/Dockerfile.alien-verifier
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta_verifier.outputs.tags }}
+          labels: ${{ steps.meta_verifier.outputs.labels }}
+          provenance: false
+          sbom: false
+
+      - name: Attest alien-verifier build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/alienplatform/alien-verifier
+          subject-digest: ${{ steps.publish_verifier.outputs.digest }}
+          push-to-registry: true
+
       - name: Metadata (alien-manager)
         id: meta_manager
         uses: docker/metadata-action@v5
@@ -2327,7 +2366,7 @@ jobs:
           RELEASE_COMMIT: ${{ inputs.source_ref }}
         run: |
           DIGESTS='{}'
-          for name in alien-base alien-worker-typescript alien-builder alien-operator alien-manager alien-sandbox-agent alien-egress-gateway; do
+          for name in alien-base alien-worker-typescript alien-builder alien-operator alien-verifier alien-manager alien-sandbox-agent alien-egress-gateway; do
             qualified="ghcr.io/alienplatform/${name}:qualification-${RELEASE_COMMIT}"
             digest=$(docker buildx imagetools inspect "$qualified" |
               sed -n 's/^Digest:[[:space:]]*//p' | head -n1)
@@ -2408,12 +2447,16 @@ jobs:
             done
 
       # The enforcer digests a signed release pins (crates/alien-cli/
-      # enforcer-digests.json). The official CLI distribution adds the machine
-      # agent and verifier digests and writes the file before it builds
-      # `alien`; a source build keeps the empty table and pins none.
+      # enforcer-digests.json). One verifier image serves every cloud. The
+      # official CLI distribution adds the machine agent digests and writes
+      # the file before it builds `alien`; a source build keeps the empty
+      # table and pins none.
       - name: Record enforcer digests
         run: |
-          jq '{operator: .images["alien-operator"]}' \
+          jq '{operator: .images["alien-operator"],
+               "verifier/aws": .images["alien-verifier"],
+               "verifier/gcp": .images["alien-verifier"],
+               "verifier/azure": .images["alien-verifier"]}' \
             qualification/qualified-image-digests.json > enforcer-digests.json
           jq -e 'to_entries | all(.value | test("^sha256:[0-9a-f]{64}$"))' \
             enforcer-digests.json >/dev/null || {
