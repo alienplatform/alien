@@ -17,6 +17,7 @@ use crate::error::{ErrorData, Result};
 use crate::execution_context::{ExecutionMode, ManagerContext};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::SdkResultExt as _;
+use alien_release_trust::session::{Channel, FrameKind};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use clap::{Args, Parser, Subcommand};
 use futures::{SinkExt, StreamExt};
@@ -854,7 +855,7 @@ async fn run_remote_exec_attach(
     // this is, input waits; handshake frames go out unsealed on `raw_tx`.
     let (raw_tx, mut raw_rx) = mpsc::channel::<Message>(8);
     let (decided_tx, mut decided_rx) = tokio::sync::watch::channel(signing.is_none());
-    let channel: Arc<std::sync::Mutex<Option<alien_release_trust::session::Channel>>> =
+    let channel: Arc<std::sync::Mutex<Option<Channel>>> =
         Arc::new(std::sync::Mutex::new(None));
     let writer_channel = channel.clone();
     let writer = tokio::spawn(async move {
@@ -921,11 +922,7 @@ async fn run_remote_exec_attach(
                         return Err(error);
                     }
                 };
-                let channel_state = Arc::try_unwrap(sealed)
-                    .ok()
-                    .and_then(|mutex| mutex.into_inner().ok())
-                    .expect("the handshake hands over its only channel");
-                *channel.lock().expect("channel lock") = Some(channel_state);
+                *channel.lock().expect("channel lock") = Some(sealed);
                 let _ = decided_tx.send(true);
                 continue;
             }
@@ -1000,10 +997,9 @@ async fn run_remote_exec_attach(
 
 /// Seal an outgoing frame when the session is signed. `None` ends the writer.
 fn seal_outgoing(
-    channel: &std::sync::Mutex<Option<alien_release_trust::session::Channel>>,
+    channel: &std::sync::Mutex<Option<Channel>>,
     message: Message,
 ) -> Option<Message> {
-    use alien_release_trust::session::FrameKind;
     let mut guard = channel.lock().ok()?;
     let Some(channel) = guard.as_mut() else {
         return Some(message);
@@ -1022,10 +1018,9 @@ fn seal_outgoing(
 /// Open an incoming frame when the session is signed. A plaintext frame then
 /// means the relay injected it.
 fn open_incoming(
-    channel: &std::sync::Mutex<Option<alien_release_trust::session::Channel>>,
+    channel: &std::sync::Mutex<Option<Channel>>,
     message: Message,
 ) -> Result<Message> {
-    use alien_release_trust::session::FrameKind;
     let mut guard = channel.lock().expect("channel lock");
     let Some(channel) = guard.as_mut() else {
         return Ok(message);

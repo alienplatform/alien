@@ -7,8 +7,6 @@
 //! on every frame is encrypted, so the control plane relaying the session can
 //! neither read nor inject anything.
 
-use std::sync::{Arc, Mutex};
-
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_release_trust::kinds::{SessionBody, SessionTarget, MAX_SESSION_SECONDS};
 use alien_release_trust::session::{Challenge, Channel, Handshake, SessionKeys, Side};
@@ -60,7 +58,7 @@ pub async fn handshake<St>(
     challenge: Challenge,
     send: &tokio::sync::mpsc::Sender<Message>,
     stream: &mut St,
-) -> Result<Arc<Mutex<Channel>>>
+) -> Result<Channel>
 where
     St: futures::Stream<Item = std::result::Result<Message, tokio_tungstenite::tungstenite::Error>>
         + Unpin,
@@ -170,8 +168,7 @@ where
             _ => {}
         }
     }
-    let channel = handshake.finish().context(ErrorData::SigningFailed {
+    handshake.finish().context(ErrorData::SigningFailed {
         message: "The session handshake did not finish".to_string(),
-    })?;
-    Ok(Arc::new(Mutex::new(channel)))
+    })
 }
