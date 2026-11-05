@@ -322,6 +322,7 @@ pub async fn inputs_command(args: InputsArgs) -> Result<()> {
 mod tests {
     use super::*;
     use alien_aws_clients::ssm::GetParameterRequest;
+    use clap::Parser;
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| value.to_string()).collect()
@@ -358,6 +359,28 @@ mod tests {
             "VALIDATION_ERROR"
         );
         assert_eq!(changes(&[], &[]).unwrap_err().code, "VALIDATION_ERROR");
+    }
+
+    #[test]
+    fn stdin_option_is_exclusive_with_argument_values_and_removals() {
+        #[derive(Parser)]
+        struct Cli {
+            #[command(flatten)]
+            inputs: InputsArgs,
+        }
+        let parse = |extra: &[&str]| {
+            Cli::try_parse_from(
+                ["deploy", "set", "--prefix", "example", "--platform", "aws"]
+                    .into_iter()
+                    .chain(extra.iter().copied()),
+            )
+        };
+        let cli = parse(&["--input-stdin", "password"]).unwrap();
+        let InputsCommand::Set(args) = cli.inputs.command;
+        assert_eq!(args.input_stdin.as_deref(), Some("password"));
+        assert!(parse(&["--input-stdin", "password", "--input", "region=west"]).is_err());
+        assert!(parse(&["--input-stdin", "password", "--unset", "region"]).is_err());
+        assert!(parse(&["--input", "region=west"]).is_ok());
     }
 
     #[test]
