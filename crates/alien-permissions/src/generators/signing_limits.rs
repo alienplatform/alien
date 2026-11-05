@@ -185,6 +185,14 @@ pub fn aws_management_limits(prefix: &str, account: &str, region: &str) -> Value
                 "Effect": "Allow",
                 "Action": "lambda:InvokeFunction",
                 "Resource": format!("arn:aws:lambda:{region}:{account}:function:{verifier}")
+            },
+            {
+                // Management refuses a deployment config without signing settings when it can
+                // read these. Only protected installs grant the read.
+                "Sid": "ReadThisInstallsSigningSettings",
+                "Effect": "Allow",
+                "Action": "ssm:GetParameter",
+                "Resource": format!("arn:aws:ssm:{region}:{account}:parameter/signed/{prefix}/fingerprint")
             }
         ]
     })

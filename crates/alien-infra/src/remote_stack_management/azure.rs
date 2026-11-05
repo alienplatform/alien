@@ -2799,7 +2799,8 @@ impl AzureRemoteStackManagementController {
             .with_resource_group(resource_group_name.clone())
             .with_stack_prefix(ctx.resource_prefix.to_string())
             .with_managing_subscription_id(azure_config.subscription_id.clone())
-            .with_managing_resource_group(resource_group_name.clone());
+            .with_managing_resource_group(resource_group_name.clone())
+            .with_signing(&ctx.deployment_config.stack_settings);
         let permission_context = match ctx.deployment_name_for_metadata() {
             Some(deployment_name) => {
                 permission_context.with_deployment_name(deployment_name.to_string())

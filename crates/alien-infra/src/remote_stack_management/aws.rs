@@ -5,7 +5,10 @@ use crate::core::{
     aws_permissions_boundary_for_stack, ResourceControllerContext, ResourcePermissionsHelper,
 };
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi};
+use alien_aws_clients::{
+    iam::{CreateRoleRequest, CreateRoleTag, IamApi},
+    ssm::GetParameterRequest,
+};
 use alien_core::{
     standard_resource_tags, AwsRemoteStackManagementHeartbeatData, HeartbeatBackend,
     InitialSetupAuthority, KubernetesCluster, ObservedHealth, Platform, ProviderLifecycleState,
@@ -153,6 +156,7 @@ impl AwsRemoteStackManagementController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        refuse_a_config_without_the_installs_signing(ctx).await?;
         self.install_permissions_boundary(ctx).await?;
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
@@ -248,6 +252,7 @@ impl AwsRemoteStackManagementController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        refuse_a_config_without_the_installs_signing(ctx).await?;
         self.install_permissions_boundary(ctx).await?;
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
@@ -1326,6 +1331,51 @@ fn permissions_boundary_description(resource_prefix: &str) -> String {
     format!("Permissions boundary for the roles that deployment {resource_prefix} manages")
 }
 
+/// Refuse to render management permissions from a deployment config without signing settings
+/// when the install has them at `/signed/<prefix>/fingerprint`: the config comes from the control
+/// plane, the parameter only from setup.
+///
+/// Only a protected install's management may read the parameter (setup grants the read in
+/// `<prefix>-management-limits`, which management can't change), so on an unprotected install
+/// the read is denied and that answers the question too.
+async fn refuse_a_config_without_the_installs_signing(
+    ctx: &ResourceControllerContext<'_>,
+) -> Result<()> {
+    if ctx.deployment_config.stack_settings.signing.is_some() {
+        return Ok(());
+    }
+    let settings_location = alien_signing::settings::names::aws_settings(ctx.resource_prefix);
+    let client = ctx
+        .service_provider
+        .get_aws_ssm_client(ctx.get_aws_config()?)
+        .await?;
+    match client
+        .get_parameter(GetParameterRequest {
+            name: settings_location.clone(),
+            with_decryption: None,
+        })
+        .await
+    {
+        Ok(_) => Err(AlienError::new(ErrorData::SigningSettingsMissingFromConfig {
+            resource_id: ctx.desired_config.id().to_string(),
+            settings_location,
+        })),
+        Err(error)
+            if is_remote_not_found(&error)
+                || matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteAccessDenied { .. })
+                ) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error.context(ErrorData::CloudPlatformError {
+            message: format!("Failed to read '{settings_location}' to tell whether the install is protected"),
+            resource_id: Some(ctx.desired_config.id().to_string()),
+        })),
+    }
+}
+
 /// Whether the policy at `arn` carries `description`, or `None` when it does not exist.
 async fn created_by_setup(
     client: &dyn IamApi,
@@ -1357,9 +1407,13 @@ fn is_remote_not_found(error: &alien_error::AlienError<alien_client_core::ErrorD
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use alien_aws_clients::iam::{
-        CreatePolicyResponse, CreatePolicyResult, CreateRoleResponse, CreateRoleResult,
-        ListAttachedRolePoliciesResponse, ListAttachedRolePoliciesResult, MockIamApi, Policy, Role,
+    use alien_aws_clients::{
+        iam::{
+            CreatePolicyResponse, CreatePolicyResult, CreateRoleResponse, CreateRoleResult,
+            ListAttachedRolePoliciesResponse, ListAttachedRolePoliciesResult, MockIamApi, Policy,
+            Role,
+        },
+        ssm::{GetParameterResponse, MockSsmApi, Parameter},
     };
     use alien_core::{
         RemoteStackManagement, ResourceLifecycle, ResourceStatus, Sandbox, SandboxCode,
@@ -1369,6 +1423,93 @@ mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::{MockPlatformServiceProvider, StackResourceStateExt};
+
+    fn ssm_answering(
+        name: String,
+        answer: fn(&str) -> alien_client_core::Result<GetParameterResponse>,
+    ) -> Arc<MockSsmApi> {
+        let mut ssm = MockSsmApi::new();
+        ssm.expect_get_parameter().times(1).returning(move |request| {
+            assert_eq!(request.name, name, "reads only this install's settings");
+            answer(&request.name)
+        });
+        Arc::new(ssm)
+    }
+
+    /// A control plane that drops `signing` from the deployment config of a protected install
+    /// would have management render its permissions as unprotected. The settings setup wrote
+    /// at `/signed/<prefix>/fingerprint` stop it before any policy is written.
+    #[tokio::test]
+    async fn a_config_without_signing_is_refused_where_setup_wrote_the_settings() {
+        let prefix = "acme-prod";
+        let mut iam = MockIamApi::new();
+        iam.expect_create_role().returning(|request| {
+            Ok(CreateRoleResponse {
+                create_role_result: CreateRoleResult {
+                    role: Role {
+                        path: "/".to_string(),
+                        role_name: request.role_name.clone(),
+                        role_id: "AROAEXAMPLE".to_string(),
+                        arn: format!("arn:aws:iam::123456789012:role/{}", request.role_name),
+                        create_date: "2026-09-24T00:00:00Z".to_string(),
+                        assume_role_policy_document: None,
+                        description: None,
+                        max_session_duration: None,
+                        permissions_boundary: None,
+                        tags: None,
+                        role_last_used: None,
+                    },
+                },
+            })
+        });
+        // No create_policy, put_role_policy or attach expectation: writing any policy panics.
+        let iam = Arc::new(iam);
+        let ssm = ssm_answering(format!("/signed/{prefix}/fingerprint"), |name| {
+            Ok(GetParameterResponse {
+                parameter: Some(Parameter {
+                    name: Some(name.to_string()),
+                    value: Some(format!(
+                        r#"{{"fingerprint":"SHA256:{}","prefix":"acme-prod","channel":"production"}}"#,
+                        "ab".repeat(32)
+                    )),
+                    parameter_type: Some("String".to_string()),
+                    version: Some(1),
+                    arn: None,
+                    last_modified_date: None,
+                    data_type: None,
+                }),
+            })
+        });
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_aws_ssm_client()
+            .returning(move |_| Ok(ssm.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(AwsRemoteStackManagementController::default())
+            .platform(Platform::Aws)
+            .resource_prefix(prefix)
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .expect("executor builds");
+
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("a protected install's management refuses a config without signing");
+
+        assert_eq!(error.code, "SIGNING_SETTINGS_MISSING_FROM_CONFIG", "{error:?}");
+        assert!(
+            error.message.contains("/signed/acme-prod/fingerprint"),
+            "{}",
+            error.message
+        );
+    }
 
     /// Other sets grant role writes on `role/<prefix>-*`; direct setup's management role must deny
     /// them on itself, by the name it is created under, and on every role carrying setup's sandbox
@@ -1439,10 +1580,22 @@ mod tests {
             Ok(())
         });
         let iam = Arc::new(iam);
+        // An unprotected install's management may not read `/signed/`.
+        let ssm = ssm_answering(format!("/signed/{prefix}/fingerprint"), |name| {
+            Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteAccessDenied {
+                    resource_type: "SSM Resource".to_string(),
+                    resource_name: name.to_string(),
+                },
+            ))
+        });
         let mut provider = MockPlatformServiceProvider::new();
         provider
             .expect_get_aws_iam_client()
             .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_aws_ssm_client()
+            .returning(move |_| Ok(ssm.clone()));
 
         let sandbox = |id: &str| {
             Sandbox::new(id.to_string())
