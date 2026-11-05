@@ -95,7 +95,7 @@ fn session_cutoff_policy(role_id: &str) -> CfResource {
     policy.condition = Some(CONDITION_HAS_MANAGEMENT_SESSION_CUTOFF.to_string());
     policy.properties.insert(
         "PolicyName".to_string(),
-        CfExpression::from("alien-revoke-older-management-sessions"),
+        CfExpression::from("deployment-management-session-cutoff"),
     );
     policy.properties.insert(
         "Roles".to_string(),
