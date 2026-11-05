@@ -23,6 +23,7 @@ fn outputs_fallback_chunks_large_resource_payload() {
     let template = generate_cloudformation_template(
         &stack,
         CloudFormationOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             registry: &registry,
             source_stack: &stack,
             target: CloudFormationTarget::Aws,
@@ -72,6 +73,7 @@ fn small_payload_emits_single_resources_output() {
     let template = generate_cloudformation_template(
         &stack,
         CloudFormationOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             registry: &registry,
             source_stack: &stack,
             target: CloudFormationTarget::Aws,
@@ -117,6 +119,7 @@ fn source_function_returns_typed_error() {
     let error = generate_cloudformation_template(
         &stack,
         CloudFormationOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             registry: &registry,
             source_stack: &stack,
             target: CloudFormationTarget::Aws,

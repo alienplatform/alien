@@ -1,8 +1,8 @@
-//! What a protected deployment's management identity can do on GCP. The gate alone writes Cloud
-//! Run services, instance templates and what decides who code runs as, so the management
-//! identity must hold none of it, while an unprotected deployment keeps every grant it had.
-//! Checked on the roles rendered for every set an automatic management grant can hold, and on
-//! the IAM conditions that decide who reaches the anchor's secret.
+//! What a protected install's management identity can do on GCP. The verifier alone writes Cloud
+//! Run services and jobs, instance templates, managed instance groups and what decides who code
+//! runs as, so the management identity must hold none of it, while an unprotected install keeps
+//! every grant it had. Checked on the roles rendered for every set an automatic management grant
+//! can hold, and on the IAM conditions that decide who reaches the signing inputs.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,7 +24,7 @@ fn context(protected: bool) -> PermissionContext {
         .with_region("us-central1")
         .with_managing_project_id("vendor-project")
         .with_service_account_name("orders-management")
-        .with_release_trust_protected(protected)
+        .with_signing_protected(protected)
 }
 
 /// The sets an automatic management grant holds on GCP: every resource type's provision,
@@ -81,11 +81,11 @@ fn project_grants(plan: &GcpGrantPlan) -> BTreeMap<String, (BTreeSet<String>, Op
         .collect()
 }
 
-/// What the gate alone may do, named independently of the generator: a Cloud Run service or job
-/// write, booting or reconfiguring a machine, acting as or minting tokens for another service
-/// account, changing any IAM policy or a custom role, and starting code-carrying builds or
-/// engines.
-fn gate_only(permission: &str) -> bool {
+/// What the verifier alone may do, named independently of the generator: a Cloud Run service or
+/// job write, booting, reconfiguring or scaling a machine group, pointing it at a template,
+/// acting as or minting tokens for another service account, changing any IAM policy or a custom
+/// role, and starting code-carrying builds or engines.
+fn verifier_only(permission: &str) -> bool {
     permission.ends_with(".setIamPolicy")
         || [
             "run.services.create",
@@ -97,6 +97,13 @@ fn gate_only(permission: &str) -> bool {
             "run.jobs.update",
             "run.jobs.delete",
             "run.jobs.runWithOverrides",
+            "run.jobs.createTagBinding",
+            "run.jobs.deleteTagBinding",
+            "compute.instanceGroupManagers.create",
+            "compute.instanceGroupManagers.update",
+            "compute.instanceTemplates.useReadOnly",
+            "compute.regionInstanceTemplates.create",
+            "compute.regionInstanceTemplates.useReadOnly",
             "compute.instances.create",
             "compute.instances.setMetadata",
             "compute.instances.setServiceAccount",
@@ -118,20 +125,29 @@ fn gate_only(permission: &str) -> bool {
 }
 
 #[test]
-fn protected_management_holds_nothing_only_the_gate_may_do() {
+fn protected_management_holds_nothing_only_the_verifier_may_do() {
     let mut removed = BTreeSet::new();
     for id in management_set_ids() {
         let unprotected = project_grants(&plan(id, false));
         let protected = project_grants(&plan(id, true));
         for (role_id, (permissions, condition)) in &protected {
-            let held: Vec<&String> = permissions.iter().filter(|p| gate_only(p)).collect();
+            let held: Vec<&String> = permissions.iter().filter(|p| verifier_only(p)).collect();
             assert!(held.is_empty(), "{id}: {role_id} still holds {held:?}");
             // A role keeps its ID and binding and only loses permissions, so setup updates it
-            // in place.
+            // in place. A binding that grants Secret Manager also leaves out the signing inputs.
             let (before, before_condition) = unprotected
                 .get(role_id)
                 .unwrap_or_else(|| panic!("{id}: {role_id} is new in the protected rendering"));
-            assert_eq!(condition, before_condition, "{id}: {role_id}");
+            let exclusion = r#"!resource.name.matches(".*/secrets/signed-.*")"#;
+            let expected = if permissions.iter().any(|p| p.starts_with("secretmanager.")) {
+                Some(match before_condition {
+                    Some(before) => format!("({before}) && {exclusion}"),
+                    None => exclusion.to_string(),
+                })
+            } else {
+                before_condition.clone()
+            };
+            assert_eq!(condition, &expected, "{id}: {role_id}");
             assert!(permissions.is_subset(before), "{id}: {role_id}");
         }
         for (role_id, (before, _)) in &unprotected {
@@ -141,7 +157,7 @@ fn protected_management_holds_nothing_only_the_gate_may_do() {
                 .unwrap_or_default();
             for permission in before.difference(&kept) {
                 assert!(
-                    gate_only(permission),
+                    verifier_only(permission),
                     "{id}: {role_id} lost {permission}, which management needs"
                 );
                 removed.insert(permission.clone());
@@ -155,7 +171,10 @@ fn protected_management_holds_nothing_only_the_gate_may_do() {
             "aiplatform.reasoningEngines.create",
             "cloudbuild.builds.create",
             "cloudbuild.builds.update",
+            "compute.instanceGroupManagers.create",
+            "compute.instanceGroupManagers.update",
             "compute.instanceTemplates.create",
+            "compute.instanceTemplates.useReadOnly",
             "compute.instances.create",
             "compute.instances.setMetadata",
             "iam.roles.create",
@@ -166,6 +185,12 @@ fn protected_management_holds_nothing_only_the_gate_may_do() {
             "pubsub.subscriptions.setIamPolicy",
             "pubsub.topics.setIamPolicy",
             "resourcemanager.projects.setIamPolicy",
+            "run.jobs.create",
+            "run.jobs.createTagBinding",
+            "run.jobs.delete",
+            "run.jobs.deleteTagBinding",
+            "run.jobs.setIamPolicy",
+            "run.jobs.update",
             "run.services.create",
             "run.services.createTagBinding",
             "run.services.delete",
@@ -190,8 +215,8 @@ fn protected_management_keeps_scaling_reads_and_infrastructure() {
         .flat_map(|(permissions, _)| permissions)
         .collect();
     for kept in [
-        // MIG resize and recreating instances from the gate's templates.
-        "compute.instanceGroupManagers.update",
+        // Reading machine groups and the verifier's templates; scaling goes through the verifier.
+        "compute.instanceGroupManagers.get",
         "compute.instanceTemplates.get",
         "compute.instances.get",
         "compute.instances.getSerialPortOutput",
@@ -295,6 +320,13 @@ impl Condition<'_> {
             assert!(self.eat(")"));
             return self.name.starts_with(&prefix);
         }
+        if self.eat("resource.name.matches(") {
+            let pattern = self.string();
+            assert!(self.eat(")"));
+            return regex::Regex::new(&format!("^(?:{pattern})$"))
+                .expect("valid RE2 pattern")
+                .is_match(self.name);
+        }
         if self.eat("resource.type ==") {
             return self.string() == self.kind;
         }
@@ -319,62 +351,49 @@ const SECRET: &str = "secretmanager.googleapis.com/Secret";
 const VERSION: &str = "secretmanager.googleapis.com/SecretVersion";
 
 #[test]
-fn only_machines_read_the_anchor_and_nobody_but_setup_writes_it() {
-    let anchor = format!("projects/{PROJECT_NUMBER}/secrets/_release-trust-{PREFIX}");
-    let inputs = format!("projects/{PROJECT_NUMBER}/secrets/_deployer-inputs-{PREFIX}");
-    let node = [plan("compute-cluster/execute", false)];
-    for secret in [&anchor, &inputs] {
-        assert!(
-            allowed(
-                &node,
-                "secretmanager.versions.access",
-                &format!("{secret}/versions/1"),
-                VERSION
-            ),
-            "{secret}"
-        );
+fn protected_management_holds_no_parameter_manager_permission() {
+    for protected in [false, true] {
+        for id in management_set_ids() {
+            for (role_id, (permissions, _)) in project_grants(&plan(id, protected)) {
+                let held: Vec<&String> = permissions
+                    .iter()
+                    .filter(|permission| permission.starts_with("parametermanager."))
+                    .collect();
+                assert!(held.is_empty(), "{id}: {role_id} holds {held:?}");
+            }
+        }
     }
-    // Another deployment whose prefix extends this one has its own anchor.
-    let other = format!("projects/{PROJECT_NUMBER}/secrets/_release-trust-{PREFIX}-eu/versions/1");
-    assert!(!allowed(
-        &node,
-        "secretmanager.versions.access",
-        &other,
-        VERSION
-    ));
-    // A secret of the deployment's own is not the node's to read through this grant.
-    let own = format!("projects/{PROJECT_NUMBER}/secrets/{PREFIX}-vault-key/versions/1");
-    assert!(!allowed(
-        &node,
-        "secretmanager.versions.access",
-        &own,
-        VERSION
-    ));
+}
 
+#[test]
+fn protected_management_cannot_touch_signing_inputs_stored_as_secrets() {
+    // Inputs of this install and of one whose prefix extends this one's.
+    let inputs = [
+        format!("projects/{PROJECT_NUMBER}/secrets/signed-{PREFIX}-input-api-key"),
+        format!("projects/{PROJECT_NUMBER}/secrets/signed-{PREFIX}-eu-input-api-key"),
+    ];
+    let own_secret = format!("projects/{PROJECT_NUMBER}/secrets/{PREFIX}-otlp");
     for protected in [false, true] {
         let management: Vec<GcpGrantPlan> = management_set_ids()
             .into_iter()
             .map(|id| plan(id, protected))
             .collect();
-        // The grants do reach the deployment's own secrets, so the conditions are evaluated.
-        let own_secret = format!("projects/{PROJECT_NUMBER}/secrets/{PREFIX}-otlp");
-        assert!(allowed(
-            &management,
-            "secretmanager.secrets.delete",
-            &own_secret,
-            SECRET
-        ));
-        for secret in [&anchor, &inputs] {
+        // The grants do reach the install's own secrets, so the conditions are evaluated.
+        for permission in ["secretmanager.secrets.delete", "secretmanager.versions.add"] {
+            assert!(
+                allowed(&management, permission, &own_secret, SECRET),
+                "protected={protected}: {permission} on {own_secret}"
+            );
+        }
+        if !protected {
+            continue;
+        }
+        for secret in &inputs {
             for (permission, name, kind) in [
                 ("secretmanager.versions.add", secret.clone(), SECRET),
                 ("secretmanager.secrets.delete", secret.clone(), SECRET),
                 ("secretmanager.secrets.update", secret.clone(), SECRET),
                 ("secretmanager.secrets.setIamPolicy", secret.clone(), SECRET),
-                (
-                    "secretmanager.versions.access",
-                    format!("{secret}/versions/1"),
-                    VERSION,
-                ),
                 (
                     "secretmanager.versions.destroy",
                     format!("{secret}/versions/1"),
@@ -388,9 +407,22 @@ fn only_machines_read_the_anchor_and_nobody_but_setup_writes_it() {
             ] {
                 assert!(
                     !allowed(&management, permission, &name, kind),
-                    "protected={protected}: {permission} on {name}"
+                    "{permission} on {name}"
                 );
             }
+        }
+    }
+}
+
+#[test]
+fn unprotected_management_conditions_are_unchanged() {
+    // The exclusion renders only for protected installs.
+    for id in management_set_ids() {
+        for (role_id, (_, condition)) in project_grants(&plan(id, false)) {
+            assert!(
+                !condition.as_deref().unwrap_or("").contains("signed-"),
+                "{id}: {role_id}"
+            );
         }
     }
 }

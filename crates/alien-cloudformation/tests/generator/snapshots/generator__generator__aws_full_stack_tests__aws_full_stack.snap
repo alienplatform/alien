@@ -911,11 +911,6 @@ Resources:
                 - Fn::Split:
                   - ':'
                   - Ref: ManagingRoleArn
-        - Action: ssm:GetParameter
-          Effect: Allow
-          Resource:
-          - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/_deployer-inputs/${AWS::StackName}
-          - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/_release-trust/${AWS::StackName}
         - Action: ec2:CreateSnapshot
           Condition:
             StringEquals:
@@ -1029,6 +1024,7 @@ Resources:
           - lambda:DeleteFunctionConcurrency
           - lambda:DeleteFunctionEventInvokeConfig
           - lambda:DeleteFunctionUrlConfig
+          - lambda:GetCodeSigningConfig
           - lambda:GetFunction
           - lambda:GetFunctionConcurrency
           - lambda:GetFunctionConfiguration
@@ -1044,6 +1040,7 @@ Resources:
           - lambda:RemovePermission
           - lambda:TagResource
           - lambda:UpdateAlias
+          - lambda:UpdateCodeSigningConfig
           - lambda:UpdateFunctionCode
           - lambda:UpdateFunctionConfiguration
           Condition:
@@ -2320,11 +2317,6 @@ Resources:
                     - Fn::Split:
                       - ':'
                       - Ref: ManagingRoleArn
-            - Action: ssm:GetParameter
-              Effect: Allow
-              Resource:
-              - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/_deployer-inputs/${AWS::StackName}
-              - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/_release-trust/${AWS::StackName}
             - Action: ec2:CreateSnapshot
               Condition:
                 StringEquals:
@@ -3027,11 +3019,7 @@ Outputs:
               - Fn::Split:
                 - ':'
                 - Ref: ManagingRoleArn
-        - '"},{"Action":"ssm:GetParameter","Effect":"Allow","Resource":["'
-        - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/_deployer-inputs/${AWS::StackName}
-        - '","'
-        - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/_release-trust/${AWS::StackName}
-        - '"]},{"Action":"ec2:CreateSnapshot","Condition":{"StringEquals":{"aws:RequestTag/deployment":"'
+        - '"},{"Action":"ec2:CreateSnapshot","Condition":{"StringEquals":{"aws:RequestTag/deployment":"'
         - Fn::Sub: ${AWS::StackName}
         - '","aws:RequestTag/managed-by":"runtime"}},"Effect":"Allow","Resource":"'
         - Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*

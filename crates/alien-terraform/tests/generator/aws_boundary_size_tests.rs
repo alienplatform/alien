@@ -88,13 +88,13 @@ impl TfEmitter for ExtensionComputeCluster {
 }
 
 fn settings() -> StackSettings {
-    super::helpers::fixture_settings(StackSettings {
+    StackSettings {
         network: Some(NetworkSettings::Create {
             cidr: None,
             availability_zones: 2,
         }),
         ..StackSettings::default()
-    })
+    }
 }
 
 /// Workloads that each read a different subset of many installer-provided secrets, an internet
@@ -261,10 +261,8 @@ async fn many_secret_consumers_fit_the_boundary_in_both_setup_packages() {
         .chars()
         .filter(|c| !c.is_whitespace())
         .count();
-    // Every boundary also admits the machine role's read of the anchor and the deployer's
-    // inputs, which sit outside the stack prefix.
     assert!(
-        size <= MANAGED_POLICY_LIMIT * 92 / 100,
+        size <= MANAGED_POLICY_LIMIT * 9 / 10,
         "boundary is {size} characters"
     );
     // The consumers' reads are admitted by the scoped Allow, not copied.
@@ -295,6 +293,7 @@ async fn many_secret_consumers_fit_the_boundary_in_both_setup_packages() {
     generate_cloudformation_template(
         &prepared,
         CloudFormationOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             registry: &cf_registry,
             source_stack: &stack(),
             target: CloudFormationTarget::Aws,

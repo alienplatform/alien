@@ -18,9 +18,7 @@
 //! preflights add the resource after profiles are checked) are covered only by their
 //! stack-wide sets; their resource-bound grants are rendered by the emitter of that type.
 
-use super::helpers::{
-    assert_terraform_valid, prepare_for_target, render_with_registry, MACHINE_IMAGE_PUBLISHER,
-};
+use super::helpers::{assert_terraform_valid, prepare_for_target, render_with_registry};
 use alien_core::{
     import::EmitContext, ownership_policy_for_resource_type, Ai, ArtifactRegistry, Build,
     ComputeCluster, Key, Kv, NetworkSettings, PermissionProfile, Platform, Queue,
@@ -371,8 +369,7 @@ impl TfEmitter for RegisteredFamilyGrants {
                 &role,
                 set,
                 index,
-                &aws_terraform_permission_context()
-                    .with_machine_image_owner(MACHINE_IMAGE_PUBLISHER),
+                &aws_terraform_permission_context(),
             )?;
         }
         Ok(fragment)

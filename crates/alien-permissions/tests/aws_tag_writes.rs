@@ -14,7 +14,6 @@ fn context() -> PermissionContext {
         .with_resource_id("worker")
         .with_managing_account_id("123456789012")
         .with_aws_account_id("123456789012")
-        .with_machine_image_owner("345678901234")
         .with_aws_region("us-west-2")
 }
 

@@ -254,7 +254,7 @@ const DENY_SETTINGS_MAX_EXCLUDED_ACTIONS: usize = 200;
 /// change only infrastructure running no code are excluded from the deny, so it keeps them.
 ///
 /// A deny cannot refuse an `/action`; the management roles leave out the actions that run code
-/// (see `alien_permissions::generators::gate_owned`).
+/// (see `alien_permissions::generators::verifier_owned`).
 ///
 /// To check a change here against Azure, render a protected stack, run `terraform apply` in a
 /// subscription, and as the management identity try to update the scale set and create a
@@ -982,11 +982,7 @@ fn generate_management_grant_plan(
     let mut custom_roles = Vec::new();
     let mut bindings = Vec::new();
     let context = permission_context(label)
-        .with_setup_pins(ctx.stack_settings)
-        .context(ErrorData::GenericError {
-            message: "failed to apply setup-pinned values to the Azure management roles"
-                .to_string(),
-        })?;
+        .with_signing(ctx.stack_settings);
     let generator = AzureRuntimePermissionsGenerator::new();
 
     for permission_set in global_refs.iter().filter_map(resolve_permission_set) {
