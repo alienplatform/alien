@@ -18,8 +18,99 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::envelope::Kind;
 use crate::error::{ErrorData, Result};
-use crate::kinds::SessionChallenge;
+
+/// Longest exec session a statement may allow.
+pub const MAX_SESSION_SECONDS: u32 = 30 * 60;
+
+/// What a session runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionTarget {
+    /// Machine id, for machine sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
+    /// Workload name, for replica sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workload: Option<String>,
+}
+
+/// `session/v1`: one exec session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionBody {
+    /// Unique session id; an enforcer refuses one it has seen.
+    pub session_id: String,
+    /// What the session reaches.
+    pub target: SessionTarget,
+    /// Program and arguments, or absent for the default shell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argv: Option<Vec<String>>,
+    /// Whether a terminal is allocated.
+    pub tty: bool,
+    /// Longest the session may last.
+    pub max_duration_seconds: u32,
+    /// Who asked, for the transcript.
+    pub requester: String,
+    /// Why, for the transcript.
+    pub reason: String,
+    /// The enforcer's fresh nonce, base64.
+    pub verifier_nonce: String,
+    /// The enforcer's ephemeral public key for this session, base64.
+    pub verifier_key: String,
+    /// The client's ephemeral public key, base64.
+    pub client_key: String,
+}
+
+/// What the enforcer handed out for one session request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionChallenge {
+    /// Nonce the enforcer generated, base64.
+    pub nonce: String,
+    /// Enforcer's ephemeral public key, base64.
+    pub verifier_key: String,
+    /// When the nonce was issued.
+    pub issued_at: DateTime<Utc>,
+    /// How long a nonce stays usable.
+    pub nonce_lifetime_seconds: u32,
+}
+
+impl SessionBody {
+    /// Check the session against the challenge the enforcer issued. The
+    /// caller also records the session id and refuses one it has seen.
+    pub fn check(&self, challenge: &SessionChallenge, now: DateTime<Utc>) -> Result<()> {
+        if self.verifier_nonce != challenge.nonce {
+            return Err(refused(
+                Kind::Session,
+                "the nonce is not the one this enforcer issued",
+            ));
+        }
+        if self.verifier_key != challenge.verifier_key {
+            return Err(refused(
+                Kind::Session,
+                "the session is bound to another enforcer key",
+            ));
+        }
+        let age = now.signed_duration_since(challenge.issued_at).num_seconds();
+        if age < 0 || age > i64::from(challenge.nonce_lifetime_seconds) {
+            return Err(refused(Kind::Session, "the nonce has expired"));
+        }
+        if self.max_duration_seconds == 0 || self.max_duration_seconds > MAX_SESSION_SECONDS {
+            return Err(refused(
+                Kind::Session,
+                format!("a session may last 1 to {MAX_SESSION_SECONDS} seconds"),
+            ));
+        }
+        if self.session_id.is_empty() || self.client_key.is_empty() {
+            return Err(refused(
+                Kind::Session,
+                "the session id and client key are required",
+            ));
+        }
+        Ok(())
+    }
+}
 
 const NOISE_PATTERN: &str = "Noise_KK_25519_ChaChaPoly_SHA256";
 /// Largest Noise message.
@@ -81,7 +172,7 @@ impl Challenge {
         })
     }
 
-    /// What [`crate::kinds::SessionBody::check`] compares the statement to.
+    /// What [`SessionBody::check`] compares the statement to.
     pub fn expectation(&self) -> SessionChallenge {
         SessionChallenge {
             nonce: self.nonce.clone(),
@@ -341,6 +432,13 @@ fn prologue(statement_digest: &str) -> Vec<u8> {
 fn channel_error(reason: impl Into<String>) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::BodyRefused {
         kind: "session/v1".to_string(),
+        reason: reason.into(),
+    })
+}
+
+fn refused(kind: Kind, reason: impl Into<String>) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::BodyRefused {
+        kind: kind.as_str().to_string(),
         reason: reason.into(),
     })
 }

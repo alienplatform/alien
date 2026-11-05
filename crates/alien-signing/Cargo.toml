@@ -2,7 +2,7 @@
 name = "alien-signing"
 version.workspace = true
 edition = "2021"
-description = "Signed statements, signer lists and anchors for deployments that run only what the developer signed"
+description = "Signed statements, signer lists, signing settings and the install ledger for installs that run only what the vendor signed"
 license-file.workspace = true
 
 [features]
@@ -19,6 +19,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+hmac = { workspace = true }
 snow = { workspace = true }
 getrandom = { workspace = true }
 utoipa = { workspace = true, optional = true }

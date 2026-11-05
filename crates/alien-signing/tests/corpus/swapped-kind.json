@@ -1,12 +1,12 @@
 {
   "description": "a config statement sent as a release",
-  "expect": "TRUST_WRONG_KIND",
+  "expect": "SIGNING_WRONG_KIND",
   "statement": {
-    "payload": "eyJ0eXBlIjoiY29uZmlnL3YxIiwicHJvamVjdCI6InByal90ZXN0IiwiZGVwbG95bWVudCI6ImRlcF90ZXN0Iiwic2VxdWVuY2UiOjIwLCJub3RBZnRlciI6bnVsbCwic2lnbmVyTGlzdFZlcnNpb24iOjEsImJvZHkiOnt9fQ==",
+    "payload": "eyJ0eXBlIjoiY29uZmlnL3YxIiwicHJvamVjdCI6InByal90ZXN0IiwiaW5zdGFsbCI6ImF3czoxMTExMjIyMjMzMzM6dXMtZWFzdC0xOmFjbWUtcHJvZCIsInNlcXVlbmNlIjoyMCwibm90QWZ0ZXIiOm51bGwsInNpZ25lckxpc3RWZXJzaW9uIjoxLCJib2R5Ijp7fX0=",
     "signatures": [
       {
         "signer": "ci",
-        "sig": "MEUCIG/GnGTK544IYC8OGTqlv7zJ5NfAsuWqQgADJMNLeizlAiEA+McIeCbudTM85i4baukCaa9Rwrhd0vLXOcblUg5Y9fE="
+        "sig": "MEYCIQDqi7VhLoev/Dky04nq4G2ZVdsQ1BzfDfNPfnfnWdWOUgIhAKsORbfnNE/jN6Roesax5B24GXVDvezqEOLC0Iuo+Q3j"
       }
     ]
   }

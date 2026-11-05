@@ -1,45 +1,59 @@
-//! Signed statements for deployments that run only what the developer signed.
+//! Signed statements for installs that run only what the vendor signed.
 //!
-//! The crate has no network code. Enforcers hand it bytes they received and
-//! the anchor their setup wrote, and get back either a verified statement or
-//! the reason it was refused:
+//! The crate has no network code. Enforcers hand it bytes they received, the
+//! signing settings their setup wrote, the install id they derived and the
+//! install's ledger, and get back either a verified statement or the reason
+//! it was refused:
 //!
 //! - [`envelope`]: the one envelope every statement uses;
-//! - [`signer_list`]: the developer's signer list and its chain of versions;
-//! - [`anchor`]: what setup pins for a deployment;
+//! - [`signer_list`]: the vendor's signer list and its chain of versions;
+//! - [`settings`]: what setup pins, how enforcers find it, and the install id;
+//! - [`ledger`]: what an install already accepted, shared by its enforcers;
 //! - [`verify`]: the checks every enforcer runs on every statement;
-//! - [`floors`]: per-kind sequence floors, so nothing is replayed;
 //! - [`release`]: `release/v2` and building a workload from it;
-//! - [`kinds`]: config, session, approval, dynamic, command and component bodies.
+//! - [`config`]: the `config/v1` body;
+//! - [`binding`]: binding values computed from the install, not the control plane;
+//! - [`session`]: `session/v1` and the encrypted session channel;
+//! - [`recovery`]: the recovery code and the key it derives.
 
 #![expect(
     clippy::result_large_err,
     reason = "Alien errors retain structured metadata and causal context"
 )]
 
-pub mod anchor;
+pub mod binding;
+pub mod config;
 pub mod envelope;
 pub mod error;
-pub mod floors;
 pub mod key;
-pub mod kinds;
+pub mod ledger;
+pub mod recovery;
 pub mod release;
 pub mod session;
+pub mod settings;
 pub mod signer_list;
 pub mod verify;
 
-pub use anchor::{Anchor, SessionApproval};
+pub use binding::{binding_env, binding_env_name, BindingContext};
+pub use config::ConfigBody;
 pub use envelope::{Envelope, Kind, Opened, Role, Signature, SignedStatement};
 pub use error::{ErrorData, Result};
-pub use floors::Floors;
-pub use key::{PublicKey, SoftwareKey, PUBLIC_KEY_PREFIX};
-pub use release::{build_workload, BuiltWorkload, ReleaseBody, Workload, WorkloadRequest};
-pub use signer_list::{fingerprint, Signer, SignerChain, SignerKind, SignerListBody, TrustedList};
-pub use verify::{verify_component, Trust, Verified, COMPONENTS_SIGNER};
+pub use key::{PublicKey, SecretKey, PUBLIC_KEY_PREFIX};
+pub use ledger::{Entry, Ledger};
+pub use recovery::RecoveryCode;
+pub use release::{
+    build_workload, BuiltWorkload, LocalValues, ReleaseBody, SetupTemplate, Workload,
+    WorkloadRequest,
+};
+pub use settings::{candidate_prefixes, discover, InstallId, Lookup, SigningSettings};
+pub use signer_list::{
+    display_fingerprint, fingerprint, Signer, SignerChain, SignerKind, SignerListBody, TrustedList,
+};
+pub use verify::{Trust, Verified};
 
 impl SignedStatement {
     /// Add `key`'s signature as `signer`.
-    pub fn sign_with(mut self, signer: &str, key: &SoftwareKey) -> Result<Self> {
+    pub fn sign_with(mut self, signer: &str, key: &SecretKey) -> Result<Self> {
         let bytes = self.open()?.bytes;
         self.signatures.push(Signature {
             signer: signer.to_string(),

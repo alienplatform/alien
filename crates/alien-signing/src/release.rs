@@ -2,11 +2,12 @@
 //! enforcer builds a workload from it.
 //!
 //! The control plane still decides placement, replica counts within signed
-//! bounds, and the values of the environment variables the release lets it
-//! provide (binding targets, ports, telemetry endpoints). Everything that
-//! decides which code runs and how it is loaded comes from the signed body:
-//! the image digest, the command, fixed environment values, runtime
-//! privileges, mounts and identity.
+//! bounds, and the values of the few environment variables the release names
+//! exactly as provided. Everything that decides which code runs, how it is
+//! loaded and which resources it reaches comes from the signed body or from
+//! the enforcer itself: the image digest, the command, fixed environment
+//! values, runtime privileges, mounts, identity, and binding values the
+//! enforcer computes from its own install.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -62,12 +63,56 @@ pub const LOADER_ENV: &[&str] = &[
     "PHP_INI_SCAN_DIR",
     "BUN_OPTIONS",
     "DENO_DIR",
+    "GLIBC_TUNABLES",
+    "LOCPATH",
+    "NLSPATH",
+    "PYTHONBREAKPOINT",
+    "PYTHONEXECUTABLE",
+    "PYTHONPLATLIBDIR",
+    "PERL5DB",
+    "RUBYGEMS_GEMDEPS",
+    "NODE_REPL_EXTERNAL_MODULE",
+    "LUA_INIT",
+    "LUA_PATH",
+    "LUA_CPATH",
+    "DOTNET_ADDITIONAL_DEPS",
+    "DOTNET_SHARED_STORE",
+    "COR_ENABLE_PROFILING",
+    "COR_PROFILER",
+    "COR_PROFILER_PATH",
 ];
+
+/// Families of loader variables, by prefix: the dynamic linkers' and
+/// exported shell functions.
+pub const LOADER_ENV_PREFIXES: &[&str] = &["LD_", "DYLD_", "BASH_FUNC_", "CORECLR_"];
 
 /// Whether `name` is a loader variable.
 pub fn is_loader_env(name: &str) -> bool {
     LOADER_ENV.contains(&name)
+        || LOADER_ENV_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
 }
+
+/// Components whose builds a release pins. An enforcer runs only a build
+/// whose digest the release names.
+pub const COMPONENTS: &[&str] = &[
+    "horizond/linux-x86_64",
+    "horizond/linux-aarch64",
+    "operator",
+    "verifier/aws",
+    "verifier/gcp",
+    "verifier/azure",
+];
+
+/// Setup templates a release can carry digests of.
+pub const SETUP_TEMPLATES: &[&str] = &[
+    "cloudformation",
+    "terraform-aws",
+    "terraform-gcp",
+    "terraform-azure",
+    "helm",
+];
 
 /// What one release lets run on one platform.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -75,30 +120,38 @@ pub fn is_loader_env(name: &str) -> bool {
 pub struct ReleaseBody {
     /// Platform the release is for, such as `aws` or `machines`.
     pub platform: String,
+    /// Release channel, such as `production`. An install accepts only the
+    /// channel its setup pinned.
+    pub channel: String,
     /// Every workload, by name.
     pub workloads: Vec<Workload>,
     /// What `config/v1` statements may set.
     #[serde(default)]
     pub configurable: Configurable,
-    /// Component name to digest, for the components this release expects.
+    /// Digest of each enforcer build this release runs with, by name from
+    /// [`COMPONENTS`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub components: BTreeMap<String, String>,
-    /// Data the control plane may lease, by resource name.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub remote_access: Vec<String>,
-    /// Bounds for dynamic containers, if the release allows any.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dynamic: Option<DynamicPolicy>,
-    /// Plugin name to bundle digest.
+    /// Digests of the setup templates this release renders, by name from
+    /// [`SETUP_TEMPLATES`], so a customer can check what they install.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub plugins: BTreeMap<String, String>,
-    /// Commands whose payloads need a `command/v1`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub signed_commands: Vec<String>,
+    pub setup: BTreeMap<String, SetupTemplate>,
     /// The full stack, for enforcers that deploy from it. It is signed with
     /// the rest of the body, so it is as trusted as the workloads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stack: Option<serde_json::Value>,
+}
+
+/// One setup template as the release rendered it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetupTemplate {
+    /// `sha256:<hex>` of the rendered template bytes.
+    pub sha256: String,
+    /// Parameters (or Helm values) the customer may choose. Every other
+    /// parameter must keep the template's pinned value.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed: Vec<String>,
 }
 
 /// Names config statements may set.
@@ -112,20 +165,6 @@ pub struct Configurable {
     /// Developer input ids.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<String>,
-}
-
-/// Bounds on dynamic container specs.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DynamicPolicy {
-    /// Image repositories (without tag or digest) a spec may use.
-    pub repositories: Vec<String>,
-    /// Environment variable names a spec may set.
-    #[serde(default)]
-    pub env: Vec<String>,
-    /// Upper bounds for each dynamic container.
-    #[serde(default)]
-    pub bounds: Bounds,
 }
 
 /// What kind of compute a workload is.
@@ -160,9 +199,14 @@ pub struct Workload {
     /// Fixed environment values.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
-    /// Environment names whose values the control plane provides.
-    #[serde(default)]
-    pub provided_env: ProvidedEnv,
+    /// Exact environment names whose values the control plane provides.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provided_env: Vec<String>,
+    /// Resources the workload is bound to: resource id to resource type.
+    /// The enforcer computes each binding's value from its own install, so
+    /// the control plane can't point a binding at another resource.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bindings: BTreeMap<String, String>,
     /// Environment names a config statement may set on this workload.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub configurable_env: Vec<String>,
@@ -189,30 +233,6 @@ pub struct Workload {
     /// Function settings, for `function` workloads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub function: Option<FunctionSettings>,
-}
-
-/// Names the control plane may provide values for.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProvidedEnv {
-    /// Exact names.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub names: Vec<String>,
-    /// Name prefixes, such as the platform's binding variables.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub prefixes: Vec<String>,
-}
-
-impl ProvidedEnv {
-    /// Whether the control plane may provide `name`.
-    pub fn allows(&self, name: &str) -> bool {
-        !is_loader_env(name)
-            && (self.names.iter().any(|allowed| allowed == name)
-                || self
-                    .prefixes
-                    .iter()
-                    .any(|prefix| name.starts_with(prefix.as_str())))
-    }
 }
 
 /// A secret the workload may receive. The value is not signed; the name and
@@ -338,22 +358,35 @@ impl ReleaseBody {
         for name in &self.configurable.env {
             check_settable_name(name).map_err(body_refused)?;
         }
-        if let Some(dynamic) = &self.dynamic {
-            for name in &dynamic.env {
-                check_settable_name(name).map_err(body_refused)?;
-            }
-            for repository in &dynamic.repositories {
-                if repository.is_empty() || repository.contains('@') || repository.ends_with('/') {
-                    return Err(body_refused(format!(
-                        "dynamic repository '{repository}' must be a repository without digest"
-                    )));
-                }
-            }
+        if self.channel.is_empty()
+            || !self
+                .channel
+                .bytes()
+                .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-'))
+        {
+            return Err(body_refused(format!(
+                "channel '{}' is not [a-z0-9-]",
+                self.channel
+            )));
         }
-        for (name, digest) in self.components.iter().chain(&self.plugins) {
+        for (name, digest) in &self.components {
+            if !COMPONENTS.contains(&name.as_str()) {
+                return Err(body_refused(format!("'{name}' is not a component")));
+            }
             if !is_sha256_digest(digest) {
                 return Err(body_refused(format!(
                     "'{name}' digest '{digest}' is not sha256:<hex>"
+                )));
+            }
+        }
+        for (name, template) in &self.setup {
+            if !SETUP_TEMPLATES.contains(&name.as_str()) {
+                return Err(body_refused(format!("'{name}' is not a setup template")));
+            }
+            if !is_sha256_digest(&template.sha256) {
+                return Err(body_refused(format!(
+                    "setup '{name}' digest '{}' is not sha256:<hex>",
+                    template.sha256
                 )));
             }
         }
@@ -383,24 +416,8 @@ impl Workload {
                 self.image
             )));
         }
-        for prefix in &self.provided_env.prefixes {
-            if prefix.is_empty() {
-                return Err(refuse(
-                    "an empty provided-env prefix would allow every name".into(),
-                ));
-            }
-            if let Some(loader) = LOADER_ENV
-                .iter()
-                .find(|loader| loader.starts_with(prefix.as_str()))
-            {
-                return Err(refuse(format!(
-                    "provided-env prefix '{prefix}' covers the loader variable {loader}"
-                )));
-            }
-        }
         for name in self
             .provided_env
-            .names
             .iter()
             .chain(&self.configurable_env)
             .chain(self.deployer_env.keys())
@@ -430,6 +447,17 @@ impl Workload {
         if let Some(max_memory) = &self.bounds.max_memory {
             parse_memory_bytes(max_memory).map_err(refuse)?;
         }
+        for (id, resource_type) in &self.bindings {
+            if id.is_empty() || resource_type.is_empty() {
+                return Err(refuse("a binding needs a resource id and type".into()));
+            }
+            let name = crate::binding::binding_env_name(id);
+            if self.env.contains_key(&name) || self.provided_env.contains(&name) {
+                return Err(refuse(format!(
+                    "{name} is a binding the enforcer computes; it can't also be fixed or provided"
+                )));
+            }
+        }
         if (self.kind == WorkloadKind::Function) != self.function.is_some() {
             return Err(refuse(
                 "function settings are required on functions and only on functions".into(),
@@ -454,9 +482,16 @@ pub struct WorkloadRequest {
     pub memory: Option<String>,
     /// Replica count the control plane wants.
     pub replicas: Option<u32>,
-    /// Deployer input values, by input id, read by the enforcer from the
-    /// customer's own store (never from the control plane).
+}
+
+/// Values the enforcer reads or computes itself, never from the control
+/// plane.
+#[derive(Debug, Clone, Default)]
+pub struct LocalValues {
+    /// Deployer input values, by input id, from the customer's own store.
     pub deployer_inputs: BTreeMap<String, String>,
+    /// Binding values, by environment name, from [`crate::binding_env`].
+    pub bindings: BTreeMap<String, String>,
 }
 
 /// A secret delivery the control plane asks for.
@@ -490,15 +525,17 @@ pub struct BuiltWorkload {
 }
 
 /// Build workload `name` from a verified release, applying config values
-/// from a verified `config/v1` and the values the control plane provides.
+/// from a verified `config/v1`, the values the enforcer computed itself, and
+/// the values the control plane provides.
 ///
-/// A request that tries to change a signed value, set a name the release
-/// doesn't let it set, deliver an unbound secret or go past a bound is
-/// refused, so the attempt is reported rather than silently dropped.
+/// A request that tries to change a signed or computed value, set a name the
+/// release doesn't let it set, deliver an unbound secret or go past a bound
+/// is refused, so the attempt is reported rather than silently dropped.
 pub fn build_workload(
     release: &ReleaseBody,
     name: &str,
     config_env: &BTreeMap<String, String>,
+    local: &LocalValues,
     request: &WorkloadRequest,
 ) -> Result<BuiltWorkload> {
     let workload = release.workload(name)?;
@@ -510,8 +547,17 @@ pub fn build_workload(
             env.insert(key.clone(), value.clone());
         }
     }
+    for id in workload.bindings.keys() {
+        let key = crate::binding::binding_env_name(id);
+        let value = local.bindings.get(&key).ok_or_else(|| {
+            refuse(format!(
+                "the enforcer has no value for binding '{id}' ({key})"
+            ))
+        })?;
+        env.insert(key, value.clone());
+    }
     for (key, input) in &workload.deployer_env {
-        let value = request.deployer_inputs.get(input).ok_or_else(|| {
+        let value = local.deployer_inputs.get(input).ok_or_else(|| {
             refuse(format!(
                 "deployer input '{input}' for env {key} is not set in this deployment's store"
             ))
@@ -525,9 +571,9 @@ pub fn build_workload(
             continue;
         }
         if let Some(signed) = env.get(key) {
-            if signed != value {
+            if !same_value(signed, value) {
                 return Err(refuse(format!(
-                    "env {key} differs from its signed or configured value"
+                    "env {key} differs from its signed, configured or computed value"
                 )));
             }
             continue;
@@ -537,7 +583,7 @@ pub fn build_workload(
                 "env {key} is configurable and only a signed config statement may set it"
             )));
         }
-        if !workload.provided_env.allows(key) {
+        if is_loader_env(key) || !workload.provided_env.contains(key) {
             return Err(refuse(format!("env {key} is not in the signed release")));
         }
         env.insert(key.clone(), value.clone());
@@ -586,6 +632,22 @@ pub fn build_workload(
         volume_mount_path: workload.volume_mount_path.clone(),
         identity: workload.identity.clone(),
     })
+}
+
+/// Whether two values of one variable are the same. Binding values are JSON
+/// whose key order the control plane may not keep, so JSON objects compare
+/// by content.
+fn same_value(expected: &str, actual: &str) -> bool {
+    if expected == actual {
+        return true;
+    }
+    match (
+        serde_json::from_str::<serde_json::Value>(expected),
+        serde_json::from_str::<serde_json::Value>(actual),
+    ) {
+        (Ok(left @ serde_json::Value::Object(_)), Ok(right)) => left == right,
+        _ => false,
+    }
 }
 
 /// Whether `image` is `<repository>@sha256:<64 hex>`.

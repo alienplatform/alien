@@ -7,35 +7,35 @@
 use std::collections::BTreeMap;
 
 use alien_signing::envelope::Envelope;
-use alien_signing::release::{Bounds, WorkloadKind};
-use alien_signing::release::{ProvidedEnv, Runtime};
+use alien_signing::release::{Bounds, Runtime, WorkloadKind};
 use alien_signing::{
-    fingerprint, Anchor, ReleaseBody, Role, SessionApproval, SignedStatement, Signer, SignerKind,
-    SignerListBody, SoftwareKey, Workload,
+    fingerprint, InstallId, ReleaseBody, Role, SecretKey, SignedStatement, Signer, SignerKind,
+    SignerListBody, SigningSettings, Workload,
 };
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 use serde::Serialize;
 
 pub const PROJECT: &str = "prj_test";
-pub const DEPLOYMENT: &str = "dep_test";
+pub const PREFIX: &str = "acme-prod";
+pub const INSTALL: &str = "aws:111122223333:us-east-1:acme-prod";
+pub const CHANNEL: &str = "production";
 pub const IMAGE: &str =
     "registry.example.com/app@sha256:1111111111111111111111111111111111111111111111111111111111111111";
 
-pub fn key(seed: u8) -> SoftwareKey {
+pub fn key(seed: u8) -> SecretKey {
     let mut secret = [seed; 32];
     secret[0] = 1;
-    SoftwareKey::from_secret_bytes(&secret).expect("fixed secrets are valid scalars")
+    SecretKey::from_secret_bytes(&secret).expect("fixed secrets are valid scalars")
 }
 
 pub struct Keys {
-    pub admin: SoftwareKey,
-    pub second_admin: SoftwareKey,
-    pub ci: SoftwareKey,
-    pub operator: SoftwareKey,
-    pub recovery: SoftwareKey,
-    pub backend: SoftwareKey,
-    pub outsider: SoftwareKey,
-    pub components: SoftwareKey,
+    pub admin: SecretKey,
+    pub second_admin: SecretKey,
+    pub ci: SecretKey,
+    pub operator: SecretKey,
+    pub recovery: SecretKey,
+    pub outsider: SecretKey,
+    pub components: SecretKey,
 }
 
 pub fn keys() -> Keys {
@@ -45,7 +45,6 @@ pub fn keys() -> Keys {
         ci: key(4),
         operator: key(5),
         recovery: key(6),
-        backend: key(7),
         outsider: key(8),
         components: key(9),
     }
@@ -55,7 +54,7 @@ pub fn now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 11, 4, 12, 0, 0).unwrap()
 }
 
-pub fn signer(id: &str, key: &SoftwareKey, kind: SignerKind, roles: &[Role]) -> Signer {
+pub fn signer(id: &str, key: &SecretKey, kind: SignerKind, roles: &[Role]) -> Signer {
     Signer {
         id: id.to_string(),
         key: key.public_key().as_str().to_string(),
@@ -67,22 +66,60 @@ pub fn signer(id: &str, key: &SoftwareKey, kind: SignerKind, roles: &[Role]) -> 
 
 pub fn statement<B: Serialize>(
     kind: &str,
-    project: Option<&str>,
-    deployment: Option<&str>,
+    project: &str,
+    install: Option<&str>,
     sequence: u64,
     signer_list_version: u64,
     body: B,
 ) -> SignedStatement {
+    statement_until(
+        kind,
+        project,
+        install,
+        sequence,
+        signer_list_version,
+        None,
+        body,
+    )
+}
+
+pub fn statement_until<B: Serialize>(
+    kind: &str,
+    project: &str,
+    install: Option<&str>,
+    sequence: u64,
+    signer_list_version: u64,
+    not_after: Option<DateTime<Utc>>,
+    body: B,
+) -> SignedStatement {
     let envelope = Envelope {
         kind: kind.to_string(),
-        project: project.map(str::to_string),
-        deployment: deployment.map(str::to_string),
+        project: project.to_string(),
+        install: install.map(str::to_string),
         sequence,
-        not_after: None,
+        not_after,
         signer_list_version,
         body,
     };
     SignedStatement::new(&envelope.to_payload().unwrap())
+}
+
+/// A signer list version, valid for 60 days from [`now`].
+pub fn list<B: Serialize>(
+    project: &str,
+    version: u64,
+    authorized_by: u64,
+    body: B,
+) -> SignedStatement {
+    statement_until(
+        "signer-list/v1",
+        project,
+        None,
+        version,
+        authorized_by,
+        Some(now() + Duration::days(60)),
+        body,
+    )
 }
 
 pub fn genesis_body(keys: &Keys) -> SignerListBody {
@@ -105,24 +142,18 @@ pub fn genesis_body(keys: &Keys) -> SignerListBody {
             ),
         ],
         deny: Vec::new(),
+        recovered: false,
     }
 }
 
 pub fn genesis(keys: &Keys) -> SignedStatement {
-    statement(
-        "signer-list/v1",
-        Some(PROJECT),
-        None,
-        1,
-        1,
-        genesis_body(keys),
-    )
-    .sign_with("alice-laptop", &keys.admin)
-    .unwrap()
+    list(PROJECT, 1, 1, genesis_body(keys))
+        .sign_with("alice-laptop", &keys.admin)
+        .unwrap()
 }
 
-/// Version 2 adds Bob's laptop with `operate`, the backend's runtime key and
-/// a second admin, and raises the threshold to 2.
+/// Version 2 adds Bob's laptop with `operate` and a second admin, and raises
+/// the threshold to 2.
 pub fn version_2_body(keys: &Keys) -> SignerListBody {
     let mut body = genesis_body(keys);
     body.previous = Some(genesis(keys).open().unwrap().digest);
@@ -134,12 +165,6 @@ pub fn version_2_body(keys: &Keys) -> SignerListBody {
         &[Role::Operate],
     ));
     body.signers.push(signer(
-        "backend",
-        &keys.backend,
-        SignerKind::Service,
-        &[Role::Runtime],
-    ));
-    body.signers.push(signer(
         "carol-laptop",
         &keys.second_admin,
         SignerKind::Device,
@@ -149,16 +174,9 @@ pub fn version_2_body(keys: &Keys) -> SignerListBody {
 }
 
 pub fn version_2(keys: &Keys) -> SignedStatement {
-    statement(
-        "signer-list/v1",
-        Some(PROJECT),
-        None,
-        2,
-        1,
-        version_2_body(keys),
-    )
-    .sign_with("alice-laptop", &keys.admin)
-    .unwrap()
+    list(PROJECT, 2, 1, version_2_body(keys))
+        .sign_with("alice-laptop", &keys.admin)
+        .unwrap()
 }
 
 /// Version 3 removes Bob, signed by both admins as version 2 requires.
@@ -170,31 +188,23 @@ pub fn version_3_body(keys: &Keys) -> SignerListBody {
 }
 
 pub fn version_3(keys: &Keys) -> SignedStatement {
-    statement(
-        "signer-list/v1",
-        Some(PROJECT),
-        None,
-        3,
-        2,
-        version_3_body(keys),
-    )
-    .sign_with("alice-laptop", &keys.admin)
-    .unwrap()
-    .sign_with("carol-laptop", &keys.second_admin)
-    .unwrap()
+    list(PROJECT, 3, 2, version_3_body(keys))
+        .sign_with("alice-laptop", &keys.admin)
+        .unwrap()
+        .sign_with("carol-laptop", &keys.second_admin)
+        .unwrap()
 }
 
-pub fn anchor(keys: &Keys) -> Anchor {
-    Anchor {
-        project: PROJECT.to_string(),
-        deployment: DEPLOYMENT.to_string(),
-        protected: true,
-        signing: fingerprint(&genesis(keys).open().unwrap().digest),
-        components: keys.components.public_key().as_str().to_string(),
-        session_approval: SessionApproval::Developer,
-        inputs: None,
-        resource_prefix: None,
+pub fn settings(keys: &Keys) -> SigningSettings {
+    SigningSettings {
+        fingerprint: fingerprint(&genesis(keys).open().unwrap().digest),
+        prefix: PREFIX.to_string(),
+        channel: CHANNEL.to_string(),
     }
+}
+
+pub fn install() -> InstallId {
+    InstallId::parse(INSTALL).unwrap()
 }
 
 pub fn web_workload() -> Workload {
@@ -208,10 +218,8 @@ pub fn web_workload() -> Workload {
             "8080".to_string(),
         ]),
         env: BTreeMap::from([("LOG_LEVEL".to_string(), "info".to_string())]),
-        provided_env: ProvidedEnv {
-            names: vec!["PORT".to_string()],
-            prefixes: vec!["APP_BINDING_".to_string()],
-        },
+        provided_env: vec!["PORT".to_string()],
+        bindings: BTreeMap::from([("uploads".to_string(), "storage".to_string())]),
         configurable_env: vec!["FEATURE_FLAGS".to_string()],
         deployer_env: BTreeMap::from([("DATABASE_URL".to_string(), "databaseUrl".to_string())]),
         secrets: vec![alien_signing::release::SecretBinding {
@@ -233,30 +241,21 @@ pub fn web_workload() -> Workload {
 
 pub fn release_body() -> ReleaseBody {
     ReleaseBody {
-        platform: "machines".to_string(),
+        platform: "aws".to_string(),
+        channel: CHANNEL.to_string(),
         workloads: vec![web_workload()],
         configurable: alien_signing::release::Configurable {
             env: vec!["FEATURE_FLAGS".to_string()],
             inputs: vec!["region-label".to_string()],
         },
         components: BTreeMap::new(),
-        remote_access: Vec::new(),
-        dynamic: None,
-        plugins: BTreeMap::new(),
-        signed_commands: vec!["rotate".to_string()],
+        setup: BTreeMap::new(),
         stack: None,
     }
 }
 
 pub fn release(keys: &Keys, sequence: u64) -> SignedStatement {
-    statement(
-        "release/v2",
-        Some(PROJECT),
-        None,
-        sequence,
-        1,
-        release_body(),
-    )
-    .sign_with("ci", &keys.ci)
-    .unwrap()
+    statement("release/v2", PROJECT, None, sequence, 1, release_body())
+        .sign_with("ci", &keys.ci)
+        .unwrap()
 }

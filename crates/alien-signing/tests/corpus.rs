@@ -12,15 +12,14 @@ mod common;
 use std::path::PathBuf;
 
 use alien_signing::envelope::Envelope;
-use alien_signing::kinds::ConfigBody;
-use alien_signing::{Floors, Kind, ReleaseBody, SignedStatement, Trust};
+use alien_signing::{ConfigBody, Kind, Ledger, SignedStatement, Trust};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use chrono::Duration;
 use common::*;
 use serde::{Deserialize, Serialize};
 
-/// Sequence floor the corpus runner sets for releases before each case.
+/// Release floor the corpus runner's ledger holds before each case.
 const RELEASE_FLOOR: u64 = 10;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -54,29 +53,29 @@ fn cases() -> Vec<(&'static str, Case)> {
 
     let config_as_release = statement(
         "config/v1",
-        Some(PROJECT),
-        Some(DEPLOYMENT),
+        PROJECT,
+        Some(INSTALL),
         20,
         1,
         ConfigBody::default(),
     )
     .sign_with("ci", &keys.ci)
     .unwrap();
-    let other_project = statement("release/v2", Some("prj_other"), None, 20, 1, release_body())
+    let other_project = statement("release/v2", "prj_other", None, 20, 1, release_body())
         .sign_with("ci", &keys.ci)
         .unwrap();
-    let outsider = statement("release/v2", Some(PROJECT), None, 20, 1, release_body())
+    let outsider = statement("release/v2", PROJECT, None, 20, 1, release_body())
         .sign_with("ci", &keys.outsider)
         .unwrap();
-    let unsigned = statement("release/v2", Some(PROJECT), None, 20, 1, release_body());
-    let by_removed_role = statement("release/v2", Some(PROJECT), None, 20, 1, release_body())
+    let unsigned = statement("release/v2", PROJECT, None, 20, 1, release_body());
+    let by_removed_role = statement("release/v2", PROJECT, None, 20, 1, release_body())
         .sign_with("bob-laptop", &keys.operator)
         .unwrap();
 
     let mut extra_field = serde_json::to_value(Envelope {
         kind: "release/v2".to_string(),
-        project: Some(PROJECT.to_string()),
-        deployment: None,
+        project: PROJECT.to_string(),
+        install: None,
         sequence: 20,
         not_after: None,
         signer_list_version: 1,
@@ -96,8 +95,8 @@ fn cases() -> Vec<(&'static str, Case)> {
     let expired = SignedStatement::new(
         &Envelope {
             kind: "release/v2".to_string(),
-            project: Some(PROJECT.to_string()),
-            deployment: None,
+            project: PROJECT.to_string(),
+            install: None,
             sequence: 20,
             not_after: Some(now() - Duration::hours(1)),
             signer_list_version: 1,
@@ -111,7 +110,7 @@ fn cases() -> Vec<(&'static str, Case)> {
 
     let mut unlinked = version_3_body(&keys);
     unlinked.previous = Some(genesis(&keys).open().unwrap().digest);
-    let unlinked = statement("signer-list/v1", Some(PROJECT), None, 3, 2, unlinked)
+    let unlinked = list(PROJECT, 3, 2, unlinked)
         .sign_with("alice-laptop", &keys.admin)
         .unwrap()
         .sign_with("carol-laptop", &keys.second_admin)
@@ -122,20 +121,13 @@ fn cases() -> Vec<(&'static str, Case)> {
     fork_body
         .signers
         .retain(|signer| signer.id != "carol-laptop");
-    let fork = statement("signer-list/v1", Some(PROJECT), None, 2, 1, fork_body)
+    let fork = list(PROJECT, 2, 1, fork_body)
         .sign_with("alice-laptop", &keys.admin)
         .unwrap();
 
-    let one_admin = statement(
-        "signer-list/v1",
-        Some(PROJECT),
-        None,
-        3,
-        2,
-        version_3_body(&keys),
-    )
-    .sign_with("alice-laptop", &keys.admin)
-    .unwrap();
+    let one_admin = list(PROJECT, 3, 2, version_3_body(&keys))
+        .sign_with("alice-laptop", &keys.admin)
+        .unwrap();
 
     let mut off_curve = version_3_body(&keys);
     let mut der = STANDARD
@@ -149,10 +141,30 @@ fn cases() -> Vec<(&'static str, Case)> {
     let last = der.len() - 1;
     der[last] ^= 0x01;
     off_curve.signers[0].key = format!("ecdsa-p256:{}", STANDARD.encode(&der));
-    let off_curve = statement("signer-list/v1", Some(PROJECT), None, 3, 2, off_curve)
+    let off_curve = list(PROJECT, 3, 2, off_curve)
         .sign_with("alice-laptop", &keys.admin)
         .unwrap()
         .sign_with("carol-laptop", &keys.second_admin)
+        .unwrap();
+
+    let mut dev_body = release_body();
+    dev_body.channel = "dev".to_string();
+    let dev_release = statement("release/v2", PROJECT, None, 20, 1, dev_body)
+        .sign_with("ci", &keys.ci)
+        .unwrap();
+
+    let mut other_body = release_body();
+    other_body.workloads[0]
+        .env
+        .insert("LOG_LEVEL".into(), "debug".into());
+    let same_sequence = statement("release/v2", PROJECT, None, RELEASE_FLOOR, 1, other_body)
+        .sign_with("ci", &keys.ci)
+        .unwrap();
+
+    let mut refresh = version_3_body(&keys);
+    refresh.previous = Some(version_2(&keys).open().unwrap().digest);
+    let refreshed_by_ci = list(PROJECT, 3, 2, refresh)
+        .sign_with("ci", &keys.ci)
         .unwrap();
 
     vec![
@@ -160,7 +172,7 @@ fn cases() -> Vec<(&'static str, Case)> {
             "changed-byte",
             case(
                 "a release with one payload byte changed",
-                "TRUST_SIGNATURE_REFUSED",
+                "SIGNING_SIGNATURE_REFUSED",
                 changed_byte,
             ),
         ),
@@ -168,7 +180,7 @@ fn cases() -> Vec<(&'static str, Case)> {
             "swapped-kind",
             case(
                 "a config statement sent as a release",
-                "TRUST_WRONG_KIND",
+                "SIGNING_WRONG_KIND",
                 config_as_release,
             ),
         ),
@@ -176,7 +188,7 @@ fn cases() -> Vec<(&'static str, Case)> {
             "other-project",
             case(
                 "a release signed for another project",
-                "TRUST_WRONG_PROJECT",
+                "SIGNING_WRONG_PROJECT",
                 other_project,
             ),
         ),
@@ -184,27 +196,27 @@ fn cases() -> Vec<(&'static str, Case)> {
             "replayed-sequence",
             case(
                 "an older release sent again",
-                "TRUST_SEQUENCE_REPLAYED",
-                release(&keys, RELEASE_FLOOR),
+                "SIGNING_SEQUENCE_REPLAYED",
+                release(&keys, RELEASE_FLOOR - 1),
             ),
         ),
         (
             "outsider-key",
             case(
                 "a release signed by a key that is not on the list",
-                "TRUST_SIGNATURE_REFUSED",
+                "SIGNING_SIGNATURE_REFUSED",
                 outsider,
             ),
         ),
         (
             "unsigned",
-            case("a release with no signature", "TRUST_UNSIGNED", unsigned),
+            case("a release with no signature", "SIGNING_UNSIGNED", unsigned),
         ),
         (
             "wrong-role",
             case(
                 "a release signed by a key without the release role",
-                "TRUST_SIGNATURE_REFUSED",
+                "SIGNING_SIGNATURE_REFUSED",
                 by_removed_role,
             ),
         ),
@@ -212,19 +224,19 @@ fn cases() -> Vec<(&'static str, Case)> {
             "unknown-field",
             case(
                 "a release that adds a field the enforcer does not know",
-                "TRUST_BODY_REFUSED",
+                "SIGNING_BODY_REFUSED",
                 extra_field,
             ),
         ),
         (
             "expired",
-            case("a release past its notAfter", "TRUST_EXPIRED", expired),
+            case("a release past its notAfter", "SIGNING_EXPIRED", expired),
         ),
         (
             "broken-chain-link",
             case(
                 "a signer list that skips the version before it",
-                "TRUST_SIGNER_LIST_REFUSED",
+                "SIGNING_SIGNER_LIST_REFUSED",
                 unlinked,
             ),
         ),
@@ -232,7 +244,7 @@ fn cases() -> Vec<(&'static str, Case)> {
             "older-list-fork",
             case(
                 "a different version 2 after version 2 is trusted",
-                "TRUST_SIGNER_LIST_REFUSED",
+                "SIGNING_SIGNER_LIST_REFUSED",
                 fork,
             ),
         ),
@@ -240,39 +252,72 @@ fn cases() -> Vec<(&'static str, Case)> {
             "below-threshold",
             case(
                 "a signer list signed by fewer admins than required",
-                "TRUST_SIGNER_LIST_REFUSED",
+                "SIGNING_SIGNER_LIST_REFUSED",
                 one_admin,
+            ),
+        ),
+        (
+            "dev-release",
+            case(
+                "a release for the dev channel sent to a production install",
+                "SIGNING_WRONG_CHANNEL",
+                dev_release,
+            ),
+        ),
+        (
+            "same-sequence-other-release",
+            case(
+                "a different release with the sequence the install accepted",
+                "SIGNING_SEQUENCE_REPLAYED",
+                same_sequence,
+            ),
+        ),
+        (
+            "refreshed-by-ci",
+            case(
+                "a signer list refresh signed by CI, which is not an admin",
+                "SIGNING_SIGNATURE_REFUSED",
+                refreshed_by_ci,
             ),
         ),
         (
             "invalid-curve-point",
             case(
                 "a signer list holding a key that is not on the curve",
-                "TRUST_SIGNER_LIST_REFUSED",
+                "SIGNING_SIGNER_LIST_REFUSED",
                 off_curve,
             ),
         ),
     ]
 }
 
-/// What an enforcer at signer list version 2 with a release floor reports.
+/// What an enforcer at signer list version 2, whose ledger holds release
+/// [`RELEASE_FLOOR`], reports.
 fn run(case: &Case) -> String {
     let keys = keys();
-    let mut trust = Trust::new(anchor(&keys), &[genesis(&keys), version_2(&keys)]).unwrap();
-    let mut floors = Floors::default();
-    floors.raise(Kind::Release.as_str(), RELEASE_FLOOR);
+    let mut ledger = Ledger::new(PREFIX);
+    let floor = release(&keys, RELEASE_FLOOR).open().unwrap().digest;
+    ledger.raise(Kind::Release, RELEASE_FLOOR, &floor).unwrap();
+    let mut trust = Trust::new(
+        settings(&keys),
+        install(),
+        &[genesis(&keys), version_2(&keys)],
+        &ledger,
+        now(),
+    )
+    .unwrap();
     let opened = match case.statement.open() {
         Ok(opened) => opened,
         Err(error) => return error.code,
     };
     let result = if opened.kind == Kind::SignerList {
         trust
-            .extend_chain(std::slice::from_ref(&case.statement))
+            .extend_chain(std::slice::from_ref(&case.statement), now())
             .map(|_| ())
     } else {
         trust
-            .verify::<ReleaseBody>(&case.statement, Kind::Release, now())
-            .and_then(|verified| floors.check(Kind::Release.as_str(), verified.sequence))
+            .verify_release(&case.statement, now())
+            .and_then(|verified| ledger.check(Kind::Release, verified.sequence, &verified.digest))
     };
     match result {
         Ok(()) => "ACCEPTED".to_string(),
