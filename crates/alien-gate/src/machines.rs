@@ -572,10 +572,19 @@ impl<E: Ec2Api, A: AutoScalingApi> MachineApi for AwsMachines<E, A> {
                 .into_iter()
                 .find(|image| image.image_id.as_deref() == Some(id))
         });
-        Ok(image.map(|image| ImageFacts {
-            owner: image.owner_id.unwrap_or_default(),
-            architecture: image.architecture.unwrap_or_default(),
-        }))
+        image
+            .map(|image| {
+                let missing = |field: &str| {
+                    AlienError::new(failed(format!(
+                        "ec2:DescribeImages {id} returned no {field}"
+                    )))
+                };
+                Ok(ImageFacts {
+                    owner: image.owner_id.ok_or_else(|| missing("owner"))?,
+                    architecture: image.architecture.ok_or_else(|| missing("architecture"))?,
+                })
+            })
+            .transpose()
     }
 
     async fn template(&self, name: &str) -> Result<Option<String>> {
