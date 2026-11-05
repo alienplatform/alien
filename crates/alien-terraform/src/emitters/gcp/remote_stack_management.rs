@@ -14,7 +14,7 @@ use alien_core::{
     import::EmitContext, ErrorData, KubernetesCluster, PermissionProfile, PermissionSet,
     PermissionSetReference, RemoteStackManagement, Result,
 };
-use alien_error::{AlienError, Context};
+use alien_error::AlienError;
 use alien_permissions::{
     generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
     BindingTarget, PermissionContext,

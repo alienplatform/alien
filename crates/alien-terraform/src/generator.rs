@@ -1839,8 +1839,8 @@ fn body_is_empty(body: &Body) -> bool {
 /// The fingerprint and channel are literals, so the module's digest pins them; the
 /// `signing_fingerprint` variable only shows the fingerprint and refuses any other value.
 ///
-/// On Azure the settings are not written yet; the Azure management emitter writes the deny
-/// settings that keep the management identity away from what runs code.
+/// On Azure the resource group emitter writes the settings tag and the management emitter the
+/// ledger, the verifier identity and the deny settings; this adds the verifier's Container App.
 fn signing_blocks(
     settings: &StackSettings,
     target: TerraformTarget,
@@ -1942,7 +1942,11 @@ fn signing_blocks(
             }
             Ok(blocks)
         }
-        TerraformTarget::Azure => Ok(vec![fingerprint_variable]),
+        TerraformTarget::Azure => Ok([
+            vec![fingerprint_variable],
+            azure_verifier_blocks(pins, management_label)?,
+        ]
+        .concat()),
         TerraformTarget::Eks | TerraformTarget::Gke | TerraformTarget::Aks => {
             Err(AlienError::new(ErrorData::OperationNotSupported {
                 operation: format!("protect a {} install through Terraform", target.name()),
@@ -2114,6 +2118,145 @@ fn aws_verifier_blocks(
         ));
     }
     Ok(blocks)
+}
+
+/// A protected Azure install's verifier: the Container App `<prefix>-verifier` in a managed
+/// environment of its own, running as the verifier identity the management emitter creates
+/// (the deny's second excluded principal) and reading the signing vault. The management roles
+/// hold no Container App writes on a protected install, so only setup changes its image and
+/// environment.
+///
+/// Its ingress is public: whoever calls it can only hand it statements the vendor signed,
+/// which it checks against the install's settings and ledger itself.
+fn azure_verifier_blocks(
+    pins: &alien_core::SetupPins,
+    management_label: Option<&str>,
+) -> Result<Vec<Block>> {
+    let image = pins
+        .azure_verifier_image
+        .as_deref()
+        .filter(|image| alien_core::is_pinned_image(image))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::OperationNotSupported {
+                operation: "render a protected Azure setup".to_string(),
+                reason: "this CLI build has no Azure verifier image pinned by digest; protected setups come from released CLI builds".to_string(),
+            })
+        })?;
+    let management = management_label.ok_or_else(|| {
+        AlienError::new(ErrorData::OperationNotSupported {
+            operation: "render a protected Azure setup".to_string(),
+            reason: "the stack has no remote management, which creates the verifier identity"
+                .to_string(),
+        })
+    })?;
+    let identity = format!("{management}_verifier");
+    let vault = format!("{management}_signing");
+    let name = expr::template("${local.resource_prefix}-verifier".to_string());
+    let setup_tags = || expr::object([("managed-by", Expression::String("setup".to_string()))]);
+    let env = |name: &str, value: Expression| {
+        nested(block(
+            "env",
+            [attr("name", Expression::String(name.to_string())), attr("value", value)],
+        ))
+    };
+    Ok(vec![
+        resource_block(
+            "azurerm_container_app_environment",
+            "signing_verifier",
+            [
+                attr("name", name.clone()),
+                attr("resource_group_name", expr::raw("var.azure_resource_group_name")),
+                attr("location", expr::raw("var.azure_location")),
+                attr("tags", setup_tags()),
+            ],
+        ),
+        resource_block(
+            "azurerm_container_app",
+            "signing_verifier",
+            [
+                attr("name", name),
+                attr("resource_group_name", expr::raw("var.azure_resource_group_name")),
+                attr(
+                    "container_app_environment_id",
+                    expr::traversal(["azurerm_container_app_environment", "signing_verifier", "id"]),
+                ),
+                attr("revision_mode", Expression::String("Single".to_string())),
+                nested(block(
+                    "identity",
+                    [
+                        attr("type", Expression::String("UserAssigned".to_string())),
+                        attr(
+                            "identity_ids",
+                            Expression::Array(vec![expr::traversal([
+                                "azurerm_user_assigned_identity",
+                                &identity,
+                                "id",
+                            ])]),
+                        ),
+                    ],
+                )),
+                nested(block(
+                    "template",
+                    [
+                        attr("min_replicas", Expression::Number(0.into())),
+                        attr("max_replicas", Expression::Number(1.into())),
+                        nested(block(
+                            "container",
+                            [
+                                attr("name", Expression::String("verifier".to_string())),
+                                attr("image", Expression::String(image.to_string())),
+                                attr("cpu", expr::raw("0.25")),
+                                attr("memory", Expression::String("0.5Gi".to_string())),
+                                env("VERIFIER_CLOUD", Expression::String("azure".to_string())),
+                                env(
+                                    "VERIFIER_AZURE_RESOURCE_GROUP",
+                                    expr::template(
+                                        "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+                                            .to_string(),
+                                    ),
+                                ),
+                                env(
+                                    "VERIFIER_AZURE_VAULT",
+                                    expr::traversal(["azurerm_key_vault", &vault, "vault_uri"]),
+                                ),
+                                env(
+                                    "VERIFIER_AZURE_CLIENT_ID",
+                                    expr::traversal([
+                                        "azurerm_user_assigned_identity",
+                                        &identity,
+                                        "client_id",
+                                    ]),
+                                ),
+                            ],
+                        )),
+                    ],
+                )),
+                nested(block(
+                    "ingress",
+                    [
+                        attr("external_enabled", Expression::Bool(true)),
+                        attr("target_port", Expression::Number(8080.into())),
+                        attr("transport", Expression::String("auto".to_string())),
+                        nested(block(
+                            "traffic_weight",
+                            [
+                                attr("latest_revision", Expression::Bool(true)),
+                                attr("percentage", Expression::Number(100.into())),
+                            ],
+                        )),
+                    ],
+                )),
+                attr("tags", setup_tags()),
+                attr(
+                    "depends_on",
+                    Expression::Array(vec![
+                        expr::traversal(["azurerm_role_assignment", &identity]),
+                        expr::traversal(["azurerm_role_assignment", &format!("{vault}_verifier")]),
+                    ]),
+                ),
+            ],
+        ),
+    ])
 }
 
 /// What the GCP verifier may change: the install's own machine templates and groups, the

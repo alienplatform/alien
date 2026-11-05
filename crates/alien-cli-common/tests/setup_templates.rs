@@ -1,10 +1,10 @@
 //! Rendering a protected stack's setup templates the way a signed release records them.
 
 use alien_cli_common::setup_templates::{
-    render_setup_templates, SetupHostingOptions, SetupRenderOptions,
+    render_setup_template, render_setup_templates, SetupHostingOptions, SetupRenderOptions,
 };
 use alien_cloudformation::CfRegistry;
-use alien_core::{SetupPins, Stack, StackSigning};
+use alien_core::{SetupPins, Stack, StackSettings, StackSigning};
 use alien_helm::HelmRegistry;
 use alien_signing::release::SETUP_TEMPLATES;
 use alien_terraform::TfRegistry;
@@ -19,6 +19,8 @@ fn pins() -> SetupPins {
     SetupPins {
         aws_publisher: Some(PUBLISHER.to_string()),
         aws_verifier_image: Some(VERIFIER.to_string()),
+        gcp_verifier_image: Some(format!("gcr.example/verifier@sha256:{}", "6e".repeat(32))),
+        azure_verifier_image: Some(format!("registry.example/verifier@sha256:{}", "7f".repeat(32))),
         operator_digest: Some(format!("sha256:{}", "ef".repeat(32))),
     }
 }
@@ -194,6 +196,42 @@ async fn a_build_without_pins_refuses_to_render_protected_aws_setup() {
     .expect_err("no publisher, no protected AWS setup");
     let text = format!("{error:?}");
     assert!(text.contains("no machine-image publisher"), "{text}");
+}
+
+/// Every pin but the Azure verifier image: the protected Azure module is refused and names the
+/// missing pin; the other clouds still render.
+#[tokio::test]
+async fn a_build_without_the_azure_verifier_image_refuses_protected_azure_setup() {
+    let signing = StackSigning {
+        fingerprint: FINGERPRINT.to_string(),
+        channel: "production".to_string(),
+    };
+    let cloudformation = CfRegistry::built_in();
+    let terraform = TfRegistry::built_in();
+    let helm = HelmRegistry::built_in();
+    let options = SetupRenderOptions::builder()
+        .signing(&signing)
+        .cloudformation_registry(&cloudformation)
+        .terraform_registry(&terraform)
+        .helm_registry(&helm)
+        .hosting(hosting())
+        .pins(SetupPins {
+            azure_verifier_image: None,
+            ..pins()
+        })
+        .build();
+    let settings = StackSettings {
+        signing: Some(signing.clone()),
+        ..Default::default()
+    };
+    let error = render_setup_template("terraform-azure", &stack(), &settings, &options)
+        .await
+        .expect_err("no Azure verifier image, no protected Azure setup");
+    let text = format!("{error:?}");
+    assert!(text.contains("no Azure verifier image pinned by digest"), "{text}");
+    render_setup_template("terraform-aws", &stack(), &settings, &options)
+        .await
+        .expect("protected AWS setup needs no Azure pin");
 }
 
 /// Hosting options come from a service the install doesn't trust. None of them may change what
