@@ -6,7 +6,8 @@
 //!
 //! Compute clusters render through emitters a composed CLI registers; the built-in registries
 //! have none. `--stub-compute-clusters` registers an emitter that emits nothing for them, so a
-//! stack with containers still renders, with the management identity's grants for the cluster.`
+//! stack with containers still renders, with the management identity's grants for the cluster.
+//! On protected GCP and Azure renders it names a placeholder machine network for the verifier.
 
 use std::{env, fs, process::ExitCode};
 
@@ -30,6 +31,35 @@ impl TfEmitter for NoComputeCluster {
 
     fn emit_import_ref(&self, _ctx: &EmitContext<'_>) -> alien_core::Result<hcl::Expression> {
         Ok(alien_terraform::expr::raw("true"))
+    }
+
+    fn machine_network(
+        &self,
+        ctx: &EmitContext<'_>,
+    ) -> alien_core::Result<Option<hcl::Expression>> {
+        let (subnet, group, identity) = match ctx.platform {
+            Platform::Gcp => (
+                "projects/${var.gcp_project}/regions/${var.gcp_region}/subnetworks/${local.resource_prefix}-machines",
+                "${local.resource_prefix}-machines",
+                "machines@${var.gcp_project}.iam.gserviceaccount.com",
+            ),
+            _ => (
+                "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}/providers/Microsoft.Network/virtualNetworks/machines/subnets/machines",
+                "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}/providers/Microsoft.Network/networkSecurityGroups/machines",
+                "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/machines",
+            ),
+        };
+        let template = alien_terraform::expr::template;
+        Ok(Some(alien_terraform::expr::jsonencode(
+            alien_terraform::expr::object([
+                ("subnetIds", hcl::Expression::Array(vec![template(subnet)])),
+                (
+                    "securityGroupIds",
+                    hcl::Expression::Array(vec![template(group)]),
+                ),
+                ("identity", template(identity)),
+            ]),
+        )))
     }
 }
 

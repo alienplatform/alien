@@ -550,8 +550,8 @@ pub(crate) fn render_terraform_module(
         })
         .collect();
     let verifier_machine_network =
-        verifier_machine_network(stack, &stack_settings, &labels, target)?;
-    let signing = signing_blocks(
+        verifier_machine_network(stack, &stack_settings, &labels, target, options.registry)?;
+    let mut signing = signing_blocks(
         &stack_settings,
         target,
         &options.pins,
@@ -559,6 +559,24 @@ pub(crate) fn render_terraform_module(
         &runtime_service_accounts,
         verifier_machine_network,
     )?;
+    // The signing parameters and the verifier need their APIs (Parameter Manager, Cloud Run)
+    // enabled first.
+    let service_activations: Vec<Expression> = per_resource
+        .values()
+        .flat_map(|fragment| fragment.resource_blocks.iter())
+        .filter(|block| {
+            block.labels.first().map(|kind| kind.as_str()) == Some("google_project_service")
+        })
+        .filter_map(resource_address)
+        .collect();
+    if !service_activations.is_empty() {
+        for block in signing
+            .iter_mut()
+            .filter(|block| resource_address(block).is_some())
+        {
+            upsert_depends_on(block, &service_activations);
+        }
+    }
     import_depends_on.extend(signing.iter().filter_map(resource_address));
 
     let network_vars = network_extra_variables(stack, &labels);
@@ -1914,7 +1932,12 @@ fn signing_blocks(
         .concat()),
         TerraformTarget::Gcp => {
             let mut blocks = vec![fingerprint_variable];
-            blocks.extend(gcp_verifier_blocks(runtime_service_accounts));
+            blocks.extend(gcp_verifier_blocks(
+                pins,
+                management_label,
+                runtime_service_accounts,
+                verifier_machine_network,
+            )?);
             for (label, name, value) in [
                 (
                     "signing_fingerprint",
@@ -1953,7 +1976,7 @@ fn signing_blocks(
         }
         TerraformTarget::Azure => Ok([
             vec![fingerprint_variable],
-            azure_verifier_blocks(pins, management_label)?,
+            azure_verifier_blocks(pins, management_label, verifier_machine_network)?,
         ]
         .concat()),
         TerraformTarget::Eks | TerraformTarget::Gke | TerraformTarget::Aks => {
@@ -2143,6 +2166,7 @@ fn aws_verifier_blocks(
 fn azure_verifier_blocks(
     pins: &alien_core::SetupPins,
     management_label: Option<&str>,
+    machine_network: Option<Expression>,
 ) -> Result<Vec<Block>> {
     let image = pins
         .azure_verifier_image
@@ -2242,7 +2266,12 @@ fn azure_verifier_blocks(
                                         "client_id",
                                     ]),
                                 ),
-                            ],
+                            ]
+                            .into_iter()
+                            .chain(
+                                machine_network
+                                    .map(|network| env("VERIFIER_MACHINE_NETWORK", network)),
+                            ),
                         )),
                     ],
                 )),
@@ -2317,10 +2346,26 @@ const GCP_VERIFIER_SHARED_PERMISSIONS: &[&str] = &[
     "compute.zoneOperations.get",
 ];
 
-/// A protected GCP install's verifier identity: a service account with one custom role on the
-/// install's own resources, `actAs` on each runtime service account only, and reads of the
-/// signing parameters. Management never writes compute; it asks the verifier.
-fn gcp_verifier_blocks(runtime_service_accounts: &[String]) -> Vec<Block> {
+/// A protected GCP install's verifier: the Cloud Run service `<prefix>-verifier` running as a
+/// service account with one custom role on the install's own resources, `actAs` on each
+/// runtime service account only, and reads of the signing parameters. Management never writes
+/// compute; it asks the verifier, which only it may invoke, with an ID token of its own.
+fn gcp_verifier_blocks(
+    pins: &alien_core::SetupPins,
+    management_label: Option<&str>,
+    runtime_service_accounts: &[String],
+    machine_network: Option<Expression>,
+) -> Result<Vec<Block>> {
+    let image = pins
+        .gcp_verifier_image
+        .as_deref()
+        .filter(|image| alien_core::is_pinned_image(image))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::OperationNotSupported {
+                operation: "render a protected GCP setup".to_string(),
+                reason: "this CLI build has no GCP verifier image pinned by digest; protected setups come from released CLI builds".to_string(),
+            })
+        })?;
     let member = expr::template("serviceAccount:${google_service_account.signing_verifier.email}");
     let custom_role = |label: &str, suffix: &str, title: &str, permissions: &[&str]| {
         resource_block(
@@ -2491,27 +2536,184 @@ fn gcp_verifier_blocks(runtime_service_accounts: &[String]) -> Vec<Block> {
             ],
         ));
     }
-    blocks
+    let env = |name: &str, value: Expression| {
+        nested(block(
+            "env",
+            [
+                attr("name", Expression::String(name.to_string())),
+                attr("value", value),
+            ],
+        ))
+    };
+    let mut container = vec![
+        attr("image", Expression::String(image.to_string())),
+        nested(block(
+            "ports",
+            [attr("container_port", Expression::Number(8080.into()))],
+        )),
+        env("VERIFIER_CLOUD", Expression::String("gcp".to_string())),
+    ];
+    container.extend(machine_network.map(|network| env("VERIFIER_MACHINE_NETWORK", network)));
+    blocks.push(resource_block(
+        "google_cloud_run_v2_service",
+        "signing_verifier",
+        [
+            attr("name", expr::template("${local.resource_prefix}-verifier")),
+            attr("project", expr::raw("var.gcp_project")),
+            attr("location", expr::raw("var.gcp_region")),
+            attr(
+                "ingress",
+                Expression::String("INGRESS_TRAFFIC_ALL".to_string()),
+            ),
+            attr(
+                "labels",
+                expr::object([("managed-by", Expression::String("setup".to_string()))]),
+            ),
+            attr("deletion_protection", Expression::Bool(false)),
+            nested(block(
+                "template",
+                [
+                    attr(
+                        "service_account",
+                        expr::traversal(["google_service_account", "signing_verifier", "email"]),
+                    ),
+                    nested(block(
+                        "scaling",
+                        [
+                            attr("min_instance_count", Expression::Number(0.into())),
+                            attr("max_instance_count", Expression::Number(1.into())),
+                        ],
+                    )),
+                    nested(block("containers", container)),
+                ],
+            )),
+            attr(
+                "depends_on",
+                Expression::Array(vec![
+                    expr::traversal(["google_project_iam_member", "signing_verifier"]),
+                    expr::traversal(["google_project_iam_member", "signing_verifier_shared"]),
+                    expr::traversal([
+                        "google_project_iam_member",
+                        "signing_verifier_reads_settings",
+                    ]),
+                    expr::traversal([
+                        "google_project_iam_member",
+                        "signing_verifier_records_ledger",
+                    ]),
+                ]),
+            ),
+        ],
+    ));
+    if let Some(management) = management_label {
+        let management_member = expr::template(format!(
+            "serviceAccount:${{google_service_account.{management}.email}}"
+        ));
+        blocks.push(resource_block(
+            "google_cloud_run_v2_service_iam_member",
+            "signing_verifier_invoker",
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr("location", expr::raw("var.gcp_region")),
+                attr(
+                    "name",
+                    expr::traversal(["google_cloud_run_v2_service", "signing_verifier", "name"]),
+                ),
+                attr("role", Expression::String("roles/run.invoker".to_string())),
+                attr("member", management_member.clone()),
+            ],
+        ));
+        // An ID token of its own proves only who management already is; it grants nothing.
+        blocks.push(resource_block(
+            "google_service_account_iam_member",
+            "signing_management_id_token",
+            [
+                attr(
+                    "service_account_id",
+                    expr::traversal(["google_service_account", management, "name"]),
+                ),
+                attr(
+                    "role",
+                    Expression::String("roles/iam.serviceAccountOpenIdTokenCreator".to_string()),
+                ),
+                attr("member", management_member),
+            ],
+        ));
+    }
+    Ok(blocks)
 }
 
-/// Where a protected AWS install's verifier launches machines, when the stack has any: JSON
-/// `{"subnetIds": [..], "securityGroupIds": [..]}` from the network setup creates or the
-/// customer names. Machines in the default VPC have no subnets setup fixes, so the render is
-/// refused.
+/// Where a protected install's verifier launches machines, when the stack has any: JSON
+/// `{"subnetIds": [..], "securityGroupIds": [..]}` (GCP and Azure add `identity`). On AWS it
+/// comes from the network setup creates or the customer names; machines in the default VPC
+/// have no subnets setup fixes, so the render is refused. On GCP and Azure each compute
+/// cluster's emitter names it ([`crate::emitter::TfEmitter::machine_network`]); a cluster
+/// that names none, or clusters that name different networks, are refused.
 fn verifier_machine_network(
     stack: &Stack,
     settings: &StackSettings,
     labels: &IndexMap<String, String>,
     target: TerraformTarget,
+    registry: &TfRegistry,
 ) -> Result<Option<Expression>> {
-    if settings.signing.is_none()
-        || target != TerraformTarget::Aws
-        || !stack
-            .resources()
-            .any(|(_, entry)| entry.config.resource_type() == ComputeCluster::RESOURCE_TYPE)
-    {
+    let clusters: Vec<_> = stack
+        .resources()
+        .filter(|(_, entry)| entry.config.resource_type() == ComputeCluster::RESOURCE_TYPE)
+        .collect();
+    if settings.signing.is_none() || clusters.is_empty() {
         return Ok(None);
     }
+    match target {
+        TerraformTarget::Aws => aws_verifier_machine_network(stack, settings, labels, target),
+        TerraformTarget::Gcp | TerraformTarget::Azure => {
+            let mut network: Option<Expression> = None;
+            for (cluster_id, entry) in clusters {
+                let refuse = |reason: &str| {
+                    AlienError::new(ErrorData::OperationNotSupported {
+                        operation: format!(
+                            "protect the machines of compute cluster '{cluster_id}'"
+                        ),
+                        reason: reason.to_string(),
+                    })
+                };
+                let ctx = EmitContext {
+                    stack,
+                    resource: entry,
+                    resource_id: cluster_id,
+                    platform: target.cloud_platform(),
+                    targets_kubernetes: false,
+                    stack_settings: settings,
+                    names: labels,
+                };
+                let named = registry
+                    .require(&ComputeCluster::RESOURCE_TYPE, target.cloud_platform())?
+                    .machine_network(&ctx)?
+                    .ok_or_else(|| {
+                        refuse(
+                            "its emitter names no network for the verifier to launch machines into",
+                        )
+                    })?;
+                match &network {
+                    Some(existing) if *existing != named => {
+                        return Err(refuse(
+                            "the verifier launches every cluster's machines into one network, and this cluster names another",
+                        ));
+                    }
+                    Some(_) => {}
+                    None => network = Some(named),
+                }
+            }
+            Ok(network)
+        }
+        TerraformTarget::Eks | TerraformTarget::Gke | TerraformTarget::Aks => Ok(None),
+    }
+}
+
+fn aws_verifier_machine_network(
+    stack: &Stack,
+    settings: &StackSettings,
+    labels: &IndexMap<String, String>,
+    target: TerraformTarget,
+) -> Result<Option<Expression>> {
     let refuse = || {
         AlienError::new(ErrorData::OperationNotSupported {
             operation: "protect machines in the default VPC".to_string(),

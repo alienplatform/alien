@@ -412,6 +412,7 @@ const AZURE_VERIFIER_ACTIONS: &[&str] = &[
     "Microsoft.Compute/virtualMachineScaleSets/read",
     "Microsoft.Compute/virtualMachineScaleSets/write",
     "Microsoft.Compute/virtualMachineScaleSets/delete",
+    "Microsoft.Compute/virtualMachineScaleSets/delete/action",
     "Microsoft.Compute/virtualMachineScaleSets/manualupgrade/action",
     "Microsoft.Compute/virtualMachineScaleSets/reimage/action",
     "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/read",
@@ -590,7 +591,10 @@ fn emit_verifier_grants(
         "azurerm_role_definition",
         &images,
         [
-            attr("name", expr::template("${local.resource_prefix}-verifier-images".to_string())),
+            attr(
+                "name",
+                expr::template("${local.resource_prefix}-verifier-images".to_string()),
+            ),
             attr("scope", subscription.clone()),
             attr(
                 "description",
@@ -600,11 +604,20 @@ fn emit_verifier_grants(
             ),
             nested(block(
                 "permissions",
-                [attr("actions", string_array(
-                    AZURE_VERIFIER_IMAGE_ACTIONS.iter().map(|action| action.to_string()).collect(),
-                ))],
+                [attr(
+                    "actions",
+                    string_array(
+                        AZURE_VERIFIER_IMAGE_ACTIONS
+                            .iter()
+                            .map(|action| action.to_string())
+                            .collect(),
+                    ),
+                )],
             )),
-            attr("assignable_scopes", Expression::Array(vec![subscription.clone()])),
+            attr(
+                "assignable_scopes",
+                Expression::Array(vec![subscription.clone()]),
+            ),
         ],
     ));
     fragment.resource_blocks.push(resource_block(
