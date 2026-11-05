@@ -855,8 +855,7 @@ async fn run_remote_exec_attach(
     // this is, input waits; handshake frames go out unsealed on `raw_tx`.
     let (raw_tx, mut raw_rx) = mpsc::channel::<Message>(8);
     let (decided_tx, mut decided_rx) = tokio::sync::watch::channel(signing.is_none());
-    let channel: Arc<std::sync::Mutex<Option<Channel>>> =
-        Arc::new(std::sync::Mutex::new(None));
+    let channel: Arc<std::sync::Mutex<Option<Channel>>> = Arc::new(std::sync::Mutex::new(None));
     let writer_channel = channel.clone();
     let writer = tokio::spawn(async move {
         loop {
@@ -996,10 +995,7 @@ async fn run_remote_exec_attach(
 }
 
 /// Seal an outgoing frame when the session is signed. `None` ends the writer.
-fn seal_outgoing(
-    channel: &std::sync::Mutex<Option<Channel>>,
-    message: Message,
-) -> Option<Message> {
+fn seal_outgoing(channel: &std::sync::Mutex<Option<Channel>>, message: Message) -> Option<Message> {
     let mut guard = channel.lock().ok()?;
     let Some(channel) = guard.as_mut() else {
         return Some(message);
@@ -1017,10 +1013,7 @@ fn seal_outgoing(
 
 /// Open an incoming frame when the session is signed. A plaintext frame then
 /// means the relay injected it.
-fn open_incoming(
-    channel: &std::sync::Mutex<Option<Channel>>,
-    message: Message,
-) -> Result<Message> {
+fn open_incoming(channel: &std::sync::Mutex<Option<Channel>>, message: Message) -> Result<Message> {
     let mut guard = channel.lock().expect("channel lock");
     let Some(channel) = guard.as_mut() else {
         return Ok(message);
