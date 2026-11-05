@@ -618,4 +618,63 @@ mod update_during_dependency_change {
         assert_eq!(daemon_image(&next), "daemon-v2");
         Ok(())
     }
+
+    /// `daemon` also depends on `config`. A desired stack that changes only `config` to v2
+    /// while `cluster` is still updating: `daemon`'s own config is the same, so its update
+    /// comes from `config` changing, and only both opt-ins on `cluster` let it through.
+    #[tokio::test]
+    async fn dependency_change_updates_the_dependent_during_another_dependency_update_only_when_both_opt_in(
+    ) -> Result<()> {
+        fn stack(config_version: &str) -> Stack {
+            Stack::new("update-during-dependency-change".to_owned())
+                .add(
+                    test_function_with_image("cluster", "cluster-v2"),
+                    ResourceLifecycle::Live,
+                )
+                .add(
+                    test_function_with_image("config", &format!("config-{config_version}")),
+                    ResourceLifecycle::Live,
+                )
+                .add_with_dependencies(
+                    test_function_with_image("daemon", "daemon-v1"),
+                    ResourceLifecycle::Live,
+                    vec![
+                        ResourceRef::new(Worker::RESOURCE_TYPE, "cluster"),
+                        ResourceRef::new(Worker::RESOURCE_TYPE, "config"),
+                    ],
+                )
+                .build()
+        }
+
+        for (dependents_may_update, updates_during_dependency_change) in
+            [(true, true), (true, false), (false, true), (false, false)]
+        {
+            let both = dependents_may_update && updates_during_dependency_change;
+            let mut state = run_to_synced(&new_executor(&stack("v1"))?, new_test_state()).await?;
+            assert_all_running(&state, &["cluster", "config", "daemon"]);
+
+            let cluster = state.resources.get_mut("cluster").expect("cluster state");
+            let mut controller = cluster.get_internal_controller_typed::<TestWorkerController>()?;
+            controller.dependents_may_update = dependents_may_update;
+            controller.state = TestWorkerState::UpdateCodePolling;
+            cluster.status = ResourceStatus::Updating;
+            cluster.set_internal_controller(Some(Box::new(controller)))?;
+
+            let daemon = state.resources.get_mut("daemon").expect("daemon state");
+            let mut controller = daemon.get_internal_controller_typed::<TestWorkerController>()?;
+            controller.updates_during_dependency_change = updates_during_dependency_change;
+            daemon.set_internal_controller(Some(Box::new(controller)))?;
+
+            let plan = new_executor(&stack("v2"))?.plan(&state)?;
+            assert!(plan.updates.contains_key("config"));
+            assert!(!plan.updates.contains_key("cluster"));
+            assert_eq!(
+                plan.updates.contains_key("daemon"),
+                both,
+                "dependency opts in: {dependents_may_update}, dependent opts in: \
+                 {updates_during_dependency_change}"
+            );
+        }
+        Ok(())
+    }
 }
