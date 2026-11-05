@@ -594,6 +594,9 @@ fn deny_excluded_actions(roles: &AzureManagementRoles) -> Result<Vec<String>> {
         .iter()
         .flat_map(|role| role.actions.iter())
         .filter(|action| azure_write_or_delete(action) && azure_runs_no_code(action))
+        // A vault write could turn the signing vault to access policies and grant management
+        // its secrets, so on a protected install vaults stay under the deny.
+        .filter(|action| !action.to_ascii_lowercase().starts_with("microsoft.keyvault/vaults"))
         .cloned()
         .collect();
     if actions.len() > DENY_SETTINGS_MAX_EXCLUDED_ACTIONS {
