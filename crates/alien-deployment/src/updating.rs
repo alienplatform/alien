@@ -744,7 +744,9 @@ pub async fn handle_updating(
                     None => AlienError::new(superseded_failure),
                 };
             // The failed stack was never installed: the installed baseline and the current
-            // release stay as they were.
+            // release stay as they were. Drop its prepared stack too, so nothing that checks
+            // for a pending stack sees the superseded one.
+            runtime_metadata.pending_prepared_stack = None;
             runtime_metadata.pending_prepared_release_id = None;
             next.status = DeploymentStatus::UpdatePending;
             next.error = Some(failure.into_generic());

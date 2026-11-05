@@ -1342,13 +1342,11 @@ async fn a_release_that_supersedes_a_failing_update_is_applied_without_a_retry()
         release_id(installed_release.as_ref()),
         "the failed v2 was never installed"
     );
-    assert_eq!(
-        state
-            .runtime_metadata
-            .as_ref()
-            .unwrap()
-            .pending_prepared_release_id,
-        None
+    let metadata = state.runtime_metadata.as_ref().unwrap();
+    assert_eq!(metadata.pending_prepared_release_id, None);
+    assert!(
+        metadata.pending_prepared_stack.is_none(),
+        "the superseded v2 stack must not stay pending"
     );
 
     state = run_to_completion(state, config).await;
