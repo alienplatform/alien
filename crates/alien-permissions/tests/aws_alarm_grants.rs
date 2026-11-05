@@ -180,7 +180,10 @@ fn every_alarm_write_refuses_actions_and_is_bound_to_the_deployment_tag() {
 
 #[test]
 fn alarm_grants_reach_only_this_deployments_alarms_without_actions() {
-    let own_tag = [(ALIEN_STACK_TAG_KEY, "acme"), (ALIEN_RESOURCE_TAG_KEY, "api")];
+    let own_tag = [
+        (ALIEN_STACK_TAG_KEY, "acme"),
+        (ALIEN_RESOURCE_TAG_KEY, "api"),
+    ];
     let other_tag = [(ALIEN_STACK_TAG_KEY, "acme-prod")];
     for id in alarm_writing_sets() {
         for target in [BindingTarget::Stack, BindingTarget::Resource] {
@@ -282,7 +285,10 @@ fn alarm_grants_reach_only_this_deployments_alarms_without_actions() {
 #[test]
 fn a_deployment_cannot_take_over_the_alarms_of_a_deployment_whose_name_extends_its_own() {
     let own_tag = [(ALIEN_STACK_TAG_KEY, "a"), (ALIEN_RESOURCE_TAG_KEY, "api")];
-    let prod_tag = [(ALIEN_STACK_TAG_KEY, "a-prod"), (ALIEN_RESOURCE_TAG_KEY, "api")];
+    let prod_tag = [
+        (ALIEN_STACK_TAG_KEY, "a-prod"),
+        (ALIEN_RESOURCE_TAG_KEY, "api"),
+    ];
     let prod_alarm = "arn:aws:cloudwatch:us-east-1:123456789012:alarm:a-prod-api-cpu";
     for id in alarm_writing_sets() {
         for target in [BindingTarget::Stack, BindingTarget::Resource] {
@@ -335,15 +341,20 @@ fn a_deployment_cannot_take_over_the_alarms_of_a_deployment_whose_name_extends_i
 /// even though both carry the deployment's tag.
 #[test]
 fn a_resource_reaches_only_its_own_alarms() {
-    let own_tag = [(ALIEN_STACK_TAG_KEY, "acme"), (ALIEN_RESOURCE_TAG_KEY, "db")];
+    let own_tag = [
+        (ALIEN_STACK_TAG_KEY, "acme"),
+        (ALIEN_RESOURCE_TAG_KEY, "db"),
+    ];
     let db_alarm = "arn:aws:cloudwatch:us-east-1:123456789012:alarm:acme-db-writer-cpu";
     let db2_alarm = "arn:aws:cloudwatch:us-east-1:123456789012:alarm:acme-db2-writer-cpu";
     for id in alarm_writing_sets() {
         let statements =
             alarm_statements_for(id, BindingTarget::Resource, &context_for("acme", "db"));
         let decide = |request: Request| evaluate(&statements, &request);
-        for (alarm, expected) in [(db_alarm, Decision::Allowed), (db2_alarm, Decision::NotAllowed)]
-        {
+        for (alarm, expected) in [
+            (db_alarm, Decision::Allowed),
+            (db2_alarm, Decision::NotAllowed),
+        ] {
             assert_eq!(
                 decide(
                     Request::new("cloudwatch:PutMetricAlarm", alarm)
@@ -376,7 +387,10 @@ fn a_resource_reaches_only_its_own_alarms() {
 /// stack "a" never reaches stack "a-prod"'s group alarms.
 #[test]
 fn a_compute_cluster_reaches_only_its_own_group_alarms() {
-    let own_tag = [(ALIEN_STACK_TAG_KEY, "a"), (ALIEN_RESOURCE_TAG_KEY, "compute")];
+    let own_tag = [
+        (ALIEN_STACK_TAG_KEY, "a"),
+        (ALIEN_RESOURCE_TAG_KEY, "compute"),
+    ];
     let alarm = |name: &str| format!("arn:aws:cloudwatch:us-east-1:123456789012:alarm:{name}");
     for id in ["compute-cluster/management", "compute-cluster/provision"] {
         let statements =
@@ -414,7 +428,10 @@ fn a_compute_cluster_reaches_only_its_own_group_alarms() {
 #[test]
 fn the_deployment_tag_denies_writes_when_a_resource_name_matches_another_deployment() {
     let own_tag = [(ALIEN_STACK_TAG_KEY, "a"), (ALIEN_RESOURCE_TAG_KEY, "prod")];
-    let prod_tag = [(ALIEN_STACK_TAG_KEY, "a-prod"), (ALIEN_RESOURCE_TAG_KEY, "prod")];
+    let prod_tag = [
+        (ALIEN_STACK_TAG_KEY, "a-prod"),
+        (ALIEN_RESOURCE_TAG_KEY, "prod"),
+    ];
     let prod_alarm = "arn:aws:cloudwatch:us-east-1:123456789012:alarm:a-prod-api-cpu";
     let own_alarm = "arn:aws:cloudwatch:us-east-1:123456789012:alarm:a-prod-writer-cpu";
     for id in alarm_writing_sets() {
@@ -486,7 +503,11 @@ fn a_resource_cannot_write_the_alarms_of_a_sibling_whose_id_extends_its_own() {
                 .resource_tags(&sibling),
             Request::new("cloudwatch:DeleteAlarms", sibling_alarm).resource_tags(&sibling),
         ] {
-            assert_eq!(decide(request), Decision::NotAllowed, "{id} sibling's alarm");
+            assert_eq!(
+                decide(request),
+                Decision::NotAllowed,
+                "{id} sibling's alarm"
+            );
         }
     }
 }

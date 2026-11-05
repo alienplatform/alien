@@ -142,7 +142,7 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
             });
         }
         emit_management_roles(&mut fragment, label, &roles, conditions.len());
-        if ctx.stack_settings.release_trust.is_some() {
+        if ctx.stack_settings.signing.is_some() {
             emit_protection(ctx, &mut fragment, label, &roles)?;
         }
         let merged_gates = merged_grant_gates(ctx, &resource_scoped_refs);

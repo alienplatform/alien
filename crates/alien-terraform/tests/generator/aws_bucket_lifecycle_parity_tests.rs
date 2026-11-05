@@ -10,7 +10,8 @@ use alien_cloudformation::{
 };
 use alien_core::{
     LifecycleRule, ResourceLifecycle, Stack, StackSettings, Storage,
-    AWS_ABORT_INCOMPLETE_UPLOAD_DAYS, AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID, AWS_LIFECYCLE_RULE_LIMIT,
+    AWS_ABORT_INCOMPLETE_UPLOAD_DAYS, AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID,
+    AWS_LIFECYCLE_RULE_LIMIT,
 };
 use alien_terraform::TerraformTarget;
 use serde_json::Value;
@@ -192,5 +193,8 @@ fn a_bucket_whose_app_rules_fill_s3s_limit_gets_no_extra_rule() {
         cloudformation_rules(&room).last(),
         Some(&incomplete_upload_rule())
     );
-    assert_eq!(terraform_rules(&room).last(), Some(&incomplete_upload_rule()));
+    assert_eq!(
+        terraform_rules(&room).last(),
+        Some(&incomplete_upload_rule())
+    );
 }

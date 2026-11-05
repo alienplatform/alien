@@ -514,16 +514,17 @@ fn require_machine_image_publisher(
     let launches_machines = LAUNCHES_MACHINES
         .into_iter()
         .any(|id| management_profile_contains(stack.management(), id));
-    match &config.stack_settings.machine_image_publisher {
-        None if launches_machines => Err(
-            "The management identity can launch machines, so the deployment's settings must \
-             name the AWS account that publishes their machine images \
-             (machineImagePublisher.awsAccountId)"
+    if launches_machines
+        && config.stack_settings.signing.is_some()
+        && alien_core::machine_image_publisher_aws().is_none()
+    {
+        return Err(
+            "This protected install can launch machines, but this build has no \
+             machine-image publisher; use a released CLI build"
                 .to_string(),
-        ),
-        Some(publisher) => publisher.checked_aws_account_id().map(|_| ()),
-        None => Ok(()),
+        );
     }
+    Ok(())
 }
 
 fn management_profile_contains(
@@ -574,7 +575,7 @@ fn generate_auto_management_profile(
                 && supports_stack_grant(id, platform)
                 && !(platform == Platform::Aws
                     && LAUNCHES_MACHINES.contains(&id)
-                    && config.stack_settings.machine_image_publisher.is_none())
+                    && alien_core::machine_image_publisher_aws().is_none())
             {
                 permission_set_ids.insert(id.to_string());
             }

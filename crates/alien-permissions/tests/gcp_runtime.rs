@@ -140,7 +140,11 @@ fn gcp_compute_cluster_execute_keeps_distinct_generated_role_permissions() {
     // secrets (`gcp_protected_management.rs` evaluates the condition).
     for binding in &project_bindings {
         let Some(role) = project_roles.iter().find(|role| role.name == binding.role) else {
-            assert!(binding.role.starts_with("roles/artifactregistry."), "{}", binding.role);
+            assert!(
+                binding.role.starts_with("roles/artifactregistry."),
+                "{}",
+                binding.role
+            );
             continue;
         };
         if role
@@ -897,10 +901,8 @@ fn service_account_quota_inventory_is_project_scoped(
         .find(|binding| binding.role == inventory_roles[0].name)
         .expect("inventory role must be bound at project scope");
     assert!(inventory_binding.condition.is_none());
-    assert!(
-        !inventory_roles[0]
-            .included_permissions
-            .iter()
-            .any(|p| p.contains("getAccessToken") || p.contains("keys"))
-    );
+    assert!(!inventory_roles[0]
+        .included_permissions
+        .iter()
+        .any(|p| p.contains("getAccessToken") || p.contains("keys")));
 }

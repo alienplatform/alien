@@ -16,7 +16,8 @@ use iam_policy::{evaluate, Decision, Request};
 use rstest::rstest;
 use serde_json::Value;
 
-const SECURITY_GROUP: &str = "arn:aws:ec2:us-west-2:123456789012:security-group/sg-0123456789abcdef0";
+const SECURITY_GROUP: &str =
+    "arn:aws:ec2:us-west-2:123456789012:security-group/sg-0123456789abcdef0";
 
 fn resolve_cloudformation(value: Value) -> Value {
     if let Some(template) = value.get("Fn::Sub") {
@@ -92,7 +93,11 @@ fn management_can_launch_with_this_stacks_compute_security_group_only(
             &runtime[..],
             &[][..],
         ),
-        ("arn:aws:ec2:us-west-2::image/ami-0123456789abcdef0", &[][..], &[][..]),
+        (
+            "arn:aws:ec2:us-west-2::image/ami-0123456789abcdef0",
+            &[][..],
+            &[][..],
+        ),
         (
             "arn:aws:ec2:us-west-2:123456789012:subnet/subnet-0123456789abcdef0",
             &[][..],
@@ -103,7 +108,11 @@ fn management_can_launch_with_this_stacks_compute_security_group_only(
             &[][..],
             &[][..],
         ),
-        ("arn:aws:ec2:us-west-2:123456789012:volume/*", &[][..], &[][..]),
+        (
+            "arn:aws:ec2:us-west-2:123456789012:volume/*",
+            &[][..],
+            &[][..],
+        ),
         (
             "arn:aws:ec2:us-west-2:123456789012:instance/*",
             &[][..],

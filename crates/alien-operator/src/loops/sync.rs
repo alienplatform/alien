@@ -3178,7 +3178,9 @@ mod tests {
             .await
             .unwrap()
             .expect("the signed release is accepted");
-        super::accept_target(&state, &installed, false).await.unwrap();
+        super::accept_target(&state, &installed, false)
+            .await
+            .unwrap();
         let finish = || async {
             let mut deployed = db.get_deployment_state().await.unwrap().unwrap();
             deployed.status = DeploymentStatus::Running;
@@ -3192,9 +3194,11 @@ mod tests {
             "dep_shop",
             serde_json::json!({"inputs": {"logLevel": "warn"}}),
         );
-        assert!(super::reapply_with_signed_config(&state, Some(config.clone()))
-            .await
-            .unwrap());
+        assert!(
+            super::reapply_with_signed_config(&state, Some(config.clone()))
+                .await
+                .unwrap()
+        );
         let applied = db.get_deployment_config().await.unwrap().unwrap();
         assert!(
             applied

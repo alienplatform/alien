@@ -882,20 +882,29 @@ fn observe_only_initial_state(
     }
 }
 
-/// Protected mode is on when the anchor says so. A malformed anchor fails
+/// Protected mode is on when signing settings are given. Malformed settings fail
 /// startup rather than falling back to unprotected.
 fn release_signing(anchor: Option<&str>) -> Result<Option<crate::protected::ReleaseSigning>> {
-    let Some(anchor) = anchor.map(str::trim).filter(|anchor| !anchor.is_empty()) else {
+    let Some(text) = anchor.map(str::trim).filter(|text| !text.is_empty()) else {
         return Ok(None);
     };
-    let anchor = alien_signing::Anchor::parse(anchor.as_bytes()).context(
+    let value: serde_json::Value =
+        serde_json::from_str(text)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "the signing settings are not JSON".to_string(),
+            })?;
+    let prefix = value["prefix"].as_str().unwrap_or_default().to_string();
+    let settings = alien_signing::SigningSettings::parse(text.as_bytes(), &prefix).context(
         ErrorData::ConfigurationError {
-            message: "OPERATOR_RELEASE_TRUST_ANCHOR is not a valid anchor".to_string(),
+            message: "the signing settings are not valid".to_string(),
         },
     )?;
-    Ok(anchor
-        .protected
-        .then_some(crate::protected::ReleaseSigning { anchor }))
+    let install = alien_signing::InstallId::parse(value["install"].as_str().unwrap_or_default())
+        .context(ErrorData::ConfigurationError {
+            message: "the install id is not valid".to_string(),
+        })?;
+    Ok(Some(crate::protected::ReleaseSigning { settings, install }))
 }
 
 #[cfg(unix)]

@@ -985,6 +985,14 @@ pub struct StackSettings {
     pub signing: Option<StackSigning>,
 }
 
+/// The 12-digit AWS account that publishes the machine images protected installs boot, if this
+/// build has one. The CLI release workflow writes it into `machine-image-publisher-aws.txt`
+/// before building, so every build of a release renders the same setup; source builds have none.
+pub fn machine_image_publisher_aws() -> Option<&'static str> {
+    let account = include_str!("../machine-image-publisher-aws.txt").trim();
+    (account.len() == 12 && account.bytes().all(|byte| byte.is_ascii_digit())).then_some(account)
+}
+
 /// What setup pins for a protected install.
 ///
 /// Take the values from the vendor's install guide or signed release, not from the

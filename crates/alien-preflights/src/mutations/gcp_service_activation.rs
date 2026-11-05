@@ -91,11 +91,11 @@ impl StackMutation for GcpServiceActivationMutation {
         info!("Adding GCP ServiceActivation resources");
 
         let mut required_services = self.get_required_services(&stack, stack_state);
-        // Setup writes a protected deployment's anchor into Secret Manager.
-        if config.stack_settings.release_trust.is_some() {
+        // Setup writes a protected install's signing settings into Parameter Manager.
+        if config.stack_settings.signing.is_some() {
             required_services.insert(
-                "enable-secret-manager".to_string(),
-                "secretmanager.googleapis.com".to_string(),
+                "enable-parameter-manager".to_string(),
+                "parametermanager.googleapis.com".to_string(),
             );
         }
 

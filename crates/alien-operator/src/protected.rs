@@ -30,19 +30,20 @@ use alien_core::{
     ExternalBindings, Platform, ReleaseInfo, SignedStatement, Stack, StackInputProvider,
     StackSettings,
 };
-use alien_signing::kinds::ConfigBody;
-use alien_signing::{Anchor, Kind, ReleaseBody, Trust};
+use alien_signing::{ConfigBody, InstallId, Kind, Ledger, ReleaseBody, SigningSettings, Trust};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 /// Component name of the Operator in a release's signed components.
 pub const OPERATOR_COMPONENT: &str = "operator";
 
-/// The anchor an installation pinned.
+/// What an installation pinned, and who it is.
 #[derive(Debug, Clone)]
 pub struct ReleaseSigning {
     /// What setup wrote.
-    pub anchor: Anchor,
+    pub settings: SigningSettings,
+    /// This install.
+    pub install: InstallId,
 }
 
 /// The newest release this Operator accepted, and the signer chain it was
@@ -172,10 +173,17 @@ impl ReleaseSigning {
             Some(accepted) if !accepted.signer_lists.is_empty() => &accepted.signer_lists,
             _ => &release.signer_lists,
         };
-        let mut trust = Trust::new(self.anchor.clone(), chain)?;
-        trust.extend_chain(&release.signer_lists)?;
-        let verified = trust.verify::<ReleaseBody>(signed, Kind::Release, Utc::now())?;
-        verified.body.validate()?;
+        let now = Utc::now();
+        let ledger = Ledger::new(&self.settings.prefix);
+        let mut trust = Trust::new(
+            self.settings.clone(),
+            self.install.clone(),
+            chain,
+            &ledger,
+            now,
+        )?;
+        trust.extend_chain(&release.signer_lists, now)?;
+        let verified = trust.verify_release(signed, now)?;
         let stack = signed_stack(&verified.body, platform)?;
         if relocate_images(&stack, &release.stack) != release.stack {
             return Err(Refusal::StackChanged);
@@ -216,8 +224,15 @@ impl ReleaseSigning {
         let signed_config = match &target.signed_config {
             None => ConfigBody::default(),
             Some(signed) => {
-                let trust = Trust::new(self.anchor.clone(), &verified.signer_lists)?;
-                let config = trust.verify::<ConfigBody>(signed, Kind::Config, Utc::now())?;
+                let now = Utc::now();
+                let trust = Trust::new(
+                    self.settings.clone(),
+                    self.install.clone(),
+                    &verified.signer_lists,
+                    &Ledger::new(&self.settings.prefix),
+                    now,
+                )?;
+                let config = trust.verify::<ConfigBody>(signed, Kind::Config, now)?;
                 if let Some(applied) = accepted.and_then(|accepted| accepted.config_sequence) {
                     if config.sequence < applied {
                         return Err(Refusal::OlderConfig {
@@ -324,12 +339,16 @@ fn protect_config(
     // limited to names it lists.
     let configured: BTreeMap<&String, &String> = signed_config.env.iter().collect();
     variables.retain(|variable| !configured.contains_key(&variable.name));
-    variables.extend(configured.into_iter().map(|(name, value)| EnvironmentVariable {
-        name: name.clone(),
-        value: value.clone(),
-        var_type: EnvironmentVariableType::Plain,
-        target_resources: None,
-    }));
+    variables.extend(
+        configured
+            .into_iter()
+            .map(|(name, value)| EnvironmentVariable {
+                name: name.clone(),
+                value: value.clone(),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: None,
+            }),
+    );
 
     Ok(DeploymentConfig {
         setup_run: manager.setup_run,
@@ -396,10 +415,7 @@ pub(crate) fn test_signing(project: &str) -> ReleaseSigning {
 
 /// Version 1 of a signer list with `key` as its one releaser and admin.
 #[cfg(test)]
-pub(crate) fn test_signer_list(
-    project: &str,
-    key: &alien_signing::SoftwareKey,
-) -> SignedStatement {
+pub(crate) fn test_signer_list(project: &str, key: &alien_signing::SoftwareKey) -> SignedStatement {
     use alien_signing::{Envelope, Role, Signer, SignerKind, SignerListBody};
     let envelope = Envelope {
         kind: Kind::SignerList.as_str().to_string(),
@@ -517,7 +533,10 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn target(release_info: ReleaseInfo, variables: Vec<EnvironmentVariable>) -> TargetDeployment {
+    pub(crate) fn target(
+        release_info: ReleaseInfo,
+        variables: Vec<EnvironmentVariable>,
+    ) -> TargetDeployment {
         TargetDeployment {
             signed_config: None,
             release_info,
@@ -665,7 +684,11 @@ pub(crate) mod tests {
     }
 
     /// A `config/v1` for the test deployment, signed by the release key.
-    pub(crate) fn signed_config(sequence: u64, deployment: &str, body: serde_json::Value) -> SignedStatement {
+    pub(crate) fn signed_config(
+        sequence: u64,
+        deployment: &str,
+        body: serde_json::Value,
+    ) -> SignedStatement {
         let envelope = Envelope {
             kind: Kind::Config.as_str().to_string(),
             project: Some("shop".to_string()),
@@ -723,7 +746,11 @@ pub(crate) mod tests {
         let (protected, verified) = signing()
             .protect_target(Platform::Kubernetes, &local_inputs(), None, &target)
             .unwrap();
-        assert_eq!(values(&protected)["LOG_LEVEL"], "warn", "the signed value runs");
+        assert_eq!(
+            values(&protected)["LOG_LEVEL"],
+            "warn",
+            "the signed value runs"
+        );
         assert_eq!(verified.config_sequence, Some(3));
 
         // An older config can't come back once a newer one was applied.
@@ -735,7 +762,12 @@ pub(crate) mod tests {
         ));
         assert_eq!(
             signing()
-                .protect_target(Platform::Kubernetes, &local_inputs(), Some(&accepted), &target)
+                .protect_target(
+                    Platform::Kubernetes,
+                    &local_inputs(),
+                    Some(&accepted),
+                    &target
+                )
                 .unwrap_err(),
             Refusal::OlderConfig {
                 applied: 3,

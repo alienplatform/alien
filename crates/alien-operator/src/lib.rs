@@ -280,9 +280,9 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
                 }));
             }
             info!(
-                project = %signing.anchor.project,
-                deployment = %signing.anchor.deployment,
-                fingerprint = %signing.anchor.signing,
+                install = %signing.install,
+                channel = %signing.settings.channel,
+                fingerprint = %signing.settings.fingerprint,
                 "Protected mode: running only releases the pinned signer list signed. Debug sessions, access requests, operations plugins, dynamic containers and manager-set environment variables are off"
             );
             (None, None, None, None)
