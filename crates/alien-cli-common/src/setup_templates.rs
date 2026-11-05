@@ -2,7 +2,7 @@
 //!
 //! `alien release` signs the digest of each template in
 //! [`alien_signing::release::SETUP_TEMPLATES`] together with the parameters a customer may
-//! choose, and the platform that hosts the templates renders them again for installs. Both
+//! choose, and the service that hosts the templates renders them again for installs. Both
 //! must produce the same bytes, so [`render_setup_templates`] depends only on its inputs: the
 //! stack, its signing settings, the emitter registries and the hosting options, rendered by
 //! the alien version that is running. It reads no environment, clock, or cloud.

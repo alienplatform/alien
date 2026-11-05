@@ -1850,7 +1850,18 @@ fn signing_blocks(
     let mut signing_settings = signing.settings("stack")?;
     signing_settings.prefix = prefix.to_string();
     let settings_value = escaped_template(&signing_settings.to_json());
-    let ledger_value = escaped_template(&alien_signing::Ledger::new(prefix).to_json());
+    let ledger_json = alien_signing::Ledger::new(prefix).to_json();
+    // Standard SSM parameters and Parameter Manager versions hold far more than this; the
+    // ledger keeps heads only. A prefix is at most 128 characters.
+    for (name, json) in [("settings", signing_settings.to_json()), ("ledger", ledger_json.clone())] {
+        if json.replace(prefix, &"x".repeat(128)).len() > 4096 {
+            return Err(AlienError::new(ErrorData::TemplateSerializationFailed {
+                format: "Terraform".to_string(),
+                reason: format!("the signing {name} could pass 4096 bytes"),
+            }));
+        }
+    }
+    let ledger_value = escaped_template(&ledger_json);
     match target {
         TerraformTarget::Aws => Ok([
             vec![fingerprint_variable],
@@ -1878,7 +1889,7 @@ fn signing_blocks(
                         expr::template(alien_signing::settings::names::aws_ledger(prefix)),
                     ),
                     attr("type", Expression::String("String".to_string())),
-                    attr("tier", Expression::String("Advanced".to_string())),
+                    attr("tier", Expression::String("Standard".to_string())),
                     attr("value", ledger_value),
                 ],
             ),

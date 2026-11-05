@@ -1884,6 +1884,8 @@ pub const SIGNING_FINGERPRINT_PARAMETER: &str = "SigningFingerprint";
 /// Logical IDs of the parameters that hold a protected install's signing settings and ledger.
 const SIGNING_SETTINGS_ID: &str = "SigningFingerprintParameter";
 const SIGNING_LEDGER_ID: &str = "SigningStateParameter";
+/// Largest value a Standard-tier SSM parameter holds.
+const SSM_STANDARD_VALUE_MAX: usize = 4096;
 
 /// Writes a protected install's signing settings and its ledger: setup alone writes the
 /// settings. They live under `/signed/`, which no management grant on `<prefix>-*` reaches.
@@ -1931,23 +1933,36 @@ fn add_signing_settings(
             no_echo: None,
         },
     );
-    if let Some(interface) = template.metadata.get_mut("AWS::CloudFormation::Interface") {
-        if let Some(Value::Array(groups)) = interface.get_mut("ParameterGroups") {
-            groups.insert(
-                0,
-                json!({
-                    "Label": { "default": "Release signing" },
-                    "Parameters": [SIGNING_FINGERPRINT_PARAMETER],
-                }),
-            );
-        }
-        if let Some(Value::Object(labels)) = interface.get_mut("ParameterLabels") {
-            labels.insert(
-                SIGNING_FINGERPRINT_PARAMETER.to_string(),
-                json!({ "default": "Signing fingerprint" }),
-            );
-        }
-    }
+    // The console shows the fingerprint first, under its own heading, so whoever creates the
+    // stack sees what it pins.
+    let missing_interface = || {
+        AlienError::new(ErrorData::TemplateSerializationFailed {
+            format: "CloudFormation".to_string(),
+            reason: "the template has no parameter groups to show the signing fingerprint in"
+                .to_string(),
+        })
+    };
+    let interface = template
+        .metadata
+        .get_mut("AWS::CloudFormation::Interface")
+        .ok_or_else(missing_interface)?;
+    let Some(Value::Array(groups)) = interface.get_mut("ParameterGroups") else {
+        return Err(missing_interface());
+    };
+    groups.insert(
+        0,
+        json!({
+            "Label": { "default": "Release signing" },
+            "Parameters": [SIGNING_FINGERPRINT_PARAMETER],
+        }),
+    );
+    let Some(Value::Object(labels)) = interface.get_mut("ParameterLabels") else {
+        return Err(missing_interface());
+    };
+    labels.insert(
+        SIGNING_FINGERPRINT_PARAMETER.to_string(),
+        json!({ "default": "Signing fingerprint" }),
+    );
     template.outputs.insert(
         SIGNING_FINGERPRINT_PARAMETER.to_string(),
         output(
@@ -1971,11 +1986,18 @@ fn add_signing_settings(
         (
             SIGNING_LEDGER_ID,
             alien_signing::settings::names::aws_ledger(prefix),
-            "Advanced",
+            "Standard",
             alien_signing::Ledger::new(prefix).to_json(),
             "What this stack has already accepted, so older software can't be sent to new machines. Only the verifier and the stack's machines update it.",
         ),
     ] {
+        // Standard parameters hold 4 KB. A stack name is at most 128 characters.
+        if value.replace(prefix, &"x".repeat(128)).len() > SSM_STANDARD_VALUE_MAX {
+            return Err(AlienError::new(ErrorData::TemplateSerializationFailed {
+                format: "CloudFormation".to_string(),
+                reason: format!("the value of {id} could pass SSM's {SSM_STANDARD_VALUE_MAX} bytes"),
+            }));
+        }
         let mut parameter = CfResource::new(id.to_string(), "AWS::SSM::Parameter".to_string());
         parameter
             .properties
