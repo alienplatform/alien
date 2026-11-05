@@ -102,6 +102,11 @@ pub struct DeploymentResponse {
     pub stack_settings: Option<serde_json::Value>,
     /// Whether the deployment's setup pins a signing fingerprint, so it runs
     /// only signed releases. Only the install's own verification proves it.
+    /// Absent from older managers, which have no protected deployments;
+    /// a protected install refuses unsigned releases whatever this says, so
+    /// reading it as false can't skip a signature.
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(default = false))]
     pub protected: bool,
     /// The fingerprint the deployment's setup pins.
     pub signing_fingerprint: Option<String>,

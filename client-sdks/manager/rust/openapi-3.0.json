@@ -7842,7 +7842,6 @@
           "deploymentProtocolVersion",
           "projectId",
           "workspaceId",
-          "protected",
           "retryRequested",
           "createdAt"
         ],
@@ -7900,7 +7899,8 @@
           },
           "protected": {
             "type": "boolean",
-            "description": "Whether the deployment's setup pins a signing fingerprint, so it runs\nonly signed releases. Only the install's own verification proves it."
+            "description": "Whether the deployment's setup pins a signing fingerprint, so it runs\nonly signed releases. Only the install's own verification proves it.\nAbsent from older managers, which have no protected deployments;\na protected install refuses unsigned releases whatever this says, so\nreading it as false can't skip a signature.",
+            "default": false
           },
           "retryRequested": {
             "type": "boolean"
