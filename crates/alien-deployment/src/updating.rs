@@ -5,7 +5,7 @@ use alien_core::{
     ComputeClusterOutputs, InitialSetupAuthority, Platform, ReleaseInfo, ResourceLifecycle,
     ResourceStatus, SetupScaffolding, Stack, StackState, StackStatus,
 };
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, ContextError};
 use alien_infra::{RunningResourcePolicy, StackExecutor};
 use std::{
     borrow::Cow,
@@ -705,9 +705,60 @@ pub async fn handle_updating(
 
         crate::helpers::interrupt_in_progress_resources(&mut next_state, &failed_refs, None)?;
 
+        let setup_required = crate::helpers::setup_required_error(&next_state);
+        let failed_release_id = runtime_metadata.pending_prepared_release_id.clone();
+        let target_release_id = next
+            .target_release
+            .as_ref()
+            .and_then(|release| release.release_id.clone());
+        // A newer release became the target while this stack was applying. Stopping here
+        // would report the superseded release's failure as the newer one's and leave the
+        // newer one unapplied until someone retries. Prepare it instead, as a retry would.
+        // A failure that waits for setup keeps waiting for it, and nothing an explicit
+        // retry unlocks (a denied replace) is unlocked here. A stack prepared before the
+        // release was recorded has no id and keeps the old behavior.
+        let superseded = match (&failed_release_id, &target_release_id) {
+            (Some(failed), Some(next_release)) if failed != next_release && setup_required.is_none() => {
+                Some((failed.clone(), next_release.clone()))
+            }
+            _ => None,
+        };
+        if let Some((failed_release_id, next_release_id)) = superseded {
+            info!(
+                failed_release_id = %failed_release_id,
+                next_release_id = %next_release_id,
+                "Update of a superseded release failed; preparing the newer target"
+            );
+            let superseded_failure = ErrorData::SupersededUpdateFailed {
+                failed_release_id,
+                next_release_id,
+            };
+            // Keep the superseded release's resource errors under it, not under the newer
+            // release. This deployment-level error is the headline until the newer release
+            // starts applying.
+            let failure =
+                match crate::helpers::create_aggregated_error_from_stack_state(&next_state) {
+                    Some(resource_errors) => resource_errors.context(superseded_failure),
+                    None => AlienError::new(superseded_failure),
+                };
+            // The failed stack was never installed: the installed baseline and the current
+            // release stay as they were.
+            runtime_metadata.pending_prepared_release_id = None;
+            next.status = DeploymentStatus::UpdatePending;
+            next.error = Some(failure.into_generic());
+            next.stack_state = Some(next_state);
+            next.runtime_metadata = Some(runtime_metadata);
+            return Ok(DeploymentStepResult {
+                state: next,
+                suggested_delay_ms: None,
+                update_heartbeat: false,
+                heartbeats: vec![],
+                observed_inventory_batches: vec![],
+            });
+        }
+
         next.status = DeploymentStatus::UpdateFailed;
-        next.error =
-            crate::helpers::setup_required_error(&next_state).map(AlienError::into_generic);
+        next.error = setup_required.map(AlienError::into_generic);
         next.stack_state = Some(next_state);
         next.runtime_metadata = Some(runtime_metadata);
 

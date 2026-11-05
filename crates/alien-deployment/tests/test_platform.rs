@@ -1225,6 +1225,188 @@ async fn a_release_that_supersedes_an_in_flight_update_is_applied_before_it_is_r
     );
 }
 
+/// A release whose worker update never succeeds, as a rollout whose new version is
+/// never healthy.
+fn failing_worker_image_release(image: &str, release_id: &str) -> ReleaseInfo {
+    let mut release = worker_image_release(image, release_id);
+    let entry = release.stack.resources.get_mut("test-function").unwrap();
+    let mut worker = entry.config.downcast_ref::<Worker>().unwrap().clone();
+    worker
+        .environment
+        .insert("SIMULATE_UPDATE_FAILURE".to_string(), "true".to_string());
+    entry.config = alien_core::Resource::new(worker);
+    release
+}
+
+fn release_id(release: Option<&ReleaseInfo>) -> Option<&str> {
+    release.and_then(|release| release.release_id.as_deref())
+}
+
+/// Runs a deployment to Running on v1, then starts an update to a v2 that never
+/// succeeds and returns it while v2 is still applying.
+async fn updating_to_a_failing_release(config: &DeploymentConfig) -> DeploymentState {
+    let mut state = run_to_completion(
+        create_initial_state(create_test_stack("test-stack", "test-function")),
+        config.clone(),
+    )
+    .await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    start_update(
+        &mut state,
+        failing_worker_image_release("test:v2", "rel_v2"),
+    );
+    run_until_status(state, config.clone(), &[DeploymentStatus::Updating]).await
+}
+
+/// A newer release can supersede an update that never succeeds. When that update fails,
+/// the newer release is prepared and applied without a retry, and the failure is
+/// reported as the superseded release's, not the newer one's.
+#[tokio::test]
+async fn a_release_that_supersedes_a_failing_update_is_applied_without_a_retry() {
+    let _vault = test_vault_env().await;
+    let config = create_test_config("hash_v1", false);
+    let mut state = updating_to_a_failing_release(&config).await;
+    let installed_release = state.current_release.clone();
+    state.target_release = Some(worker_image_release("test:v3", "rel_v3"));
+
+    state = run_until_status(
+        state,
+        config.clone(),
+        &[
+            DeploymentStatus::UpdatePending,
+            DeploymentStatus::UpdateFailed,
+            DeploymentStatus::Running,
+        ],
+    )
+    .await;
+
+    assert_eq!(
+        state.status,
+        DeploymentStatus::UpdatePending,
+        "the failed v2 update must move on to v3, error: {:?}",
+        state.error
+    );
+    let error = state.error.as_ref().expect("the v2 failure is reported");
+    assert_eq!(error.code, "SUPERSEDED_UPDATE_FAILED");
+    let context = error.context.as_ref().unwrap();
+    assert_eq!(context["failed_release_id"], "rel_v2");
+    assert_eq!(context["next_release_id"], "rel_v3");
+    assert_eq!(
+        error.message,
+        "Release rel_v2 failed to roll out after release rel_v3 superseded it; applying rel_v3 next"
+    );
+    let cause = error.source.as_ref().expect("the resource failures stay attached");
+    assert_eq!(cause.code, "DEPLOYMENT_FAILED");
+    assert!(
+        serde_json::to_string(&cause.context).unwrap().contains("test-function"),
+        "{cause:?}"
+    );
+    assert_eq!(
+        release_id(state.current_release.as_ref()),
+        release_id(installed_release.as_ref()),
+        "the failed v2 was never installed"
+    );
+    assert_eq!(
+        state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .pending_prepared_release_id,
+        None
+    );
+
+    state = run_to_completion(state, config).await;
+
+    assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
+    assert!(state.error.is_none(), "{:?}", state.error);
+    assert_eq!(release_id(state.current_release.as_ref()), Some("rel_v3"));
+    assert_eq!(state.target_release, None);
+    assert_eq!(deployed_worker_image(&state, "test-function"), "test:v3");
+}
+
+/// The engine applies only the target it is given. The manager never moves the target
+/// of a pinned deployment past its pin, so a failed update of the pinned release stays
+/// failed and waits for a retry, as before.
+#[tokio::test]
+async fn a_failed_update_of_the_current_target_waits_for_a_retry() {
+    let _vault = test_vault_env().await;
+    let config = create_test_config("hash_v1", false);
+    let state = updating_to_a_failing_release(&config).await;
+
+    let state = run_to_completion(state, config).await;
+
+    assert_eq!(state.status, DeploymentStatus::UpdateFailed);
+    assert_eq!(release_id(state.target_release.as_ref()), Some("rel_v2"));
+    assert!(
+        state
+            .error
+            .as_ref()
+            .is_none_or(|error| error.code != "SUPERSEDED_UPDATE_FAILED"),
+        "{:?}",
+        state.error
+    );
+}
+
+/// A release that supersedes the newer target while that target is still being prepared
+/// is the one applied, and the deployment does not loop through the releases in between.
+#[tokio::test]
+async fn a_release_that_supersedes_the_next_target_while_it_prepares_is_applied() {
+    let _vault = test_vault_env().await;
+    let config = create_test_config("hash_v1", false);
+    let mut state = updating_to_a_failing_release(&config).await;
+    state.target_release = Some(worker_image_release("test:v3", "rel_v3"));
+    state = run_until_status(state, config.clone(), &[DeploymentStatus::UpdatePending]).await;
+    assert_eq!(
+        state.error.as_ref().map(|error| error.code.as_str()),
+        Some("SUPERSEDED_UPDATE_FAILED")
+    );
+
+    state.target_release = Some(worker_image_release("test:v4", "rel_v4"));
+    state = run_to_completion(state, config).await;
+
+    assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
+    assert_eq!(release_id(state.current_release.as_ref()), Some("rel_v4"));
+    assert_eq!(deployed_worker_image(&state, "test-function"), "test:v4");
+}
+
+/// When the newer release fails too, its failure is its own: the deployment stops at
+/// UpdateFailed instead of going around again.
+#[tokio::test]
+async fn a_superseding_release_that_also_fails_stops_at_update_failed() {
+    let _vault = test_vault_env().await;
+    let config = create_test_config("hash_v1", false);
+    let mut state = updating_to_a_failing_release(&config).await;
+    let installed_release = state.current_release.clone();
+    state.target_release = Some(failing_worker_image_release("test:v3", "rel_v3"));
+
+    let state = run_to_completion(state, config).await;
+
+    assert_eq!(state.status, DeploymentStatus::UpdateFailed);
+    assert_eq!(release_id(state.target_release.as_ref()), Some("rel_v3"));
+    assert_eq!(
+        state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .pending_prepared_release_id
+            .as_deref(),
+        Some("rel_v3"),
+        "v3 was prepared and applied before it failed"
+    );
+    assert_eq!(
+        release_id(state.current_release.as_ref()),
+        release_id(installed_release.as_ref())
+    );
+    assert!(
+        state
+            .error
+            .as_ref()
+            .is_none_or(|error| error.code != "SUPERSEDED_UPDATE_FAILED"),
+        "{:?}",
+        state.error
+    );
+}
+
 #[tokio::test]
 async fn setup_authorized_update_clears_authority_only_on_success() {
     let config = create_test_config("hash_v1", false);

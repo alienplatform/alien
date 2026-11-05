@@ -612,6 +612,17 @@ impl TestWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let target_func = ctx.desired_resource_config::<Worker>()?;
+        // An update that never succeeds, as a rollout whose new version is never healthy.
+        if target_func
+            .environment
+            .get("SIMULATE_UPDATE_FAILURE")
+            .is_some_and(|value| value == "true")
+        {
+            return Err(AlienError::new(ErrorData::ExecutionStepFailed {
+                message: "Simulated update failure".to_string(),
+                resource_id: Some(target_func.id.clone()),
+            }));
+        }
         if target_func
             .environment
             .get("SIMULATE_UPDATE_PENDING")
