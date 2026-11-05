@@ -1069,7 +1069,14 @@ async fn create_platform_release(
                 url: Some(url.clone()),
             })?;
         let status = response.status();
-        let text = response.text().await.unwrap_or_default();
+        let text = response
+            .text()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: format!("Failed to read the platform API's response (HTTP {status})"),
+                url: Some(url.clone()),
+            })?;
         if !status.is_success() {
             return Err(AlienError::new(ErrorData::ApiRequestFailed {
                 message: format!("Failed to create release on platform API: HTTP {status}: {text}"),

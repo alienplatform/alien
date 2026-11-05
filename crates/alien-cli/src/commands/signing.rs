@@ -683,17 +683,14 @@ async fn approve_device(args: ApproveDeviceArgs, ctx: ExecutionMode) -> Result<(
     let api = SigningApi::from_context(&ctx).await?;
     let home = SigningHome::current()?;
     let chain = verified_chain(&api, &home, &project, args.signer.fingerprint.as_deref()).await?;
-    let change = api
+    let (change, mut device) = api
         .pending(&project)
         .await?
         .into_iter()
-        .find(|change| {
-            change.kind == PendingKind::Device
-                && (change.id == args.id
-                    || change
-                        .device
-                        .as_ref()
-                        .is_some_and(|device| device.id == args.id))
+        .filter(|change| change.kind == PendingKind::Device)
+        .find_map(|change| {
+            let device = change.device.clone()?;
+            (change.id == args.id || device.id == args.id).then_some((change, device))
         })
         .ok_or_else(|| {
             AlienError::new(ErrorData::ValidationError {
@@ -701,10 +698,6 @@ async fn approve_device(args: ApproveDeviceArgs, ctx: ExecutionMode) -> Result<(
                 message: format!("No pending device '{}' in project {project}", args.id),
             })
         })?;
-    let mut device = change
-        .device
-        .clone()
-        .expect("device changes carry a device");
     let key = alien_release_trust::PublicKey::parse(&device.key)
         .context(signing_failed("read the pending device key"))?;
     let code = approval_code(&key);
@@ -963,10 +956,10 @@ pub async fn approve_task(args: ApproveArgs, ctx: ExecutionMode) -> Result<()> {
     let pretty: serde_json::Value = serde_json::from_slice(&opened.bytes)
         .into_alien_error()
         .context(signing_failed("decode the pending statement"))?;
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&pretty).unwrap_or_default()
-    );
+    let pretty = serde_json::to_string_pretty(&pretty)
+        .into_alien_error()
+        .context(signing_failed("print the pending statement"))?;
+    println!("{pretty}");
     println!();
     confirm(
         &format!("Sign this {} statement as '{}'?", opened.kind, signer.id()),
