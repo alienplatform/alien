@@ -368,4 +368,43 @@ pub mod names {
     pub fn kubernetes_settings(release: &str) -> String {
         format!("{release}-signing")
     }
+
+    /// IAM role names setup may give the cloud identity of permission
+    /// profile `profile`. Setup at runtime names it `<prefix>-<profile>-sa`;
+    /// Terraform keeps that while it fits IAM's 64 characters and otherwise
+    /// cuts it to 55 and appends 8 hex of its SHA-1.
+    pub fn aws_workload_roles(prefix: &str, profile: &str) -> Vec<String> {
+        const MAX: usize = 64;
+        let full = format!("{prefix}-{profile}-sa");
+        if full.chars().count() <= MAX {
+            return vec![full];
+        }
+        let readable: String = full.chars().take(MAX - 9).collect();
+        vec![format!("{readable}-{}", &sha1_hex(&full)[..8])]
+    }
+
+    /// GCP service account ids setup may give the cloud identity of
+    /// permission profile `profile`: `<prefix>-<profile>-sa` at runtime, and
+    /// Terraform's id (lowercase, `_` as `-`, `a-` in front, cut to 21 and
+    /// trimmed of `-`, then 8 hex of the SHA-1 of the full name).
+    pub fn gcp_workload_service_accounts(prefix: &str, profile: &str) -> Vec<String> {
+        let runtime = format!("{prefix}-{profile}-sa");
+        let normalized = runtime.to_lowercase().replace('_', "-");
+        let readable: String = format!("a-{normalized}").chars().take(21).collect();
+        let terraform = format!(
+            "{}-{}",
+            readable.trim_matches('-'),
+            &sha1_hex(&normalized)[..8]
+        );
+        if terraform == runtime {
+            vec![runtime]
+        } else {
+            vec![runtime, terraform]
+        }
+    }
+
+    fn sha1_hex(text: &str) -> String {
+        use sha1::{Digest, Sha1};
+        hex::encode(Sha1::digest(text.as_bytes()))
+    }
 }
