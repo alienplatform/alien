@@ -210,7 +210,7 @@ pub async fn run(
                         env = name,
                         "Loading secrets from vault before starting application"
                     );
-                    crate::secrets::load_secrets_from_vault(&**provider, &list).await?
+                    crate::secrets::load_secrets_from_vault(&**provider, &list, name).await?
                 }
                 None => {
                     debug!("No secrets list found in config or process env");
