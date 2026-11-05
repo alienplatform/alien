@@ -3,8 +3,12 @@
   "resources": {
     "assets": {
       "config": {
-        "corsAllowedOrigins": [], "id": "assets", "lifecycleRules": [],
-        "publicRead": false, "type": "storage", "versioning": true
+        "corsAllowedOrigins": [],
+        "id": "assets",
+        "lifecycleRules": [],
+        "publicRead": false,
+        "type": "storage",
+        "versioning": true
       },
       "lifecycle": "frozen",
       "dependencies": [],
