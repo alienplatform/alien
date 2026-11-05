@@ -31,6 +31,9 @@ removes it.
 
 import argparse
 import base64
+
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 import copy
 import hashlib
 import json
@@ -140,6 +143,7 @@ class Suite:
                 "ALIEN_MANAGER_URL": f"http://localhost:{MANAGER_PORT}",
                 "ALIEN_API_KEY": self.admin_token,
                 "XDG_CONFIG_HOME": str(self.work / "config"),
+                "ALIEN_SIGNING_HOME": str(self.work / "signing"),
                 "NO_COLOR": "1",
             }
         )
@@ -190,11 +194,18 @@ class Suite:
         wait_until("the manager", lambda: run(
             ["curl", "-sf", f"http://localhost:{MANAGER_PORT}/health"], check=False).returncode == 0)
 
-        self.key_file = self.work / "release-key.pem"
-        self.alien_cli("release-key", "generate", "--out", self.key_file)
-        self.public_key = self.alien_cli(
-            "release-key", "public-key", "--key-file", self.key_file).stdout.strip().splitlines()[-1]
-        log(f"release key {self.public_key}")
+        # The developer sets up signing: a signer list with this machine's key,
+        # a CI key in a file and a recovery key. Releases are signed with the CI key.
+        self.key_file = self.work / "ci.pem"
+        init = json.loads(self.alien_cli(
+            "signing", "init", "--backend", "software", "--ci-key-out", self.key_file,
+            "--recovery-key-out", self.work / "recovery.pem", "--json").stdout)
+        self.fingerprint = init["fingerprint"]
+        # The key that signs Operator builds; the suite never signs one.
+        self.components_key = "ecdsa-p256:" + base64.b64encode(
+            ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(
+                serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)).decode()
+        log(f"signing fingerprint {self.fingerprint}")
 
     def build_images(self):
         build = self.work / "images"
@@ -249,7 +260,7 @@ class Suite:
         config_path.write_text(json.dumps(config, indent=2) + "\n")
         args = ["release", "--platforms", "kubernetes", "--targets", self.targets, "--no-git", "--json"]
         if signed:
-            args += ["--signing-key-file", self.key_file]
+            args += ["--sign", "--signing-key-file", self.key_file, "--signing-fingerprint", self.fingerprint]
         output = json.loads(self.alien_cli(*args).stdout)
         release = self.manager_get(f"/v1/releases/{output['releaseId']}")
         image = release["stack"]["kubernetes"]["resources"]["app"]["config"]["code"]["image"]
@@ -279,7 +290,11 @@ class Suite:
             "tunnel": {"enabled": False},
         }
         if protected:
-            values["releaseSigning"] = {"publicKeys": [self.public_key], "project": "default"}
+            # The anchor the customer's setup pins, from the vendor's install guide.
+            values["releaseSigning"] = {
+                "protected": True, "project": "default", "deployment": "dep_customer",
+                "signing": self.fingerprint, "components": self.components_key,
+            }
         values_file = self.work / "values.yaml"
         values_file.write_text(json.dumps(values))
         (self.evidence / "customer-values.json").write_text(json.dumps(
@@ -421,8 +436,8 @@ class Suite:
         def tampered_payload():
             modified = copy.deepcopy(target)
             payload = json.loads(base64.b64decode(modified["releaseInfo"]["signed"]["payload"]))
-            app = payload["stack"]["resources"]["app"]["config"]
-            app["command"] = evil_command
+            payload["body"]["stack"]["resources"]["app"]["config"]["command"] = evil_command
+            payload["body"]["workloads"][0]["command"] = evil_command
             modified["releaseInfo"]["signed"]["payload"] = base64.b64encode(
                 json.dumps(payload).encode()).decode()
             modified["releaseInfo"]["stack"]["resources"]["app"]["config"]["command"] = evil_command
@@ -438,8 +453,59 @@ class Suite:
             config.setdefault("inputValues", {}).update(input_values)
             return [{"op": "set", "path": ["target"], "value": modified}]
 
+        def attacker_signed():
+            """A signer list version 2 that adds the attacker's key, and a release
+            the attacker signs with it: what a control plane that forged the list
+            would send."""
+            attacker = ec.generate_private_key(ec.SECP256R1())
+            attacker_key = "ecdsa-p256:" + base64.b64encode(attacker.public_key().public_bytes(
+                serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)).decode()
+            modified = copy.deepcopy(target)
+            lists = modified["releaseInfo"]["signerLists"]
+            first = json.loads(base64.b64decode(lists[0]["payload"]))
+            first_digest = "sha256:" + hashlib.sha256(base64.b64decode(lists[0]["payload"])).hexdigest()
+            body = first["body"]
+            body["previous"] = first_digest
+            body["signers"].append({"id": "attacker", "key": attacker_key, "kind": "ci", "roles": ["release", "admin"]})
+            forged = {**first, "sequence": 2, "signerListVersion": 1, "body": body}
+            def sign(document, signer):
+                payload = json.dumps(document).encode()
+                sig = attacker.sign(payload, ec.ECDSA(hashes.SHA256()))
+                return {"payload": base64.b64encode(payload).decode(),
+                        "signatures": [{"signer": signer, "sig": base64.b64encode(sig).decode()}]}
+            admin = next(s["id"] for s in first["body"]["signers"] if "admin" in s["roles"] and s["kind"] != "recovery")
+            modified["releaseInfo"]["signerLists"] = [lists[0], sign(forged, admin)]
+            release = json.loads(base64.b64decode(modified["releaseInfo"]["signed"]["payload"]))
+            release["sequence"] += 1000
+            release["signerListVersion"] = 2
+            release["body"]["stack"]["resources"]["app"]["config"]["command"] = evil_command
+            release["body"]["workloads"][0]["command"] = evil_command
+            modified["releaseInfo"]["signed"] = sign(release, "attacker")
+            modified["releaseInfo"]["stack"]["resources"]["app"]["config"]["command"] = evil_command
+            return [{"op": "set", "path": ["target"], "value": modified}]
+
+        def unsigned():
+            modified = copy.deepcopy(target)
+            modified["releaseInfo"].pop("signed", None)
+            modified["releaseInfo"]["stack"]["resources"]["app"]["config"]["command"] = evil_command
+            return [{"op": "set", "path": ["target"], "value": modified}]
+
         evil_operator = self.evil_operator_image()
         attacks = [
+            {
+                "name": "forged-signer-list",
+                "summary": "the manager forges signer list version 2 with its own key and signs a release with it",
+                "sync": attacker_signed(),
+                "refusal": r"refused the target.*TRUST_SIGNATURE_REFUSED|refused the target.*TRUST_SIGNER_LIST_REFUSED",
+                "took_effect": lambda: self.app_message() == "evil",
+            },
+            {
+                "name": "unsigned-target",
+                "summary": "the manager drops the signature and sends its own command",
+                "sync": unsigned(),
+                "refusal": r"refused the target.*not signed",
+                "took_effect": lambda: self.app_message() == "evil",
+            },
             {
                 "name": "modified-stack-image",
                 "summary": "the manager changes the release's image and command",
@@ -459,14 +525,14 @@ class Suite:
                 "name": "tampered-signed-bytes",
                 "summary": "the manager edits the signed statement itself (same release, new bytes)",
                 "sync": tampered_payload(),
-                "refusal": r"refused the target.*not signed by a trusted key, or was changed after signing",
+                "refusal": r"refused the target.*TRUST_SIGNATURE_REFUSED",
                 "took_effect": lambda: self.app_message() == "evil",
             },
             {
                 "name": "older-signed-release",
                 "summary": "the manager replays the older signed release-1",
                 "sync": [{"op": "set", "path": ["target"], "value": self.first_target}],
-                "refusal": r"refused the target.*older than the applied",
+                "refusal": r"refused the target.*already applied",
                 "took_effect": lambda: self.app_message() == "release-1",
             },
             {

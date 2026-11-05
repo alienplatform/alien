@@ -201,6 +201,7 @@ async fn prepare_stack_for_render(
         allow_frozen_changes: false,
         setup_run: false,
         setup_run_id: None,
+        release_statements: None,
         compute_backend: None,
         external_bindings: ExternalBindings::default(),
         base_platform,
