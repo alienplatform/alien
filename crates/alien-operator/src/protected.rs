@@ -558,9 +558,8 @@ impl ReleaseSigning {
                 ConfigBody::default()
             }
             Some(signed) => {
-                let config = verified
-                    .trust
-                    .verify_config(signed, &verified.body, Utc::now())?;
+                let config =
+                    verify_or_keep_config(&verified.trust, &stored.ledger, signed, &verified.body)?;
                 if let Some(applied) = stored.config_sequence() {
                     if config.sequence < applied {
                         return Err(Refusal::OlderConfig {
@@ -652,6 +651,37 @@ fn signed_external_bindings(
         bindings.insert(id.as_str(), binding);
     }
     Ok(bindings)
+}
+
+/// `config` verified for this install and `release`, or kept: the config
+/// at the install's floor passes again even after its signer left the list
+/// (only the deny-list stops it), as the release at the floor does.
+fn verify_or_keep_config(
+    trust: &Trust,
+    ledger: &Ledger,
+    config: &SignedStatement,
+    release: &ReleaseBody,
+) -> Result<alien_signing::Verified<ConfigBody>, Refusal> {
+    let opened = config.open()?;
+    let at_floor = opened.kind == Kind::Config
+        && ledger
+            .config
+            .as_ref()
+            .is_some_and(|floor| floor.digest == opened.digest);
+    if !at_floor {
+        return Ok(trust.verify_config(config, release, Utc::now())?);
+    }
+    trust.keeps(&opened.digest)?;
+    let body: ConfigBody = opened.body()?;
+    body.check(release)?;
+    Ok(alien_signing::Verified {
+        kind: Kind::Config,
+        sequence: opened.sequence,
+        digest: opened.digest.clone(),
+        not_after: opened.not_after,
+        signers: BTreeSet::new(),
+        body,
+    })
 }
 
 /// OTLP export to `endpoint`, the signed config's OTLP/HTTP base URL, which
@@ -1220,7 +1250,18 @@ pub(crate) mod tests {
     #[test]
     fn removing_the_ci_key_keeps_the_accepted_release_and_lands_the_next() {
         let accepted_release = signed_release(5, &stack(&pinned()));
-        let stored = accept(&fresh(), &target(accepted_release.clone(), vec![])).unwrap();
+        // CI signed the config too.
+        let configured = |release: ReleaseInfo| {
+            let mut target = target(release, vec![]);
+            target.signed_config = Some(signed_config(
+                1,
+                &this_install(),
+                serde_json::json!({"inputs": {"logLevel": "warn"}}),
+            ));
+            target
+        };
+        let configured_config = configured(accepted_release.clone()).signed_config;
+        let stored = accept(&fresh(), &configured(accepted_release.clone())).unwrap();
 
         let mut without_ci = accepted_release.clone();
         without_ci.signer_lists = vec![signer_list(), test_signer_list_without_ci("shop")];
@@ -1234,18 +1275,38 @@ pub(crate) mod tests {
             .verify_release(Platform::Kubernetes, &without_ci, &stored)
             .expect("the accepted release keeps running after its signer leaves");
         assert_eq!(kept.sequence, 5);
+        // So does the config CI signed, the one at the config floor.
+        let mut again = target(without_ci.clone(), vec![]);
+        again.signed_config = configured_config.clone();
+        accept(&stored, &again)
+            .expect("the accepted config keeps applying after its signer leaves");
 
-        // The next release, signed by a key still on the list, lands.
-        let mut next = release_by(6, &stack(&pinned()), "production", "alice-laptop");
-        next.signer_lists = without_ci.signer_lists.clone();
-        let stored =
-            accept(&stored, &target(next, vec![])).expect("a release signed by the device lands");
+        // The next release, signed by a key still on the list, lands with it.
+        let mut next_release = release_by(6, &stack(&pinned()), "production", "alice-laptop");
+        next_release.signer_lists = without_ci.signer_lists.clone();
+        let mut next = target(next_release.clone(), vec![]);
+        next.signed_config = configured_config;
+        let stored = accept(&stored, &next).expect("a release signed by the device lands");
         assert_eq!(stored.ledger.signer_list.as_ref().unwrap().sequence, 2);
 
         // A newer release signed by the removed CI key is refused.
         let mut by_ci = signed_release(7, &stack(&pinned()));
-        by_ci.signer_lists = without_ci.signer_lists;
-        assert!(accept(&stored, &target(by_ci, vec![])).is_err());
+        by_ci.signer_lists = without_ci.signer_lists.clone();
+        let mut by_ci = target(by_ci, vec![]);
+        by_ci.signed_config = configured(without_ci).signed_config;
+        assert!(accept(&stored, &by_ci).is_err());
+        // A new config CI signs is refused.
+        let mut new_config = target(next_release, vec![]);
+        new_config.signed_config = Some(signed_config(
+            2,
+            &this_install(),
+            serde_json::json!({"inputs": {"logLevel": "trace"}}),
+        ));
+        let refusal = accept(&stored, &new_config).unwrap_err().to_string();
+        assert!(
+            refusal.contains("not on signer list version 2"),
+            "{refusal}"
+        );
     }
 
     #[test]
