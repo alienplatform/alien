@@ -1,4 +1,4 @@
-//! Platform-only commands for managing workspace private managers.
+//! Platform-only commands for managing workspace private instances.
 
 use crate::auth::AuthHttp;
 use crate::commands::event_display::{print_event_lines, print_event_table, EventDisplayRow};
@@ -23,8 +23,8 @@ use std::time::Duration;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
-    about = "Manage private managers",
-    long_about = "Manage private managers deployed to a workspace cloud account."
+    about = "Manage Private Alien Instances",
+    long_about = "Manage Private Alien Instances deployed to a workspace cloud account."
 )]
 pub struct ManagersArgs {
     /// Print machine-readable JSON
@@ -37,17 +37,17 @@ pub struct ManagersArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum ManagersCmd {
-    /// Create a new private manager and return its setup action
+    /// Create a new private instance and return its setup action
     Create {
-        /// Manager display name
+        /// Instance display name
         #[arg(long, default_value = "alien-private-manager")]
         name: String,
 
-        /// Cloud where the manager will run
+        /// Cloud where the instance will run
         #[arg(long)]
         cloud: PrivateManagerCloudArg,
 
-        /// Cloud region for the manager
+        /// Cloud region for the instance
         #[arg(long)]
         region: String,
 
@@ -67,17 +67,17 @@ pub enum ManagersCmd {
         #[arg(long)]
         open: bool,
     },
-    /// List private managers
+    /// List private instances
     #[command(visible_alias = "ls")]
     List {
         /// Filter by cloud
         #[arg(long)]
         cloud: Option<PrivateManagerCloudArg>,
     },
-    /// Show manager status and details
+    /// Show instance status and details
     #[command(visible_aliases = ["get", "describe", "show"])]
     Status {
-        /// Manager ID
+        /// Instance ID
         id: String,
 
         /// Poll until setup reaches a terminal state
@@ -86,7 +86,7 @@ pub enum ManagersCmd {
     },
     /// Return a fresh setup action for a pending or failed manager
     Setup {
-        /// Manager ID
+        /// Instance ID
         id: String,
 
         /// Write Terraform setup files to this directory
@@ -97,9 +97,9 @@ pub enum ManagersCmd {
         #[arg(long)]
         open: bool,
     },
-    /// Retry private-manager setup or failed manager deployment
+    /// Retry private instance setup or a failed instance deployment
     Retry {
-        /// Manager ID
+        /// Instance ID
         id: String,
 
         /// Write Terraform setup files to this directory when setup is retried
@@ -110,12 +110,12 @@ pub enum ManagersCmd {
         #[arg(long)]
         open: bool,
     },
-    /// Update a private manager to the latest manager release, or to a specific one
+    /// Update a private instance to the latest release, or to a specific one
     Update {
-        /// Manager ID
+        /// Instance ID
         id: String,
 
-        /// Manager release ID (rel_...). Omit to use the latest release.
+        /// Instance release ID (rel_...). Omit to use the latest release.
         #[arg(long)]
         release: Option<String>,
 
@@ -123,14 +123,14 @@ pub enum ManagersCmd {
         #[arg(long)]
         yes: bool,
     },
-    /// Run a private manager's provisioning again, for example after it failed
+    /// Run a private instance's provisioning again, for example after it failed
     Provision {
-        /// Manager ID
+        /// Instance ID
         id: String,
     },
-    /// Serve a private manager's API on a workspace domain, or go back to its generated URL
+    /// Serve a private instance's API on a workspace domain, or go back to its generated URL
     SetDomain {
-        /// Manager ID
+        /// Instance ID
         id: String,
 
         /// Domain ID (dom_...), as shown by `alien domains ls`
@@ -141,34 +141,34 @@ pub enum ManagersCmd {
         #[arg(long)]
         clear: bool,
     },
-    /// Cancel an incomplete private-manager setup
+    /// Cancel an incomplete private instance setup
     Cancel {
-        /// Manager ID
+        /// Instance ID
         id: String,
 
         /// Skip confirmation prompt
         #[arg(long)]
         yes: bool,
     },
-    /// Delete a private manager
+    /// Delete a private instance
     Delete {
-        /// Manager ID
+        /// Instance ID
         id: String,
 
         /// Skip confirmation prompt
         #[arg(long)]
         yes: bool,
     },
-    /// View manager deployment events
+    /// View instance deployment events
     Events {
-        /// Manager ID
+        /// Instance ID
         id: String,
 
         /// Follow events
         #[arg(long, short)]
         follow: bool,
     },
-    /// Manage project default private managers
+    /// Manage project default private instances
     Defaults {
         #[command(subcommand)]
         cmd: DefaultsCmd,
@@ -177,13 +177,13 @@ pub enum ManagersCmd {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum DefaultsCmd {
-    /// Show default private managers for a project
+    /// Show default private instances for a project
     Show {
         /// Project ID or name. Defaults to --project or the linked project
         #[arg(long)]
         project: Option<String>,
     },
-    /// Set the default private manager for a cloud
+    /// Set the default private instance for a cloud
     Set {
         /// Project ID or name. Defaults to --project or the linked project
         #[arg(long)]
@@ -193,11 +193,11 @@ pub enum DefaultsCmd {
         #[arg(long)]
         cloud: PrivateManagerCloudArg,
 
-        /// Manager ID
+        /// Instance ID
         #[arg(long)]
         manager: String,
     },
-    /// Clear default private managers
+    /// Clear default private instances
     Clear {
         /// Project ID or name. Defaults to --project or the linked project
         #[arg(long)]
@@ -394,7 +394,7 @@ pub async fn managers_task(args: ManagersArgs, ctx: ExecutionMode) -> Result<()>
             return Err(AlienError::new(ErrorData::ValidationError {
                 field: "follow".to_string(),
                 message:
-                    "`alien managers events --json` does not support `--follow`; rerun without `--json` for streaming output"
+                    "`alien instances events --json` does not support `--follow`; rerun without `--json` for streaming output"
                         .to_string(),
             }));
         }
@@ -797,14 +797,14 @@ async fn set_manager_domain_task(
                     .unwrap_or("-")
                     .to_string()
             };
-            println!("Manager {manager_id} now uses {}.", field("hostname"));
+            println!("Instance {manager_id} now uses {}.", field("hostname"));
             println!("Status: {}", field("status"));
             println!(
                 "Check progress with: alien domains get {}",
                 field("domainId")
             );
         }
-        None => println!("Manager {manager_id} no longer uses a custom domain."),
+        None => println!("Instance {manager_id} no longer uses a custom domain."),
     }
     Ok(())
 }
@@ -829,7 +829,7 @@ async fn list_managers_task(
         .await
         .into_sdk_error()
         .context(ErrorData::ApiRequestFailed {
-            message: "listing managers".to_string(),
+            message: "listing instances".to_string(),
             url: None,
         })?;
 
@@ -865,7 +865,7 @@ async fn list_managers_task(
     }
 
     if summaries.is_empty() {
-        println!("(no private managers)");
+        println!("(no private instances)");
         return Ok(());
     }
 
@@ -918,7 +918,7 @@ async fn status_manager_task(
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "watch".to_string(),
             message:
-                "`alien managers status --watch --json` is not supported; poll without --watch"
+                "`alien instances status --watch --json` is not supported; poll without --watch"
                     .to_string(),
         }));
     }
@@ -962,7 +962,7 @@ async fn get_manager_summary(
         .await
         .into_sdk_error()
         .context(ErrorData::ApiRequestFailed {
-            message: "retrieving manager details".to_string(),
+            message: "retrieving instance details".to_string(),
             url: None,
         })?;
 
@@ -970,7 +970,7 @@ async fn get_manager_summary(
 }
 
 fn render_manager_status(summary: &ManagerSummary) {
-    println!("Manager:");
+    println!("Instance:");
     println!("  ID: {}", summary.id);
     println!("  Name: {}", summary.name);
     println!("  Health: {}", summary.status);
@@ -1008,7 +1008,7 @@ async fn cancel_manager_task(
     validate_manager_id(manager_id)?;
     let mode = confirmation_mode(yes, json, "cancel")?;
     if matches!(mode, ConfirmationMode::Prompt)
-        && !prompt_confirm("Cancel this incomplete manager setup?", false)?
+        && !prompt_confirm("Cancel this incomplete instance setup?", false)?
     {
         println!("Cancel skipped.");
         return Ok(());
@@ -1026,7 +1026,7 @@ async fn cancel_manager_task(
         });
     }
 
-    println!("Manager setup canceled: {manager_id}");
+    println!("Instance setup canceled: {manager_id}");
     Ok(())
 }
 
@@ -1041,7 +1041,7 @@ async fn delete_manager_task(
     let summary = get_manager_summary(client, workspace, manager_id).await?;
 
     if !json {
-        println!("About to delete manager:");
+        println!("About to delete instance:");
         println!("  ID: {}", summary.id);
         println!("  Name: {}", summary.name);
         println!(
@@ -1050,7 +1050,8 @@ async fn delete_manager_task(
         );
     }
 
-    if matches!(mode, ConfirmationMode::Prompt) && !prompt_confirm("Delete this manager?", false)? {
+    if matches!(mode, ConfirmationMode::Prompt) && !prompt_confirm("Delete this instance?", false)?
+    {
         println!("Delete skipped.");
         return Ok(());
     }
@@ -1071,7 +1072,7 @@ async fn delete_manager_task(
         .await
         .into_sdk_error()
         .context(ErrorData::ApiRequestFailed {
-            message: "deleting manager".to_string(),
+            message: "deleting instance".to_string(),
             url: None,
         })?;
 
@@ -1083,7 +1084,7 @@ async fn delete_manager_task(
         });
     }
 
-    println!("Manager delete started: {}", summary.id);
+    println!("Instance delete started: {}", summary.id);
     Ok(())
 }
 
@@ -1264,7 +1265,7 @@ fn render_setup_output(output: &ManagerSetupOutput, json: bool) -> Result<()> {
         return print_json(output);
     }
 
-    println!("Manager setup ready:");
+    println!("Instance setup ready:");
     println!("  ID: {}", output.manager_id);
     if let Some(name) = &output.name {
         println!("  Name: {}", name);
@@ -1285,7 +1286,7 @@ fn render_setup_output(output: &ManagerSetupOutput, json: bool) -> Result<()> {
         }
     }
     println!();
-    println!("Next: alien managers status {} --watch", output.manager_id);
+    println!("Next: alien instances status {} --watch", output.manager_id);
     Ok(())
 }
 
@@ -1294,13 +1295,13 @@ fn render_retry_deployment_output(output: &ManagerRetryDeploymentOutput, json: b
         return print_json(output);
     }
 
-    println!("Manager retry requested:");
+    println!("Instance retry requested:");
     println!("  ID: {}", output.manager_id);
     println!("  Deployment: {}", output.deployment_id);
     println!("  Setup: {}", output.setup_status);
     println!("  Message: {}", output.message);
     println!();
-    println!("Next: alien managers status {} --watch", output.manager_id);
+    println!("Next: alien instances status {} --watch", output.manager_id);
     Ok(())
 }
 
@@ -1478,7 +1479,7 @@ fn validate_manager_id(manager_id: &str) -> Result<ManagerId> {
         .into_alien_error()
         .context(ErrorData::ValidationError {
             field: "id".to_string(),
-            message: "manager ID format is invalid (expected mgr_...)".to_string(),
+            message: "instance ID format is invalid (expected mgr_...)".to_string(),
         })
 }
 
@@ -1486,7 +1487,7 @@ fn confirmation_mode(action_yes: bool, json: bool, action: &str) -> Result<Confi
     InteractionMode::current(json).confirmation_mode(
         action_yes,
         &format!(
-            "`alien managers {action} --json` requires `--yes`; confirmation prompts are disabled in machine mode"
+            "`alien instances {action} --json` requires `--yes`; confirmation prompts are disabled in machine mode"
         ),
     )
 }
@@ -1593,7 +1594,7 @@ async fn events_manager_task(
             .await
             .into_sdk_error()
             .context(ErrorData::ApiRequestFailed {
-                message: "listing manager events".to_string(),
+                message: "listing instance events".to_string(),
                 url: None,
             })?;
 
