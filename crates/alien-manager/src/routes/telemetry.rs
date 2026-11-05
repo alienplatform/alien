@@ -96,7 +96,13 @@ async fn ingest(
         }
     };
 
+    if signal == TelemetrySignal::Metrics && !state.telemetry_backend.supports_metrics() {
+        return ErrorData::internal("Metrics backend is not configured").into_response();
+    }
     match state.telemetry_backend.ingest(signal, &caller, body).await {
+        Ok(()) if signal == TelemetrySignal::Metrics => {
+            ([("content-type", "application/x-protobuf")], Bytes::new()).into_response()
+        }
         Ok(()) => Json(TelemetryResponse { accepted: true }).into_response(),
         Err(e) => e.into_response(),
     }

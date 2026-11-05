@@ -2,6 +2,7 @@ use crate::error::ErrorData;
 use crate::traits::telemetry_backend::{TelemetryBackend, TelemetryCaller, TelemetrySignal};
 use alien_error::{AlienError, Context, ContextError, GenericError, IntoAlienError};
 use async_trait::async_trait;
+use prost::Message;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::collections::HashMap;
 
@@ -78,7 +79,7 @@ impl TelemetryBackend for OtlpForwardingBackend {
                 message: "Failed to forward telemetry signal to OTLP backend".to_string(),
             })?;
         let status = response.status().as_u16();
-        if let Err(source) = response.error_for_status() {
+        if let Err(source) = response.error_for_status_ref() {
             let mut error = AlienError::from_std(&source)
                 .context(ErrorData::TelemetryBackendRejected { status });
             error.http_status_code = Some(status);
@@ -86,6 +87,23 @@ impl TelemetryBackend for OtlpForwardingBackend {
             return Err(error.into_generic());
         }
 
+        if signal == TelemetrySignal::Metrics {
+            let bytes = response
+                .bytes()
+                .await
+                .into_alien_error()
+                .context(GenericError {
+                    message: "Could not read metrics acknowledgement".into(),
+                })?;
+            let acknowledgement = opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceResponse::decode(bytes).into_alien_error().context(GenericError { message: "Invalid OTLP metric acknowledgement".into() })?;
+            if acknowledgement.partial_success.is_some_and(|partial| {
+                partial.rejected_data_points > 0 || !partial.error_message.is_empty()
+            }) {
+                return Err(AlienError::new(GenericError {
+                    message: "OTLP backend partially rejected metric collection".into(),
+                }));
+            }
+        }
         Ok(())
     }
 }

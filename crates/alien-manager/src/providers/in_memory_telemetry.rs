@@ -17,6 +17,10 @@ impl InMemoryTelemetryBackend {
 
 #[async_trait]
 impl TelemetryBackend for InMemoryTelemetryBackend {
+    fn supports_metrics(&self) -> bool {
+        false
+    }
+
     async fn ingest(
         &self,
         signal: TelemetrySignal,

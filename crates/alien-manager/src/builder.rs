@@ -1045,6 +1045,7 @@ async fn finalize(
     );
 
     Ok(AlienManager {
+        telemetry_backend,
         config,
         router,
         deployment_store,

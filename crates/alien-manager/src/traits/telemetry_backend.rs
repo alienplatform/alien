@@ -31,6 +31,11 @@ pub struct TelemetryCaller {
 /// Dev mode: `InMemoryTelemetryBackend` — parses and stores in a ring buffer.
 #[async_trait]
 pub trait TelemetryBackend: Send + Sync {
+    /// Whether the backend actually retains/forwards metrics rather than discarding them.
+    fn supports_metrics(&self) -> bool {
+        true
+    }
+
     /// Ingest OTLP protobuf data.
     async fn ingest(
         &self,

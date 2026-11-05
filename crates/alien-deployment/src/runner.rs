@@ -354,6 +354,32 @@ async fn run_step_loop_body(
     on_progress: Option<&ProgressCallback>,
     allow_initial_running_step: bool,
 ) -> Result<RunnerResult> {
+    if config.stack_settings.metrics_collection.is_some()
+        && (matches!(
+            state.status,
+            DeploymentStatus::Running | DeploymentStatus::RefreshFailed
+        ) || !state.has_desired())
+    {
+        crate::metrics::collect_and_checkpoint(
+            state,
+            config,
+            client_config,
+            deployment_id,
+            transport,
+        )
+        .await?;
+        if !config.stack_settings.heartbeats.is_enabled() && state.has_desired() {
+            return Ok(RunnerResult {
+                loop_result: LoopResult {
+                    stop_reason: LoopStopReason::NoWork,
+                    outcome: LoopOutcome::Neutral,
+                    final_status: state.status,
+                },
+                steps_executed: 0,
+                state_persisted: true,
+            });
+        }
+    }
     if !state.has_desired() {
         let service_provider = service_provider
             .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));

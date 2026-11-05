@@ -35,6 +35,9 @@ impl RecentLogsBackend {
 
 #[async_trait]
 impl TelemetryBackend for RecentLogsBackend {
+    fn supports_metrics(&self) -> bool {
+        self.inner.supports_metrics()
+    }
     async fn ingest(
         &self,
         signal: TelemetrySignal,

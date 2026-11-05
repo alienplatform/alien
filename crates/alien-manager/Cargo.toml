@@ -100,7 +100,7 @@ aegis = { workspace = true, optional = true }
 
 # Telemetry parsing
 prost = { workspace = true }
-opentelemetry-proto = { version = "0.30", features = ["gen-tonic-messages", "logs"] }
+opentelemetry-proto = { version = "0.30", features = ["gen-tonic-messages", "logs", "metrics"] }
 prost-types = { workspace = true }
 
 # Binary data

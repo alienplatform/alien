@@ -14,6 +14,10 @@ pub struct NullTelemetryBackend;
 
 #[async_trait]
 impl TelemetryBackend for NullTelemetryBackend {
+    fn supports_metrics(&self) -> bool {
+        false
+    }
+
     async fn ingest(
         &self,
         signal: TelemetrySignal,

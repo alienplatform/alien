@@ -42,6 +42,20 @@ pub struct StepReconcileResult {
 /// env var injection, etc.).
 #[async_trait]
 pub trait DeploymentLoopTransport: Send + Sync {
+    /// Export an explicitly enabled metric batch. ACK is required before checkpointing.
+    /// External drivers use the deployment's configured OTLP endpoint; managers may
+    /// override this to invoke their TelemetryBackend without a network roundtrip.
+    async fn export_metrics(
+        &self,
+        _deployment_id: &str,
+        config: &DeploymentConfig,
+        data: Vec<u8>,
+    ) -> Result<(), AlienError> {
+        crate::metrics::export_to_endpoint(config, data)
+            .await
+            .map_err(AlienError::into_generic)
+    }
+
     /// Renew the caller's deployment lease while a cloud operation is still in
     /// flight. Transports without distributed locking may keep the default
     /// no-op implementation.

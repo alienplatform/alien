@@ -881,6 +881,9 @@ pub struct KubernetesTlsSecretRef {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct StackSettings {
+    /// Explicit infrastructure metric sources. Absent disables collection and grants no new cloud access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics_collection: Option<crate::MetricsCollectionConfig>,
     /// Ongoing authority over infrastructure normally owned by setup. Automatic requires
     /// an explicit CLI setup grant; changing this setting alone never grants that authority.
     #[serde(default, skip_serializing_if = "is_manual_setup_management")]

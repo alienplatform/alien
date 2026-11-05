@@ -7,6 +7,7 @@ mod error;
 mod gcp;
 #[cfg(feature = "kubernetes")]
 mod kubernetes;
+pub mod metrics;
 
 use std::collections::{BTreeMap, BTreeSet};
 

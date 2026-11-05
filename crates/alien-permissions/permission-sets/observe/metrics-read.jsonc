@@ -1,0 +1,26 @@
+{
+  "id": "observe/metrics-read",
+  "description": "Explicit access to infrastructure metric samples, whose labels and values may contain sensitive data. This does not enable paid instrumentation or read application payloads.",
+  "platforms": {
+    "aws": [{
+      "label": "read-metric-samples",
+      "description": "Read Classic CloudWatch samples in the target account. CloudWatch cannot restrict these reads to individual workload ARNs.",
+      "grant": { "actions": ["cloudwatch:GetMetricData"] },
+      "binding": { "stack": { "resources": ["*"] } }
+    }],
+    "gcp": [{
+      "label": "read-metric-samples",
+      "description": "Read metric samples in the explicitly selected project.",
+      "grant": { "permissions": ["monitoring.timeSeries.list"] },
+      "binding": { "stack": { "scope": "projects/${projectName}" } }
+    }],
+    "azure": [{
+      "label": "read-metric-samples",
+      "description": "Read metric samples through the per-resource ARM API. Does not authorize subscription-wide batch reads.",
+      "grant": { "actions": ["Microsoft.Insights/metrics/read"] },
+      "binding": {
+        "stack": { "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}" }
+      }
+    }]
+  }
+}

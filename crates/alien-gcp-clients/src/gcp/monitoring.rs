@@ -130,6 +130,8 @@ impl ListTimeSeriesRequest {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, Builder)]
 #[serde(rename_all = "camelCase")]
 pub struct TimeInterval {
+    /// Gauge responses omit the start time; requests still set it explicitly.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub start_time: String,
     pub end_time: String,
 }

@@ -211,6 +211,7 @@ fn get_or_create_local_bindings_provider(
 }
 
 pub struct DeploymentLoop {
+    telemetry_backend: Option<Arc<dyn crate::traits::TelemetryBackend>>,
     config: Arc<ManagerConfig>,
     deployment_store: Arc<dyn DeploymentStore>,
     release_store: Arc<dyn ReleaseStore>,
@@ -307,6 +308,7 @@ impl DeploymentLoop {
         dev_status_tx: Option<watch::Sender<()>>,
     ) -> Self {
         Self {
+            telemetry_backend: None,
             config,
             deployment_store,
             release_store,
@@ -317,6 +319,15 @@ impl DeploymentLoop {
             settled_stack_cache: Mutex::new(HashMap::new()),
             deferred: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Export explicitly configured infrastructure metrics through the manager's backend.
+    pub fn with_telemetry_backend(
+        mut self,
+        backend: Arc<dyn crate::traits::TelemetryBackend>,
+    ) -> Self {
+        self.telemetry_backend = Some(backend);
+        self
     }
 
     /// Add acquisition exclusions without enumerating a possibly capped candidate list.
@@ -732,7 +743,9 @@ impl DeploymentLoop {
             .expect("stored deployment carries stack_settings");
 
         let skip_credentials = stack_settings.deployment_model == alien_core::DeploymentModel::Pull
-            || (options.require_heartbeats_enabled && !stack_settings.heartbeats.is_enabled());
+            || (options.require_heartbeats_enabled
+                && !stack_settings.heartbeats.is_enabled()
+                && stack_settings.metrics_collection.is_none());
 
         let status = parse_status(&deployment.status);
         let had_credential_retry = deployment
@@ -1184,7 +1197,7 @@ impl DeploymentLoop {
             delay_strategy: alien_deployment::runner::DelayStrategy::Yield,
         };
 
-        let transport = ManagerTransport::new(
+        let mut transport = ManagerTransport::new(
             self.deployment_store.clone(),
             self.server_bindings.bindings_provider.clone(),
             self.server_bindings.target_bindings_providers.clone(),
@@ -1193,6 +1206,10 @@ impl DeploymentLoop {
             execution_claim.clone(),
             self.config.supported_aws_regions.clone(),
         );
+
+        if let Some(backend) = &self.telemetry_backend {
+            transport = transport.with_telemetry_backend(backend.clone());
+        }
 
         let mut config = config;
         let runner_result = if options.require_heartbeats_enabled {

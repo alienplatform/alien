@@ -22,6 +22,7 @@ use crate::traits::DeploymentStore;
 /// reconciles cross-account registry access with each step.
 pub struct ManagerTransport {
     deployment_store: Arc<dyn DeploymentStore>,
+    telemetry_backend: Option<Arc<dyn crate::traits::TelemetryBackend>>,
     bindings_provider: Option<Arc<dyn BindingsProviderApi>>,
     target_bindings_providers: HashMap<Platform, Arc<dyn BindingsProviderApi>>,
     project_id: String,
@@ -43,6 +44,7 @@ impl ManagerTransport {
     ) -> Self {
         Self {
             deployment_store,
+            telemetry_backend: None,
             bindings_provider,
             target_bindings_providers,
             project_id,
@@ -51,10 +53,49 @@ impl ManagerTransport {
             supported_aws_regions,
         }
     }
+    /// Attach the manager's trusted ingestion backend for scheduler-owned metrics.
+    pub fn with_telemetry_backend(
+        mut self,
+        backend: Arc<dyn crate::traits::TelemetryBackend>,
+    ) -> Self {
+        self.telemetry_backend = Some(backend);
+        self
+    }
 }
 
 #[async_trait]
 impl DeploymentLoopTransport for ManagerTransport {
+    async fn export_metrics(
+        &self,
+        deployment_id: &str,
+        config: &alien_core::DeploymentConfig,
+        data: Vec<u8>,
+    ) -> Result<(), AlienError> {
+        let Some(backend) = &self.telemetry_backend else {
+            return alien_deployment::metrics::export_to_endpoint(config, data)
+                .await
+                .map_err(AlienError::into_generic);
+        };
+        if !backend.supports_metrics() {
+            return Err(crate::error::ErrorData::internal(
+                "Infrastructure metric collection needs a configured metrics backend",
+            )
+            .into_generic());
+        }
+        backend
+            .ingest(
+                crate::traits::TelemetrySignal::Metrics,
+                &crate::traits::TelemetryCaller {
+                    deployment_id: Some(deployment_id.into()),
+                    project_id: Some(self.project_id.clone()),
+                    workspace_id: None,
+                    gateway_log_source: None,
+                },
+                data.into(),
+            )
+            .await
+    }
+
     async fn renew_lease(&self, deployment_id: &str) -> Result<(), AlienError> {
         let caller = Subject::system();
         self.deployment_store
