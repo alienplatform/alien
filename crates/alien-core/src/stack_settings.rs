@@ -993,6 +993,33 @@ pub fn machine_image_publisher_aws() -> Option<&'static str> {
     (account.len() == 12 && account.bytes().all(|byte| byte.is_ascii_digit())).then_some(account)
 }
 
+/// The GCP project that publishes the machine images protected installs boot
+/// (`projects/<project>/global/images/<name>`), if this build has one. The CLI release
+/// workflow writes it into `machine-image-publisher-gcp.txt`; source builds have none.
+pub fn machine_image_publisher_gcp() -> Option<&'static str> {
+    let project = include_str!("../machine-image-publisher-gcp.txt").trim();
+    (!project.is_empty()
+        && project.len() <= 30
+        && project
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'))
+    .then_some(project)
+}
+
+/// The public name of the Azure community gallery that publishes the machine images
+/// protected installs boot (`/CommunityGalleries/<name>/Images/...`), if this build has one.
+/// The CLI release workflow writes it into `machine-image-publisher-azure.txt`; source builds
+/// have none.
+pub fn machine_image_publisher_azure() -> Option<&'static str> {
+    let gallery = include_str!("../machine-image-publisher-azure.txt").trim();
+    (!gallery.is_empty()
+        && gallery.len() <= 100
+        && gallery
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'))
+    .then_some(gallery)
+}
+
 /// The oldest machine image protected installs boot: an image the cloud records as created
 /// before this is refused even from the publisher, so a fixed image replaces every older one.
 /// The CLI release workflow writes it (RFC 3339) into `machine-image-minimum-created.txt` with
