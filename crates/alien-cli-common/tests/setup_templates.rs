@@ -186,6 +186,7 @@ async fn cloudformation_runs_the_pinned_verifier_and_limits_management() {
             "OnlySetupChangesTheVerifier",
             "OnlySetupChangesTheseLimits",
             "CallTheVerifier",
+            "ReadThisInstallsSigningSettings",
         ]
     );
 }

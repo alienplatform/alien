@@ -422,7 +422,15 @@ const AZURE_VERIFIER_ACTIONS: &[&str] = &[
     "Microsoft.Compute/virtualMachineScaleSets/extensions/delete",
     "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
     "Microsoft.Network/virtualNetworks/subnets/join/action",
+    "Microsoft.Network/networkSecurityGroups/join/action",
     "Microsoft.Resources/subscriptions/resourceGroups/read",
+];
+
+/// What the verifier reads outside the group: the publisher's community gallery images its
+/// scale sets boot. Reads only; granted at the subscription because gallery images live there.
+const AZURE_VERIFIER_IMAGE_ACTIONS: &[&str] = &[
+    "Microsoft.Compute/locations/communityGalleries/images/read",
+    "Microsoft.Compute/locations/communityGalleries/images/versions/read",
 ];
 
 /// Built-in role that reads and writes Key Vault secrets.
@@ -565,6 +573,50 @@ fn emit_verifier_grants(
                 expr::traversal([
                     "azurerm_role_definition",
                     &role,
+                    "role_definition_resource_id",
+                ]),
+            ),
+            attr("principal_id", principal.clone()),
+            attr(
+                "principal_type",
+                Expression::String("ServicePrincipal".to_string()),
+            ),
+        ],
+    ));
+
+    let images = format!("{label}_verifier_images");
+    let subscription = expr::template(OWN_SUBSCRIPTION_SCOPE.to_string());
+    fragment.resource_blocks.push(resource_block(
+        "azurerm_role_definition",
+        &images,
+        [
+            attr("name", expr::template("${local.resource_prefix}-verifier-images".to_string())),
+            attr("scope", subscription.clone()),
+            attr(
+                "description",
+                Expression::String(
+                    "Reads the community gallery images the install's scale sets boot.".to_string(),
+                ),
+            ),
+            nested(block(
+                "permissions",
+                [attr("actions", string_array(
+                    AZURE_VERIFIER_IMAGE_ACTIONS.iter().map(|action| action.to_string()).collect(),
+                ))],
+            )),
+            attr("assignable_scopes", Expression::Array(vec![subscription.clone()])),
+        ],
+    ));
+    fragment.resource_blocks.push(resource_block(
+        "azurerm_role_assignment",
+        &images,
+        [
+            attr("scope", subscription),
+            attr(
+                "role_definition_id",
+                expr::traversal([
+                    "azurerm_role_definition",
+                    &images,
                     "role_definition_resource_id",
                 ]),
             ),

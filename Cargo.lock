@@ -538,6 +538,7 @@ dependencies = [
  "clap",
  "flate2",
  "fs2",
+ "hcl-rs",
  "hex",
  "httpmock",
  "oci-client",
