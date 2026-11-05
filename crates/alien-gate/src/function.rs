@@ -497,6 +497,7 @@ mod tests {
         spec.vpc = Some(crate::plan::SetupNetwork {
             subnet_ids: vec!["subnet-b".into(), "subnet-a".into()],
             security_group_ids: vec!["sg-1".into()],
+            identity: None,
         });
         let mut back = function(&spec);
         back["Configuration"]["VpcConfig"] = json!({

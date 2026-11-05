@@ -157,7 +157,7 @@ async fn gcp_verifier() -> Result<Verifier> {
             prefix: prefix.to_string(),
         }),
         store: Arc::new(GcpInstall(client.clone())),
-        backend: Arc::new(GcpBackend(client)),
+        backend: Arc::new(GcpBackend(client, alien_gate::machines::ImagePins::gcp())),
         vpc: None,
         machine_network: None,
     })

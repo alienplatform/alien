@@ -94,7 +94,7 @@ class Run:
         self.other_ami = public("/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id")
         # An Amazon Linux image from 2023: the publisher's, but older than
         # the minimum this test's verifier build boots (MINIMUM_CREATED).
-        old = aws("ec2", "describe-images", "--owners", AMAZON, "--filters",
+        old = aws("ec2", "describe-images", "--owners", AMAZON, "--include-deprecated", "--filters",
                   "Name=name,Values=al2023-ami-2023.0.2023*-kernel-6.1-x86_64", "Name=architecture,Values=x86_64")["Images"]
         self.old_ami = sorted(old, key=lambda image: image["CreationDate"])[0]["ImageId"]
 

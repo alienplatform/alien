@@ -72,6 +72,10 @@ pub struct RollMachines {
     /// The subnets the caller expects, checked the same way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subnet_ids: Option<Vec<String>>,
+    /// GCP zone of a zonal group, in the verifier's region; absent for a
+    /// regional one, and on AWS and Azure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
 }
 
 /// Resize one machine group within its signed bounds (GCP MIG, Azure VMSS).
@@ -257,7 +261,8 @@ pub struct ImageFacts {
 /// The images this build boots, compiled in by the release workflow.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ImagePins {
-    /// The account (AWS) or project (GCP) that publishes them.
+    /// The account (AWS), project (GCP) or community gallery (Azure) that
+    /// publishes them.
     pub publisher: Option<String>,
     /// The oldest image creation time it boots.
     pub minimum_created: Option<DateTime<Utc>>,
@@ -268,6 +273,22 @@ impl ImagePins {
     pub fn aws() -> Self {
         Self {
             publisher: alien_core::machine_image_publisher_aws().map(str::to_string),
+            minimum_created: alien_core::machine_image_minimum_created(),
+        }
+    }
+
+    /// The GCP pins this build was released with.
+    pub fn gcp() -> Self {
+        Self {
+            publisher: alien_core::machine_image_publisher_gcp().map(str::to_string),
+            minimum_created: alien_core::machine_image_minimum_created(),
+        }
+    }
+
+    /// The Azure pins this build was released with.
+    pub fn azure() -> Self {
+        Self {
+            publisher: alien_core::machine_image_publisher_azure().map(str::to_string),
             minimum_created: alien_core::machine_image_minimum_created(),
         }
     }
@@ -337,21 +358,30 @@ fn check_setup_ids(what: &str, asked: Option<&[String]>, setup: &[String]) -> Re
     Ok(())
 }
 
-/// Build the launch template for a roll. `pins` name the images this build
-/// boots; `image` is what the verifier read about the requested image.
-pub fn plan_roll(
+/// What every cloud's roll takes from the signed release and the request,
+/// after the checks they share.
+#[derive(Debug, Clone)]
+pub struct RollBasics {
+    /// The signed capacity group.
+    pub group: CapacityGroup,
+    /// The instance type, machine type or VM size machines run as.
+    pub instance_type: String,
+    /// What machines read at boot (see [`boot_tags`]).
+    pub tags: Vec<(String, String)>,
+    /// `<prefix>-<cluster>-<group>`, the group's name in the cloud.
+    pub name: String,
+}
+
+/// The checks every cloud's roll shares: the image is the publisher's and
+/// recent enough, the group and instance type are the signed ones, and the
+/// release pins an agent build for the image's architecture.
+pub fn roll_basics(
     place: &Place,
     release: &ReleaseBody,
     request: &RollMachines,
     pins: &ImagePins,
     image: &ImageFacts,
-) -> Result<RollPlan> {
-    if !is_id(&request.machine_image, "ami-") {
-        return Err(refused(format!(
-            "'{}' is not an AMI id",
-            request.machine_image
-        )));
-    }
+) -> Result<RollBasics> {
     // The caller picks the image: any publisher image no older than the
     // build's minimum. What it runs is the machine agent build the signed
     // release pins.
@@ -383,7 +413,35 @@ pub fn plan_roll(
             "the release pins no {component} build, so no machine may boot it"
         )));
     }
-    let tags = boot_tags(&request.group, request.api_url.as_deref())?;
+    Ok(RollBasics {
+        tags: boot_tags(&request.group, request.api_url.as_deref())?,
+        name: scale_target(&place.prefix, &request.cluster, &request.group)?,
+        group,
+        instance_type,
+    })
+}
+
+/// Build the launch template for a roll. `pins` name the images this build
+/// boots; `image` is what the verifier read about the requested image.
+pub fn plan_roll(
+    place: &Place,
+    release: &ReleaseBody,
+    request: &RollMachines,
+    pins: &ImagePins,
+    image: &ImageFacts,
+) -> Result<RollPlan> {
+    if !is_id(&request.machine_image, "ami-") {
+        return Err(refused(format!(
+            "'{}' is not an AMI id",
+            request.machine_image
+        )));
+    }
+    let RollBasics {
+        group,
+        instance_type,
+        tags,
+        name: base,
+    } = roll_basics(place, release, request, pins, image)?;
     let network = place.machine_network.as_ref().ok_or_else(|| {
         refused("setup fixed no machine network for this verifier, so it launches no machines")
     })?;
@@ -403,13 +461,10 @@ pub fn plan_roll(
         &network.security_group_ids,
     )?;
     check_setup_ids("subnet", request.subnet_ids.as_deref(), &network.subnet_ids)?;
-    let (account, prefix) = match &place.install {
-        alien_signing::InstallId::Aws {
-            account, prefix, ..
-        } => (account.clone(), prefix.clone()),
-        _ => return Err(refused("machines roll through the verifier on AWS only")),
+    let account = match &place.install {
+        alien_signing::InstallId::Aws { account, .. } => account.clone(),
+        _ => return Err(refused("this is the AWS roll")),
     };
-    let base = format!("{prefix}-{}-{}", request.cluster, request.group);
     let ebs = |size: i32| LaunchTemplateEbsBlockDevice {
         volume_size: Some(size),
         volume_type: Some("gp3".to_string()),
@@ -775,6 +830,7 @@ mod tests {
             machine_network: Some(SetupNetwork {
                 subnet_ids: vec![SUBNET.to_string()],
                 security_group_ids: vec![SECURITY_GROUP.to_string()],
+                identity: None,
             }),
         }
     }
@@ -835,6 +891,7 @@ mod tests {
             api_url: Some("https://machines.example.com".to_string()),
             security_group_ids: None,
             subnet_ids: None,
+            zone: None,
         }
     }
 
