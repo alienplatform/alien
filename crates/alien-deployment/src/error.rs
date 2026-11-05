@@ -318,6 +318,22 @@ pub enum ErrorData {
         interrupted_resources: usize,
     },
 
+    /// A release that was superseded while it was being applied failed. The deployment moves
+    /// on to the newer release; the failure stays attributed to the superseded one.
+    #[error(
+        code = "SUPERSEDED_UPDATE_FAILED",
+        message = "Release {failed_release_id} failed to roll out after release {next_release_id} superseded it; applying {next_release_id} next",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 500
+    )]
+    SupersededUpdateFailed {
+        /// The superseded release whose update failed.
+        failed_release_id: String,
+        /// The release the deployment applies next.
+        next_release_id: String,
+    },
+
     /// Every resource that failed stopped at a step that only rerunning the installation's
     /// setup unblocks, such as a grant the management role lacks.
     ///
