@@ -3,7 +3,8 @@ use crate::{
     emitters::{
         aws::helpers::{
             list_parameter_value, CONDITION_HAS_MANAGEMENT_EXTERNAL_ID,
-            PARAM_MANAGEMENT_EXTERNAL_ID,
+            CONDITION_HAS_MANAGEMENT_SESSION_CUTOFF, PARAM_MANAGEMENT_EXTERNAL_ID,
+            PARAM_MANAGEMENT_SESSION_CUTOFF,
         },
         enabled,
     },
@@ -676,6 +677,7 @@ pub fn generate_cloudformation_template_with_profile(
         profile,
     );
     add_management_external_id_parameter(&mut template);
+    add_management_session_cutoff_parameter(&mut template);
     apply_management_trust(&mut template, &options.management_trust)?;
     retain_data_network_dependencies(&mut template);
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
@@ -2878,6 +2880,42 @@ fn insert_parameter_label(
     label: &str,
 ) {
     labels.insert(parameter.to_string(), json!({ "default": label }));
+}
+
+/// This parameter is deliberately not a runtime setting. CloudFormation owns
+/// the role policy, and an administrator must review changes to its cutoff.
+fn add_management_session_cutoff_parameter(template: &mut CfTemplate) {
+    if !template.resources.values().any(|resource| {
+        resource.condition.as_deref() == Some(CONDITION_HAS_MANAGEMENT_SESSION_CUTOFF)
+    }) {
+        return;
+    }
+    template.parameters.insert(
+        PARAM_MANAGEMENT_SESSION_CUTOFF.to_string(),
+        CfParameter {
+            allowed_pattern: Some(
+                r"^$|^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$".to_string(),
+            ),
+            constraint_description: Some(
+                "Use an empty value or a UTC timestamp such as 2026-01-01T00:00:00Z.".to_string(),
+            ),
+            ..string_parameter(
+                "Deny management sessions issued before this UTC timestamp. Change trust before \
+                 this time, then verify old sessions are denied and fresh sessions work. Preserve \
+                 the value on later updates; clearing or reducing it can restore old sessions.",
+                Some(String::new()),
+                None,
+                false,
+            )
+        },
+    );
+    template.conditions.insert(
+        CONDITION_HAS_MANAGEMENT_SESSION_CUTOFF.to_string(),
+        CfExpression::not(CfExpression::equals(
+            CfExpression::ref_(PARAM_MANAGEMENT_SESSION_CUTOFF),
+            CfExpression::from(""),
+        )),
+    );
 }
 
 /// Declare `ManagementExternalId` when an emitted role trusts the managing

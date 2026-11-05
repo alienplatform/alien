@@ -18,6 +18,9 @@ use serde_json::Value as JsonValue;
 use std::collections::{BTreeSet, HashSet};
 
 pub const PARAM_MANAGING_ROLE_ARN: &str = "ManagingRoleArn";
+/// Setup-owned cutoff for previously issued deployment-management sessions.
+pub const PARAM_MANAGEMENT_SESSION_CUTOFF: &str = "ManagementSessionCutoff";
+pub const CONDITION_HAS_MANAGEMENT_SESSION_CUTOFF: &str = "HasManagementSessionCutoff";
 /// The control plane's ExternalId for this customer. The management and
 /// remote-bindings roles require it as `sts:ExternalId` when it is set.
 pub const PARAM_MANAGEMENT_EXTERNAL_ID: &str = "ManagementExternalId";
