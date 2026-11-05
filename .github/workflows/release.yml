@@ -2407,6 +2407,27 @@ jobs:
                 "${image}@${source_digest}"
             done
 
+      # The enforcer digests a signed release pins (crates/alien-cli/
+      # enforcer-digests.json). The official CLI distribution adds the machine
+      # agent and verifier digests and writes the file before it builds
+      # `alien`; a source build keeps the empty table and pins none.
+      - name: Record enforcer digests
+        run: |
+          jq '{operator: .images["alien-operator"]}' \
+            qualification/qualified-image-digests.json > enforcer-digests.json
+          jq -e 'to_entries | all(.value | test("^sha256:[0-9a-f]{64}$"))' \
+            enforcer-digests.json >/dev/null || {
+            echo "::error::Enforcer digests are not all sha256 digests"; cat enforcer-digests.json; exit 1
+          }
+          cat enforcer-digests.json
+
+      - name: Upload enforcer digests
+        uses: actions/upload-artifact@v7
+        with:
+          name: enforcer-digests
+          path: enforcer-digests.json
+          if-no-files-found: error
+
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.qualification_head_sha }}

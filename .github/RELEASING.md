@@ -59,3 +59,13 @@ CLI distribution publishes those from the release tag: it builds `alien`,
 creates the immutable GitHub release with the changelog (rendered from
 `cliff.toml`) and the archives of `alien` plus this release's binaries, then
 updates Homebrew and, last, `channels/stable`.
+
+Before it builds `alien`, the distribution writes
+`crates/alien-cli/enforcer-digests.json`: the `enforcer-digests` artifact of
+the publish run (the promoted `alien-operator` image digest) plus the
+`machine-agent/linux-x86_64`, `machine-agent/linux-aarch64` and
+`verifier/{aws,gcp,azure}` digests of the builds this version ships, each
+`sha256:<hex>`. Signed releases pin those builds; an install refuses any
+other. The GitHub release must stay immutable so that
+`gh release verify-asset` vouches for each archive: `alien devices add-ci`
+pins CI to the archive checksums it checks that way.

@@ -712,6 +712,7 @@ dependencies = [
  "alien-core",
  "alien-deployment",
  "alien-error",
+ "alien-gcp-clients",
  "alien-helm",
  "alien-infra",
  "alien-local",

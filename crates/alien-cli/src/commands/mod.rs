@@ -89,9 +89,7 @@ pub use packages::{packages_task, PackagesArgs};
 pub use release::{release_command, ReleaseArgs};
 pub use releases::{releases_task, ReleasesArgs};
 pub use render::{render_task, RenderArgs};
-pub use signing::{
-    approve_task, signers_task, signing_task, ApproveArgs, SignersArgs, SigningArgs,
-};
+pub use signing::{approve_task, devices_task, ApproveArgs, DevicesArgs};
 pub use status::{status_task, StatusArgs};
 pub use tokens::{tokens_task, TokensArgs};
 pub use upgrade::{upgrade_task, UpgradeArgs};

@@ -43,7 +43,7 @@ pub use release_channel_store::{
 pub use release_store::{CreateReleaseParams, ReleaseRecord, ReleaseStore};
 pub use server_bindings::ServerBindings;
 pub use signing_store::{
-    PendingChangeKind, PendingChangeRecord, PendingChangeStatus, SignerListWrite, SigningStore,
+    PendingChangeRecord, PendingChangeStatus, SignerListRecord, SignerListWrite, SigningStore,
 };
 pub use telemetry_backend::{TelemetryBackend, TelemetryCaller, TelemetrySignal};
 pub use token_store::{CreateTokenParams, TokenRecord, TokenStore};
