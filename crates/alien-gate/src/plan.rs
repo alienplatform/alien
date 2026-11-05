@@ -7,9 +7,9 @@
 use std::collections::BTreeMap;
 
 use alien_error::{AlienError, Context};
-use alien_release_trust::kinds::ConfigBody;
-use alien_release_trust::release::{is_pinned_image, Runtime, WorkloadKind};
-use alien_release_trust::{
+use alien_signing::kinds::ConfigBody;
+use alien_signing::release::{is_pinned_image, Runtime, WorkloadKind};
+use alien_signing::{
     build_workload, Anchor, Kind, ReleaseBody, SignedStatement, Trust, WorkloadRequest,
 };
 use chrono::{DateTime, Utc};
@@ -285,10 +285,10 @@ pub fn plan(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use alien_release_trust::envelope::Envelope;
-    use alien_release_trust::release::{Bounds, Configurable, FunctionSettings, ProvidedEnv};
-    use alien_release_trust::{fingerprint, Role, Signer, SignerKind, SignerListBody, SoftwareKey};
-    use alien_release_trust::{SessionApproval, Workload};
+    use alien_signing::envelope::Envelope;
+    use alien_signing::release::{Bounds, Configurable, FunctionSettings, ProvidedEnv};
+    use alien_signing::{fingerprint, Role, Signer, SignerKind, SignerListBody, SoftwareKey};
+    use alien_signing::{SessionApproval, Workload};
 
     pub const DIGEST: &str =
         "sha256:1111111111111111111111111111111111111111111111111111111111111111";

@@ -6,10 +6,10 @@
 
 use std::collections::BTreeMap;
 
-use alien_release_trust::envelope::Envelope;
-use alien_release_trust::release::{Bounds, WorkloadKind};
-use alien_release_trust::release::{ProvidedEnv, Runtime};
-use alien_release_trust::{
+use alien_signing::envelope::Envelope;
+use alien_signing::release::{Bounds, WorkloadKind};
+use alien_signing::release::{ProvidedEnv, Runtime};
+use alien_signing::{
     fingerprint, Anchor, ReleaseBody, Role, SessionApproval, SignedStatement, Signer, SignerKind,
     SignerListBody, SoftwareKey, Workload,
 };
@@ -214,7 +214,7 @@ pub fn web_workload() -> Workload {
         },
         configurable_env: vec!["FEATURE_FLAGS".to_string()],
         deployer_env: BTreeMap::from([("DATABASE_URL".to_string(), "databaseUrl".to_string())]),
-        secrets: vec![alien_release_trust::release::SecretBinding {
+        secrets: vec![alien_signing::release::SecretBinding {
             name: "db-password".to_string(),
             env_name: Some("DB_PASSWORD".to_string()),
             file_path: None,
@@ -235,7 +235,7 @@ pub fn release_body() -> ReleaseBody {
     ReleaseBody {
         platform: "machines".to_string(),
         workloads: vec![web_workload()],
-        configurable: alien_release_trust::release::Configurable {
+        configurable: alien_signing::release::Configurable {
             env: vec!["FEATURE_FLAGS".to_string()],
             inputs: vec!["region-label".to_string()],
         },

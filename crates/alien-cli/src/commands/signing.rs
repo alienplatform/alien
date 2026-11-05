@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_release_trust::{
+use alien_signing::{
     fingerprint, Envelope, Kind, Role, SignedStatement, Signer, SignerChain, SignerKind,
     SignerListBody, SoftwareKey,
 };
@@ -355,7 +355,7 @@ async fn init(args: InitArgs, ctx: ExecutionMode) -> Result<()> {
             )?;
             key.public_key().as_str().to_string()
         }
-        (None, Some(public)) => alien_release_trust::PublicKey::parse(public)
+        (None, Some(public)) => alien_signing::PublicKey::parse(public)
             .context(signing_failed("read --recovery-public-key"))?
             .as_str()
             .to_string(),
@@ -698,7 +698,7 @@ async fn approve_device(args: ApproveDeviceArgs, ctx: ExecutionMode) -> Result<(
                 message: format!("No pending device '{}' in project {project}", args.id),
             })
         })?;
-    let key = alien_release_trust::PublicKey::parse(&device.key)
+    let key = alien_signing::PublicKey::parse(&device.key)
         .context(signing_failed("read the pending device key"))?;
     let code = approval_code(&key);
     match &args.code {

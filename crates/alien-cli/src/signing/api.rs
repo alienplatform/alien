@@ -2,7 +2,7 @@
 //! the CLI sends; nothing it returns is trusted until it verifies here.
 
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_release_trust::{Signature, SignedStatement, Signer};
+use alien_signing::{Signature, SignedStatement, Signer};
 use reqwest::{Client, Method};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};

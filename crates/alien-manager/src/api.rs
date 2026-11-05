@@ -107,7 +107,7 @@ impl Modify for BearerSecurity {
         crate::traits::PendingChangeKind,
         crate::traits::PendingChangeStatus,
         alien_core::SignedStatement,
-        alien_release_trust::Signature,
+        alien_signing::Signature,
         // Deployment types
         crate::routes::deployments::CreateDeploymentRequest,
         crate::routes::deployments::SetQuotaWarningOverridesRequest,

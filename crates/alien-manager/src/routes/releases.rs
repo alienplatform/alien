@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use alien_core::{Platform, SignedStatement, Stack};
 use alien_preflights::compile_time::endpoint_host_label_conflicts;
-use alien_release_trust::{Kind, ReleaseBody};
+use alien_signing::{Kind, ReleaseBody};
 
 use crate::error::ErrorData;
 use crate::traits::{CreateReleaseParams, ReleaseRecord};
@@ -571,14 +571,14 @@ mod tests {
         project: &str,
         stack: &Stack,
     ) -> HashMap<Platform, SignedStatement> {
-        let key = alien_release_trust::SoftwareKey::from_secret_bytes(&[5; 32]).unwrap();
+        let key = alien_signing::SoftwareKey::from_secret_bytes(&[5; 32]).unwrap();
         let body = alien_core::release_statement::release_body(
             Platform::Kubernetes,
             stack,
             &alien_core::release_statement::ReleaseOptions::default(),
         )
         .unwrap();
-        let envelope = alien_release_trust::Envelope {
+        let envelope = alien_signing::Envelope {
             kind: Kind::Release.as_str().to_string(),
             project: Some(project.to_string()),
             deployment: None,

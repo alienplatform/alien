@@ -11,8 +11,8 @@ mod common;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
-use alien_release_trust::kinds::{ConfigBody, SessionBody};
-use alien_release_trust::{
+use alien_signing::kinds::{ConfigBody, SessionBody};
+use alien_signing::{
     build_workload, Anchor, Kind, ReleaseBody, SignedStatement, Trust, WorkloadRequest,
 };
 use common::*;

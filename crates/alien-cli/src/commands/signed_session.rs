@@ -8,9 +8,9 @@
 //! neither read nor inject anything.
 
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_release_trust::kinds::{SessionBody, SessionTarget, MAX_SESSION_SECONDS};
-use alien_release_trust::session::{Challenge, Channel, Handshake, SessionKeys, Side};
-use alien_release_trust::{Kind, Role};
+use alien_signing::kinds::{SessionBody, SessionTarget, MAX_SESSION_SECONDS};
+use alien_signing::session::{Challenge, Channel, Handshake, SessionKeys, Side};
+use alien_signing::{Kind, Role};
 use futures::StreamExt;
 use serde::Deserialize;
 use tokio_tungstenite::tungstenite::Message;

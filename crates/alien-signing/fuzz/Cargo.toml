@@ -1,5 +1,5 @@
 [package]
-name = "alien-release-trust-fuzz"
+name = "alien-signing-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2021"
@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-alien-release-trust = { path = ".." }
+alien-signing = { path = ".." }
 base64 = "0.22"
 chrono = "0.4"
 serde = { version = "1", features = ["derive"] }

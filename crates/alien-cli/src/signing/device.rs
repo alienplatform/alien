@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_release_trust::{PublicKey, SignerKind, SoftwareKey};
+use alien_signing::{PublicKey, SignerKind, SoftwareKey};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};

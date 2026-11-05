@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "alien-release-trust"
+name = "alien-signing"
 version = "3.3.53"
 dependencies = [
  "alien-error",
@@ -38,10 +38,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "alien-release-trust-fuzz"
+name = "alien-signing-fuzz"
 version = "0.0.0"
 dependencies = [
- "alien-release-trust",
+ "alien-signing",
  "base64",
  "chrono",
  "hex",

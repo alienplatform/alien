@@ -2227,7 +2227,7 @@ async fn signed_stacks_are_stored_exactly_as_received() {
     // Opaque to the store: it must not parse, re-encode or normalize them.
     let signed = alien_core::SignedStatement {
         payload: " eyJ0eXBlIjoicmVsZWFzZS92MiJ9 ".to_string(),
-        signatures: vec![alien_release_trust::Signature {
+        signatures: vec![alien_signing::Signature {
             signer: "ci".to_string(),
             sig: "MEUCIQ==".to_string(),
         }],

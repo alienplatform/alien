@@ -1,5 +1,5 @@
 [package]
-name = "alien-release-trust"
+name = "alien-signing"
 version.workspace = true
 edition = "2021"
 description = "Signed statements, signer lists and anchors for deployments that run only what the developer signed"

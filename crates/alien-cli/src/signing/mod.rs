@@ -14,7 +14,7 @@ pub mod kms;
 use std::path::{Path, PathBuf};
 
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_release_trust::{
+use alien_signing::{
     Envelope, Kind, PublicKey, Role, Signature, SignedStatement, SignerChain, SoftwareKey,
 };
 use serde::{Deserialize, Serialize};

@@ -40,7 +40,7 @@ use alien_gate::{
     cloud_run, container_apps, plan, Action, ErrorData, FunctionStore, GateConfig, GateRequest,
     GateState, Result,
 };
-use alien_release_trust::Anchor;
+use alien_signing::Anchor;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use lambda_runtime::{service_fn, LambdaEvent};

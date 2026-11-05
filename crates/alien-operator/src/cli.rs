@@ -888,7 +888,7 @@ fn release_signing(anchor: Option<&str>) -> Result<Option<crate::protected::Rele
     let Some(anchor) = anchor.map(str::trim).filter(|anchor| !anchor.is_empty()) else {
         return Ok(None);
     };
-    let anchor = alien_release_trust::Anchor::parse(anchor.as_bytes()).context(
+    let anchor = alien_signing::Anchor::parse(anchor.as_bytes()).context(
         ErrorData::ConfigurationError {
             message: "OPERATOR_RELEASE_TRUST_ANCHOR is not a valid anchor".to_string(),
         },

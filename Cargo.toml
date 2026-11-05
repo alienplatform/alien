@@ -29,7 +29,7 @@ members = [
   "crates/alien-k8s-clients",
   "crates/alien-observer",
   "crates/alien-error",
-  "crates/alien-release-trust",
+  "crates/alien-signing",
   "crates/alien-gate",
   "crates/alien-ai-gateway",
   "crates/alien-error-derive",
@@ -114,7 +114,7 @@ alien-azure-models-5 = { path = "crates/alien-azure-models-5", version = "3.3.54
 alien-k8s-clients = { path = "crates/alien-k8s-clients", version = "3.3.54" }
 alien-error = { path = "crates/alien-error", version = "3.3.54", features = ["anyhow"] }
 alien-error-derive = { path = "crates/alien-error-derive", version = "3.3.54" }
-alien-release-trust = { path = "crates/alien-release-trust", version = "3.3.54" }
+alien-signing = { path = "crates/alien-signing", version = "3.3.54" }
 alien-permissions = { path = "crates/alien-permissions", version = "3.3.54" }
 alien-permission-types = { path = "crates/alien-permission-types", version = "3.3.54" }
 alien-operations-sdk = { path = "crates/alien-operations-sdk", version = "3.3.54" }

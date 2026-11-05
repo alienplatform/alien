@@ -5,7 +5,7 @@ use super::helpers::{assert_terraform_valid, render, try_render};
 use alien_core::{
     Kv, ReleaseTrustSettings, RemoteStackManagement, ResourceLifecycle, Stack, StackSettings,
 };
-use alien_release_trust::{Anchor, SessionApproval, SoftwareKey};
+use alien_signing::{Anchor, SessionApproval, SoftwareKey};
 use alien_terraform::{ModuleFiles, TerraformTarget};
 use hcl::eval::{Context, Evaluate};
 

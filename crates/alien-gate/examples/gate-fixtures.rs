@@ -7,11 +7,11 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use alien_release_trust::envelope::Envelope;
-use alien_release_trust::release::{
+use alien_signing::envelope::Envelope;
+use alien_signing::release::{
     Bounds, Configurable, FunctionSettings, ProvidedEnv, Runtime, WorkloadKind,
 };
-use alien_release_trust::{
+use alien_signing::{
     fingerprint, Anchor, Kind, ReleaseBody, Role, SessionApproval, SignedStatement, Signer,
     SignerKind, SignerListBody, SoftwareKey, Workload,
 };

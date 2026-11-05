@@ -21,7 +21,7 @@ serde_yaml = { workspace = true }
 tempfile = { workspace = true }
 
 [dev-dependencies]
-alien-release-trust = { workspace = true }
+alien-signing = { workspace = true }
 alien-permissions = { workspace = true }
 alien-preflights = { workspace = true }
 insta = { workspace = true, features = ["yaml"] }

@@ -212,7 +212,7 @@ fn release_signing_passes_the_anchor_to_the_operator() {
     );
     let base = "management:\n  token: ax_bootstrap\n  url: https://manager.example.test\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
     let fingerprint = format!("SHA256:{}", "a".repeat(64));
-    let components_key = alien_release_trust::SoftwareKey::from_secret_bytes(&[9; 32]).unwrap();
+    let components_key = alien_signing::SoftwareKey::from_secret_bytes(&[9; 32]).unwrap();
     let components = components_key.public_key().as_str().to_string();
 
     let unprotected = test_utils::helm_template(&chart.files, Some(base));
@@ -225,7 +225,7 @@ fn release_signing_passes_the_anchor_to_the_operator() {
     let protected = test_utils::helm_template(&chart.files, Some(&protected_values));
     protected.assert_ok("protected mode");
     let env = operator_env(&protected.stdout);
-    let anchor = alien_release_trust::Anchor::parse(
+    let anchor = alien_signing::Anchor::parse(
         env.get("OPERATOR_RELEASE_TRUST_ANCHOR")
             .expect("protected mode passes the anchor")
             .as_bytes(),

@@ -8,7 +8,7 @@ use alien_cloudformation::{CfTemplate, CloudFormationTarget};
 use alien_core::{
     Kv, ReleaseTrustSettings, RemoteStackManagement, ResourceLifecycle, Stack, StackSettings,
 };
-use alien_release_trust::{Anchor, SessionApproval, SoftwareKey};
+use alien_signing::{Anchor, SessionApproval, SoftwareKey};
 use serde_json::{json, Value};
 
 const SIGNING: &str = "SHA256:9f2c3b1a7d6e5f4c8b0a9d2e1f3c4b5a6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a";

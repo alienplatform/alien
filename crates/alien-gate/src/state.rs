@@ -6,7 +6,7 @@
 use alien_aws_clients::ssm::{GetParameterRequest, PutParameterRequest, SsmApi};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_error::{Context, IntoAlienError};
-use alien_release_trust::{Floors, SignedStatement};
+use alien_signing::{Floors, SignedStatement};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ErrorData, Result};

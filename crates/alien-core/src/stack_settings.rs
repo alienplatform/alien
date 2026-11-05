@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::{ErrorData, KubernetesCloudReference, KubernetesClusterOwnership, Platform, Result};
 use alien_error::AlienError;
-use alien_release_trust::Anchor;
+use alien_signing::Anchor;
 
 /// AWS management configuration extracted from stack settings
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1009,7 +1009,7 @@ pub struct ReleaseTrustSettings {
     /// Who approves exec and debug sessions.
     #[serde(default)]
     #[cfg_attr(feature = "openapi", schema(value_type = String))]
-    pub session_approval: alien_release_trust::SessionApproval,
+    pub session_approval: alien_signing::SessionApproval,
 }
 
 impl ReleaseTrustSettings {

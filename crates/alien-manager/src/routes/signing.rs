@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use alien_core::SignedStatement;
-use alien_release_trust::{Kind, Signature, Signer};
+use alien_signing::{Kind, Signature, Signer};
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},

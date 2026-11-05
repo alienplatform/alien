@@ -1380,7 +1380,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                 })?;
                 values.insert(key, value);
             }
-            let body = alien_release_trust::kinds::ConfigBody {
+            let body = alien_signing::kinds::ConfigBody {
                 env: values,
                 inputs: Default::default(),
             };
@@ -1452,7 +1452,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                     serde_json::from_str(&value).unwrap_or(serde_json::Value::String(value));
                 values.insert(key, value);
             }
-            let body = alien_release_trust::kinds::ConfigBody {
+            let body = alien_signing::kinds::ConfigBody {
                 env: Default::default(),
                 inputs: values,
             };
@@ -1573,7 +1573,7 @@ struct PlatformTarget {
 async fn sign_config(
     ctx: &ExecutionMode,
     target: &PlatformTarget,
-    body: alien_release_trust::kinds::ConfigBody,
+    body: alien_signing::kinds::ConfigBody,
     signer_args: &crate::signing::SignerArgs,
     json: bool,
 ) -> Result<()> {
@@ -1585,9 +1585,9 @@ async fn sign_config(
         crate::signing::verified_chain(&api, &home, &project, signer_args.fingerprint.as_deref())
             .await?;
     let signer = signer_args.open(&home).await?;
-    crate::signing::check_signer(&chain, &signer, alien_release_trust::Role::Release)?;
+    crate::signing::check_signer(&chain, &signer, alien_signing::Role::Release)?;
     let envelope = crate::signing::envelope(
-        alien_release_trust::Kind::Config,
+        alien_signing::Kind::Config,
         &project,
         Some(&deployment),
         &chain,

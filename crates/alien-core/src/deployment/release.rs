@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 /// A signed statement as it is stored and forwarded: the exact bytes that were
 /// signed and the signatures over them. Carriers pass it through unchanged;
-/// only enforcers verify it (see `alien-release-trust`).
-pub use alien_release_trust::SignedStatement;
+/// only enforcers verify it (see `alien-signing`).
+pub use alien_signing::SignedStatement;
 
 /// Release metadata
 ///
