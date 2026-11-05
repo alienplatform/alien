@@ -1002,6 +1002,23 @@ pub fn verifier_image_aws() -> Option<&'static str> {
     is_pinned_image(image).then_some(image)
 }
 
+/// The GCP verifier image protected setups run on Cloud Run, as
+/// `<registry host>/<repository>@sha256:<64 hex>`, if this build has one. The CLI release
+/// workflow writes it into `verifier-image-gcp.txt`.
+pub fn verifier_image_gcp() -> Option<&'static str> {
+    let image = include_str!("../verifier-image-gcp.txt").trim();
+    is_pinned_image(image).then_some(image)
+}
+
+/// The Azure verifier image protected setups run as a Container App, as
+/// `<registry host>/<repository>@sha256:<64 hex>` in a registry that serves it without
+/// credentials, if this build has one. The CLI release workflow writes it into
+/// `verifier-image-azure.txt`.
+pub fn verifier_image_azure() -> Option<&'static str> {
+    let image = include_str!("../verifier-image-azure.txt").trim();
+    is_pinned_image(image).then_some(image)
+}
+
 /// Whether `image` is `<repository>@sha256:<64 lowercase hex>` with a plain repository path.
 pub fn is_pinned_image(image: &str) -> bool {
     let Some((repository, hex)) = image.split_once("@sha256:") else {
@@ -1026,7 +1043,7 @@ pub fn operator_digest() -> Option<&'static str> {
 }
 
 /// Values a protected setup pins that come with the CLI build, not with the stack: the account
-/// whose machine images machines may boot and the verifier image. Renders that a release
+/// whose machine images machines may boot and the verifier image of each cloud. Renders that a release
 /// records use [`SetupPins::compiled_in`], so every build of one release renders the same
 /// bytes; tests pin their own.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1035,6 +1052,10 @@ pub struct SetupPins {
     pub aws_publisher: Option<String>,
     /// AWS verifier image, `<repository>@sha256:<64 hex>` in the publisher's registry.
     pub aws_verifier_image: Option<String>,
+    /// GCP verifier image, `<registry host>/<repository>@sha256:<64 hex>`.
+    pub gcp_verifier_image: Option<String>,
+    /// Azure verifier image, `<registry host>/<repository>@sha256:<64 hex>`.
+    pub azure_verifier_image: Option<String>,
     /// `sha256:<64 hex>` of the Operator image protected charts run.
     pub operator_digest: Option<String>,
 }
@@ -1045,6 +1066,8 @@ impl SetupPins {
         Self {
             aws_publisher: machine_image_publisher_aws().map(str::to_string),
             aws_verifier_image: verifier_image_aws().map(str::to_string),
+            gcp_verifier_image: verifier_image_gcp().map(str::to_string),
+            azure_verifier_image: verifier_image_azure().map(str::to_string),
             operator_digest: operator_digest().map(str::to_string),
         }
     }
