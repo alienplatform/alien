@@ -1,22 +1,15 @@
 {
   "id": "setup-locks",
-  "permissions": { "profiles": { "execution": { "*": [] } } },
   "resources": {
-    "app": {
+    "assets": {
       "config": {
-        "id": "app",
-        "type": "container",
-        "code": { "type": "image", "image": "public.ecr.aws/docker/library/busybox:latest" },
-        "cpu": { "min": "0.25", "desired": "0.25" },
-        "memory": { "min": "256Mi", "desired": "256Mi" },
-        "environment": {},
-        "links": [],
-        "permissions": "execution",
-        "ports": [],
-        "stateful": false
+        "corsAllowedOrigins": [], "id": "assets", "lifecycleRules": [],
+        "publicRead": false, "type": "storage", "versioning": false
       },
+      "lifecycle": "frozen",
       "dependencies": [],
-      "lifecycle": "live"
+      "remoteAccess": false
     }
-  }
+  },
+  "permissions": { "profiles": { "execution": {} }, "management": "auto" }
 }

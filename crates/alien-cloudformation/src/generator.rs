@@ -686,8 +686,9 @@ pub fn generate_cloudformation_template_with_profile(
     apply_network_iam_dependencies(stack, &emitted_resource_ids, &mut template);
     add_sandbox_gateway_replica_secret(&mut template, stack, options.target);
     add_signing_settings(&mut template, &stack_settings_value, options.target)?;
-    add_verifier_and_limits(&mut template, &stack_settings_value, &options.pins)?;
     consolidate_role_inline_policies(&mut template)?;
+    // After consolidation, so the count of managed policies on the management role is final.
+    add_verifier_and_limits(&mut template, &stack_settings_value, &options.pins)?;
 
     add_deployer_secret_outputs(
         &mut template,
@@ -1980,8 +1981,6 @@ fn add_signing_settings(
 const VERIFIER_FUNCTION_ID: &str = "SigningVerifier";
 const VERIFIER_ROLE_ID: &str = "SigningVerifierRole";
 const MANAGEMENT_LIMITS_ID: &str = "ManagementLimits";
-/// IAM attaches at most this many managed policies to a role by default.
-const MANAGED_POLICIES_PER_ROLE: usize = 10;
 
 /// Adds a protected install's verifier, `<prefix>-verifier`, and the limits on its management
 /// role, `<prefix>-management-limits`. The verifier alone changes functions and launches
@@ -2122,11 +2121,12 @@ fn add_verifier_and_limits(
                 })
         })
         .count();
-    if attached + 1 > MANAGED_POLICIES_PER_ROLE {
+    if attached + 1 > crate::inline_policy::IAM_MANAGED_POLICIES_PER_ROLE {
         return Err(AlienError::new(ErrorData::OperationNotSupported {
             operation: "render a protected AWS setup".to_string(),
             reason: format!(
-                "the management role already has {attached} managed policies; the limits would pass IAM's {MANAGED_POLICIES_PER_ROLE} per role"
+                "the management role already has {attached} managed policies; the limits would pass IAM's {} per role",
+                crate::inline_policy::IAM_MANAGED_POLICIES_PER_ROLE
             ),
         }));
     }

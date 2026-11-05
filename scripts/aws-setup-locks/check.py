@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Check on real AWS what a protected setup keeps from its management role.
 
-Renders `app/` as CloudFormation twice with the given `alien` (built with setup pins whose
-publisher is this account and whose verifier image is `<prefix>-verifier@<digest>`), once
-unprotected and once protected, deploys both into the default VPC, assumes each stack's
+Renders `app/` as CloudFormation twice with the `render_setup` example of alien-cli-common
+(`cargo build -p alien-cli-common --example render_setup`), pinned to this account as the
+publisher and to `<prefix>-verifier@<digest>` as the verifier image, once unprotected and once
+protected, deploys both into the default VPC, assumes each stack's
 management role, attaches a policy that allows everything a compromised control plane would
 try (as an extended profile or a customer policy could), and tries:
 
@@ -24,7 +25,8 @@ Everything is named with --prefix and tagged with --tag plus a tag unique to the
 deleted before exit; the run then lists what still carries the run tag or the prefix and fails if
 anything does. Launches are dry runs; the machine group has no capacity.
 
-  python3 scripts/aws-setup-locks/check.py --alien target/debug/alien --prefix locks-check \\
+  python3 scripts/aws-setup-locks/check.py --renderer target/debug/examples/render_setup \\
+      --prefix locks-check \\
       --tag purpose=locks-check --evidence /tmp/locks-evidence
 
 Requires boto3 and administrator credentials for a disposable test account in the environment.
@@ -166,18 +168,18 @@ class Run:
         self.cleanups.append(lambda: self.iam.delete_role_policy(RoleName=name, PolicyName="assume"))
         return arn
 
-    def render(self, directory, protected):
+    def render(self, directory, protected, verifier_image):
         settings = {"setupManagement": "automatic", "network": {"type": "use-default"}}
         if protected:
             settings["signing"] = {"fingerprint": FINGERPRINT, "channel": "production"}
         (directory / "settings.json").write_text(json.dumps(settings))
+        template = directory / "template.yaml"
         subprocess.run(
-            [str(self.args.alien), "render", "--format", "cloudformation", "--stack", str(HERE / "app"),
-             "--stack-settings", str(directory / "settings.json"), "--registration-mode", "outputs",
-             "--output", str(directory)],
+            [str(self.args.renderer), "cloudformation", str(HERE / "app" / "alien.json"),
+             str(directory / "settings.json"), str(template), self.account, verifier_image],
             check=True,
         )
-        return directory / "template.yaml"
+        return template
 
     def template_bucket(self):
         name = f"{self.args.prefix}-templates-{self.run_tag['Value']}"
@@ -431,7 +433,7 @@ class Run:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--alien", required=True, help="alien binary built with this account's setup pins")
+    parser.add_argument("--renderer", required=True, help="the render_setup example of alien-cli-common")
     parser.add_argument("--prefix", required=True, help="name prefix of everything created")
     parser.add_argument("--tag", required=True, help="KEY=VALUE tag on everything created")
     parser.add_argument("--region", default="us-east-1")
@@ -452,14 +454,16 @@ def main():
             for variant in ["unprotected", "protected"]:
                 directory = Path(scratch) / variant
                 directory.mkdir()
-                templates[variant] = run.render(directory, protected=variant == "protected")
+                templates[variant] = run.render(
+                    directory, variant == "protected", f"{args.prefix}-verifier@{digest}"
+                )
                 (run.evidence / f"{variant}-template.yaml").write_text(templates[variant].read_text())
                 lint = subprocess.run(["cfn-lint", "--format", "parseable", str(templates[variant])], capture_output=True, text=True)
                 errors = [line for line in lint.stdout.splitlines() if ":E" in line]
                 run.record(f"{variant}-cfn-lint", {"output": lint.stdout.splitlines()})
                 run.expect(variant, "cfn-lint-no-errors", "0", str(len(errors)), errors)
             if digest not in templates["protected"].read_text():
-                raise SystemExit(f"the protected template does not run {digest}; build alien with this run's pins")
+                raise SystemExit(f"the protected template does not run {digest}")
 
             unprotected, _ = run.variant("unprotected", templates["unprotected"], caller_role, subnet)
             run.without_signed_guard(unprotected)

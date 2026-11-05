@@ -108,7 +108,7 @@ pub async fn render_setup_templates(
     };
     let mut rendered = BTreeMap::new();
     for &name in SETUP_TEMPLATES {
-        let template = render_one(name, stack, &settings, &options)
+        let template = render_setup_template(name, stack, &settings, &options)
             .await
             .context(ErrorData::RenderFailed {
                 template: name.to_string(),
@@ -119,7 +119,10 @@ pub async fn render_setup_templates(
     Ok(rendered)
 }
 
-async fn render_one(
+/// Render the setup template `name` (from [`SETUP_TEMPLATES`]) for `stack` with `settings`.
+/// [`render_setup_templates`] calls this with signing on and nothing else set; other settings
+/// make templates a release does not record. `options.signing` is not used here.
+pub async fn render_setup_template(
     name: &str,
     source: &Stack,
     settings: &StackSettings,
