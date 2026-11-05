@@ -81,8 +81,13 @@ pub struct Place {
 pub struct SetupNetwork {
     /// Subnet ids.
     pub subnet_ids: Vec<String>,
-    /// Security group ids.
+    /// Security group ids (AWS), network tags (GCP) or network security
+    /// group ids (Azure).
     pub security_group_ids: Vec<String>,
+    /// What machines run as, where the cloud takes it at launch: the GCP
+    /// service account email, or the Azure user-assigned identity id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<String>,
 }
 
 impl Place {

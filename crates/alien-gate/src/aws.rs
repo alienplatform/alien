@@ -196,8 +196,8 @@ pub struct AwsBackend<L, M> {
     pub machines: M,
     /// The region the verifier runs in.
     pub region: String,
-    /// The account whose machine images this build boots, if any.
-    pub publisher: Option<String>,
+    /// The machine images this build boots.
+    pub images: crate::machines::ImagePins,
 }
 
 #[async_trait]
@@ -234,7 +234,7 @@ impl<L: LambdaApi, M: MachineApi> Backend for AwsBackend<L, M> {
                     reason: format!("image {} does not exist", request.machine_image),
                 })
             })?;
-        let plan = plan_roll(place, release, request, self.publisher.as_deref(), &image)?;
+        let plan = plan_roll(place, release, request, &self.images, &image)?;
         let rolled = roll(&self.machines, &plan).await?;
         serde_json::to_value(rolled).map_err(|error| {
             AlienError::new(ErrorData::ConfigurationInvalid {

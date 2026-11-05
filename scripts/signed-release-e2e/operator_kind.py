@@ -82,6 +82,7 @@ class Suite:
         self.sync_dir = self.evidence / "sync"
         self.binaries = Path(args.binaries).resolve()
         self.results = []
+        self.accounts = set()
 
     def kubectl(self, *args, check=True, input=None):
         return run(["kubectl", "--context", self.context, *args], check=check, input=input)
@@ -127,6 +128,9 @@ class Suite:
             response = json.loads(path.read_text())
             response["target"]["config"]["managerUrl"] = f"http://{self.manager}:8080"
             path.write_text(json.dumps(response))
+        # A newer config alone, as the manager sends it once the target is applied.
+        config_only = {"signedConfig": json.loads((self.sync_dir / "config-2.json").read_text())["signedConfig"]}
+        (self.sync_dir / "config-2-only.json").write_text(json.dumps(config_only))
         self.settings = (fixtures / "settings.json").read_text()
         self.ledger_seed = (fixtures / "ledger.json").read_text()
         self.serve("release-1")
@@ -225,11 +229,16 @@ class Suite:
         return self.kubectl(*args, check=False).stdout
 
     def app(self):
-        """The app container's image and env, from its Deployment."""
+        """The app container's image and env, from its Deployment. Creates
+        the service account a workload runs as, which the chart creates."""
         items = json.loads(self.kubectl("-n", NAMESPACE, "get", "deployments", "-o", "json").stdout)["items"]
         for item in items:
             if item["metadata"]["name"] == "operator":
                 continue
+            account = item["spec"]["template"]["spec"].get("serviceAccountName")
+            if account and account not in self.accounts:
+                self.apply({"apiVersion": "v1", "kind": "ServiceAccount", "metadata": {"name": account, "namespace": NAMESPACE}})
+                self.accounts.add(account)
             for container in item["spec"]["template"]["spec"]["containers"]:
                 env = {e["name"]: e.get("value") for e in container.get("env", [])}
                 if "MESSAGE" in env:
@@ -249,11 +258,22 @@ class Suite:
     # ── Cases ────────────────────────────────────────────────────────────
 
     def lands(self, name, serve, message, image, env=None, timeout=300):
+        since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         self.serve(serve)
         app = self.wait_for(f"{message} to run", lambda app: app["env"].get("MESSAGE") == message and app["image"] == IMAGES[image]
                             and all(app["env"].get(k) == v for k, v in (env or {}).items()), timeout=timeout)
         self.record(name, app is not None, json.dumps(app or self.app())[:500])
+        if app is not None:
+            # A target sent mid-update waits for it, so attacks start from rest.
+            self.settled(since)
         return app
+
+    def settled(self, since):
+        try:
+            wait_until("the Operator to finish its update", lambda: "status=Running stop_reason=Synced" in
+                       re.sub(r"\x1b\[[0-9;]*m", "", self.operator_logs(since)), timeout=180)
+        except TimeoutError:
+            log("the Operator did not report a finished update")
 
     def attack(self, name, serve, reason, took_effect, settle=40):
         """Protected: refused with `reason` (None: nothing to refuse), and the
@@ -296,9 +316,11 @@ class Suite:
             self.serve("release-2-config-1")
         restore = "release-2-config-1"
         attacks = [
-            ("unsigned-target", r"refused the target.*not signed", lambda app: message(app) == "evil"),
+            ("unsigned", r"refused the target.*not signed", lambda app: message(app) == "evil"),
             ("modified-stack-image", r"refused the target.*differs from the signed release", lambda app: (app or {}).get("image") == IMAGES["evil"]),
-            ("tampered-signed-bytes", r"refused the target.*SIGNATURE", lambda app: (app or {}).get("image") == IMAGES["evil"]),
+            # Same sequence as the accepted release, other bytes: refused as a replay
+            # before the signature is even checked.
+            ("tampered-signed-bytes", r"refused the target.*(SIGNATURE|already applied)", lambda app: (app or {}).get("image") == IMAGES["evil"]),
             ("older-signed-release", r"refused the target", lambda app: message(app) == "release-1"),
             ("dev-release", r"refused the target.*channel", lambda app: message(app) == "dev"),
             ("attacker-key", r"refused the target.*[Ss]ignature", lambda app: message(app) == "evil"),
@@ -322,7 +344,7 @@ class Suite:
         self.lands("ci-removed: the next release, signed by the laptop, lands", "ci-removed-next-release", "release-10", "a", {"LOG_LEVEL": "debug"})
         self.attack("ci-removed: a release CI signs after removal", "ci-removed-ci-release", r"refused the target", lambda app: message(app) == "release-11")
         self.serve("ci-removed-next-release")
-        self.lands("newer signed config applies without a release", "config-2", "release-10", "a", {"LOG_LEVEL": "warn"})
+        self.lands("newer signed config applies without a release", "config-2-only", "release-10", "a", {"LOG_LEVEL": "warn"})
         ledger = self.ledger()
         self.record("the ledger ConfigMap rose to release 10, config 2, list 2",
                     ledger.get("release", {}).get("sequence") == 10 and ledger.get("config", {}).get("sequence") == 2

@@ -122,7 +122,7 @@ impl Aws {
                     autoscaling: AutoScalingClient::new(http, credentials),
                 },
                 region,
-                publisher: alien_core::machine_image_publisher_aws().map(str::to_string),
+                images: alien_gate::machines::ImagePins::aws(),
             }),
             vpc,
             machine_network,
@@ -157,7 +157,7 @@ async fn gcp_verifier() -> Result<Verifier> {
             prefix: prefix.to_string(),
         }),
         store: Arc::new(GcpInstall(client.clone())),
-        backend: Arc::new(GcpBackend(client)),
+        backend: Arc::new(GcpBackend(client, alien_gate::machines::ImagePins::gcp())),
         vpc: None,
         machine_network: None,
     })
@@ -193,7 +193,10 @@ fn azure_verifier() -> Result<Verifier> {
             resource_group: group.clone(),
         }),
         store: Arc::new(AzureInstall(client.clone())),
-        backend: Arc::new(AzureBackend(client)),
+        backend: Arc::new(AzureBackend(
+            client,
+            alien_gate::machines::ImagePins::azure(),
+        )),
         vpc: None,
         machine_network: None,
     })

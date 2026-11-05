@@ -31,7 +31,7 @@ pub trait Backend: Send + Sync {
     async fn apply(&self, spec: &FunctionSpec) -> Result<()>;
     /// Read `spec` back.
     async fn check(&self, spec: &FunctionSpec) -> Result<()>;
-    /// Roll machines (AWS).
+    /// Roll a machine group to the signed release.
     async fn roll(
         &self,
         _place: &Place,

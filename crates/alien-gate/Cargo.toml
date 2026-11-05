@@ -19,6 +19,8 @@ async-trait = { workspace = true }
 axum = { workspace = true, features = ["http1", "json", "tokio"] }
 base64 = { workspace = true }
 chrono = { workspace = true }
+ed25519-compact = { workspace = true }
+rand = { workspace = true }
 lambda_runtime = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
