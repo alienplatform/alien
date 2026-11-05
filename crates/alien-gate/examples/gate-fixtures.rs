@@ -10,7 +10,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use alien_core::release_statement::{self, ReleaseOptions};
-use alien_core::{CapacityGroup, ComputeCluster, Platform, ResourceLifecycle, Stack};
+use alien_core::{
+    CapacityGroup, ComputeCluster, Platform, ResourceLifecycle, ServiceAccount, Stack,
+};
 use alien_signing::envelope::Envelope;
 use alien_signing::release::{
     Bounds, Configurable, FunctionSettings, Runtime, SecretBinding, WorkloadKind,
@@ -162,26 +164,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     // A machine cluster: one group booting the machine agent build `agent`.
     // One machine on AWS; one to two on GCP and Azure, so scale and
-    // removeMachines have room to move inside the signed bounds.
+    // removeMachines have room to move inside the signed bounds. The Azure
+    // stack also names service account `workers-sa`, whose setup-created
+    // identity the verifier attaches to the scale set.
     let agent = format!("sha256:{}", "a".repeat(64));
     let machines = |platform: Platform, instance_type: &str, max_size: u32| {
-        let stack = Stack::new("machines".to_string())
-            .add(
-                ComputeCluster::new("compute".to_string())
-                    .capacity_group(CapacityGroup {
-                        group_id: "general".to_string(),
-                        instance_type: Some(instance_type.to_string()),
-                        profile: None,
-                        min_size: 1,
-                        max_size,
-                        scale_policy: None,
-                        nested_virtualization: None,
-                        data_disk_gib_range: None,
-                    })
-                    .build(),
+        let stack = Stack::new("machines".to_string()).add(
+            ComputeCluster::new("compute".to_string())
+                .capacity_group(CapacityGroup {
+                    group_id: "general".to_string(),
+                    instance_type: Some(instance_type.to_string()),
+                    profile: None,
+                    min_size: 1,
+                    max_size,
+                    scale_policy: None,
+                    nested_virtualization: None,
+                    data_disk_gib_range: None,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        );
+        let stack = if platform == Platform::Azure {
+            stack.add(
+                ServiceAccount::new("workers-sa".to_string()).build(),
                 ResourceLifecycle::Frozen,
             )
-            .build();
+        } else {
+            stack
+        };
+        let stack = stack.build();
         release_statement::release_body(
             platform,
             &stack,
@@ -210,7 +221,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     signed(
         "release-72-machines-azure",
         72,
-        &machines(Platform::Azure, "Standard_B2s", 2)?,
+        &machines(Platform::Azure, "Standard_D2s_v3", 2)?,
         &ci,
     )?;
 
