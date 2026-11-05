@@ -192,6 +192,7 @@ postgresql_extensions = { version = "0.22", default-features = false, features =
 prost = "0.13"
 prost-types = "0.13"
 rand = "0.9"
+snow = { version = "0.10", default-features = false, features = ["default-resolver", "std", "use-chacha20poly1305", "use-sha2", "use-curve25519", "use-getrandom"] }
 rand_distr = "0.5"
 regex = "1"
 reqwest = { version = "0.12.23", default-features = false }

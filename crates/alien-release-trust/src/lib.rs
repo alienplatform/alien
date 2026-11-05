@@ -24,6 +24,7 @@ pub mod floors;
 pub mod key;
 pub mod kinds;
 pub mod release;
+pub mod session;
 pub mod signer_list;
 pub mod verify;
 
