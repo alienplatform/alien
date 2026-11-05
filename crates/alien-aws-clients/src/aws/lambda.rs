@@ -1099,6 +1099,9 @@ pub struct AddPermissionResponse {
 pub struct UpdateFunctionCodeRequest {
     pub image_uri: String,
     pub publish: Option<bool>,
+    /// Instruction set the image is built for, such as `arm64`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub architectures: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Builder)]
@@ -1125,6 +1128,16 @@ pub struct UpdateFunctionConfigurationRequest {
     /// values clear them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_config: Option<serde_json::Value>,
+    /// Key that encrypts the environment. An empty string returns to the
+    /// AWS managed key.
+    #[serde(rename = "KMSKeyArn", skip_serializing_if = "Option::is_none")]
+    pub kms_key_arn: Option<String>,
+    /// Where failed asynchronous invocations go. `{"TargetArn": ""}` removes it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dead_letter_config: Option<serde_json::Value>,
+    /// Log format and destination.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logging_config: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,13 +1,13 @@
 use alien_error::AlienErrorData;
 use serde::{Deserialize, Serialize};
 
-/// Why the gate refused or failed a call.
+/// Why the verifier refused or failed a call.
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
     /// The request or its statements don't allow the write.
     #[error(
-        code = "GATE_REFUSED",
+        code = "VERIFIER_REFUSED",
         message = "Refused: {reason}",
         retryable = "false",
         internal = "false",
@@ -18,9 +18,9 @@ pub enum ErrorData {
         reason: String,
     },
 
-    /// The function in the cloud doesn't match what the gate built.
+    /// What runs in the cloud doesn't match what the verifier built.
     #[error(
-        code = "GATE_READ_BACK_MISMATCH",
+        code = "VERIFIER_READ_BACK_MISMATCH",
         message = "Function '{function}' does not match its signed release: {reason}",
         retryable = "false",
         internal = "false",
@@ -33,10 +33,10 @@ pub enum ErrorData {
         reason: String,
     },
 
-    /// The gate's own configuration is missing or broken.
+    /// The verifier's own configuration is missing or broken.
     #[error(
-        code = "GATE_CONFIGURATION_INVALID",
-        message = "Gate configuration is invalid: {message}",
+        code = "VERIFIER_CONFIGURATION_INVALID",
+        message = "Verifier configuration is invalid: {message}",
         retryable = "false",
         internal = "false"
     )]
@@ -47,7 +47,7 @@ pub enum ErrorData {
 
     /// A cloud call failed.
     #[error(
-        code = "GATE_CLOUD_CALL_FAILED",
+        code = "VERIFIER_CLOUD_CALL_FAILED",
         message = "{operation} failed",
         retryable = "inherit",
         internal = "false"
@@ -58,5 +58,5 @@ pub enum ErrorData {
     },
 }
 
-/// Result type for the gate.
+/// Result type for the verifier.
 pub type Result<T> = alien_error::Result<T, ErrorData>;

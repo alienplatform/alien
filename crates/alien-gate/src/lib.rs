@@ -1,32 +1,54 @@
-//! The gate: the only principal that writes the serverless functions it owns.
+//! The verifier: on a protected install, the only principal that changes
+//! what runs.
 //!
-//! The control plane calls the gate with statements, never with a function
-//! spec. The gate verifies the statements against the anchor its setup
-//! wrote, builds the whole function from the signed workload, applies it and
-//! reads it back. Any field it doesn't know, in the request or in what the
-//! cloud returns, refuses the write, so a new cloud field can't slip through.
+//! The control plane calls it with signed statements, never with a spec. It
+//! finds the install's signing settings and ledger itself, derives the
+//! install id from its own identity, verifies the statements, builds each
+//! function from the signed workload, applies it and reads it back. Any
+//! field it doesn't know, in the request or in what the cloud returns,
+//! refuses the write, so a new cloud field can't slip through. On machine
+//! clusters it writes the launch template and bounds (AWS) or resizes within
+//! the signed bounds (GCP, Azure).
 //!
-//! - [`plan`]: from a request and the trusted state to the function to write;
-//! - [`function`]: apply a planned function and check it reads back the same;
-//! - [`cloud_run`] and [`gcp`]: the same for Cloud Run services on GCP;
-//! - [`container_apps`] and [`azure`]: the same for Container Apps on Azure;
-//! - [`state`]: the signer chain and floors the gate keeps between calls.
+//! - [`trust`]: finding the settings and ledger, and accepting statements;
+//! - [`plan`]: from an accepted release to the functions to write;
+//! - [`function`] and [`aws`]: Lambda and the install's SSM parameters;
+//! - [`cloud_run`] and [`gcp`]: Cloud Run and Parameter Manager on GCP;
+//! - [`container_apps`] and [`azure`]: Container Apps and Key Vault on Azure;
+//! - [`machines`]: launch templates, Auto Scaling groups and resizes;
+//! - [`verifier`]: one call, from request to writes.
 
 #![expect(
     clippy::result_large_err,
     reason = "Alien errors retain structured metadata and causal context"
 )]
 
+pub mod aws;
 pub mod azure;
 pub mod cloud_run;
 pub mod container_apps;
 pub mod error;
+#[cfg(test)]
+pub mod fixtures;
 pub mod function;
 pub mod gcp;
+pub mod machines;
 pub mod plan;
-pub mod state;
+pub mod trust;
+pub mod verifier;
 
 pub use error::{ErrorData, Result};
-pub use function::{apply, check_read_back, FunctionStore};
-pub use plan::{plan, Action, FunctionSpec, GateConfig, GateRequest, Planned};
-pub use state::GateState;
+pub use plan::{FunctionSpec, ReleaseRequest, Request, SECRETS_ENV};
+pub use verifier::{Backend, Verifier};
+
+/// The outer reason and what caused it, as one line.
+pub fn describe<T: alien_error::AlienErrorData + Clone + std::fmt::Debug + serde::Serialize>(
+    error: &alien_error::AlienError<T>,
+) -> String {
+    let causes = std::iter::successors(error.source.as_deref(), |cause| cause.source.as_deref())
+        .map(|cause| format!("{}: {}", cause.code, cause.message));
+    std::iter::once(error.message.clone())
+        .chain(causes)
+        .collect::<Vec<_>>()
+        .join(": ")
+}

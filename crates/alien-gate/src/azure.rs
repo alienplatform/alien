@@ -1,6 +1,7 @@
-//! The gate's Azure calls: Container Apps through Azure Resource Manager and
-//! secrets in Key Vault, with the token of the managed identity the gate
-//! runs as.
+//! The verifier's Azure calls: the signing settings tag on the install's
+//! resource group, the ledger and deployer inputs in the install's Key
+//! Vault, Container Apps and scale sets, with the token of the managed
+//! identity the verifier runs as.
 
 use std::collections::BTreeMap;
 
@@ -8,9 +9,14 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
+use alien_signing::settings::names;
+use alien_signing::{Ledger, Lookup, Workload};
+
 use crate::container_apps::AppStore;
 use crate::error::{ErrorData, Result};
-use crate::state::GateState;
+use crate::plan::{FunctionSpec, Place};
+use crate::trust::InstallStore;
+use crate::verifier::Backend;
 
 const ARM: &str = "https://management.azure.com";
 const CONTAINER_APPS_API: &str = "2024-03-01";
@@ -30,7 +36,7 @@ pub struct Azure {
     pub resource_group: String,
     /// `https://<vault>.vault.azure.net`.
     pub vault: String,
-    /// Client id of the gate's user-assigned identity, if it has several.
+    /// Client id of the verifier's user-assigned identity, if it has several.
     pub client_id: Option<String>,
 }
 
@@ -155,38 +161,162 @@ impl Azure {
         Ok(())
     }
 
-    /// The gate's state from `secret`; empty when it doesn't exist yet.
-    pub async fn load_state(&self, secret: &str) -> Result<GateState> {
-        match self.secret(secret).await? {
-            None => Ok(GateState::default()),
-            Some(text) => serde_json::from_str(&text).into_alien_error().context(
-                ErrorData::ConfigurationInvalid {
-                    message: format!("secret {secret} does not hold the gate's state"),
-                },
-            ),
+    /// The value of tag `name` on the install's resource group: absent when
+    /// the group has no such tag, denied when the verifier may not read it.
+    pub async fn resource_group_tag(&self, name: &str) -> Result<Lookup> {
+        let url = format!("{ARM}{}?api-version=2021-04-01", self.resource_group);
+        let response = self
+            .http
+            .get(&url)
+            .bearer_auth(self.token(ARM).await?)
+            .send()
+            .await
+            .into_alien_error()
+            .context(failed("resourceGroups get"))?;
+        let status = response.status();
+        if status == reqwest::StatusCode::FORBIDDEN {
+            return Ok(Lookup::Denied);
         }
+        if !status.is_success() {
+            return Err(AlienError::new(failed(format!(
+                "resourceGroups get: HTTP {status}"
+            ))));
+        }
+        let group: Value = response
+            .json()
+            .await
+            .into_alien_error()
+            .context(failed("resourceGroups get"))?;
+        Ok(match group["tags"][name].as_str() {
+            Some(value) => Lookup::Found(value.as_bytes().to_vec()),
+            None => Lookup::Absent,
+        })
     }
 
-    /// Store the gate's state in `secret`.
-    pub async fn store_state(&self, secret: &str, state: &GateState) -> Result<()> {
-        let value = serde_json::to_string(state).into_alien_error().context(
-            ErrorData::ConfigurationInvalid {
-                message: "the gate's state does not serialize".to_string(),
-            },
-        )?;
-        self.set_secret(secret, &value).await
+    /// Set the capacity of scale set `name`.
+    pub async fn resize_scale_set(&self, name: &str, size: u32) -> Result<()> {
+        let url = scale_set_url(&self.resource_group, name)?;
+        self.call(
+            reqwest::Method::PATCH,
+            url.as_str(),
+            ARM,
+            Some(&json!({"sku": {"capacity": size}})),
+            &format!("virtualMachineScaleSets update {name}"),
+        )
+        .await?
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::Refused {
+                reason: format!("scale set {name} does not exist"),
+            })
+        })?;
+        Ok(())
+    }
+}
+
+/// The ARM URL of scale set `name` in `resource_group`.
+fn scale_set_url(resource_group: &str, name: &str) -> Result<reqwest::Url> {
+    let mut url = crate::machines::segments_url(
+        &format!("{ARM}{resource_group}"),
+        &[
+            "providers",
+            "Microsoft.Compute",
+            "virtualMachineScaleSets",
+            name,
+        ],
+    )?;
+    url.query_pairs_mut()
+        .append_pair("api-version", "2024-07-01");
+    Ok(url)
+}
+
+/// The install's resource-group tag and Key Vault secrets.
+pub struct AzureInstall(pub Azure);
+
+#[async_trait]
+impl InstallStore for AzureInstall {
+    /// The resource group holds one settings tag. It belongs to `prefix`
+    /// only if it names `prefix`; otherwise this place is empty.
+    async fn settings(&self, prefix: &str) -> Result<Lookup> {
+        let lookup = self.0.resource_group_tag(names::AZURE_SETTINGS_TAG).await?;
+        if let Lookup::Found(bytes) = &lookup {
+            let named: Value =
+                serde_json::from_slice(bytes)
+                    .into_alien_error()
+                    .context(ErrorData::Refused {
+                        reason: format!(
+                            "the {} tag does not hold signing settings",
+                            names::AZURE_SETTINGS_TAG
+                        ),
+                    })?;
+            if named["prefix"].as_str() != Some(prefix) {
+                return Ok(Lookup::Absent);
+            }
+        }
+        Ok(lookup)
     }
 
-    /// Deployer inputs from `secret`, a JSON object of strings.
-    pub async fn deployer_inputs(&self, secret: &str) -> Result<BTreeMap<String, String>> {
-        match self.secret(secret).await? {
-            None => Ok(BTreeMap::new()),
-            Some(text) => serde_json::from_str(&text).into_alien_error().context(
-                ErrorData::ConfigurationInvalid {
-                    message: format!("secret {secret} is not a JSON object of strings"),
-                },
-            ),
+    async fn ledger(&self, _prefix: &str) -> Result<Lookup> {
+        Ok(match self.0.secret(names::AZURE_LEDGER_SECRET).await? {
+            Some(value) => Lookup::Found(value.into_bytes()),
+            None => Lookup::Absent,
+        })
+    }
+
+    async fn store_ledger(&self, _prefix: &str, ledger: &Ledger) -> Result<()> {
+        self.0
+            .set_secret(names::AZURE_LEDGER_SECRET, &ledger.to_json())
+            .await
+    }
+
+    async fn input(&self, _prefix: &str, name: &str) -> Result<Option<String>> {
+        self.0.secret(&format!("input-{name}")).await
+    }
+
+    fn settings_name(&self, _prefix: &str) -> String {
+        format!("resource group tag {}", names::AZURE_SETTINGS_TAG)
+    }
+
+    fn ledger_name(&self, _prefix: &str) -> String {
+        format!("Key Vault secret {}", names::AZURE_LEDGER_SECRET)
+    }
+}
+
+/// Container Apps and scale sets.
+pub struct AzureBackend(pub Azure);
+
+#[async_trait]
+impl Backend for AzureBackend {
+    async fn binding_reads(
+        &self,
+        _place: &Place,
+        _workload: &Workload,
+    ) -> Result<BTreeMap<String, String>> {
+        Ok(BTreeMap::new())
+    }
+
+    async fn apply(&self, spec: &FunctionSpec) -> Result<()> {
+        if spec.architecture != "x86_64" {
+            return Err(AlienError::new(ErrorData::Refused {
+                reason: "Container Apps runs only x86_64".to_string(),
+            }));
         }
+        crate::container_apps::apply(&self.0, spec)
+            .await
+            .map(|_| ())
+    }
+
+    async fn check(&self, spec: &FunctionSpec) -> Result<()> {
+        let back = AppStore::get(&self.0, &spec.name).await?;
+        crate::container_apps::check_read_back(spec, &back)
+    }
+
+    async fn resize(&self, target: &str, zone: Option<&str>, size: u32) -> Result<()> {
+        if let Some(zone) = zone {
+            return Err(AlienError::new(ErrorData::Refused {
+                reason: format!("a scale set is resized as a whole, not in zone '{zone}'"),
+            }));
+        }
+        self.0.resize_scale_set(target, size).await
     }
 }
 
@@ -223,5 +353,25 @@ impl AppStore for Azure {
             })
         })?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_scale_set_url_keeps_the_name_in_one_path_segment() {
+        let group = "/subscriptions/0000/resourceGroups/acme-prod";
+        assert_eq!(
+            scale_set_url(group, "acme-prod-compute-general").unwrap().as_str(),
+            "https://management.azure.com/subscriptions/0000/resourceGroups/acme-prod/providers/Microsoft.Compute/virtualMachineScaleSets/acme-prod-compute-general?api-version=2024-07-01"
+        );
+        // A name the verifier never builds still can't climb out of the
+        // scale set collection or add a query.
+        assert_eq!(
+            scale_set_url(group, "x/../../../other?api-version=1").unwrap().as_str(),
+            "https://management.azure.com/subscriptions/0000/resourceGroups/acme-prod/providers/Microsoft.Compute/virtualMachineScaleSets/x%2F..%2F..%2F..%2Fother%3Fapi-version=1?api-version=2024-07-01"
+        );
     }
 }
