@@ -367,4 +367,51 @@ mod tests {
         // Removing what isn't there is not an error.
         store.apply(&unset).await.unwrap();
     }
+
+    /// Writes, overwrites and removes an input in a real Secret Manager
+    /// project the way the verifier reads it (the latest version). Needs
+    /// GCP_ACCESS_TOKEN, GCP_PROJECT_ID, GCP_REGION and TEST_RESOURCE_PREFIX;
+    /// touches only `signed-<TEST_RESOURCE_PREFIX>-inputs-*` secrets.
+    #[tokio::test]
+    #[ignore = "needs GCP credentials"]
+    async fn gcp_inputs_round_trip_through_secret_manager() {
+        let prefix = format!(
+            "{}-inputs-{}",
+            std::env::var("TEST_RESOURCE_PREFIX").expect("set TEST_RESOURCE_PREFIX"),
+            std::process::id()
+        );
+        let store = Store::open(InputsPlatform::Gcp, &prefix).await.unwrap();
+        let Store::Gcp { secrets, .. } = &store else {
+            panic!("expected a GCP store")
+        };
+        let secret = format!("signed-{prefix}-input-databaseUrl");
+        for value in ["postgres://db/a=b", "postgres://db/c"] {
+            store
+                .apply(&Change::Set {
+                    name: "databaseUrl".to_string(),
+                    value: value.to_string(),
+                })
+                .await
+                .unwrap();
+            let latest = secrets
+                .access_secret_version(format!("{secret}/versions/latest"))
+                .await
+                .unwrap();
+            let data = latest.payload.unwrap().data.unwrap();
+            assert_eq!(
+                base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .unwrap(),
+                value.as_bytes()
+            );
+        }
+        let unset = Change::Unset {
+            name: "databaseUrl".to_string(),
+        };
+        store.apply(&unset).await.unwrap();
+        assert!(not_found(
+            &secrets.get_secret(secret.clone()).await.unwrap_err()
+        ));
+        store.apply(&unset).await.unwrap();
+    }
 }

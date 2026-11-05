@@ -1,7 +1,8 @@
 //! Rendering a protected stack's setup templates the way a signed release records them.
 
 use alien_cli_common::setup_templates::{
-    render_setup_template, render_setup_templates, SetupHostingOptions, SetupRenderOptions,
+    file_map_bytes, render_setup_template, render_setup_templates, SetupHostingOptions,
+    SetupRenderOptions,
 };
 use alien_cloudformation::CfRegistry;
 use alien_core::{SetupPins, Stack, StackSettings, StackSigning};
@@ -9,11 +10,11 @@ use alien_helm::HelmRegistry;
 use alien_signing::release::SETUP_TEMPLATES;
 use alien_terraform::TfRegistry;
 
-const FINGERPRINT: &str =
-    "SHA256:9f2c3b1a77d0e5c20b19a4f36c8e2d5100112233445566778899aabbccddeeff";
+const FINGERPRINT: &str = "SHA256:9f2c3b1a77d0e5c20b19a4f36c8e2d5100112233445566778899aabbccddeeff";
 
 const PUBLISHER: &str = "111122223333";
-const VERIFIER: &str = "verifier@sha256:5d41402abc4b2a76b9719d911017c592ae9e2b6d7c5c7f2a3f1e0d9c8b7a6f50";
+const VERIFIER: &str =
+    "verifier@sha256:5d41402abc4b2a76b9719d911017c592ae9e2b6d7c5c7f2a3f1e0d9c8b7a6f50";
 
 fn pins() -> SetupPins {
     SetupPins {
@@ -49,7 +50,9 @@ fn stack() -> Stack {
     .expect("fixture stack parses")
 }
 
-async fn render(fingerprint: &str) -> std::collections::BTreeMap<String, alien_cli_common::setup_templates::RenderedSetupTemplate> {
+async fn render(
+    fingerprint: &str,
+) -> std::collections::BTreeMap<String, alien_cli_common::setup_templates::RenderedSetupTemplate> {
     let signing = StackSigning {
         fingerprint: fingerprint.to_string(),
         channel: "production".to_string(),
@@ -86,14 +89,11 @@ async fn renders_every_setup_template_the_same_way_twice() {
     let first = render(FINGERPRINT).await;
     let second = render(FINGERPRINT).await;
 
-    assert_eq!(
-        first.keys().map(String::as_str).collect::<Vec<_>>(),
-        {
-            let mut names = SETUP_TEMPLATES.to_vec();
-            names.sort();
-            names
-        }
-    );
+    assert_eq!(first.keys().map(String::as_str).collect::<Vec<_>>(), {
+        let mut names = SETUP_TEMPLATES.to_vec();
+        names.sort();
+        names
+    });
     assert_eq!(first, second, "rendering is deterministic");
 
     let other = render(&FINGERPRINT.replace("9f2c", "0000")).await;
@@ -114,15 +114,27 @@ async fn cloudformation_pins_the_fingerprint_and_leaves_it_off_the_allow_list() 
         serde_yaml::from_slice(&cloudformation.bytes).expect("template is YAML");
 
     let parameter = &template["Parameters"]["SigningFingerprint"];
-    assert_eq!(parameter["AllowedValues"], serde_yaml::to_value([FINGERPRINT]).unwrap());
+    assert_eq!(
+        parameter["AllowedValues"],
+        serde_yaml::to_value([FINGERPRINT]).unwrap()
+    );
     assert_eq!(parameter["Default"].as_str(), Some(FINGERPRINT));
-    assert!(!cloudformation.allowed.iter().any(|name| name == "SigningFingerprint"));
-    assert!(cloudformation.allowed.iter().any(|name| name == "ManagingRoleArn"));
+    assert!(!cloudformation
+        .allowed
+        .iter()
+        .any(|name| name == "SigningFingerprint"));
+    assert!(cloudformation
+        .allowed
+        .iter()
+        .any(|name| name == "ManagingRoleArn"));
     let template_parameters = template["Parameters"].as_mapping().unwrap().len();
     assert_eq!(cloudformation.allowed.len(), template_parameters - 1);
 
     let terraform = &rendered["terraform-aws"];
-    assert!(!terraform.allowed.iter().any(|name| name == "signing_fingerprint"));
+    assert!(!terraform
+        .allowed
+        .iter()
+        .any(|name| name == "signing_fingerprint"));
     let helm = &rendered["helm"];
     assert!(!helm.allowed.iter().any(|name| name == "signing"));
 }
@@ -139,9 +151,15 @@ async fn cloudformation_runs_the_pinned_verifier_and_limits_management() {
         verifier["Code"]["ImageUri"]["Fn::Sub"].as_str(),
         Some(format!("{PUBLISHER}.dkr.ecr.${{AWS::Region}}.amazonaws.com/{VERIFIER}").as_str())
     );
-    assert_eq!(verifier["FunctionName"]["Fn::Sub"].as_str(), Some("${AWS::StackName}-verifier"));
+    assert_eq!(
+        verifier["FunctionName"]["Fn::Sub"].as_str(),
+        Some("${AWS::StackName}-verifier")
+    );
     let role = &resources["SigningVerifierRole"]["Properties"];
-    assert!(role.get("PermissionsBoundary").is_none(), "the verifier's role has no boundary");
+    assert!(
+        role.get("PermissionsBoundary").is_none(),
+        "the verifier's role has no boundary"
+    );
 
     let limits = &resources["ManagementLimits"]["Properties"];
     assert_eq!(
@@ -305,8 +323,11 @@ async fn hosting_options_cannot_weaken_the_protected_locks() {
             fingerprint: FINGERPRINT.to_string(),
             channel: "production".to_string(),
         };
-        let (cloudformation, terraform, helm) =
-            (CfRegistry::built_in(), TfRegistry::built_in(), HelmRegistry::built_in());
+        let (cloudformation, terraform, helm) = (
+            CfRegistry::built_in(),
+            TfRegistry::built_in(),
+            HelmRegistry::built_in(),
+        );
         let rendered = render_setup_templates(
             &stack(),
             SetupRenderOptions::builder()
@@ -359,4 +380,30 @@ fn setup_fingerprints_match_the_hosting_service() {
         }
     }
     assert_eq!(checked, 8);
+}
+
+/// Module and chart bytes are the sorted JSON object of their files, so anyone holding the
+/// files rebuilds the signed bytes: here they decode back to the rendered files, and
+/// reordering the files changes nothing.
+#[tokio::test]
+async fn file_map_bytes_rebuild_the_rendered_module() {
+    let rendered = render(&format!("SHA256:{}", "9f".repeat(32))).await;
+    let module = &rendered["terraform-gcp"];
+    let files: std::collections::BTreeMap<String, String> =
+        serde_json::from_slice(&module.bytes).expect("module bytes are a JSON file map");
+    assert!(
+        files.keys().any(|path| path.ends_with(".tf")),
+        "{:?}",
+        files.keys()
+    );
+    assert_eq!(file_map_bytes(&files), module.bytes);
+
+    let tricky = std::collections::BTreeMap::from([
+        ("z.tf".to_string(), "b = \"\\u00e9 é\"\n\ttab".to_string()),
+        ("a/b.tf".to_string(), "</script> & \u{2028}".to_string()),
+    ]);
+    assert_eq!(
+        file_map_bytes(&tricky),
+        serde_json::to_vec(&tricky).unwrap()
+    );
 }

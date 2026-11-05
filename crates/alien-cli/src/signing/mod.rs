@@ -602,6 +602,59 @@ fn file_failed(path: &Path, reason: &str) -> ErrorData {
     }
 }
 
+/// Check a statement the server returned: of `kind` for this project (and
+/// `install`, when given), not deny-listed, signed with the kind's role by
+/// the signer list version it names. The reason when it isn't.
+pub fn check_statement(
+    chain: &SignerChain,
+    opened: &alien_signing::Opened,
+    kind: Kind,
+    install: Option<&alien_signing::InstallId>,
+    now: DateTime<Utc>,
+) -> std::result::Result<(), String> {
+    if opened.kind != kind || opened.project != chain.project() {
+        return Err(format!(
+            "it is a {} statement of project {}",
+            opened.kind.as_str(),
+            opened.project
+        ));
+    }
+    if let Some(install) = install {
+        if opened.install.as_deref() != Some(install.to_string().as_str()) {
+            return Err(format!(
+                "it is for install {}, not {install}",
+                opened.install.as_deref().unwrap_or("none")
+            ));
+        }
+    }
+    if chain.current().denies(&opened.digest) {
+        return Err("it is deny-listed".to_string());
+    }
+    let version = opened.signer_list_version;
+    let first = chain
+        .digest_of(1)
+        .ok_or_else(|| "the signer list chain is empty".to_string())?;
+    if version == 0 || version > chain.current().version {
+        return Err(format!("it names signer list v{version}"));
+    }
+    let named = SignerChain::from_statements(
+        &alien_signing::fingerprint(first),
+        &chain.statements()[..version as usize],
+        now,
+    )
+    .map_err(|error| format!("signer list v{version} doesn't verify ({error})"))?;
+    named
+        .current()
+        .check_signatures(opened, kind.role())
+        .map_err(|error| {
+            format!(
+                "it isn't signed by a {} key ({error})",
+                kind.role().as_str()
+            )
+        })?;
+    Ok(())
+}
+
 /// The body of the newest config statement the server holds for `install`,
 /// checked here: a config statement of this project for this install, not
 /// deny-listed, signed with the release role by the list version it names.
@@ -629,39 +682,7 @@ pub fn latest_config(
     let Some(newest) = opened.pop() else {
         return Ok(None);
     };
-    if newest.kind != Kind::Config || newest.project != chain.project() {
-        return Err(refused(format!(
-            "it is a {} statement of project {}",
-            newest.kind.as_str(),
-            newest.project
-        )));
-    }
-    if newest.install.as_deref() != Some(install.to_string().as_str()) {
-        return Err(refused(format!(
-            "it is for install {}, not {install}",
-            newest.install.as_deref().unwrap_or("none")
-        )));
-    }
-    if chain.current().denies(&newest.digest) {
-        return Err(refused("it is deny-listed".to_string()));
-    }
-    let version = newest.signer_list_version;
-    let first = chain
-        .digest_of(1)
-        .ok_or_else(|| refused("the signer list chain is empty".to_string()))?;
-    if version == 0 || version > chain.current().version {
-        return Err(refused(format!("it names signer list v{version}")));
-    }
-    let named = SignerChain::from_statements(
-        &alien_signing::fingerprint(first),
-        &chain.statements()[..version as usize],
-        now,
-    )
-    .map_err(|error| refused(format!("signer list v{version} doesn't verify ({error})")))?;
-    named
-        .current()
-        .check_signatures(&newest, Role::Release)
-        .map_err(|error| refused(format!("it isn't signed by a release key ({error})")))?;
+    check_statement(chain, &newest, Kind::Config, Some(install), now).map_err(refused)?;
     newest
         .body()
         .map(Some)

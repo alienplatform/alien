@@ -58,6 +58,7 @@ pub(crate) enum Releases {
     Stack,
     /// JSON-encoded `HashMap<Platform, SignedStatement>`, stored as received.
     SignedStacks,
+    SetupTemplates,
     GitCommitSha,
     GitCommitRef,
     GitCommitMessage,
@@ -200,6 +201,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
             .col(ColumnDef::new(Releases::Id).text().primary_key())
             .col(ColumnDef::new(Releases::Stack).text().not_null())
             .col(ColumnDef::new(Releases::SignedStacks).text())
+            .col(ColumnDef::new(Releases::SetupTemplates).text())
             .col(ColumnDef::new(Releases::GitCommitSha).text())
             .col(ColumnDef::new(Releases::GitCommitRef).text())
             .col(ColumnDef::new(Releases::GitCommitMessage).text())
@@ -352,6 +354,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         "ALTER TABLE releases ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE releases ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE releases ADD COLUMN signed_stacks TEXT",
+        "ALTER TABLE releases ADD COLUMN setup_templates TEXT",
         "ALTER TABLE deployment_groups ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE deployment_groups ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
         // Command target columns. Nullable — legacy rows written

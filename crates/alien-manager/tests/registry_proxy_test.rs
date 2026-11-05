@@ -301,6 +301,7 @@ async fn setup_with_repository(repository: &str, configure_routing: bool) -> Tes
                 git_commit_ref: None,
                 git_commit_message: None,
                 signed_stacks: Default::default(),
+                setup_templates: Default::default(),
             },
         )
         .await
@@ -862,6 +863,7 @@ async fn test_proxy_push_then_pull() {
                 git_commit_ref: None,
                 git_commit_message: None,
                 signed_stacks: Default::default(),
+                setup_templates: Default::default(),
             },
         )
         .await

@@ -3,7 +3,7 @@
 //! Each test gets a fresh in-memory SQLite database with migrations run,
 //! exercising store operations through the trait interfaces.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use alien_core::{DeploymentModel, DeploymentState, DeploymentStatus, Platform, StackSettings};
@@ -666,6 +666,7 @@ async fn running_reconcile_cannot_erase_a_new_release_request() {
                         git_commit_ref: None,
                         git_commit_message: None,
                         signed_stacks: Default::default(),
+                        setup_templates: Default::default(),
                     },
                 )
                 .await
@@ -753,6 +754,7 @@ async fn new_release_reaches_failed_local_startup_without_changing_its_retry_pha
                         git_commit_ref: None,
                         git_commit_message: None,
                         signed_stacks: Default::default(),
+                        setup_templates: Default::default(),
                     },
                 )
                 .await
@@ -2181,6 +2183,7 @@ async fn create_and_get_release() {
                 git_commit_ref: Some("refs/heads/main".to_string()),
                 git_commit_message: Some("Initial commit".to_string()),
                 signed_stacks: Default::default(),
+                setup_templates: Default::default(),
             },
         )
         .await
@@ -2232,6 +2235,10 @@ async fn signed_stacks_are_stored_exactly_as_received() {
             sig: "MEUCIQ==".to_string(),
         }],
     };
+    let setup_templates = HashMap::from([(
+        Platform::Kubernetes,
+        BTreeMap::from([("helm".to_string(), " Y2hhcnQ= ".to_string())]),
+    )]);
 
     let created = store
         .create_release(
@@ -2243,6 +2250,7 @@ async fn signed_stacks_are_stored_exactly_as_received() {
                     alien_core::Stack::new("my-stack".to_string()).build(),
                 )]),
                 signed_stacks: HashMap::from([(Platform::Kubernetes, signed.clone())]),
+                setup_templates: setup_templates.clone(),
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: None,
@@ -2260,6 +2268,7 @@ async fn signed_stacks_are_stored_exactly_as_received() {
                     alien_core::Stack::new("my-stack".to_string()).build(),
                 )]),
                 signed_stacks: HashMap::new(),
+                setup_templates: Default::default(),
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: None,
@@ -2274,12 +2283,14 @@ async fn signed_stacks_are_stored_exactly_as_received() {
         .unwrap()
         .unwrap();
     assert_eq!(fetched.signed_stacks[&Platform::Kubernetes], signed);
+    assert_eq!(fetched.setup_templates, setup_templates);
     let fetched = store
         .get_release(&subject, &unsigned.id)
         .await
         .unwrap()
         .unwrap();
     assert!(fetched.signed_stacks.is_empty());
+    assert!(fetched.setup_templates.is_empty());
 }
 
 #[tokio::test]
@@ -2311,6 +2322,7 @@ async fn create_and_get_release_multi_platform() {
                 git_commit_ref: None,
                 git_commit_message: None,
                 signed_stacks: Default::default(),
+                setup_templates: Default::default(),
             },
         )
         .await
@@ -2357,6 +2369,7 @@ async fn latest_release() {
                 git_commit_ref: None,
                 git_commit_message: Some("first".to_string()),
                 signed_stacks: Default::default(),
+                setup_templates: Default::default(),
             },
         )
         .await
@@ -2378,6 +2391,7 @@ async fn latest_release() {
                 git_commit_ref: None,
                 git_commit_message: Some("second".to_string()),
                 signed_stacks: Default::default(),
+                setup_templates: Default::default(),
             },
         )
         .await
@@ -2476,6 +2490,7 @@ async fn registry_with_release(
                 git_commit_ref: None,
                 git_commit_message: None,
                 signed_stacks: Default::default(),
+                setup_templates: Default::default(),
             },
         )
         .await

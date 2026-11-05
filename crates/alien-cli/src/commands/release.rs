@@ -738,9 +738,15 @@ async fn protected_following(ctx: &ExecutionMode, project_id: &str, channel: &st
 /// that release is signed.
 async fn previous_components(
     ctx: &ExecutionMode,
+    chain: &alien_signing::SignerChain,
     project_id: &str,
     channel: &str,
-) -> Result<Option<(String, BTreeMap<String, String>)>> {
+) -> Result<
+    Option<(
+        String,
+        std::result::Result<BTreeMap<String, String>, String>,
+    )>,
+> {
     let query = signing::api::project_query(ctx, project_id).await?;
     let channels = signing::api::get_json(ctx, "/v1/release-channels", &query).await?;
     let Some(release_id) = channels["items"]
@@ -767,14 +773,27 @@ async fn previous_components(
             message: format!("Release {release_id} carries a statement that doesn't parse"),
             url: None,
         })?;
-    let body: alien_signing::ReleaseBody = statement
+    // The control plane's word until it checks out against the device list.
+    let checked = statement
         .open()
-        .and_then(|opened| opened.body())
-        .context(ErrorData::ApiRequestFailed {
-            message: format!("Release {release_id} carries a statement that doesn't read"),
-            url: None,
-        })?;
-    Ok(Some((release_id, body.components)))
+        .map_err(|error| format!("it doesn't open ({error})"))
+        .and_then(|opened| {
+            signing::check_statement(
+                chain,
+                &opened,
+                alien_signing::Kind::Release,
+                None,
+                chrono::Utc::now(),
+            )?;
+            let body: alien_signing::ReleaseBody = opened
+                .body()
+                .map_err(|error| format!("its body doesn't parse ({error})"))?;
+            if body.channel != channel {
+                return Err(format!("it is signed for channel {}", body.channel));
+            }
+            Ok(body.components)
+        });
+    Ok(Some((release_id, checked)))
 }
 
 /// Core release logic for console mode.
@@ -929,8 +948,10 @@ async fn release_task_core(
 
     let signed = sign_release(ctx, &project_link.project_id, &mut signing, pushed_stacks).await?;
     let mut signed_stacks = HashMap::new();
-    for (platform, statement) in &signed {
-        signed_stacks.insert(platform.as_str().to_string(), manager_statement(statement));
+    let mut setup_templates = HashMap::new();
+    for (platform, statement, setup) in signed {
+        signed_stacks.insert(platform.as_str().to_string(), manager_statement(&statement));
+        setup_templates.insert(platform.as_str().to_string(), setup);
     }
 
     // Create release
@@ -949,6 +970,7 @@ async fn release_task_core(
             &project_link.project_id,
             stack_by_platform,
             signed_stacks,
+            setup_templates,
             sdk_git_metadata,
             &args.channel,
         )
@@ -964,6 +986,7 @@ async fn release_task_core(
                 workspace_query.as_deref(),
                 stack_by_platform,
                 signed_stacks,
+                setup_templates,
                 git_metadata,
                 (!args.no_promote).then_some(args.channel.as_str()),
                 args.title.as_deref(),
@@ -999,16 +1022,21 @@ async fn release_task_core(
     })
 }
 
+/// Setup template bytes (base64) by template name, as the release uploads them.
+type SetupUpload = HashMap<String, String>;
+
 /// Sign every platform's pushed stack, or say in one line why the release
 /// goes out unsigned. Enforcer builds that changed since the release now on
-/// the channel are listed before the signature is asked for.
+/// the channel are listed before the signature is asked for. Each statement
+/// comes with the setup template bytes whose digests it signs.
 async fn sign_release(
     ctx: &ExecutionMode,
     project_id: &str,
     signing: &mut SigningState,
     pushed: Vec<(Platform, Stack)>,
-) -> Result<Vec<(Platform, alien_core::SignedStatement)>> {
+) -> Result<Vec<(Platform, alien_core::SignedStatement, SetupUpload)>> {
     let mut bodies = Vec::new();
+    let mut uploads: HashMap<Platform, SetupUpload> = HashMap::new();
     if let Some(signer) = signing.signing() {
         let fingerprint = signer
             .chain
@@ -1050,8 +1078,15 @@ async fn sign_release(
             )
             .await
             {
-                Ok(setup) => {
-                    signing::release::body(platform, &stack, &signing.channel, &components, setup)
+                Ok(rendered) => {
+                    uploads.insert(platform, signing::release::setup_upload(&rendered));
+                    signing::release::body(
+                        platform,
+                        &stack,
+                        &signing.channel,
+                        &components,
+                        signing::release::signed_setup(&rendered),
+                    )
                 }
                 Err(error) => Err(error),
             };
@@ -1066,14 +1101,22 @@ async fn sign_release(
         if let Some(reason) = refused {
             signing.cannot_sign(reason)?;
         } else if let Some((release, previous)) =
-            previous_components(ctx, project_id, &signing.channel).await?
+            previous_components(ctx, &signer.chain, project_id, &signing.channel).await?
         {
-            let changes = signing::release::component_changes(&previous, &components);
-            if !changes.is_empty() {
-                signing.say(&format!("  Enforcer builds change since {release}:"));
-                for change in changes {
-                    signing.say(&format!("    {change}"));
+            match previous {
+                Ok(previous) => {
+                    let changes = signing::release::component_changes(&previous, &components);
+                    if !changes.is_empty() {
+                        signing.say(&format!("  Enforcer builds change since {release}:"));
+                        for change in changes {
+                            signing.say(&format!("    {change}"));
+                        }
+                    }
                 }
+                Err(reason) => signing.say(&format!(
+                    "  ! {release}, now on {}, doesn't check out against the device list: {reason}. Enforcer build changes since it aren't shown.",
+                    signing.channel
+                )),
             }
         }
     }
@@ -1115,7 +1158,17 @@ async fn sign_release(
     if signer.signer.gesture().is_some() {
         signing.say("✓");
     }
-    Ok(statements)
+    statements
+        .into_iter()
+        .map(|(platform, statement)| {
+            let setup = uploads.remove(&platform).ok_or_else(|| {
+                AlienError::new(ErrorData::SigningFailed {
+                    message: format!("The {} setup templates went missing", platform.as_str()),
+                })
+            })?;
+            Ok((platform, statement, setup))
+        })
+        .collect()
 }
 
 /// The manager SDK's copy of a signed statement. Both are the same two
@@ -1174,6 +1227,7 @@ async fn create_manager_release(
     project_id: &str,
     stack: ManagerStackByPlatform,
     signed_stacks: HashMap<String, alien_manager_api::types::SignedStatement>,
+    setup_templates: HashMap<String, SetupUpload>,
     git_metadata: Option<alien_manager_api::types::GitMetadata>,
     channel: &str,
 ) -> Result<String> {
@@ -1188,6 +1242,7 @@ async fn create_manager_release(
             project_id: project_id.to_string(),
             channel: Some(channel.to_string()),
             signed_stacks,
+            setup_templates,
         })
         .send()
         .await
@@ -1218,6 +1273,7 @@ async fn create_platform_release(
     workspace: Option<&str>,
     stack: ManagerStackByPlatform,
     signed_stacks: HashMap<String, alien_manager_api::types::SignedStatement>,
+    setup_templates: HashMap<String, SetupUpload>,
     git_metadata: Option<GitMetadata>,
     channel: Option<&str>,
     title: Option<&str>,
@@ -1283,9 +1339,10 @@ async fn create_platform_release(
         )?;
         response.id.to_string()
     } else {
-        // The signed statements travel byte for byte beside the stack. The
-        // generated client doesn't carry them yet, so the request is sent
-        // as JSON with the same body plus `signedStacks`.
+        // The signed statements and the setup template bytes they digest
+        // travel byte for byte beside the stack. The generated client
+        // doesn't carry them, so the request is sent as JSON with the same
+        // body plus `signedStacks` and `setupTemplates`.
         let mut json = serde_json::to_value(&body).into_alien_error().context(
             ErrorData::ApiRequestFailed {
                 message: "Failed to serialize the release request".to_string(),
@@ -1296,6 +1353,12 @@ async fn create_platform_release(
             .into_alien_error()
             .context(ErrorData::ApiRequestFailed {
                 message: "Failed to carry the signed statements".to_string(),
+                url: None,
+            })?;
+        json["setupTemplates"] = serde_json::to_value(&setup_templates)
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to carry the setup templates".to_string(),
                 url: None,
             })?;
         let url = format!("{}/v1/releases", http.base_url.trim_end_matches('/'));
@@ -1324,7 +1387,10 @@ async fn create_platform_release(
                 })?;
         if !status.is_success() {
             return Err(AlienError::new(ErrorData::ApiRequestFailed {
-                message: format!("Failed to create release on platform API: HTTP {status}: {text}"),
+                message: format!(
+                    "The platform refused the signed release (HTTP {status}): {}",
+                    refusal_reason(&text)
+                ),
                 url: Some(url),
             }));
         }
@@ -1346,6 +1412,15 @@ async fn create_platform_release(
     info!("   ID: {}", release_id);
 
     Ok(release_id)
+}
+
+/// The reason in an API error body (its `message`), as the API wrote it;
+/// the whole body when it has none.
+fn refusal_reason(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|error| error["message"].as_str().map(str::to_string))
+        .unwrap_or_else(|| body.to_string())
 }
 
 /// Result of a stackless declare.
@@ -4697,6 +4772,11 @@ mod tests {
                         "updatedAt": "2026-01-01T00:00:00Z",
                     }] }))
                 }),
+            )
+            // No protected deployment follows the channel, so the release may go unsigned.
+            .route(
+                "/v1/deployments",
+                get(|| async { Json(serde_json::json!({ "items": [] })) }),
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());

@@ -7,6 +7,8 @@ pub mod register;
 pub mod status;
 pub mod up;
 pub mod verify;
+pub mod verify_helm;
+pub mod verify_terraform;
 
 pub use down::{down_command, DownArgs};
 pub use inputs::{inputs_command, InputsArgs};
