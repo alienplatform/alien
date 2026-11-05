@@ -11,15 +11,18 @@ use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::path::Path;
 
+use alien_cli_common::setup_templates::{
+    render_setup_template, SetupHostingOptions, SetupRenderOptions,
+};
+use alien_cloudformation::RegistrationMode;
 use alien_core::release_statement::{release_body, signed_stack, ReleaseOptions};
-use alien_core::{Platform, Stack, StackSettings, StackSigning};
+use alien_core::{Platform, SetupPins, Stack, StackSettings, StackSigning};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_signing::{
     display_fingerprint, fingerprint, Envelope, Kind, RecoveryCode, ReleaseBody, Role,
     SetupTemplate, SignedStatement, Signer, SignerChain, SignerKind, SignerListBody,
 };
 use chrono::Utc;
-use sha2::{Digest, Sha256};
 
 use super::api::{ListPublished, SigningApi};
 use super::device::Backend;
@@ -411,52 +414,90 @@ fn parse_enforcer_digests(text: &str) -> Result<BTreeMap<String, String>> {
     Ok(table)
 }
 
-/// The setup templates a protected install of `platform` uses, rendered for
-/// `signing`, with the digest of each and the parameters a customer may
-/// choose. This is the one place the release renders setup.
+/// Setup templates of `platform`, from [`SETUP_TEMPLATES`](alien_signing::release::SETUP_TEMPLATES).
+fn platform_templates(platform: Platform) -> &'static [&'static str] {
+    match platform {
+        Platform::Aws => &["cloudformation", "terraform-aws"],
+        Platform::Gcp => &["terraform-gcp"],
+        Platform::Azure => &["terraform-azure"],
+        Platform::Kubernetes => &["helm"],
+        // Machines join with `join`, and local and test stacks have no setup.
+        Platform::Machines | Platform::Local | Platform::Test => &[],
+    }
+}
+
+/// The setup templates a protected install of `platform` uses, with the
+/// digest of each and the parameters a customer may choose. They are
+/// rendered with the same function and inputs the control plane renders
+/// them with (`hosting` comes from it, `pins` are this build's own), so
+/// installs get the bytes signed here. This is the one place the release
+/// renders setup.
 pub async fn setup_templates(
     stack: &Stack,
     platform: Platform,
     signing: &StackSigning,
+    hosting: &SetupHostingOptions,
+    pins: SetupPins,
 ) -> Result<BTreeMap<String, SetupTemplate>> {
     let settings = StackSettings {
         signing: Some(signing.clone()),
         ..StackSettings::default()
     };
-    let rendered = crate::commands::render::setup_files(stack, platform, &settings).await?;
-    Ok(rendered
-        .into_iter()
-        .map(|(name, files, allowed)| {
-            (
-                name,
-                SetupTemplate {
-                    sha256: files_digest(&files),
-                    allowed,
-                },
-            )
-        })
-        .collect())
+    let cloudformation = crate::commands::render::cloudformation_registry();
+    let terraform = crate::commands::render::terraform_registry();
+    let helm = alien_helm::HelmRegistry::built_in();
+    let options = SetupRenderOptions::builder()
+        .signing(signing)
+        .cloudformation_registry(&cloudformation)
+        .terraform_registry(&terraform)
+        .helm_registry(&helm)
+        .hosting(hosting.clone())
+        .pins(pins)
+        .build();
+    let mut templates = BTreeMap::new();
+    for &name in platform_templates(platform) {
+        let rendered = render_setup_template(name, stack, &settings, &options)
+            .await
+            .context(ErrorData::SigningFailed {
+                message: format!("Could not render the {name} setup template"),
+            })?;
+        templates.insert(name.to_string(), rendered.setup_template());
+    }
+    Ok(templates)
 }
 
-/// `sha256:<hex>` of a rendered template. A single file is hashed as its
-/// bytes, so a customer can hash what CloudFormation returns; several files
-/// are hashed as their sorted paths and contents, each length-prefixed.
-pub fn files_digest(files: &[(String, String)]) -> String {
-    let mut hasher = Sha256::new();
-    match files {
-        [(_, contents)] => hasher.update(contents.as_bytes()),
-        _ => {
-            let mut sorted: Vec<&(String, String)> = files.iter().collect();
-            sorted.sort_by(|a, b| a.0.cmp(&b.0));
-            for (path, contents) in sorted {
-                for part in [path.as_bytes(), contents.as_bytes()] {
-                    hasher.update((part.len() as u64).to_be_bytes());
-                    hasher.update(part);
-                }
-            }
+/// One line saying what setup is rendered with, for the signing summary.
+pub fn hosting_summary(hosting: &SetupHostingOptions) -> String {
+    let registration = match &hosting.registration {
+        RegistrationMode::CustomResource { .. }
+        | RegistrationMode::RegionalCustomResource { .. } => "custom resource",
+        RegistrationMode::OutputsFallback => "stack outputs",
+        RegistrationMode::Both { .. } | RegistrationMode::RegionalBoth { .. } => {
+            "custom resource and stack outputs"
         }
-    }
-    format!("sha256:{}", hex::encode(hasher.finalize()))
+    };
+    let management = if hosting
+        .management_trust
+        .allowed_managing_role_arns
+        .is_empty()
+    {
+        "any managing role".to_string()
+    } else {
+        hosting
+            .management_trust
+            .allowed_managing_role_arns
+            .join(", ")
+    };
+    format!(
+        "Setup as the control plane hosts it · registers through {registration} · managed by {management}{} · setup {} v{}",
+        if hosting.management_trust.require_external_id {
+            " with an external id"
+        } else {
+            ""
+        },
+        hosting.setup_fingerprint,
+        hosting.setup_fingerprint_version
+    )
 }
 
 /// The `release/v2` body for one platform's pushed stack.
@@ -571,6 +612,120 @@ mod tests {
     use super::*;
 
     const A: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    fn storage_stack() -> Stack {
+        serde_json::from_value(serde_json::json!({
+            "id": "minimal",
+            "resources": {
+                "assets": {
+                    "config": {
+                        "corsAllowedOrigins": [], "id": "assets", "lifecycleRules": [],
+                        "publicRead": false, "type": "storage", "versioning": false
+                    },
+                    "lifecycle": "frozen", "dependencies": [], "remoteAccess": false
+                }
+            },
+            "permissions": { "profiles": { "execution": {} }, "management": "auto" }
+        }))
+        .unwrap()
+    }
+
+    fn pins() -> SetupPins {
+        SetupPins {
+            aws_publisher: Some("111122223333".to_string()),
+            aws_verifier_image: Some(format!("verifier@sha256:{}", "5d".repeat(32))),
+            operator_digest: Some(format!("sha256:{}", "0b".repeat(32))),
+        }
+    }
+
+    fn hosting(fingerprint: &str) -> SetupHostingOptions {
+        serde_json::from_value(serde_json::json!({
+            "registration": { "mode": "outputsFallback" },
+            "managementTrust": {
+                "requireExternalId": true,
+                "allowedManagingRoleArns": ["arn:aws:iam::999988887777:role/manager"]
+            },
+            "setupFingerprint": fingerprint,
+            "setupFingerprintVersion": 1
+        }))
+        .unwrap()
+    }
+
+    /// What a release signs for each platform is the digest of the bytes the
+    /// shared renderer gives the control plane for the same stack, signing
+    /// settings and hosting.
+    #[tokio::test]
+    async fn release_digests_are_of_the_templates_the_control_plane_renders() {
+        let stack = storage_stack();
+        let signing = StackSigning {
+            fingerprint: format!("SHA256:{}", "9f".repeat(32)),
+            channel: "production".to_string(),
+        };
+        let cloudformation = crate::commands::render::cloudformation_registry();
+        let terraform = crate::commands::render::terraform_registry();
+        let helm = alien_helm::HelmRegistry::built_in();
+        let options = SetupRenderOptions::builder()
+            .signing(&signing)
+            .cloudformation_registry(&cloudformation)
+            .terraform_registry(&terraform)
+            .helm_registry(&helm)
+            .hosting(hosting("sha256:setup"))
+            .pins(pins())
+            .build();
+        let settings = StackSettings {
+            signing: Some(signing.clone()),
+            ..StackSettings::default()
+        };
+        // `render_setup_templates` renders these with signing on and nothing
+        // else set. Helm is left out until the chart renders signed with the
+        // release's Operator digest; for now both sides refuse it.
+        let mut rendered = BTreeMap::new();
+        for name in [
+            "cloudformation",
+            "terraform-aws",
+            "terraform-gcp",
+            "terraform-azure",
+        ] {
+            let template = render_setup_template(name, &stack, &settings, &options)
+                .await
+                .unwrap();
+            rendered.insert(name.to_string(), template.setup_template());
+        }
+        let mut signed = BTreeMap::new();
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            signed.extend(
+                setup_templates(&stack, platform, &signing, &hosting("sha256:setup"), pins())
+                    .await
+                    .unwrap(),
+            );
+        }
+        assert_eq!(signed, rendered);
+        setup_templates(
+            &stack,
+            Platform::Kubernetes,
+            &signing,
+            &hosting("sha256:setup"),
+            pins(),
+        )
+        .await
+        .expect_err("the helm setup template doesn't render signed yet");
+
+        // Hosting reaches the bytes: another setup fingerprint is another template.
+        let other = setup_templates(
+            &stack,
+            Platform::Aws,
+            &signing,
+            &hosting("sha256:other"),
+            pins(),
+        )
+        .await
+        .unwrap();
+        assert_ne!(
+            other["cloudformation"].sha256,
+            signed["cloudformation"].sha256
+        );
+    }
+
     const B: &str = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     #[test]
@@ -602,32 +757,5 @@ mod tests {
             ]
         );
         assert!(component_changes(&next, &next).is_empty());
-    }
-
-    #[test]
-    fn one_template_file_is_hashed_as_its_bytes() {
-        let digest = files_digest(&[("template.yaml".to_string(), "Resources: {}\n".to_string())]);
-        assert_eq!(
-            digest,
-            format!("sha256:{}", hex::encode(Sha256::digest(b"Resources: {}\n")))
-        );
-        let module = |order: &[(&str, &str)]| {
-            files_digest(
-                &order
-                    .iter()
-                    .map(|(path, contents)| (path.to_string(), contents.to_string()))
-                    .collect::<Vec<_>>(),
-            )
-        };
-        assert_eq!(
-            module(&[("main.tf", "a"), ("variables.tf", "b")]),
-            module(&[("variables.tf", "b"), ("main.tf", "a")]),
-            "file order doesn't matter"
-        );
-        assert_ne!(
-            module(&[("main.tf", "ab"), ("variables.tf", "")]),
-            module(&[("main.tf", "a"), ("variables.tf", "b")]),
-            "moving bytes between files changes the digest"
-        );
     }
 }

@@ -557,6 +557,10 @@ async fn signing_from_first_release_to_recovery() {
         "{output}"
     );
     assert!(
+        output.contains("Setup as the control plane hosts it · registers through stack outputs · managed by any managing role · setup release v1"),
+        "{output}"
+    );
+    assert!(
         output.contains("Releasing to production · 0 protected deployments will run it"),
         "{output}"
     );
