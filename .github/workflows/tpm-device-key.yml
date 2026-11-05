@@ -6,12 +6,20 @@ name: TPM device key
 on:
   pull_request:
     paths:
-      - 'crates/alien-cli/src/signing/device.rs'
+      - 'crates/alien-cli/src/signing/**'
+      - 'crates/alien-cli/src/commands/signing.rs'
+      - 'crates/alien-cli/tests/signing_flow.rs'
+      - 'crates/alien-manager/src/routes/signing.rs'
+      - 'crates/alien-signing/**'
       - '.github/workflows/tpm-device-key.yml'
   push:
     branches: [main]
     paths:
-      - 'crates/alien-cli/src/signing/device.rs'
+      - 'crates/alien-cli/src/signing/**'
+      - 'crates/alien-cli/src/commands/signing.rs'
+      - 'crates/alien-cli/tests/signing_flow.rs'
+      - 'crates/alien-manager/src/routes/signing.rs'
+      - 'crates/alien-signing/**'
       - '.github/workflows/tpm-device-key.yml'
   workflow_dispatch:
 
@@ -76,3 +84,10 @@ jobs:
             signing::device::tests::a_tpm_key_signs_with_its_pin_and_refuses_a_wrong_one \
             -- --ignored --exact | tee "$RUNNER_TEMP/tpm-test.log"
           grep -q "test result: ok. 1 passed" "$RUNNER_TEMP/tpm-test.log"
+
+      # First release, a refused second v1, pairing, CI, removal and recovery,
+      # with real CLI and manager processes and keys in the simulator.
+      - name: Test the signing flow
+        run: |
+          cargo test --locked -p alien-cli --features test-device-env --test signing_flow -- --ignored | tee "$RUNNER_TEMP/flow-test.log"
+          grep -q "test result: ok. 1 passed" "$RUNNER_TEMP/flow-test.log"

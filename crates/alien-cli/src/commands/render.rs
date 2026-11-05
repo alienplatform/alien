@@ -39,7 +39,7 @@ pub fn register_terraform_registry_extension(extension: TerraformRegistryExtensi
         .expect("Terraform registry extension already registered");
 }
 
-fn cloudformation_registry() -> alien_cloudformation::CfRegistry {
+pub(crate) fn cloudformation_registry() -> alien_cloudformation::CfRegistry {
     let mut registry = alien_cloudformation::CfRegistry::built_in();
     if let Some(extension) = CLOUDFORMATION_REGISTRY_EXTENSION.get() {
         extension(&mut registry);
@@ -47,7 +47,7 @@ fn cloudformation_registry() -> alien_cloudformation::CfRegistry {
     registry
 }
 
-fn terraform_registry() -> alien_terraform::TfRegistry {
+pub(crate) fn terraform_registry() -> alien_terraform::TfRegistry {
     let mut registry = alien_terraform::TfRegistry::built_in();
     if let Some(extension) = TERRAFORM_REGISTRY_EXTENSION.get() {
         extension(&mut registry);

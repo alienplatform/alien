@@ -269,8 +269,7 @@ mod tests {
                 quota_warning_overrides: Vec::new(),
                 endpoint_access: alien_core::EndpointAccess::Internet,
                 setup_management: alien_core::SetupManagement::Manual,
-                release_trust: None,
-                machine_image_publisher: None,
+                signing: None,
             }))
             .api_server_port(8080)
             .build();
@@ -352,8 +351,7 @@ mod tests {
                 quota_warning_overrides: Vec::new(),
                 endpoint_access: alien_core::EndpointAccess::Internet,
                 setup_management: alien_core::SetupManagement::Manual,
-                release_trust: None,
-                machine_image_publisher: None,
+                signing: None,
             }))
             .build();
 
@@ -382,8 +380,7 @@ mod tests {
                 quota_warning_overrides: Vec::new(),
                 endpoint_access: alien_core::EndpointAccess::Internet,
                 setup_management: alien_core::SetupManagement::Manual,
-                release_trust: None,
-                machine_image_publisher: None,
+                signing: None,
             }))
             .build();
 
@@ -412,8 +409,7 @@ mod tests {
                 quota_warning_overrides: Vec::new(),
                 endpoint_access: alien_core::EndpointAccess::Internet,
                 setup_management: alien_core::SetupManagement::Manual,
-                release_trust: None,
-                machine_image_publisher: None,
+                signing: None,
             }))
             .build();
 

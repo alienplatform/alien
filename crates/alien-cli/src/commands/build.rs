@@ -97,12 +97,6 @@ pub struct BuildArgs {
     #[arg(long, env = "ALIEN_OVERRIDE_BASE_IMAGE", hide = true)]
     pub override_base_image: Option<String>,
 
-    /// Build only from base images pinned by digest in this CLI, and refuse
-    /// any other, as `alien release --sign` does. Use it when a later
-    /// `alien release --prebuilt --sign` publishes this build.
-    #[arg(long)]
-    pub pinned_base_images: bool,
-
     /// Emit result JSON on stdout and plain progress lines on stderr.
     /// On failure, stderr ends with one JSON error document on its own line.
     #[arg(long)]
@@ -355,7 +349,7 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
                 debug_mode: false,
                 rebuild: false,
                 pull_base_images: false,
-                require_pinned_base_images: args.pinned_base_images,
+                require_pinned_base_images: false,
             },
         });
     }
