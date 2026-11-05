@@ -1247,6 +1247,7 @@ async fn run_cloudformation_aws(
     let template = alien_cloudformation::generate_cloudformation_template_with_profile(
         &prepared.rendered_stack,
         alien_cloudformation::CloudFormationOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             registry: &registry,
             source_stack: &prepared.built_stack,
             target: alien_cloudformation::CloudFormationTarget::Aws,
@@ -1455,6 +1456,7 @@ async fn run_cloudformation_k8s(
         let template = alien_cloudformation::generate_cloudformation_template(
             &cloudformation_stack,
             alien_cloudformation::CloudFormationOptions {
+                pins: alien_core::SetupPins::compiled_in(),
                 registry: &registry,
                 source_stack: &cloudformation_stack,
                 target: alien_cloudformation::CloudFormationTarget::Eks,
@@ -2147,6 +2149,7 @@ async fn apply_terraform_and_import(
         &terraform_stack,
         target,
         alien_terraform::TerraformOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             display_name: None,
             registry: &registry,
             stack_settings,
@@ -4346,6 +4349,7 @@ mod tests {
                 &stack,
                 target,
                 alien_terraform::TerraformOptions {
+                    pins: alien_core::SetupPins::compiled_in(),
                     display_name: None,
                     registry: &registry,
                     stack_settings: StackSettings::default(),
@@ -5036,6 +5040,7 @@ resource "terraform_data" "gate_keeper" {}
             &rendered_stack,
             alien_terraform::TerraformTarget::Eks,
             alien_terraform::TerraformOptions {
+                pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
                 stack_settings,
@@ -5135,6 +5140,7 @@ resource "terraform_data" "gate_keeper" {}
             &rendered_stack,
             alien_terraform::TerraformTarget::Eks,
             alien_terraform::TerraformOptions {
+                pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
                 stack_settings,
@@ -5198,6 +5204,7 @@ resource "terraform_data" "gate_keeper" {}
             &rendered_stack,
             alien_terraform::TerraformTarget::Gcp,
             alien_terraform::TerraformOptions {
+                pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
                 stack_settings,
@@ -5239,6 +5246,7 @@ resource "terraform_data" "gate_keeper" {}
             &rendered_stack,
             alien_terraform::TerraformTarget::Gcp,
             alien_terraform::TerraformOptions {
+                pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
                 stack_settings,
@@ -5387,6 +5395,7 @@ resource "terraform_data" "gate_keeper" {}
             &rendered_stack,
             alien_terraform::TerraformTarget::Azure,
             alien_terraform::TerraformOptions {
+                pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
                 stack_settings,

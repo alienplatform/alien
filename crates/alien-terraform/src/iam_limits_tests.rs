@@ -938,6 +938,7 @@ async fn prepare_for_render(stack: Stack) -> Stack {
 
 fn options(registry: &TfRegistry) -> TerraformOptions<'_> {
     TerraformOptions {
+        pins: alien_core::SetupPins::compiled_in(),
         registry,
         display_name: None,
         stack_settings: StackSettings::default(),

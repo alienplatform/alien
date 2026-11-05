@@ -568,6 +568,7 @@ fn registration_depends_on_the_boundary_for_teardown_ordering() {
         &stack(),
         TerraformTarget::Aws,
         alien_terraform::TerraformOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             display_name: None,
             registry: &alien_terraform::TfRegistry::built_in(),
             stack_settings: StackSettings::default(),

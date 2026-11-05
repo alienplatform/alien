@@ -72,6 +72,7 @@ fn terraform_grants_the_workload_role_what_cloudformation_grants() {
     let template = generate_cloudformation_template(
         &stack,
         CloudFormationOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             registry: &CfRegistry::built_in(),
             source_stack: &stack,
             target: CloudFormationTarget::Aws,

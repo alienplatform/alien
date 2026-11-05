@@ -154,6 +154,7 @@ fn gcp_container_cluster_without_platform_extension_errors_cleanly() {
         &stack,
         TerraformTarget::Gcp,
         TerraformOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             display_name: None,
             registry: &registry,
             stack_settings: StackSettings::default(),

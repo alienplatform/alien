@@ -127,6 +127,8 @@ async fn render(source: &Stack, format: &str) -> String {
                     },
                     description: None,
                     management_trust: Default::default(),
+                    #[cfg(feature = "pins")]
+                    pins: Default::default(),
                 },
             )
             .and_then(|template| alien_cloudformation::to_yaml(&template))
@@ -158,6 +160,8 @@ async fn render(source: &Stack, format: &str) -> String {
                     registration: None,
                     helm_install: None,
                     supported_aws_regions: Vec::new(),
+                    #[cfg(feature = "pins")]
+                    pins: Default::default(),
                 },
             )
             .map(|module| {

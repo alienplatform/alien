@@ -9,6 +9,7 @@
 # Usage: scripts/setup-render-diff/run.sh [base-ref]
 #   SETUP_RENDER_DIFF_BASE_TARGET  cargo target dir for the base build (default: a temp dir)
 #   SETUP_RENDER_DIFF_OUT          keep the rendered trees and the diff here
+#   SETUP_RENDER_DIFF_BASE_FEATURES  renderer features for the base (`pins` if it has SetupPins)
 #   UPDATE=1                       write the actual diff to expected.diff
 set -euo pipefail
 
@@ -32,19 +33,19 @@ trap cleanup EXIT
 
 # Add the renderer to the checkout's workspace and run it there.
 render() {
-  local checkout=$1 dest=$2
+  local checkout=$1 dest=$2 features=$3
   rm -rf "$checkout/crates/setup-render-diff"
   cp -r "$here/renderer" "$checkout/crates/setup-render-diff"
   sed -i 's|^members = \[|members = [\n  "crates/setup-render-diff",|' "$checkout/Cargo.toml"
-  (cd "$checkout" && cargo run --quiet -p setup-render-diff -- "$here/fixtures" "$dest")
+  (cd "$checkout" && cargo run --quiet -p setup-render-diff --features "$features" -- "$here/fixtures" "$dest")
 }
 
 git -C "$repo" worktree add --quiet --detach "$work/base" "$base"
-CARGO_TARGET_DIR=${SETUP_RENDER_DIFF_BASE_TARGET:-$work/target} render "$work/base" "$out/base"
+CARGO_TARGET_DIR=${SETUP_RENDER_DIFF_BASE_TARGET:-$work/target} render "$work/base" "$out/base" "${SETUP_RENDER_DIFF_BASE_FEATURES:-}"
 
 cp "$repo/Cargo.toml" "$work/Cargo.toml"
 cp "$repo/Cargo.lock" "$work/Cargo.lock"
-render "$repo" "$out/head"
+render "$repo" "$out/head" pins
 
 (cd "$out" && diff -ru base head || true) > "$out/actual.diff"
 if [ "${UPDATE:-}" = 1 ]; then

@@ -191,6 +191,9 @@ pub struct CloudFormationOptions<'a> {
     /// How strictly the template constrains who may manage the stack. The
     /// default leaves both parameters as open as they have always been.
     pub management_trust: ManagementTrustOptions,
+    /// What a protected template pins from the CLI build: the machine-image publisher and the
+    /// verifier image. Unprotected templates ignore it.
+    pub pins: alien_core::SetupPins,
 }
 
 /// Constraints on the parameters that decide who may assume the roles a
@@ -683,6 +686,7 @@ pub fn generate_cloudformation_template_with_profile(
     apply_network_iam_dependencies(stack, &emitted_resource_ids, &mut template);
     add_sandbox_gateway_replica_secret(&mut template, stack, options.target);
     add_signing_settings(&mut template, &stack_settings_value, options.target)?;
+    add_verifier_and_limits(&mut template, &stack_settings_value, &options.pins)?;
     consolidate_role_inline_policies(&mut template)?;
 
     add_deployer_secret_outputs(
@@ -1936,7 +1940,11 @@ fn add_signing_settings(
             SIGNING_SETTINGS_ID,
             alien_signing::settings::names::aws_settings(prefix),
             "Standard",
-            signing_settings.to_json(),
+            // The parameter allows only the pinned fingerprint, so this is the same value.
+            signing_settings.to_json().replace(
+                &signing.fingerprint,
+                &format!("${{{SIGNING_FINGERPRINT_PARAMETER}}}"),
+            ),
             "Software must be signed with these keys to run here. The vendor's access can't change this value; your administrators can.",
         ),
         (
@@ -1966,6 +1974,234 @@ fn add_signing_settings(
         insert_resource(template, parameter)?;
     }
     Ok(())
+}
+
+/// Logical IDs of the verifier and the management limits on a protected install.
+const VERIFIER_FUNCTION_ID: &str = "SigningVerifier";
+const VERIFIER_ROLE_ID: &str = "SigningVerifierRole";
+const MANAGEMENT_LIMITS_ID: &str = "ManagementLimits";
+/// IAM attaches at most this many managed policies to a role by default.
+const MANAGED_POLICIES_PER_ROLE: usize = 10;
+
+/// Adds a protected install's verifier, `<prefix>-verifier`, and the limits on its management
+/// role, `<prefix>-management-limits`. The verifier alone changes functions and launches
+/// machines; its image and the machine-image publisher are literals from the CLI build.
+fn add_verifier_and_limits(
+    template: &mut CfTemplate,
+    settings: &StackSettings,
+    pins: &alien_core::SetupPins,
+) -> Result<()> {
+    if settings.signing.is_none() {
+        return Ok(());
+    }
+    let missing = |what: &str| {
+        AlienError::new(ErrorData::OperationNotSupported {
+            operation: "render a protected AWS setup".to_string(),
+            reason: format!(
+                "this CLI build has no {what}; protected setups come from released CLI builds"
+            ),
+        })
+    };
+    let publisher = pins
+        .aws_publisher
+        .as_deref()
+        .ok_or_else(|| missing("machine-image publisher"))?;
+    let digest = pins
+        .aws_verifier_digest
+        .as_deref()
+        .ok_or_else(|| missing("verifier image"))?;
+    let prefix = "${AWS::StackName}";
+    let account = "${AWS::AccountId}";
+    let region = "${AWS::Region}";
+    let verifier_name = alien_permissions::generators::signing_limits::aws_verifier_name(prefix);
+
+    let mut role = CfResource::new(VERIFIER_ROLE_ID.to_string(), "AWS::IAM::Role".to_string());
+    role.properties
+        .insert("RoleName".to_string(), CfExpression::sub(&verifier_name));
+    role.properties.insert(
+        "Description".to_string(),
+        CfExpression::from("The verifier's role. Only setup changes it."),
+    );
+    role.properties.insert(
+        "AssumeRolePolicyDocument".to_string(),
+        CfExpression::object([
+            ("Version", CfExpression::from("2012-10-17")),
+            (
+                "Statement",
+                CfExpression::list([CfExpression::object([
+                    ("Effect", CfExpression::from("Allow")),
+                    (
+                        "Principal",
+                        CfExpression::object([(
+                            "Service",
+                            CfExpression::from("lambda.amazonaws.com"),
+                        )]),
+                    ),
+                    ("Action", CfExpression::from("sts:AssumeRole")),
+                ])]),
+            ),
+        ]),
+    );
+    role.properties.insert(
+        "Policies".to_string(),
+        CfExpression::list([CfExpression::object([
+            ("PolicyName", CfExpression::from("verifier")),
+            (
+                "PolicyDocument",
+                sub_json(
+                    alien_permissions::generators::signing_limits::aws_verifier_policy(
+                        prefix, account, region, publisher,
+                    ),
+                ),
+            ),
+        ])]),
+    );
+    role.properties
+        .insert("Tags".to_string(), setup_tags(&verifier_name));
+    insert_resource(template, role)?;
+
+    let mut function = CfResource::new(
+        VERIFIER_FUNCTION_ID.to_string(),
+        "AWS::Lambda::Function".to_string(),
+    );
+    function
+        .properties
+        .insert("FunctionName".to_string(), CfExpression::sub(&verifier_name));
+    function.properties.insert(
+        "Description".to_string(),
+        CfExpression::from(
+            "Applies only releases the vendor signed. The management role can't change what runs here.",
+        ),
+    );
+    function
+        .properties
+        .insert("PackageType".to_string(), CfExpression::from("Image"));
+    function.properties.insert(
+        "Code".to_string(),
+        CfExpression::object([(
+            "ImageUri",
+            CfExpression::sub(format!(
+                "{publisher}.dkr.ecr.${{AWS::Region}}.amazonaws.com/verifier@{digest}"
+            )),
+        )]),
+    );
+    function.properties.insert(
+        "Role".to_string(),
+        CfExpression::get_att(VERIFIER_ROLE_ID, "Arn"),
+    );
+    function
+        .properties
+        .insert("Timeout".to_string(), CfExpression::from(300u32));
+    function
+        .properties
+        .insert("MemorySize".to_string(), CfExpression::from(512u32));
+    function.properties.insert(
+        "Environment".to_string(),
+        CfExpression::object([(
+            "Variables",
+            CfExpression::object([("VERIFIER_CLOUD", CfExpression::from("aws"))]),
+        )]),
+    );
+    function
+        .properties
+        .insert("Tags".to_string(), setup_tags(&verifier_name));
+    insert_resource(template, function)?;
+
+    let Some(management_role) = management_role_id(template) else {
+        return Ok(());
+    };
+    let attached = template
+        .resources
+        .values()
+        .filter(|resource| {
+            resource.resource_type == "AWS::IAM::ManagedPolicy"
+                && resource.properties.get("Roles").is_some_and(|roles| {
+                    matches!(roles, CfExpression::List(roles)
+                        if roles.contains(&CfExpression::ref_(&management_role)))
+                })
+        })
+        .count();
+    if attached + 1 > MANAGED_POLICIES_PER_ROLE {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "render a protected AWS setup".to_string(),
+            reason: format!(
+                "the management role already has {attached} managed policies; the limits would pass IAM's {MANAGED_POLICIES_PER_ROLE} per role"
+            ),
+        }));
+    }
+    let mut limits = CfResource::new(
+        MANAGEMENT_LIMITS_ID.to_string(),
+        "AWS::IAM::ManagedPolicy".to_string(),
+    );
+    limits.properties.insert(
+        "ManagedPolicyName".to_string(),
+        CfExpression::sub(alien_permissions::generators::signing_limits::aws_management_limits_name(prefix)),
+    );
+    limits.properties.insert(
+        "Description".to_string(),
+        CfExpression::sub(format!(
+            "Limits that hold even if another policy grants more: only this stack changes what the install trusts; only {verifier_name} changes what runs; machines boot only the publisher's images."
+        )),
+    );
+    limits.properties.insert(
+        "PolicyDocument".to_string(),
+        sub_json(alien_permissions::generators::signing_limits::aws_management_limits(
+            prefix, account, region,
+        )),
+    );
+    limits.properties.insert(
+        "Roles".to_string(),
+        CfExpression::list([CfExpression::ref_(management_role)]),
+    );
+    insert_resource(template, limits)
+}
+
+/// The logical ID of the role named `<prefix>-management`, if the template creates it.
+fn management_role_id(template: &CfTemplate) -> Option<String> {
+    template
+        .resources
+        .iter()
+        .find(|(_, resource)| {
+            resource.resource_type == "AWS::IAM::Role"
+                && resource.properties.get("RoleName")
+                    == Some(&CfExpression::sub("${AWS::StackName}-management"))
+        })
+        .map(|(id, _)| id.clone())
+}
+
+fn setup_tags(name: &str) -> CfExpression {
+    CfExpression::list([
+        CfExpression::object([
+            ("Key", CfExpression::from("managed-by")),
+            ("Value", CfExpression::from("setup")),
+        ]),
+        CfExpression::object([
+            ("Key", CfExpression::from("Name")),
+            ("Value", CfExpression::sub(name)),
+        ]),
+    ])
+}
+
+/// A JSON value as a CloudFormation expression whose strings with `${...}` are `Fn::Sub`.
+fn sub_json(value: Value) -> CfExpression {
+    match value {
+        Value::String(text) if text.contains("${") => CfExpression::sub(text),
+        Value::String(text) => CfExpression::from(text),
+        Value::Array(values) => CfExpression::list(values.into_iter().map(sub_json)),
+        Value::Object(values) => CfExpression::Object(
+            values
+                .into_iter()
+                .map(|(key, value)| (key, sub_json(value)))
+                .collect(),
+        ),
+        Value::Bool(value) => CfExpression::from(value),
+        Value::Number(number) => match (number.as_i64(), number.as_f64()) {
+            (Some(integer), _) => CfExpression::Integer(integer),
+            (None, Some(float)) => CfExpression::Number(float),
+            (None, None) => CfExpression::String(number.to_string()),
+        },
+        Value::Null => CfExpression::Null,
+    }
 }
 
 fn add_network_parameters(

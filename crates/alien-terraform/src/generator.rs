@@ -111,6 +111,9 @@ pub struct TerraformOptions<'a> {
     /// AWS regions supported by the environment that produced this
     /// module. Empty means no generated region validation.
     pub supported_aws_regions: Vec<String>,
+    /// What a protected module pins from the CLI build: the machine-image publisher and the
+    /// verifier image. Unprotected modules ignore it.
+    pub pins: alien_core::SetupPins,
 }
 
 /// Terraform provider dependency used by self-registering modules.
@@ -5603,6 +5606,7 @@ mod tests {
             &Stack::new("app".into()).build(),
             TerraformTarget::Eks,
             TerraformOptions {
+                pins: alien_core::SetupPins::compiled_in(),
                 registry: &registry,
                 display_name: None,
                 stack_settings: StackSettings {
@@ -5691,6 +5695,7 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
             &Stack::new("product-terraform-test".to_string()).build(),
             TerraformTarget::Eks,
             TerraformOptions {
+                pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
                 stack_settings: StackSettings::default(),
@@ -5758,6 +5763,7 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
                     &stack,
                     TerraformTarget::Aws,
                     TerraformOptions {
+                        pins: alien_core::SetupPins::compiled_in(),
                         display_name: None,
                         registry: &registry,
                         stack_settings: StackSettings::default(),

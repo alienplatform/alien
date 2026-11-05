@@ -34,6 +34,7 @@ fn cloudformation_rules(stack: &Stack) -> Vec<Rule> {
     let template = generate_cloudformation_template(
         stack,
         CloudFormationOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             registry: &CfRegistry::built_in(),
             source_stack: stack,
             target: CloudFormationTarget::Aws,

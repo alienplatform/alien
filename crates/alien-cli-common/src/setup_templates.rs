@@ -15,8 +15,8 @@ use alien_cloudformation::{
 };
 use alien_core::{
     AwsManagementConfig, AzureManagementConfig, DeploymentConfig, EnvironmentVariablesSnapshot,
-    ExternalBindings, GcpManagementConfig, ManagementConfig, Platform, Stack, StackSettings,
-    StackSigning, StackState,
+    ExternalBindings, GcpManagementConfig, ManagementConfig, Platform, SetupPins, Stack,
+    StackSettings, StackSigning, StackState,
 };
 use alien_error::{AlienError, AlienErrorData, Context, IntoAlienError};
 use alien_helm::{HelmOptions, HelmRegistry};
@@ -69,6 +69,10 @@ pub struct SetupRenderOptions<'a> {
     /// AWS regions the Terraform AWS module accepts; empty accepts any.
     #[builder(default)]
     pub supported_aws_regions: Vec<String>,
+    /// Machine-image publisher and verifier image. Leave the default, this build's own, except
+    /// in tests: a release records templates rendered with it.
+    #[builder(default = SetupPins::compiled_in())]
+    pub pins: SetupPins,
 }
 
 /// One rendered setup template.
@@ -138,6 +142,7 @@ async fn render_one(
             let template = alien_cloudformation::generate_cloudformation_template(
                 &stack,
                 CloudFormationOptions {
+                    pins: options.pins.clone(),
                     registry: options.cloudformation_registry,
                     source_stack: &source_stack,
                     target: CloudFormationTarget::Aws,
@@ -191,6 +196,7 @@ async fn render_one(
                 &stack,
                 target,
                 TerraformOptions {
+                    pins: options.pins.clone(),
                     display_name: None,
                     registry: options.terraform_registry,
                     stack_settings: settings.clone(),

@@ -149,6 +149,7 @@ pub fn render_with_registry(
         stack,
         target,
         TerraformOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             display_name: None,
             registry,
             stack_settings: settings,

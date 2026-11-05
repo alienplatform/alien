@@ -58,6 +58,7 @@ fn cloudformation_emits_stack_inputs_as_parameters_and_registration_values() {
     let template = generate_cloudformation_template(
         &stack,
         CloudFormationOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             registry: &registry,
             source_stack: &stack,
             target: CloudFormationTarget::Aws,
@@ -267,6 +268,7 @@ fn conditional_inputs_produce_a_valid_cloudformation_template_for_provider(
     let template = generate_cloudformation_template(
         &stack,
         CloudFormationOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             registry: &registry,
             source_stack: &stack,
             target: CloudFormationTarget::Aws,
