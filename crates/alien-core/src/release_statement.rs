@@ -1,6 +1,6 @@
 //! Release statements for stacks.
 //!
-//! A signed release is a `release/v2` statement from `alien-release-trust`.
+//! A signed release is a `release/v2` statement from `alien-signing`.
 //! Its body names every workload exactly, for enforcers that build workloads
 //! one by one, and carries the whole stack, for enforcers that deploy from it.
 //! [`release_body`] builds that body from a pushed stack; [`signed_stack`]
@@ -10,10 +10,10 @@
 use std::collections::BTreeMap;
 
 use alien_error::AlienError;
-use alien_release_trust::release::{
+use alien_signing::release::{
     Bounds, Configurable, FunctionSettings, Mount, ProvidedEnv, Runtime, Security, WorkloadKind,
 };
-use alien_release_trust::{ReleaseBody, Workload};
+use alien_signing::{ReleaseBody, Workload};
 
 use crate::error::{ErrorData, Result};
 use crate::{
@@ -428,7 +428,7 @@ pub fn image_digest(image: &str) -> Option<&str> {
     let (repository, digest) = image.rsplit_once('@')?;
     let valid = !repository.is_empty()
         && !repository.chars().any(char::is_whitespace)
-        && alien_release_trust::release::is_sha256_digest(digest);
+        && alien_signing::release::is_sha256_digest(digest);
     valid.then_some(digest)
 }
 

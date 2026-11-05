@@ -9,7 +9,7 @@ use alien_core::{
     AzureResourceGroup, ManagementPermissions, PermissionProfile, ReleaseTrustSettings,
     RemoteStackManagement, ResourceLifecycle, Stack, StackSettings,
 };
-use alien_release_trust::{SessionApproval, SoftwareKey};
+use alien_signing::{SessionApproval, SoftwareKey};
 use alien_terraform::{ModuleFiles, TerraformTarget};
 
 const MANAGEMENT_SETS: [&str; 10] = [

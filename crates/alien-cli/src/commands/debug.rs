@@ -17,7 +17,7 @@ use crate::error::{ErrorData, Result};
 use crate::execution_context::{ExecutionMode, ManagerContext};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::SdkResultExt as _;
-use alien_release_trust::session::{Channel, FrameKind};
+use alien_signing::session::{Channel, FrameKind};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use clap::{Args, Parser, Subcommand};
 use futures::{SinkExt, StreamExt};

@@ -462,7 +462,7 @@ dependencies = [
  "alien-permissions",
  "alien-platform-api",
  "alien-preflights",
- "alien-release-trust",
+ "alien-signing",
  "alien-terraform",
  "alien-worker-runtime",
  "async-trait",
@@ -592,7 +592,7 @@ dependencies = [
  "alien-error",
  "alien-permissions",
  "alien-preflights",
- "alien-release-trust",
+ "alien-signing",
  "indexmap 2.14.1",
  "insta",
  "regex",
@@ -663,7 +663,7 @@ dependencies = [
  "alien-error",
  "alien-macros",
  "alien-permission-types",
- "alien-release-trust",
+ "alien-signing",
  "async-trait",
  "axum 0.8.9",
  "base64 0.22.1",
@@ -850,12 +850,12 @@ dependencies = [
 
 [[package]]
 name = "alien-gate"
-version = "3.3.53"
+version = "3.3.54"
 dependencies = [
  "alien-aws-clients",
  "alien-client-core",
  "alien-error",
- "alien-release-trust",
+ "alien-signing",
  "async-trait",
  "axum 0.8.9",
  "base64 0.22.1",
@@ -912,7 +912,7 @@ dependencies = [
  "alien-operations-sdk",
  "alien-permissions",
  "alien-preflights",
- "alien-release-trust",
+ "alien-signing",
  "alien-terraform",
  "flate2",
  "indexmap 2.14.1",
@@ -1101,7 +1101,7 @@ dependencies = [
  "alien-manager-api",
  "alien-permissions",
  "alien-preflights",
- "alien-release-trust",
+ "alien-signing",
  "alien-tunnel",
  "async-trait",
  "axum 0.8.9",
@@ -1226,7 +1226,7 @@ dependencies = [
  "alien-k8s-clients",
  "alien-local",
  "alien-manager-api",
- "alien-release-trust",
+ "alien-signing",
  "alien-tunnel",
  "async-trait",
  "aws-config",
@@ -1344,23 +1344,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "alien-release-trust"
-version = "3.3.53"
-dependencies = [
- "alien-error",
- "base64 0.22.1",
- "chrono",
- "getrandom 0.3.4",
- "hex",
- "p256",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "snow",
- "utoipa",
-]
-
-[[package]]
 name = "alien-sandbox-agent"
 version = "3.3.54"
 dependencies = [
@@ -1421,6 +1404,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "alien-signing"
+version = "3.3.54"
+dependencies = [
+ "alien-error",
+ "base64 0.22.1",
+ "chrono",
+ "getrandom 0.3.4",
+ "hex",
+ "p256",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "snow",
+ "utoipa",
+]
+
+[[package]]
 name = "alien-terraform"
 version = "3.3.54"
 dependencies = [
@@ -1429,7 +1429,7 @@ dependencies = [
  "alien-error",
  "alien-permissions",
  "alien-preflights",
- "alien-release-trust",
+ "alien-signing",
  "hcl-rs",
  "indexmap 2.14.1",
  "insta",

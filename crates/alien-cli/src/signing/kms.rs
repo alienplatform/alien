@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use alien_aws_clients::kms::{CreateKeyRequest, KmsApi, KmsClient, KmsTag, SignRequest};
 use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt, AwsCredentialProvider};
 use alien_error::{AlienError, Context};
-use alien_release_trust::PublicKey;
+use alien_signing::PublicKey;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use sha2::{Digest, Sha256};

@@ -30,8 +30,8 @@ use alien_core::{
     ExternalBindings, Platform, ReleaseInfo, SignedStatement, Stack, StackInputProvider,
     StackSettings,
 };
-use alien_release_trust::kinds::ConfigBody;
-use alien_release_trust::{Anchor, Kind, ReleaseBody, Trust};
+use alien_signing::kinds::ConfigBody;
+use alien_signing::{Anchor, Kind, ReleaseBody, Trust};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
@@ -374,15 +374,15 @@ fn protect_config(
 /// list for `project`.
 #[cfg(test)]
 pub(crate) fn test_signing(project: &str) -> ReleaseSigning {
-    let key = alien_release_trust::SoftwareKey::from_secret_bytes(&[21; 32]).unwrap();
+    let key = alien_signing::SoftwareKey::from_secret_bytes(&[21; 32]).unwrap();
     let list = test_signer_list(project, &key);
     ReleaseSigning {
         anchor: Anchor {
             project: project.to_string(),
             deployment: format!("dep_{project}"),
             protected: true,
-            signing: alien_release_trust::fingerprint(&list.open().unwrap().digest),
-            components: alien_release_trust::SoftwareKey::from_secret_bytes(&[22; 32])
+            signing: alien_signing::fingerprint(&list.open().unwrap().digest),
+            components: alien_signing::SoftwareKey::from_secret_bytes(&[22; 32])
                 .unwrap()
                 .public_key()
                 .as_str()
@@ -398,9 +398,9 @@ pub(crate) fn test_signing(project: &str) -> ReleaseSigning {
 #[cfg(test)]
 pub(crate) fn test_signer_list(
     project: &str,
-    key: &alien_release_trust::SoftwareKey,
+    key: &alien_signing::SoftwareKey,
 ) -> SignedStatement {
-    use alien_release_trust::{Envelope, Role, Signer, SignerKind, SignerListBody};
+    use alien_signing::{Envelope, Role, Signer, SignerKind, SignerListBody};
     let envelope = Envelope {
         kind: Kind::SignerList.as_str().to_string(),
         project: Some(project.to_string()),
@@ -434,7 +434,7 @@ pub(crate) mod tests {
         Container, ContainerCode, EnvironmentVariable, EnvironmentVariableType, ResourceLifecycle,
         ResourceSpec, StackInputDefinition,
     };
-    use alien_release_trust::{Envelope, SoftwareKey};
+    use alien_signing::{Envelope, SoftwareKey};
 
     const DIGEST: &str = "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
 

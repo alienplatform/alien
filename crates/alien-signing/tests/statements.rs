@@ -7,12 +7,12 @@ mod common;
 
 use std::collections::BTreeMap;
 
-use alien_release_trust::envelope::Envelope;
-use alien_release_trust::kinds::{
+use alien_signing::envelope::Envelope;
+use alien_signing::kinds::{
     CommandBody, ComponentBody, ConfigBody, SessionBody, SessionChallenge, SessionTarget,
 };
-use alien_release_trust::release::RequestedSecret;
-use alien_release_trust::{
+use alien_signing::release::RequestedSecret;
+use alien_signing::{
     build_workload, verify_component, Floors, Kind, ReleaseBody, SignedStatement, Trust,
     WorkloadRequest, COMPONENTS_SIGNER,
 };
@@ -32,7 +32,7 @@ fn trust(keys: &Keys, chain: &[SignedStatement]) -> Trust {
     Trust::new(anchor(keys), chain).expect("the chain is valid")
 }
 
-fn code<T: std::fmt::Debug>(result: alien_release_trust::Result<T>) -> String {
+fn code<T: std::fmt::Debug>(result: alien_signing::Result<T>) -> String {
     result.expect_err("must be refused").code
 }
 
@@ -238,7 +238,7 @@ fn statements_are_bound_to_their_kind_project_and_deployment() {
 fn signed_raw(bytes: &[u8], keys: &Keys) -> SignedStatement {
     SignedStatement {
         payload: STANDARD.encode(bytes),
-        signatures: vec![alien_release_trust::Signature {
+        signatures: vec![alien_signing::Signature {
             signer: "ci".to_string(),
             sig: keys.ci.sign(bytes),
         }],
@@ -468,7 +468,7 @@ fn chain_attacks_are_refused() {
     other_genesis.admin_threshold = 2;
     other_genesis.signers[2]
         .roles
-        .push(alien_release_trust::Role::Release);
+        .push(alien_signing::Role::Release);
     let other_genesis = statement("signer-list/v1", Some(PROJECT), None, 1, 1, other_genesis)
         .sign_with("alice-laptop", &keys.admin)
         .unwrap();
@@ -482,7 +482,7 @@ fn chain_attacks_are_refused() {
 fn signer_lists_with_bad_keys_or_rules_are_refused() {
     let keys = keys();
     let base = trust(&keys, &[genesis(&keys)]);
-    let attempt = |body: alien_release_trust::SignerListBody| {
+    let attempt = |body: alien_signing::SignerListBody| {
         let next = statement("signer-list/v1", Some(PROJECT), None, 2, 1, body)
             .sign_with("alice-laptop", &keys.admin)
             .unwrap();
@@ -1065,13 +1065,13 @@ fn component_updates_verify_only_with_the_components_key() {
 fn anchors_are_checked_when_read() {
     let keys = keys();
     let good = serde_json::to_vec(&anchor(&keys)).unwrap();
-    let parsed = alien_release_trust::Anchor::parse(&good).unwrap();
+    let parsed = alien_signing::Anchor::parse(&good).unwrap();
     assert!(parsed.protected);
 
     let mut value: serde_json::Value = serde_json::from_slice(&good).unwrap();
     value["signing"] = serde_json::json!("SHA256:abc");
     assert_eq!(
-        code(alien_release_trust::Anchor::parse(
+        code(alien_signing::Anchor::parse(
             &serde_json::to_vec(&value).unwrap()
         )),
         "TRUST_ANCHOR_INVALID"
@@ -1080,7 +1080,7 @@ fn anchors_are_checked_when_read() {
     let mut value: serde_json::Value = serde_json::from_slice(&good).unwrap();
     value["components"] = serde_json::json!("ecdsa-p256:AAAA");
     assert_eq!(
-        code(alien_release_trust::Anchor::parse(
+        code(alien_signing::Anchor::parse(
             &serde_json::to_vec(&value).unwrap()
         )),
         "TRUST_ANCHOR_INVALID"
@@ -1089,7 +1089,7 @@ fn anchors_are_checked_when_read() {
     let mut value: serde_json::Value = serde_json::from_slice(&good).unwrap();
     value["protected"] = serde_json::json!("yes");
     assert_eq!(
-        code(alien_release_trust::Anchor::parse(
+        code(alien_signing::Anchor::parse(
             &serde_json::to_vec(&value).unwrap()
         )),
         "TRUST_ANCHOR_INVALID"
@@ -1098,7 +1098,7 @@ fn anchors_are_checked_when_read() {
     let mut value: serde_json::Value = serde_json::from_slice(&good).unwrap();
     value["extra"] = serde_json::json!(1);
     assert_eq!(
-        code(alien_release_trust::Anchor::parse(
+        code(alien_signing::Anchor::parse(
             &serde_json::to_vec(&value).unwrap()
         )),
         "TRUST_ANCHOR_INVALID"

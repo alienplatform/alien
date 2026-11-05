@@ -10,7 +10,7 @@ use std::path::Path;
 use std::process::{Child, Command, Output};
 use std::time::{Duration, Instant};
 
-use alien_release_trust::{
+use alien_signing::{
     Anchor, Envelope, Kind, ReleaseBody, Role, SignedStatement, Signer, SignerKind, SignerListBody,
     SoftwareKey, Trust,
 };
@@ -178,7 +178,7 @@ async fn signing_setup_approval_release_and_a_forged_list() {
     let stored = stored_lists(&manager).await;
     assert_eq!(stored.len(), 1);
     assert_eq!(
-        alien_release_trust::fingerprint(&stored[0].open().unwrap().digest),
+        alien_signing::fingerprint(&stored[0].open().unwrap().digest),
         fingerprint,
         "the manager returns version 1 byte for byte"
     );

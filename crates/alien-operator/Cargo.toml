@@ -18,7 +18,7 @@ path = "src/main.rs"
 lognorm = { workspace = true }
 # Alien crates
 alien-core = { workspace = true }
-alien-release-trust = { workspace = true }
+alien-signing = { workspace = true }
 alien-error = { workspace = true }
 alien-deployment = { workspace = true }
 alien-infra = { workspace = true, features = ["all-platforms", "local"] }

@@ -816,14 +816,14 @@ async fn open_release_signer(
     args: &ReleaseArgs,
     ctx: &ExecutionMode,
     project_id: &str,
-) -> Result<(signing::StatementSigner, alien_release_trust::SignerChain)> {
+) -> Result<(signing::StatementSigner, alien_signing::SignerChain)> {
     let home = SigningHome::current()?;
     let api = SigningApi::from_context(ctx).await?;
     let chain =
         signing::verified_chain(&api, &home, project_id, args.signer.fingerprint.as_deref())
             .await?;
     let signer = args.signer.open(&home).await?;
-    signing::check_signer(&chain, &signer, alien_release_trust::Role::Release)?;
+    signing::check_signer(&chain, &signer, alien_signing::Role::Release)?;
     Ok((signer, chain))
 }
 
@@ -850,7 +850,7 @@ fn manager_statement(
 /// refuse fails here.
 async fn sign_platform_stack(
     signer: &signing::StatementSigner,
-    chain: &alien_release_trust::SignerChain,
+    chain: &alien_signing::SignerChain,
     project_id: &str,
     platform: Platform,
     sequence: u64,
@@ -863,7 +863,7 @@ async fn sign_platform_stack(
     let body = release_body(platform, stack, options)
         .map_err(|error| AlienError::new(refused(error.message)))?;
     let mut envelope = signing::envelope(
-        alien_release_trust::Kind::Release,
+        alien_signing::Kind::Release,
         project_id,
         None,
         chain,
@@ -875,9 +875,9 @@ async fn sign_platform_stack(
     let opened = statement
         .open()
         .map_err(|error| AlienError::new(refused(error.message)))?;
-    list.check_signatures(&opened, alien_release_trust::Role::Release)
+    list.check_signatures(&opened, alien_signing::Role::Release)
         .map_err(|error| AlienError::new(refused(error.message)))?;
-    let verified: alien_release_trust::ReleaseBody = opened
+    let verified: alien_signing::ReleaseBody = opened
         .body()
         .map_err(|error| AlienError::new(refused(error.message)))?;
     let carried = alien_core::release_statement::signed_stack(&verified, platform)
@@ -4081,27 +4081,27 @@ mod tests {
     fn release_signer(
         seed: u8,
     ) -> (
-        alien_release_trust::SoftwareKey,
+        alien_signing::SoftwareKey,
         alien_core::SignedStatement,
     ) {
-        let key = alien_release_trust::SoftwareKey::from_secret_bytes(&[seed; 32]).unwrap();
-        let envelope = alien_release_trust::Envelope {
-            kind: alien_release_trust::Kind::SignerList.as_str().to_string(),
+        let key = alien_signing::SoftwareKey::from_secret_bytes(&[seed; 32]).unwrap();
+        let envelope = alien_signing::Envelope {
+            kind: alien_signing::Kind::SignerList.as_str().to_string(),
             project: Some("default".to_string()),
             deployment: None,
             sequence: 1,
             not_after: None,
             signer_list_version: 1,
-            body: alien_release_trust::SignerListBody {
+            body: alien_signing::SignerListBody {
                 previous: None,
                 admin_threshold: 1,
-                signers: vec![alien_release_trust::Signer {
+                signers: vec![alien_signing::Signer {
                     id: "ci".to_string(),
                     key: key.public_key().as_str().to_string(),
-                    kind: alien_release_trust::SignerKind::Ci,
+                    kind: alien_signing::SignerKind::Ci,
                     roles: vec![
-                        alien_release_trust::Role::Release,
-                        alien_release_trust::Role::Admin,
+                        alien_signing::Role::Release,
+                        alien_signing::Role::Admin,
                     ],
                     label: None,
                 }],
@@ -4120,7 +4120,7 @@ mod tests {
     #[tokio::test]
     async fn a_signed_release_carries_a_verifiable_statement_of_its_stack() {
         let (key, list) = release_signer(11);
-        let fingerprint = alien_release_trust::fingerprint(&list.open().unwrap().digest);
+        let fingerprint = alien_signing::fingerprint(&list.open().unwrap().digest);
         let (manager_url, requests) = start_recording_manager_with_lists(vec![list.clone()]).await;
         let keys = tempfile::tempdir().unwrap();
         let key_file = keys.path().join("ci.pem");
@@ -4162,7 +4162,7 @@ mod tests {
         assert_eq!(requests[0]["stack"], requests[1]["stack"]);
         let signed: alien_core::SignedStatement =
             serde_json::from_value(requests[1]["signedStacks"]["test"].clone()).unwrap();
-        let anchor = alien_release_trust::Anchor {
+        let anchor = alien_signing::Anchor {
             project: "default".to_string(),
             deployment: "dep_1".to_string(),
             protected: true,
@@ -4172,11 +4172,11 @@ mod tests {
             inputs: None,
             resource_prefix: None,
         };
-        let verified = alien_release_trust::Trust::new(anchor, &[list])
+        let verified = alien_signing::Trust::new(anchor, &[list])
             .unwrap()
-            .verify::<alien_release_trust::ReleaseBody>(
+            .verify::<alien_signing::ReleaseBody>(
                 &signed,
-                alien_release_trust::Kind::Release,
+                alien_signing::Kind::Release,
                 chrono::Utc::now(),
             )
             .expect("the statement verifies from the pinned fingerprint");
@@ -4196,7 +4196,7 @@ mod tests {
     #[tokio::test]
     async fn a_release_that_cannot_be_signed_is_not_created() {
         let (key, list) = release_signer(11);
-        let fingerprint = alien_release_trust::fingerprint(&list.open().unwrap().digest);
+        let fingerprint = alien_signing::fingerprint(&list.open().unwrap().digest);
         let keys = tempfile::tempdir().unwrap();
         let key_file = keys.path().join("ci.pem");
         fs::write(&key_file, key.to_pkcs8_pem().unwrap()).unwrap();

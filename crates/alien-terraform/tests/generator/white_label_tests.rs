@@ -30,7 +30,7 @@ use alien_permissions::{
     BindingTarget, PermissionContext,
 };
 use alien_preflights::runner::PreflightRunner;
-use alien_release_trust::{SessionApproval, SoftwareKey};
+use alien_signing::{SessionApproval, SoftwareKey};
 use alien_terraform::TerraformTarget;
 use serde_json::Value;
 

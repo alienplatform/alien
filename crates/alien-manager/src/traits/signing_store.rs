@@ -4,7 +4,7 @@
 //! verify them.
 
 use alien_core::SignedStatement;
-use alien_release_trust::Signer;
+use alien_signing::Signer;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -58,7 +58,7 @@ pub struct PendingChangeRecord {
     /// For statement changes: base64 payload bytes to sign.
     pub payload: Option<String>,
     /// Signatures gathered so far.
-    pub signatures: Vec<alien_release_trust::Signature>,
+    pub signatures: Vec<alien_signing::Signature>,
     /// The signed statement that resolved the change.
     pub statement: Option<SignedStatement>,
     pub created_at: DateTime<Utc>,
