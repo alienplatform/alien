@@ -433,6 +433,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
             project_id TEXT NOT NULL,
             version INTEGER NOT NULL,
             statement TEXT NOT NULL,
+            created_by TEXT NOT NULL,
             created_at TEXT NOT NULL,
             PRIMARY KEY (project_id, version)
         )",

@@ -135,6 +135,15 @@ pub enum ErrorData {
     )]
     EmbeddedConfigUnreadable { file_path: String, reason: String },
 
+    /// The install doesn't match what the vendor signed.
+    #[error(
+        code = "VERIFY_FAILED",
+        message = "{message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    VerifyFailed { message: String },
+
     #[error(
         code = "GENERIC_ERROR",
         message = "{message}",

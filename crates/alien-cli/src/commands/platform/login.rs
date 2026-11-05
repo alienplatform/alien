@@ -64,19 +64,8 @@ pub async fn login_task(_args: LoginArgs, ctx: ExecutionMode) -> Result<()> {
 
     save_workspace(&workspace)?;
 
-    // Every engineer who may sign gets a device key in this machine's
-    // secure hardware at login; an admin approves it per project.
-    let device = ensure_device_key()?;
-
     println!("{}", contextual_heading("Logged in to", &workspace, &[]));
     println!("{}", success_line("Workspace ready."));
-    println!(
-        "{} {} ({}), code {}",
-        dim_label("Device key"),
-        device.0,
-        device.1,
-        device.2
-    );
     println!("{}", dim_label("Next"));
     println!("  {}  Link a project directory", command("alien link"));
     println!(
@@ -87,25 +76,6 @@ pub async fn login_task(_args: LoginArgs, ctx: ExecutionMode) -> Result<()> {
         "  {}  Publish an application",
         command("alien release --project <name>")
     );
-    println!(
-        "  {}  Ask an admin to approve this device for signing",
-        command("alien signing device --project <name>")
-    );
 
     Ok(())
-}
-
-/// This machine's device key, created on first login: its signer id,
-/// backend and approval code.
-fn ensure_device_key() -> Result<(String, &'static str, String)> {
-    let home = crate::signing::SigningHome::current()?;
-    let (record, key) = match home.device()? {
-        Some(device) => device,
-        None => home.create_device(None, &crate::signing::default_device_id(), None)?,
-    };
-    Ok((
-        record.signer_id,
-        record.backend.as_str(),
-        crate::signing::device::approval_code(&key.public_key),
-    ))
 }

@@ -1,36 +1,37 @@
 //! Storage for signed statements the manager carries but never trusts: the
-//! project's signer list versions, changes waiting for a signature, and
-//! signed deployment config. Bytes are kept exactly as received; enforcers
-//! verify them.
+//! project's signer list versions, prepared next lists waiting for an
+//! admin, and signed deployment config. Bytes are kept exactly as received;
+//! enforcers verify them.
 
 use alien_core::SignedStatement;
-use alien_signing::Signer;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use alien_error::AlienError;
 
+/// One stored signer list version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignerListRecord {
+    /// Version, from the statement's sequence.
+    pub version: u64,
+    /// The statement, as received.
+    pub statement: SignedStatement,
+    /// Who stored it, for display.
+    pub created_by: String,
+    /// When it was stored.
+    pub created_at: DateTime<Utc>,
+}
+
 /// Outcome of storing a signer list version.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SignerListWrite {
     /// The version was new and is stored.
     Added,
     /// The same bytes were already stored for this version.
     AlreadyStored,
     /// Different bytes are already stored for this version.
-    Conflict,
-}
-
-/// What a pending change asks for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase")]
-pub enum PendingChangeKind {
-    /// A device asks to be added to the signer list.
-    Device,
-    /// A prepared statement waits for signatures.
-    Statement,
+    Conflict(SignerListRecord),
 }
 
 /// Where a pending change stands.
@@ -43,38 +44,38 @@ pub enum PendingChangeStatus {
     Rejected,
 }
 
-/// A change waiting for a signature.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The body of the next signer list, prepared for an admin to review and
+/// sign. A device request, a removal and a list refresh all take this form.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingChangeRecord {
     pub id: String,
     pub project_id: String,
-    pub kind: PendingChangeKind,
     pub status: PendingChangeStatus,
+    /// Display only.
     pub summary: String,
-    pub deployment_id: Option<String>,
-    /// For device changes.
-    pub device: Option<Signer>,
-    /// For statement changes: base64 payload bytes to sign.
-    pub payload: Option<String>,
-    /// Signatures gathered so far.
-    pub signatures: Vec<alien_signing::Signature>,
-    /// The signed statement that resolved the change.
-    pub statement: Option<SignedStatement>,
+    /// Signer list version the body was prepared from.
+    pub based_on_version: u64,
+    /// `SignerListBody` JSON.
+    pub body: serde_json::Value,
+    /// Who filed it, display only.
+    pub requested_by: Option<String>,
     pub created_at: DateTime<Utc>,
+    pub resolved_at: Option<DateTime<Utc>>,
+    /// The signer list version that approved it.
+    pub signer_list_version: Option<u64>,
 }
 
 #[async_trait]
 pub trait SigningStore: Send + Sync {
     /// Every stored signer list version of `project_id`, oldest first.
-    async fn signer_lists(&self, project_id: &str) -> Result<Vec<SignedStatement>, AlienError>;
+    async fn signer_lists(&self, project_id: &str) -> Result<Vec<SignerListRecord>, AlienError>;
 
-    /// Store signer list `version`.
+    /// Store signer list `record.version`. Versions never change once stored.
     async fn add_signer_list(
         &self,
         project_id: &str,
-        version: u64,
-        statement: &SignedStatement,
+        record: &SignerListRecord,
     ) -> Result<SignerListWrite, AlienError>;
 
     async fn create_pending_change(&self, change: &PendingChangeRecord) -> Result<(), AlienError>;

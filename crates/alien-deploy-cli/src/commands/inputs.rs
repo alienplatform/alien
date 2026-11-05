@@ -1,32 +1,30 @@
-//! Inputs command — change a deployment's deployer inputs in the customer's
-//! own store.
+//! Inputs command — change a protected install's deployer inputs in the
+//! customer's own cloud.
 //!
-//! On a protected deployment, the machines and operators read deployer
-//! inputs from a store only the customer can write, and ignore any value the
-//! control plane sends. The store is named by the deployment's trust anchor
-//! (its `inputs` field). This command writes `aws-ssm:<parameter name>`, an
-//! SSM parameter holding a JSON object, or a path to a TOML file, and refuses
-//! the other stores an anchor can name. A change takes effect on the next
+//! On a protected install, workloads read deployer inputs from a store only
+//! the customer can write, and ignore any value the control plane sends. Each
+//! input is one entry under the install's signed names: the SSM SecureString
+//! `/signed/<prefix>/inputs/<name>` on AWS, the Secret Manager secret
+//! `signed-<prefix>-input-<name>` on GCP. A change takes effect on the next
 //! check, with no stack update.
 
-use std::collections::BTreeMap;
-use std::path::PathBuf;
-
-use alien_aws_clients::ssm::{GetParameterRequest, PutParameterRequest, SsmApi, SsmClient};
+use alien_aws_clients::ssm::{PutParameterRequest, SsmApi, SsmClient};
 use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt, AwsCredentialProvider};
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_core::{DEPLOYER_INPUTS_STORE_GCP_SECRET, DEPLOYER_INPUTS_STORE_SSM};
-use alien_error::{AlienError, Context, IntoAlienError};
-use clap::{Args, Subcommand};
+use alien_error::{AlienError, Context};
+use alien_gcp_clients::secret_manager::{
+    AddSecretVersionRequest, AutomaticReplication, Replication, ReplicationPolicy, Secret,
+    SecretManagerApi, SecretManagerClient, SecretPayload,
+};
+use alien_gcp_clients::{GcpClientConfig, GcpClientConfigExt};
+use alien_signing::settings::names;
+use base64::Engine;
+use clap::{Args, Subcommand, ValueEnum};
 
 use crate::error::{ErrorData, Result};
 
-/// Anchor `inputs` prefixes of stores this command doesn't write. Without
-/// them, such a location would be taken for a file path.
-const UNSUPPORTED_PREFIXES: [&str; 2] = [DEPLOYER_INPUTS_STORE_GCP_SECRET, "azure-keyvault:"];
-
 #[derive(Args, Debug, Clone)]
-#[command(about = "Change deployer inputs in your own store")]
+#[command(about = "Change deployer inputs in your own cloud")]
 pub struct InputsArgs {
     #[command(subcommand)]
     pub command: InputsCommand,
@@ -34,229 +32,248 @@ pub struct InputsArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum InputsCommand {
-    /// Set or remove deployer inputs.
+    /// Set or remove deployer inputs of a protected install.
     Set(InputsSetArgs),
-    /// Show the deployer inputs in the store.
-    List(InputsStoreArg),
 }
 
-#[derive(Args, Debug, Clone)]
-pub struct InputsStoreArg {
-    /// Where the deployment reads its deployer inputs: the `inputs` field of
-    /// its trust anchor (`aws-ssm:<parameter>` or a file path).
-    #[arg(long)]
-    pub store: String,
+/// The cloud the install runs in.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputsPlatform {
+    Aws,
+    Gcp,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct InputsSetArgs {
-    #[command(flatten)]
-    pub store: InputsStoreArg,
-    /// An input to set, as `id=value`. Repeat for more.
-    #[arg(long = "input", value_name = "ID=VALUE")]
+    /// The install's resource prefix (the stack name on AWS).
+    #[arg(long)]
+    pub prefix: String,
+    /// The cloud the install runs in. Credentials come from the standard
+    /// environment (AWS_PROFILE/AWS_REGION, or GOOGLE_APPLICATION_CREDENTIALS
+    /// and the project).
+    #[arg(long, value_enum)]
+    pub platform: InputsPlatform,
+    /// An input to set, as `name=value`. Repeat for more.
+    #[arg(long = "input", value_name = "NAME=VALUE")]
     pub inputs: Vec<String>,
     /// An input to remove. Repeat for more.
-    #[arg(long, value_name = "ID")]
+    #[arg(long, value_name = "NAME")]
     pub unset: Vec<String>,
 }
 
-/// A deployer inputs store.
+/// One change to the store.
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum Change {
+    Set { name: String, value: String },
+    Unset { name: String },
+}
+
+/// Parse `--input name=value` and `--unset name` into changes. Names must fit
+/// both an SSM parameter name segment and a Secret Manager secret id.
+fn changes(set: &[String], unset: &[String]) -> Result<Vec<Change>> {
+    if set.is_empty() && unset.is_empty() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "input".to_string(),
+            message: "pass --input name=value or --unset name".to_string(),
+        }));
+    }
+    let mut changes = Vec::new();
+    for pair in set {
+        let (name, value) = pair.split_once('=').ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "input".to_string(),
+                message: format!("'{pair}' is not name=value"),
+            })
+        })?;
+        check_name(name)?;
+        changes.push(Change::Set {
+            name: name.to_string(),
+            value: value.to_string(),
+        });
+    }
+    for name in unset {
+        check_name(name)?;
+        changes.push(Change::Unset { name: name.clone() });
+    }
+    Ok(changes)
+}
+
+fn check_name(name: &str) -> Result<()> {
+    let valid = !name.is_empty()
+        && name.len() <= 128
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if valid {
+        Ok(())
+    } else {
+        Err(AlienError::new(ErrorData::ValidationError {
+            field: "input".to_string(),
+            message: format!(
+                "'{name}' is not an input name (letters, digits, '_' and '-', at most 128)"
+            ),
+        }))
+    }
+}
+
+/// Where each input of the install lives.
 enum Store {
-    Ssm(String),
-    File(PathBuf),
+    Aws {
+        prefix: String,
+        ssm: SsmClient,
+    },
+    Gcp {
+        prefix: String,
+        secrets: SecretManagerClient,
+    },
 }
 
 impl Store {
-    fn parse(location: &str) -> Result<Self> {
-        if let Some(name) = location.strip_prefix(DEPLOYER_INPUTS_STORE_SSM) {
-            return Ok(Store::Ssm(name.to_string()));
+    async fn open(platform: InputsPlatform, prefix: &str) -> Result<Self> {
+        match platform {
+            InputsPlatform::Aws => {
+                let config = AwsClientConfig::from_std_env().await.context(
+                    ErrorData::ConfigurationError {
+                        message: "Could not load AWS credentials; set AWS_PROFILE or AWS_REGION"
+                            .to_string(),
+                    },
+                )?;
+                let credentials = AwsCredentialProvider::from_config(config).await.context(
+                    ErrorData::ConfigurationError {
+                        message: "Could not load AWS credentials".to_string(),
+                    },
+                )?;
+                Ok(Store::Aws {
+                    prefix: prefix.to_string(),
+                    ssm: SsmClient::new(reqwest::Client::new(), credentials),
+                })
+            }
+            InputsPlatform::Gcp => {
+                let config: GcpClientConfig = GcpClientConfig::from_std_env().await.context(
+                    ErrorData::ConfigurationError {
+                        message: "Could not load GCP credentials".to_string(),
+                    },
+                )?;
+                Ok(Store::Gcp {
+                    prefix: prefix.to_string(),
+                    secrets: SecretManagerClient::new(reqwest::Client::new(), config),
+                })
+            }
         }
-        if UNSUPPORTED_PREFIXES
-            .iter()
-            .any(|prefix| location.starts_with(prefix))
-        {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "store".to_string(),
-                message: format!(
-                    "This command writes only an SSM parameter or a file, not {location}"
-                ),
-            }));
-        }
-        Ok(Store::File(PathBuf::from(location)))
     }
 
-    async fn read(&self) -> Result<BTreeMap<String, String>> {
+    /// The name of input `name` in this store.
+    fn location(&self, name: &str) -> String {
         match self {
-            Store::File(path) => {
-                let text = match std::fs::read_to_string(path) {
-                    Ok(text) => text,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                        return Ok(BTreeMap::new())
-                    }
-                    Err(error) => {
-                        return Err(error).into_alien_error().context(
-                            ErrorData::FileOperationFailed {
-                                operation: "read".to_string(),
-                                file_path: path.display().to_string(),
-                                reason: "Could not read the deployer inputs".to_string(),
-                            },
-                        )
-                    }
-                };
-                toml::from_str(&text)
-                    .into_alien_error()
-                    .context(ErrorData::ConfigurationError {
-                        message: format!("{} is not a table of strings", path.display()),
-                    })
+            Store::Aws { prefix, .. } => format!("{}{name}", names::aws_inputs(prefix)),
+            Store::Gcp { prefix, .. } => names::gcp_input(prefix, name),
+        }
+    }
+
+    async fn apply(&self, change: &Change) -> Result<()> {
+        match (self, change) {
+            (Store::Aws { ssm, .. }, Change::Set { name, value }) => {
+                let parameter = self.location(name);
+                ssm.put_parameter(
+                    PutParameterRequest::builder()
+                        .name(parameter.clone())
+                        .value(value.clone())
+                        .parameter_type("SecureString".to_string())
+                        .overwrite(true)
+                        .build(),
+                )
+                .await
+                .context(ErrorData::ConfigurationError {
+                    message: format!("Could not write parameter {parameter}"),
+                })?;
+                Ok(())
             }
-            Store::Ssm(name) => {
-                let response = ssm_client()
-                    .await?
-                    .get_parameter(GetParameterRequest {
-                        name: name.clone(),
-                        with_decryption: Some(true),
-                    })
-                    .await;
-                let value = match response {
-                    Ok(response) => response.parameter.and_then(|parameter| parameter.value),
-                    Err(error)
-                        if matches!(
-                            error.error,
-                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                        ) =>
-                    {
-                        None
+            (Store::Aws { ssm, .. }, Change::Unset { name }) => {
+                let parameter = self.location(name);
+                match ssm.delete_parameter(&parameter).await {
+                    Ok(()) => Ok(()),
+                    Err(error) if not_found(&error) => Ok(()),
+                    Err(error) => Err(error).context(ErrorData::ConfigurationError {
+                        message: format!("Could not delete parameter {parameter}"),
+                    }),
+                }
+            }
+            (Store::Gcp { secrets, .. }, Change::Set { name, value }) => {
+                let secret = self.location(name);
+                match secrets.get_secret(secret.clone()).await {
+                    Ok(_) => {}
+                    Err(error) if not_found(&error) => {
+                        secrets
+                            .create_secret(
+                                secret.clone(),
+                                Secret::builder()
+                                    .replication(Replication {
+                                        replication_policy: Some(ReplicationPolicy::Automatic(
+                                            AutomaticReplication::default(),
+                                        )),
+                                    })
+                                    .build(),
+                            )
+                            .await
+                            .context(ErrorData::ConfigurationError {
+                                message: format!("Could not create secret {secret}"),
+                            })?;
                     }
                     Err(error) => {
                         return Err(error).context(ErrorData::ConfigurationError {
-                            message: format!("Could not read parameter {name}"),
+                            message: format!("Could not read secret {secret}"),
                         })
                     }
-                };
-                match value {
-                    None => Ok(BTreeMap::new()),
-                    Some(text) => serde_json::from_str(&text).into_alien_error().context(
-                        ErrorData::ConfigurationError {
-                            message: format!("Parameter {name} is not a JSON object of strings"),
+                }
+                secrets
+                    .add_secret_version(
+                        secret.clone(),
+                        AddSecretVersionRequest {
+                            payload: SecretPayload {
+                                data: Some(base64::engine::general_purpose::STANDARD.encode(value)),
+                            },
                         },
-                    ),
+                    )
+                    .await
+                    .context(ErrorData::ConfigurationError {
+                        message: format!("Could not write secret {secret}"),
+                    })?;
+                Ok(())
+            }
+            (Store::Gcp { secrets, .. }, Change::Unset { name }) => {
+                let secret = self.location(name);
+                match secrets.delete_secret(secret.clone()).await {
+                    Ok(()) => Ok(()),
+                    Err(error) if not_found(&error) => Ok(()),
+                    Err(error) => Err(error).context(ErrorData::ConfigurationError {
+                        message: format!("Could not delete secret {secret}"),
+                    }),
                 }
             }
         }
     }
-
-    async fn write(&self, inputs: &BTreeMap<String, String>) -> Result<()> {
-        match self {
-            Store::File(path) => {
-                let text = toml::to_string(inputs).into_alien_error().context(
-                    ErrorData::ConfigurationError {
-                        message: "Could not encode the deployer inputs".to_string(),
-                    },
-                )?;
-                std::fs::write(path, text)
-                    .into_alien_error()
-                    .context(ErrorData::FileOperationFailed {
-                        operation: "write".to_string(),
-                        file_path: path.display().to_string(),
-                        reason: "Could not write the deployer inputs".to_string(),
-                    })
-            }
-            Store::Ssm(name) => {
-                let value = serde_json::to_string(inputs).into_alien_error().context(
-                    ErrorData::ConfigurationError {
-                        message: "Could not encode the deployer inputs".to_string(),
-                    },
-                )?;
-                ssm_client()
-                    .await?
-                    .put_parameter(
-                        PutParameterRequest::builder()
-                            .name(name.clone())
-                            .value(value)
-                            .parameter_type("SecureString".to_string())
-                            .overwrite(true)
-                            .build(),
-                    )
-                    .await
-                    .context(ErrorData::ConfigurationError {
-                        message: format!("Could not write parameter {name}"),
-                    })?;
-                Ok(())
-            }
-        }
-    }
 }
 
-async fn ssm_client() -> Result<SsmClient> {
-    let config = AwsClientConfig::from_std_env()
-        .await
-        .context(ErrorData::ConfigurationError {
-            message: "Could not load AWS credentials; set AWS_PROFILE or AWS_REGION".to_string(),
-        })?;
-    let credentials = AwsCredentialProvider::from_config(config).await.context(
-        ErrorData::ConfigurationError {
-            message: "Could not load AWS credentials".to_string(),
-        },
-    )?;
-    Ok(SsmClient::new(reqwest::Client::new(), credentials))
-}
-
-/// Apply `set` (`id=value`) and `unset` to `inputs`.
-fn apply(
-    inputs: &mut BTreeMap<String, String>,
-    set: &[String],
-    unset: &[String],
-) -> Result<()> {
-    for pair in set {
-        let (id, value) = pair.split_once('=').ok_or_else(|| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "input".to_string(),
-                message: format!("'{pair}' is not id=value"),
-            })
-        })?;
-        if id.is_empty() {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "input".to_string(),
-                message: format!("'{pair}' has an empty id"),
-            }));
-        }
-        inputs.insert(id.to_string(), value.to_string());
-    }
-    for id in unset {
-        inputs.remove(id);
-    }
-    Ok(())
+fn not_found(error: &AlienError<CloudClientErrorData>) -> bool {
+    matches!(
+        error.error,
+        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+    )
 }
 
 pub async fn inputs_command(args: InputsArgs) -> Result<()> {
     match args.command {
-        InputsCommand::List(store) => {
-            let inputs = Store::parse(&store.store)?.read().await?;
-            if inputs.is_empty() {
-                println!("No deployer inputs in {}", store.store);
-            }
-            for (id, value) in inputs {
-                println!("{id}={value}");
-            }
-            Ok(())
-        }
         InputsCommand::Set(args) => {
-            if args.inputs.is_empty() && args.unset.is_empty() {
-                return Err(AlienError::new(ErrorData::ValidationError {
-                    field: "input".to_string(),
-                    message: "pass --input id=value or --unset id".to_string(),
-                }));
+            let changes = changes(&args.inputs, &args.unset)?;
+            let store = Store::open(args.platform, &args.prefix).await?;
+            for change in &changes {
+                store.apply(change).await?;
+                match change {
+                    Change::Set { name, .. } => println!("set {}", store.location(name)),
+                    Change::Unset { name } => println!("removed {}", store.location(name)),
+                }
             }
-            let store = Store::parse(&args.store.store)?;
-            let mut inputs = store.read().await?;
-            apply(&mut inputs, &args.inputs, &args.unset)?;
-            store.write(&inputs).await?;
-            println!(
-                "Updated {} deployer input(s) in {}. Machines pick the change up on their next check.",
-                args.inputs.len() + args.unset.len(),
-                args.store.store
-            );
+            println!("Workloads pick the change up on their next check.");
             Ok(())
         }
     }
@@ -265,89 +282,89 @@ pub async fn inputs_command(args: InputsArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_aws_clients::ssm::GetParameterRequest;
 
-    fn set(store: &str, inputs: &[&str], unset: &[&str]) -> InputsArgs {
-        InputsArgs {
-            command: InputsCommand::Set(InputsSetArgs {
-                store: InputsStoreArg {
-                    store: store.to_string(),
-                },
-                inputs: inputs.iter().map(|value| value.to_string()).collect(),
-                unset: unset.iter().map(|value| value.to_string()).collect(),
-            }),
-        }
-    }
-
-    #[tokio::test]
-    async fn set_and_unset_keep_the_other_inputs() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("inputs.toml");
-        let store = path.display().to_string();
-
-        inputs_command(set(&store, &["region=eu", "databaseUrl=postgres://db/a=b"], &[]))
-            .await
-            .unwrap();
-        inputs_command(set(&store, &["region=us"], &["missing"]))
-            .await
-            .unwrap();
-
-        // Read it back the way an enforcer does: a TOML table of strings.
-        let read: BTreeMap<String, String> =
-            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(
-            read,
-            BTreeMap::from([
-                ("databaseUrl".to_string(), "postgres://db/a=b".to_string()),
-                ("region".to_string(), "us".to_string()),
-            ])
-        );
-
-        inputs_command(set(&store, &[], &["region"])).await.unwrap();
-        let read: BTreeMap<String, String> =
-            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(read.keys().collect::<Vec<_>>(), ["databaseUrl"]);
-    }
-
-    #[tokio::test]
-    async fn a_bad_pair_or_a_malformed_store_changes_nothing() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("inputs.toml");
-        let store = path.display().to_string();
-        std::fs::write(&path, "region = \"eu\"\n").unwrap();
-
-        let error = inputs_command(set(&store, &["region"], &[]))
-            .await
-            .unwrap_err();
-        assert_eq!(error.code, "VALIDATION_ERROR");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "region = \"eu\"\n");
-
-        std::fs::write(&path, "region = [1]\n").unwrap();
-        let error = inputs_command(set(&store, &["region=us"], &[]))
-            .await
-            .unwrap_err();
-        assert_eq!(error.code, "CONFIGURATION_ERROR");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "region = [1]\n");
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
     }
 
     #[test]
-    fn the_store_is_named_like_the_anchor_names_it() {
+    fn values_may_hold_equals_signs_and_names_are_checked() {
         assert_eq!(
-            Store::parse("aws-ssm:/acme/inputs").unwrap(),
-            Store::Ssm("/acme/inputs".to_string())
+            changes(
+                &strings(&["databaseUrl=postgres://db/a=b"]),
+                &strings(&["region"])
+            )
+            .unwrap(),
+            vec![
+                Change::Set {
+                    name: "databaseUrl".to_string(),
+                    value: "postgres://db/a=b".to_string()
+                },
+                Change::Unset {
+                    name: "region".to_string()
+                },
+            ]
         );
-        assert_eq!(
-            Store::parse("/etc/acme/inputs.toml").unwrap(),
-            Store::File(PathBuf::from("/etc/acme/inputs.toml"))
-        );
-        for unsupported in [
-            "gcp-secret:_deployer-inputs-orders",
-            "azure-keyvault:orders/inputs",
-        ] {
+        for bad in ["region", "=eu", "../state=x", "a/b=x", "a b=x"] {
             assert_eq!(
-                Store::parse(unsupported).unwrap_err().code,
+                changes(&strings(&[bad]), &[]).unwrap_err().code,
                 "VALIDATION_ERROR",
-                "{unsupported} must not be written as a file"
+                "{bad} must be refused"
             );
         }
+        // `--unset ../state` would otherwise delete the ledger.
+        assert_eq!(
+            changes(&[], &strings(&["../state"])).unwrap_err().code,
+            "VALIDATION_ERROR"
+        );
+        assert_eq!(changes(&[], &[]).unwrap_err().code, "VALIDATION_ERROR");
+    }
+
+    /// Writes, overwrites and removes an input in a real SSM account the way
+    /// the verifier reads it (GetParameter with decryption). Needs AWS
+    /// credentials in the environment and `TEST_RESOURCE_PREFIX`; touches only
+    /// `/signed/<TEST_RESOURCE_PREFIX>-inputs-*`.
+    #[tokio::test]
+    #[ignore = "needs AWS credentials"]
+    async fn aws_inputs_round_trip_through_ssm() {
+        let prefix = format!(
+            "{}-inputs-{}",
+            std::env::var("TEST_RESOURCE_PREFIX").expect("set TEST_RESOURCE_PREFIX"),
+            std::process::id()
+        );
+        let store = Store::open(InputsPlatform::Aws, &prefix).await.unwrap();
+        let Store::Aws { ssm, .. } = &store else {
+            panic!("expected an AWS store")
+        };
+        let parameter = format!("/signed/{prefix}/inputs/databaseUrl");
+        let read = |name: String| async move {
+            ssm.get_parameter(GetParameterRequest {
+                name,
+                with_decryption: Some(true),
+            })
+            .await
+        };
+
+        for value in ["postgres://db/a=b", "postgres://db/c"] {
+            store
+                .apply(&Change::Set {
+                    name: "databaseUrl".to_string(),
+                    value: value.to_string(),
+                })
+                .await
+                .unwrap();
+            let parameter = read(parameter.clone()).await.unwrap().parameter.unwrap();
+            assert_eq!(parameter.value.as_deref(), Some(value));
+            assert_eq!(parameter.parameter_type.as_deref(), Some("SecureString"));
+        }
+
+        let unset = Change::Unset {
+            name: "databaseUrl".to_string(),
+        };
+        store.apply(&unset).await.unwrap();
+        assert!(not_found(&read(parameter.clone()).await.unwrap_err()));
+        // Removing what isn't there is not an error.
+        store.apply(&unset).await.unwrap();
     }
 }

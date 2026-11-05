@@ -2,33 +2,36 @@
 //!
 //! - `GET/POST /v1/projects/{project}/signer-lists`
 //! - `GET/POST /v1/projects/{project}/pending-changes`
-//! - `GET /v1/pending-changes/{id}`, `POST /v1/pending-changes/{id}/signatures`
+//! - `GET /v1/pending-changes/{id}`, `POST /v1/pending-changes/{id}/resolution`
 //! - `POST /v1/deployments/{id}/config-statements`
 //!
 //! The manager stores and forwards these statements; it never verifies a
-//! signature, because enforcers in each deployment do. It only checks what it
-//! needs to keep its own records straight: the kind, the project, and that
-//! signer list versions arrive in order and never change.
+//! signature, because enforcers in each deployment do, and the CLI verifies
+//! the signer list from the fingerprint the repository pins. It only checks
+//! what it needs to keep its own records straight: the kind, the project,
+//! and that signer list versions arrive in order and never change.
 
 use std::sync::Arc;
 
 use alien_core::SignedStatement;
-use alien_signing::{Kind, Signature, Signer};
+use alien_error::AlienError;
+use alien_signing::{Kind, SignerListBody};
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use super::{auth, AppState};
 use crate::{
-    auth::Subject,
+    auth::{Subject, SubjectKind},
     error::ErrorData,
     traits::{
-        PendingChangeKind, PendingChangeRecord, PendingChangeStatus, SignerListWrite, SigningStore,
+        PendingChangeRecord, PendingChangeStatus, SignerListRecord, SignerListWrite, SigningStore,
     },
 };
 
@@ -44,8 +47,8 @@ pub fn router() -> Router<AppState> {
         )
         .route("/v1/pending-changes/{id}", get(get_pending_change))
         .route(
-            "/v1/pending-changes/{id}/signatures",
-            post(sign_pending_change),
+            "/v1/pending-changes/{id}/resolution",
+            post(resolve_pending_change),
         )
         .route(
             "/v1/deployments/{id}/config-statements",
@@ -69,57 +72,80 @@ pub struct StatementRequest {
     pub statement: SignedStatement,
 }
 
-/// Body of `POST /v1/projects/{project}/pending-changes`.
-#[derive(Debug, Deserialize)]
+/// Answer to storing a signer list version.
+#[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct CreatePendingChangeRequest {
-    pub kind: PendingChangeKind,
-    pub summary: String,
-    #[serde(default)]
-    pub deployment_id: Option<String>,
-    /// For device changes: the signer asking to be added.
-    #[serde(default)]
-    #[cfg_attr(feature = "openapi", schema(value_type = Option<Object>))]
-    pub device: Option<Signer>,
-    /// For statement changes: base64 payload bytes to sign.
-    #[serde(default)]
-    pub payload: Option<String>,
-    #[serde(default)]
-    pub signatures: Vec<Signature>,
+pub struct SignerListStored {
+    /// The version stored.
+    pub version: u64,
 }
 
-/// Body of `POST /v1/pending-changes/{id}/signatures`.
+/// Body of `POST /v1/projects/{project}/pending-changes`: the body of the
+/// next signer list, for an admin to review and sign.
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreatePendingChangeRequest {
+    /// One line for lists, such as `bob-thinkpad asks to: release`.
+    pub summary: String,
+    /// Signer list version the body was prepared from.
+    pub based_on_version: u64,
+    /// The next list's body (`previous`, `adminThreshold`, `signers`,
+    /// `deny`, `recovered`).
+    #[cfg_attr(feature = "openapi", schema(value_type = Object))]
+    pub body: serde_json::Value,
+}
+
+/// How a pending change ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct SignPendingChangeRequest {
-    pub signatures: Vec<Signature>,
-    /// The complete signed statement, once it has every signature it needs.
+pub enum ResolutionStatus {
+    Approved,
+    Rejected,
+}
+
+/// Body of `POST /v1/pending-changes/{id}/resolution`.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvePendingChangeRequest {
+    pub status: ResolutionStatus,
+    /// The signer list version that carries the change; required when approved.
     #[serde(default)]
-    pub statement: Option<SignedStatement>,
+    pub signer_list_version: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::IntoParams))]
+#[serde(rename_all = "camelCase")]
+pub struct PendingChangesQuery {
+    /// Only changes with this status.
+    pub status: Option<PendingChangeStatus>,
 }
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct PendingChangeResponse {
+    /// Also the request id the pairing code covers.
     pub id: String,
     pub project_id: String,
-    pub kind: PendingChangeKind,
     pub status: PendingChangeStatus,
+    /// Display only.
     pub summary: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deployment_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "openapi", schema(value_type = Option<Object>))]
-    pub device: Option<Signer>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub payload: Option<String>,
-    pub signatures: Vec<Signature>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub statement: Option<SignedStatement>,
+    /// Signer list version the body was prepared from.
+    pub based_on_version: u64,
+    /// The next list's body.
+    #[cfg_attr(feature = "openapi", schema(value_type = Object))]
+    pub body: serde_json::Value,
+    /// Who filed it, display only.
+    pub requested_by: Option<String>,
     pub created_at: String,
+    pub resolved_at: Option<String>,
+    /// Set when approved.
+    pub signer_list_version: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -134,20 +160,28 @@ impl From<PendingChangeRecord> for PendingChangeResponse {
         Self {
             id: record.id,
             project_id: record.project_id,
-            kind: record.kind,
             status: record.status,
             summary: record.summary,
-            deployment_id: record.deployment_id,
-            device: record.device,
-            payload: record.payload,
-            signatures: record.signatures,
-            statement: record.statement,
+            based_on_version: record.based_on_version,
+            body: record.body,
+            requested_by: record.requested_by,
             created_at: record.created_at.to_rfc3339(),
+            resolved_at: record.resolved_at.map(|at| at.to_rfc3339()),
+            signer_list_version: record.signer_list_version,
         }
     }
 }
 
 type Handler<T> = std::result::Result<T, Response>;
+
+/// The caller's name as people read it: a user's email, or the service
+/// account id.
+fn display_name(subject: &Subject) -> String {
+    match &subject.kind {
+        SubjectKind::User { email, .. } => email.clone(),
+        SubjectKind::ServiceAccount { id } => id.clone(),
+    }
+}
 
 async fn setup(
     state: &AppState,
@@ -168,11 +202,26 @@ async fn setup(
     Ok((subject, store))
 }
 
-fn conflict(reason: impl Into<String>) -> Response {
-    alien_error::AlienError::new(ErrorData::SignedStatementConflict {
+fn list_conflict(reason: impl Into<String>) -> Response {
+    AlienError::new(ErrorData::SignerListConflict {
         reason: reason.into(),
     })
     .into_response()
+}
+
+/// `409 SIGNING_ALREADY_ON` with `context: { enabledBy, enabledAt }`.
+fn signing_already_on(project: &str, first: &SignerListRecord) -> Response {
+    let enabled_at = first.created_at.to_rfc3339();
+    let mut error = AlienError::new(ErrorData::SigningAlreadyOn {
+        project: project.to_string(),
+        enabled_by: first.created_by.clone(),
+        enabled_at: enabled_at.clone(),
+    });
+    error.context = Some(serde_json::json!({
+        "enabledBy": first.created_by,
+        "enabledAt": enabled_at,
+    }));
+    error.into_response()
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -194,7 +243,10 @@ async fn list_signer_lists(
         Err(response) => return response,
     };
     match store.signer_lists(&project).await {
-        Ok(items) => Json(SignerListsResponse { items }).into_response(),
+        Ok(records) => Json(SignerListsResponse {
+            items: records.into_iter().map(|record| record.statement).collect(),
+        })
+        .into_response(),
         Err(error) => error.into_response(),
     }
 }
@@ -207,9 +259,9 @@ async fn list_signer_lists(
     params(("project" = String, Path, description = "Project id")),
     request_body = StatementRequest,
     responses(
-        (status = 201, description = "Stored"),
-        (status = 200, description = "The same version was already stored"),
-        (status = 409, description = "The version is out of order or differs from the stored one"),
+        (status = 201, description = "Stored", body = SignerListStored),
+        (status = 200, description = "The same version was already stored", body = SignerListStored),
+        (status = 409, description = "SIGNING_ALREADY_ON: another version 1 is stored; SIGNER_LIST_CONFLICT: the version skips one or differs from the stored one"),
     ),
     security(("bearer" = []))
 ))]
@@ -219,7 +271,7 @@ async fn add_signer_list(
     Path(project): Path<String>,
     Json(request): Json<StatementRequest>,
 ) -> Response {
-    let (_, store) = match setup(&state, &headers, &project).await {
+    let (subject, store) = match setup(&state, &headers, &project).await {
         Ok(ok) => ok,
         Err(response) => return response,
     };
@@ -234,29 +286,45 @@ async fn add_signer_list(
         }
         Err(error) => return ErrorData::bad_request(error.message).into_response(),
     };
-    if opened.project.as_deref() != Some(project.as_str()) {
-        return ErrorData::bad_request("The signer list names another project").into_response();
+    if opened.project != project {
+        return ErrorData::bad_request(format!(
+            "The signer list is for project '{}', not '{project}'",
+            opened.project
+        ))
+        .into_response();
+    }
+    let version = opened.sequence;
+    if version == 0 {
+        return ErrorData::bad_request("Signer list versions start at 1").into_response();
     }
     let stored = match store.signer_lists(&project).await {
         Ok(stored) => stored,
         Err(error) => return error.into_response(),
     };
     let next = stored.len() as u64 + 1;
-    if opened.sequence > next {
-        return conflict(format!(
-            "Signer list version {} can't be stored before version {next}",
-            opened.sequence
+    if version > next {
+        return list_conflict(format!(
+            "Signer list version {version} can't be stored before version {next}"
         ));
     }
-    match store
-        .add_signer_list(&project, opened.sequence, &request.statement)
-        .await
-    {
-        Ok(SignerListWrite::Added) => StatusCode::CREATED.into_response(),
-        Ok(SignerListWrite::AlreadyStored) => StatusCode::OK.into_response(),
-        Ok(SignerListWrite::Conflict) => conflict(format!(
-            "A different signer list version {} is already stored",
-            opened.sequence
+    let record = SignerListRecord {
+        version,
+        statement: request.statement,
+        created_by: display_name(&subject),
+        created_at: Utc::now(),
+    };
+    match store.add_signer_list(&project, &record).await {
+        Ok(SignerListWrite::Added) => {
+            (StatusCode::CREATED, Json(SignerListStored { version })).into_response()
+        }
+        Ok(SignerListWrite::AlreadyStored) => {
+            (StatusCode::OK, Json(SignerListStored { version })).into_response()
+        }
+        Ok(SignerListWrite::Conflict(first)) if version == 1 => {
+            signing_already_on(&project, &first)
+        }
+        Ok(SignerListWrite::Conflict(_)) => list_conflict(format!(
+            "A different signer list version {version} is already stored"
         )),
         Err(error) => error.into_response(),
     }
@@ -267,14 +335,15 @@ async fn add_signer_list(
     path = "/v1/projects/{project}/pending-changes",
     operation_id = "list_pending_changes",
     tag = "signing",
-    params(("project" = String, Path, description = "Project id")),
-    responses((status = 200, description = "Pending changes", body = PendingChangesResponse)),
+    params(("project" = String, Path, description = "Project id"), PendingChangesQuery),
+    responses((status = 200, description = "Pending changes, newest first", body = PendingChangesResponse)),
     security(("bearer" = []))
 ))]
 async fn list_pending_changes(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(project): Path<String>,
+    Query(query): Query<PendingChangesQuery>,
 ) -> Response {
     let (_, store) = match setup(&state, &headers, &project).await {
         Ok(ok) => ok,
@@ -284,7 +353,7 @@ async fn list_pending_changes(
         Ok(records) => Json(PendingChangesResponse {
             items: records
                 .into_iter()
-                .filter(|record| record.status == PendingChangeStatus::Pending)
+                .filter(|record| query.status.is_none_or(|status| record.status == status))
                 .map(Into::into)
                 .collect(),
         })
@@ -309,46 +378,27 @@ async fn create_pending_change(
     Path(project): Path<String>,
     Json(request): Json<CreatePendingChangeRequest>,
 ) -> Response {
-    let (_, store) = match setup(&state, &headers, &project).await {
+    let (subject, store) = match setup(&state, &headers, &project).await {
         Ok(ok) => ok,
         Err(response) => return response,
     };
-    let well_formed = match request.kind {
-        PendingChangeKind::Device => request.device.is_some() && request.payload.is_none(),
-        PendingChangeKind::Statement => request.payload.is_some() && request.device.is_none(),
-    };
-    if !well_formed {
-        return ErrorData::bad_request(
-            "A device change carries a device, and a statement change carries a payload",
-        )
-        .into_response();
-    }
-    if let Some(payload) = &request.payload {
-        let unsigned = SignedStatement {
-            payload: payload.clone(),
-            signatures: Vec::new(),
-        };
-        match unsigned.open() {
-            Ok(opened) if opened.project.as_deref() == Some(project.as_str()) => {}
-            Ok(_) => {
-                return ErrorData::bad_request("The statement names another project")
-                    .into_response()
-            }
-            Err(error) => return ErrorData::bad_request(error.message).into_response(),
-        }
+    // The admin's CLI reads the body as the next list's body; refuse one it
+    // could never sign.
+    if let Err(error) = serde_json::from_value::<SignerListBody>(request.body.clone()) {
+        return ErrorData::bad_request(format!("The body is not a signer list body: {error}"))
+            .into_response();
     }
     let record = PendingChangeRecord {
         id: format!("pch_{}", uuid::Uuid::new_v4().simple()),
         project_id: project,
-        kind: request.kind,
         status: PendingChangeStatus::Pending,
         summary: request.summary,
-        deployment_id: request.deployment_id,
-        device: request.device,
-        payload: request.payload,
-        signatures: request.signatures,
-        statement: None,
-        created_at: chrono::Utc::now(),
+        based_on_version: request.based_on_version,
+        body: request.body,
+        requested_by: Some(display_name(&subject)),
+        created_at: Utc::now(),
+        resolved_at: None,
+        signer_list_version: None,
     };
     match store.create_pending_change(&record).await {
         Ok(()) => (
@@ -378,8 +428,7 @@ async fn load_pending(
         .await
         .map_err(IntoResponse::into_response)?
         .ok_or_else(|| {
-            alien_error::AlienError::new(ErrorData::PendingChangeNotFound { id: id.to_string() })
-                .into_response()
+            AlienError::new(ErrorData::PendingChangeNotFound { id: id.to_string() }).into_response()
         })?;
     if !state.authz.can_create_release(&subject, &record.project_id) {
         return Err(ErrorData::forbidden("Cannot manage signing for this project").into_response());
@@ -409,60 +458,62 @@ async fn get_pending_change(
 
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
-    path = "/v1/pending-changes/{id}/signatures",
-    operation_id = "sign_pending_change",
+    path = "/v1/pending-changes/{id}/resolution",
+    operation_id = "resolve_pending_change",
     tag = "signing",
     params(("id" = String, Path, description = "Pending change id")),
-    request_body = SignPendingChangeRequest,
-    responses((status = 200, description = "Updated", body = PendingChangeResponse)),
+    request_body = ResolvePendingChangeRequest,
+    responses(
+        (status = 200, description = "Resolved", body = PendingChangeResponse),
+        (status = 409, description = "The change is already resolved"),
+    ),
     security(("bearer" = []))
 ))]
-async fn sign_pending_change(
+async fn resolve_pending_change(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(request): Json<SignPendingChangeRequest>,
+    Json(request): Json<ResolvePendingChangeRequest>,
 ) -> Response {
     let (store, mut record) = match load_pending(&state, &headers, &id).await {
         Ok(ok) => ok,
         Err(response) => return response,
     };
     if record.status != PendingChangeStatus::Pending {
-        return conflict(format!("Pending change '{id}' is already resolved"));
+        return AlienError::new(ErrorData::SignedStatementConflict {
+            reason: format!("Pending change '{id}' is already resolved"),
+        })
+        .into_response();
     }
-    for signature in request.signatures {
-        record
-            .signatures
-            .retain(|existing| existing.signer != signature.signer);
-        record.signatures.push(signature);
-    }
-    if let Some(statement) = request.statement {
-        // A statement change resolves only with the bytes it asked to sign.
-        if let Some(payload) = &record.payload {
-            if &statement.payload != payload {
-                return ErrorData::bad_request("The statement is not the pending payload")
-                    .into_response();
-            }
-        }
-        let opened = match statement.open() {
-            Ok(opened) => opened,
-            Err(error) => return ErrorData::bad_request(error.message).into_response(),
-        };
-        if opened.kind == Kind::Config {
-            let Some(deployment) = opened.deployment.clone() else {
-                return ErrorData::bad_request("A config statement names its deployment")
-                    .into_response();
+    match (request.status, request.signer_list_version) {
+        (ResolutionStatus::Approved, Some(version)) => {
+            // Presence only: the CLI that signed the list verified it.
+            let lists = match store.signer_lists(&record.project_id).await {
+                Ok(lists) => lists,
+                Err(error) => return error.into_response(),
             };
-            if let Err(error) = store
-                .add_config_statement(&deployment, opened.sequence, &statement)
-                .await
-            {
-                return error.into_response();
+            if !lists.iter().any(|list| list.version == version) {
+                return ErrorData::bad_request(format!(
+                    "Signer list version {version} is not stored; store it before approving"
+                ))
+                .into_response();
             }
+            record.status = PendingChangeStatus::Approved;
+            record.signer_list_version = Some(version);
         }
-        record.status = PendingChangeStatus::Approved;
-        record.statement = Some(statement);
+        (ResolutionStatus::Approved, None) => {
+            return ErrorData::bad_request(
+                "An approved change names the signer list version that carries it",
+            )
+            .into_response()
+        }
+        (ResolutionStatus::Rejected, None) => record.status = PendingChangeStatus::Rejected,
+        (ResolutionStatus::Rejected, Some(_)) => {
+            return ErrorData::bad_request("A rejected change names no signer list version")
+                .into_response()
+        }
     }
+    record.resolved_at = Some(Utc::now());
     match store.update_pending_change(&record).await {
         Ok(()) => Json(PendingChangeResponse::from(record)).into_response(),
         Err(error) => error.into_response(),
@@ -513,8 +564,17 @@ async fn add_config_statement(
         }
         Err(error) => return ErrorData::bad_request(error.message).into_response(),
     };
-    if opened.deployment.as_deref() != Some(deployment.id.as_str()) {
-        return ErrorData::bad_request("The config statement names another deployment")
+    if opened.project != deployment.project_id {
+        return ErrorData::bad_request(format!(
+            "The config statement is for project '{}', not this deployment's",
+            opened.project
+        ))
+        .into_response();
+    }
+    // The statement names the install it is for; the install checks that
+    // itself, so the manager only stores it.
+    if opened.install.is_none() {
+        return ErrorData::bad_request("A config statement names the install it is for")
             .into_response();
     }
     // Sync hands the newest config to the deployment on its next pass.

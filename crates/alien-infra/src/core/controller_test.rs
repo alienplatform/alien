@@ -806,20 +806,6 @@ pub struct SingleControllerExecutorBuilder {
     delay_mode: DelayMode,
 }
 
-/// Account that publishes the machine images of the executor's setups. A setup whose
-/// management identity can launch machines must name one; a test that sets no publisher gets
-/// this one.
-const TEST_MACHINE_IMAGE_PUBLISHER: &str = "444455556666";
-
-fn with_test_machine_image_publisher(mut settings: StackSettings) -> StackSettings {
-    settings
-        .machine_image_publisher
-        .get_or_insert_with(|| alien_core::MachineImagePublisher {
-            aws_account_id: TEST_MACHINE_IMAGE_PUBLISHER.to_string(),
-        });
-    settings
-}
-
 impl SingleControllerExecutorBuilder {
     fn new() -> Self {
         Self {
@@ -827,7 +813,7 @@ impl SingleControllerExecutorBuilder {
             previous_resource: None,
             controller: None,
             platform: None,
-            stack_settings: with_test_machine_image_publisher(StackSettings::default()),
+            stack_settings: StackSettings::default(),
             setup_run: true,
             management_config: None,
             gcp_federation_scope: None,
@@ -904,7 +890,7 @@ impl SingleControllerExecutorBuilder {
     }
 
     pub fn stack_settings(mut self, settings: StackSettings) -> Self {
-        self.stack_settings = with_test_machine_image_publisher(settings);
+        self.stack_settings = settings;
         self
     }
 

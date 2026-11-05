@@ -3,8 +3,7 @@
 //! Each backend creates a P-256 key that can't leave the hardware and needs
 //! the person at the keyboard for every signature: Touch ID or the login
 //! password on macOS, a PIN on a TPM, a touch on a YubiKey. A machine with
-//! none of them gets a software key in a private file, listed on the signer
-//! list as `software` so admins can see it and refuse it.
+//! none of them has no device key, and releases from it go out unsigned.
 //!
 //! The hardware backends drive the platform's own tools (`swift` with
 //! CryptoKit, `tpm2-tools`, `yubico-piv-tool`), so the CLI links no hardware
@@ -15,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_signing::{PublicKey, SignerKind, SoftwareKey};
+use alien_signing::PublicKey;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -36,34 +35,32 @@ pub enum Backend {
     Tpm,
     /// A YubiKey's PIV applet, slot 9c.
     Yubikey,
-    /// A private file, for machines without secure hardware.
-    Software,
 }
 
 impl Backend {
-    /// Every backend, in the order `auto` tries them.
-    pub const ALL: [Backend; 4] = [
-        Backend::SecureEnclave,
-        Backend::Tpm,
-        Backend::Yubikey,
-        Backend::Software,
-    ];
+    /// Every backend, in the order they are tried.
+    pub const ALL: [Backend; 3] = [Backend::SecureEnclave, Backend::Tpm, Backend::Yubikey];
 
-    /// The kind the signer list records for a key on this backend.
-    pub fn signer_kind(self) -> SignerKind {
-        match self {
-            Backend::Software => SignerKind::Software,
-            _ => SignerKind::Device,
-        }
+    /// The first backend this machine has, if any.
+    pub fn detect() -> Option<Backend> {
+        Self::ALL.into_iter().find(|backend| backend.available())
     }
 
-    /// Name for display and for the `--backend` flag.
+    /// Name for display.
     pub fn as_str(self) -> &'static str {
         match self {
             Backend::SecureEnclave => "secure-enclave",
             Backend::Tpm => "tpm",
             Backend::Yubikey => "yubikey",
-            Backend::Software => "software",
+        }
+    }
+
+    /// What the person does to sign, as the prompt names it.
+    pub fn gesture(self) -> &'static str {
+        match self {
+            Backend::SecureEnclave => "Touch ID",
+            Backend::Tpm => "TPM PIN",
+            Backend::Yubikey => "YubiKey touch",
         }
     }
 
@@ -85,7 +82,6 @@ impl Backend {
                         .status()
                         .is_ok_and(|status| status.success())
             }
-            Backend::Software => true,
         }
     }
 }
@@ -109,16 +105,6 @@ impl DeviceKey {
             .context(file_failed(dir, "create the device key directory"))?;
         restrict_dir(dir)?;
         let public_key = match backend {
-            Backend::Software => {
-                let key =
-                    SoftwareKey::generate().context(signing_failed("generate a software key"))?;
-                write_private(
-                    &dir.join("key.pem"),
-                    &key.to_pkcs8_pem()
-                        .context(signing_failed("encode the key"))?,
-                )?;
-                key.public_key()
-            }
             Backend::Tpm => tpm::create(dir)?,
             Backend::Yubikey => yubikey::create(dir)?,
             Backend::SecureEnclave => secure_enclave::create(dir)?,
@@ -147,42 +133,50 @@ impl DeviceKey {
         })
     }
 
-    /// Sign `message`; the hardware asks for the person's presence. The
-    /// signature is checked against the public key before it is returned, so
-    /// a backend fault never produces a signature enforcers will refuse.
+    /// Sign `message`; the hardware asks for the person's presence.
     pub fn sign(&self, message: &[u8]) -> Result<String> {
-        let signature = match self.backend {
-            Backend::Software => {
-                let pem = std::fs::read_to_string(self.dir.join("key.pem"))
-                    .into_alien_error()
-                    .context(file_failed(&self.dir, "read the software key"))?;
-                SoftwareKey::from_pkcs8_pem(&pem)
-                    .context(signing_failed("read the software key"))?
-                    .sign(message)
-            }
-            Backend::Tpm => tpm::sign(&self.dir, message)?,
-            Backend::Yubikey => yubikey::sign(&self.dir, message)?,
-            Backend::SecureEnclave => secure_enclave::sign(&self.dir, message)?,
-        };
-        self.public_key
-            .verify(message, &signature)
-            .context(signing_failed(&format!(
-                "check the {} signature",
-                self.backend.as_str()
-            )))?;
-        Ok(signature)
+        let mut signatures = self.sign_all(&[message.to_vec()])?;
+        signatures.pop().ok_or_else(|| {
+            AlienError::new(ErrorData::SigningFailed {
+                message: format!("The {} key returned no signature", self.backend.as_str()),
+            })
+        })
     }
-}
 
-/// Fingerprint code people compare when an admin approves a device: the
-/// first four hex digits of the key's SHA-256, upper case, such as `4F2A`.
-pub fn approval_code(key: &PublicKey) -> String {
-    key.fingerprint()
-        .trim_start_matches("SHA256:")
-        .chars()
-        .take(4)
-        .collect::<String>()
-        .to_uppercase()
+    /// Sign every message, asking for the person's presence once where the
+    /// hardware allows it (Touch ID, a TPM PIN; a YubiKey asks for a touch
+    /// per signature). Each signature is checked against the public key
+    /// before it is returned, so a backend fault never produces a signature
+    /// enforcers will refuse.
+    pub fn sign_all(&self, messages: &[Vec<u8>]) -> Result<Vec<String>> {
+        let signatures = match self.backend {
+            Backend::Tpm => tpm::sign_all(&self.dir, messages)?,
+            Backend::Yubikey => messages
+                .iter()
+                .map(|message| yubikey::sign(&self.dir, message))
+                .collect::<Result<Vec<_>>>()?,
+            Backend::SecureEnclave => secure_enclave::sign_all(&self.dir, messages)?,
+        };
+        if signatures.len() != messages.len() {
+            return Err(AlienError::new(ErrorData::SigningFailed {
+                message: format!(
+                    "The {} key returned {} signatures for {} messages",
+                    self.backend.as_str(),
+                    signatures.len(),
+                    messages.len()
+                ),
+            }));
+        }
+        for (message, signature) in messages.iter().zip(&signatures) {
+            self.public_key
+                .verify(message, signature)
+                .context(signing_failed(&format!(
+                    "check the {} signature",
+                    self.backend.as_str()
+                )))?;
+        }
+        Ok(signatures)
+    }
 }
 
 mod tpm {
@@ -230,10 +224,19 @@ mod tpm {
         public_from_der(&dir.join("key.der"))
     }
 
-    pub(super) fn sign(dir: &Path, message: &[u8]) -> Result<String> {
+    pub(super) fn sign_all(dir: &Path, messages: &[Vec<u8>]) -> Result<Vec<String>> {
         let pin = super::pin("TPM signing key PIN")?;
         primary(dir)?;
         load(dir)?;
+        let signatures = messages
+            .iter()
+            .map(|message| sign_loaded(dir, message, &pin))
+            .collect();
+        cleanup(dir);
+        signatures
+    }
+
+    fn sign_loaded(dir: &Path, message: &[u8], pin: &str) -> Result<String> {
         std::fs::write(dir.join("message.bin"), message)
             .into_alien_error()
             .context(file_failed(dir, "write the message to sign"))?;
@@ -261,7 +264,6 @@ mod tpm {
                 .into_alien_error()
                 .context(file_failed(dir, "read the TPM signature"))
         });
-        cleanup(dir);
         let _ = std::fs::remove_file(dir.join("message.bin"));
         let _ = std::fs::remove_file(dir.join("signature.der"));
         Ok(STANDARD.encode(signature?))
@@ -367,7 +369,6 @@ mod yubikey {
         std::fs::write(dir.join("message.bin"), message)
             .into_alien_error()
             .context(file_failed(dir, "write the message to sign"))?;
-        eprintln!("Touch your YubiKey to sign.");
         let result = run(
             Command::new("yubico-piv-tool").args([
                 "-a",
@@ -419,14 +420,23 @@ try key.dataRepresentation.write(to: URL(fileURLWithPath: "key.blob"))
 FileHandle.standardOutput.write(key.publicKey.derRepresentation.base64EncodedData())
 "#;
 
+    // One authentication context for every message, so Touch ID asks once
+    // for all the statements of one release.
     const SIGN: &str = r#"
 import CryptoKit
 import Foundation
+import LocalAuthentication
 let blob = try Data(contentsOf: URL(fileURLWithPath: "key.blob"))
-let key = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: blob)
-let message = FileHandle.standardInput.readDataToEndOfFile()
-let signature = try key.signature(for: message)
-FileHandle.standardOutput.write(signature.derRepresentation.base64EncodedData())
+let context = LAContext()
+let key = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: blob, authenticationContext: context)
+let input = String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)
+var signatures: [String] = []
+for line in input.split(separator: "\n") {
+    guard let message = Data(base64Encoded: String(line)) else { exit(3) }
+    let signature = try key.signature(for: message)
+    signatures.append(signature.derRepresentation.base64EncodedString())
+}
+FileHandle.standardOutput.write(signatures.joined(separator: "\n").data(using: .utf8)!)
 "#;
 
     pub(super) fn create(dir: &Path) -> Result<PublicKey> {
@@ -435,13 +445,22 @@ FileHandle.standardOutput.write(signature.derRepresentation.base64EncodedData())
             .context(signing_failed("read the Secure Enclave public key"))
     }
 
-    pub(super) fn sign(dir: &Path, message: &[u8]) -> Result<String> {
-        eprintln!("Confirm with Touch ID to sign.");
-        Ok(
-            swift(dir, SIGN, message, "sign with the Secure Enclave key")?
-                .trim()
-                .to_string(),
-        )
+    pub(super) fn sign_all(dir: &Path, messages: &[Vec<u8>]) -> Result<Vec<String>> {
+        let input = messages
+            .iter()
+            .map(|message| STANDARD.encode(message))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(swift(
+            dir,
+            SIGN,
+            input.as_bytes(),
+            "sign with the Secure Enclave key",
+        )?
+        .lines()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect())
     }
 
     fn swift(dir: &Path, script: &str, input: &[u8], action: &str) -> Result<String> {
@@ -572,43 +591,6 @@ fn signing_failed(action: &str) -> ErrorData {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_software_device_key_signs_and_survives_reopening() {
-        let dir = tempfile::tempdir().unwrap();
-        let key = DeviceKey::create(Backend::Software, dir.path()).unwrap();
-        let reopened = DeviceKey::open(Backend::Software, dir.path()).unwrap();
-        assert_eq!(reopened.public_key, key.public_key);
-        let signature = reopened.sign(b"statement bytes").unwrap();
-        key.public_key
-            .verify(b"statement bytes", &signature)
-            .unwrap();
-        assert_eq!(Backend::Software.signer_kind(), SignerKind::Software);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let mode = std::fs::metadata(dir.path().join("key.pem"))
-                .unwrap()
-                .permissions()
-                .mode();
-            assert_eq!(mode & 0o777, 0o600);
-        }
-        DeviceKey::create(Backend::Software, dir.path())
-            .expect_err("an existing key is never replaced");
-    }
-
-    #[test]
-    fn approval_codes_are_four_upper_hex_digits_of_the_key() {
-        let key = SoftwareKey::from_secret_bytes(&[7; 32])
-            .unwrap()
-            .public_key();
-        let code = approval_code(&key);
-        assert_eq!(code.len(), 4);
-        assert!(code
-            .chars()
-            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_lowercase()));
-        assert!(key.fingerprint().to_uppercase().contains(&code));
-    }
 
     /// Runs against a real TPM: the machine's, or a simulator named by
     /// `TPM2TOOLS_TCTI` (for example `swtpm:port=2321`).

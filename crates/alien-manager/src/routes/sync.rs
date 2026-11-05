@@ -3523,7 +3523,10 @@ pub(crate) async fn build_pull_target(
         (Some(_), Some(signing)) => signing
             .signer_lists(&r.project_id)
             .await
-            .map_err(|error| error.into_response())?,
+            .map_err(|error| error.into_response())?
+            .into_iter()
+            .map(|record| record.statement)
+            .collect(),
         _ => Vec::new(),
     };
     // The deployment's newest signed config: a protected deployment takes
