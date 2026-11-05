@@ -18,6 +18,7 @@ use mockall::automock;
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait CloudFormationApi: Send + Sync + std::fmt::Debug {
     async fn create_stack(&self, request: CreateStackRequest) -> Result<CreateStackResponse>;
+    async fn get_template(&self, request: GetTemplateRequest) -> Result<GetTemplateResponse>;
     async fn describe_stacks(
         &self,
         request: DescribeStacksRequest,
@@ -252,6 +253,16 @@ impl CloudFormationApi for CloudFormationClient {
         self.post_xml(body, "CreateStack", stack_name).await
     }
 
+    async fn get_template(&self, request: GetTemplateRequest) -> Result<GetTemplateResponse> {
+        let params = vec![
+            ("StackName".to_string(), request.stack_name.clone()),
+            ("TemplateStage".to_string(), "Original".to_string()),
+        ];
+        let body = Self::build_form_body("GetTemplate", "2010-05-15", params);
+        self.post_xml(body, "GetTemplate", &request.stack_name)
+            .await
+    }
+
     async fn describe_stacks(
         &self,
         request: DescribeStacksRequest,
@@ -368,6 +379,25 @@ pub struct CreateStackResponse {
 #[serde(rename_all = "PascalCase")]
 pub struct CreateStackResult {
     pub stack_id: String,
+}
+
+/// Fetches the original customer-submitted template without expanding transforms.
+#[derive(Serialize, Debug, Clone, Builder)]
+#[serde(rename_all = "PascalCase")]
+pub struct GetTemplateRequest {
+    pub stack_name: String,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct GetTemplateResponse {
+    pub get_template_result: GetTemplateResult,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct GetTemplateResult {
+    pub template_body: String,
 }
 
 #[derive(Serialize, Debug, Clone, Builder)]

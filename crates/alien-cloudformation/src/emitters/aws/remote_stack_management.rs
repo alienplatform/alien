@@ -375,13 +375,36 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
     statements.push(CfExpression::object([
         ("Sid", CfExpression::from("ReadOwnManagementRole")),
         ("Effect", CfExpression::from("Allow")),
-        ("Action", CfExpression::from("iam:GetRole")),
+        (
+            "Action",
+            CfExpression::list([
+                CfExpression::from("iam:GetRole"),
+                CfExpression::from("iam:GetRolePolicy"),
+            ]),
+        ),
         (
             "Resource",
             CfExpression::sub(
                 "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-management",
             ),
         ),
+    ]));
+
+    // Installation verification reads only this setup stack; it cannot update IAM
+    // or apply a CloudFormation change on behalf of the customer administrator.
+    statements.push(CfExpression::object([
+        ("Sid", CfExpression::from("ReadOwnSetupStack")),
+        ("Effect", CfExpression::from("Allow")),
+        (
+            "Action",
+            CfExpression::list([
+                CfExpression::from("cloudformation:GetTemplate"),
+                CfExpression::from("cloudformation:DescribeStacks"),
+                CfExpression::from("cloudformation:DescribeStackResources"),
+                CfExpression::from("cloudformation:DescribeStackEvents"),
+            ]),
+        ),
+        ("Resource", CfExpression::ref_("AWS::StackId")),
     ]));
 
     // Chunk against the complete expanded ARN before replacing it with a short Ref.
