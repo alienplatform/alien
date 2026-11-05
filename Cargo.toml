@@ -30,6 +30,7 @@ members = [
   "crates/alien-observer",
   "crates/alien-error",
   "crates/alien-release-trust",
+  "crates/alien-gate",
   "crates/alien-ai-gateway",
   "crates/alien-error-derive",
   "crates/alien-permissions",

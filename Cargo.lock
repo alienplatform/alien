@@ -848,6 +848,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "alien-gate"
+version = "3.3.53"
+dependencies = [
+ "alien-aws-clients",
+ "alien-client-core",
+ "alien-error",
+ "alien-release-trust",
+ "async-trait",
+ "chrono",
+ "lambda_runtime",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "alien-gcp-clients"
 version = "3.3.53"
 dependencies = [

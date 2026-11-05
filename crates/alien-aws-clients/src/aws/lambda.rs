@@ -48,6 +48,9 @@ pub trait LambdaApi: Send + Sync + std::fmt::Debug {
     /// GetFunction: the function's configuration and its tags. Lambda returns the tags only to
     /// callers allowed `lambda:ListTags`; for others `tags` is `None`.
     async fn get_function(&self, function_name: &str) -> Result<GetFunctionResponse>;
+    /// GetFunction's response exactly as Lambda returned it, for callers that
+    /// must notice fields this client doesn't model.
+    async fn get_function_json(&self, function_name: &str) -> Result<serde_json::Value>;
     /// The environment variables the function runs with, from a GetFunction call (needs
     /// `lambda:GetFunction`). Values can be secret: never log them.
     async fn get_function_environment(
@@ -559,6 +562,12 @@ impl LambdaApi for LambdaClient {
     }
 
     async fn get_function(&self, function_name: &str) -> Result<GetFunctionResponse> {
+        let path = format!("/2015-03-31/functions/{}", function_name);
+        self.send_json(Method::GET, &path, None, None, "GetFunction", function_name)
+            .await
+    }
+
+    async fn get_function_json(&self, function_name: &str) -> Result<serde_json::Value> {
         let path = format!("/2015-03-31/functions/{}", function_name);
         self.send_json(Method::GET, &path, None, None, "GetFunction", function_name)
             .await
@@ -1106,6 +1115,16 @@ pub struct UpdateFunctionConfigurationRequest {
     /// VPC configuration for running the function inside a VPC
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vpc_config: Option<VpcConfig>,
+    /// Layer ARNs. An empty list removes every layer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layers: Option<Vec<String>>,
+    /// File systems to mount. An empty list removes every mount.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_system_configs: Option<Vec<serde_json::Value>>,
+    /// Image entry point, command and working directory overrides. Empty
+    /// values clear them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_config: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
