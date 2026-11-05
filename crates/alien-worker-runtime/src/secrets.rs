@@ -37,7 +37,8 @@ pub fn secrets_list(
 }
 
 /// Refuse a secret that would become a loader variable such as `LD_PRELOAD`:
-/// a value in a vault must never decide what code the process loads.
+/// on a protected install a value in a vault must never decide what code the
+/// process loads. Unprotected installs keep loading these names as before.
 fn refuse_loader_name(name: &str) -> Result<()> {
     if alien_signing::release::is_loader_env(name) {
         return Err(AlienError::new(ErrorData::SecretLoadFailed {
@@ -85,10 +86,13 @@ struct AlienSecretsConfig {
 ///
 /// # Arguments
 /// * `bindings_provider` - The bindings provider to load vault from
-/// * `alien_secrets_json` - The ALIEN_SECRETS JSON string (from config.env_vars or std::env)
+/// * `alien_secrets_json` - The secrets list JSON string (from config.env_vars or std::env)
+/// * `list_env` - The env var the list came from; a `WORKLOAD_SECRETS` list
+///   (protected installs) may not name loader variables
 pub async fn load_secrets_from_vault(
     bindings_provider: &dyn alien_bindings::BindingsProviderApi,
     alien_secrets_json: &str,
+    list_env: &str,
 ) -> Result<std::collections::HashMap<String, String>> {
     // Parse the JSON
     let config: AlienSecretsConfig = serde_json::from_str(alien_secrets_json)
@@ -98,12 +102,14 @@ pub async fn load_secrets_from_vault(
             message: "Failed to parse the secrets list JSON".to_string(),
         })?;
 
-    for name in config
-        .keys
-        .iter()
-        .chain(config.deployer_secrets.iter().map(|secret| &secret.name))
-    {
-        refuse_loader_name(name)?;
+    if list_env == ENV_WORKLOAD_SECRETS {
+        for name in config
+            .keys
+            .iter()
+            .chain(config.deployer_secrets.iter().map(|secret| &secret.name))
+        {
+            refuse_loader_name(name)?;
+        }
     }
 
     if config.keys.is_empty() && config.deployer_secrets.is_empty() {
@@ -307,7 +313,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_vault_value_named_like_a_loader_never_becomes_env() {
+    async fn a_vault_value_named_like_a_loader_never_becomes_env_on_a_protected_install() {
         let temp = tempfile::TempDir::new().unwrap();
         let state_dir = temp.path().to_string_lossy().to_string();
         let binding = serde_json::to_value(alien_core::VaultBinding::local(
@@ -339,14 +345,27 @@ mod tests {
             .unwrap();
 
         // Without a loader name the list loads.
-        let loaded = load_secrets_from_vault(&provider, r#"{"keys":["API_KEY"],"hash":"h"}"#)
-            .await
-            .unwrap();
+        let loaded = load_secrets_from_vault(
+            &provider,
+            r#"{"keys":["API_KEY"],"hash":"h"}"#,
+            ENV_WORKLOAD_SECRETS,
+        )
+        .await
+        .unwrap();
         assert_eq!(loaded["API_KEY"], "k");
 
         for name in ["LD_PRELOAD", "NODE_OPTIONS"] {
             let list = serde_json::json!({"keys": ["API_KEY", name], "hash": "h"}).to_string();
-            let error = load_secrets_from_vault(&provider, &list)
+            // Unprotected installs load the names as they always did.
+            let loaded = load_secrets_from_vault(&provider, &list, alien_core::ENV_ALIEN_SECRETS)
+                .await
+                .unwrap();
+            assert!(
+                loaded.contains_key(name),
+                "{name} loads on an unprotected install"
+            );
+
+            let error = load_secrets_from_vault(&provider, &list, ENV_WORKLOAD_SECRETS)
                 .await
                 .expect_err("a loader name from a vault must be refused");
             assert!(
@@ -364,7 +383,7 @@ mod tests {
             }],
         })
         .to_string();
-        let error = load_secrets_from_vault(&provider, &deployer)
+        let error = load_secrets_from_vault(&provider, &deployer, ENV_WORKLOAD_SECRETS)
             .await
             .expect_err("a loader name from the deployer's vault must be refused");
         assert!(error.message.contains("LD_AUDIT"), "{}", error.message);
@@ -399,9 +418,13 @@ mod tests {
         let temp = tempfile::TempDir::new().unwrap();
         let provider = local_vault_provider(temp.path());
 
-        let error = load_secrets_from_vault(&provider, &deployer_secrets_json(true))
-            .await
-            .expect_err("start must fail without the secret");
+        let error = load_secrets_from_vault(
+            &provider,
+            &deployer_secrets_json(true),
+            alien_core::ENV_ALIEN_SECRETS,
+        )
+        .await
+        .expect_err("start must fail without the secret");
 
         assert_eq!(error.code, "DEPLOYER_SECRET_MISSING");
         assert!(
@@ -416,9 +439,13 @@ mod tests {
         let temp = tempfile::TempDir::new().unwrap();
         let provider = local_vault_provider(temp.path());
 
-        let loaded = load_secrets_from_vault(&provider, &deployer_secrets_json(false))
-            .await
-            .unwrap();
+        let loaded = load_secrets_from_vault(
+            &provider,
+            &deployer_secrets_json(false),
+            alien_core::ENV_ALIEN_SECRETS,
+        )
+        .await
+        .unwrap();
         assert!(loaded.is_empty());
     }
 
@@ -437,18 +464,26 @@ mod tests {
             .set_secret("database-password", "first")
             .await
             .unwrap();
-        let loaded = load_secrets_from_vault(&provider, &deployer_secrets_json(true))
-            .await
-            .unwrap();
+        let loaded = load_secrets_from_vault(
+            &provider,
+            &deployer_secrets_json(true),
+            alien_core::ENV_ALIEN_SECRETS,
+        )
+        .await
+        .unwrap();
         assert_eq!(loaded["DATABASE_PASSWORD"], "first");
 
         vault
             .set_secret("database-password", "rotated")
             .await
             .unwrap();
-        let loaded = load_secrets_from_vault(&provider, &deployer_secrets_json(true))
-            .await
-            .unwrap();
+        let loaded = load_secrets_from_vault(
+            &provider,
+            &deployer_secrets_json(true),
+            alien_core::ENV_ALIEN_SECRETS,
+        )
+        .await
+        .unwrap();
         assert_eq!(loaded["DATABASE_PASSWORD"], "rotated");
     }
 }
