@@ -517,6 +517,10 @@ pub(crate) fn render_terraform_module(
     if let Some(barrier) = &gcp_iam_propagation_barrier {
         import_depends_on.push(barrier.clone());
     }
+    let release_trust_anchor = release_trust_anchor_block(&stack_settings, target)?;
+    if let Some(anchor) = &release_trust_anchor {
+        import_depends_on.extend(resource_address(anchor));
+    }
 
     let network_vars = network_extra_variables(stack, &labels);
     let include_kubernetes_provider = target.is_kubernetes()
@@ -727,6 +731,12 @@ pub(crate) fn render_terraform_module(
             let file_name = format!("{}.tf", resource_label_for_file(&labels, &resource_id));
             files.insert(file_name, render_body(body)?);
         }
+    }
+    if let Some(anchor) = release_trust_anchor {
+        files.insert(
+            "release_trust.tf".to_string(),
+            render_body(Body::from(vec![Structure::Block(anchor)]))?,
+        );
     }
     if !gcp_iam_propagation_dependencies.is_empty() {
         files.insert(
@@ -1772,6 +1782,56 @@ fn upsert_depends_on(resource: &mut Block, depends_on: &[Expression]) {
 
 fn body_is_empty(body: &Body) -> bool {
     body.iter().next().is_none()
+}
+
+/// The parameter that holds a protected deployment's anchor: setup alone writes it. The
+/// management role has no grant on its path, and its guard denies writes there. It carries no
+/// deployment tag, so no grant conditioned on that tag reaches it.
+fn release_trust_anchor_block(
+    settings: &StackSettings,
+    target: TerraformTarget,
+) -> Result<Option<Block>> {
+    let Some(release_trust) = &settings.release_trust else {
+        return Ok(None);
+    };
+    if target != TerraformTarget::Aws {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: format!("protect a {} deployment through Terraform", target.name()),
+            reason: "Terraform writes the anchor only for AWS; on Kubernetes the chart's releaseSigning values hold it".to_string(),
+        }));
+    }
+    let prefix = "${local.resource_prefix}";
+    let anchor = release_trust.anchor(prefix)?;
+    let value = serde_json::to_value(&anchor).into_alien_error().context(
+        ErrorData::JsonSerializationFailed {
+            reason: "cannot serialize the anchor".to_string(),
+        },
+    )?;
+    Ok(Some(resource_block(
+        "aws_ssm_parameter",
+        "release_trust_anchor",
+        [
+            attr(
+                "name",
+                expr::template(alien_core::release_trust_parameter_name(prefix)),
+            ),
+            attr("type", Expression::String("String".to_string())),
+            attr("tier", Expression::String("Standard".to_string())),
+            attr(
+                "description",
+                Expression::String(
+                    "What this deployment trusts: the signer list, the component key and protection. Written by setup only."
+                        .to_string(),
+                ),
+            ),
+            attr(
+                "value",
+                expr::jsonencode(crate::emitters::aws::helpers::json_value_to_expression(
+                    value,
+                )),
+            ),
+        ],
+    )))
 }
 
 fn resource_label_for_file<'a>(
@@ -2853,6 +2913,10 @@ fn advanced_settings_default_json(
         object.remove("telemetry");
         object.remove("heartbeats");
         object.remove("endpointAccess");
+        // Setup writes these into the anchor and the management policy. A later change to
+        // the registered settings changes neither, so they are not offered as one.
+        object.remove("releaseTrust");
+        object.remove("machineImagePublisher");
         if (matches!(target.cloud_platform(), alien_core::Platform::Aws)
             && has_dynamic_aws_network_settings(stack_settings.network.as_ref()))
             || (matches!(target.cloud_platform(), alien_core::Platform::Gcp)

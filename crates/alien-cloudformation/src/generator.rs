@@ -666,6 +666,7 @@ pub fn generate_cloudformation_template_with_profile(
     };
 
     let management_config = management_config_expression(options.target);
+    let stack_settings_value = stack_settings.clone();
     let stack_settings = stack_settings_expression(
         options.target,
         stack,
@@ -681,6 +682,7 @@ pub fn generate_cloudformation_template_with_profile(
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
     apply_network_iam_dependencies(stack, &emitted_resource_ids, &mut template);
     add_sandbox_gateway_replica_secret(&mut template, stack, options.target);
+    add_release_trust_anchor(&mut template, &stack_settings_value, options.target)?;
     consolidate_role_inline_policies(&mut template)?;
 
     add_deployer_secret_outputs(
@@ -1849,6 +1851,63 @@ fn add_sandbox_gateway_replica_secret(
         ]),
     );
     template.resources.insert(secret.logical_id.clone(), secret);
+}
+
+/// Logical ID of the parameter that holds a protected deployment's anchor.
+const RELEASE_TRUST_ANCHOR_ID: &str = "ReleaseTrustAnchor";
+
+/// Writes the anchor of a protected deployment: setup alone writes it. The management role has
+/// no grant on its path, and its guard denies writes there.
+///
+/// The parameter carries no deployment tag, so no grant conditioned on that tag reaches it.
+fn add_release_trust_anchor(
+    template: &mut CfTemplate,
+    settings: &StackSettings,
+    target: CloudFormationTarget,
+) -> Result<()> {
+    let Some(release_trust) = &settings.release_trust else {
+        return Ok(());
+    };
+    if target.is_kubernetes() {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "protect a Kubernetes deployment through CloudFormation".to_string(),
+            reason: "On Kubernetes the chart's releaseSigning values hold the anchor; install the chart with them".to_string(),
+        }));
+    }
+    let prefix = "${AWS::StackName}";
+    let anchor = release_trust.anchor(prefix)?;
+    // The anchor checks every field it holds: hex, base64, an enum and plain IDs. The only
+    // substitutions in the text are the stack name.
+    let value = serde_json::to_string(&anchor).map_err(|error| {
+        AlienError::new(ErrorData::TemplateSerializationFailed {
+            format: "CloudFormation".to_string(),
+            reason: format!("cannot serialize the anchor: {error}"),
+        })
+    })?;
+    let mut parameter = CfResource::new(
+        RELEASE_TRUST_ANCHOR_ID.to_string(),
+        "AWS::SSM::Parameter".to_string(),
+    );
+    parameter.properties.insert(
+        "Name".to_string(),
+        CfExpression::sub(alien_core::release_trust_parameter_name(prefix)),
+    );
+    parameter
+        .properties
+        .insert("Type".to_string(), CfExpression::from("String"));
+    parameter
+        .properties
+        .insert("Tier".to_string(), CfExpression::from("Standard"));
+    parameter.properties.insert(
+        "Description".to_string(),
+        CfExpression::from(
+            "What this deployment trusts: the signer list, the component key and protection. Written by setup only.",
+        ),
+    );
+    parameter
+        .properties
+        .insert("Value".to_string(), CfExpression::sub(value));
+    insert_resource(template, parameter)
 }
 
 fn add_network_parameters(
