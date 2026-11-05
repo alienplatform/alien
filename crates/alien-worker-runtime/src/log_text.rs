@@ -1,10 +1,9 @@
+use alien_core::ALIEN_SYSTEM_LOG_LINE_PREFIX;
 use std::borrow::Cow;
-
-const SYSTEM_LOG_PREFIX: &str = "\u{1e}ALIEN_SYSTEM\u{1f}";
 
 pub(crate) fn strip_system_log_prefix(input: &str) -> (&str, bool) {
     input
-        .strip_prefix(SYSTEM_LOG_PREFIX)
+        .strip_prefix(ALIEN_SYSTEM_LOG_LINE_PREFIX)
         .map_or((input, false), |body| (body, true))
 }
 
