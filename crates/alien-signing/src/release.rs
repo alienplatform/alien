@@ -490,7 +490,7 @@ pub struct WorkloadRequest {
 pub struct LocalValues {
     /// Deployer input values, by input id, from the customer's own store.
     pub deployer_inputs: BTreeMap<String, String>,
-    /// Binding values, by environment name, from [`crate::binding_env`].
+    /// Binding values, by environment name, from [`crate::resolve_bindings`].
     pub bindings: BTreeMap<String, String>,
 }
 

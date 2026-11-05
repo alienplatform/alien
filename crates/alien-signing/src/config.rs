@@ -19,6 +19,11 @@ pub struct ConfigBody {
     /// Developer input values, by id.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub inputs: BTreeMap<String, serde_json::Value>,
+    /// Values of bindings to resources outside the customer's cloud, by
+    /// resource id. Used only for bindings the enforcer can neither derive
+    /// nor find in its own install.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bindings: BTreeMap<String, serde_json::Value>,
     /// Where workloads send telemetry, if anywhere. The control plane can't
     /// point it elsewhere: it is part of the signed config.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -41,6 +46,18 @@ impl ConfigBody {
                 return Err(refused(
                     Kind::Config,
                     format!("input '{id}' is not configurable in the signed release"),
+                ));
+            }
+        }
+        for id in self.bindings.keys() {
+            if !release
+                .workloads
+                .iter()
+                .any(|workload| workload.bindings.contains_key(id))
+            {
+                return Err(refused(
+                    Kind::Config,
+                    format!("binding '{id}' is not a binding of the signed release"),
                 ));
             }
         }
