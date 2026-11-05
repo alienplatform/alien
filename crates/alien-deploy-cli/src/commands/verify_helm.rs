@@ -63,10 +63,17 @@ pub fn helm_install(
         ),
     })?;
     let defaults = yaml_object(files, "values.yaml")?;
-    let set = observed.record["config"]
-        .as_object()
-        .cloned()
-        .unwrap_or_default();
+    // What Helm renders with: the stored chart's values with the
+    // installer's on top. An upgrade with `--reuse-values` stores the
+    // previous values in the chart, so the chart's values alone aren't
+    // the signed values.yaml even when nothing else changed.
+    let mut effective = observed.record["chart"]["values"].clone();
+    coalesce(&mut effective, &observed.record["config"]);
+    let effective = match effective {
+        Value::Object(map) => map,
+        Value::Null => Map::new(),
+        _ => return Err(failed("Helm's stored values are not a mapping")),
+    };
     let signed = Signed {
         install,
         prefix: observed.release.clone(),
@@ -88,7 +95,10 @@ pub fn helm_install(
     let installed = Installed {
         template: HELM,
         digest: sha256_digest(&alien_cli_common::setup_templates::file_map_bytes(files)),
-        choices: Choices::Values { set, defaults },
+        choices: Choices::Values {
+            effective,
+            defaults,
+        },
     };
     let chart = match installed_chart_differences(&observed.record["chart"], files) {
         Ok(()) => line(
@@ -121,9 +131,37 @@ fn yaml_object(files: &BTreeMap<String, String>, path: &str) -> Result<Map<Strin
     }
 }
 
+/// Put `over` on top of `base` as Helm merges values: maps merge key by
+/// key, anything else replaces, and `null` removes the key.
+fn coalesce(base: &mut Value, over: &Value) {
+    let Value::Object(over) = over else {
+        if !over.is_null() {
+            *base = over.clone();
+        }
+        return;
+    };
+    if !base.is_object() {
+        *base = Value::Object(Map::new());
+    }
+    if let Value::Object(base) = base {
+        for (key, value) in over {
+            match (base.get_mut(key), value) {
+                (_, Value::Null) => {
+                    base.remove(key);
+                }
+                (Some(existing @ Value::Object(_)), Value::Object(_)) => coalesce(existing, value),
+                _ => {
+                    base.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+}
+
 /// How the chart Helm stored differs from the chart's files: templates,
-/// schema and other files byte for byte, default values and the chart's
-/// name and version as parsed (Helm keeps those parsed, not as bytes).
+/// schema and other files byte for byte, and the chart's name and version
+/// as parsed (Helm keeps Chart.yaml parsed, not as bytes). Values are
+/// checked as the values in effect, against the signed allow-list.
 fn installed_chart_differences(
     stored: &Value,
     files: &BTreeMap<String, String>,
@@ -186,14 +224,6 @@ fn installed_chart_differences(
     if schema.as_deref() != files.get("values.schema.json").map(String::as_str) {
         differences.push("values.schema.json differs from the chart".to_string());
     }
-    match yaml_object(files, "values.yaml") {
-        Ok(defaults) => {
-            if stored["values"] != Value::Object(defaults) {
-                differences.push("values.yaml differs from the chart".to_string());
-            }
-        }
-        Err(error) => differences.push(error.message.clone()),
-    }
     match yaml_object(files, "Chart.yaml") {
         Ok(chart) => {
             for field in ["name", "version"] {
@@ -219,6 +249,12 @@ pub async fn observe(release: &str, namespace: &str) -> Result<HelmObserved> {
             .await
             .context(ErrorData::ConfigurationError {
                 message: "Could not load the kubeconfig".to_string(),
+            })?;
+    let config =
+        alien_infra::resolve_kubeconfig(&config)
+            .await
+            .context(ErrorData::ConfigurationError {
+                message: "Could not read the kubeconfig".to_string(),
             })?;
     let client = KubernetesClient::new(config)
         .await
@@ -331,3 +367,7 @@ async fn config_map_entry(
         }),
     }
 }
+
+#[cfg(test)]
+#[path = "verify_helm_tests.rs"]
+mod tests;

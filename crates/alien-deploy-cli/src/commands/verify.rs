@@ -223,12 +223,12 @@ pub enum Choices {
     /// CloudFormation parameters: the fingerprint parameter must hold the
     /// pinned fingerprint, every other parameter must be allowed.
     Parameters(BTreeMap<String, String>),
-    /// Helm values the installer set: each must be allowed, or equal the
-    /// chart's own default.
+    /// Helm values in effect (`helm get values --all`): each top-level value
+    /// that isn't the signed chart's default must be allowed.
     Values {
-        /// Values the installer set (`helm get values`).
-        set: serde_json::Map<String, serde_json::Value>,
-        /// The chart's `values.yaml`.
+        /// Values in effect.
+        effective: serde_json::Map<String, serde_json::Value>,
+        /// The signed chart's `values.yaml`.
         defaults: serde_json::Map<String, serde_json::Value>,
     },
     /// Not readable from the install (Terraform variables live in the
@@ -489,11 +489,20 @@ fn choices_line(choices: &Choices, allowed: &[String], settings: &SigningSetting
             }
             ("Parameters", "fingerprint pinned · ")
         }
-        Choices::Values { set, defaults } => {
-            for (name, value) in set {
+        Choices::Values {
+            effective,
+            defaults,
+        } => {
+            let mut names: Vec<&String> = effective.keys().chain(defaults.keys()).collect();
+            names.sort();
+            names.dedup();
+            for name in names {
+                if effective.get(name) == defaults.get(name) {
+                    continue;
+                }
                 if allowed.contains(name) {
                     chosen += 1;
-                } else if defaults.get(name) != Some(value) {
+                } else {
                     refused.push(format!(
                         "{name} is set, and it is not a value the signed release allows"
                     ));
