@@ -89,5 +89,5 @@ jobs:
       # with real CLI and manager processes and keys in the simulator.
       - name: Test the signing flow
         run: |
-          cargo test --locked -p alien-cli --test signing_flow -- --ignored | tee "$RUNNER_TEMP/flow-test.log"
+          cargo test --locked -p alien-cli --features test-device-env --test signing_flow -- --ignored | tee "$RUNNER_TEMP/flow-test.log"
           grep -q "test result: ok. 1 passed" "$RUNNER_TEMP/flow-test.log"

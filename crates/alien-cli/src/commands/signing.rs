@@ -569,6 +569,19 @@ async fn list(ctx: &ExecutionMode, json: bool) -> Result<()> {
         ]);
     }
     crate::ui::print_table(table);
+    if let Some((record, key)) = SigningHome::current()?.device()? {
+        let on_list = list
+            .body
+            .signers
+            .iter()
+            .any(|signer| signer.key == key.public_key.as_str());
+        println!(
+            "This device  {} · {}{}",
+            record.signer_id,
+            record.backend.hardware(),
+            if on_list { "" } else { " · not trusted yet" }
+        );
+    }
     println!("Fingerprint  {}", display_fingerprint(&repo.fingerprint));
     println!(
         "Device list  v{} · expires {}{}",

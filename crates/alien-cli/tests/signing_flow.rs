@@ -572,6 +572,13 @@ async fn signing_from_first_release_to_recovery() {
     let alice_id = alice_id.as_str();
     let bob_id = device("bob");
     let bob_id = bob_id.as_str();
+    let devices = ok(world.run(&alice, &app, &["devices", "list"]));
+    assert!(
+        devices.contains(&format!(
+            "This device  {alice_id} · TPM simulator (test build)"
+        )),
+        "{devices}"
+    );
     assert!(
         output.contains(&format!("· signed by {alice_id} · production")),
         "{output}"

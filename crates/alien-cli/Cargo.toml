@@ -18,6 +18,9 @@ path = "src/main.rs"
 default = ["otlp", "platform"]
 otlp = ["dep:alien-worker-runtime", "alien-worker-runtime/otlp"]
 platform = ["dep:oauth2", "dep:open"]
+# Test builds only: read the device key PIN from ALIEN_DEVICE_KEY_PIN and the
+# TPM from TPM2TOOLS_TCTI (a TPM simulator). Never in a release build.
+test-device-env = []
 
 [dependencies]
 bon = { workspace = true }
@@ -109,3 +112,7 @@ http = { workspace = true }
 snapbox = "0.6.0"
 predicates = "3.0.4"
 insta = { workspace = true }
+
+[[test]]
+name = "signing_flow"
+required-features = ["test-device-env"]

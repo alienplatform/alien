@@ -21,9 +21,30 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{ErrorData, Result};
 
-/// Environment variable holding the PIN for TPM and YubiKey backends, for
-/// unattended use such as tests. Interactive use prompts instead.
+/// Environment variable holding the PIN for TPM and YubiKey backends, read
+/// only by test builds (`cfg(test)` or the `test-device-env` feature).
+/// Release builds always prompt.
 pub const DEVICE_PIN_ENV: &str = "ALIEN_DEVICE_KEY_PIN";
+
+/// The TPM release builds use: the machine's own.
+const MACHINE_TPM: &str = "device:/dev/tpmrm0";
+
+/// The TPM the tpm2 tools talk to. Release builds always use the machine's
+/// own; test builds honor `TPM2TOOLS_TCTI`, such as a swtpm simulator.
+fn tpm_tcti() -> String {
+    #[cfg(any(test, feature = "test-device-env"))]
+    if let Ok(tcti) = std::env::var("TPM2TOOLS_TCTI") {
+        return tcti;
+    }
+    MACHINE_TPM.to_string()
+}
+
+/// A tpm2 tool, pointed at [`tpm_tcti`] whatever the environment says.
+fn tpm2(program: &str) -> Command {
+    let mut command = Command::new(program);
+    command.env("TPM2TOOLS_TCTI", tpm_tcti());
+    command
+}
 
 /// Which secure hardware holds a device key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +76,17 @@ impl Backend {
         }
     }
 
+    /// The hardware, as `devices list` names it. A test build pointed at a
+    /// TPM simulator says so.
+    pub fn hardware(self) -> &'static str {
+        match self {
+            Backend::SecureEnclave => "Secure Enclave",
+            Backend::Tpm if tpm_tcti() != MACHINE_TPM => "TPM simulator (test build)",
+            Backend::Tpm => "TPM",
+            Backend::Yubikey => "YubiKey",
+        }
+    }
+
     /// What the person does to sign, as the prompt names it.
     pub fn gesture(self) -> &'static str {
         match self {
@@ -70,8 +102,7 @@ impl Backend {
             Backend::SecureEnclave => cfg!(target_os = "macos") && which::which("swift").is_ok(),
             Backend::Tpm => {
                 which::which("tpm2_create").is_ok()
-                    && (std::env::var_os("TPM2TOOLS_TCTI").is_some()
-                        || Path::new("/dev/tpmrm0").exists())
+                    && (tpm_tcti() != MACHINE_TPM || Path::new("/dev/tpmrm0").exists())
             }
             Backend::Yubikey => {
                 which::which("yubico-piv-tool").is_ok()
@@ -193,7 +224,7 @@ mod tpm {
         let pin = super::pin("Choose a PIN for the TPM signing key")?;
         primary(dir)?;
         tpm(
-            Command::new("tpm2_create").args([
+            tpm2("tpm2_create").args([
                 "-Q",
                 "-C",
                 "primary.ctx",
@@ -214,8 +245,7 @@ mod tpm {
         )?;
         load(dir)?;
         tpm(
-            Command::new("tpm2_readpublic")
-                .args(["-Q", "-c", "key.ctx", "-f", "der", "-o", "key.der"]),
+            tpm2("tpm2_readpublic").args(["-Q", "-c", "key.ctx", "-f", "der", "-o", "key.der"]),
             dir,
             None,
             "read the TPM public key",
@@ -241,7 +271,7 @@ mod tpm {
             .into_alien_error()
             .context(file_failed(dir, "write the message to sign"))?;
         let result = tpm(
-            Command::new("tpm2_sign").args([
+            tpm2("tpm2_sign").args([
                 "-Q",
                 "-c",
                 "key.ctx",
@@ -271,7 +301,7 @@ mod tpm {
 
     fn primary(dir: &Path) -> Result<()> {
         tpm(
-            Command::new("tpm2_createprimary").args([
+            tpm2("tpm2_createprimary").args([
                 "-Q",
                 "-C",
                 "o",
@@ -290,7 +320,7 @@ mod tpm {
 
     fn load(dir: &Path) -> Result<()> {
         tpm(
-            Command::new("tpm2_load").args([
+            tpm2("tpm2_load").args([
                 "-Q",
                 "-C",
                 "primary.ctx",
@@ -320,7 +350,7 @@ mod tpm {
     fn tpm(command: &mut Command, dir: &Path, input: Option<&[u8]>, action: &str) -> Result<()> {
         let result = run(command, dir, input, action);
         let flushed = run(
-            Command::new("tpm2_flushcontext").arg("-t"),
+            tpm2("tpm2_flushcontext").arg("-t"),
             dir,
             None,
             "flush the TPM's transient objects",
@@ -480,12 +510,13 @@ FileHandle.standardOutput.write(signatures.joined(separator: "\n").data(using: .
 }
 
 fn pin(prompt: &str) -> Result<String> {
+    #[cfg(any(test, feature = "test-device-env"))]
     if let Ok(pin) = std::env::var(DEVICE_PIN_ENV) {
         return Ok(pin);
     }
     if !crate::output::can_prompt() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: format!("{prompt} is needed; run in a terminal or set {DEVICE_PIN_ENV}"),
+            message: format!("{prompt} is needed; run in a terminal"),
         }));
     }
     eprint!("{prompt}: ");
