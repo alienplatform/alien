@@ -43,6 +43,9 @@ pub struct GcpMetricSource {
     /// Whether numeric DELTA points are known non-negative counter increments.
     #[serde(default)]
     pub monotonic: bool,
+    /// Provider visibility delay. This is independent of the collection cadence.
+    #[serde(default)]
+    pub minimum_lag_seconds: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

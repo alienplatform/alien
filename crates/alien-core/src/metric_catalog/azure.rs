@@ -24,7 +24,15 @@ pub fn container_app(resource_uri: &str) -> Vec<AzureMetricSource> {
 
 /// Blob-service platform metrics apply to the service/account, not an individual container.
 pub fn blob_service(blob_service_uri: &str) -> Vec<AzureMetricSource> {
+    let mut capacity = native(
+        blob_service_uri,
+        "Microsoft.Storage/storageAccounts/blobServices",
+        &["BlobCapacity", "BlobCount", "ContainerCount"],
+        "Average",
+    );
+    capacity.interval_seconds = 3600;
     vec![
+        capacity,
         native(
             blob_service_uri,
             "Microsoft.Storage/storageAccounts/blobServices",

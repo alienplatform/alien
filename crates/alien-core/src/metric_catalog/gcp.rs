@@ -134,5 +134,12 @@ fn resource_source(
         project_id: project.into(),
         filter,
         monotonic: metric.ends_with("_count"),
+        // Capacity is measured daily, then repeated every five minutes with up to
+        // 690 seconds of reporting delay. Other selected native families fit 300s.
+        minimum_lag_seconds: if metric.starts_with("storage.googleapis.com/storage/") {
+            900
+        } else {
+            300
+        },
     }
 }

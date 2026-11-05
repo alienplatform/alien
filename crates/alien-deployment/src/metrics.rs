@@ -103,11 +103,13 @@ pub async fn collect_and_checkpoint(
         let interval = i64::from(collection.interval_seconds).max(source_period);
         // Daily S3 storage metrics may arrive much later than workload metrics.
         // Never close yesterday's capacity window after only a minute of lag.
-        let lag = i64::from(collection.source_lag_seconds).max(if source_period >= 86400 {
-            48 * 3600
-        } else {
-            0
-        });
+        let native_lag = match &job.source {
+            MetricsSource::Gcp(source) => i64::from(source.minimum_lag_seconds),
+            _ => 0,
+        };
+        let lag = i64::from(collection.source_lag_seconds)
+            .max(native_lag)
+            .max(if source_period >= 86400 { 48 * 3600 } else { 0 });
         let end_seconds = (now.timestamp() - lag) / interval * interval;
         let end = Utc
             .timestamp_opt(end_seconds, 0)
