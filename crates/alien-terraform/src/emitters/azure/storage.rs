@@ -344,7 +344,11 @@ fn emit_storage_permissions(
                 ),
             })?;
 
-        emit_remote_bindings_role_definitions(fragment, &permission_set)?;
+        emit_remote_bindings_role_definitions(
+            fragment,
+            &permission_set,
+            ctx.stack_settings.signing.is_some(),
+        )?;
 
         for (binding_index, binding) in grant_plan.bindings.iter().enumerate() {
             let role_definition_id = match &binding.role_definition {

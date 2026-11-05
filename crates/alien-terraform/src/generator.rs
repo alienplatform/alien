@@ -491,7 +491,7 @@ pub(crate) fn render_terraform_module(
         apply_aws_network_iam_dependency(stack, &mut per_resource);
     }
     if matches!(platform, alien_core::Platform::Azure) {
-        emit_azure_setup_resource_role_definitions(&mut per_resource, stack)?;
+        emit_azure_setup_resource_role_definitions(&mut per_resource, stack, &stack_settings)?;
         apply_azure_resource_group_dependency(stack, &labels, &mut per_resource);
     }
     // Every fragment is emitted and every generator-injected block exists by
@@ -549,7 +549,8 @@ pub(crate) fn render_terraform_module(
             _ => None,
         })
         .collect();
-    let verifier_machine_network = verifier_machine_network(stack, &stack_settings, &labels, target)?;
+    let verifier_machine_network =
+        verifier_machine_network(stack, &stack_settings, &labels, target)?;
     let signing = signing_blocks(
         &stack_settings,
         target,
@@ -1114,12 +1115,17 @@ fn append_permission_entry(
 fn emit_azure_setup_resource_role_definitions(
     per_resource: &mut IndexMap<String, TfFragment>,
     stack: &Stack,
+    settings: &StackSettings,
 ) -> Result<()> {
     let Some((_resource_id, fragment)) = per_resource.iter_mut().next() else {
         return Ok(());
     };
 
-    crate::emitters::azure::helpers::emit_setup_resource_role_definitions(stack, fragment)
+    crate::emitters::azure::helpers::emit_setup_resource_role_definitions(
+        stack,
+        fragment,
+        settings.signing.is_some(),
+    )
 }
 
 fn dedupe_gcp_support_resources(per_resource: &mut IndexMap<String, TfFragment>) -> Result<()> {
@@ -1860,7 +1866,10 @@ fn signing_blocks(
     let ledger_json = alien_signing::Ledger::new(prefix).to_json();
     // Standard SSM parameters and Parameter Manager versions hold far more than this; the
     // ledger keeps heads only. A prefix is at most 128 characters.
-    for (name, json) in [("settings", signing_settings.to_json()), ("ledger", ledger_json.clone())] {
+    for (name, json) in [
+        ("settings", signing_settings.to_json()),
+        ("ledger", ledger_json.clone()),
+    ] {
         if json.replace(prefix, &"x".repeat(128)).len() > 4096 {
             return Err(AlienError::new(ErrorData::TemplateSerializationFailed {
                 format: "Terraform".to_string(),
@@ -1874,32 +1883,32 @@ fn signing_blocks(
             vec![fingerprint_variable],
             aws_verifier_blocks(pins, management_label, verifier_machine_network)?,
             vec![
-            resource_block(
-                "aws_ssm_parameter",
-                "signing_fingerprint",
-                [
-                    attr(
-                        "name",
-                        expr::template(alien_signing::settings::names::aws_settings(prefix)),
-                    ),
-                    attr("type", Expression::String("String".to_string())),
-                    attr("tier", Expression::String("Standard".to_string())),
-                    attr("value", settings_value),
-                ],
-            ),
-            resource_block(
-                "aws_ssm_parameter",
-                "signing_state",
-                [
-                    attr(
-                        "name",
-                        expr::template(alien_signing::settings::names::aws_ledger(prefix)),
-                    ),
-                    attr("type", Expression::String("String".to_string())),
-                    attr("tier", Expression::String("Standard".to_string())),
-                    attr("value", ledger_value),
-                ],
-            ),
+                resource_block(
+                    "aws_ssm_parameter",
+                    "signing_fingerprint",
+                    [
+                        attr(
+                            "name",
+                            expr::template(alien_signing::settings::names::aws_settings(prefix)),
+                        ),
+                        attr("type", Expression::String("String".to_string())),
+                        attr("tier", Expression::String("Standard".to_string())),
+                        attr("value", settings_value),
+                    ],
+                ),
+                resource_block(
+                    "aws_ssm_parameter",
+                    "signing_state",
+                    [
+                        attr(
+                            "name",
+                            expr::template(alien_signing::settings::names::aws_ledger(prefix)),
+                        ),
+                        attr("type", Expression::String("String".to_string())),
+                        attr("tier", Expression::String("Standard".to_string())),
+                        attr("value", ledger_value),
+                    ],
+                ),
             ],
         ]
         .concat()),
@@ -2109,7 +2118,10 @@ fn aws_verifier_blocks(
             "aws_iam_role_policy_attachment",
             "management_limits",
             [
-                attr("role", expr::traversal(["aws_iam_role", management, "name"])),
+                attr(
+                    "role",
+                    expr::traversal(["aws_iam_role", management, "name"]),
+                ),
                 attr(
                     "policy_arn",
                     expr::traversal(["aws_iam_policy", "management_limits", "arn"]),
@@ -2156,7 +2168,10 @@ fn azure_verifier_blocks(
     let env = |name: &str, value: Expression| {
         nested(block(
             "env",
-            [attr("name", Expression::String(name.to_string())), attr("value", value)],
+            [
+                attr("name", Expression::String(name.to_string())),
+                attr("value", value),
+            ],
         ))
     };
     Ok(vec![
@@ -2312,7 +2327,10 @@ fn gcp_verifier_blocks(runtime_service_accounts: &[String]) -> Vec<Block> {
                         "format(\"%s_{suffix}\", replace(local.resource_prefix, \"-\", \"_\"))"
                     )),
                 ),
-                attr("title", expr::template(format!("${{local.resource_prefix}} {title}"))),
+                attr(
+                    "title",
+                    expr::template(format!("${{local.resource_prefix}} {title}")),
+                ),
                 attr(
                     "permissions",
                     Expression::Array(
@@ -2458,7 +2476,10 @@ fn gcp_verifier_blocks(runtime_service_accounts: &[String]) -> Vec<Block> {
                     "service_account_id",
                     expr::traversal(["google_service_account", label, "name"]),
                 ),
-                attr("role", Expression::String("roles/iam.serviceAccountUser".to_string())),
+                attr(
+                    "role",
+                    Expression::String("roles/iam.serviceAccountUser".to_string()),
+                ),
                 attr("member", member.clone()),
             ],
         ));
@@ -2495,7 +2516,10 @@ fn verifier_machine_network(
         .find(|(_, entry)| entry.config.downcast_ref::<Network>().is_some())
         .ok_or_else(refuse)?;
     if matches!(
-        entry.config.downcast_ref::<Network>().map(|network| &network.settings),
+        entry
+            .config
+            .downcast_ref::<Network>()
+            .map(|network| &network.settings),
         Some(NetworkSettings::UseDefault)
     ) {
         return Err(refuse());
