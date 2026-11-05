@@ -241,9 +241,9 @@ pub enum Commands {
     #[command(flatten)]
     Platform(PlatformCommand),
 
-    /// Manage private managers deployed to your cloud
+    /// Manage Private Alien Instances deployed to your cloud
     #[cfg(feature = "platform")]
-    #[command(alias = "manager")]
+    #[command(name = "instances", visible_alias = "managers", aliases = ["instance", "manager"])]
     Managers(ManagersArgs),
 
     // No doc comment: it would replace the long help defined on `OperationsArgs`.
