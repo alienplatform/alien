@@ -47,6 +47,8 @@ async fn chart() -> RenderedSetupTemplate {
         .pins(SetupPins {
             aws_publisher: None,
             aws_verifier_image: None,
+            gcp_verifier_image: None,
+            azure_verifier_image: None,
             operator_digest: Some(format!("sha256:{}", "ef".repeat(32))),
         })
         .build();
