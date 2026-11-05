@@ -156,6 +156,31 @@ signing:
     Ok(())
 }
 
+/// Top-level values a customer may set on a protected chart, for the signed release's
+/// allow-list: every key of `values.yaml` except those the schema fixes whole. Inside the
+/// allowed keys, the schema still fixes every image digest and keeps Postgres off.
+pub fn allowed_values(chart: &crate::HelmChart) -> Result<Vec<String>> {
+    let values = chart
+        .files
+        .get("values.yaml")
+        .ok_or_else(|| missing("values.yaml"))?;
+    let values: serde_yaml::Mapping =
+        serde_yaml::from_str(values)
+            .into_alien_error()
+            .context(ErrorData::GenericError {
+                message: "the chart's values.yaml is not a YAML mapping".to_string(),
+            })?;
+    Ok(values
+        .keys()
+        .filter_map(|key| key.as_str())
+        .filter(|key| !PINNED_WHOLE.contains(key))
+        .map(str::to_string)
+        .collect())
+}
+
+/// Values a protected chart's schema fixes to the chart's own defaults.
+const PINNED_WHOLE: [&str; 2] = ["signing", "serviceAccounts"];
+
 /// Pin the signing settings and the digest of every image in the chart's values. A tag may
 /// change (a mirror may retag), the digest after its `@` may not, and Kubernetes pulls
 /// `repository:tag@digest` by the digest.
@@ -511,6 +536,26 @@ mod tests {
             error.to_string().contains("image value 'extra.image'"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn the_allow_list_leaves_out_exactly_the_values_the_schema_fixes() {
+        let pins = SignedChartPins {
+            operator_digest: DIGEST.to_string(),
+        };
+        let chart = render(protected(), Some(&pins)).unwrap();
+        let allowed = allowed_values(&chart).unwrap();
+        let values: Value = serde_yaml::from_str(&chart.files["values.yaml"]).unwrap();
+        let schema: Value = serde_json::from_str(&chart.files["values.schema.json"]).unwrap();
+        for key in values.as_object().unwrap().keys() {
+            let property = &schema["properties"][key.as_str()];
+            let fixed = property.get("const").is_some()
+                || property["properties"].as_object().is_some_and(|fields| {
+                    !fields.is_empty() && fields.values().all(|field| field.get("const").is_some())
+                });
+            assert_eq!(!allowed.contains(key), fixed, "{key}: {property}");
+        }
+        assert!(allowed.contains(&"runtime".to_string()));
     }
 
     #[test]

@@ -38,4 +38,4 @@ pub use package::{
     PackageDefaults,
 };
 pub use registry::HelmRegistry;
-pub use signing::{SignedChartPins, LEDGER_KEY, SETTINGS_KEY};
+pub use signing::{allowed_values, SignedChartPins, LEDGER_KEY, SETTINGS_KEY};
