@@ -99,6 +99,11 @@ pub struct ReleaseArgs {
     #[arg(long, default_value = "production")]
     pub channel: String,
 
+    /// Pin the private instance machine API in this signed release's setup.
+    /// Must be an HTTPS origin followed by /v1/horizon; requires a signing key.
+    #[arg(long, conflicts_with = "no_stack")]
+    pub private_machine_api_url: Option<String>,
+
     /// Create the release without advancing a channel or scheduling deployment updates (platform mode).
     #[arg(long, conflicts_with = "channel")]
     pub no_promote: bool,
@@ -359,6 +364,7 @@ struct SigningState {
     /// release, so with any of them a release that can't be signed fails.
     protected: u64,
     channel: String,
+    private_machine_api_url: Option<String>,
     /// Whether the release goes to the channel now. With `--no-promote` it is
     /// signed for the channel but no deployment runs it until it's promoted.
     promoted: bool,
@@ -682,8 +688,21 @@ async fn plan_signing(
     interactive: bool,
 ) -> Result<SigningState> {
     let channel = args.channel.clone();
+    if let Some(endpoint) = &args.private_machine_api_url {
+        alien_signing::settings::validate_private_machine_api_url(endpoint).context(
+            ErrorData::SigningFailed {
+                message: "Invalid private machine setup endpoint".to_string(),
+            },
+        )?;
+        if ctx.is_dev() {
+            return Err(AlienError::new(ErrorData::SigningFailed {
+                message: "Private machine setup requires a signed release".to_string(),
+            }));
+        }
+    }
     if ctx.is_dev() {
         return Ok(SigningState {
+            private_machine_api_url: None,
             plan: SigningPlan::Unsigned("local development is unsigned".to_string()),
             protected: 0,
             channel,
@@ -695,7 +714,13 @@ async fn plan_signing(
     let api = SigningApi::from_context(ctx).await?;
     let protected = protected_following(ctx, project_id, &channel).await?;
     let plan = signing::release::plan(&api, dir, project_id, interactive).await?;
+    if args.private_machine_api_url.is_some() && !matches!(&plan, SigningPlan::Sign(_)) {
+        return Err(AlienError::new(ErrorData::SigningFailed {
+            message: "Private machine setup requires a usable signing key".to_string(),
+        }));
+    }
     Ok(SigningState {
+        private_machine_api_url: args.private_machine_api_url.clone(),
         plan,
         protected,
         channel,
@@ -1048,6 +1073,7 @@ async fn sign_release(
                 })
             })?;
         let settings = alien_core::StackSigning {
+            private_machine_api_url: signing.private_machine_api_url.clone(),
             fingerprint,
             channel: signing.channel.clone(),
         };
@@ -3486,6 +3512,7 @@ mod tests {
             platforms: vec!["test".to_string()],
             onboarding_inputs: vec![],
             signing: SigningState {
+                private_machine_api_url: None,
                 plan: SigningPlan::Unsigned("not under test".to_string()),
                 protected: 0,
                 channel: "production".to_string(),

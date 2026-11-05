@@ -103,6 +103,7 @@ async fn main() -> ExitCode {
     let stack: Stack = serde_json::from_str(&read(stack)).expect("stack JSON");
     let settings: StackSettings = serde_json::from_str(&read(settings)).expect("settings JSON");
     let unused = StackSigning {
+        private_machine_api_url: None,
         fingerprint: String::new(),
         channel: String::new(),
     };

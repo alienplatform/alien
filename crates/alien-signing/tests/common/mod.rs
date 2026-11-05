@@ -197,6 +197,7 @@ pub fn version_3(keys: &Keys) -> SignedStatement {
 
 pub fn settings(keys: &Keys) -> SigningSettings {
     SigningSettings {
+        private_machine_api_url: None,
         fingerprint: fingerprint(&genesis(keys).open().unwrap().digest),
         prefix: PREFIX.to_string(),
         channel: CHANNEL.to_string(),

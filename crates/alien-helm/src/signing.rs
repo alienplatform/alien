@@ -669,6 +669,7 @@ mod tests {
     fn protected() -> StackSettings {
         StackSettings {
             signing: Some(StackSigning {
+                private_machine_api_url: None,
                 fingerprint: FINGERPRINT.to_string(),
                 channel: "production".to_string(),
             }),

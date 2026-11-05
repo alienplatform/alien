@@ -1067,7 +1067,9 @@ pub fn is_pinned_image(image: &str) -> bool {
             .bytes()
             .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'/'))
         && hex.len() == 64
-        && hex.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        && hex
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// Digest (`sha256:<64 hex>`) of the Operator image protected charts run, if this build has
@@ -1076,8 +1078,11 @@ pub fn is_pinned_image(image: &str) -> bool {
 pub fn operator_digest() -> Option<&'static str> {
     let digest = include_str!("../operator-digest.txt").trim();
     let hex = digest.strip_prefix("sha256:")?;
-    (hex.len() == 64 && hex.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))
-        .then_some(digest)
+    (hex.len() == 64
+        && hex
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))
+    .then_some(digest)
 }
 
 /// Values a protected setup pins that come with the CLI build, not with the stack: the account
@@ -1119,6 +1124,10 @@ impl SetupPins {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StackSigning {
+    /// Customer setup pins this private instance machine endpoint and enables
+    /// install-local input custody. It cannot be changed by the runtime role.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_machine_api_url: Option<String>,
     /// `SHA256:<64 hex>` fingerprint of the vendor's signer list version 1.
     pub fingerprint: String,
     /// Release channel the install follows, such as `production`.
@@ -1130,6 +1139,7 @@ impl StackSigning {
     /// the way enforcers check them when they read them.
     pub fn settings(&self, prefix: &str) -> Result<SigningSettings> {
         let settings = SigningSettings {
+            private_machine_api_url: self.private_machine_api_url.clone(),
             fingerprint: self.fingerprint.clone(),
             prefix: prefix.to_string(),
             channel: self.channel.clone(),

@@ -3236,6 +3236,7 @@ fn resolve_signing(args: &JoinArgs) -> Result<Option<SigningSettings>> {
     ) {
         (Some(fingerprint), Some(prefix), Some(channel)) => {
             let settings = SigningSettings {
+                private_machine_api_url: None,
                 fingerprint: fingerprint.clone(),
                 prefix: prefix.clone(),
                 channel: channel.clone(),
@@ -3302,6 +3303,7 @@ fn read_signing_settings(install_root: &Path) -> Result<Option<(SigningSettings,
         .into_alien_error()
         .context(unreadable())?;
     let settings = SigningSettings {
+        private_machine_api_url: None,
         fingerprint: file.fingerprint,
         prefix: file.prefix,
         channel: file.channel,
@@ -6040,6 +6042,7 @@ mod tests {
 
         fn signing_settings(fingerprint: &str) -> SigningSettings {
             SigningSettings {
+                private_machine_api_url: None,
                 fingerprint: fingerprint.to_string(),
                 prefix: "acme-edge".to_string(),
                 channel: "production".to_string(),
