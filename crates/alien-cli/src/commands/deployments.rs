@@ -99,6 +99,7 @@ pub enum MonitoringMode {
     alien deployments machines production/api --json
     alien deployments set-compute production/api --machines 3
     alien deployments set-inputs production/api --input region=eu-west-1
+    alien deployments set-inputs production/api --secret-input-file tlsCertificate=./tls.pem
     alien deployments drain-machine production/api <machine-id>
     alien deployments join-tokens create production/api
     alien deployments untrack my-sandbox
@@ -619,6 +620,13 @@ pub enum DeploymentsCmd {
         /// Secret input value in ID=VALUE format, sent as text (can be used multiple times)
         #[arg(long = "secret-input")]
         secret_inputs: Vec<String>,
+
+        /// Secret input read from a file in ID=PATH format, or from piped stdin with
+        /// ID=-. The contents must be UTF-8 text and are sent byte for byte,
+        /// including any trailing newline, so use it for PEM certificates and keys
+        /// (can be used multiple times)
+        #[arg(long = "secret-input-file", value_name = "ID=PATH")]
+        secret_input_files: Vec<String>,
 
         /// Input to reset to its default (can be used multiple times)
         #[arg(long)]
@@ -1390,9 +1398,13 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             id,
             inputs,
             secret_inputs,
+            secret_input_files,
             clear,
             json,
         } => {
+            // Read files first, so a wrong path fails before any API call.
+            let secret_input_files =
+                deployment_actions::read_secret_input_files(&secret_input_files)?;
             let target = resolve_platform_target(&ctx, &id, json, "Stack input changes").await?;
             deployment_actions::set_inputs_task(
                 &target.client,
@@ -1401,6 +1413,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                 deployment_actions::InputChanges {
                     inputs,
                     secret_inputs,
+                    secret_input_files,
                     clear,
                 },
                 json,
