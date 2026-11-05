@@ -5,7 +5,7 @@ use tracing::{info, warn};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_core::{ResourceOutputs, ResourceStatus, Worker, WorkerOutputs};
+use alien_core::{ResourceOutputs, ResourceRef, ResourceStatus, Worker, WorkerOutputs};
 use alien_macros::controller;
 
 pub(crate) const CREATE_POLL_COUNT: u32 = 3; // Reduced from 5 for faster tests
@@ -226,6 +226,14 @@ pub struct TestWorkerController {
 
 #[controller]
 impl TestWorkerController {
+    fn dependents_may_update(&self) -> bool {
+        self.dependents_may_update
+    }
+
+    fn updates_during_dependency_change(&self, _dependency: &ResourceRef) -> bool {
+        self.updates_during_dependency_change
+    }
+
     fn nothing_deleted_yet(&self) -> bool {
         matches!(
             self.state,

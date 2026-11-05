@@ -1088,6 +1088,48 @@ impl StackExecutor {
             })
     }
 
+    /// Whether a dependent may update now against this dependency: the dependency is
+    /// settled, or it is still changing and both controllers opt in. The dependency allows
+    /// its dependents to update in its current state, and the dependent can update against
+    /// it while it is not Running. Either side alone keeps the dependent waiting.
+    fn dependency_allows_update(
+        &self,
+        dependent: &StackResourceState,
+        dependency: &ResourceRef,
+        state: &StackState,
+    ) -> Result<bool> {
+        if self.dependency_settled(dependency.id(), state) {
+            return Ok(true);
+        }
+        let Some(dependency_state) = state.resources.get(dependency.id()) else {
+            return Ok(false);
+        };
+        if !dependency_state
+            .get_internal_controller()?
+            .is_some_and(|controller| controller.dependents_may_update())
+        {
+            return Ok(false);
+        }
+        Ok(dependent
+            .get_internal_controller()?
+            .is_some_and(|controller| controller.updates_during_dependency_change(dependency)))
+    }
+
+    /// Whether every dependency of `desired` allows `dependent` to update now.
+    fn dependencies_allow_update(
+        &self,
+        dependent: &StackResourceState,
+        desired: &ResourceConfig,
+        state: &StackState,
+    ) -> Result<bool> {
+        for dependency in &desired.dependencies {
+            if !self.dependency_allows_update(dependent, dependency, state)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// Map of resource id to the ids still depending on it, for deletion safety checks.
     fn deletion_dependents(&self, state: &StackState) -> HashMap<String, Vec<String>> {
         let mut has_dependents: HashMap<String, Vec<String>> = HashMap::new();
@@ -1346,10 +1388,11 @@ impl StackExecutor {
                         match current_resource_state.status {
                             status if status_allows_update_planning(status) => {
                                 // Check if all new dependencies are ready before planning the update
-                                let new_dependencies_ready = desired_config
-                                    .dependencies
-                                    .iter()
-                                    .all(|dep_ref| self.dependency_settled(dep_ref.id(), state));
+                                let new_dependencies_ready = self.dependencies_allow_update(
+                                    current_resource_state,
+                                    desired_config,
+                                    state,
+                                )?;
 
                                 // An edge that does not carry grants only orders work, and no
                                 // controller reads it. On a Frozen resource that setup created,
@@ -1695,10 +1738,11 @@ impl StackExecutor {
                         match current_resource_state.status {
                             status if status_allows_update_planning(status) => {
                                 // Check if all dependencies are ready before planning the update from dependency propagation
-                                let dependencies_ready = desired_config
-                                    .dependencies
-                                    .iter()
-                                    .all(|dep_ref| self.dependency_settled(dep_ref.id(), state));
+                                let dependencies_ready = self.dependencies_allow_update(
+                                    current_resource_state,
+                                    desired_config,
+                                    state,
+                                )?;
 
                                 if dependencies_ready {
                                     debug!(
