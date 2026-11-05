@@ -4317,12 +4317,19 @@ fn protected_site(values: &[serde_json::Value]) -> Result<bool> {
 fn chart_signing_fingerprint(chart: &Path) -> Result<Option<String>> {
     let file = std::fs::File::open(chart)
         .into_alien_error()
-        .context(config_error(format!("opening the chart {}", chart.display())))?;
+        .context(config_error(format!(
+            "opening the chart {}",
+            chart.display()
+        )))?;
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
     let unreadable = || config_error("reading the update's chart archive");
     for entry in archive.entries().into_alien_error().context(unreadable())? {
         let mut entry = entry.into_alien_error().context(unreadable())?;
-        let path = entry.path().into_alien_error().context(unreadable())?;
+        let path = entry
+            .path()
+            .into_alien_error()
+            .context(unreadable())?
+            .into_owned();
         // `<chart>/values.yaml`, not a subchart's.
         if path.components().count() != 2 || !path.ends_with("values.yaml") {
             continue;
@@ -5101,7 +5108,10 @@ mod tests {
         let values = values.unwrap().unwrap();
         // `helm get values --all`: the chart's default still pins the
         // fingerprint, and no bundle string assigned another value.
-        assert_eq!(values["signing"]["fingerprint"], "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        assert_eq!(
+            values["signing"]["fingerprint"],
+            "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
         assert_eq!(
             values["signing"].as_object().unwrap().len(),
             1,
@@ -5113,6 +5123,165 @@ mod tests {
             values["management"]["name"],
             "site,signing.channel=attacker"
         );
+    }
+
+    /// R13 in a real cluster: a site whose installed chart pins signing in
+    /// its defaults (seen only with `helm get values --all`) refuses a
+    /// foreign chart even when the admin passes its digest; an unprotected
+    /// site installs the same chart.
+    #[tokio::test]
+    #[ignore = "requires Helm, kubectl and ALIEN_SYNC_TEST_CONTEXT for a disposable Kind cluster"]
+    async fn protected_site_refuses_a_foreign_chart_from_chart_defaults() {
+        const SITE: &str =
+            "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const OTHER: &str =
+            "SHA256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let context = std::env::var("ALIEN_SYNC_TEST_CONTEXT").expect("explicit test context");
+        let charts = tempfile::tempdir().unwrap();
+        let package = |name: &str, signing: Option<&str>| {
+            let dir = charts.path().join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("Chart.yaml"),
+                format!("apiVersion: v2\nname: app\nversion: 0.1.0\ndescription: {name}\n"),
+            )
+            .unwrap();
+            let mut values = "runtime:\n  image:\n    repository: registry.example.com/operator\n    tag: fixture\n".to_string();
+            if let Some(fingerprint) = signing {
+                values.push_str(&format!("signing:\n  fingerprint: \"{fingerprint}\"\n"));
+            }
+            std::fs::write(dir.join("values.yaml"), values).unwrap();
+            let out = charts.path().join(format!("{name}-out"));
+            std::fs::create_dir_all(&out).unwrap();
+            let status = std::process::Command::new("helm")
+                .args(["package"])
+                .arg(&dir)
+                .arg("--destination")
+                .arg(&out)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            out.join("app-0.1.0.tgz")
+        };
+        let protected_chart = package("protected", Some(SITE));
+        let same = package("same", Some(SITE));
+        let unsigned = package("unsigned", None);
+        let other = package("other", Some(OTHER));
+
+        let site = |namespace: &str| SiteSide {
+            registry: "registry.example.com/site".into(),
+            registry_credentials: None,
+            insecure_registry: false,
+            namespace: Some(namespace.to_string()),
+            values: Vec::new(),
+            kube_context: Some(context.clone()),
+        };
+        let helm_install = |chart: &Path, namespace: &str| {
+            let status = std::process::Command::new("helm")
+                .args(["install", "app"])
+                .arg(chart)
+                .args([
+                    "-n",
+                    namespace,
+                    "--create-namespace",
+                    "--kube-context",
+                    &context,
+                ])
+                .status()
+                .unwrap();
+            assert!(status.success());
+        };
+        let pid = std::process::id();
+        let on = format!("sync-r13-on-{pid}");
+        let off = format!("sync-r13-off-{pid}");
+        helm_install(&protected_chart, &on);
+        helm_install(&unsigned, &off);
+
+        let on_values = site_values(&site(&on), "app", &on).await;
+        let on_saved = read_release_values(&site(&on), "app", &on, false).await;
+        let off_values = site_values(&site(&off), "app", &off).await;
+        let mut upgrade = Command::new("helm");
+        upgrade.args(["upgrade", "app"]).arg(&unsigned).args([
+            "-n",
+            &off,
+            "--kube-context",
+            &context,
+        ]);
+        let off_upgrade = run(upgrade, "upgrading the unprotected site").await;
+        for namespace in [&on, &off] {
+            let mut cleanup = kubectl(Some(&context));
+            cleanup.args([
+                "delete",
+                "namespace",
+                namespace,
+                "--ignore-not-found",
+                "--wait=true",
+            ]);
+            run(cleanup, "removing the R13 fixture").await.unwrap();
+        }
+
+        // The fingerprint is only in the chart's defaults: `helm get values`
+        // without --all doesn't show it.
+        let saved = on_saved.unwrap();
+        assert!(
+            saved
+                .as_ref()
+                .is_none_or(|values| values.get("signing").is_none()),
+            "{saved:?}"
+        );
+        let (installed, values) = on_values.unwrap();
+        assert!(installed);
+        assert_eq!(site_fingerprint(&values).unwrap().as_deref(), Some(SITE));
+
+        // On: a chart without signing, or with another fingerprint, is refused
+        // with or without --accept-chart.
+        for foreign in [&unsigned, &other] {
+            let fingerprint = chart_signing_fingerprint(foreign).unwrap();
+            for accept in [None, Some("sha256:foreign")] {
+                let error = decide_chart(
+                    &values,
+                    installed,
+                    fingerprint.as_deref(),
+                    "sha256:foreign",
+                    accept,
+                )
+                .unwrap_err();
+                assert!(
+                    error.to_string().contains(&format!("signed for {SITE}")),
+                    "{error}"
+                );
+            }
+        }
+        let fingerprint = chart_signing_fingerprint(&same).unwrap();
+        assert_eq!(fingerprint.as_deref(), Some(SITE));
+        assert_eq!(
+            decide_chart(
+                &values,
+                installed,
+                fingerprint.as_deref(),
+                "sha256:same",
+                Some("sha256:same")
+            )
+            .unwrap(),
+            ChartDecision::Install(Some("sha256:same".into()))
+        );
+
+        // Off: the unprotected site takes the unsigned chart.
+        let (installed, values) = off_values.unwrap();
+        assert!(installed);
+        assert_eq!(site_fingerprint(&values).unwrap(), None);
+        assert_eq!(
+            decide_chart(
+                &values,
+                installed,
+                chart_signing_fingerprint(&unsigned).unwrap().as_deref(),
+                "sha256:foreign",
+                None
+            )
+            .unwrap(),
+            ChartDecision::Install(None)
+        );
+        off_upgrade.unwrap();
     }
 
     #[test]
@@ -5351,7 +5520,8 @@ stringData:
 
     #[test]
     fn protected_sites_install_only_an_accepted_chart() {
-        const SITE: &str = "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const SITE: &str =
+            "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let digest = "sha256:new";
         let unprotected = [serde_json::json!({"airgapped": {"enabled": true}})];
         assert_eq!(
@@ -5374,7 +5544,12 @@ stringData:
             serde_json::json!({"signing": {"fingerprint": "SHA256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}),
         ];
         let error = decide_chart(&conflicting, true, Some(SITE), digest, None).unwrap_err();
-        assert!(error.to_string().contains("more than one signing fingerprint"), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("more than one signing fingerprint"),
+            "{error}"
+        );
 
         let keys = serde_json::json!({"signing": {"fingerprint": SITE}});
         let first =
@@ -5385,8 +5560,14 @@ stringData:
             "{first}"
         );
         assert_eq!(
-            decide_chart(std::slice::from_ref(&keys), false, Some(SITE), digest, Some(digest))
-                .unwrap(),
+            decide_chart(
+                std::slice::from_ref(&keys),
+                false,
+                Some(SITE),
+                digest,
+                Some(digest)
+            )
+            .unwrap(),
             ChartDecision::Install(Some(digest.into()))
         );
         // A protected chart on a site that pins nothing yet needs acceptance too.
@@ -5423,8 +5604,10 @@ stringData:
     /// none, is refused even when the admin passes its digest.
     #[test]
     fn protected_sites_refuse_a_foreign_chart() {
-        const SITE: &str = "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        const OTHER: &str = "SHA256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        const SITE: &str =
+            "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const OTHER: &str =
+            "SHA256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         let digest = "sha256:new";
         let site = [serde_json::json!({"signing": {"fingerprint": SITE}})];
         for chart in [None, Some(OTHER)] {
@@ -5435,7 +5618,10 @@ stringData:
                     error.to_string().contains(&format!("signed for {SITE}")),
                     "{error}"
                 );
-                assert!(error.to_string().contains("with or without --accept-chart"), "{error}");
+                assert!(
+                    error.to_string().contains("with or without --accept-chart"),
+                    "{error}"
+                );
             }
         }
         // Off: the same charts on an unprotected site install as before.
