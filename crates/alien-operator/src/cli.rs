@@ -199,7 +199,8 @@ pub struct Args {
     pub self_update_deployment: Option<String>,
 
     /// Protected mode: the anchor setup wrote, as JSON (project, deployment,
-    /// signing fingerprint, components key). With `"protected": true` this
+    /// signing fingerprint, components key, session approval, inputs store,
+    /// resource prefix). With `"protected": true` this
     /// Operator runs only what the developer's signer list signed.
     #[arg(long, env = "OPERATOR_RELEASE_TRUST_ANCHOR")]
     pub release_trust_anchor: Option<String>,

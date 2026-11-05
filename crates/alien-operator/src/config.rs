@@ -153,8 +153,8 @@ pub struct OperatorConfig {
     /// Optional shell command override for Local runtime debug shells.
     pub local_debug_shell_command: Option<String>,
 
-    /// Protected mode: the keys and project this installation pinned. When
-    /// set, the Operator runs only releases those keys signed; see
+    /// Protected mode: the anchor this installation pinned. When set, the
+    /// Operator runs only releases its signer list signed; see
     /// [`crate::protected`].
     pub release_signing: Option<crate::protected::ReleaseSigning>,
 

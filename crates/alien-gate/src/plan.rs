@@ -71,7 +71,7 @@ pub struct GateConfig {
     /// Repository prefix a relocated image must start with.
     pub registry: String,
     /// What each permission profile runs as: an IAM role ARN on AWS, a
-    /// service account email on GCP.
+    /// service account email on GCP, a user-assigned identity resource id on Azure.
     pub roles: BTreeMap<String, String>,
 }
 
@@ -94,7 +94,7 @@ pub struct FunctionSpec {
     /// `x86_64` or `arm64`.
     pub architecture: String,
     /// What it runs as: the execution role ARN on AWS, the service account
-    /// email on GCP.
+    /// email on GCP, the user-assigned identity resource id on Azure.
     pub run_as: String,
 }
 

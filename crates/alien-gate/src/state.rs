@@ -1,6 +1,7 @@
 //! What the gate keeps between calls: the signer chain it accepted and the
-//! sequence floors. Setup creates the parameter that holds it, and only the
-//! gate's role can write it, so the control plane can't roll it back.
+//! sequence floors. Setup creates the SSM parameter, Secret Manager secret or
+//! Key Vault secret that holds it, and only the gate's identity can write it,
+//! so the control plane can't roll it back.
 
 use alien_aws_clients::ssm::{GetParameterRequest, PutParameterRequest, SsmApi};
 use alien_client_core::ErrorData as CloudClientErrorData;

@@ -1,4 +1,5 @@
-//! The gate as a Lambda function on AWS or a Cloud Run service on GCP.
+//! The gate as a Lambda function on AWS, a Cloud Run service on GCP or a
+//! Container App on Azure.
 //!
 //! Setup creates it with this configuration, which only the gate's own
 //! identity can change:
@@ -7,7 +8,8 @@
 //! - `ALIEN_GATE_ANCHOR`: the deployment's anchor, as JSON;
 //! - `ALIEN_GATE_FUNCTION_PREFIX`: the functions it owns are `<prefix><workload>`;
 //! - `ALIEN_GATE_REGISTRY`: repository prefix relocated images must start with;
-//! - `ALIEN_GATE_ROLES`: `{"<permission profile>": "<role ARN or service account>"}`;
+//! - `ALIEN_GATE_ROLES`: `{"<permission profile>": "<what it runs as>"}`, see
+//!   `GateConfig::roles` in the library;
 //! - on AWS, `ALIEN_GATE_STATE_PARAMETER`: SSM parameter holding the gate's state;
 //! - on GCP, `ALIEN_GATE_STATE_SECRET`: Secret Manager secret holding it, and
 //!   `ALIEN_GATE_GCP_PROJECT` and `ALIEN_GATE_GCP_REGION`;
