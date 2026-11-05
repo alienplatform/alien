@@ -993,14 +993,26 @@ pub fn machine_image_publisher_aws() -> Option<&'static str> {
     (account.len() == 12 && account.bytes().all(|byte| byte.is_ascii_digit())).then_some(account)
 }
 
-/// Digest (`sha256:<64 hex>`) of the AWS verifier image protected setups run, if this build has
-/// one. The CLI release workflow writes it into `verifier-image-aws.txt` with the publisher;
-/// the image is `<publisher>.dkr.ecr.<region>.amazonaws.com/verifier@<digest>`.
+/// The AWS verifier image protected setups run, as `<repository>@sha256:<64 hex>` in the
+/// publisher's registry, if this build has one. The CLI release workflow writes it into
+/// `verifier-image-aws.txt` with the publisher; setups run
+/// `<publisher>.dkr.ecr.<region>.amazonaws.com/<repository>@<digest>`.
 pub fn verifier_image_aws() -> Option<&'static str> {
-    let digest = include_str!("../verifier-image-aws.txt").trim();
-    let hex = digest.strip_prefix("sha256:")?;
-    (hex.len() == 64 && hex.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))
-        .then_some(digest)
+    let image = include_str!("../verifier-image-aws.txt").trim();
+    is_pinned_image(image).then_some(image)
+}
+
+/// Whether `image` is `<repository>@sha256:<64 lowercase hex>` with a plain repository path.
+pub fn is_pinned_image(image: &str) -> bool {
+    let Some((repository, hex)) = image.split_once("@sha256:") else {
+        return false;
+    };
+    !repository.is_empty()
+        && repository
+            .bytes()
+            .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'/'))
+        && hex.len() == 64
+        && hex.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// Values a protected setup pins that come with the CLI build, not with the stack: the account
@@ -1011,8 +1023,8 @@ pub fn verifier_image_aws() -> Option<&'static str> {
 pub struct SetupPins {
     /// 12-digit AWS account that publishes machine images and the verifier image.
     pub aws_publisher: Option<String>,
-    /// `sha256:<64 hex>` digest of the AWS verifier image.
-    pub aws_verifier_digest: Option<String>,
+    /// AWS verifier image, `<repository>@sha256:<64 hex>` in the publisher's registry.
+    pub aws_verifier_image: Option<String>,
 }
 
 impl SetupPins {
@@ -1020,7 +1032,7 @@ impl SetupPins {
     pub fn compiled_in() -> Self {
         Self {
             aws_publisher: machine_image_publisher_aws().map(str::to_string),
-            aws_verifier_digest: verifier_image_aws().map(str::to_string),
+            aws_verifier_image: verifier_image_aws().map(str::to_string),
         }
     }
 }
