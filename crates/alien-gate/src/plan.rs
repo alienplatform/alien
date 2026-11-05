@@ -36,6 +36,9 @@ pub enum Request {
     RollMachines(crate::machines::RollMachines),
     /// Resize a machine cluster within its signed bounds (GCP, Azure).
     Scale(crate::machines::Scale),
+    /// Delete named machines of a group, never below its signed minimum
+    /// (GCP, Azure).
+    RemoveMachines(crate::machines::RemoveMachines),
 }
 
 /// The statements and values for one release.

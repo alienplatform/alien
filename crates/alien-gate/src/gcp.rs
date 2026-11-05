@@ -481,6 +481,35 @@ impl crate::gcp_machines::GcpMachineApi for Gcp {
     async fn patch(&self, path: &str, body: &Value) -> Result<()> {
         self.compute_write(reqwest::Method::PATCH, path, body).await
     }
+
+    async fn members(&self, path: &str) -> Result<Vec<String>> {
+        let what = format!("compute listManagedInstances {path}");
+        let mut members = Vec::new();
+        let mut page: Option<String> = None;
+        loop {
+            let mut url = reqwest::Url::parse(&format!("{COMPUTE}{path}/listManagedInstances"))
+                .into_alien_error()
+                .context(failed(what.clone()))?;
+            if let Some(token) = &page {
+                url.query_pairs_mut().append_pair("pageToken", token);
+            }
+            let listed = self
+                .call(reqwest::Method::POST, url.as_str(), Some(&json!({})), &what)
+                .await?
+                .ok_or_else(|| AlienError::new(failed(format!("{what}: not found"))))?;
+            members.extend(
+                listed["managedInstances"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|member| member["instance"].as_str().map(str::to_string)),
+            );
+            match listed["nextPageToken"].as_str() {
+                Some(token) if !token.is_empty() => page = Some(token.to_string()),
+                _ => return Ok(members),
+            }
+        }
+    }
 }
 
 /// The install's Parameter Manager parameters and Secret Manager inputs.
@@ -545,6 +574,26 @@ impl Backend for GcpBackend {
 
     async fn resize(&self, target: &str, zone: Option<&str>, size: u32) -> Result<()> {
         self.0.resize_group(target, zone, size).await
+    }
+
+    async fn remove(
+        &self,
+        _place: &Place,
+        target: &str,
+        zone: Option<&str>,
+        machines: &[String],
+        minimum: u32,
+    ) -> Result<(Vec<String>, u32)> {
+        crate::gcp_machines::remove(
+            &self.0,
+            &self.0.project,
+            &self.0.region,
+            target,
+            zone,
+            machines,
+            minimum,
+        )
+        .await
     }
 
     async fn roll(
