@@ -788,13 +788,11 @@
     "gcp": [
       {
         "label": "manage-cloud-run-services",
-        "description": "Create, update, and delete Cloud Run services, jobs, schedulers, Pub/Sub triggers, and HTTPS load-balancer resources owned by this application.",
+        "description": "Create, update, and delete Cloud Run services, schedulers, Pub/Sub triggers, and HTTPS load-balancer resources owned by this application.",
         "grant": {
           "permissions": [
             "run.services.create",
             "run.services.delete",
-            "run.jobs.create",
-            "run.jobs.delete",
             "run.locations.list",
             "resourcemanager.projects.get",
             "iam.serviceAccounts.actAs",
@@ -817,16 +815,11 @@
             "run.services.listTagBindings",
             "run.services.update",
             "run.services.setIamPolicy",
-            "run.jobs.update",
-            "run.jobs.getIamPolicy",
-            "run.jobs.setIamPolicy",
             "run.operations.delete",
             "run.revisions.delete",
             "run.executions.delete",
             "run.services.createTagBinding",
             "run.services.deleteTagBinding",
-            "run.jobs.createTagBinding",
-            "run.jobs.deleteTagBinding",
             "cloudscheduler.jobs.create",
             "cloudscheduler.jobs.delete",
             "cloudscheduler.jobs.get",

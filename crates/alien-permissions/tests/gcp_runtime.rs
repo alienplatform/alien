@@ -136,10 +136,23 @@ fn gcp_compute_cluster_execute_keeps_distinct_generated_role_permissions() {
     assert!(project_bindings
         .iter()
         .all(|binding| binding.role != "roles/secretmanager.secretAccessor"));
-    assert!(project_roles.iter().all(|role| !role
-        .included_permissions
-        .iter()
-        .any(|permission| permission == "secretmanager.versions.access")));
+    // The node reads only the anchor and the deployer's inputs, never the deployment's own
+    // secrets (`gcp_protected_management.rs` evaluates the condition).
+    for binding in &project_bindings {
+        let Some(role) = project_roles.iter().find(|role| role.name == binding.role) else {
+            assert!(binding.role.starts_with("roles/artifactregistry."), "{}", binding.role);
+            continue;
+        };
+        if role
+            .included_permissions
+            .iter()
+            .any(|permission| permission.starts_with("secretmanager."))
+        {
+            assert_eq!(role.included_permissions, ["secretmanager.versions.access"]);
+            let condition = binding.condition.as_ref().expect("a conditioned grant");
+            assert_eq!(condition.title, "ReleaseTrustOnly");
+        }
+    }
 
     assert!(
         project_roles.iter().any(|role| {

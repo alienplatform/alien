@@ -207,7 +207,14 @@ impl GcpRemoteStackManagementController {
             .unwrap_or(service_account_email);
 
         let permission_context = ResourcePermissionsHelper::gcp_permission_context(ctx)?
-            .with_service_account_name(service_account_id.to_string());
+            .with_service_account_name(service_account_id.to_string())
+            .with_setup_pins(&ctx.deployment_config.stack_settings)
+            .context(ErrorData::InfrastructureError {
+                message: "Cannot apply the deployment's pinned values to the management roles"
+                    .to_string(),
+                operation: Some("binding_role".to_string()),
+                resource_id: Some(config.id.clone()),
+            })?;
 
         let self_plan =
             Self::management_service_account_plan(ctx.desired_stack, &permission_context)?;
@@ -397,7 +404,14 @@ impl GcpRemoteStackManagementController {
                     .next()
                     .unwrap_or(service_account_email)
                     .to_string(),
-            );
+            )
+            .with_setup_pins(&ctx.deployment_config.stack_settings)
+            .context(ErrorData::InfrastructureError {
+                message: "Cannot apply the deployment's pinned values to the management roles"
+                    .to_string(),
+                operation: Some("binding_role".to_string()),
+                resource_id: Some(config.id.clone()),
+            })?;
         let mut self_bindings = Vec::new();
         let mut explicit_target = None;
         for binding in Self::management_service_account_plan(ctx.desired_stack, &context)?.bindings
@@ -958,7 +972,14 @@ impl GcpRemoteStackManagementController {
                     ctx,
                     cluster,
                     Some(service_account_id),
-                )?;
+                )?
+                .with_setup_pins(&ctx.deployment_config.stack_settings)
+                .context(ErrorData::InfrastructureError {
+                    message: "Cannot apply the deployment's pinned values to the management roles"
+                        .to_string(),
+                    operation: Some("binding_role".to_string()),
+                    resource_id: Some(resource_id.clone()),
+                })?;
 
             for permission_set_ref in permission_set_refs {
                 let Some(permission_set) =
