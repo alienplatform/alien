@@ -676,7 +676,22 @@ fn check_settable_name(name: &str) -> std::result::Result<(), String> {
             "{name} changes how code loads and can only have a fixed value"
         ));
     }
+    if is_enforcer_env(name) {
+        return Err(format!(
+            "{name} is set by the enforcer from the signed release and can't be provided or configured"
+        ));
+    }
     Ok(())
+}
+
+/// Names the enforcer fills itself: the vault secrets list and binding values.
+/// A control plane that could set them would pick which vault keys load or
+/// where a binding points.
+fn is_enforcer_env(name: &str) -> bool {
+    matches!(name, "ALIEN_SECRETS" | "WORKLOAD_SECRETS")
+        || name
+            .strip_prefix("ALIEN_")
+            .is_some_and(|rest| rest.len() > "_BINDING".len() && rest.ends_with("_BINDING"))
 }
 
 /// CPU quantity in millicores: `2`, `0.5` or `500m`.
