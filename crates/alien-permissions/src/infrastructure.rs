@@ -1,9 +1,6 @@
 use alien_core::{
     StackSettings, ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
-use alien_error::AlienError;
-
-use crate::error::{ErrorData, Result};
 
 // Core types are re-exported by the generators that need them
 
@@ -49,15 +46,15 @@ pub struct PermissionContext {
     /// `stack_prefix`, for deployments whose roles already use another one.
     pub gcp_custom_role_namespace: Option<String>,
 
-    /// AWS account that owns the machine images the management identity may boot.
-    /// Setup supplies it; the control plane never does.
-    pub machine_image_owner: Option<String>,
+    /// AWS account that publishes the machine images a protected install's verifier may
+    /// boot. Set only when rendering the verifier; it is a constant of this build.
+    pub machine_image_publisher: Option<String>,
 
-    /// The deployment is protected: it runs only what the developer signed. Set only when
-    /// rendering the management identity. It never receives the grants kept for setups that
-    /// recorded no boundary, and on GCP and Azure it loses what only the gate may do
-    /// (see [`crate::generators::gate_owned`]).
-    pub release_trust_protected: bool,
+    /// The install is protected: it runs only what the vendor signed. Set only when rendering
+    /// the management identity of a protected install. It never receives the grants kept for
+    /// setups that recorded no boundary, it loses what only the verifier may do (see
+    /// [`crate::generators::verifier_owned`]), and the catalog's `signing-` statements apply.
+    pub signing_protected: bool,
 }
 
 impl PermissionContext {
@@ -87,8 +84,8 @@ impl PermissionContext {
             managing_role_arn: None,
             managing_account_id: None,
             gcp_custom_role_namespace: None,
-            machine_image_owner: None,
-            release_trust_protected: false,
+            machine_image_publisher: None,
+            signing_protected: false,
         }
     }
 
@@ -230,26 +227,21 @@ impl PermissionContext {
         self
     }
 
-    /// Builder pattern for the AWS account that owns bootable machine images
-    pub fn with_machine_image_owner(mut self, account_id: impl Into<String>) -> Self {
-        self.machine_image_owner = Some(account_id.into());
+    /// Builder pattern for the AWS account that publishes bootable machine images
+    pub fn with_machine_image_publisher(mut self, account_id: impl Into<String>) -> Self {
+        self.machine_image_publisher = Some(account_id.into());
         self
     }
 
-    /// Builder pattern for a protected deployment
-    pub fn with_release_trust_protected(mut self, protected: bool) -> Self {
-        self.release_trust_protected = protected;
+    /// Builder pattern for a protected install's management identity
+    pub fn with_signing_protected(mut self, protected: bool) -> Self {
+        self.signing_protected = protected;
         self
     }
 
-    /// Apply what setup pins from the deployment's settings: whether the install is protected,
-    /// and then the publisher of the machine images it may boot, compiled into this build.
-    pub fn with_setup_pins(mut self, settings: &StackSettings) -> Result<Self> {
-        self.release_trust_protected = settings.signing.is_some();
-        if let Some(account_id) = alien_core::machine_image_publisher_aws() {
-            self.machine_image_owner = Some(account_id.to_string());
-        }
-        Ok(self)
+    /// Mark the management identity protected when the stack settings pin signing.
+    pub fn with_signing(self, settings: &StackSettings) -> Self {
+        self.with_signing_protected(settings.signing.is_some())
     }
 
     /// Extract AWS account ID from an IAM role ARN
@@ -288,7 +280,7 @@ impl PermissionContext {
             "managingProjectId" => self.managing_project_id.as_deref(),
             "managingSubscriptionId" => self.managing_subscription_id.as_deref(),
             "managingResourceGroup" => self.managing_resource_group.as_deref(),
-            "machineImageOwner" => self.machine_image_owner.as_deref(),
+            "machineImagePublisher" => self.machine_image_publisher.as_deref(),
             "stackTag" => Some(ALIEN_STACK_TAG_KEY),
             "resourceTag" => Some(ALIEN_RESOURCE_TAG_KEY),
             "managedByTag" => Some(ALIEN_MANAGED_BY_TAG_KEY),

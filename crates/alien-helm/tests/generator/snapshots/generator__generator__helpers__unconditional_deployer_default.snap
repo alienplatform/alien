@@ -174,34 +174,12 @@ airgapped:
   # Public key (ed25519:...) bundles must be signed with. Set by the first
   # `alien-deploy sync --trusted-key`, and checked on every later one.
   bundleSigningKey: ""
-  # With releaseSigning, the chart digest the site admin accepted
-  # (`alien-deploy sync --accept-chart`). A bundle with another chart keeps
-  # this one installed.
-  acceptedChart: ""
 
 tunnel:
   # Serve requests the control plane sends through the manager to the stack's
   # declared tunnel endpoints, over the Operator's outbound connection.
   # false closes the tunnel; nothing else changes.
   enabled: true
-
-releaseSigning:
-  # Protected mode. With protected: true the Operator runs only releases the
-  # developer's signer list signed, and refuses the rest of what the manager
-  # could change: environment variables, bindings, debug sessions, access
-  # requests, operations plugins and dynamic containers. Get the signing
-  # fingerprint from the developer's install guide, not from the manager.
-  # Deployer inputs come only from inputValues.
-  protected: false
-  # Project and deployment the signed statements must name.
-  project: ""
-  deployment: ""
-  # SHA256:<hex> fingerprint of the developer's signer list version 1.
-  signing: ""
-  # ecdsa-p256:<base64> key that signs Operator builds.
-  components: ""
-  # developer, or developer+customer to also require your approval of exec.
-  sessionApproval: developer
 
 clusterBootstrap:
   metricsServer:
@@ -374,9 +352,6 @@ postgres: {}
     "airgapped": {
       "additionalProperties": false,
       "properties": {
-        "acceptedChart": {
-          "type": "string"
-        },
         "bundleSigningKey": {
           "type": "string"
         },
@@ -817,36 +792,6 @@ postgres: {}
           "type": "string"
         },
         "type": "object"
-      },
-      "type": "object"
-    },
-    "releaseSigning": {
-      "additionalProperties": false,
-      "properties": {
-        "components": {
-          "pattern": "^(ecdsa-p256:[A-Za-z0-9+/=]+)?$",
-          "type": "string"
-        },
-        "deployment": {
-          "type": "string"
-        },
-        "project": {
-          "type": "string"
-        },
-        "protected": {
-          "type": "boolean"
-        },
-        "sessionApproval": {
-          "enum": [
-            "developer",
-            "developer+customer"
-          ],
-          "type": "string"
-        },
-        "signing": {
-          "pattern": "^(SHA256:[0-9a-f]{64})?$",
-          "type": "string"
-        }
       },
       "type": "object"
     },
@@ -1970,17 +1915,6 @@ spec:
             {{- if dig "selfUpdate" true .Values.runtime.image }}
             - name: OPERATOR_SELF_UPDATE_DEPLOYMENT
               value: {{ include "deployment.fullname" . | quote }}
-            {{- end }}
-            {{- $releaseSigning := default dict .Values.releaseSigning }}
-            {{- if $releaseSigning.protected }}
-            {{- if not (and $releaseSigning.project $releaseSigning.deployment $releaseSigning.signing $releaseSigning.components) }}
-              {{- fail "releaseSigning.protected needs project, deployment, signing and components" }}
-            {{- end }}
-            {{- if dig "enabled" false (default dict .Values.remoteOperator) }}
-              {{- fail "releaseSigning runs only signed releases; it can't be combined with remoteOperator.enabled" }}
-            {{- end }}
-            - name: OPERATOR_RELEASE_TRUST_ANCHOR
-              value: {{ toJson $releaseSigning | quote }}
             {{- end }}
             - name: OTLP_PORT
               value: {{ .Values.runtime.api.port | quote }}

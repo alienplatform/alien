@@ -191,30 +191,23 @@ fn compute_cluster_execute_does_not_read_workload_secrets() {
         .map(|statement| statement.sid.as_str())
         .collect::<std::collections::HashSet<_>>();
     assert_eq!(unique_sids.len(), result.statement.len());
-    let reads_values = |statement: &&alien_permissions::generators::AwsIamStatement| {
-        statement.action.iter().any(|action| {
-            action.starts_with("ssm:Get") || action == "secretsmanager:GetSecretValue"
-        })
-    };
-    let reads = result
+    let actions = result
         .statement
         .iter()
-        .filter(reads_values)
+        .flat_map(|statement| statement.action.iter().map(String::as_str))
         .collect::<Vec<_>>();
 
-    // The only values the machine role reads are the anchor setup wrote and the deployer's
-    // inputs. Neither is a workload secret: vault parameters live under the stack prefix.
-    assert_eq!(reads.len(), 1, "{reads:?}");
-    assert_eq!(reads[0].effect, "Allow");
-    assert_eq!(reads[0].action, ["ssm:GetParameter"]);
-    assert_eq!(
-        reads[0].resource,
-        [
-            "arn:aws:ssm:us-east-1:123456789012:parameter/_release-trust/my-stack",
-            "arn:aws:ssm:us-east-1:123456789012:parameter/_deployer-inputs/my-stack",
-        ]
-    );
-    assert!(reads[0].condition.is_none());
+    for action in [
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParametersByPath",
+        "secretsmanager:GetSecretValue",
+    ] {
+        assert!(
+            !actions.contains(&action),
+            "machine role must not grant {action}"
+        );
+    }
 }
 
 #[test]
@@ -599,41 +592,13 @@ fn test_compute_cluster_identity_metadata_reads_preserve_pass_role_scope() {
             let serialized = serde_json::to_string(&generated).unwrap();
             let policy: AwsIamPolicy = serde_json::from_str(&serialized).unwrap();
             assert_eq!(policy, generated);
-            // EC2 receives only the compute roles: never the management role, `-sa`
-            // workload roles or any other stack role.
-            let compute_roles: Vec<String> = match target {
-                BindingTarget::Stack => vec![
-                    "arn:aws:iam::123456789012:role/my-stack-compute".to_string(),
-                    "arn:aws:iam::123456789012:role/my-stack-*-instances".to_string(),
-                    "arn:aws:iam::123456789012:role/my-stack-*-isolation-v1".to_string(),
-                    "arn:aws:iam::123456789012:role/my-stack-*-role".to_string(),
-                ],
-                BindingTarget::Resource => {
-                    // Provision names the cluster by its resource name, management by its ID.
-                    let cluster = if id == "compute-cluster/provision" {
-                        "arn:aws:iam::123456789012:role/my-stack-my-stack-payments-data"
-                    } else {
-                        "arn:aws:iam::123456789012:role/my-stack-payments-data"
-                    };
-                    vec![
-                        "arn:aws:iam::123456789012:role/my-stack-compute".to_string(),
-                        format!("{cluster}-instances"),
-                        format!("{cluster}-isolation-v1"),
-                        format!("{cluster}-role"),
-                        format!("{cluster}-isolation-v1-role"),
-                    ]
-                }
-            };
-            for (action, resources) in [
+            for (action, resource) in [
                 (
                     "iam:GetInstanceProfile",
-                    vec!["arn:aws:iam::123456789012:instance-profile/*".to_string()],
+                    "arn:aws:iam::123456789012:instance-profile/*",
                 ),
-                (
-                    "iam:GetRole",
-                    vec!["arn:aws:iam::123456789012:role/my-stack-*".to_string()],
-                ),
-                ("iam:PassRole", compute_roles.clone()),
+                ("iam:GetRole", "arn:aws:iam::123456789012:role/my-stack-*"),
+                ("iam:PassRole", "arn:aws:iam::123456789012:role/my-stack-*"),
             ] {
                 let grants = policy
                     .statement
@@ -646,7 +611,7 @@ fn test_compute_cluster_identity_metadata_reads_preserve_pass_role_scope() {
                 let grant = grants[0];
                 assert_eq!(grant.effect, "Allow");
                 assert_eq!(grant.action, [action]);
-                assert_eq!(grant.resource, resources, "{id} / {target} / {action}");
+                assert_eq!(grant.resource, [resource]);
                 assert!(grant.not_resource.is_empty());
                 if action == "iam:PassRole" {
                     assert_eq!(

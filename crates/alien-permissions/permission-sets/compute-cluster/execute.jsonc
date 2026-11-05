@@ -30,28 +30,6 @@
           }
         }
       },
-      // The machine agent reads the anchor setup wrote for this deployment, and the deployer's
-      // inputs, one parameter only the customer writes. An unprotected deployment has no anchor.
-      {
-        "label": "read-release-trust",
-        "grant": {
-          "actions": ["ssm:GetParameter"]
-        },
-        "binding": {
-          "stack": {
-            "resources": [
-              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/_release-trust/${stackPrefix}",
-              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/_deployer-inputs/${stackPrefix}"
-            ]
-          },
-          "resource": {
-            "resources": [
-              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/_release-trust/${stackPrefix}",
-              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/_deployer-inputs/${stackPrefix}"
-            ]
-          }
-        }
-      },
       // Per-container SA impersonation: VM assumes any SA role in this stack
       {
         "grant": {
@@ -165,31 +143,6 @@
       }
     ],
     "gcp": [
-      // The machine agent reads the anchor setup wrote for this deployment, and the deployer's
-      // inputs, a secret only the deployer writes. An unprotected deployment has neither.
-      {
-        "label": "read-release-trust",
-        "description": "Read the deployment's anchor and the deployer's inputs",
-        "grant": {
-          "permissions": ["secretmanager.versions.access"]
-        },
-        "binding": {
-          "stack": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "ReleaseTrustOnly",
-              "expression": "resource.name.startsWith(\"projects/${projectNumber}/secrets/_release-trust-${stackPrefix}/\") || resource.name.startsWith(\"projects/${projectNumber}/secrets/_deployer-inputs-${stackPrefix}/\")"
-            }
-          },
-          "resource": {
-            "scope": "projects/${projectName}",
-            "condition": {
-              "title": "ReleaseTrustOnly",
-              "expression": "resource.name.startsWith(\"projects/${projectNumber}/secrets/_release-trust-${stackPrefix}/\") || resource.name.startsWith(\"projects/${projectNumber}/secrets/_deployer-inputs-${stackPrefix}/\")"
-            }
-          }
-        }
-      },
       // Cross-project artifact registry image pull from managing project
       {
         "grant": {

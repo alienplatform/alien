@@ -24,6 +24,7 @@ alien-cli-common = { workspace = true }
 alien-error = { workspace = true }
 alien-deployment = { workspace = true }
 alien-helm = { workspace = true }
+alien-signing = { workspace = true }
 alien-infra = { workspace = true, features = ["aws", "gcp", "azure", "test", "local"] }
 alien-local = { workspace = true }
 alien-operator = { path = "../alien-operator" }

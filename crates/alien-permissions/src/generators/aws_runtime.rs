@@ -153,6 +153,15 @@ impl AwsRuntimePermissionsGenerator {
 
             let (binding_spec, actions) =
                 super::aws_boundary::role_write_binding(binding_spec, actions, context);
+            let actions = super::aws_boundary::protected_management_actions(
+                platform_permission.effect.is_allow(),
+                &binding_spec,
+                actions,
+                context,
+            );
+            if actions.is_empty() {
+                continue;
+            }
 
             let resources = binding_spec
                 .resources
@@ -357,8 +366,7 @@ mod tests {
         let context = PermissionContext::new()
             .with_aws_region("us-east-1")
             .with_aws_account_id("123456789012")
-            .with_stack_prefix("test-stack")
-            .with_machine_image_owner("210987654321");
+            .with_stack_prefix("test-stack");
 
         let generator = AwsRuntimePermissionsGenerator::new();
         let mut policy = generator

@@ -526,11 +526,15 @@ dependencies = [
 name = "alien-cli-common"
 version = "3.3.54"
 dependencies = [
+ "alien-cloudformation",
  "alien-core",
  "alien-deployment",
  "alien-error",
  "alien-helm",
  "alien-preflights",
+ "alien-signing",
+ "alien-terraform",
+ "bon",
  "clap",
  "flate2",
  "fs2",
@@ -714,6 +718,7 @@ dependencies = [
  "alien-manager-api",
  "alien-operator",
  "alien-preflights",
+ "alien-signing",
  "async-trait",
  "aws-config",
  "aws-sdk-cloudformation",

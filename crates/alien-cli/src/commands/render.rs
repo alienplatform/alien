@@ -352,6 +352,7 @@ fn render_cloudformation(
     let template = alien_cloudformation::generate_cloudformation_template(
         stack,
         alien_cloudformation::CloudFormationOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             registry: &registry,
             source_stack,
             target: alien_cloudformation::CloudFormationTarget::Aws,
@@ -425,6 +426,7 @@ fn render_terraform(
         stack,
         terraform_target(target),
         alien_terraform::TerraformOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             display_name: None,
             registry: &registry,
             stack_settings: stack_settings.clone(),
@@ -730,6 +732,7 @@ mod tests {
             &stack,
             alien_terraform::TerraformTarget::Gcp,
             alien_terraform::TerraformOptions {
+                pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
                 stack_settings: StackSettings::default(),
