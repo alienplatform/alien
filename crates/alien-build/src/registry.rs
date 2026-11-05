@@ -8,6 +8,7 @@ use oci_client::manifest::{
     OCI_IMAGE_MEDIA_TYPE,
 };
 use oci_client::Reference;
+use sha2::{Digest, Sha256};
 
 const MANIFEST_MEDIA_TYPES: [&str; 4] = [
     OCI_IMAGE_INDEX_MEDIA_TYPE,
@@ -193,7 +194,10 @@ fn archive_content(archive: &std::path::Path) -> Result<ImageContent> {
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .ok_or_else(|| unreadable("no index.json"))?;
     let digest = match index["manifests"].as_array().map(Vec::as_slice) {
-        Some([only]) => only["digest"].as_str().unwrap_or_default().to_string(),
+        Some([only]) => only["digest"]
+            .as_str()
+            .ok_or_else(|| unreadable("index.json names a manifest without a digest"))?
+            .to_string(),
         _ => return Err(unreadable("index.json must name one manifest")),
     };
     let manifest = read(&format!("blobs/{}", digest.replacen(':', "/", 1)))?
@@ -203,7 +207,6 @@ fn archive_content(archive: &std::path::Path) -> Result<ImageContent> {
 }
 
 fn sha256_digest(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
