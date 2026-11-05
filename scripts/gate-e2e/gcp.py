@@ -47,9 +47,9 @@ def log(message):
 
 
 class Run:
-    def __init__(self, args):
+    def __init__(self, args, suffix=None):
         self.args = args
-        self.suffix = uuid.uuid4().hex[:6]
+        self.suffix = suffix or uuid.uuid4().hex[:6]
         self.name = f"{args.prefix}-{self.suffix}"
         self.project, self.region = args.project, args.region
         self.label = args.label
@@ -95,7 +95,12 @@ class Run:
         return f"https://run.googleapis.com/v2/projects/{self.project}/locations/{self.region}/services/{service}"
 
     def docker(self, *args, input=None):
-        subprocess.run(["docker", *args], check=True, capture_output=True, input=input)
+        for attempt in range(3):
+            result = subprocess.run(["docker", *args], capture_output=True, input=input)
+            if result.returncode == 0:
+                return
+            time.sleep(5)
+        raise RuntimeError(f"docker {' '.join(args[:2])} failed: {result.stderr.decode()[-500:]}")
 
     def digest(self, image):
         out = subprocess.run(["docker", "inspect", "--format", "{{index .RepoDigests 0}}", image], check=True, capture_output=True, text=True).stdout.strip()
@@ -108,9 +113,14 @@ class Run:
         self.gcloud("artifacts", "repositories", "create", self.name, "--repository-format=docker", f"--location={self.region}", f"--labels={key}={value}")
         self.docker("login", "-u", "oauth2accesstoken", "--password-stdin", f"https://{self.region}-docker.pkg.dev", input=self.token().encode())
         self.images = {}
-        for tag, source in [("a", "gcr.io/google-samples/hello-app:1.0"), ("b", "gcr.io/google-samples/hello-app:2.0")]:
-            self.docker("pull", "--platform", "linux/amd64", source)
-            self.docker("tag", source, f"{self.registry}/app:{tag}")
+        sample = "us-docker.pkg.dev/cloudrun/container/hello"
+        self.docker("pull", sample)
+        variant = self.work / "variant"
+        variant.mkdir()
+        (variant / "Dockerfile").write_text(f"FROM {sample}\nLABEL variant=b\n")
+        self.docker("tag", sample, f"{self.registry}/app:a")
+        self.docker("build", "--platform", "linux/amd64", "-t", f"{self.registry}/app:b", str(variant))
+        for tag in ("a", "b"):
             self.docker("push", f"{self.registry}/app:{tag}")
             self.images[tag] = f"{self.registry}/app@{self.digest(f'{self.registry}/app:{tag}')}"
         build = self.work / "gate-image"
@@ -140,7 +150,6 @@ class Run:
         # The caller mints the management stand-in's identity tokens.
         status, me = self.http("GET", "https://www.googleapis.com/oauth2/v3/userinfo")
         self.gcloud("iam", "service-accounts", "add-iam-policy-binding", self.accounts["mgmt"], f"--member=user:{me['email']}", "--role=roles/iam.serviceAccountTokenCreator")
-        self.gcloud("iam", "service-accounts", "add-iam-policy-binding", self.accounts["mgmt"], f"--member=user:{me['email']}", "--role=roles/iam.serviceAccountTokenCreator")
 
     def make_fixtures(self):
         out = self.work / "fixtures"
@@ -154,6 +163,9 @@ class Run:
                     f"--service-account={self.accounts['exec']}", "--no-allow-unauthenticated", "--memory=128Mi", f"--labels={key}={value}")
         self.gcloud("run", "services", "add-iam-policy-binding", self.workload_service, f"--region={self.region}",
                     f"--member=serviceAccount:{self.accounts['gate']}", "--role=roles/run.developer")
+        # Cloud Run checks that whoever deploys an image may read it.
+        self.gcloud("artifacts", "repositories", "add-iam-policy-binding", self.name, f"--location={self.region}",
+                    f"--member=serviceAccount:{self.accounts['gate']}", "--role=roles/artifactregistry.reader")
         self.gcloud("run", "services", "add-iam-policy-binding", self.workload_service, f"--region={self.region}",
                     f"--member=serviceAccount:{self.accounts['mgmt']}", "--role=roles/run.viewer")
         env = {
@@ -177,7 +189,7 @@ class Run:
 
     # --- the management stand-in -------------------------------------------------
 
-    def mgmt_token(self, audience=None):
+    def mgmt_token(self, audience=None, attempt=0):
         account = self.accounts["mgmt"]
         if audience:
             url = f"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{account}:generateIdToken"
@@ -185,6 +197,9 @@ class Run:
         else:
             url = f"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{account}:generateAccessToken"
             status, body = self.http("POST", url, {"scope": ["https://www.googleapis.com/auth/cloud-platform"]})
+        if status == 403 and attempt < 12:
+            time.sleep(10)  # IAM propagation for the token creator binding
+            return self.mgmt_token(audience, attempt + 1)
         if status != 200:
             raise RuntimeError(f"minting a token for {account}: {status} {body}")
         return body.get("token") or body["accessToken"]
@@ -257,7 +272,7 @@ class Run:
 
         # The lock: management may call the gate and read, not write the service.
         body = self.service()
-        body["template"]["containers"][0]["env"].append({"name": "NODE_OPTIONS", "value": "--require /tmp/ATTACK.js"})
+        body["template"]["containers"][0].setdefault("env", []).append({"name": "NODE_OPTIONS", "value": "--require /tmp/ATTACK.js"})
         status, response = self.http("PATCH", self.service_url(self.workload_service), {"template": body["template"]}, token=self.mgmt_token())
         self.record("management can't update the service directly", status == 403 and "NODE_OPTIONS" not in self.env(),
                     f"HTTP {status} {str(response)[:200]}")
@@ -304,14 +319,23 @@ def main():
     parser.add_argument("--label", required=True, help="key=value label for every resource that takes labels")
     parser.add_argument("--evidence", required=True)
     parser.add_argument("--keep", action="store_true")
+    parser.add_argument("--cleanup-only", action="store_true", help="delete what the run recorded in --evidence left")
     args = parser.parse_args()
     run = Run(args)
+    state = run.evidence / "state.json"
+    if args.cleanup_only:
+        run = Run(args, suffix=json.loads(state.read_text())["suffix"])
+        run.cleanup()
+        state.unlink()
+        return
+    state.write_text(json.dumps({"suffix": run.suffix}))
     try:
         run.run()
     finally:
         (run.evidence / "results.json").write_text(json.dumps(run.results, indent=2))
         if not args.keep:
             run.cleanup()
+            state.unlink()
     failed = [result for result in run.results if not result["pass"]]
     if failed or not run.results:
         sys.exit(1)

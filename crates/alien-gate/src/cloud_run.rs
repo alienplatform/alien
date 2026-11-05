@@ -39,7 +39,12 @@ pub fn service_body(spec: &FunctionSpec) -> Value {
             "containers": [{
                 "image": spec.image_uri,
                 "env": env,
-                "resources": {"limits": {"memory": format!("{}Mi", spec.memory_mb), "cpu": "1"}},
+                // CPU only while serving requests: Cloud Run refuses less
+                // than 512Mi with CPU always allocated.
+                "resources": {
+                    "limits": {"memory": format!("{}Mi", spec.memory_mb), "cpu": "1"},
+                    "cpuIdle": true,
+                },
             }],
         },
     })
@@ -71,6 +76,9 @@ pub async fn apply(store: &dyn ServiceStore, spec: &FunctionSpec) -> Result<Valu
 
 /// Template keys the gate understands.
 const KNOWN_TEMPLATE: &[&str] = &[
+    // The tool that last deployed the template, for display only.
+    "client",
+    "clientVersion",
     "revision",
     "labels",
     "annotations",
@@ -227,7 +235,11 @@ mod tests {
         template["containers"][0]["name"] = json!("api-1");
         template["containers"][0]["ports"] = json!([{"name": "http1", "containerPort": 8080}]);
         template["containers"][0]["startupProbe"] = json!({"tcpSocket": {"port": 8080}});
-        template["containers"][0]["resources"]["cpuIdle"] = json!(true);
+        template["containers"][0]["resources"]["startupCpuBoost"] = json!(true);
+        template["client"] = json!("gcloud");
+        template["clientVersion"] = json!("586.0.0");
+        // A field Cloud Run added that the gate doesn't know, still empty.
+        template["sandboxes"] = json!({});
         service
     }
 

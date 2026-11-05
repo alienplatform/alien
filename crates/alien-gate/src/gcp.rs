@@ -111,7 +111,7 @@ impl Gcp {
         if !status.is_success() {
             return Err(AlienError::new(failed(format!(
                 "{operation}: HTTP {status}: {}",
-                text.chars().take(500).collect::<String>()
+                text.chars().take(2000).collect::<String>()
             ))));
         }
         if text.trim().is_empty() {
