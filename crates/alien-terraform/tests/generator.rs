@@ -48,4 +48,5 @@ mod generator {
     pub mod setup_management_tests;
     pub mod stack_input_tests;
     pub mod storage_notifications_tests;
+    pub mod white_label_tests;
 }
