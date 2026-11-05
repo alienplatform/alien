@@ -1,10 +1,10 @@
 //! Machines on protected installs: the verifier is the only principal that
 //! decides what a machine boots.
 //!
-//! On AWS it writes the launch template version, the Auto Scaling group's
-//! template and bounds, and starts the instance refresh; management keeps
-//! only `SetDesiredCapacity` and terminate, and AWS holds desired capacity
-//! within the signed bounds. On GCP and Azure management writes no compute
+//! On AWS it writes the launch template version and the Auto Scaling
+//! group's template and bounds; management keeps only `SetDesiredCapacity`
+//! and terminate, so it replaces machines by draining and terminating them,
+//! and AWS holds desired capacity within the signed bounds. On GCP and Azure management writes no compute
 //! at all and asks the verifier to resize, which clamps to the signed
 //! bounds.
 //!
@@ -16,7 +16,7 @@
 
 use alien_aws_clients::autoscaling::{
     AutoScalingApi, CreateAutoScalingGroupRequest, DescribeAutoScalingGroupsRequest,
-    LaunchTemplateSpecification, StartInstanceRefreshRequest, UpdateAutoScalingGroupRequest,
+    LaunchTemplateSpecification, UpdateAutoScalingGroupRequest,
 };
 use alien_aws_clients::ec2::{
     CreateLaunchTemplateRequest, CreateLaunchTemplateVersionRequest, DescribeImagesRequest,
@@ -451,8 +451,6 @@ pub trait MachineApi: Send + Sync {
     async fn create_group(&self, request: CreateAutoScalingGroupRequest) -> Result<()>;
     /// Update an Auto Scaling group.
     async fn update_group(&self, request: UpdateAutoScalingGroupRequest) -> Result<()>;
-    /// Start an instance refresh; its id.
-    async fn start_refresh(&self, name: &str) -> Result<String>;
 }
 
 /// What a roll did.
@@ -465,12 +463,11 @@ pub struct Rolled {
     pub version: i64,
     /// Auto Scaling group name.
     pub group: String,
-    /// Instance refresh id, when the group already existed.
-    pub instance_refresh_id: Option<String>,
 }
 
-/// Write the launch template version, point the group at it with the
-/// signed bounds, and start replacing its machines.
+/// Write the launch template version and point the group at it with the
+/// signed bounds. Machines already running keep their template until the
+/// platform replaces them.
 pub async fn roll(api: &dyn MachineApi, plan: &RollPlan) -> Result<Rolled> {
     let (template_id, version) = match api.template(&plan.template_name).await? {
         Some(id) => {
@@ -509,7 +506,6 @@ pub async fn roll(api: &dyn MachineApi, plan: &RollPlan) -> Result<Rolled> {
             launch_template_id: template_id,
             version,
             group: plan.group_name.clone(),
-            instance_refresh_id: None,
         });
     }
     api.update_group(
@@ -521,12 +517,10 @@ pub async fn roll(api: &dyn MachineApi, plan: &RollPlan) -> Result<Rolled> {
             .build(),
     )
     .await?;
-    let refresh = api.start_refresh(&plan.group_name).await?;
     Ok(Rolled {
         launch_template_id: template_id,
         version,
         group: plan.group_name.clone(),
-        instance_refresh_id: Some(refresh),
     })
 }
 
@@ -696,27 +690,6 @@ impl<E: Ec2Api, A: AutoScalingApi> MachineApi for AwsMachines<E, A> {
             .update_auto_scaling_group(request)
             .await
             .context(failed(format!("autoscaling:UpdateAutoScalingGroup {name}")))
-    }
-
-    async fn start_refresh(&self, name: &str) -> Result<String> {
-        let response = self
-            .autoscaling
-            .start_instance_refresh(
-                StartInstanceRefreshRequest::builder()
-                    .auto_scaling_group_name(name.to_string())
-                    .strategy("Rolling".to_string())
-                    .build(),
-            )
-            .await
-            .context(failed(format!("autoscaling:StartInstanceRefresh {name}")))?;
-        response
-            .start_instance_refresh_result
-            .instance_refresh_id
-            .ok_or_else(|| {
-                AlienError::new(failed(format!(
-                    "autoscaling:StartInstanceRefresh {name} returned no id"
-                )))
-            })
     }
 }
 
@@ -1121,10 +1094,6 @@ mod tests {
             ));
             Ok(())
         }
-        async fn start_refresh(&self, name: &str) -> Result<String> {
-            self.call(format!("StartInstanceRefresh {name}"));
-            Ok("refresh-1".to_string())
-        }
     }
 
     fn plan() -> RollPlan {
@@ -1139,7 +1108,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_roll_adds_a_version_sets_the_signed_bounds_and_refreshes() {
+    async fn a_roll_adds_a_version_and_sets_the_signed_bounds() {
         let api = Recorded {
             template: Some("lt-0aaaaaaaaaaaaaaaa".to_string()),
             group_exists: true,
@@ -1147,9 +1116,8 @@ mod tests {
         };
         let rolled = roll(&api, &plan()).await.unwrap();
         assert_eq!(rolled.version, 7);
-        assert_eq!(rolled.instance_refresh_id.as_deref(), Some("refresh-1"));
         let calls = api.calls.into_inner().unwrap();
-        assert_eq!(calls.len(), 3, "{calls:?}");
+        assert_eq!(calls.len(), 2, "{calls:?}");
         assert_eq!(
             calls[0],
             "CreateLaunchTemplateVersion lt-0aaaaaaaaaaaaaaaa ami-0123456789abcdef0"
@@ -1158,14 +1126,13 @@ mod tests {
             calls[1],
             "UpdateAutoScalingGroup acme-prod-compute-general min=Some(1) max=Some(4) desired=None version=Some(\"7\")"
         );
-        assert_eq!(calls[2], "StartInstanceRefresh acme-prod-compute-general");
     }
 
     #[tokio::test]
     async fn a_first_roll_creates_the_template_and_group() {
         let api = Recorded::default();
         let rolled = roll(&api, &plan()).await.unwrap();
-        assert_eq!((rolled.version, rolled.instance_refresh_id), (1, None));
+        assert_eq!(rolled.version, 1);
         let calls = api.calls.into_inner().unwrap();
         assert_eq!(
             calls[0],
