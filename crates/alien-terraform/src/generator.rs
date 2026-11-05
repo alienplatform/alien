@@ -542,12 +542,14 @@ pub(crate) fn render_terraform_module(
             _ => None,
         })
         .collect();
+    let verifier_machine_network = verifier_machine_network(stack, &stack_settings, &labels, target)?;
     let signing = signing_blocks(
         &stack_settings,
         target,
         &options.pins,
         management_label.as_deref(),
         &runtime_service_accounts,
+        verifier_machine_network,
     )?;
     import_depends_on.extend(signing.iter().filter_map(resource_address));
 
@@ -1838,6 +1840,7 @@ fn signing_blocks(
     pins: &alien_core::SetupPins,
     management_label: Option<&str>,
     runtime_service_accounts: &[String],
+    verifier_machine_network: Option<Expression>,
 ) -> Result<Vec<Block>> {
     let Some(signing) = &settings.signing else {
         return Ok(Vec::new());
@@ -1851,7 +1854,7 @@ fn signing_blocks(
     match target {
         TerraformTarget::Aws => Ok([
             vec![fingerprint_variable],
-            aws_verifier_blocks(pins, management_label)?,
+            aws_verifier_blocks(pins, management_label, verifier_machine_network)?,
             vec![
             resource_block(
                 "aws_ssm_parameter",
@@ -1936,6 +1939,7 @@ fn signing_blocks(
 fn aws_verifier_blocks(
     pins: &alien_core::SetupPins,
     management_label: Option<&str>,
+    machine_network: Option<Expression>,
 ) -> Result<Vec<Block>> {
     let missing = |what: &str| {
         AlienError::new(ErrorData::OperationNotSupported {
@@ -2035,7 +2039,14 @@ fn aws_verifier_blocks(
                     "environment",
                     [attr(
                         "variables",
-                        expr::object([("VERIFIER_CLOUD", Expression::String("aws".to_string()))]),
+                        expr::object(
+                            [("VERIFIER_CLOUD", Expression::String("aws".to_string()))]
+                                .into_iter()
+                                .chain(
+                                    machine_network
+                                        .map(|network| ("VERIFIER_MACHINE_NETWORK", network)),
+                                ),
+                        ),
                     )],
                 )),
                 attr("tags", setup_tags()),
@@ -2292,6 +2303,61 @@ fn gcp_verifier_blocks(runtime_service_accounts: &[String]) -> Vec<Block> {
         ));
     }
     blocks
+}
+
+/// Where a protected AWS install's verifier launches machines, when the stack has any: JSON
+/// `{"subnetIds": [..], "securityGroupIds": [..]}` from the network setup creates or the
+/// customer names. Machines in the default VPC have no subnets setup fixes, so the render is
+/// refused.
+fn verifier_machine_network(
+    stack: &Stack,
+    settings: &StackSettings,
+    labels: &IndexMap<String, String>,
+    target: TerraformTarget,
+) -> Result<Option<Expression>> {
+    if settings.signing.is_none()
+        || target != TerraformTarget::Aws
+        || !stack
+            .resources()
+            .any(|(_, entry)| entry.config.resource_type() == ComputeCluster::RESOURCE_TYPE)
+    {
+        return Ok(None);
+    }
+    let refuse = || {
+        AlienError::new(ErrorData::OperationNotSupported {
+            operation: "protect machines in the default VPC".to_string(),
+            reason: "the verifier launches machines only into subnets setup fixes; create a network or name existing subnets".to_string(),
+        })
+    };
+    let (network_id, entry) = stack
+        .resources()
+        .find(|(_, entry)| entry.config.downcast_ref::<Network>().is_some())
+        .ok_or_else(refuse)?;
+    if matches!(
+        entry.config.downcast_ref::<Network>().map(|network| &network.settings),
+        Some(NetworkSettings::UseDefault)
+    ) {
+        return Err(refuse());
+    }
+    let ctx = EmitContext {
+        stack,
+        resource: entry,
+        resource_id: network_id,
+        platform: target.cloud_platform(),
+        targets_kubernetes: false,
+        stack_settings: settings,
+        names: labels,
+    };
+    Ok(Some(expr::jsonencode(expr::object([
+        (
+            "subnetIds",
+            crate::emitters::aws::helpers::private_subnet_ids_expr(&ctx),
+        ),
+        (
+            "securityGroupIds",
+            crate::emitters::aws::helpers::security_group_ids_expr(&ctx),
+        ),
+    ]))))
 }
 
 /// A quoted template whose value is `text` (JSON, a CEL condition), keeping its `${...}`

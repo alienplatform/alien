@@ -695,7 +695,17 @@ pub fn generate_cloudformation_template_with_profile(
     add_signing_settings(&mut template, &stack_settings_value, options.target)?;
     consolidate_role_inline_policies(&mut template)?;
     // After consolidation, so the count of managed policies on the management role is final.
-    add_verifier_and_limits(&mut template, &stack_settings_value, &options.pins)?;
+    let verifier_machine_network = if stack_settings_value.signing.is_some() {
+        verifier_machine_network(stack, &stack_settings_value, &names, options.target)?
+    } else {
+        None
+    };
+    add_verifier_and_limits(
+        &mut template,
+        &stack_settings_value,
+        &options.pins,
+        verifier_machine_network,
+    )?;
     if stack_settings_value.signing.is_some() {
         refuse_unverifiable_code(&template)?;
     }
@@ -1999,6 +2009,7 @@ fn add_verifier_and_limits(
     template: &mut CfTemplate,
     settings: &StackSettings,
     pins: &alien_core::SetupPins,
+    machine_network: Option<CfExpression>,
 ) -> Result<()> {
     if settings.signing.is_none() {
         return Ok(());
@@ -2105,12 +2116,13 @@ fn add_verifier_and_limits(
     function
         .properties
         .insert("MemorySize".to_string(), CfExpression::from(512u32));
+    let mut environment = vec![("VERIFIER_CLOUD", CfExpression::from("aws"))];
+    if let Some(network) = machine_network {
+        environment.push(("VERIFIER_MACHINE_NETWORK", network));
+    }
     function.properties.insert(
         "Environment".to_string(),
-        CfExpression::object([(
-            "Variables",
-            CfExpression::object([("VERIFIER_CLOUD", CfExpression::from("aws"))]),
-        )]),
+        CfExpression::object([("Variables", CfExpression::object(environment))]),
     );
     function
         .properties
@@ -2211,6 +2223,60 @@ fn refuse_unverifiable_code(template: &CfTemplate) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Where the verifier launches machines, when the stack has any: the private subnets and
+/// security group setup created, or the ones the customer named. JSON
+/// `{"subnetIds": [..], "securityGroupIds": [..]}` in the verifier's `VERIFIER_MACHINE_NETWORK`.
+/// Machines in the default VPC have no subnets setup fixes, so a protected stack refuses them.
+fn verifier_machine_network(
+    stack: &Stack,
+    settings: &StackSettings,
+    names: &IndexMap<String, String>,
+    target: CloudFormationTarget,
+) -> Result<Option<CfExpression>> {
+    if !stack
+        .resources()
+        .any(|(_, entry)| entry.config.resource_type() == ComputeCluster::RESOURCE_TYPE)
+    {
+        return Ok(None);
+    }
+    let refuse = || {
+        AlienError::new(ErrorData::OperationNotSupported {
+            operation: "protect machines in the default VPC".to_string(),
+            reason: "the verifier launches machines only into subnets setup fixes; create a network or name existing subnets".to_string(),
+        })
+    };
+    let (network_id, entry) = stack
+        .resources()
+        .find(|(_, entry)| entry.config.downcast_ref::<Network>().is_some())
+        .ok_or_else(refuse)?;
+    let network = entry.config.downcast_ref::<Network>().ok_or_else(refuse)?;
+    if matches!(network.settings, NetworkSettings::UseDefault) {
+        return Err(refuse());
+    }
+    let ctx = EmitContext {
+        stack,
+        resource: entry,
+        resource_id: network_id,
+        platform: target.cloud_platform(),
+        targets_kubernetes: target.is_kubernetes(),
+        stack_settings: settings,
+        names,
+    };
+    Ok(Some(CfExpression::sub_with(
+        r#"{"subnetIds":["${Subnets}"],"securityGroupIds":["${Groups}"]}"#,
+        [
+            (
+                "Subnets",
+                CfExpression::join("\",\"", crate::emitters::aws::helpers::private_subnet_ids_expr(&ctx)),
+            ),
+            (
+                "Groups",
+                CfExpression::join("\",\"", crate::emitters::aws::helpers::security_group_ids_expr(&ctx)),
+            ),
+        ],
+    )))
 }
 
 /// The logical ID of the role named `<prefix>-management`, if the template creates it.
