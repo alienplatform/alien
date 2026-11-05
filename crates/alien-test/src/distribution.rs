@@ -1145,6 +1145,7 @@ async fn apply_render_mutations_with_management_config(
         native_image_host: None,
         volume_restores: Vec::new(),
         deletion_policy: Default::default(),
+        release_statements: None,
     };
 
     runner
@@ -2433,6 +2434,7 @@ async fn terraform_kubernetes_stack_for_target(
         native_image_host: None,
         volume_restores: Vec::new(),
         deletion_policy: Default::default(),
+        release_statements: None,
     };
 
     runner

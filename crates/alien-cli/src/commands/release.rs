@@ -485,6 +485,7 @@ async fn load_release_config(
             args.override_base_image.clone(),
             kubernetes_base_platform,
             args.targets.as_deref(),
+            args.sign,
         )
         .await?;
     }
@@ -1261,6 +1262,7 @@ async fn auto_build_for_platforms(
     override_base_image: Option<String>,
     kubernetes_base_platform: Option<Platform>,
     user_targets: Option<&[String]>,
+    require_pinned_base_images: bool,
 ) -> Result<()> {
     let stack_needs_x86_64_on_aws = stack_requires_x86_64_on_aws(stack);
 
@@ -1283,15 +1285,18 @@ async fn auto_build_for_platforms(
             None
         };
 
+        let mut settings = auto_build_settings_for_platform(
+            platform_str,
+            output_dir,
+            override_base_image.clone(),
+            kubernetes_base_platform,
+            effective_targets,
+        )?;
+        // A signed release builds only from base images this CLI pins.
+        settings.require_pinned_base_images = require_pinned_base_images;
         plans.push(AutoBuildPlan {
             platform: platform_str.clone(),
-            settings: auto_build_settings_for_platform(
-                platform_str,
-                output_dir,
-                override_base_image.clone(),
-                kubernetes_base_platform,
-                effective_targets,
-            )?,
+            settings,
         });
     }
 
@@ -1381,6 +1386,7 @@ pub(crate) fn auto_build_settings_for_platform(
         debug_mode: false,
         rebuild: false,
         pull_base_images: false,
+        require_pinned_base_images: false,
     })
 }
 
@@ -3765,6 +3771,7 @@ mod tests {
                 debug_mode: false,
                 rebuild: false,
                 pull_base_images: false,
+                require_pinned_base_images: false,
             },
         }
     }

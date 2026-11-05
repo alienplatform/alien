@@ -813,6 +813,7 @@ mod tests {
                     native_image_host: None,
                     volume_restores: Vec::new(),
                     deletion_policy: Default::default(),
+                    release_statements: None,
                 };
                 let runner = alien_preflights::runner::PreflightRunner::new();
                 let on_gcp = runner
