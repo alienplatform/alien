@@ -701,7 +701,9 @@ dependencies = [
 name = "alien-deploy-cli"
 version = "3.3.53"
 dependencies = [
+ "alien-aws-clients",
  "alien-cli-common",
+ "alien-client-core",
  "alien-core",
  "alien-deployment",
  "alien-error",

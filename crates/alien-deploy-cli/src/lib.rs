@@ -10,7 +10,7 @@ pub mod output;
 
 use crate::commands::{
     down_command, join_command, leave_command, list_command, operator_command, register_command,
-    status_command, up_command, DownArgs, JoinArgs, LeaveArgs, ListArgs, OperatorArgs,
+    status_command, up_command, inputs_command, DownArgs, InputsArgs, JoinArgs, LeaveArgs, ListArgs, OperatorArgs,
     RegisterArgs, StatusArgs, UpArgs,
 };
 use crate::error::{ErrorData, Result};
@@ -58,6 +58,8 @@ pub enum Commands {
     Sync(commands::sync::SyncArgs),
     /// Return an air-gapped deployment to its previous release
     Rollback(commands::sync::RollbackArgs),
+    /// Change deployer inputs in your own store
+    Inputs(InputsArgs),
 }
 
 /// Loads the configuration embedded in this binary, if it carries one.
@@ -186,6 +188,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         Commands::Leave(args) => leave_command(args).await,
         Commands::Sync(args) => commands::sync::sync_command(args, embedded_config.as_ref()).await,
         Commands::Rollback(args) => commands::sync::rollback_command(args).await,
+        Commands::Inputs(args) => inputs_command(args).await,
     }
 }
 

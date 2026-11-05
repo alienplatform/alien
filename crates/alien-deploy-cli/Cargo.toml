@@ -17,6 +17,8 @@ path = "src/main.rs"
 [dependencies]
 # Alien crates
 alien-core = { workspace = true }
+alien-aws-clients = { workspace = true }
+alien-client-core = { workspace = true }
 alien-preflights = { workspace = true }
 alien-cli-common = { workspace = true }
 alien-error = { workspace = true }
