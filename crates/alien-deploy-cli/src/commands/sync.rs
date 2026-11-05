@@ -1342,13 +1342,15 @@ async fn download_update(
         .map(|image| source_access(image, false))
         .collect();
     // The site pinned release signing keys, now or in its values.
-    let protected = site.protected
-        || protected_site(
-            &values
-                .iter()
-                .filter_map(|value| serde_json::to_value(value).ok())
-                .collect::<Vec<_>>(),
-        );
+    let json_values = values
+        .iter()
+        .map(|value| {
+            serde_json::to_value(value)
+                .into_alien_error()
+                .context(config_error("reading Helm values as JSON"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let protected = site.protected || protected_site(&json_values);
     // A signed release names each image by the digest it was pushed with,
     // often a multi-platform index, and a protected site runs only that
     // digest. So it gets the whole index rather than one platform's manifest.
