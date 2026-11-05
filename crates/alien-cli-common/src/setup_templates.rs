@@ -154,7 +154,14 @@ pub async fn render_setup_template(
     let mut source_stack = source.clone();
     let mut compute = settings.compute.clone();
     alien_core::remove_off_platform_gated_resources(&mut source_stack, platform, compute.as_mut());
-    let stack = prepare(name, source_stack.clone(), platform, base_platform, settings).await?;
+    let stack = prepare(
+        name,
+        source_stack.clone(),
+        platform,
+        base_platform,
+        settings,
+    )
+    .await?;
     // The hosting service computes the same value from the stack the release sends.
     let (setup_fingerprint, setup_fingerprint_version) =
         crate::setup_fingerprint::setup_fingerprint(&stack_json, platform.as_str());
@@ -181,7 +188,9 @@ pub async fn render_setup_template(
             let allowed = template
                 .parameters
                 .keys()
-                .filter(|parameter| parameter.as_str() != alien_cloudformation::SIGNING_FINGERPRINT_PARAMETER)
+                .filter(|parameter| {
+                    parameter.as_str() != alien_cloudformation::SIGNING_FINGERPRINT_PARAMETER
+                })
                 .cloned()
                 .collect();
             let yaml = alien_cloudformation::to_yaml(&template)
@@ -221,7 +230,7 @@ pub async fn render_setup_template(
             };
             let files: BTreeMap<String, String> = chart.files.into_iter().collect();
             Ok(RenderedSetupTemplate {
-                bytes: file_map_bytes(name, &files)?,
+                bytes: file_map_bytes(&files),
                 allowed,
             })
         }
@@ -262,7 +271,7 @@ pub async fn render_setup_template(
                 .map(|(path, contents)| (path.to_string(), contents.to_string()))
                 .collect();
             Ok(RenderedSetupTemplate {
-                bytes: file_map_bytes(name, &files)?,
+                bytes: file_map_bytes(&files),
                 allowed,
             })
         }
@@ -322,10 +331,18 @@ fn placeholder_management_config(platform: Platform) -> Option<ManagementConfig>
     }
 }
 
-fn file_map_bytes(name: &str, files: &BTreeMap<String, String>) -> Result<Vec<u8>> {
-    serde_json::to_vec(files)
-        .into_alien_error()
-        .context(step(name, "encode the files as JSON"))
+/// The bytes a setup template made of several files (a Terraform module, a Helm chart) is
+/// signed as: the JSON object of file path to contents, keys sorted, no whitespace. Whoever
+/// holds the files rebuilds these bytes to check them against the signed digest.
+pub fn file_map_bytes(files: &BTreeMap<String, String>) -> Vec<u8> {
+    serde_json::Value::Object(
+        files
+            .iter()
+            .map(|(path, contents)| (path.clone(), serde_json::Value::String(contents.clone())))
+            .collect(),
+    )
+    .to_string()
+    .into_bytes()
 }
 
 fn step(name: &str, what: &str) -> ErrorData {

@@ -36,8 +36,11 @@ async fn render() -> BTreeMap<String, RenderedSetupTemplate> {
         "registration": { "mode": "outputsFallback" }
     }))
     .expect("hosting options parse");
-    let (cloudformation, terraform, helm) =
-        (CfRegistry::built_in(), TfRegistry::built_in(), HelmRegistry::built_in());
+    let (cloudformation, terraform, helm) = (
+        CfRegistry::built_in(),
+        TfRegistry::built_in(),
+        HelmRegistry::built_in(),
+    );
     render_setup_templates(
         &stack,
         SetupRenderOptions::builder()
