@@ -1,0 +1,6 @@
+{
+  "setupManagement": "automatic",
+  "network": { "type": "create", "cidr": "10.40.0.0/16", "availabilityZones": 2 },
+  "updates": "approval-required",
+  "telemetry": "off"
+}

@@ -29,6 +29,7 @@ fn registered_module(display_name: Option<&str>) -> ModuleFiles {
         &stack,
         TerraformTarget::Aws,
         TerraformOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             display_name: display_name.map(str::to_string),
             registry: &registry,
             stack_settings: StackSettings::default(),

@@ -146,6 +146,7 @@ fn encrypted_container_volume_generates_an_acyclic_dependency_graph() {
     let template = generate_cloudformation_template(
         &stack,
         CloudFormationOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             registry: &registry,
             source_stack: &stack,
             target: CloudFormationTarget::Aws,

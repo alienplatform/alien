@@ -1,6 +1,13 @@
 use alien_core::PermissionGrant;
 
+/// The statement name from an entry's label. A protected-only entry's Sid leaves out the
+/// `signing-` prefix, so it reads as the sentence the label ends with.
 pub(crate) fn entry_pascal_label(explicit: Option<&str>, grant: &PermissionGrant) -> String {
+    let explicit = explicit.map(|label| {
+        label
+            .strip_prefix(super::aws_boundary::SIGNING_LABEL_PREFIX)
+            .unwrap_or(label)
+    });
     to_pascal_case(&entry_kebab_label(explicit, grant))
 }
 

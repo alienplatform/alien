@@ -17,22 +17,22 @@ use std::{future::ready, sync::Arc, time::Duration};
 
 use alien_bindings::traits::Kv;
 use alien_core::{
-    AirgappedReportMetadata, DeploymentState, Platform, ResourceHeartbeat, sync::TargetDeployment,
+    sync::TargetDeployment, AirgappedReportMetadata, DeploymentState, Platform, ResourceHeartbeat,
 };
 use axum::{
-    Json, Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
+    Json, Router,
 };
 use base64::Engine as _;
-use futures::{StreamExt, stream};
+use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::time::Instant;
 
-use super::{AppState, auth};
+use super::{auth, AppState};
 use crate::{
     auth::{Scope, Subject},
     error::ErrorData,
@@ -1929,18 +1929,16 @@ mod tests {
         });
         let mut input = batches(1..=256);
         input[199].1 = TelemetrySignal::Traces;
-        assert!(
-            forward_telemetry(
-                backend.clone(),
-                kv.clone(),
-                caller(),
-                "mark".into(),
-                input.clone(),
-                Duration::from_secs(5)
-            )
-            .await
-            .is_err()
-        );
+        assert!(forward_telemetry(
+            backend.clone(),
+            kv.clone(),
+            caller(),
+            "mark".into(),
+            input.clone(),
+            Duration::from_secs(5)
+        )
+        .await
+        .is_err());
         assert!(
             backend.received.lock().unwrap().contains(&256),
             "logs in the failed window reached the backend"

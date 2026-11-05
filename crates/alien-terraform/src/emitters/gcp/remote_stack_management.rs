@@ -57,11 +57,7 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
 
         let member = service_account_member_for_label(label);
         let context = permission_context(label, ctx.stack.id())
-            .with_setup_pins(ctx.stack_settings)
-            .context(ErrorData::GenericError {
-                message: "failed to apply setup-pinned values to the GCP management roles"
-                    .to_string(),
-            })?;
+            .with_signing(ctx.stack_settings);
         if let Some(profile) = ctx.stack.management().profile() {
             for permission_set_ref in global_permission_refs(ctx, profile) {
                 if let Some(permission_set) = permission_set_ref

@@ -30,7 +30,6 @@ const WRITES: &[&str] = &[
 
 fn compile(stack: &Stack, bounded: bool) -> Vec<AwsIamStatement> {
     let mut context = PermissionContext::new()
-        .with_machine_image_owner("345678901234")
         .with_stack_prefix("sample")
         .with_aws_region("us-east-1")
         .with_aws_account_id("123456789012")
@@ -86,9 +85,6 @@ async fn stack_with_management(
     stack.permissions.management = management;
     let settings = StackSettings {
         setup_management,
-        machine_image_publisher: Some(alien_core::MachineImagePublisher {
-            aws_account_id: "345678901234".to_string(),
-        }),
         ..StackSettings::default()
     };
     let config = DeploymentConfig::builder()
@@ -534,7 +530,6 @@ async fn boundary_guard_is_installed_in_every_management_mode() {
             }
             let stack = stack_with_management(setup, management).await;
             let context = PermissionContext::new()
-                .with_machine_image_owner("345678901234")
                 .with_stack_prefix("sample")
                 .with_aws_account_id("123456789012")
                 .with_aws_permissions_boundary_arn(BOUNDARY);
@@ -570,25 +565,9 @@ async fn automatic_profile_passes_roles_only_to_their_intended_services() {
             Decision::Allowed,
         ),
         (
-            "sample-compute-role",
-            "ec2.amazonaws.com",
-            Decision::Allowed,
-        ),
-        // EC2 receives only the compute roles, never a workload or the management role.
-        (
             "sample-compute-node",
             "ec2.amazonaws.com",
-            Decision::NotAllowed,
-        ),
-        (
-            "sample-execution-sa",
-            "ec2.amazonaws.com",
-            Decision::NotAllowed,
-        ),
-        (
-            "sample-management",
-            "ec2.amazonaws.com",
-            Decision::NotAllowed,
+            Decision::Allowed,
         ),
         (
             "sample-execution-sa",

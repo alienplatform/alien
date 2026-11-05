@@ -5,7 +5,8 @@ pub mod aws_cloudformation;
 pub mod aws_runtime;
 pub mod azure_runtime;
 pub mod azure_setup_owned;
-pub mod gate_owned;
+pub mod signing_limits;
+pub mod verifier_owned;
 pub mod gcp_runtime;
 mod labels;
 
@@ -35,9 +36,9 @@ pub use azure_setup_owned::{
     AZURE_REMOTE_BINDINGS_PROFILE, AZURE_SERVICE_BUS_DATA_RECEIVER_ROLE_ID,
     AZURE_SERVICE_BUS_DATA_SENDER_ROLE_ID,
 };
-pub use gate_owned::{
-    azure_gate_owned_action, azure_runs_no_code, azure_write_or_delete, gcp_gate_owned,
-    gcp_refused_predefined_role,
+pub use verifier_owned::{
+    aws_management_actions, aws_verifier_owned, azure_runs_no_code, azure_verifier_owned_action,
+    azure_write_or_delete, gcp_refused_predefined_role, gcp_verifier_owned, AWS_VERIFIER_OWNED,
 };
 pub use gcp_runtime::{
     custom_role_description_names_prefix, custom_role_namespace_for_prefix,

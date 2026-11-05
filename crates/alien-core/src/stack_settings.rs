@@ -993,6 +993,63 @@ pub fn machine_image_publisher_aws() -> Option<&'static str> {
     (account.len() == 12 && account.bytes().all(|byte| byte.is_ascii_digit())).then_some(account)
 }
 
+/// The AWS verifier image protected setups run, as `<repository>@sha256:<64 hex>` in the
+/// publisher's registry, if this build has one. The CLI release workflow writes it into
+/// `verifier-image-aws.txt` with the publisher; setups run
+/// `<publisher>.dkr.ecr.<region>.amazonaws.com/<repository>@<digest>`.
+pub fn verifier_image_aws() -> Option<&'static str> {
+    let image = include_str!("../verifier-image-aws.txt").trim();
+    is_pinned_image(image).then_some(image)
+}
+
+/// Whether `image` is `<repository>@sha256:<64 lowercase hex>` with a plain repository path.
+pub fn is_pinned_image(image: &str) -> bool {
+    let Some((repository, hex)) = image.split_once("@sha256:") else {
+        return false;
+    };
+    !repository.is_empty()
+        && repository
+            .bytes()
+            .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'/'))
+        && hex.len() == 64
+        && hex.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Digest (`sha256:<64 hex>`) of the Operator image protected charts run, if this build has
+/// one. The CLI release workflow writes it into `operator-digest.txt` with the other pins; it
+/// is the `operator` digest a signed release names in `components`.
+pub fn operator_digest() -> Option<&'static str> {
+    let digest = include_str!("../operator-digest.txt").trim();
+    let hex = digest.strip_prefix("sha256:")?;
+    (hex.len() == 64 && hex.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))
+        .then_some(digest)
+}
+
+/// Values a protected setup pins that come with the CLI build, not with the stack: the account
+/// whose machine images machines may boot and the verifier image. Renders that a release
+/// records use [`SetupPins::compiled_in`], so every build of one release renders the same
+/// bytes; tests pin their own.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SetupPins {
+    /// 12-digit AWS account that publishes machine images and the verifier image.
+    pub aws_publisher: Option<String>,
+    /// AWS verifier image, `<repository>@sha256:<64 hex>` in the publisher's registry.
+    pub aws_verifier_image: Option<String>,
+    /// `sha256:<64 hex>` of the Operator image protected charts run.
+    pub operator_digest: Option<String>,
+}
+
+impl SetupPins {
+    /// The pins this build was released with; empty for source builds.
+    pub fn compiled_in() -> Self {
+        Self {
+            aws_publisher: machine_image_publisher_aws().map(str::to_string),
+            aws_verifier_image: verifier_image_aws().map(str::to_string),
+            operator_digest: operator_digest().map(str::to_string),
+        }
+    }
+}
+
 /// What setup pins for a protected install.
 ///
 /// Take the values from the vendor's install guide or signed release, not from the

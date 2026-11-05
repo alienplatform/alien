@@ -31,6 +31,7 @@ use alien_core::{
     TelemetryMode, UpdatesMode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_permissions::generators::signing_limits;
 use hcl::{
     expr::Expression,
     structure::{Block, BlockLabel, Body, Structure},
@@ -111,10 +112,14 @@ pub struct TerraformOptions<'a> {
     /// AWS regions supported by the environment that produced this
     /// module. Empty means no generated region validation.
     pub supported_aws_regions: Vec<String>,
+    /// What a protected module pins from the CLI build: the machine-image publisher and the
+    /// verifier image. Unprotected modules ignore it.
+    pub pins: alien_core::SetupPins,
 }
 
 /// Terraform provider dependency used by self-registering modules.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TerraformRegistration {
     /// Local Terraform provider name, used in `required_providers`.
     pub provider_name: String,
@@ -281,6 +286,13 @@ pub(crate) fn render_terraform_module(
     requires_remote_operator_collector_token: bool,
     profile: alien_core::SetupConfigurationProfile,
 ) -> Result<ModuleFiles> {
+    // Advanced settings replace the deployment settings whole at apply time; a protected
+    // module fixes what it runs with in the module itself.
+    let profile = if options.stack_settings.signing.is_some() {
+        alien_core::SetupConfigurationProfile::Standard
+    } else {
+        profile
+    };
     if target == TerraformTarget::Eks
         && matches!(
             options
@@ -517,8 +529,36 @@ pub(crate) fn render_terraform_module(
     if let Some(barrier) = &gcp_iam_propagation_barrier {
         import_depends_on.push(barrier.clone());
     }
-    let release_trust_anchor = release_trust_anchor_blocks(&stack_settings, target, &labels)?;
-    import_depends_on.extend(release_trust_anchor.iter().filter_map(resource_address));
+    let management_label = stack
+        .resources()
+        .find(|(_, entry)| entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
+        .map(|(id, _)| resource_label_for_file(&labels, id).to_string());
+    // The runtime service accounts the module creates, by Terraform label; never management's.
+    let runtime_service_accounts: Vec<String> = per_resource
+        .iter()
+        .filter(|(id, _)| {
+            stack.resources.get(id.as_str()).is_some_and(|entry| {
+                entry.config.resource_type() == alien_core::ServiceAccount::RESOURCE_TYPE
+            })
+        })
+        .flat_map(|(_, fragment)| fragment.resource_blocks.iter())
+        .filter_map(|block| match block.labels.as_slice() {
+            [kind, label] if kind.as_str() == "google_service_account" => {
+                Some(label.as_str().to_string())
+            }
+            _ => None,
+        })
+        .collect();
+    let verifier_machine_network = verifier_machine_network(stack, &stack_settings, &labels, target)?;
+    let signing = signing_blocks(
+        &stack_settings,
+        target,
+        &options.pins,
+        management_label.as_deref(),
+        &runtime_service_accounts,
+        verifier_machine_network,
+    )?;
+    import_depends_on.extend(signing.iter().filter_map(resource_address));
 
     let network_vars = network_extra_variables(stack, &labels);
     let include_kubernetes_provider = target.is_kubernetes()
@@ -730,11 +770,11 @@ pub(crate) fn render_terraform_module(
             files.insert(file_name, render_body(body)?);
         }
     }
-    if !release_trust_anchor.is_empty() {
+    if !signing.is_empty() {
         files.insert(
-            "release_trust.tf".to_string(),
+            "signing.tf".to_string(),
             render_body(Body::from(
-                release_trust_anchor
+                signing
                     .into_iter()
                     .map(Structure::Block)
                     .collect::<Vec<_>>(),
@@ -887,7 +927,12 @@ pub(crate) fn render_terraform_module(
     // `terraform fmt -check` expects. If terraform isn't installed we ship
     // the hcl-rs output as-is \u2014 it parses identically; only attribute
     // equals-sign alignment differs.
-    let _ = format_with_terraform(&mut module);
+    //
+    // A protected module skips it: a signed release records its digest, and
+    // its bytes must not depend on what is on the renderer's PATH.
+    if stack_settings.signing.is_none() {
+        let _ = format_with_terraform(&mut module);
+    }
 
     Ok(module)
 }
@@ -1791,23 +1836,44 @@ fn body_is_empty(body: &Body) -> bool {
 /// writes the settings. Their names start with `/signed/` (AWS) or `signed-` (GCP), which no
 /// management grant on `<prefix>-*` reaches.
 ///
+/// The fingerprint and channel are literals, so the module's digest pins them; the
+/// `signing_fingerprint` variable only shows the fingerprint and refuses any other value.
+///
 /// On Azure the settings are not written yet; the Azure management emitter writes the deny
 /// settings that keep the management identity away from what runs code.
-fn release_trust_anchor_blocks(
+fn signing_blocks(
     settings: &StackSettings,
     target: TerraformTarget,
-    _labels: &IndexMap<String, String>,
+    pins: &alien_core::SetupPins,
+    management_label: Option<&str>,
+    runtime_service_accounts: &[String],
+    verifier_machine_network: Option<Expression>,
 ) -> Result<Vec<Block>> {
     let Some(signing) = &settings.signing else {
         return Ok(Vec::new());
     };
+    let fingerprint_variable = signing_fingerprint_variable(&signing.fingerprint);
     let prefix = "${local.resource_prefix}";
     let mut signing_settings = signing.settings("stack")?;
     signing_settings.prefix = prefix.to_string();
-    let settings_value = expr::template(signing_settings.to_json());
-    let ledger_value = expr::template(alien_signing::Ledger::new(prefix).to_json());
+    let settings_value = escaped_template(&signing_settings.to_json());
+    let ledger_json = alien_signing::Ledger::new(prefix).to_json();
+    // Standard SSM parameters and Parameter Manager versions hold far more than this; the
+    // ledger keeps heads only. A prefix is at most 128 characters.
+    for (name, json) in [("settings", signing_settings.to_json()), ("ledger", ledger_json.clone())] {
+        if json.replace(prefix, &"x".repeat(128)).len() > 4096 {
+            return Err(AlienError::new(ErrorData::TemplateSerializationFailed {
+                format: "Terraform".to_string(),
+                reason: format!("the signing {name} could pass 4096 bytes"),
+            }));
+        }
+    }
+    let ledger_value = escaped_template(&ledger_json);
     match target {
-        TerraformTarget::Aws => Ok(vec![
+        TerraformTarget::Aws => Ok([
+            vec![fingerprint_variable],
+            aws_verifier_blocks(pins, management_label, verifier_machine_network)?,
+            vec![
             resource_block(
                 "aws_ssm_parameter",
                 "signing_fingerprint",
@@ -1830,13 +1896,16 @@ fn release_trust_anchor_blocks(
                         expr::template(alien_signing::settings::names::aws_ledger(prefix)),
                     ),
                     attr("type", Expression::String("String".to_string())),
-                    attr("tier", Expression::String("Advanced".to_string())),
+                    attr("tier", Expression::String("Standard".to_string())),
                     attr("value", ledger_value),
                 ],
             ),
-        ]),
+            ],
+        ]
+        .concat()),
         TerraformTarget::Gcp => {
-            let mut blocks = Vec::new();
+            let mut blocks = vec![fingerprint_variable];
+            blocks.extend(gcp_verifier_blocks(runtime_service_accounts));
             for (label, name, value) in [
                 (
                     "signing_fingerprint",
@@ -1873,13 +1942,483 @@ fn release_trust_anchor_blocks(
             }
             Ok(blocks)
         }
-        TerraformTarget::Azure => Ok(Vec::new()),
+        TerraformTarget::Azure => Ok(vec![fingerprint_variable]),
         TerraformTarget::Eks | TerraformTarget::Gke | TerraformTarget::Aks => {
             Err(AlienError::new(ErrorData::OperationNotSupported {
                 operation: format!("protect a {} install through Terraform", target.name()),
                 reason: "on Kubernetes the chart's signing values hold the settings".to_string(),
             }))
         }
+    }
+}
+
+/// A protected AWS install's verifier, `<prefix>-verifier`, and the limits on its management
+/// role, `<prefix>-management-limits`; the same as the CloudFormation template's.
+fn aws_verifier_blocks(
+    pins: &alien_core::SetupPins,
+    management_label: Option<&str>,
+    machine_network: Option<Expression>,
+) -> Result<Vec<Block>> {
+    let missing = |what: &str| {
+        AlienError::new(ErrorData::OperationNotSupported {
+            operation: "render a protected AWS setup".to_string(),
+            reason: format!(
+                "this CLI build has no {what}; protected setups come from released CLI builds"
+            ),
+        })
+    };
+    let publisher = pins
+        .aws_publisher
+        .as_deref()
+        .ok_or_else(|| missing("machine-image publisher"))?;
+    let image = pins
+        .aws_verifier_image
+        .as_deref()
+        .filter(|image| alien_core::is_pinned_image(image))
+        .ok_or_else(|| missing("verifier image pinned by digest"))?;
+    let prefix = "${local.resource_prefix}";
+    let account = "${data.aws_caller_identity.current.account_id}";
+    let region = "${data.aws_region.current.region}";
+    let verifier = signing_limits::aws_verifier_name(prefix);
+    let setup_tags = || {
+        expr::object([
+            ("managed-by", Expression::String("setup".to_string())),
+            ("Name", expr::template(verifier.clone())),
+        ])
+    };
+    let lambda_trust = serde_json::json!({
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Effect": "Allow",
+            "Principal": { "Service": "lambda.amazonaws.com" },
+            "Action": "sts:AssumeRole"
+        }]
+    });
+    let mut blocks = vec![
+        resource_block(
+            "aws_iam_role",
+            "signing_verifier",
+            [
+                attr("name", expr::template(verifier.clone())),
+                attr(
+                    "description",
+                    Expression::String("The verifier's role. Only setup changes it.".to_string()),
+                ),
+                attr(
+                    "assume_role_policy",
+                    crate::emitters::aws::helpers::jsonencode_policy_value(lambda_trust),
+                ),
+                attr("tags", setup_tags()),
+            ],
+        ),
+        resource_block(
+            "aws_iam_role_policy",
+            "signing_verifier",
+            [
+                attr("name", Expression::String("verifier".to_string())),
+                attr(
+                    "role",
+                    expr::traversal(["aws_iam_role", "signing_verifier", "id"]),
+                ),
+                attr(
+                    "policy",
+                    crate::emitters::aws::helpers::jsonencode_policy_value(
+                        signing_limits::aws_verifier_policy(prefix, account, region, publisher),
+                    ),
+                ),
+            ],
+        ),
+        resource_block(
+            "aws_lambda_function",
+            "signing_verifier",
+            [
+                attr("function_name", expr::template(verifier.clone())),
+                attr(
+                    "description",
+                    Expression::String(
+                        "Applies only releases the vendor signed. The management role can't change what runs here."
+                            .to_string(),
+                    ),
+                ),
+                attr("package_type", Expression::String("Image".to_string())),
+                attr(
+                    "image_uri",
+                    expr::template(format!(
+                        "{publisher}.dkr.ecr.${{data.aws_region.current.region}}.amazonaws.com/{image}"
+                    )),
+                ),
+                attr(
+                    "role",
+                    expr::traversal(["aws_iam_role", "signing_verifier", "arn"]),
+                ),
+                attr("timeout", Expression::Number(300.into())),
+                attr("memory_size", Expression::Number(512.into())),
+                nested(block(
+                    "environment",
+                    [attr(
+                        "variables",
+                        expr::object(
+                            [("VERIFIER_CLOUD", Expression::String("aws".to_string()))]
+                                .into_iter()
+                                .chain(
+                                    machine_network
+                                        .map(|network| ("VERIFIER_MACHINE_NETWORK", network)),
+                                ),
+                        ),
+                    )],
+                )),
+                attr("tags", setup_tags()),
+                attr(
+                    "depends_on",
+                    Expression::Array(vec![expr::traversal([
+                        "aws_iam_role_policy",
+                        "signing_verifier",
+                    ])]),
+                ),
+            ],
+        ),
+    ];
+    if let Some(management) = management_label {
+        blocks.push(resource_block(
+            "aws_iam_policy",
+            "management_limits",
+            [
+                attr(
+                    "name",
+                    expr::template(signing_limits::aws_management_limits_name(prefix)),
+                ),
+                attr(
+                    "description",
+                    expr::template(format!(
+                        "Limits that hold even if another policy grants more: only this module changes what the install trusts; only {verifier} changes what runs; machines boot only the publisher's images."
+                    )),
+                ),
+                attr(
+                    "policy",
+                    crate::emitters::aws::helpers::jsonencode_policy_value(
+                        signing_limits::aws_management_limits(prefix, account, region),
+                    ),
+                ),
+            ],
+        ));
+        blocks.push(resource_block(
+            "aws_iam_role_policy_attachment",
+            "management_limits",
+            [
+                attr("role", expr::traversal(["aws_iam_role", management, "name"])),
+                attr(
+                    "policy_arn",
+                    expr::traversal(["aws_iam_policy", "management_limits", "arn"]),
+                ),
+            ],
+        ));
+    }
+    Ok(blocks)
+}
+
+/// What the GCP verifier may change: the install's own machine templates and groups, the
+/// machines and disks those create, and its Cloud Run services and jobs (byoc review §1).
+const GCP_VERIFIER_OWN_RESOURCE_PERMISSIONS: &[&str] = &[
+    "compute.instanceTemplates.create",
+    "compute.instanceTemplates.delete",
+    "compute.instanceTemplates.get",
+    "compute.instanceTemplates.useReadOnly",
+    "compute.regionInstanceTemplates.create",
+    "compute.regionInstanceTemplates.delete",
+    "compute.regionInstanceTemplates.get",
+    "compute.regionInstanceTemplates.useReadOnly",
+    "compute.instanceGroupManagers.create",
+    "compute.instanceGroupManagers.update",
+    "compute.instanceGroupManagers.delete",
+    "compute.instanceGroupManagers.get",
+    "compute.instances.create",
+    "compute.instances.setMetadata",
+    "compute.instances.setServiceAccount",
+    "compute.instances.delete",
+    "compute.disks.create",
+    "run.services.create",
+    "run.services.update",
+    "run.services.delete",
+    "run.services.get",
+    "run.jobs.create",
+    "run.jobs.update",
+    "run.jobs.delete",
+    "run.jobs.get",
+    "run.jobs.run",
+];
+
+/// What the GCP verifier uses that the install doesn't name: the network its machines join and
+/// the images they boot.
+const GCP_VERIFIER_SHARED_PERMISSIONS: &[&str] =
+    &["compute.subnetworks.use", "compute.images.useReadOnly"];
+
+/// A protected GCP install's verifier identity: a service account with one custom role on the
+/// install's own resources, `actAs` on each runtime service account only, and reads of the
+/// signing parameters. Management never writes compute; it asks the verifier.
+fn gcp_verifier_blocks(runtime_service_accounts: &[String]) -> Vec<Block> {
+    let member = expr::template("serviceAccount:${google_service_account.signing_verifier.email}");
+    let custom_role = |label: &str, suffix: &str, title: &str, permissions: &[&str]| {
+        resource_block(
+            "google_project_iam_custom_role",
+            label,
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "role_id",
+                    expr::raw(format!(
+                        "format(\"%s_{suffix}\", replace(local.resource_prefix, \"-\", \"_\"))"
+                    )),
+                ),
+                attr("title", expr::template(format!("${{local.resource_prefix}} {title}"))),
+                attr(
+                    "permissions",
+                    Expression::Array(
+                        permissions
+                            .iter()
+                            .map(|permission| Expression::String(permission.to_string()))
+                            .collect(),
+                    ),
+                ),
+            ],
+        )
+    };
+    let own_resources = [
+        "instanceTemplates",
+        "instanceGroupManagers",
+        "instances",
+        "disks",
+        "services",
+        "jobs",
+    ]
+    .iter()
+    .map(|collection| {
+        format!(
+            r#"resource.name.extract("/{collection}/{{name}}").startsWith("${{local.resource_prefix}}-")"#
+        )
+    })
+    .collect::<Vec<_>>()
+    .join(" || ");
+    let mut blocks = vec![
+        resource_block(
+            "google_service_account",
+            "signing_verifier",
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "account_id",
+                    crate::emitters::gcp::helpers::service_account_id_template("verifier"),
+                ),
+                attr(
+                    "display_name",
+                    expr::template("${local.resource_prefix}-verifier"),
+                ),
+                attr(
+                    "description",
+                    Expression::String(
+                        "Applies only releases the vendor signed. The management identity can't change what runs here."
+                            .to_string(),
+                    ),
+                ),
+            ],
+        ),
+        custom_role(
+            "signing_verifier",
+            "verifier",
+            "verifier: the install's machines and services",
+            GCP_VERIFIER_OWN_RESOURCE_PERMISSIONS,
+        ),
+        custom_role(
+            "signing_verifier_shared",
+            "verifier_shared",
+            "verifier: network and images",
+            GCP_VERIFIER_SHARED_PERMISSIONS,
+        ),
+        resource_block(
+            "google_project_iam_member",
+            "signing_verifier",
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "role",
+                    expr::traversal(["google_project_iam_custom_role", "signing_verifier", "name"]),
+                ),
+                attr("member", member.clone()),
+                nested(block(
+                    "condition",
+                    [
+                        attr("title", Expression::String("The install's own resources".to_string())),
+                        attr("expression", escaped_template(&own_resources)),
+                    ],
+                )),
+            ],
+        ),
+        resource_block(
+            "google_project_iam_member",
+            "signing_verifier_shared",
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "role",
+                    expr::traversal([
+                        "google_project_iam_custom_role",
+                        "signing_verifier_shared",
+                        "name",
+                    ]),
+                ),
+                attr("member", member.clone()),
+            ],
+        ),
+        // The settings and ledger are public values; reading them needs no name condition.
+        resource_block(
+            "google_project_iam_member",
+            "signing_verifier_reads_settings",
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "role",
+                    Expression::String("roles/parametermanager.parameterAccessor".to_string()),
+                ),
+                attr("member", member.clone()),
+            ],
+        ),
+        resource_block(
+            "google_project_iam_member",
+            "signing_verifier_records_ledger",
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "role",
+                    Expression::String("roles/parametermanager.parameterVersionAdder".to_string()),
+                ),
+                attr("member", member.clone()),
+                nested(block(
+                    "condition",
+                    [
+                        attr("title", Expression::String("This install's ledger".to_string())),
+                        attr(
+                            "expression",
+                            escaped_template(
+                                r#"resource.name.startsWith("projects/${var.gcp_project}/locations/global/parameters/signed-${local.resource_prefix}-state")"#,
+                            ),
+                        ),
+                    ],
+                )),
+            ],
+        ),
+    ];
+    for label in runtime_service_accounts {
+        blocks.push(resource_block(
+            "google_service_account_iam_member",
+            &format!("signing_verifier_acts_as_{label}"),
+            [
+                attr(
+                    "service_account_id",
+                    expr::traversal(["google_service_account", label, "name"]),
+                ),
+                attr("role", Expression::String("roles/iam.serviceAccountUser".to_string())),
+                attr("member", member.clone()),
+            ],
+        ));
+    }
+    blocks
+}
+
+/// Where a protected AWS install's verifier launches machines, when the stack has any: JSON
+/// `{"subnetIds": [..], "securityGroupIds": [..]}` from the network setup creates or the
+/// customer names. Machines in the default VPC have no subnets setup fixes, so the render is
+/// refused.
+fn verifier_machine_network(
+    stack: &Stack,
+    settings: &StackSettings,
+    labels: &IndexMap<String, String>,
+    target: TerraformTarget,
+) -> Result<Option<Expression>> {
+    if settings.signing.is_none()
+        || target != TerraformTarget::Aws
+        || !stack
+            .resources()
+            .any(|(_, entry)| entry.config.resource_type() == ComputeCluster::RESOURCE_TYPE)
+    {
+        return Ok(None);
+    }
+    let refuse = || {
+        AlienError::new(ErrorData::OperationNotSupported {
+            operation: "protect machines in the default VPC".to_string(),
+            reason: "the verifier launches machines only into subnets setup fixes; create a network or name existing subnets".to_string(),
+        })
+    };
+    let (network_id, entry) = stack
+        .resources()
+        .find(|(_, entry)| entry.config.downcast_ref::<Network>().is_some())
+        .ok_or_else(refuse)?;
+    if matches!(
+        entry.config.downcast_ref::<Network>().map(|network| &network.settings),
+        Some(NetworkSettings::UseDefault)
+    ) {
+        return Err(refuse());
+    }
+    let ctx = EmitContext {
+        stack,
+        resource: entry,
+        resource_id: network_id,
+        platform: target.cloud_platform(),
+        targets_kubernetes: false,
+        stack_settings: settings,
+        names: labels,
+    };
+    Ok(Some(expr::jsonencode(expr::object([
+        (
+            "subnetIds",
+            crate::emitters::aws::helpers::private_subnet_ids_expr(&ctx),
+        ),
+        (
+            "securityGroupIds",
+            crate::emitters::aws::helpers::security_group_ids_expr(&ctx),
+        ),
+    ]))))
+}
+
+/// A quoted template whose value is `text` (JSON, a CEL condition), keeping its `${...}`
+/// interpolations.
+fn escaped_template(text: &str) -> Expression {
+    expr::template(text.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Variable that shows a protected install's signing fingerprint and accepts only that value.
+pub const SIGNING_FINGERPRINT_VARIABLE: &str = "signing_fingerprint";
+
+fn signing_fingerprint_variable(fingerprint: &str) -> Block {
+    let literal = serde_json::Value::String(fingerprint.to_string()).to_string();
+    Block {
+        identifier: Identifier::sanitized("variable"),
+        labels: vec![BlockLabel::String(SIGNING_FINGERPRINT_VARIABLE.to_string())],
+        body: Body::from(vec![
+            attr("type", expr::raw("string")),
+            attr(
+                "description",
+                Expression::String(
+                    "Only software and settings signed with the vendor's keys run here. Check that this matches the fingerprint on the vendor's security page."
+                        .to_string(),
+                ),
+            ),
+            attr("default", Expression::String(fingerprint.to_string())),
+            nested(block(
+                "validation",
+                [
+                    attr(
+                        "condition",
+                        expr::raw(format!("var.{SIGNING_FINGERPRINT_VARIABLE} == {literal}")),
+                    ),
+                    attr(
+                        "error_message",
+                        Expression::String(
+                            "This module runs only software signed with one fingerprint; it can't be changed."
+                                .to_string(),
+                        ),
+                    ),
+                ],
+            )),
+        ]),
     }
 }
 
@@ -2505,17 +3044,48 @@ fn variables_body(
             Some(Expression::String(String::new())),
             false,
         )));
-        blocks.push(nested(bool_variable_block(
+        let mut manage_roles = bool_variable_block(
             "gcp_manage_custom_roles",
             "Whether this module creates the GCP project custom roles it binds. Set to false when those roles are managed outside this stack.",
             Some(true),
-        )));
-        blocks.push(nested(variable_block(
+        );
+        let mut role_prefix = variable_block(
             "gcp_custom_role_prefix",
             "Prefix used for GCP project custom role IDs when gcp_manage_custom_roles is false. Empty uses resource_prefix.",
             Some(Expression::String(String::new())),
             false,
-        )));
+        );
+        // Roles managed outside the module could grant management what only the verifier
+        // may do, so a protected module creates its own.
+        if stack_settings.signing.is_some() {
+            manage_roles.body.0.push(nested(block(
+                "validation",
+                [
+                    attr("condition", expr::raw("var.gcp_manage_custom_roles")),
+                    attr(
+                        "error_message",
+                        Expression::String(
+                            "A protected module creates its own custom roles.".to_string(),
+                        ),
+                    ),
+                ],
+            )));
+            role_prefix.body.0.push(nested(block(
+                "validation",
+                [
+                    attr("condition", expr::raw("var.gcp_custom_role_prefix == \"\"")),
+                    attr(
+                        "error_message",
+                        Expression::String(
+                            "A protected module names its custom roles after its own prefix."
+                                .to_string(),
+                        ),
+                    ),
+                ],
+            )));
+        }
+        blocks.push(nested(manage_roles));
+        blocks.push(nested(role_prefix));
         if has_dynamic_gcp_network_settings(stack_settings.network.as_ref()) {
             blocks.push(nested(variable_block(
                 "network_mode",
@@ -5559,6 +6129,7 @@ mod tests {
             &Stack::new("app".into()).build(),
             TerraformTarget::Eks,
             TerraformOptions {
+                pins: alien_core::SetupPins::compiled_in(),
                 registry: &registry,
                 display_name: None,
                 stack_settings: StackSettings {
@@ -5647,6 +6218,7 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
             &Stack::new("product-terraform-test".to_string()).build(),
             TerraformTarget::Eks,
             TerraformOptions {
+                pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
                 stack_settings: StackSettings::default(),
@@ -5714,6 +6286,7 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
                     &stack,
                     TerraformTarget::Aws,
                     TerraformOptions {
+                        pins: alien_core::SetupPins::compiled_in(),
                         display_name: None,
                         registry: &registry,
                         stack_settings: StackSettings::default(),

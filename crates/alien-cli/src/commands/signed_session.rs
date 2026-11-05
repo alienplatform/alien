@@ -8,54 +8,71 @@
 //! neither read nor inject anything.
 
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_signing::kinds::{SessionBody, SessionTarget, MAX_SESSION_SECONDS};
-use alien_signing::session::{Challenge, Channel, Handshake, SessionKeys, Side};
-use alien_signing::{Kind, Role};
+use alien_signing::session::{
+    Challenge, Channel, Handshake, SessionBody, SessionKeys, SessionTarget, Side,
+    MAX_SESSION_SECONDS,
+};
+use alien_signing::{InstallId, Kind, Role};
 use futures::StreamExt;
 use serde::Deserialize;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
-use crate::signing::{self, api::SigningApi, SignerArgs, SigningHome};
+use crate::signing::{self, api::SigningApi};
+
+/// Printed before every signed session. The statement binds the session to
+/// the install, not to one machine in it, until machines can prove which
+/// one they are.
+pub const SESSION_NOTICE: &str =
+    "the session is signed; this does not prove which machine answered";
 
 /// What the CLI needs to sign a session when the machine asks for one.
 #[derive(Debug, Clone)]
 pub struct SessionSigning {
     /// Where to verify the signer list and the project.
     pub ctx: ExecutionMode,
-    /// The deployment.
-    pub deployment_id: String,
     /// Machine the session targets.
     pub machine: Option<String>,
+    /// Workload the session targets, for replica sessions.
+    pub workload: Option<String>,
     /// The command, or `None` for a shell.
     pub argv: Option<Vec<String>>,
     /// Whether a terminal is allocated.
     pub tty: bool,
     /// Why, for the customer's transcript.
     pub reason: String,
-    /// Which key signs.
-    pub signer: SignerArgs,
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum MachineHello {
-    Challenge { challenge: Challenge },
+    Challenge {
+        challenge: Challenge,
+        install: String,
+    },
+}
+
+/// The machine's first message: its challenge and the install id it derived.
+pub struct MachineChallenge {
+    challenge: Challenge,
+    install: String,
 }
 
 /// Whether `text` is a machine's challenge.
-pub fn challenge(text: &str) -> Option<Challenge> {
+pub fn challenge(text: &str) -> Option<MachineChallenge> {
     match serde_json::from_str::<MachineHello>(text) {
-        Ok(MachineHello::Challenge { challenge }) => Some(challenge),
+        Ok(MachineHello::Challenge { challenge, install }) => {
+            Some(MachineChallenge { challenge, install })
+        }
         Err(_) => None,
     }
 }
 
-/// Sign the session for `challenge` and run the handshake on the socket.
+/// Sign the session for `hello` and run the handshake on the socket.
 pub async fn handshake<St>(
     signing: &SessionSigning,
-    challenge: Challenge,
+    hello: MachineChallenge,
     send: &tokio::sync::mpsc::Sender<Message>,
     stream: &mut St,
 ) -> Result<Channel>
@@ -63,31 +80,35 @@ where
     St: futures::Stream<Item = std::result::Result<Message, tokio_tungstenite::tungstenite::Error>>
         + Unpin,
 {
-    let machine = signing.machine.clone().ok_or_else(|| {
-        AlienError::new(ErrorData::SigningFailed {
-            message: "This machine needs a signed session; pass --machine".to_string(),
-        })
+    let MachineChallenge { challenge, install } = hello;
+    let install = InstallId::parse(&install).context(ErrorData::SigningFailed {
+        message: format!("The machine names install '{install}', which is not an install id"),
     })?;
-    let (project, _) = signing.ctx.resolve_project(None, false).await?;
-    let home = SigningHome::current()?;
+    let target = match (&signing.machine, &signing.workload) {
+        (Some(machine), _) => SessionTarget {
+            machine: Some(machine.clone()),
+            workload: None,
+        },
+        (None, Some(workload)) => SessionTarget {
+            machine: None,
+            workload: Some(workload.clone()),
+        },
+        (None, None) => {
+            return Err(AlienError::new(ErrorData::SigningFailed {
+                message: "A protected machine needs a signed session; pass --machine or --resource"
+                    .to_string(),
+            }))
+        }
+    };
     let api = SigningApi::from_context(&signing.ctx).await?;
-    let chain =
-        signing::verified_chain(&api, &home, &project, signing.signer.fingerprint.as_deref())
-            .await?;
-    let signer = signing.signer.open(&home).await?;
-    signing::check_signer(&chain, &signer, Role::Operate)?;
+    let (chain, signer) = signing::project_signer(&api, Role::Operate).await?;
 
     let keys = SessionKeys::generate().context(ErrorData::SigningFailed {
         message: "Could not create the session key".to_string(),
     })?;
     let body = SessionBody {
         session_id: challenge.session_id.clone(),
-        target: SessionTarget {
-            machine: Some(machine.clone()),
-            workload: None,
-            tool: None,
-            scope: None,
-        },
+        target: target.clone(),
         argv: signing.argv.clone(),
         tty: signing.tty,
         max_duration_seconds: MAX_SESSION_SECONDS,
@@ -97,8 +118,13 @@ where
         verifier_key: challenge.verifier_key.clone(),
         client_key: keys.public_key(),
     };
+    let reaches = match (&target.machine, &target.workload) {
+        (Some(machine), _) => format!("machine {machine}"),
+        (None, Some(workload)) => format!("a replica of {workload}"),
+        (None, None) => "the install".to_string(),
+    };
     eprintln!(
-        "Signing session {} on machine {machine} as '{}': {}",
+        "Signing session {} for {install} ({reaches}) as '{}': {}",
         body.session_id,
         signer.id(),
         body.argv
@@ -106,14 +132,12 @@ where
             .map(|argv| argv.join(" "))
             .unwrap_or_else(|| "a shell".to_string())
     );
-    let envelope = signing::envelope(
-        Kind::Session,
-        &project,
-        Some(&signing.deployment_id),
-        &chain,
-        body,
-    );
-    let statement = signing::sign_envelope(&envelope, &signer).await?;
+    eprintln!("  {SESSION_NOTICE}");
+    let envelope = signing::envelope(Kind::Session, &chain, Some(&install), body);
+    if let Some(gesture) = signer.gesture() {
+        eprintln!("  {gesture} to sign the session ▸");
+    }
+    let statement = signing::sign_envelope(&envelope, &signer)?;
     let digest = statement
         .open()
         .context(ErrorData::SigningFailed {

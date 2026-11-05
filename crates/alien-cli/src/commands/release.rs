@@ -2,13 +2,15 @@ use crate::execution_context::{ExecutionMode, ManagerContext};
 use crate::get_current_dir;
 use crate::git_utils::collect_git_metadata;
 use crate::output::print_json;
-use crate::signing::{self, api::SigningApi, SignerArgs, SigningHome};
+use crate::signing::{
+    self,
+    api::SigningApi,
+    release::{ReleaseSigner, SigningPlan},
+};
 use crate::ui::{command, contextual_heading, dim_label, success_line};
 use crate::{ErrorData, Result};
 use alien_build::{settings::PushSettings, ImageDestinations};
-use alien_core::release_statement::{
-    code_image, code_image_mut, image_digest, release_body, ReleaseOptions,
-};
+use alien_core::release_statement::{code_image, code_image_mut, image_digest};
 use alien_core::{
     alien_event, is_deployer_secret_input, AlienEvent, Container, ContainerCode, Daemon,
     DaemonCode, Platform, Sandbox, SandboxCode, Stack, StackInputDefinition, StackInputKind,
@@ -22,7 +24,7 @@ use alien_manager_api::SdkResultExt as _;
 use alien_platform_api::types::GitMetadata;
 use clap::Parser;
 use dockdash::{ClientProtocol, RegistryAuth};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -66,10 +68,7 @@ use tracing::{info, warn};
 
     # Skip git metadata collection
     alien release --no-git
-
-    # Sign the release so deployments that pin your public key accept it
-    alien release-key generate --out release-key.pem
-    alien release --signing-key-file release-key.pem"
+"
 )]
 pub struct ReleaseArgs {
     /// Target platforms to release (comma-separated). If not specified, auto-discovers
@@ -158,25 +157,6 @@ pub struct ReleaseArgs {
     /// Registry password (required for basic auth)
     #[arg(long)]
     pub registry_password: Option<String>,
-
-    /// Sign the release. Every image is pinned to its digest and each
-    /// platform's workloads are signed, so protected deployments run exactly
-    /// what was released. Signs with this machine's device key unless a CI key
-    /// is given.
-    #[arg(long)]
-    pub sign: bool,
-
-    #[command(flatten)]
-    pub signer: SignerArgs,
-
-    /// Environment variable names deployment config may set with a signed
-    /// `alien deployments set-env --sign`. Nothing else can change env.
-    #[arg(long, value_delimiter = ',', requires = "sign")]
-    pub configurable_env: Vec<String>,
-
-    /// Developer input ids deployment config may set with a signed config.
-    #[arg(long, value_delimiter = ',', requires = "sign")]
-    pub configurable_input: Vec<String>,
 }
 
 /// JSON output for release command
@@ -190,6 +170,10 @@ struct ReleaseJsonOutput {
     platforms: Vec<String>,
     /// Channel advanced by this command, or null for a create-only release.
     channel: Option<String>,
+    /// Signer id that signed the release, or null when it went out unsigned.
+    signed_by: Option<String>,
+    /// Why the release went out unsigned, when it did.
+    not_signed: Option<String>,
 }
 
 type ReleaseResult = String;
@@ -212,10 +196,6 @@ pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()
         #[cfg(feature = "platform")]
         parse_release_title(Some(title))?;
     }
-    if args.sign {
-        validate_signing(&args)?;
-    }
-
     if args.no_stack {
         let declared = release_declare(&args, &ctx).await?;
         if args.json {
@@ -226,6 +206,8 @@ pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()
                 workspace: declared.project_link.workspace,
                 platforms: Vec::new(),
                 channel: (!args.no_promote).then(|| args.channel.clone()),
+                signed_by: None,
+                not_signed: Some("a stackless release has nothing to sign".to_string()),
             })?;
         } else {
             println!("{}", success_line("Release declared."));
@@ -342,17 +324,17 @@ async fn release_task_json(args: ReleaseArgs, ctx: ExecutionMode) -> Result<Rele
     let platforms = config.platforms.clone();
     let channel = (!args.no_promote).then(|| args.channel.clone());
 
-    match release_task_core(args, config, &ctx).await {
-        Ok(release_id) => Ok(ReleaseJsonOutput {
-            success: true,
-            release_id: Some(release_id),
-            project: project_name,
-            workspace: workspace_name,
-            platforms,
-            channel,
-        }),
-        Err(err) => Err(err),
-    }
+    let outcome = release_task_core(args, config, &ctx).await?;
+    Ok(ReleaseJsonOutput {
+        success: true,
+        release_id: Some(outcome.release_id),
+        project: project_name,
+        workspace: workspace_name,
+        platforms,
+        channel,
+        signed_by: outcome.signed_by,
+        not_signed: outcome.not_signed,
+    })
 }
 
 /// Resolved release configuration shared across human and JSON output paths.
@@ -366,6 +348,71 @@ struct ReleaseConfig {
     git_metadata: Option<GitMetadata>,
     platforms: Vec<String>,
     onboarding_inputs: Vec<StackInputDefinition>,
+    signing: SigningState,
+}
+
+/// How this release is signed, decided before anything is built so a key
+/// that can't sign is known before the push.
+struct SigningState {
+    plan: SigningPlan,
+    /// Protected deployments following the channel. They refuse an unsigned
+    /// release, so with any of them a release that can't be signed fails.
+    protected: u64,
+    channel: String,
+    /// Whether the release goes to the channel now. With `--no-promote` it is
+    /// signed for the channel but no deployment runs it until it's promoted.
+    promoted: bool,
+    /// Prints to stderr in JSON mode, so stdout stays one JSON document.
+    json: bool,
+    /// Local development: releases there are unsigned and say nothing about it.
+    quiet: bool,
+}
+
+impl SigningState {
+    fn signing(&self) -> Option<&ReleaseSigner> {
+        match &self.plan {
+            SigningPlan::Sign(signer) => Some(signer),
+            SigningPlan::Unsigned(_) | SigningPlan::Requested(_) => None,
+        }
+    }
+
+    /// Give up signing for `reason`, failing when protected deployments
+    /// would refuse the unsigned release.
+    fn cannot_sign(&mut self, reason: impl Into<String>) -> Result<()> {
+        self.plan = SigningPlan::Unsigned(reason.into());
+        self.refuse_unsigned()
+    }
+
+    fn refuse_unsigned(&self) -> Result<()> {
+        let reason = match &self.plan {
+            SigningPlan::Sign(_) => return Ok(()),
+            SigningPlan::Unsigned(reason) | SigningPlan::Requested(reason) => reason,
+        };
+        if self.protected == 0 || !self.promoted {
+            return Ok(());
+        }
+        Err(AlienError::new(ErrorData::ReleaseFailed {
+            message: format!(
+                "{} protected deployments follow {} and run only signed releases, but this release can't be signed: {reason}",
+                self.protected, self.channel
+            ),
+        }))
+    }
+
+    fn say(&self, line: &str) {
+        if self.json {
+            eprintln!("{line}");
+        } else {
+            println!("{line}");
+        }
+    }
+}
+
+/// What `alien release` created.
+struct ReleaseOutcome {
+    release_id: String,
+    signed_by: Option<String>,
+    not_signed: Option<String>,
 }
 
 #[derive(Clone)]
@@ -424,6 +471,17 @@ async fn load_release_config(
 
     let is_dev = ctx.is_dev();
 
+    let interactive = show_human_output && !args.json && crate::output::can_prompt();
+    let mut signing = plan_signing(
+        args,
+        ctx,
+        &project_link.project_id,
+        &current_dir,
+        interactive,
+    )
+    .await?;
+    signing.refuse_unsigned()?;
+
     let source_stack = load_source_stack_for_release(args.prebuilt, &current_dir).await?;
 
     // Determine target platforms:
@@ -477,17 +535,32 @@ async fn load_release_config(
     // Build for every platform unless --prebuilt is set.
     // Content-hash dedup in the build layer makes this fast when nothing changed.
     if let Some(stack) = source_stack.as_ref() {
-        auto_build_for_platforms(
-            &target_platforms,
-            stack,
-            &output_dir,
-            show_human_output,
-            args.override_base_image.clone(),
-            kubernetes_base_platform,
-            args.targets.as_deref(),
-            args.sign,
-        )
-        .await?;
+        if signing.signing().is_some() {
+            if let Some(image) = &args.override_base_image {
+                signing.cannot_sign(format!(
+                    "--override-base-image {image} replaces the base images this CLI pins"
+                ))?;
+            }
+        }
+        let build = |require_pinned: bool| {
+            auto_build_for_platforms(
+                &target_platforms,
+                stack,
+                &output_dir,
+                show_human_output,
+                args.override_base_image.clone(),
+                kubernetes_base_platform,
+                args.targets.as_deref(),
+                require_pinned,
+            )
+        };
+        match build(signing.signing().is_some()).await {
+            Err(error) if signing.signing().is_some() && unpinned_base_image(&error) => {
+                signing.cannot_sign(error_reason(&error))?;
+                build(false).await?;
+            }
+            result => result?,
+        }
     }
 
     // Re-discover platforms after potential auto-build
@@ -572,7 +645,136 @@ async fn load_release_config(
         git_metadata,
         platforms,
         onboarding_inputs,
+        signing,
     })
+}
+
+/// Whether `error` is a build refusing a base image this CLI doesn't pin.
+fn unpinned_base_image(error: &AlienError<ErrorData>) -> bool {
+    let mut current = error.source.as_deref();
+    while let Some(error) = current {
+        if error.code == "BASE_IMAGE_NOT_PINNED" {
+            return true;
+        }
+        current = error.source.as_deref();
+    }
+    false
+}
+
+/// The innermost message of `error`, which says what went wrong.
+fn error_reason(error: &AlienError<ErrorData>) -> String {
+    let mut message = error.message.clone();
+    let mut current = error.source.as_deref();
+    while let Some(error) = current {
+        message = error.message.clone();
+        current = error.source.as_deref();
+    }
+    message
+}
+
+/// Decide how this release is signed and count the protected deployments
+/// that follow its channel.
+async fn plan_signing(
+    args: &ReleaseArgs,
+    ctx: &ExecutionMode,
+    project_id: &str,
+    dir: &Path,
+    interactive: bool,
+) -> Result<SigningState> {
+    let channel = args.channel.clone();
+    if ctx.is_dev() {
+        return Ok(SigningState {
+            plan: SigningPlan::Unsigned("local development is unsigned".to_string()),
+            protected: 0,
+            channel,
+            promoted: !args.no_promote,
+            json: args.json,
+            quiet: true,
+        });
+    }
+    let api = SigningApi::from_context(ctx).await?;
+    let protected = protected_following(ctx, project_id, &channel).await?;
+    let plan = signing::release::plan(&api, dir, project_id, interactive).await?;
+    Ok(SigningState {
+        plan,
+        protected,
+        channel,
+        promoted: !args.no_promote,
+        json: args.json,
+        quiet: false,
+    })
+}
+
+/// How many protected deployments of the project follow `channel`: those
+/// whose setup pins a fingerprint for it. A protected deployment that
+/// doesn't say which channel it follows is counted, so a release that can't
+/// be signed never slips past one.
+async fn protected_following(ctx: &ExecutionMode, project_id: &str, channel: &str) -> Result<u64> {
+    let mut query = signing::api::project_query(ctx, project_id).await?;
+    query.push(("limit".to_string(), "100".to_string()));
+    let mut count = 0;
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut page_query = query.clone();
+        if let Some(cursor) = &cursor {
+            page_query.push(("cursor".to_string(), cursor.clone()));
+        }
+        let page = signing::api::get_json(ctx, "/v1/deployments", &page_query).await?;
+        for item in page["items"].as_array().into_iter().flatten() {
+            let pinned = item["stackSettings"]["signing"]["channel"].as_str();
+            let protected = item["protected"].as_bool() == Some(true) || pinned.is_some();
+            if protected && pinned.is_none_or(|pinned| pinned == channel) {
+                count += 1;
+            }
+        }
+        cursor = page["nextCursor"].as_str().map(str::to_string);
+        if cursor.is_none() {
+            return Ok(count);
+        }
+    }
+}
+
+/// The enforcer builds the release now on `channel` pins, with its id, when
+/// that release is signed.
+async fn previous_components(
+    ctx: &ExecutionMode,
+    project_id: &str,
+    channel: &str,
+) -> Result<Option<(String, BTreeMap<String, String>)>> {
+    let query = signing::api::project_query(ctx, project_id).await?;
+    let channels = signing::api::get_json(ctx, "/v1/release-channels", &query).await?;
+    let Some(release_id) = channels["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|item| item["name"].as_str() == Some(channel))
+        .and_then(|item| item["currentReleaseId"].as_str())
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    let release =
+        signing::api::get_json(ctx, &format!("/v1/releases/{release_id}"), &query).await?;
+    let Some(statement) = release["signedStacks"]
+        .as_object()
+        .and_then(|stacks| stacks.values().next())
+    else {
+        return Ok(None);
+    };
+    let statement: alien_signing::SignedStatement = serde_json::from_value(statement.clone())
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("Release {release_id} carries a statement that doesn't parse"),
+            url: None,
+        })?;
+    let body: alien_signing::ReleaseBody = statement
+        .open()
+        .and_then(|opened| opened.body())
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("Release {release_id} carries a statement that doesn't read"),
+            url: None,
+        })?;
+    Ok(Some((release_id, body.components)))
 }
 
 /// Core release logic for console mode.
@@ -595,9 +797,19 @@ async fn release_task(args: ReleaseArgs, ctx: ExecutionMode) -> Result<ReleaseRe
         )
     );
 
-    let release_id = release_task_core(args, config, &ctx).await?;
-    println!("{}", success_line("Release created."));
-    println!("{} {}", dim_label("Release"), release_id);
+    let channel = args.channel.clone();
+    let outcome = release_task_core(args, config, &ctx).await?;
+    let release_id = outcome.release_id.clone();
+    match &outcome.signed_by {
+        Some(signer) if !no_promote => {
+            println!("✓ Release {release_id} · signed by {signer} · {channel}")
+        }
+        Some(signer) => println!("✓ Release {release_id} · signed by {signer}"),
+        None => {
+            println!("{}", success_line("Release created."));
+            println!("{} {}", dim_label("Release"), release_id);
+        }
+    }
     if no_promote {
         println!("No channel changed. No deployment updates scheduled.");
         println!(
@@ -621,7 +833,7 @@ async fn release_task_core(
     args: ReleaseArgs,
     config: ReleaseConfig,
     ctx: &ExecutionMode,
-) -> Result<ReleaseResult> {
+) -> Result<ReleaseOutcome> {
     let release_started = Instant::now();
     let ReleaseConfig {
         output_dir,
@@ -641,17 +853,8 @@ async fn release_task_core(
         local: None,
         test: None,
     };
-    // Open the signer and verify the signer list before building anything,
-    // so a key that isn't on the list fails here and not after the push.
-    let signing = if args.sign {
-        validate_signing(&args)?;
-        Some(open_release_signer(&args, ctx, &project_link.project_id).await?)
-    } else {
-        None
-    };
-    // One sequence for every platform of the release.
-    let sequence = signing::new_sequence();
-    let mut signed_stacks = HashMap::new();
+    let mut signing = config.signing;
+    let mut pushed_stacks: Vec<(Platform, Stack)> = Vec::new();
 
     for platform_str in &platforms_to_release {
         let platform_started = Instant::now();
@@ -679,35 +882,23 @@ async fn release_task_core(
                 rebase_prebuilt_stack_image_paths(&mut built_stack, &output_dir)?;
             }
 
-            push_platform_stack(
+            let (pushed, unpinned) = push_platform_stack(
                 &args,
                 ctx,
                 &project_link.project_id,
                 platform,
                 built_stack,
                 &output_dir,
-                signing.is_some(),
+                signing.signing().is_some(),
             )
-            .await?
+            .await?;
+            if let Some(reason) = unpinned {
+                signing.cannot_sign(reason)?;
+            }
+            pushed
         } else {
             built_stack
         };
-        if let Some((signer, chain)) = &signing {
-            let signed = sign_platform_stack(
-                signer,
-                chain,
-                &project_link.project_id,
-                platform,
-                sequence,
-                &pushed_stack,
-                &ReleaseOptions {
-                    configurable_env: args.configurable_env.clone(),
-                    configurable_inputs: args.configurable_input.clone(),
-                },
-            )
-            .await?;
-            signed_stacks.insert(platform.as_str().to_string(), manager_statement(&signed)?);
-        }
 
         // Convert to JSON for the API
         let stack_json = serde_json::to_value(&pushed_stack)
@@ -727,12 +918,19 @@ async fn release_task_core(
             Platform::Local => stack_by_platform.local = Some(stack_json),
             Platform::Test => stack_by_platform.test = Some(stack_json),
         }
+        pushed_stacks.push((platform, pushed_stack));
 
         info!(
             "   ✓ {} platform ready in {:.2}s",
             platform_str,
             platform_started.elapsed().as_secs_f64()
         );
+    }
+
+    let signed = sign_release(ctx, &project_link.project_id, &mut signing, pushed_stacks).await?;
+    let mut signed_stacks = HashMap::new();
+    for (platform, statement) in &signed {
+        signed_stacks.insert(platform.as_str().to_string(), manager_statement(statement));
     }
 
     // Create release
@@ -788,51 +986,121 @@ async fn release_task_core(
         release_started.elapsed().as_secs_f64()
     );
 
-    Ok(release_id)
+    let (signed_by, not_signed) = match &signing.plan {
+        SigningPlan::Sign(signer) => (Some(signer.signer.id().to_string()), None),
+        SigningPlan::Unsigned(reason) | SigningPlan::Requested(reason) => {
+            (None, (!signing.quiet).then(|| reason.clone()))
+        }
+    };
+    Ok(ReleaseOutcome {
+        release_id,
+        signed_by,
+        not_signed,
+    })
 }
 
-/// Refuse signing options this release can't honor, before building anything.
-fn validate_signing(args: &ReleaseArgs) -> Result<()> {
-    if args.no_stack {
-        return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: "A stackless release has nothing to sign; omit --sign".to_string(),
-        }));
-    }
-    // A build override replaces code the release would otherwise build from
-    // pinned inputs, so a signed release takes none.
-    if let Some(image) = &args.override_base_image {
-        return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: format!(
-                "--sign refuses --override-base-image ({image}): a signed release builds only from the base images this CLI pins"
-            ),
-        }));
-    }
-    Ok(())
-}
-
-/// The release signer, after verifying the project's signer list and
-/// checking the signer may release.
-async fn open_release_signer(
-    args: &ReleaseArgs,
+/// Sign every platform's pushed stack, or say in one line why the release
+/// goes out unsigned. Enforcer builds that changed since the release now on
+/// the channel are listed before the signature is asked for.
+async fn sign_release(
     ctx: &ExecutionMode,
     project_id: &str,
-) -> Result<(signing::StatementSigner, alien_signing::SignerChain)> {
-    let home = SigningHome::current()?;
-    let api = SigningApi::from_context(ctx).await?;
-    let chain =
-        signing::verified_chain(&api, &home, project_id, args.signer.fingerprint.as_deref())
-            .await?;
-    let signer = args.signer.open(&home).await?;
-    signing::check_signer(&chain, &signer, alien_signing::Role::Release)?;
-    Ok((signer, chain))
+    signing: &mut SigningState,
+    pushed: Vec<(Platform, Stack)>,
+) -> Result<Vec<(Platform, alien_core::SignedStatement)>> {
+    let mut bodies = Vec::new();
+    if let Some(signer) = signing.signing() {
+        let fingerprint = signer
+            .chain
+            .digest_of(1)
+            .map(alien_signing::fingerprint)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SigningFailed {
+                    message: "The verified device list has no version 1".to_string(),
+                })
+            })?;
+        let settings = alien_core::StackSigning {
+            fingerprint,
+            channel: signing.channel.clone(),
+        };
+        let components = signing::release::enforcer_digests()?;
+        let mut refused = None;
+        for (platform, stack) in pushed {
+            let built = match signing::release::setup_templates(&stack, platform, &settings).await {
+                Ok(setup) => {
+                    signing::release::body(platform, &stack, &signing.channel, &components, setup)
+                }
+                Err(error) => Err(error),
+            };
+            match built {
+                Ok(body) => bodies.push((platform, stack, body)),
+                Err(error) => {
+                    refused = Some(format!("{}: {}", platform.as_str(), error_reason(&error)));
+                    break;
+                }
+            }
+        }
+        if let Some(reason) = refused {
+            signing.cannot_sign(reason)?;
+        } else if let Some((release, previous)) =
+            previous_components(ctx, project_id, &signing.channel).await?
+        {
+            let changes = signing::release::component_changes(&previous, &components);
+            if !changes.is_empty() {
+                signing.say(&format!("  Enforcer builds change since {release}:"));
+                for change in changes {
+                    signing.say(&format!("    {change}"));
+                }
+            }
+        }
+    }
+    let Some(signer) = signing.signing() else {
+        if let SigningPlan::Unsigned(reason) = &signing.plan {
+            if !signing.quiet {
+                signing.say(&format!("  not signed: {reason}"));
+            }
+        }
+        return Ok(Vec::new());
+    };
+    let deployments = format!(
+        "{} protected deployment{}",
+        signing.protected,
+        if signing.protected == 1 { "" } else { "s" }
+    );
+    signing.say(&if signing.promoted {
+        format!("  Releasing to {} · {deployments} will run it", signing.channel)
+    } else {
+        format!(
+            "  Signing for {} without promoting it · no deployment runs it until it's promoted ({deployments} follow {})",
+            signing.channel, signing.channel
+        )
+    });
+    if let Some(gesture) = signer.signer.gesture() {
+        let prompt = format!("  {gesture} to sign ▸ ");
+        if signing.json {
+            eprint!("{prompt}");
+        } else {
+            print!("{prompt}");
+            std::io::stdout().flush().into_alien_error().context(
+                ErrorData::CliInteractionFailed {
+                    message: "Failed to show the signing prompt".to_string(),
+                },
+            )?;
+        }
+    }
+    let statements = signing::release::sign_all(signer, bodies)?;
+    if signer.signer.gesture().is_some() {
+        signing.say("✓");
+    }
+    Ok(statements)
 }
 
 /// The manager SDK's copy of a signed statement. Both are the same two
 /// strings; the payload is carried, never re-encoded.
 fn manager_statement(
     statement: &alien_core::SignedStatement,
-) -> Result<alien_manager_api::types::SignedStatement> {
-    Ok(alien_manager_api::types::SignedStatement {
+) -> alien_manager_api::types::SignedStatement {
+    alien_manager_api::types::SignedStatement {
         payload: statement.payload.clone(),
         signatures: statement
             .signatures
@@ -842,52 +1110,7 @@ fn manager_statement(
                 sig: signature.sig.clone(),
             })
             .collect(),
-    })
-}
-
-/// Sign `stack` for `platform` as a `release/v2` statement, then verify the
-/// result with the checks a protected deployment runs, so a release it would
-/// refuse fails here.
-async fn sign_platform_stack(
-    signer: &signing::StatementSigner,
-    chain: &alien_signing::SignerChain,
-    project_id: &str,
-    platform: Platform,
-    sequence: u64,
-    stack: &Stack,
-    options: &ReleaseOptions,
-) -> Result<alien_core::SignedStatement> {
-    let refused = |reason: String| ErrorData::ReleaseFailed {
-        message: format!("Can't sign the {} stack: {reason}", platform.as_str()),
-    };
-    let body = release_body(platform, stack, options)
-        .map_err(|error| AlienError::new(refused(error.message)))?;
-    let mut envelope = signing::envelope(
-        alien_signing::Kind::Release,
-        project_id,
-        None,
-        chain,
-        body,
-    );
-    envelope.sequence = sequence;
-    let statement = signing::sign_envelope(&envelope, signer).await?;
-    let list = chain.current();
-    let opened = statement
-        .open()
-        .map_err(|error| AlienError::new(refused(error.message)))?;
-    list.check_signatures(&opened, alien_signing::Role::Release)
-        .map_err(|error| AlienError::new(refused(error.message)))?;
-    let verified: alien_signing::ReleaseBody = opened
-        .body()
-        .map_err(|error| AlienError::new(refused(error.message)))?;
-    let carried = alien_core::release_statement::signed_stack(&verified, platform)
-        .map_err(|error| AlienError::new(refused(error.message)))?;
-    if &carried != stack {
-        return Err(AlienError::new(refused(
-            "the signed stack does not read back as the pushed stack".to_string(),
-        )));
     }
-    Ok(statement)
 }
 
 /// Fail before building when a manager you run has no such channel.
@@ -1029,15 +1252,12 @@ async fn create_platform_release(
             })?;
             request = request.workspace(&workspace_param);
         }
-        let response = request
-            .body(body)
-            .send()
-            .await
-            .into_sdk_error()
-            .context(ErrorData::ApiRequestFailed {
+        let response = request.body(body).send().await.into_sdk_error().context(
+            ErrorData::ApiRequestFailed {
                 message: "Failed to create release on platform API".to_string(),
                 url: None,
-            })?;
+            },
+        )?;
         response.id.to_string()
     } else {
         // The signed statements travel byte for byte beside the stack. The
@@ -1060,44 +1280,43 @@ async fn create_platform_release(
         if let Some(workspace) = workspace {
             request = request.query(&[("workspace", workspace)]);
         }
-        let response = request
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::ApiRequestFailed {
-                message: "Failed to create release on platform API".to_string(),
-                url: Some(url.clone()),
-            })?;
+        let response =
+            request
+                .send()
+                .await
+                .into_alien_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: "Failed to create release on platform API".to_string(),
+                    url: Some(url.clone()),
+                })?;
         let status = response.status();
-        let text = response
-            .text()
-            .await
-            .into_alien_error()
-            .context(ErrorData::ApiRequestFailed {
-                message: format!("Failed to read the platform API's response (HTTP {status})"),
-                url: Some(url.clone()),
-            })?;
+        let text =
+            response
+                .text()
+                .await
+                .into_alien_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: format!("Failed to read the platform API's response (HTTP {status})"),
+                    url: Some(url.clone()),
+                })?;
         if !status.is_success() {
             return Err(AlienError::new(ErrorData::ApiRequestFailed {
                 message: format!("Failed to create release on platform API: HTTP {status}: {text}"),
                 url: Some(url),
             }));
         }
-        let created: serde_json::Value = serde_json::from_str(&text)
-            .into_alien_error()
-            .context(ErrorData::ApiRequestFailed {
+        let created: serde_json::Value = serde_json::from_str(&text).into_alien_error().context(
+            ErrorData::ApiRequestFailed {
                 message: "The platform API's release response is not JSON".to_string(),
                 url: Some(url.clone()),
-            })?;
-        created["id"]
-            .as_str()
-            .map(str::to_string)
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ApiRequestFailed {
-                    message: "The platform API's release response has no id".to_string(),
-                    url: Some(url),
-                })
-            })?
+            },
+        )?;
+        created["id"].as_str().map(str::to_string).ok_or_else(|| {
+            AlienError::new(ErrorData::ApiRequestFailed {
+                message: "The platform API's release response has no id".to_string(),
+                url: Some(url),
+            })
+        })?
     };
 
     info!("Release created successfully!");
@@ -1609,6 +1828,8 @@ async fn resolve_push_destinations(
 }
 
 /// Pushes the platform's images and returns the stack that names them.
+/// With `pin_digests`, every image is pinned to its digest for signing; an
+/// image that can't be pinned leaves the stack unpinned, with the reason.
 ///
 /// A manager rollout that renames the registry's repositories can refuse a push to the name
 /// resolved before it. The destinations are then resolved once more and, when they changed, the
@@ -1621,7 +1842,7 @@ async fn push_platform_stack(
     built_stack: Stack,
     output_dir: &PathBuf,
     pin_digests: bool,
-) -> Result<Stack> {
+) -> Result<(Stack, Option<String>)> {
     let push_failed = || ErrorData::ReleaseFailed {
         message: format!("Failed to push images for {} platform", platform.as_str()),
     };
@@ -1670,8 +1891,13 @@ async fn push_platform_stack(
     };
     // Look digests up where the images were pushed, before any rewrite to the
     // host deployments pull from: the digest is the same on both.
+    let mut unpinned = None;
     if let Some(built) = &built_for_pinning {
-        pin_stack_images(&mut pushed, built, &destinations.settings.options).await?;
+        let mut pinned = pushed.clone();
+        match pin_stack_images(&mut pinned, built, &destinations.settings.options).await {
+            Ok(()) => pushed = pinned,
+            Err(error) => unpinned = Some(error_reason(&error)),
+        }
     }
     if let Some(public_host) = destinations.public_registry_host {
         let push_host = destinations
@@ -1683,7 +1909,7 @@ async fn push_platform_stack(
             .to_string();
         retarget_stack_registry(&mut pushed, &push_host, &public_host);
     }
-    Ok(pushed)
+    Ok((pushed, unpinned))
 }
 
 /// Create push settings from manual CLI arguments
@@ -3161,9 +3387,20 @@ mod tests {
             git_metadata: None,
             platforms: vec!["test".to_string()],
             onboarding_inputs: vec![],
+            signing: SigningState {
+                plan: SigningPlan::Unsigned("not under test".to_string()),
+                protected: 0,
+                channel: "production".to_string(),
+                promoted: true,
+                json: false,
+                quiet: true,
+            },
         };
         assert_eq!(
-            release_task_core(args, config, &ctx).await.unwrap(),
+            release_task_core(args, config, &ctx)
+                .await
+                .unwrap()
+                .release_id,
             release_id
         );
         assert_eq!(fs::read(build_dir.join("stack.json")).unwrap(), stack_bytes);
@@ -3963,7 +4200,8 @@ mod tests {
                 false,
             )
             .await
-            .unwrap_or_else(|e| panic!("{targets:?}: the push is retried: {e:?}"));
+            .unwrap_or_else(|e| panic!("{targets:?}: the push is retried: {e:?}"))
+            .0;
 
             let host = manager_url.trim_start_matches("http://");
             let images: Vec<String> = pushed
@@ -3987,295 +4225,6 @@ mod tests {
                 .await
                 .unwrap_or_else(|e| panic!("{targets:?}: the released image is missing: {e}"));
         }
-    }
-
-    /// A manager that records release bodies and serves `signer_lists` for
-    /// project `default`, as a compromised one could serve any list.
-    async fn start_recording_manager_with_lists(
-        signer_lists: Vec<alien_core::SignedStatement>,
-    ) -> (String, Arc<std::sync::Mutex<Vec<serde_json::Value>>>) {
-        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let recorded = requests.clone();
-        let lists = serde_json::json!({ "items": signer_lists });
-        let app = axum::Router::new()
-            .route(
-                "/v1/projects/default/signer-lists",
-                axum::routing::get(move || {
-                    let lists = lists.clone();
-                    async move { axum::Json(lists) }
-                }),
-            )
-            .route(
-            "/v1/releases",
-            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
-                let recorded = recorded.clone();
-                async move {
-                    recorded.lock().unwrap().push(body.clone());
-                    (
-                        http::StatusCode::CREATED,
-                        axum::Json(serde_json::json!({
-                            "id": "rel_signed", "workspaceId": "default", "projectId": "default",
-                            "stack": body["stack"], "createdAt": "2026-01-01T00:00:00Z",
-                            "setupFingerprints": {},
-                        })),
-                    )
-                }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        (url, requests)
-    }
-
-    async fn release_to_manager(
-        manager_url: &str,
-        stack: &Stack,
-        extra_args: &[&str],
-    ) -> Result<String> {
-        let output = tempfile::tempdir().unwrap();
-        let output_dir = output.path().join(".alien");
-        let build_dir = output_dir.join("build/test");
-        fs::create_dir_all(&build_dir).unwrap();
-        fs::write(
-            build_dir.join("stack.json"),
-            serde_json::to_vec(stack).unwrap(),
-        )
-        .unwrap();
-        let http_client = reqwest::Client::new();
-        let manager = ManagerContext {
-            manager_url: manager_url.to_string(),
-            manager_name: None,
-            manager_is_system: None,
-            manager_cloud: None,
-            client: alien_manager_api::Client::new_with_client(manager_url, http_client.clone()),
-            http_client,
-            auth_token: None,
-            repository_name: None,
-            repository_uri: None,
-            workspace: None,
-        };
-        let config = ReleaseConfig {
-            output_dir,
-            manager: Some(manager),
-            workspace_name: "default".to_string(),
-            project_link: crate::project_link::ProjectLink::new(
-                "default".to_string(),
-                "default".to_string(),
-                "default".to_string(),
-            ),
-            git_metadata: None,
-            platforms: vec!["test".to_string()],
-            onboarding_inputs: vec![],
-        };
-        let ctx = ExecutionMode::Standalone {
-            server_url: manager_url.to_string(),
-            api_key: "test-token".to_string(),
-        };
-        let args =
-            ReleaseArgs::try_parse_from([&["release", "--prebuilt"], extra_args].concat()).unwrap();
-        release_task_core(args, config, &ctx).await
-    }
-
-    /// A one-key signer list for project `default` whose key releases.
-    fn release_signer(
-        seed: u8,
-    ) -> (
-        alien_signing::SoftwareKey,
-        alien_core::SignedStatement,
-    ) {
-        let key = alien_signing::SoftwareKey::from_secret_bytes(&[seed; 32]).unwrap();
-        let envelope = alien_signing::Envelope {
-            kind: alien_signing::Kind::SignerList.as_str().to_string(),
-            project: Some("default".to_string()),
-            deployment: None,
-            sequence: 1,
-            not_after: None,
-            signer_list_version: 1,
-            body: alien_signing::SignerListBody {
-                previous: None,
-                admin_threshold: 1,
-                signers: vec![alien_signing::Signer {
-                    id: "ci".to_string(),
-                    key: key.public_key().as_str().to_string(),
-                    kind: alien_signing::SignerKind::Ci,
-                    roles: vec![
-                        alien_signing::Role::Release,
-                        alien_signing::Role::Admin,
-                    ],
-                    label: None,
-                }],
-                deny: Vec::new(),
-            },
-        };
-        let list = alien_core::SignedStatement::new(&envelope.to_payload().unwrap())
-            .sign_with("ci", &key)
-            .unwrap();
-        (key, list)
-    }
-
-    /// Signed, the release carries a `release/v2` statement that verifies from
-    /// the pinned fingerprint and reads back as exactly the stack sent beside
-    /// it. Unsigned, the request is what it has always been.
-    #[tokio::test]
-    async fn a_signed_release_carries_a_verifiable_statement_of_its_stack() {
-        let (key, list) = release_signer(11);
-        let fingerprint = alien_signing::fingerprint(&list.open().unwrap().digest);
-        let (manager_url, requests) = start_recording_manager_with_lists(vec![list.clone()]).await;
-        let keys = tempfile::tempdir().unwrap();
-        let key_file = keys.path().join("ci.pem");
-        fs::write(&key_file, key.to_pkcs8_pem().unwrap()).unwrap();
-        let stack = Stack::new("app".to_string())
-            .add(
-                test_container(
-                    "web",
-                    format!("registry.example.com/app/web@sha256:{}", "a".repeat(64)),
-                ),
-                ResourceLifecycle::Live,
-            )
-            .build();
-
-        release_to_manager(&manager_url, &stack, &[]).await.unwrap();
-        release_to_manager(
-            &manager_url,
-            &stack,
-            &[
-                "--sign",
-                "--signing-key-file",
-                key_file.to_str().unwrap(),
-                "--signing-fingerprint",
-                &fingerprint,
-                "--configurable-env",
-                "FEATURE_FLAGS",
-            ],
-        )
-        .await
-        .unwrap();
-
-        let requests = requests.lock().unwrap().clone();
-        assert_eq!(requests.len(), 2);
-        assert!(
-            requests[0].get("signedStacks").is_none(),
-            "an unsigned release sends no statements: {}",
-            requests[0]
-        );
-        assert_eq!(requests[0]["stack"], requests[1]["stack"]);
-        let signed: alien_core::SignedStatement =
-            serde_json::from_value(requests[1]["signedStacks"]["test"].clone()).unwrap();
-        let anchor = alien_signing::Anchor {
-            project: "default".to_string(),
-            deployment: "dep_1".to_string(),
-            protected: true,
-            signing: fingerprint,
-            components: key.public_key().as_str().to_string(),
-            session_approval: Default::default(),
-            inputs: None,
-            resource_prefix: None,
-        };
-        let verified = alien_signing::Trust::new(anchor, &[list])
-            .unwrap()
-            .verify::<alien_signing::ReleaseBody>(
-                &signed,
-                alien_signing::Kind::Release,
-                chrono::Utc::now(),
-            )
-            .expect("the statement verifies from the pinned fingerprint");
-        assert_eq!(
-            verified.body.configurable.env,
-            vec!["FEATURE_FLAGS".to_string()]
-        );
-        assert_eq!(
-            alien_core::release_statement::signed_stack(&verified.body, Platform::Test).unwrap(),
-            stack
-        );
-    }
-
-    /// The CLI refuses to sign a stack a protected deployment would refuse, a
-    /// key the signer list doesn't hold, a list that doesn't match the pinned
-    /// fingerprint, and a build override, all before anything is created.
-    #[tokio::test]
-    async fn a_release_that_cannot_be_signed_is_not_created() {
-        let (key, list) = release_signer(11);
-        let fingerprint = alien_signing::fingerprint(&list.open().unwrap().digest);
-        let keys = tempfile::tempdir().unwrap();
-        let key_file = keys.path().join("ci.pem");
-        fs::write(&key_file, key.to_pkcs8_pem().unwrap()).unwrap();
-        let pinned_stack = Stack::new("app".to_string())
-            .add(
-                test_container(
-                    "web",
-                    format!("registry.example.com/app/web@sha256:{}", "a".repeat(64)),
-                ),
-                ResourceLifecycle::Live,
-            )
-            .build();
-        let sign = [
-            "--sign",
-            "--signing-key-file",
-            key_file.to_str().unwrap(),
-            "--signing-fingerprint",
-            fingerprint.as_str(),
-        ];
-
-        // The test platform pushes nothing, so nothing pins this tag.
-        let (manager_url, requests) = start_recording_manager_with_lists(vec![list.clone()]).await;
-        let tagged = Stack::new("app".to_string())
-            .add(
-                test_container("web", "registry.example.com/app/web:v1".to_string()),
-                ResourceLifecycle::Live,
-            )
-            .build();
-        let error = release_to_manager(&manager_url, &tagged, &sign)
-            .await
-            .expect_err("an unpinned image can't be signed");
-        assert!(
-            error.to_string().contains("not pinned by sha256 digest"),
-            "{error}"
-        );
-
-        // A key that isn't on the list.
-        let other_file = keys.path().join("other.pem");
-        fs::write(&other_file, release_signer(12).0.to_pkcs8_pem().unwrap()).unwrap();
-        let error = release_to_manager(
-            &manager_url,
-            &pinned_stack,
-            &[
-                "--sign",
-                "--signing-key-file",
-                other_file.to_str().unwrap(),
-                "--signing-fingerprint",
-                fingerprint.as_str(),
-            ],
-        )
-        .await
-        .expect_err("a key the list doesn't hold can't sign");
-        assert!(error.to_string().contains("another key"), "{error}");
-
-        // A manager serving a list of its own making.
-        let (forged_manager, forged_requests) =
-            start_recording_manager_with_lists(vec![release_signer(12).1]).await;
-        let error = release_to_manager(&forged_manager, &pinned_stack, &sign)
-            .await
-            .expect_err("a list that doesn't match the pinned fingerprint is refused");
-        assert!(error.to_string().contains("do not verify"), "{error}");
-        assert!(forged_requests.lock().unwrap().is_empty());
-
-        let error = release_to_manager(
-            &manager_url,
-            &pinned_stack,
-            &[
-                &sign[..],
-                &["--override-base-image", "ghcr.io/acme/base:latest"],
-            ]
-            .concat(),
-        )
-        .await
-        .expect_err("--sign refuses build overrides");
-        assert!(
-            error.to_string().contains("--override-base-image"),
-            "{error}"
-        );
-        assert!(requests.lock().unwrap().is_empty());
     }
 
     /// Signing pins each pushed image to the digest the registry holds; an
@@ -4327,7 +4276,8 @@ mod tests {
             false,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .0;
         let host = manager_url.trim_start_matches("http://");
         let tagged = image(&unsigned);
         assert!(
@@ -4346,7 +4296,8 @@ mod tests {
         )
         .await
         .unwrap();
-        let pinned = image(&signed);
+        assert_eq!(signed.1, None, "every image built here is pinned");
+        let pinned = image(&signed.0);
         let client = oci_client::Client::new(oci_client::client::ClientConfig {
             protocol: oci_client::client::ClientProtocol::Http,
             ..Default::default()
@@ -4375,7 +4326,8 @@ mod tests {
     }
 
     /// The registry can't vouch for an image this release didn't build, so
-    /// signing needs the developer to name it by digest.
+    /// signing needs the developer to name it by digest; without one the
+    /// release goes out unsigned, saying why.
     #[tokio::test]
     async fn signing_an_image_not_built_here_needs_its_digest() {
         let (manager_url, _) = start_renaming_manager(|_| false).await;
@@ -4410,15 +4362,17 @@ mod tests {
             }
         };
 
-        let error = push(stack_with("registry.example.com/team/web:v1"), true)
+        let (_, unpinned) = push(stack_with("registry.example.com/team/web:v1"), true)
             .await
-            .expect_err("a tag the release didn't push can't be signed");
-        assert!(error.to_string().contains("name it by digest"), "{error}");
+            .unwrap();
+        let reason = unpinned.expect("a tag the release didn't push can't be signed");
+        assert!(reason.contains("name it by digest"), "{reason}");
 
         let pinned = format!("registry.example.com/team/web@sha256:{}", "a".repeat(64));
-        push(stack_with(&pinned), true)
+        let (_, unpinned) = push(stack_with(&pinned), true)
             .await
             .expect("a digest the developer named is signed as is");
+        assert_eq!(unpinned, None);
         push(stack_with("registry.example.com/team/web:v1"), false)
             .await
             .expect("an unsigned release keeps accepting tags");
@@ -4598,7 +4552,8 @@ mod tests {
                 false,
             )
             .await
-            .unwrap_or_else(|e| panic!("splits={splits}: push failed: {e:?}"));
+            .unwrap_or_else(|e| panic!("splits={splits}: push failed: {e:?}"))
+            .0;
 
             let host = url.trim_start_matches("http://");
             let proxy_only = if splits {

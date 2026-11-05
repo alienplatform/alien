@@ -3515,12 +3515,12 @@ async fn build_target_to_file(
                 workload,
                 toolchain_config,
             );
-            if settings.require_pinned_base_images {
-                base_images_to_try = base_images_to_try
-                    .iter()
-                    .map(|image| pinned_base_images::pin(image))
-                    .collect::<Result<_>>()?;
-            }
+            base_images_to_try = base_images_to_try
+                .iter()
+                .map(|image| {
+                    pinned_base_images::resolve(image, settings.require_pinned_base_images)
+                })
+                .collect::<Result<_>>()?;
 
             if base_images_to_try.is_empty() {
                 return Err(AlienError::new(ErrorData::BuildConfigInvalid {

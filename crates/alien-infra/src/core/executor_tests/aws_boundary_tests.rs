@@ -574,10 +574,8 @@ async fn boundaries_installed_with_copied_prefixed_grants_still_cover_the_stack(
         aws_permissions_boundary_for_stack(&stack, &state, &permission_context("boundary-test"))
             .unwrap();
     let mut statements = required["Statement"].as_array().unwrap().clone();
-    // The boundary's only parameter read is the machine role's read of what setup pins.
     assert!(
-        !required.to_string().contains("secret-one")
-            && !required.to_string().contains("secret-two"),
+        !required.to_string().contains("ssm:GetParameter"),
         "admitted grants are no longer copied"
     );
     // Verbatim from the earlier renderer for this stack, in its order around the inline Deny.

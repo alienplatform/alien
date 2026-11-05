@@ -142,9 +142,6 @@ pub struct DebugShellArgs {
     #[arg(long)]
     pub reason: Option<String>,
 
-    #[command(flatten)]
-    pub signer: crate::signing::SignerArgs,
-
     /// Emit errors as JSON.
     #[arg(long)]
     pub json: bool,
@@ -170,9 +167,6 @@ pub struct DebugExecArgs {
     /// Why you open the session; recorded in the machine's transcript.
     #[arg(long)]
     pub reason: Option<String>,
-
-    #[command(flatten)]
-    pub signer: crate::signing::SignerArgs,
 
     /// Emit structured JSON with captured output.
     #[arg(long)]
@@ -426,15 +420,14 @@ async fn runtime_shell_task(args: DebugShellArgs, ctx: ExecutionMode) -> Result<
         DebugSessionResponse::RemoteExec(session) => {
             let signing = crate::commands::signed_session::SessionSigning {
                 ctx: ctx.clone(),
-                deployment_id: deployment_id.clone(),
                 machine: args.machine.clone(),
+                workload: args.resource.clone(),
                 argv: None,
                 tty: true,
                 reason: args
                     .reason
                     .clone()
                     .unwrap_or_else(|| "interactive shell".to_string()),
-                signer: args.signer.clone(),
             };
             run_remote_exec_attach(session, None, false, Some(signing)).await
         }
@@ -469,15 +462,14 @@ async fn runtime_exec_task(args: DebugExecArgs, ctx: ExecutionMode) -> Result<()
         DebugSessionResponse::RemoteExec(session) => {
             let signing = crate::commands::signed_session::SessionSigning {
                 ctx: ctx.clone(),
-                deployment_id: deployment_id.clone(),
                 machine: args.machine.clone(),
+                workload: args.resource.clone(),
                 argv: Some(args.cmd.clone()),
                 tty: false,
                 reason: args
                     .reason
                     .clone()
                     .unwrap_or_else(|| "remote command".to_string()),
-                signer: args.signer.clone(),
             };
             run_remote_exec_attach(
                 session,

@@ -18,6 +18,7 @@ mod generator;
 mod package;
 mod postgres;
 mod registry;
+mod signing;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 
@@ -26,13 +27,15 @@ pub use generator::{
     generate_helm_chart, generate_operator_manifest,
     generate_operator_manifest_with_image_identity, generate_product_helm_chart,
     generate_product_helm_chart_with_image_identity, generate_product_operator_manifest,
-    generate_product_operator_manifest_with_image_identity, render_manager_fetch_values, HelmChart,
-    HelmOptions, ManagerFetchHelmValuesOptions, OperatorImageIdentityOptions,
-    OperatorLogCollectorOptions, OperatorManifestOptions, OperatorOutputFormat, OperatorPermission,
-    OperatorScope, ProductOperatorManifestOptions, OPERATOR_RBAC_POLICY_VERSION,
+    generate_product_operator_manifest_with_image_identity, generate_signed_helm_chart,
+    render_manager_fetch_values, HelmChart, HelmOptions, ManagerFetchHelmValuesOptions,
+    OperatorImageIdentityOptions, OperatorLogCollectorOptions, OperatorManifestOptions,
+    OperatorOutputFormat, OperatorPermission, OperatorScope, ProductOperatorManifestOptions,
+    OPERATOR_RBAC_POLICY_VERSION,
 };
 pub use package::{
     apply_package_defaults, package_chart, LogCollectorDefault, OperatorImageDefault,
     PackageDefaults,
 };
 pub use registry::HelmRegistry;
+pub use signing::{allowed_values, SignedChartPins, LEDGER_KEY, SETTINGS_KEY};
