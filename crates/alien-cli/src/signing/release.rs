@@ -283,49 +283,47 @@ async fn request_trust(
 ) -> Result<()> {
     let project = chain.project().to_string();
     let list = chain.current();
+    // What this device asks for, built here: a waiting request is reused
+    // only if it asks for exactly this, so the control plane can't put other
+    // roles, a kind or another change behind this device's pairing code.
+    let mut id = record.signer_id.clone();
+    let mut suffix = 2;
+    while list.signer(&id).is_some() {
+        id = format!("{}-{suffix}", record.signer_id);
+        suffix += 1;
+    }
+    let signer = Signer {
+        id,
+        key: key.as_str().to_string(),
+        kind: SignerKind::Device,
+        roles: vec![Role::Release],
+        label: record.label.clone(),
+    };
+    let mut body = list.body.clone();
+    body.previous = Some(list.digest.clone());
+    body.recovered = false;
+    body.signers.push(signer.clone());
+
     let pending = api.pending(&project).await?;
     let waiting = pending.into_iter().find(|change| {
-        change.based_on_version == list.version
-            && added_signers(&list.body, &change.body)
-                .iter()
-                .any(|signer| signer.key == key.as_str())
+        added_signers(&list.body, &change.body)
+            .iter()
+            .any(|added| added.key == key.as_str())
     });
-    let (change, signer) = match waiting {
+    let change = match waiting {
+        Some(change) if change.based_on_version == list.version && change.body == body => change,
         Some(change) => {
-            let signer = added_signers(&list.body, &change.body)
-                .into_iter()
-                .find(|signer| signer.key == key.as_str())
-                .cloned()
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::SigningFailed {
-                        message: "The waiting request lost this device".to_string(),
-                    })
-                })?;
-            (change, signer)
+            return Err(AlienError::new(ErrorData::SigningFailed {
+                message: format!(
+                    "Waiting change {} adds this device but isn't the request this device makes (one device with role release, based on version {}). Ask an admin to reject it in the dashboard, then release again.",
+                    change.id, list.version
+                ),
+            }))
         }
         None => {
-            let mut id = record.signer_id.clone();
-            let mut suffix = 2;
-            while list.signer(&id).is_some() {
-                id = format!("{}-{suffix}", record.signer_id);
-                suffix += 1;
-            }
-            let signer = Signer {
-                id,
-                key: key.as_str().to_string(),
-                kind: SignerKind::Device,
-                roles: vec![Role::Release],
-                label: record.label.clone(),
-            };
-            let mut body = list.body.clone();
-            body.previous = Some(list.digest.clone());
-            body.recovered = false;
-            body.signers.push(signer.clone());
             let summary = format!("{} asks to: release", signer.id);
-            let change = api
-                .create_pending(&project, &summary, list.version, &body)
-                .await?;
-            (change, signer)
+            api.create_pending(&project, &summary, list.version, &body)
+                .await?
         }
     };
     let admins: Vec<String> = list

@@ -286,7 +286,7 @@ async fn approve_one(admin: &mut Admin, change: &PendingChange) -> Result<()> {
         }
     }
     match added.as_slice() {
-        [signer] if diff(list, &body).len() == 1 => {
+        [signer] if diff(&list.body, &body).len() == 1 => {
             println!("{} asks to: {}", who(signer), roles_text(&signer.roles))
         }
         _ => {
@@ -295,7 +295,7 @@ async fn approve_one(admin: &mut Admin, change: &PendingChange) -> Result<()> {
                 change.requested_by.as_deref().unwrap_or("Someone"),
                 admin.chain.project()
             );
-            for line in diff(list, &body) {
+            for line in diff(&list.body, &body) {
                 println!("  {line}");
             }
         }
@@ -340,30 +340,54 @@ fn refused(change: &PendingChange, reason: &str) -> AlienError<ErrorData> {
 }
 
 /// How `next` differs from `list`, one line per signer and setting.
-fn diff(list: &TrustedList, next: &SignerListBody) -> Vec<String> {
-    let current = &list.body;
+fn diff(current: &SignerListBody, next: &SignerListBody) -> Vec<String> {
     let mut lines = Vec::new();
     for signer in added_signers(current, next) {
         lines.push(format!(
-            "+ {} · {} · {}",
+            "+ {} · {} · {} · key {}",
             who(signer),
             kind_name(signer.kind),
-            roles_text(&signer.roles)
+            roles_text(&signer.roles),
+            short_key(&signer.key)
         ));
     }
     for signer in &current.signers {
-        match next.signers.iter().find(|other| other.key == signer.key) {
-            None => lines.push(format!("- {}", who(signer))),
-            Some(other) if other.roles != signer.roles => lines.push(format!(
-                "~ {}: {} → {}",
+        let Some(other) = next.signers.iter().find(|other| other.key == signer.key) else {
+            lines.push(format!("- {}", who(signer)));
+            continue;
+        };
+        // Each field on its own line, so no change hides behind another.
+        if other.id != signer.id {
+            lines.push(format!(
+                "~ {}: id {} → {}",
+                who(signer),
+                signer.id,
+                other.id
+            ));
+        }
+        if other.label != signer.label {
+            lines.push(format!(
+                "~ {}: label {} → {}",
+                who(signer),
+                signer.label.as_deref().unwrap_or("none"),
+                other.label.as_deref().unwrap_or("none")
+            ));
+        }
+        if other.kind != signer.kind {
+            lines.push(format!(
+                "~ {}: kind {} → {}",
+                who(signer),
+                kind_name(signer.kind),
+                kind_name(other.kind)
+            ));
+        }
+        if other.roles != signer.roles {
+            lines.push(format!(
+                "~ {}: roles {} → {}",
                 who(signer),
                 roles_text(&signer.roles),
                 roles_text(&other.roles)
-            )),
-            Some(other) if other.id != signer.id || other.label != signer.label => {
-                lines.push(format!("~ {} is now {}", who(signer), who(other)))
-            }
-            Some(_) => {}
+            ));
         }
     }
     for digest in next
@@ -393,6 +417,14 @@ fn diff(list: &TrustedList, next: &SignerListBody) -> Vec<String> {
         ));
     }
     lines
+}
+
+/// The first characters of a public key, enough to tell keys apart.
+fn short_key(key: &str) -> String {
+    let key = key
+        .strip_prefix(alien_signing::PUBLIC_KEY_PREFIX)
+        .unwrap_or(key);
+    key.chars().take(12).collect()
 }
 
 fn who(signer: &Signer) -> String {
@@ -1318,6 +1350,52 @@ mod tests {
             roles,
             label: Some(format!("{id}@example.com")),
         }
+    }
+
+    fn body(signers: Vec<Signer>) -> SignerListBody {
+        SignerListBody {
+            previous: None,
+            admin_threshold: 1,
+            signers,
+            deny: Vec::new(),
+            recovered: false,
+        }
+    }
+
+    #[test]
+    fn every_changed_field_of_a_signer_is_shown() {
+        let mut recovery = signer("recovery", 2, vec![Role::Admin]);
+        recovery.kind = SignerKind::Recovery;
+        recovery.label = None;
+        let current = body(vec![
+            signer("alice", 1, vec![Role::Admin, Role::Release]),
+            recovery.clone(),
+        ]);
+
+        // Unchanged: only the refresh line.
+        assert_eq!(diff(&current, &current).len(), 1);
+
+        // A prepared refresh that quietly makes the recovery key a device.
+        let mut next = current.clone();
+        next.signers[1].kind = SignerKind::Device;
+        assert_eq!(
+            diff(&current, &next),
+            ["~ recovery: kind recovery → device"]
+        );
+
+        // Roles and label changed together: two lines, neither hidden.
+        let mut next = current.clone();
+        next.signers[0].roles = vec![Role::Release];
+        next.signers[0].label = Some("mallory@example.com".to_string());
+        next.signers[0].id = "mallory".to_string();
+        assert_eq!(
+            diff(&current, &next),
+            [
+                "~ alice (alice@example.com): id alice → mallory",
+                "~ alice (alice@example.com): label alice@example.com → mallory@example.com",
+                "~ alice (alice@example.com): roles manage devices, release → release",
+            ]
+        );
     }
 
     #[test]

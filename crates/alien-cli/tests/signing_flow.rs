@@ -637,6 +637,77 @@ async fn signing_from_first_release_to_recovery() {
     .await;
     assert!(pending["items"].as_array().unwrap().is_empty(), "{pending}");
 
+    // Erin asks to be trusted. The control plane drops her request and files
+    // its own for her key with the admin role: her CLI refuses to show a
+    // pairing code for it, so no admin is asked to type one.
+    let erin = world.person("erin");
+    let output = ok(world.run_in_terminal(&erin, &app, RELEASE, &[]));
+    assert!(output.contains("Send them this code"), "{output}");
+    let pending = get(
+        &world.manager,
+        &format!("/v1/projects/{PROJECT}/pending-changes?status=pending"),
+    )
+    .await;
+    let honest = pending["items"][0].clone();
+    assert_eq!(pending["items"].as_array().unwrap().len(), 1, "{pending}");
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!(
+            "{}/v1/pending-changes/{}/resolution",
+            world.manager.url,
+            honest["id"].as_str().unwrap()
+        ))
+        .bearer_auth(TOKEN)
+        .json(&serde_json::json!({ "status": "rejected" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let mut crafted = honest["body"].clone();
+    let signers = crafted["signers"].as_array_mut().unwrap();
+    signers.last_mut().unwrap()["roles"] = serde_json::json!(["admin", "release"]);
+    let response = client
+        .post(format!(
+            "{}/v1/projects/{PROJECT}/pending-changes",
+            world.manager.url
+        ))
+        .bearer_auth(TOKEN)
+        .json(&serde_json::json!({
+            "summary": "erin asks to: release",
+            "basedOnVersion": honest["basedOnVersion"],
+            "body": crafted,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        201,
+        "the manager stores what it is given"
+    );
+    let crafted: serde_json::Value = response.json().await.unwrap();
+    let output = failed(world.run_in_terminal(&erin, &app, RELEASE, &[]));
+    assert!(
+        output.contains(&format!(
+            "Waiting change {} adds this device but isn't the request this device makes",
+            crafted["id"].as_str().unwrap()
+        )),
+        "{output}"
+    );
+    assert!(!output.contains("Send them this code"), "{output}");
+    let response = client
+        .post(format!(
+            "{}/v1/pending-changes/{}/resolution",
+            world.manager.url,
+            crafted["id"].as_str().unwrap()
+        ))
+        .bearer_auth(TOKEN)
+        .json(&serde_json::json!({ "status": "rejected" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+
     // Bob's next release is signed by him.
     ok(world.run_in_terminal(&bob, &app, RELEASE, &[]));
     assert_eq!(
