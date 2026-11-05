@@ -435,6 +435,14 @@ pub enum Refusal {
     /// The signed inputs don't resolve.
     #[error("the signed release's inputs don't resolve: {0}")]
     Inputs(String),
+    /// A binding the signed config sets doesn't fit the signed stack.
+    #[error("the signed config's binding '{id}' is refused: {reason}")]
+    Binding {
+        /// Resource id.
+        id: String,
+        /// Why.
+        reason: String,
+    },
     /// The carried stack differs from the one its statement signs.
     #[error("the stack the manager sent differs from the signed release")]
     StackChanged,
@@ -615,6 +623,37 @@ pub fn developer_inputs(stack: &Stack) -> Vec<&str> {
         .collect()
 }
 
+/// The bindings of resources outside this cluster, from the signed config.
+/// Each names a resource of the signed stack and is read as that resource's
+/// type of binding.
+fn signed_external_bindings(
+    stack: &Stack,
+    signed_config: &ConfigBody,
+) -> Result<ExternalBindings, Refusal> {
+    let mut bindings = ExternalBindings::default();
+    for (id, value) in &signed_config.bindings {
+        let refuse = |reason: String| Refusal::Binding {
+            id: id.clone(),
+            reason,
+        };
+        let entry = stack
+            .resources()
+            .find(|(resource, _)| resource.as_str() == id)
+            .map(|(_, entry)| entry)
+            .ok_or_else(|| refuse("the signed stack has no such resource".to_string()))?;
+        let mut typed = value
+            .as_object()
+            .cloned()
+            .ok_or_else(|| refuse("its value is not an object".to_string()))?;
+        let resource_type = entry.config.resource_type().to_string().replace('-', "_");
+        typed.insert("type".to_string(), serde_json::Value::String(resource_type));
+        let binding = serde_json::from_value(serde_json::Value::Object(typed))
+            .map_err(|error| refuse(format!("it is not a binding of this resource: {error}")))?;
+        bindings.insert(id.as_str(), binding);
+    }
+    Ok(bindings)
+}
+
 /// OTLP export to `endpoint`, the signed config's OTLP/HTTP base URL, which
 /// the signing crate already limited to `https://`.
 fn signed_telemetry(endpoint: &str) -> OtlpConfig {
@@ -730,7 +769,9 @@ fn protect_config(
         // installation; the deployment loop fills these from its settings.
         deployment_name: None,
         stack_settings: StackSettings::default(),
-        external_bindings: ExternalBindings::default(),
+        // Resources outside this cluster bind only to values the signed
+        // config names; the manager's are ignored.
+        external_bindings: signed_external_bindings(stack, signed_config)?,
         base_platform: None,
         label_domain: None,
         observe_label_selector: None,
@@ -941,7 +982,21 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn stack(image: &str) -> Stack {
-        let container = Container::new("api".to_string())
+        build_stack(image, false)
+    }
+
+    /// The test stack with a storage resource `data` beside the container.
+    fn stack_with_storage(image: &str) -> Stack {
+        build_stack(image, true)
+    }
+
+    fn build_stack(image: &str, storage: bool) -> Stack {
+        let data = alien_core::Storage::new("data".to_string()).build();
+        let mut container = Container::new("api".to_string());
+        if storage {
+            container = container.link(&data);
+        }
+        let container = container
             .code(ContainerCode::Image {
                 image: image.to_string(),
             })
@@ -956,9 +1011,11 @@ pub(crate) mod tests {
             .port(8080)
             .permissions("execution".to_string())
             .build();
-        let mut stack = Stack::new("shop".to_string())
-            .add(container, ResourceLifecycle::Live)
-            .build();
+        let mut builder = Stack::new("shop".to_string()).add(container, ResourceLifecycle::Live);
+        if storage {
+            builder = builder.add(data, ResourceLifecycle::Frozen);
+        }
+        let mut stack = builder.build();
         stack.inputs = vec![
             input("logLevel", "developer", "LOG_LEVEL"),
             input("databaseUrl", "deployer", "DATABASE_URL"),
@@ -1334,6 +1391,59 @@ pub(crate) mod tests {
         assert_eq!(protected.config.native_image_host, None);
         assert_eq!(protected.config.observe_label_selector, None);
         assert!(protected.config.external_bindings.0.is_empty());
+    }
+
+    #[test]
+    fn external_bindings_come_only_from_signed_config() {
+        let release = signed_release(5, &stack_with_storage(&pinned()));
+        let mut target = target(release, vec![]);
+        // Attack: the manager points the binding at its own bucket.
+        target.config.external_bindings.insert(
+            "data",
+            alien_core::ExternalBinding::Storage(alien_core::StorageBinding::s3("attacker-bucket")),
+        );
+        let (protected, _, _) = signing()
+            .protect_target(Platform::Kubernetes, &local_inputs(), &fresh(), &target)
+            .unwrap();
+        assert!(
+            protected.config.external_bindings.0.is_empty(),
+            "the manager's binding is ignored"
+        );
+
+        target.signed_config = Some(signed_config(
+            1,
+            &this_install(),
+            serde_json::json!({"bindings": {"data": {"service": "s3", "bucketName": "shop-data"}}}),
+        ));
+        let (protected, _, _) = signing()
+            .protect_target(Platform::Kubernetes, &local_inputs(), &fresh(), &target)
+            .unwrap();
+        assert_eq!(
+            protected.config.external_bindings.0,
+            HashMap::from([(
+                "data".to_string(),
+                alien_core::ExternalBinding::Storage(alien_core::StorageBinding::s3("shop-data"))
+            )])
+        );
+
+        for (bindings, reason) in [
+            (
+                serde_json::json!({"cache": {"service": "s3", "bucketName": "x"}}),
+                "SIGNING_BODY_REFUSED: The 'config/v1' statement was refused: binding 'cache' is not a binding of the signed release",
+            ),
+            (
+                serde_json::json!({"data": {"service": "redis", "url": "redis://x"}}),
+                "the signed config's binding 'data' is refused: it is not a binding of this resource",
+            ),
+        ] {
+            target.signed_config = Some(signed_config(
+                2,
+                &this_install(),
+                serde_json::json!({ "bindings": bindings }),
+            ));
+            let refusal = accept(&fresh(), &target).unwrap_err().to_string();
+            assert!(refusal.starts_with(reason), "{refusal}");
+        }
     }
 
     #[test]
