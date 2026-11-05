@@ -4772,6 +4772,11 @@ mod tests {
                         "updatedAt": "2026-01-01T00:00:00Z",
                     }] }))
                 }),
+            )
+            // No protected deployment follows the channel, so the release may go unsigned.
+            .route(
+                "/v1/deployments",
+                get(|| async { Json(serde_json::json!({ "items": [] })) }),
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());
