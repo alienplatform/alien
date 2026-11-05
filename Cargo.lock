@@ -718,6 +718,7 @@ dependencies = [
  "alien-manager-api",
  "alien-operator",
  "alien-preflights",
+ "alien-signing",
  "async-trait",
  "aws-config",
  "aws-sdk-cloudformation",
