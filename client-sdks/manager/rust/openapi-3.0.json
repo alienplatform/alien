@@ -12647,6 +12647,20 @@
           }
         }
       },
+      "MachineImagePublisher": {
+        "type": "object",
+        "description": "The publisher of the machine images compute clusters boot.",
+        "required": [
+          "awsAccountId"
+        ],
+        "properties": {
+          "awsAccountId": {
+            "type": "string",
+            "description": "The 12-digit AWS account ID that owns the machine images. IAM sees an image owner's\nalias in place of its ID when it has one, so this account must have none."
+          }
+        },
+        "additionalProperties": false
+      },
       "MachinesComputeClusterHeartbeatData": {
         "type": "object",
         "required": [
@@ -15196,6 +15210,39 @@
             "type": "string"
           }
         }
+      },
+      "ReleaseTrustSettings": {
+        "type": "object",
+        "description": "What setup pins for a protected deployment.\n\nSetup copies these values into the anchor. Take them from the developer's install\nguide, not from the control plane.",
+        "required": [
+          "project",
+          "deployment",
+          "signing",
+          "components"
+        ],
+        "properties": {
+          "components": {
+            "type": "string",
+            "description": "`ecdsa-p256:<base64 SPKI>` key that signs enforcer and component builds."
+          },
+          "deployment": {
+            "type": "string",
+            "description": "This deployment's ID, which every deployment-bound statement must name."
+          },
+          "project": {
+            "type": "string",
+            "description": "Project whose signed statements the deployment accepts."
+          },
+          "sessionApproval": {
+            "type": "string",
+            "description": "Who approves exec and debug sessions."
+          },
+          "signing": {
+            "type": "string",
+            "description": "`SHA256:<64 hex>` fingerprint of the developer's signer list version 1."
+          }
+        },
+        "additionalProperties": false
       },
       "RemoteAwsBedrockAiBinding": {
         "type": "object",
@@ -17971,6 +18018,15 @@
               }
             ]
           },
+          "machineImagePublisher": {
+            "nullable": true,
+            "description": "Who publishes the machine images compute clusters boot. Setup writes it into the\nmanagement identity's policy, so the control plane can boot no other image.\nRequired on AWS when the management identity can launch machines.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MachineImagePublisher"
+              }
+            ]
+          },
           "network": {
             "nullable": true,
             "description": "Network configuration for the stack (VPC/VNet settings).\nIf `None`, an isolated VPC with NAT is auto-created when the stack has resources\nthat require networking (e.g., containers). Set explicitly to customize:\n`UseDefault` for the provider's default network (fast, dev/test only),\n`Create` for an isolated VPC with managed NAT (production), or `ByoVpc*`\nto reference an existing customer-managed VPC.",
@@ -17997,6 +18053,15 @@
               "type": "string"
             },
             "description": "Provider quota identities whose preflight failures become visible warnings\nfor this deployment. Checks still run; deploy-time provider limits still apply.\nUnknown identities are rejected. An empty list restores normal blocking."
+          },
+          "releaseTrust": {
+            "nullable": true,
+            "description": "Protection for this deployment. When set, setup writes the anchor the deployment's\nenforcers read, and they run only what the developer signed. Setup alone writes it:\na later change here does not change the installed anchor.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReleaseTrustSettings"
+              }
+            ]
           },
           "setupManagement": {
             "$ref": "#/components/schemas/SetupManagement",

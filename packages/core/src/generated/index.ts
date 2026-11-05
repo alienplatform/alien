@@ -357,6 +357,7 @@ export type { LocalStorageHeartbeatData } from "./zod/local-storage-heartbeat-da
 export type { LocalVaultBinding } from "./zod/local-vault-binding-schema.js";
 export type { LocalVaultHeartbeatData } from "./zod/local-vault-heartbeat-data-schema.js";
 export type { LocalWorkerHeartbeatData } from "./zod/local-worker-heartbeat-data-schema.js";
+export type { MachineImagePublisher } from "./zod/machine-image-publisher-schema.js";
 export type { MachineProfile } from "./zod/machine-profile-schema.js";
 export type { MachinesComputeClusterHeartbeatData } from "./zod/machines-compute-cluster-heartbeat-data-schema.js";
 export type { MachinesComputeMachineStatus } from "./zod/machines-compute-machine-status-schema.js";
@@ -428,6 +429,7 @@ export type { RawHeartbeatSnippet } from "./zod/raw-heartbeat-snippet-schema.js"
 export type { ReadinessProbe } from "./zod/readiness-probe-schema.js";
 export type { RedisKvBinding } from "./zod/redis-kv-binding-schema.js";
 export type { ReleaseRequest } from "./zod/release-request-schema.js";
+export type { ReleaseTrustSettings } from "./zod/release-trust-settings-schema.js";
 export type { RemoteBindingGrant } from "./zod/remote-binding-grant-schema.js";
 export type { RemoteBindingsOutputs } from "./zod/remote-bindings-outputs-schema.js";
 export type { RemoteBindings } from "./zod/remote-bindings-schema.js";
@@ -887,6 +889,7 @@ export { LocalStorageHeartbeatDataSchema } from "./zod/local-storage-heartbeat-d
 export { LocalVaultBindingSchema } from "./zod/local-vault-binding-schema.js";
 export { LocalVaultHeartbeatDataSchema } from "./zod/local-vault-heartbeat-data-schema.js";
 export { LocalWorkerHeartbeatDataSchema } from "./zod/local-worker-heartbeat-data-schema.js";
+export { MachineImagePublisherSchema } from "./zod/machine-image-publisher-schema.js";
 export { MachineProfileSchema } from "./zod/machine-profile-schema.js";
 export { MachinesComputeClusterHeartbeatDataSchema } from "./zod/machines-compute-cluster-heartbeat-data-schema.js";
 export { MachinesComputeMachineStatusSchema } from "./zod/machines-compute-machine-status-schema.js";
@@ -958,6 +961,7 @@ export { RawHeartbeatSnippetSchema } from "./zod/raw-heartbeat-snippet-schema.js
 export { ReadinessProbeSchema } from "./zod/readiness-probe-schema.js";
 export { RedisKvBindingSchema } from "./zod/redis-kv-binding-schema.js";
 export { ReleaseRequestSchema } from "./zod/release-request-schema.js";
+export { ReleaseTrustSettingsSchema } from "./zod/release-trust-settings-schema.js";
 export { RemoteBindingGrantSchema } from "./zod/remote-binding-grant-schema.js";
 export { RemoteBindingsOutputsSchema } from "./zod/remote-bindings-outputs-schema.js";
 export { RemoteBindingsSchema } from "./zod/remote-bindings-schema.js";

@@ -325,6 +325,19 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// The protection settings of a deployment cannot become its anchor.
+    #[error(
+        code = "RELEASE_TRUST_SETTINGS_INVALID",
+        message = "Release trust settings invalid: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    ReleaseTrustSettingsInvalid {
+        /// Why the settings were refused
+        reason: String,
+    },
+
     /// A release statement could not be built or signed.
     #[error(
         code = "RELEASE_STATEMENT_INVALID",

@@ -87,6 +87,8 @@ use utoipa::OpenApi;
     EndpointAccess,
     NetworkSettings,
     ComputeSettings,
+    ReleaseTrustSettings,
+    MachineImagePublisher,
     FailureDomainSelection,
     ComputePoolSelection,
     DomainSettings,
