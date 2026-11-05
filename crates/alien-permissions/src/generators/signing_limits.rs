@@ -52,6 +52,34 @@ pub const AWS_MACHINE_COMMANDS: &[&str] = &[
     "ec2-instance-connect:SendSerialConsoleSSHPublicKey",
 ];
 
+/// Starting or changing a microVM image runs whatever code the caller names.
+pub const AWS_MICROVM_RUNS: &[&str] = &[
+    "lambda:RunMicrovm",
+    "lambda:ResumeMicrovm",
+    "lambda:CreateMicrovmImage",
+    "lambda:UpdateMicrovmImage",
+];
+
+/// A build project runs the steps and image it is given, as its service role.
+pub const AWS_BUILD_RUNS: &[&str] = &[
+    "codebuild:CreateProject",
+    "codebuild:UpdateProject",
+    "codebuild:StartBuild",
+    "codebuild:StartBuildBatch",
+    "codebuild:RetryBuild",
+    "codebuild:RetryBuildBatch",
+];
+
+/// Changing what an install's role may do, or who may assume it. Setup creates the install's
+/// roles; on a protected install management doesn't change them.
+pub const AWS_ROLE_POLICY_WRITES: &[&str] = &[
+    "iam:PutRolePolicy",
+    "iam:AttachRolePolicy",
+    "iam:UpdateAssumeRolePolicy",
+    "iam:PutRolePermissionsBoundary",
+    "iam:DeleteRolePermissionsBoundary",
+];
+
 /// Role writes that would let management become the verifier.
 const ROLE_WRITES: &[&str] = &[
     "iam:DeleteRole",
@@ -118,6 +146,24 @@ pub fn aws_management_limits(prefix: &str, account: &str, region: &str) -> Value
                 "Effect": "Deny",
                 "Action": AWS_MACHINE_COMMANDS,
                 "Resource": "*"
+            },
+            {
+                "Sid": "NoUnsignedMicrovms",
+                "Effect": "Deny",
+                "Action": AWS_MICROVM_RUNS,
+                "Resource": "*"
+            },
+            {
+                "Sid": "NoUnsignedBuilds",
+                "Effect": "Deny",
+                "Action": AWS_BUILD_RUNS,
+                "Resource": "*"
+            },
+            {
+                "Sid": "OnlySetupChangesWhatRolesMayDo",
+                "Effect": "Deny",
+                "Action": AWS_ROLE_POLICY_WRITES,
+                "Resource": format!("arn:aws:iam::{account}:role/{prefix}-*")
             },
             {
                 "Sid": "OnlySetupChangesTheVerifier",
@@ -318,8 +364,12 @@ mod tests {
         for owned in AWS_VERIFIER_OWNED {
             assert!(denied.iter().any(|action| action == owned), "{owned}");
         }
-        for command in AWS_MACHINE_COMMANDS {
-            assert!(denied.iter().any(|action| action == command), "{command}");
+        for action in AWS_MACHINE_COMMANDS
+            .iter()
+            .chain(AWS_MICROVM_RUNS)
+            .chain(AWS_BUILD_RUNS)
+        {
+            assert!(denied.iter().any(|denied| denied == action), "{action}");
         }
     }
 }

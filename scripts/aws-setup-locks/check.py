@@ -12,6 +12,7 @@ try (as an extended profile or a customer policy could), and tries:
   * UpdateAutoScalingGroup naming a launch template;
   * Lambda writes on a function of the install, and on the verifier;
   * SSM SendCommand and StartSession on the install's machines;
+  * creating a build project, widening a runtime role or letting anyone assume it;
   * writes under /signed/: its own settings, and those of a neighbor whose prefix extends its own.
 
 Unprotected, each attempt succeeds (except /signed/, which every management role now refuses;
@@ -221,7 +222,7 @@ class Run:
     def install_resources(self, stack_name, subnet):
         """A function, a launch template and an empty machine group of the install, as its runtime
         would create them, for management to try to change."""
-        trust = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": {"Service": "lambda.amazonaws.com"}, "Action": "sts:AssumeRole"}]}
+        trust = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": {"Service": ["lambda.amazonaws.com", "codebuild.amazonaws.com"]}, "Action": "sts:AssumeRole"}]}
         role = f"{stack_name}-fn-sa"
         role_arn = self.iam.create_role(RoleName=role, AssumeRolePolicyDocument=json.dumps(trust), Tags=self.tags())["Role"]["Arn"]
         self.cleanups.append(lambda: self.iam.delete_role(RoleName=role))
@@ -260,7 +261,7 @@ class Run:
             Tags=[{"Key": t["Key"], "Value": t["Value"], "PropagateAtLaunch": True} for t in tag_spec],
         )
         self.cleanups.append(lambda: self.asg.delete_auto_scaling_group(AutoScalingGroupName=group, ForceDelete=True))
-        return {"function": function, "image": image, "group": group, "other_template": templates["lt-other"]}
+        return {"function": function, "image": image, "group": group, "other_template": templates["lt-other"], "role": role, "role_arn": role_arn}
 
     # The management role
 
@@ -286,7 +287,8 @@ class Run:
 
     def allow_everything(self, stack_name):
         extra = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": [
-            "ec2:*", "autoscaling:*", "lambda:*", "ssm:*", "iam:PassRole",
+            "ec2:*", "autoscaling:*", "lambda:*", "ssm:*", "codebuild:*", "iam:PassRole",
+            "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:UpdateAssumeRolePolicy",
         ], "Resource": "*"}]}
         role = f"{stack_name}-management"
         self.iam.put_role_policy(RoleName=role, PolicyName="extra-grant", PolicyDocument=json.dumps(extra))
@@ -344,6 +346,29 @@ class Run:
             iam = session.client("iam")
             code, detail = self.call(iam.put_role_policy, RoleName=verifier, PolicyName="x", PolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "*", "Resource": "*"}]}))
             self.expect(variant, "verifier-role-policy-write", "Denied", denied(code), detail)
+
+        codebuild = session.client("codebuild")
+        project = f"{stack_name}-build"
+        code, detail = self.call(
+            codebuild.create_project, name=project, serviceRole=things["role_arn"],
+            source={"type": "NO_SOURCE", "buildspec": "version: 0.2\nphases:\n  build:\n    commands: [id]\n"},
+            artifacts={"type": "NO_ARTIFACTS"},
+            environment={"type": "LINUX_CONTAINER", "image": "aws/codebuild/amazonlinux2-x86_64-standard:5.0", "computeType": "BUILD_GENERAL1_SMALL"},
+        )
+        if code == "Success":
+            self.cleanups.append(lambda: self.session.client("codebuild").delete_project(name=project))
+        self.expect(variant, "create-build-project", refused or "Success", denied(code), detail)
+
+        iam = session.client("iam")
+        everything = json.dumps({"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "*", "Resource": "*"}]})
+        code, detail = self.call(iam.put_role_policy, RoleName=things["role"], PolicyName="widen", PolicyDocument=everything)
+        if code == "Success":
+            role = things["role"]
+            self.cleanups.append(lambda: self.iam.delete_role_policy(RoleName=role, PolicyName="widen"))
+        self.expect(variant, "widen-a-runtime-role", refused or "Success", denied(code), detail)
+        trust = json.dumps({"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": {"AWS": f"arn:aws:iam::{self.account}:root"}, "Action": "sts:AssumeRole"}]})
+        code, detail = self.call(iam.update_assume_role_policy, RoleName=things["role"], PolicyDocument=trust)
+        self.expect(variant, "assume-a-runtime-role", refused or "Success", denied(code), detail)
 
         instance = f"arn:aws:ec2:{self.args.region}:{self.account}:instance/i-0123456789abcdef0"
         code, detail = self.call(ssm.send_command, InstanceIds=["i-0123456789abcdef0"], DocumentName="AWS-RunShellScript", Parameters={"commands": ["id"]})
