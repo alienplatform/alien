@@ -371,7 +371,10 @@ class Run:
                 }}],
             },
         }, api="2023-05-01")
-        self.wait(group, "2023-05-01", lambda s, b: (b.get("properties", {}).get("instanceView") or {}).get("state") in ("Succeeded", "Failed", "Stopped") or b.get("properties", {}).get("provisioningState") == "Failed", f"probe {name}")
+        state = self.wait(group, "2023-05-01", lambda s, b: (b.get("properties", {}).get("instanceView") or {}).get("state") in ("Succeeded", "Failed", "Stopped") or b.get("properties", {}).get("provisioningState") == "Failed", f"probe {name}")
+        (self.evidence / f"{place['group']}-{name}-group.json").write_text(json.dumps(state, indent=2))
+        if state.get("properties", {}).get("provisioningState") == "Failed":
+            raise SystemExit(f"probe {name}: container group failed to provision: {json.dumps(state.get('properties', {}).get('instanceView'))}")
         logs = self.must("GET", f"{group}/containers/probe/logs", api="2023-05-01").get("content", "")
         (self.evidence / f"{place['group']}-{name}.log").write_text(logs)
         results = {}
