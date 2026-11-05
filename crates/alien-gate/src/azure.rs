@@ -281,8 +281,63 @@ impl InstallStore for AzureInstall {
     }
 }
 
-/// Container Apps and scale sets.
-pub struct AzureBackend(pub Azure);
+#[async_trait]
+impl crate::azure_machines::AzureMachineApi for Azure {
+    async fn get(&self, path: &str) -> Result<Option<Value>> {
+        self.call(
+            reqwest::Method::GET,
+            &format!("{ARM}{path}"),
+            ARM,
+            None,
+            &format!("ARM get {path}"),
+        )
+        .await
+    }
+
+    async fn put(&self, path: &str, body: &Value) -> Result<Value> {
+        let what = format!("ARM put {path}");
+        self.call(
+            reqwest::Method::PUT,
+            &format!("{ARM}{path}"),
+            ARM,
+            Some(body),
+            &what,
+        )
+        .await?
+        .ok_or_else(|| AlienError::new(failed(format!("{what}: not found"))))?;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(600);
+        loop {
+            let current = self
+                .call(
+                    reqwest::Method::GET,
+                    &format!("{ARM}{path}"),
+                    ARM,
+                    None,
+                    &what,
+                )
+                .await?
+                .ok_or_else(|| AlienError::new(failed(format!("{what}: gone after the write"))))?;
+            match current["properties"]["provisioningState"].as_str() {
+                Some("Succeeded") => return Ok(current),
+                Some("Failed") | Some("Canceled") => {
+                    return Err(AlienError::new(failed(format!(
+                        "{what}: provisioning {}",
+                        current["properties"]["provisioningState"]
+                    ))))
+                }
+                _ if tokio::time::Instant::now() > deadline => {
+                    return Err(AlienError::new(failed(format!(
+                        "{what}: not provisioned after 600 s"
+                    ))))
+                }
+                _ => tokio::time::sleep(std::time::Duration::from_secs(5)).await,
+            }
+        }
+    }
+}
+
+/// Container Apps and scale sets, and the machine images this build boots.
+pub struct AzureBackend(pub Azure, pub crate::machines::ImagePins);
 
 #[async_trait]
 impl Backend for AzureBackend {
@@ -317,6 +372,33 @@ impl Backend for AzureBackend {
             }));
         }
         self.0.resize_scale_set(target, size).await
+    }
+
+    async fn roll(
+        &self,
+        place: &Place,
+        release: &alien_signing::ReleaseBody,
+        request: &crate::machines::RollMachines,
+    ) -> Result<Value> {
+        let alien_signing::InstallId::Azure {
+            subscription,
+            resource_group,
+        } = &place.install
+        else {
+            return Err(AlienError::new(ErrorData::Refused {
+                reason: "this is the Azure roll".to_string(),
+            }));
+        };
+        crate::azure_machines::roll(
+            &self.0,
+            place,
+            subscription,
+            resource_group,
+            release,
+            request,
+            &self.1,
+        )
+        .await
     }
 }
 

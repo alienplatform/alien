@@ -25,6 +25,7 @@
 
 pub mod aws;
 pub mod azure;
+pub mod azure_machines;
 pub mod cloud_run;
 pub mod container_apps;
 pub mod error;
@@ -32,6 +33,7 @@ pub mod error;
 pub mod fixtures;
 pub mod function;
 pub mod gcp;
+pub mod gcp_machines;
 pub mod machines;
 pub mod plan;
 pub mod trust;

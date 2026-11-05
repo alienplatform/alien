@@ -14,25 +14,31 @@ it with Amazon's account so Amazon Linux boots, and an Ubuntu image stands
 in for "not the publisher's". Then:
 
   1. a signed release rolls: the verifier creates the launch template and
-     the Auto Scaling group from the signed capacity group, with typed
-     user-data, and the group launches a machine from it;
+     the Auto Scaling group from the signed capacity group, with no
+     user-data and the instance tags machines read at boot through IMDS
+     (capacity group; API URL for development images), and the group
+     launches a machine from it;
   2. an image from another owner is refused;
   3. a security group or subnet that isn't setup's is refused (off: the
      same security group written straight into a launch template lands);
   4. an instance type other than the signed one is refused;
   5. desired capacity above the signed maximum is refused by AWS itself;
   6. a second roll adds a template version and keeps the signed bounds;
-     it starts no instance refresh (the platform replaces machines).
+     it starts no instance refresh (the platform replaces machines);
+  7. a publisher image created before the build's minimum is refused.
+
+Registration with a control plane is not part of this test: it needs the
+publisher's hardened image and the machine control plane.
 
 Usage (credentials for a test account in the environment):
     scripts/gate-e2e/machines.py \\
-        --verifier <alien-gate built with crates/alien-core/machine-image-publisher-aws.txt = 137112412989> \\
+        --verifier <alien-gate built with crates/alien-core/machine-image-publisher-aws.txt = 137112412989
+                    and machine-image-minimum-created.txt = 2024-06-01T00:00:00Z> \\
         --fixtures target/debug/examples/gate-fixtures \\
         --evidence /tmp/machines-e2e   # resources named $TEST_RESOURCE_PREFIX-<random>
 """
 
 import argparse
-import base64
 import json
 import os
 import pathlib
@@ -47,6 +53,8 @@ from aws import REGION, Run as LambdaRun, aws, log
 AMAZON = "137112412989"
 CANONICAL = "099720109477"
 API_URL = "https://machines.example.com"
+# What the test's verifier build pins as the oldest image it boots.
+MINIMUM_CREATED = "2024-06-01T00:00:00Z"
 
 
 class Run:
@@ -84,6 +92,11 @@ class Run:
             return aws("ssm", "get-parameter", "--name", name)["Parameter"]["Value"]
         self.ami = public("/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64")
         self.other_ami = public("/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id")
+        # An Amazon Linux image from 2023: the publisher's, but older than
+        # the minimum this test's verifier build boots (MINIMUM_CREATED).
+        old = aws("ec2", "describe-images", "--owners", AMAZON, "--include-deprecated", "--filters",
+                  "Name=name,Values=al2023-ami-2023.0.2023*-kernel-6.1-x86_64", "Name=architecture,Values=x86_64")["Images"]
+        self.old_ami = sorted(old, key=lambda image: image["CreationDate"])[0]["ImageId"]
 
     def network(self):
         vpc = aws("ec2", "describe-vpcs", "--filters", "Name=isDefault,Values=true")["Vpcs"][0]["VpcId"]
@@ -200,6 +213,7 @@ class Run:
                             f"security group {self.default_group} is not one setup created", securityGroupIds=[self.security_group, self.default_group])
         self.expect_refused("3 a subnet that isn't setup's (on)", f"subnet {self.other_subnet} is not one setup created", subnetIds=[self.other_subnet])
         self.expect_refused("4 an instance type other than the signed one (on)", "is not the signed t3.micro", instanceType="m5.24xlarge")
+        self.expect_refused("7 a publisher image older than the build's minimum (on)", "the oldest image this build boots", machineImage=self.old_ami)
         self.record("2-4 nothing was created by a refused roll", self.asg() is None and self.versions() == [], f"asg={self.asg()} versions={self.versions()}")
 
         # 1. The signed roll.
@@ -208,13 +222,13 @@ class Run:
         if ok:
             aws("ec2", "create-tags", "--resources", body["launchTemplateId"], "--tags", f"Key={self.tag_key},Value={self.tag_value}")
         data = self.template_version(1)
-        user_data = json.loads(base64.b64decode(data["UserData"]))
-        expected_user_data = {"machineAgent": {"apiUrl": API_URL, "digest": f"sha256:{'a' * 64}"}}
-        self.record("1 the template is the signed group's", data["ImageId"] == self.ami and data["InstanceType"] == "t3.micro"
+        tags = {t["Key"]: t["Value"] for spec in data.get("TagSpecifications", []) if spec["ResourceType"] == "instance" for t in spec["Tags"]}
+        self.record("1 the template is the signed group's, with what machines read at boot", data["ImageId"] == self.ami and data["InstanceType"] == "t3.micro"
                     and data["SecurityGroupIds"] == [self.security_group]
                     and data["IamInstanceProfile"]["Arn"] == f"arn:aws:iam::{self.account}:instance-profile/{self.group}"
-                    and data["MetadataOptions"]["HttpTokens"] == "required" and user_data == expected_user_data,
-                    json.dumps({**data, "UserData": user_data})[:600])
+                    and data["MetadataOptions"]["HttpTokens"] == "required" and data["MetadataOptions"].get("InstanceMetadataTags") == "enabled"
+                    and "UserData" not in data and tags == {"HorizonCapacityGroup": "general", "HorizonApiUrl": API_URL},
+                    json.dumps(data)[:700])
         group = self.asg()
         self.record("1 the group has the signed bounds and setup's subnet", group is not None and group["MinSize"] == 1 and group["MaxSize"] == 1
                     and group["VPCZoneIdentifier"] == self.subnet and group["LaunchTemplate"]["Version"] == "1",
@@ -231,10 +245,13 @@ class Run:
                 instance = aws("ec2", "describe-instances", "--instance-ids", instances[0]["InstanceId"])["Reservations"][0]["Instances"][0]
                 break
             time.sleep(6)
+        instance_tags = {t["Key"]: t["Value"] for t in (instance or {}).get("Tags", [])}
         self.record("1 the group launched a machine from the signed template", instance is not None and instance["ImageId"] == self.ami
                     and instance["SubnetId"] == self.subnet and [g["GroupId"] for g in instance["SecurityGroups"]] == [self.security_group]
-                    and instance["InstanceType"] == "t3.micro",
-                    json.dumps({k: instance.get(k) for k in ("InstanceId", "ImageId", "SubnetId", "InstanceType", "SecurityGroups")}) if instance else "no instance")
+                    and instance["InstanceType"] == "t3.micro"
+                    and instance_tags.get("HorizonCapacityGroup") == "general" and instance_tags.get("HorizonApiUrl") == API_URL
+                    and instance["MetadataOptions"].get("InstanceMetadataTags") == "enabled",
+                    json.dumps({k: instance.get(k) for k in ("InstanceId", "ImageId", "SubnetId", "InstanceType", "SecurityGroups", "Tags", "MetadataOptions")}) if instance else "no instance")
 
         # 3 off: the same security group written straight into the template lands.
         landed = aws("ec2", "create-launch-template-version", "--launch-template-name", self.template, "--source-version", "1",

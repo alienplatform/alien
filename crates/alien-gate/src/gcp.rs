@@ -378,6 +378,111 @@ fn newest_version(parameter: &str, versions: &[Value]) -> Result<Option<String>>
     }
 }
 
+const COMPUTE: &str = "https://compute.googleapis.com/compute/v1/";
+
+impl Gcp {
+    /// Wait for Compute Engine operation `operation` to finish; its error,
+    /// if it has one, is an error here.
+    async fn wait_compute(&self, operation: Value, what: &str) -> Result<()> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
+        let mut operation = operation;
+        loop {
+            if operation["status"].as_str() == Some("DONE") {
+                if let Some(error) = operation.get("error") {
+                    return Err(AlienError::new(failed(format!("{what}: {error}"))));
+                }
+                return Ok(());
+            }
+            if tokio::time::Instant::now() > deadline {
+                return Err(AlienError::new(failed(format!(
+                    "{what}: still running after 300 s"
+                ))));
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            let link = operation["selfLink"]
+                .as_str()
+                .ok_or_else(|| {
+                    AlienError::new(failed(format!("{what}: the operation has no selfLink")))
+                })?
+                .to_string();
+            operation = self
+                .call(reqwest::Method::GET, &link, None, what)
+                .await?
+                .ok_or_else(|| {
+                    AlienError::new(failed(format!("{what}: the operation disappeared")))
+                })?;
+        }
+    }
+
+    async fn compute_write(&self, method: reqwest::Method, path: &str, body: &Value) -> Result<()> {
+        let what = format!("compute {method} {path}");
+        let operation = self
+            .call(method, &format!("{COMPUTE}{path}"), Some(body), &what)
+            .await?
+            .ok_or_else(|| AlienError::new(failed(format!("{what}: not found"))))?;
+        self.wait_compute(operation, &what).await
+    }
+}
+
+#[async_trait]
+impl crate::gcp_machines::GcpMachineApi for Gcp {
+    async fn get(&self, path: &str) -> Result<Option<Value>> {
+        self.call(
+            reqwest::Method::GET,
+            &format!("{COMPUTE}{path}"),
+            None,
+            &format!("compute get {path}"),
+        )
+        .await
+    }
+
+    async fn template_names(&self, pattern: &str) -> Result<Vec<String>> {
+        let mut names = Vec::new();
+        let mut page: Option<String> = None;
+        loop {
+            let mut url = machines::segments_url(
+                COMPUTE.trim_end_matches('/'),
+                &["projects", &self.project, "global", "instanceTemplates"],
+            )?;
+            url.query_pairs_mut()
+                .append_pair("filter", &format!("name eq \"{pattern}\""));
+            if let Some(token) = &page {
+                url.query_pairs_mut().append_pair("pageToken", token);
+            }
+            let listed = self
+                .call(
+                    reqwest::Method::GET,
+                    url.as_str(),
+                    None,
+                    "compute instanceTemplates.list",
+                )
+                .await?
+                .ok_or_else(|| {
+                    AlienError::new(failed("compute instanceTemplates.list: not found"))
+                })?;
+            names.extend(
+                listed["items"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|item| item["name"].as_str().map(str::to_string)),
+            );
+            match listed["nextPageToken"].as_str() {
+                Some(token) if !token.is_empty() => page = Some(token.to_string()),
+                _ => return Ok(names),
+            }
+        }
+    }
+
+    async fn insert(&self, path: &str, body: &Value) -> Result<()> {
+        self.compute_write(reqwest::Method::POST, path, body).await
+    }
+
+    async fn patch(&self, path: &str, body: &Value) -> Result<()> {
+        self.compute_write(reqwest::Method::PATCH, path, body).await
+    }
+}
+
 /// The install's Parameter Manager parameters and Secret Manager inputs.
 pub struct GcpInstall(pub Gcp);
 
@@ -410,8 +515,9 @@ impl InstallStore for GcpInstall {
     }
 }
 
-/// Cloud Run services and managed instance groups.
-pub struct GcpBackend(pub Gcp);
+/// Cloud Run services and machine groups, and the machine images this
+/// build boots.
+pub struct GcpBackend(pub Gcp, pub crate::machines::ImagePins);
 
 #[async_trait]
 impl Backend for GcpBackend {
@@ -439,6 +545,24 @@ impl Backend for GcpBackend {
 
     async fn resize(&self, target: &str, zone: Option<&str>, size: u32) -> Result<()> {
         self.0.resize_group(target, zone, size).await
+    }
+
+    async fn roll(
+        &self,
+        place: &Place,
+        release: &alien_signing::ReleaseBody,
+        request: &crate::machines::RollMachines,
+    ) -> Result<Value> {
+        crate::gcp_machines::roll(
+            &self.0,
+            place,
+            &self.0.project,
+            &self.0.region,
+            release,
+            request,
+            &self.1,
+        )
+        .await
     }
 }
 
