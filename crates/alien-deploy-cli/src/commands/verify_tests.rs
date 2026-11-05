@@ -501,5 +501,189 @@ async fn ssm_is_read_in_the_stacks_own_region_and_account_only() {
     let error = ssm_client(&aws, "acme-prod")
         .await
         .expect_err("a stack name is not an ARN");
-    assert!(error.to_string().contains("is not a CloudFormation stack ARN"), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("is not a CloudFormation stack ARN"),
+        "{error}"
+    );
+}
+
+/// Creates `stack` from `template` (or updates it) and waits until it settles.
+async fn apply_stack(
+    cloudformation: &aws_sdk_cloudformation::Client,
+    stack: &str,
+    template: &str,
+    tag: &str,
+    update: bool,
+) {
+    use aws_sdk_cloudformation::types::{Parameter, Tag};
+    let parameters = [
+        ("SigningFingerprint", fingerprint()),
+        ("VpcId", "vpc-1".to_string()),
+        ("SubnetIds", "subnet-1,subnet-2".to_string()),
+    ]
+    .map(|(key, value)| {
+        Parameter::builder()
+            .parameter_key(key)
+            .parameter_value(value)
+            .build()
+    });
+    if update {
+        cloudformation
+            .update_stack()
+            .stack_name(stack)
+            .template_body(template)
+            .set_parameters(Some(parameters.to_vec()))
+            .send()
+            .await
+            .unwrap();
+    } else {
+        cloudformation
+            .create_stack()
+            .stack_name(stack)
+            .template_body(template)
+            .set_parameters(Some(parameters.to_vec()))
+            .tags(Tag::builder().key(tag).value("true").build())
+            .send()
+            .await
+            .unwrap();
+    }
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        let described = cloudformation
+            .describe_stacks()
+            .stack_name(stack)
+            .send()
+            .await
+            .unwrap();
+        let status = described.stacks()[0]
+            .stack_status()
+            .unwrap()
+            .as_str()
+            .to_string();
+        if status.ends_with("_IN_PROGRESS") {
+            continue;
+        }
+        assert!(
+            status == "CREATE_COMPLETE" || status == "UPDATE_COMPLETE",
+            "stack {stack} ended {status}"
+        );
+        return;
+    }
+}
+
+/// The whole of `verify` against a real CloudFormation stack and its SSM
+/// parameters, with the signed release and lists from a control plane: a
+/// stack created from the signed template passes, and the same stack
+/// updated to another template fails. Needs AWS credentials and
+/// `TEST_RESOURCE_PREFIX`; the stack is deleted afterwards.
+#[tokio::test]
+#[ignore = "needs AWS credentials"]
+async fn verify_reads_a_real_stack_and_catches_a_changed_template() {
+    let tag = std::env::var("TEST_RESOURCE_PREFIX").expect("set TEST_RESOURCE_PREFIX");
+    let stack = format!("{tag}-verify-{}", std::process::id());
+    let aws = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .load()
+        .await;
+    let cloudformation = aws_sdk_cloudformation::Client::new(&aws);
+
+    let control_plane = httpmock::MockServer::start_async().await;
+    let signed = release("production", 20, &template(), ("github-acme-app", 2));
+    control_plane
+        .mock_async(|when, then| {
+            when.method(httpmock::Method::GET).path("/v1/releases");
+            then.status(200).json_body(serde_json::json!({
+                "items": [{ "id": "rel_live", "signedStacks": { "aws": signed } }]
+            }));
+        })
+        .await;
+    control_plane
+        .mock_async(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path(format!("/v1/projects/{PROJECT}/signer-lists"));
+            then.status(200)
+                .json_body(serde_json::json!({ "items": [genesis()] }));
+        })
+        .await;
+    let args = VerifyArgs {
+        stack: stack.clone(),
+        change_set: None,
+        lock: false,
+        manager_url: Some(control_plane.base_url()),
+        token: None,
+        token_file: None,
+    };
+
+    let run = {
+        let (aws, cloudformation, stack, url) = (
+            aws.clone(),
+            cloudformation.clone(),
+            stack.clone(),
+            control_plane.base_url(),
+        );
+        tokio::spawn(async move {
+            apply_stack(&cloudformation, &stack, &template(), &tag, false).await;
+            let observed = observe(&args, &aws, &cloudformation, &url, None)
+                .await
+                .unwrap();
+            let lines = check(&observed, Utc::now()).unwrap();
+            let screen = render(&lines);
+            println!("{screen}");
+            assert!(lines.iter().all(|line| line.mark != Mark::Fail), "{screen}");
+            assert!(
+                screen.contains(&format!(
+                    "matches release rel_live · production · {}",
+                    sha256(&template())
+                )),
+                "{screen}"
+            );
+            assert!(screen.contains(&format!(":{stack}")), "{screen}");
+
+            let changed = template().replace(
+                "Resources:\n",
+                "Resources:\n  Extra:\n    Type: AWS::SSM::Parameter\n    Properties:\n      Type: String\n      Value: extra\n",
+            );
+            apply_stack(&cloudformation, &stack, &changed, &tag, true).await;
+            let observed = observe(&args, &aws, &cloudformation, &url, None)
+                .await
+                .unwrap();
+            let lines = check(&observed, Utc::now()).unwrap();
+            let screen = render(&lines);
+            println!("{screen}");
+            let template_line = lines.iter().find(|line| line.label == "Template").unwrap();
+            assert_eq!(template_line.mark, Mark::Fail, "{screen}");
+        })
+    };
+    let outcome = run.await;
+    cloudformation
+        .delete_stack()
+        .stack_name(&stack)
+        .send()
+        .await
+        .unwrap();
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        match cloudformation
+            .describe_stacks()
+            .stack_name(&stack)
+            .send()
+            .await
+        {
+            Ok(described) => {
+                let status = described.stacks()[0]
+                    .stack_status()
+                    .unwrap()
+                    .as_str()
+                    .to_string();
+                if status == "DELETE_COMPLETE" {
+                    break;
+                }
+                assert!(!status.ends_with("_FAILED"), "deleting {stack}: {status}");
+            }
+            // Gone.
+            Err(_) => break,
+        }
+    }
+    outcome.expect("the verify run passed");
 }
