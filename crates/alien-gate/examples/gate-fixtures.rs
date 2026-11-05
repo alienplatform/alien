@@ -163,33 +163,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A machine cluster: one group of one t3.micro, booting the machine
     // agent build `agent`.
     let agent = format!("sha256:{}", "a".repeat(64));
-    let stack = Stack::new("machines".to_string())
-        .add(
-            ComputeCluster::new("compute".to_string())
-                .capacity_group(CapacityGroup {
-                    group_id: "general".to_string(),
-                    instance_type: Some("t3.micro".to_string()),
-                    profile: None,
-                    min_size: 1,
-                    max_size: 1,
-                    scale_policy: None,
-                    nested_virtualization: None,
-                    data_disk_gib_range: None,
-                })
-                .build(),
-            ResourceLifecycle::Frozen,
+    let machines = |platform: Platform, instance_type: &str| {
+        let stack = Stack::new("machines".to_string())
+            .add(
+                ComputeCluster::new("compute".to_string())
+                    .capacity_group(CapacityGroup {
+                        group_id: "general".to_string(),
+                        instance_type: Some(instance_type.to_string()),
+                        profile: None,
+                        min_size: 1,
+                        max_size: 1,
+                        scale_policy: None,
+                        nested_virtualization: None,
+                        data_disk_gib_range: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        release_statement::release_body(
+            platform,
+            &stack,
+            &ReleaseOptions {
+                channel: "production".to_string(),
+                components: BTreeMap::from([(
+                    "machine-agent/linux-x86_64".to_string(),
+                    agent.clone(),
+                )]),
+                ..ReleaseOptions::default()
+            },
         )
-        .build();
-    let machines = release_statement::release_body(
-        Platform::Aws,
-        &stack,
-        &ReleaseOptions {
-            channel: "production".to_string(),
-            components: BTreeMap::from([("machine-agent/linux-x86_64".to_string(), agent)]),
-            ..ReleaseOptions::default()
-        },
+    };
+    signed(
+        "release-70-machines",
+        70,
+        &machines(Platform::Aws, "t3.micro")?,
+        &ci,
     )?;
-    signed("release-70-machines", 70, &machines, &ci)?;
+    signed(
+        "release-71-machines-gcp",
+        71,
+        &machines(Platform::Gcp, "e2-small")?,
+        &ci,
+    )?;
+    signed(
+        "release-72-machines-azure",
+        72,
+        &machines(Platform::Azure, "Standard_B2s")?,
+        &ci,
+    )?;
 
     // Release 20's body at sequence 50 with no signature at all.
     let unsigned = statement(Kind::Release, None, 50, &twenty)?;

@@ -18,7 +18,9 @@ use alien_error::AlienError;
 use alien_signing::ReleaseBody;
 
 use crate::error::{ErrorData, Result};
-use crate::machines::{roll_basics, ImageFacts, ImagePins, RollBasics, RollMachines};
+use crate::machines::{
+    check_setup_ids, roll_basics, ImageFacts, ImagePins, RollBasics, RollMachines,
+};
 use crate::plan::Place;
 
 /// API version of the scale set calls.
@@ -243,6 +245,19 @@ pub async fn roll(
         .ok_or_else(not_found)?;
     let facts = image_facts(&request.machine_image, &definition_body, &version_body)?;
     let basics = roll_basics(place, release, request, pins, &facts)?;
+    // The caller may name the network it expects; it must be setup's.
+    let (subnet, security_group, _) = machine_network(place)?;
+    check_setup_ids(
+        "subnet",
+        request.subnet_ids.as_deref(),
+        &[subnet.to_string()],
+    )?;
+    let security_groups: Vec<String> = security_group.map(str::to_string).into_iter().collect();
+    check_setup_ids(
+        "network security group",
+        request.security_group_ids.as_deref(),
+        &security_groups,
+    )?;
     let set_path = format!(
         "{group_path}/providers/Microsoft.Compute/virtualMachineScaleSets/{}?api-version={VMSS_API}",
         basics.name
@@ -500,6 +515,24 @@ mod tests {
             assert!(error.contains(reason), "{reason}: {error}");
             assert!(api.puts.into_inner().unwrap().is_empty());
         }
+    }
+
+    #[tokio::test]
+    async fn a_network_that_is_not_setups_writes_nothing() {
+        let api = Recorded {
+            published: "2026-11-01T00:00:00Z".to_string(),
+            ..Default::default()
+        };
+        let mut request = request();
+        request.subnet_ids = Some(vec![
+            "/subscriptions/x/resourceGroups/y/providers/Microsoft.Network/virtualNetworks/z/subnets/public".into(),
+        ]);
+        let error = crate::describe(&roll_with(&api, &request).await.unwrap_err());
+        assert!(
+            error.contains("is not one setup created for this install's machines"),
+            "{error}"
+        );
+        assert!(api.puts.into_inner().unwrap().is_empty());
     }
 
     #[test]

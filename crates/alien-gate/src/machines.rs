@@ -341,7 +341,11 @@ fn is_api_url(url: &str) -> bool {
 }
 
 /// Refuse ids the caller expects that are not exactly the ones setup created.
-fn check_setup_ids(what: &str, asked: Option<&[String]>, setup: &[String]) -> Result<()> {
+pub(crate) fn check_setup_ids(
+    what: &str,
+    asked: Option<&[String]>,
+    setup: &[String],
+) -> Result<()> {
     let Some(asked) = asked else {
         return Ok(());
     };

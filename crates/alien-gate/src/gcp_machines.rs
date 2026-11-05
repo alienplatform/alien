@@ -18,7 +18,9 @@ use alien_error::AlienError;
 use alien_signing::ReleaseBody;
 
 use crate::error::{ErrorData, Result};
-use crate::machines::{check_zone, roll_basics, ImageFacts, ImagePins, RollMachines};
+use crate::machines::{
+    check_setup_ids, check_zone, roll_basics, ImageFacts, ImagePins, RollMachines,
+};
 use crate::plan::{Place, SetupNetwork};
 
 fn refused(reason: impl Into<String>) -> AlienError<ErrorData> {
@@ -207,6 +209,18 @@ pub async fn roll(
         .ok_or_else(|| refused(format!("image {} does not exist", request.machine_image)))?;
     let facts = image_facts(&request.machine_image, &image)?;
     let basics = roll_basics(place, release, request, pins, &facts)?;
+    // The caller may name the network it expects; it must be setup's.
+    let (subnetwork, network_tags, _) = machine_network(place)?;
+    check_setup_ids(
+        "subnet",
+        request.subnet_ids.as_deref(),
+        &[subnetwork.to_string()],
+    )?;
+    check_setup_ids(
+        "network tag",
+        request.security_group_ids.as_deref(),
+        network_tags,
+    )?;
     if let Some(zone) = &request.zone {
         check_zone(zone, region)?;
     }
@@ -538,6 +552,24 @@ mod tests {
                 },
                 api("2026-11-01T00:00:00Z"),
                 "is not a zone of the verifier's region us-central1",
+            ),
+            (
+                RollMachines {
+                    subnet_ids: Some(vec![
+                        "projects/shop-prod/regions/us-central1/subnetworks/default".into(),
+                    ]),
+                    ..request()
+                },
+                api("2026-11-01T00:00:00Z"),
+                "subnet projects/shop-prod/regions/us-central1/subnetworks/default is not one setup created",
+            ),
+            (
+                RollMachines {
+                    security_group_ids: Some(vec!["allow-all".into()]),
+                    ..request()
+                },
+                api("2026-11-01T00:00:00Z"),
+                "network tag allow-all is not one setup created",
             ),
             (
                 RollMachines {
