@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 
 use alien_aws_clients::ssm::{GetParameterRequest, SsmApi, SsmClient};
-use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt, AwsCredentialProvider};
+use alien_aws_clients::{AwsClientConfig, AwsCredentialProvider, AwsCredentials};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::embedded_config::DeployCliConfig;
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -17,6 +17,7 @@ use alien_signing::{
     display_fingerprint, settings::names, InstallId, Kind, Ledger, ReleaseBody, Role,
     SignedStatement, SignerChain, SignerKind, SigningSettings, Trust,
 };
+use aws_credential_types::provider::ProvideCredentials;
 use chrono::{DateTime, Utc};
 use clap::Args;
 use serde::Deserialize;
@@ -223,7 +224,10 @@ pub fn check(observed: &Observed, now: DateTime<Utc>) -> Result<Vec<Line>> {
         Some((id, verified)) => {
             lines.push(line(
                 "Template",
-                format!("matches release {id} · {}", verified.body.channel),
+                format!(
+                    "matches release {id} · {} · {digest}",
+                    verified.body.channel
+                ),
                 Mark::Pass,
             ));
             verified.body.setup[CLOUDFORMATION].allowed.clone()
@@ -269,6 +273,26 @@ pub fn check(observed: &Observed, now: DateTime<Utc>) -> Result<Vec<Line>> {
     } else {
         line("Parameters", refused.join("; "), Mark::Fail)
     });
+
+    // Who manages the install is the customer's choice; whoever it is, the
+    // signing limits hold. Shown so they know whom they let in.
+    let managing = observed
+        .parameters
+        .get("ManagingRoleArn")
+        .filter(|arn| !arn.is_empty());
+    let external_id = observed
+        .parameters
+        .get("ManagementExternalId")
+        .is_some_and(|id| !id.is_empty());
+    lines.push(line(
+        "Managed by",
+        match managing {
+            Some(arn) if external_id => format!("{arn} · with an external id"),
+            Some(arn) => arn.clone(),
+            None => "no management role".to_string(),
+        },
+        Mark::Info,
+    ));
 
     let list = trust.chain().current();
     let label = |id: &str| {
@@ -439,7 +463,6 @@ pub async fn verify_command(
         .load()
         .await;
     let cloudformation = aws_sdk_cloudformation::Client::new(&aws);
-    let ssm = ssm_client().await?;
     let token = resolve_optional_token(
         args.token.clone(),
         args.token_file.as_ref(),
@@ -456,7 +479,7 @@ pub async fn verify_command(
             })
         })?;
 
-    let observed = observe(&args, &cloudformation, &ssm, &url, token.as_deref()).await?;
+    let observed = observe(&args, &aws, &cloudformation, &url, token.as_deref()).await?;
     let lines = check(&observed, Utc::now())?;
     print!("{}", render(&lines));
     if lines.iter().any(|line| line.mark == Mark::Fail) {
@@ -470,12 +493,50 @@ pub async fn verify_command(
     Ok(())
 }
 
-async fn ssm_client() -> Result<SsmClient> {
-    let config = AwsClientConfig::from_std_env()
+/// An SSM client on the same credentials and region as CloudFormation, so
+/// both read the one install: the credentials the SDK chain resolves, in
+/// the account and region of the stack.
+async fn ssm_client(aws: &aws_config::SdkConfig, stack_id: &str) -> Result<SsmClient> {
+    let region = aws
+        .region()
+        .map(|region| region.to_string())
+        .ok_or_else(|| failed("no AWS region is set; set AWS_REGION or a profile region"))?;
+    // arn:aws:cloudformation:<region>:<account>:stack/<name>/<id>
+    let (stack_region, account) = match stack_id.split(':').collect::<Vec<_>>().as_slice() {
+        ["arn", _, "cloudformation", region, account, ..] => {
+            (region.to_string(), account.to_string())
+        }
+        _ => {
+            return Err(failed(format!(
+                "'{stack_id}' is not a CloudFormation stack ARN"
+            )))
+        }
+    };
+    if stack_region != region {
+        return Err(failed(format!(
+            "the stack is in {stack_region}, but the credentials are for {region}"
+        )));
+    }
+    let provider = aws
+        .credentials_provider()
+        .ok_or_else(|| failed("no AWS credentials were found"))?;
+    let credentials = provider
+        .provide_credentials()
         .await
+        .into_alien_error()
         .context(ErrorData::ConfigurationError {
-            message: "Could not load AWS credentials; set AWS_PROFILE or AWS_REGION".to_string(),
+            message: "Could not load AWS credentials".to_string(),
         })?;
+    let config = AwsClientConfig {
+        account_id: account,
+        region,
+        credentials: AwsCredentials::AccessKeys {
+            access_key_id: credentials.access_key_id().to_string(),
+            secret_access_key: credentials.secret_access_key().to_string(),
+            session_token: credentials.session_token().map(str::to_string),
+        },
+        service_overrides: None,
+    };
     let credentials = AwsCredentialProvider::from_config(config).await.context(
         ErrorData::ConfigurationError {
             message: "Could not load AWS credentials".to_string(),
@@ -494,8 +555,8 @@ fn aws_failed(operation: &str, stack: &str) -> ErrorData {
 
 async fn observe(
     args: &VerifyArgs,
+    aws: &aws_config::SdkConfig,
     cloudformation: &aws_sdk_cloudformation::Client,
-    ssm: &SsmClient,
     url: &str,
     token: Option<&str>,
 ) -> Result<Observed> {
@@ -550,6 +611,7 @@ async fn observe(
         .ok_or_else(|| failed(format!("stack '{stack}' returned no template")))?
         .to_string();
 
+    let ssm = &ssm_client(aws, &stack_id).await?;
     let settings = parameter(ssm, &names::aws_settings(&stack_name)).await?;
     let ledger = parameter(ssm, &names::aws_ledger(&stack_name))
         .await?

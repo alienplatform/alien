@@ -40,6 +40,7 @@ reqwest = { workspace = true, default-features = false, features = ["json", "rus
 # selects the legacy hyper 0.14 client, which pulls rustls 0.21 and
 # rustls-webpki 0.101, and is also part of aws-sdk-* default features.
 aws-config = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "behavior-version-latest"] }
+aws-credential-types = { workspace = true }
 aws-sdk-cloudformation = { version = "1", default-features = false, features = ["default-https-client"] }
 
 # Serialization

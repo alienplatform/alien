@@ -722,6 +722,7 @@ dependencies = [
  "alien-signing",
  "async-trait",
  "aws-config",
+ "aws-credential-types",
  "aws-sdk-cloudformation",
  "base64 0.22.1",
  "bon",

@@ -148,7 +148,12 @@ fn release(channel: &str, sequence: u64, template: &str, by: (&str, u8)) -> Sign
                 CLOUDFORMATION.to_string(),
                 SetupTemplate {
                     sha256: sha256(template),
-                    allowed: vec!["SubnetIds".to_string(), "VpcId".to_string()],
+                    allowed: vec![
+                        "ManagementExternalId".to_string(),
+                        "ManagingRoleArn".to_string(),
+                        "SubnetIds".to_string(),
+                        "VpcId".to_string(),
+                    ],
                 },
             )]),
             stack: None,
@@ -181,6 +186,11 @@ fn observed() -> Observed {
         stack_name: PREFIX.to_string(),
         parameters: BTreeMap::from([
             ("SigningFingerprint".to_string(), fingerprint()),
+            (
+                "ManagingRoleArn".to_string(),
+                "arn:aws:iam::999988887777:role/vendor-manager".to_string(),
+            ),
+            ("ManagementExternalId".to_string(), "ext-1".to_string()),
             ("SubnetIds".to_string(), "subnet-1,subnet-2".to_string()),
             ("VpcId".to_string(), "vpc-1".to_string()),
         ]),
@@ -215,13 +225,15 @@ fn a_protected_stack_that_matches_its_signed_release_passes_on_one_screen() {
     let lines = check(&observed, now()).unwrap();
     let display = display_fingerprint(&fingerprint());
     let digest = observed.releases[0].1.open().unwrap().digest;
+    let template = sha256(&template());
     assert_eq!(
         render(&lines),
         format!(
             "Install              aws:111122223333:us-east-1:acme-prod\n\
              Signing fingerprint  {display}   (set by this stack, 2026-11-04)\n\
-             Template             matches release 2026-11-04.3 · production  ✓\n\
-             Parameters           fingerprint pinned · 2 customer choices allowed  ✓\n\
+             Template             matches release 2026-11-04.3 · production · {template}  ✓\n\
+             Parameters           fingerprint pinned · 4 customer choices allowed  ✓\n\
+             Managed by           arn:aws:iam::999988887777:role/vendor-manager · with an external id\n\
              Running              release 2026-11-04.3 · signed by GitHub Actions (acme/app) · {digest}  ✓\n\
              Trusted keys         alice@acme.com, GitHub Actions (acme/app), recovery  (list v1, expires 2027-01-24)\n"
         )
@@ -370,14 +382,15 @@ fn a_release_whose_signer_was_removed_keeps_running_and_says_so() {
         body,
         &[("alice-mbp", 1)],
     ));
+    let line = running(&observed);
+    assert_eq!(line.mark, Mark::Info);
+    assert!(line.text.contains("no longer on the list"), "{}", line.text);
     let lines = check(&observed, now()).unwrap();
-    assert_eq!(marks(&lines)[4], ("Running", Mark::Info));
-    assert!(
-        lines[4].text.contains("no longer on the list"),
-        "{}",
-        lines[4].text
-    );
-    assert!(lines[5].text.contains("list v2"), "{}", lines[5].text);
+    let keys = lines
+        .iter()
+        .find(|line| line.label == "Trusted keys")
+        .unwrap();
+    assert!(keys.text.contains("list v2"), "{}", keys.text);
 }
 
 fn running(observed: &Observed) -> Line {
@@ -469,4 +482,24 @@ fn locking_keeps_the_existing_policy_and_adds_one_deny() {
         merged["Statement"][0]["Resource"],
         "LogicalResourceId/Database"
     );
+}
+
+#[tokio::test]
+async fn ssm_is_read_in_the_stacks_own_region_and_account_only() {
+    let aws = aws_config::SdkConfig::builder()
+        .region(aws_config::Region::new("eu-west-1"))
+        .build();
+    let error = ssm_client(&aws, STACK_ID)
+        .await
+        .expect_err("a stack in us-east-1 isn't read with eu-west-1 credentials");
+    assert!(
+        error
+            .to_string()
+            .contains("the stack is in us-east-1, but the credentials are for eu-west-1"),
+        "{error}"
+    );
+    let error = ssm_client(&aws, "acme-prod")
+        .await
+        .expect_err("a stack name is not an ARN");
+    assert!(error.to_string().contains("is not a CloudFormation stack ARN"), "{error}");
 }

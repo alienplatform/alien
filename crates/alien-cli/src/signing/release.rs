@@ -664,35 +664,30 @@ mod tests {
         let cloudformation = crate::commands::render::cloudformation_registry();
         let terraform = crate::commands::render::terraform_registry();
         let helm = alien_helm::HelmRegistry::built_in();
-        let options = SetupRenderOptions::builder()
-            .signing(&signing)
-            .cloudformation_registry(&cloudformation)
-            .terraform_registry(&terraform)
-            .helm_registry(&helm)
-            .hosting(hosting("sha256:setup"))
-            .pins(pins())
-            .build();
-        let settings = StackSettings {
-            signing: Some(signing.clone()),
-            ..StackSettings::default()
-        };
-        // `render_setup_templates` renders these with signing on and nothing
-        // else set. Helm is left out until the chart renders signed with the
-        // release's Operator digest; for now both sides refuse it.
-        let mut rendered = BTreeMap::new();
-        for name in [
-            "cloudformation",
-            "terraform-aws",
-            "terraform-gcp",
-            "terraform-azure",
-        ] {
-            let template = render_setup_template(name, &stack, &settings, &options)
-                .await
-                .unwrap();
-            rendered.insert(name.to_string(), template.setup_template());
-        }
+        let all = alien_cli_common::setup_templates::render_setup_templates(
+            &stack,
+            SetupRenderOptions::builder()
+                .signing(&signing)
+                .cloudformation_registry(&cloudformation)
+                .terraform_registry(&terraform)
+                .helm_registry(&helm)
+                .hosting(hosting("sha256:setup"))
+                .pins(pins())
+                .build(),
+        )
+        .await
+        .unwrap();
+        let rendered: BTreeMap<String, SetupTemplate> = all
+            .iter()
+            .map(|(name, template)| (name.clone(), template.setup_template()))
+            .collect();
         let mut signed = BTreeMap::new();
-        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+        for platform in [
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Kubernetes,
+        ] {
             signed.extend(
                 setup_templates(&stack, platform, &signing, &hosting("sha256:setup"), pins())
                     .await
@@ -700,15 +695,9 @@ mod tests {
             );
         }
         assert_eq!(signed, rendered);
-        setup_templates(
-            &stack,
-            Platform::Kubernetes,
-            &signing,
-            &hosting("sha256:setup"),
-            pins(),
-        )
-        .await
-        .expect_err("the helm setup template doesn't render signed yet");
+        let mut names: Vec<&str> = alien_signing::release::SETUP_TEMPLATES.to_vec();
+        names.sort();
+        assert_eq!(signed.keys().map(String::as_str).collect::<Vec<_>>(), names);
 
         // Hosting reaches the bytes: another setup fingerprint is another template.
         let other = setup_templates(

@@ -738,9 +738,15 @@ async fn protected_following(ctx: &ExecutionMode, project_id: &str, channel: &st
 /// that release is signed.
 async fn previous_components(
     ctx: &ExecutionMode,
+    chain: &alien_signing::SignerChain,
     project_id: &str,
     channel: &str,
-) -> Result<Option<(String, BTreeMap<String, String>)>> {
+) -> Result<
+    Option<(
+        String,
+        std::result::Result<BTreeMap<String, String>, String>,
+    )>,
+> {
     let query = signing::api::project_query(ctx, project_id).await?;
     let channels = signing::api::get_json(ctx, "/v1/release-channels", &query).await?;
     let Some(release_id) = channels["items"]
@@ -767,14 +773,27 @@ async fn previous_components(
             message: format!("Release {release_id} carries a statement that doesn't parse"),
             url: None,
         })?;
-    let body: alien_signing::ReleaseBody = statement
+    // The control plane's word until it checks out against the device list.
+    let checked = statement
         .open()
-        .and_then(|opened| opened.body())
-        .context(ErrorData::ApiRequestFailed {
-            message: format!("Release {release_id} carries a statement that doesn't read"),
-            url: None,
-        })?;
-    Ok(Some((release_id, body.components)))
+        .map_err(|error| format!("it doesn't open ({error})"))
+        .and_then(|opened| {
+            signing::check_statement(
+                chain,
+                &opened,
+                alien_signing::Kind::Release,
+                None,
+                chrono::Utc::now(),
+            )?;
+            let body: alien_signing::ReleaseBody = opened
+                .body()
+                .map_err(|error| format!("its body doesn't parse ({error})"))?;
+            if body.channel != channel {
+                return Err(format!("it is signed for channel {}", body.channel));
+            }
+            Ok(body.components)
+        });
+    Ok(Some((release_id, checked)))
 }
 
 /// Core release logic for console mode.
@@ -1066,14 +1085,22 @@ async fn sign_release(
         if let Some(reason) = refused {
             signing.cannot_sign(reason)?;
         } else if let Some((release, previous)) =
-            previous_components(ctx, project_id, &signing.channel).await?
+            previous_components(ctx, &signer.chain, project_id, &signing.channel).await?
         {
-            let changes = signing::release::component_changes(&previous, &components);
-            if !changes.is_empty() {
-                signing.say(&format!("  Enforcer builds change since {release}:"));
-                for change in changes {
-                    signing.say(&format!("    {change}"));
+            match previous {
+                Ok(previous) => {
+                    let changes = signing::release::component_changes(&previous, &components);
+                    if !changes.is_empty() {
+                        signing.say(&format!("  Enforcer builds change since {release}:"));
+                        for change in changes {
+                            signing.say(&format!("    {change}"));
+                        }
+                    }
                 }
+                Err(reason) => signing.say(&format!(
+                    "  ! {release}, now on {}, doesn't check out against the device list: {reason}. Enforcer build changes since it aren't shown.",
+                    signing.channel
+                )),
             }
         }
     }
