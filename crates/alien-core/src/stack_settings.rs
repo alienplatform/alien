@@ -993,6 +993,17 @@ pub fn machine_image_publisher_aws() -> Option<&'static str> {
     (account.len() == 12 && account.bytes().all(|byte| byte.is_ascii_digit())).then_some(account)
 }
 
+/// The oldest machine image protected installs boot: an image the cloud records as created
+/// before this is refused even from the publisher, so a fixed image replaces every older one.
+/// The CLI release workflow writes it (RFC 3339) into `machine-image-minimum-created.txt` with
+/// the publisher; a build without it launches no machines on protected installs.
+pub fn machine_image_minimum_created() -> Option<chrono::DateTime<chrono::Utc>> {
+    let text = include_str!("../machine-image-minimum-created.txt").trim();
+    chrono::DateTime::parse_from_rfc3339(text)
+        .ok()
+        .map(|time| time.with_timezone(&chrono::Utc))
+}
+
 /// The AWS verifier image protected setups run, as `<repository>@sha256:<64 hex>` in the
 /// publisher's registry, if this build has one. The CLI release workflow writes it into
 /// `verifier-image-aws.txt` with the publisher; setups run
