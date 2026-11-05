@@ -635,9 +635,9 @@ async fn reapply_with_signed_config(
     };
     let applied = state
         .db
-        .get_accepted_release()
+        .get_signing_trust()
         .await?
-        .and_then(|accepted| accepted.config_sequence);
+        .and_then(|stored| stored.config_sequence());
     if applied.is_some_and(|applied| applied >= opened.sequence) {
         return Ok(false);
     }
@@ -714,7 +714,11 @@ pub(crate) async fn protect_target(
     let Some(signing) = &state.config.release_signing else {
         return Ok(Some(target.clone()));
     };
-    let accepted = state.db.get_accepted_release().await?;
+    let stored = state
+        .db
+        .get_signing_trust()
+        .await?
+        .unwrap_or_else(|| crate::protected::OperatorTrust::new(&signing.settings.prefix));
     let release_id = target
         .release_info
         .release_id
@@ -723,24 +727,24 @@ pub(crate) async fn protect_target(
     match signing.protect_target(
         state.config.platform,
         &state.config.stack_input_values,
-        accepted.as_ref(),
+        &stored,
         target,
     ) {
-        Ok((protected, verified)) => {
-            if accepted.as_ref().map(|accepted| accepted.sequence) != Some(verified.sequence) {
+        Ok((protected, verified, kept)) => {
+            if stored.ledger.release.as_ref().map(|floor| floor.sequence) != Some(verified.sequence)
+            {
                 info!(
                     release_id,
                     sequence = verified.sequence,
                     signers = ?verified.signers,
                     developer_inputs = ?crate::protected::developer_inputs(&verified.stack),
-                    config_sequence = ?verified.config_sequence,
+                    config_sequence = ?kept.config_sequence(),
                     "Protected mode: accepted signed release. Values for these developer inputs come only from the deployment's signed config"
                 );
             }
-            state
-                .db
-                .set_accepted_release(&crate::protected::AcceptedRelease::from(&verified))
-                .await?;
+            // The install's ledger first: it outlives the database.
+            signing.ledger.store(&kept.ledger).await?;
+            state.db.set_signing_trust(&kept).await?;
             Ok(Some(protected))
         }
         Err(refusal) => {
@@ -3152,6 +3156,170 @@ mod tests {
     /// A newer signed config reaches the installed release with no new
     /// release; the same config again changes nothing.
     #[tokio::test]
+    async fn a_newer_signed_config_may_drop_a_configurable_variable() {
+        use crate::protected::tests as fixtures;
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(data_dir.path().to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .release_signing(crate::protected::test_signing("shop"))
+                .build(),
+            db: db.clone(),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let release = fixtures::release_with(
+            5,
+            &fixtures::stack(&fixtures::pinned()),
+            alien_core::release_statement::ReleaseOptions {
+                channel: "production".to_string(),
+                configurable_env: vec!["FEATURE_FLAGS".to_string()],
+                ..Default::default()
+            },
+            "ci",
+        );
+        let installed = super::protect_target(&state, &fixtures::target(release, vec![]))
+            .await
+            .unwrap()
+            .expect("the signed release is accepted");
+        super::accept_target(&state, &installed, false)
+            .await
+            .unwrap();
+        let finish = || async {
+            let mut deployed = db.get_deployment_state().await.unwrap().unwrap();
+            deployed.status = DeploymentStatus::Running;
+            deployed.current_release = deployed.target_release.clone();
+            db.set_deployment_state(&deployed).await.unwrap();
+        };
+        let flags = || async {
+            db.get_deployment_config()
+                .await
+                .unwrap()
+                .unwrap()
+                .environment_variables
+                .variables
+                .into_iter()
+                .find(|variable| variable.name == "FEATURE_FLAGS")
+                .map(|variable| variable.value)
+        };
+        finish().await;
+
+        let set = fixtures::signed_config(
+            3,
+            &fixtures::this_install(),
+            serde_json::json!({"env": {"FEATURE_FLAGS": "beta"}}),
+        );
+        assert!(super::reapply_with_signed_config(&state, Some(set))
+            .await
+            .unwrap());
+        assert_eq!(flags().await.as_deref(), Some("beta"));
+        finish().await;
+
+        // The next config drops the variable. The applied configuration
+        // still carries it, which must not refuse the new config.
+        let dropped = fixtures::signed_config(4, &fixtures::this_install(), serde_json::json!({}));
+        assert!(super::reapply_with_signed_config(&state, Some(dropped))
+            .await
+            .unwrap());
+        assert_eq!(flags().await, None);
+    }
+
+    #[tokio::test]
+    async fn a_lost_database_does_not_lower_the_release_floor() {
+        use crate::protected::tests as fixtures;
+        use crate::protected::MemoryLedger;
+        let state_with =
+            |data_dir: &std::path::Path, db: Arc<OperatorDb>, ledger: Arc<MemoryLedger>| {
+                let mut signing = crate::protected::test_signing("shop");
+                signing.ledger = ledger;
+                OperatorState {
+                    config: OperatorConfig::builder()
+                        .platform(Platform::Kubernetes)
+                        .data_dir(data_dir.to_str().unwrap())
+                        .encryption_key(TEST_ENCRYPTION_KEY)
+                        .release_signing(signing)
+                        .build(),
+                    db,
+                    service_provider: None,
+                    operations_sync_handler: None,
+                    pod_log_collection: false,
+                    cancel: CancellationToken::new(),
+                }
+            };
+        let open = |dir: &tempfile::TempDir| {
+            let path = dir.path().to_str().unwrap().to_string();
+            async move { Arc::new(OperatorDb::new(&path, TEST_ENCRYPTION_KEY).await.unwrap()) }
+        };
+        let stack = fixtures::stack(&fixtures::pinned());
+        let older = fixtures::target(fixtures::signed_release(5, &stack), vec![]);
+        let newer = fixtures::target(fixtures::signed_release(6, &stack), vec![]);
+
+        let ledger = Arc::new(MemoryLedger::created("shop"));
+        let first = tempfile::tempdir().unwrap();
+        let state = state_with(first.path(), open(&first).await, ledger.clone());
+        assert!(super::protect_target(&state, &newer)
+            .await
+            .unwrap()
+            .is_some());
+        assert_eq!(
+            ledger.held().unwrap().release.map(|entry| entry.sequence),
+            Some(6),
+            "accepting raised the install's ledger"
+        );
+
+        // Attack: delete the Operator's database, then deliver the older
+        // signed release. At start the Operator reads the install's ledger.
+        let wiped = tempfile::tempdir().unwrap();
+        let db = open(&wiped).await;
+        assert!(db.get_signing_trust().await.unwrap().is_none());
+        let (_, kept) = crate::protected::find_signing(
+            &fixtures::cluster_with_settings(),
+            ledger.clone(),
+            "apps",
+            "shop",
+            None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        db.set_signing_trust(&kept).await.unwrap();
+        let state = state_with(wiped.path(), db, ledger.clone());
+        assert!(
+            super::protect_target(&state, &older)
+                .await
+                .unwrap()
+                .is_none(),
+            "the older release is refused"
+        );
+
+        // Off: with no install ledger to read (the database alone), the same
+        // older release lands on the wiped Operator.
+        let unkept = tempfile::tempdir().unwrap();
+        let state = state_with(
+            unkept.path(),
+            open(&unkept).await,
+            Arc::new(MemoryLedger::created("shop")),
+        );
+        assert!(super::protect_target(&state, &older)
+            .await
+            .unwrap()
+            .is_some());
+        assert_eq!(
+            ledger.held().unwrap().release.map(|entry| entry.sequence),
+            Some(6)
+        );
+    }
+
+    #[tokio::test]
     async fn a_newer_signed_config_applies_the_installed_release_again() {
         use crate::protected::tests as fixtures;
         let data_dir = tempfile::tempdir().unwrap();
@@ -3191,7 +3359,7 @@ mod tests {
 
         let config = fixtures::signed_config(
             3,
-            "dep_shop",
+            &fixtures::this_install(),
             serde_json::json!({"inputs": {"logLevel": "warn"}}),
         );
         assert!(

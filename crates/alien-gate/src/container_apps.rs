@@ -1,7 +1,7 @@
 //! Write a planned function as an Azure Container App and check it reads
 //! back the same.
 //!
-//! The gate sends the whole template and identity it built, so an init
+//! The verifier sends the whole template and identity it built, so an init
 //! container, a volume, a command, a secret-backed env value or another
 //! identity set behind its back is replaced, and the read-back refuses any
 //! field it doesn't know.
@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use crate::error::{ErrorData, Result};
 use crate::plan::FunctionSpec;
 
-/// The Container Apps calls the gate makes.
+/// The Container Apps calls the verifier makes.
 #[async_trait]
 pub trait AppStore: Send + Sync {
     /// GET the container app, exactly as returned.
@@ -35,7 +35,7 @@ pub fn resources(memory_mb: u32) -> (f64, String) {
     (cpu, memory)
 }
 
-/// The container app body the gate writes for `spec`.
+/// The container app body the verifier writes for `spec`.
 pub fn app_body(spec: &FunctionSpec, container_name: &str) -> Value {
     let env: Vec<Value> = spec
         .env
@@ -67,7 +67,7 @@ const UPDATE_WAIT: Duration = Duration::from_secs(300);
 const POLL: Duration = Duration::from_secs(3);
 
 /// Write `spec` and read it back. The app must already exist: setup creates
-/// the apps the gate owns.
+/// the apps the verifier owns.
 pub async fn apply(store: &dyn AppStore, spec: &FunctionSpec) -> Result<Value> {
     store.patch(&spec.name, &app_body(spec, "main")).await?;
     let deadline = tokio::time::Instant::now() + UPDATE_WAIT;
@@ -94,7 +94,7 @@ pub async fn apply(store: &dyn AppStore, spec: &FunctionSpec) -> Result<Value> {
     }
 }
 
-/// Template keys the gate understands.
+/// Template keys the verifier understands.
 const KNOWN_TEMPLATE: &[&str] = &[
     "revisionSuffix",
     "terminationGracePeriodSeconds",
@@ -104,7 +104,7 @@ const KNOWN_TEMPLATE: &[&str] = &[
     "volumes",
     "serviceBinds",
 ];
-/// Container keys the gate understands.
+/// Container keys the verifier understands.
 const KNOWN_CONTAINER: &[&str] = &[
     "name",
     "image",
@@ -143,7 +143,7 @@ pub fn check_read_back(spec: &FunctionSpec, app: &Value) -> Result<()> {
         for (key, value) in fields {
             if !known.contains(&key.as_str()) && !is_empty(value) {
                 return Err(mismatch(format!(
-                    "{section} has field {key}, which the gate doesn't know"
+                    "{section} has field {key}, which the verifier doesn't know"
                 )));
             }
         }
@@ -185,12 +185,10 @@ pub fn check_read_back(spec: &FunctionSpec, app: &Value) -> Result<()> {
         env.insert(name, text(&item["value"]));
     }
     if env != spec.env {
-        let changed: Vec<&String> = env
-            .keys()
-            .chain(spec.env.keys())
-            .filter(|key| env.get(*key) != spec.env.get(*key))
-            .collect();
-        return Err(mismatch(format!("env differs for {changed:?}")));
+        return Err(mismatch(format!(
+            "env differs for {:?}",
+            crate::plan::changed_env(&env, &spec.env)
+        )));
     }
     for field in ["command", "args", "volumeMounts"] {
         if !is_empty(&container[field]) {
@@ -218,13 +216,15 @@ pub fn check_read_back(spec: &FunctionSpec, app: &Value) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plan::tests::DIGEST;
+    use crate::fixtures::DIGEST;
     use std::sync::Mutex;
 
     const IDENTITY: &str = "/subscriptions/s/resourceGroups/acme/providers/Microsoft.ManagedIdentity/userAssignedIdentities/acme-execution";
 
     fn spec() -> FunctionSpec {
         FunctionSpec {
+            workload: "api".into(),
+            vpc: None,
             name: "acme-fn-api".into(),
             image_uri: format!("acme.azurecr.io/api@{DIGEST}"),
             digest: DIGEST.into(),
@@ -236,7 +236,7 @@ mod tests {
         }
     }
 
-    /// A container app as Azure returns it once the gate's body is applied.
+    /// A container app as Azure returns it once the verifier's body is applied.
     fn app(spec: &FunctionSpec) -> Value {
         let mut app = app_body(spec, "main");
         app["identity"]["userAssignedIdentities"][IDENTITY] =
@@ -265,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn an_app_changed_behind_the_gate_is_caught() {
+    fn an_app_changed_behind_the_verifier_is_caught() {
         let reason = |change: &dyn Fn(&mut Value)| {
             let mut changed = app(&spec());
             change(&mut changed);
@@ -311,12 +311,12 @@ mod tests {
     }
 
     #[test]
-    fn a_field_the_gate_does_not_know_refuses_the_app() {
+    fn a_field_the_verifier_does_not_know_refuses_the_app() {
         let mut app = app(&spec());
         app["properties"]["template"]["containers"][0]["sidecarMagic"] = json!({"enabled": true});
         let error = check_read_back(&spec(), &app).unwrap_err().to_string();
         assert!(
-            error.contains("sidecarMagic, which the gate doesn't know"),
+            error.contains("sidecarMagic, which the verifier doesn't know"),
             "{error}"
         );
     }

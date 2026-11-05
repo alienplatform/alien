@@ -66,6 +66,9 @@ async fn write_json<T: Serialize>(conn: &Connection, key: &str, value: &T) -> Re
     Ok(())
 }
 
+/// State key of a protected Operator's ledger.
+const SIGNING_LEDGER_KEY: &str = "signing_ledger";
+
 pub const MIN_SUPPORTED_OPERATOR_SCHEMA_VERSION: u32 = 1;
 pub const CURRENT_OPERATOR_SCHEMA_VERSION: u32 = 1;
 const MAX_QUEUED_POD_LOG_BYTES: i64 = 64 * 1024 * 1024;
@@ -2089,62 +2092,32 @@ impl OperatorDb {
         Ok(())
     }
 
-    /// The newest signed release this protected Operator accepted.
-    pub async fn get_accepted_release(&self) -> Result<Option<crate::protected::AcceptedRelease>> {
+    /// What this protected Operator accepted: the install's ledger and the
+    /// signer chain. `None` before it accepted anything.
+    pub async fn get_signing_trust(&self) -> Result<Option<crate::protected::OperatorTrust>> {
         let conn = self.conn.lock().await;
-        let mut rows = conn
-            .query("SELECT value FROM state WHERE key = 'accepted_release'", ())
-            .await
-            .into_alien_error()
-            .context(ErrorData::DatabaseError {
-                message: "Failed to query accepted_release".to_string(),
-            })?;
-        let Some(row) = rows
-            .next()
-            .await
-            .into_alien_error()
-            .context(ErrorData::DatabaseError {
-                message: "Failed to fetch accepted_release row".to_string(),
-            })?
-        else {
-            return Ok(None);
-        };
-        let value: String = row
-            .get(0)
-            .into_alien_error()
-            .context(ErrorData::DatabaseError {
-                message: "Failed to read accepted_release".to_string(),
-            })?;
-        serde_json::from_str(&value)
-            .into_alien_error()
-            .context(ErrorData::DatabaseError {
-                message: "Failed to parse accepted_release".to_string(),
-            })
-            .map(Some)
+        read_json(&conn, SIGNING_LEDGER_KEY).await
     }
 
-    /// Record `accepted` as the newest signed release this Operator accepted.
-    pub async fn set_accepted_release(
+    /// Store `accepted`. The stored ledger only rises: each entry keeps the
+    /// higher of what was stored and `accepted`, and a fork is an error.
+    pub async fn set_signing_trust(
         &self,
-        accepted: &crate::protected::AcceptedRelease,
+        accepted: &crate::protected::OperatorTrust,
     ) -> Result<()> {
-        let value = serde_json::to_string(accepted).into_alien_error().context(
-            ErrorData::DatabaseError {
-                message: "Failed to encode accepted_release".to_string(),
-            },
-        )?;
         let conn = self.conn.lock().await;
-        conn.execute(
-            "INSERT INTO state (key, value, updated_at) VALUES ('accepted_release', ?, datetime('now'))
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-            (value,),
-        )
-        .await
-        .into_alien_error()
-        .context(ErrorData::DatabaseError {
-            message: "Failed to set accepted_release".to_string(),
-        })?;
-        Ok(())
+        let mut merged = accepted.clone();
+        let stored: Option<crate::protected::OperatorTrust> =
+            read_json(&conn, SIGNING_LEDGER_KEY).await?;
+        if let Some(stored) = stored {
+            merged.ledger.merge(&stored.ledger).context(database_error(
+                "the stored ledger forks from the one being written",
+            ))?;
+            if stored.signer_lists.len() > merged.signer_lists.len() {
+                merged.signer_lists = stored.signer_lists;
+            }
+        }
+        write_json(&conn, SIGNING_LEDGER_KEY, &merged).await
     }
 
     /// Manager URL to open tunnel connections to, from the last sync.

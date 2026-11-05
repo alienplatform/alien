@@ -51,6 +51,9 @@ pub(crate) mod kubernetes_manifest_test_support;
 #[cfg(feature = "kubernetes")]
 pub(crate) mod kubernetes_errors;
 
+#[cfg(test)]
+pub(crate) mod binding_equivalence;
+
 mod azure_permissions_helper;
 pub use azure_permissions_helper::*;
 
