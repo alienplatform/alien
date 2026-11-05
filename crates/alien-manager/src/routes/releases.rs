@@ -77,6 +77,7 @@ pub struct CreateReleaseRequest {
     /// Setup template bytes (base64) keyed by platform and template name, as
     /// the release signed them. Required for every template a signed
     /// statement names, and refused unless each hashes to its signed digest.
+    #[cfg_attr(feature = "openapi", schema(value_type = HashMap<Platform, HashMap<String, String>>))]
     #[serde(default)]
     pub setup_templates: HashMap<Platform, SetupTemplateBytes>,
 }
@@ -103,6 +104,7 @@ pub struct ReleaseResponse {
     pub signed_stacks: HashMap<Platform, SignedStatement>,
     /// Setup template bytes (base64) keyed by platform and template name,
     /// exactly as the release uploaded them; each hashes to its signed digest.
+    #[cfg_attr(feature = "openapi", schema(value_type = HashMap<Platform, HashMap<String, String>>))]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub setup_templates: HashMap<Platform, SetupTemplateBytes>,
     /// Who signed the release and for which channel, decoded from the stored
@@ -422,15 +424,16 @@ fn check_setup_templates_match(
     let empty = SetupTemplateBytes::new();
     for (platform, signed) in signed_stacks {
         // `check_signed_stacks_match` already refused statements that don't read.
-        let body: ReleaseBody = signed
-            .open()
-            .and_then(|opened| opened.body())
-            .map_err(|error| {
-                ErrorData::bad_request(format!(
-                    "The signed statement for {platform} can't be read: {}",
-                    error.message
-                ))
-            })?;
+        let body: ReleaseBody =
+            signed
+                .open()
+                .and_then(|opened| opened.body())
+                .map_err(|error| {
+                    ErrorData::bad_request(format!(
+                        "The signed statement for {platform} can't be read: {}",
+                        error.message
+                    ))
+                })?;
         let sent = setup_templates.get(platform).unwrap_or(&empty);
         if let Some(name) = sent.keys().find(|name| !body.setup.contains_key(*name)) {
             return Err(ErrorData::bad_request(format!(
@@ -822,14 +825,20 @@ mod tests {
         );
         let error = check_setup_templates_match(&signed, &HashMap::new())
             .expect_err("a signed template without its bytes is refused");
-        assert!(error.message.contains("bytes weren't sent"), "{}", error.message);
+        assert!(
+            error.message.contains("bytes weren't sent"),
+            "{}",
+            error.message
+        );
         let error = check_setup_templates_match(
             &signed,
             &sent(&[("helm", encode(&chart)), ("cloudformation", encode(&chart))]),
         )
         .expect_err("a template the statement doesn't name is refused");
         assert!(
-            error.message.contains("'cloudformation' isn't in the signed statement"),
+            error
+                .message
+                .contains("'cloudformation' isn't in the signed statement"),
             "{}",
             error.message
         );
@@ -837,12 +846,14 @@ mod tests {
             check_setup_templates_match(&signed, &sent(&[("helm", "not base64!".to_string())]))
                 .expect_err("bytes that aren't base64 are refused");
         assert!(error.message.contains("isn't base64"), "{}", error.message);
-        let error = check_setup_templates_match(
-            &HashMap::new(),
-            &sent(&[("helm", encode(&chart))]),
-        )
-        .expect_err("templates for an unsigned platform are refused");
-        assert!(error.message.contains("without a signed statement"), "{}", error.message);
+        let error =
+            check_setup_templates_match(&HashMap::new(), &sent(&[("helm", encode(&chart))]))
+                .expect_err("templates for an unsigned platform are refused");
+        assert!(
+            error.message.contains("without a signed statement"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]
