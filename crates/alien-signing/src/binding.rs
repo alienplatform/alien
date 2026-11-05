@@ -87,7 +87,7 @@ pub fn binding_env(
         };
         derived
             .values
-            .insert(binding_env_name(id), value.to_string());
+            .insert(binding_env_name(id), canonical(&value));
     }
     Ok(derived)
 }
@@ -105,7 +105,7 @@ pub fn resolve_bindings(
     for (id, resource_type) in &derived.unresolved {
         let value = match (read.get(id), signed_config.get(id)) {
             (Some(value), _) => value.clone(),
-            (None, Some(value)) => value.to_string(),
+            (None, Some(value)) => canonical(value),
             (None, None) => {
                 return Err(AlienError::new(ErrorData::WorkloadRefused {
                     workload: id.clone(),
@@ -118,6 +118,28 @@ pub fn resolve_bindings(
         values.insert(binding_env_name(id), value);
     }
     Ok(values)
+}
+
+/// JSON with object keys sorted, so a binding's value is the same in every
+/// enforcer build, whichever `serde_json` features the build enables.
+fn canonical(value: &serde_json::Value) -> String {
+    fn sorted(value: &serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(map) => {
+                let keys: BTreeMap<&String, &serde_json::Value> = map.iter().collect();
+                serde_json::Value::Object(
+                    keys.into_iter()
+                        .map(|(key, value)| (key.clone(), sorted(value)))
+                        .collect(),
+                )
+            }
+            serde_json::Value::Array(items) => {
+                serde_json::Value::Array(items.iter().map(sorted).collect())
+            }
+            other => other.clone(),
+        }
+    }
+    sorted(value).to_string()
 }
 
 fn refused(
