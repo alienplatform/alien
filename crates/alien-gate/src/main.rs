@@ -122,7 +122,7 @@ impl Aws {
                     autoscaling: AutoScalingClient::new(http, credentials),
                 },
                 region,
-                publisher: alien_core::machine_image_publisher_aws().map(str::to_string),
+                images: alien_gate::machines::ImagePins::aws(),
             }),
             vpc,
             machine_network,

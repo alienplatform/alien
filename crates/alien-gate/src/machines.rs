@@ -32,6 +32,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use alien_signing::{Kind, ReleaseBody, SignedStatement};
 use async_trait::async_trait;
 use base64::Engine as _;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ErrorData, Result};
@@ -236,13 +237,64 @@ pub struct RollPlan {
     pub subnet_ids: Vec<String>,
 }
 
-/// What the verifier learned about the image: its owner and architecture.
+/// What the verifier learned about the image from the cloud: its owner,
+/// architecture and when it was created.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageFacts {
     /// Account that owns it.
     pub owner: String,
     /// `x86_64` or `arm64`.
     pub architecture: String,
+    /// When the cloud says it was created.
+    pub created: DateTime<Utc>,
+}
+
+/// The images this build boots, compiled in by the release workflow.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ImagePins {
+    /// The account (AWS) or project (GCP) that publishes them.
+    pub publisher: Option<String>,
+    /// The oldest image creation time it boots.
+    pub minimum_created: Option<DateTime<Utc>>,
+}
+
+impl ImagePins {
+    /// The AWS pins this build was released with.
+    pub fn aws() -> Self {
+        Self {
+            publisher: alien_core::machine_image_publisher_aws().map(str::to_string),
+            minimum_created: alien_core::machine_image_minimum_created(),
+        }
+    }
+
+    /// Refuse `image` (named `id`) unless the publisher made it and it is
+    /// no older than the minimum.
+    pub fn check(&self, id: &str, image: &ImageFacts) -> Result<()> {
+        let publisher = self.publisher.as_deref().ok_or_else(|| {
+            refused(
+                "this verifier build names no machine-image publisher, so it launches no machines",
+            )
+        })?;
+        let minimum = self.minimum_created.ok_or_else(|| {
+            refused("this verifier build names no oldest machine image, so it launches no machines")
+        })?;
+        if image.owner != publisher {
+            return Err(refused(format!(
+                "image {id} is owned by {}, not the publisher {publisher}",
+                image.owner
+            )));
+        }
+        // The publisher's older images may carry fixed flaws; the build
+        // names the oldest one it still boots.
+        if image.created < minimum {
+            return Err(refused(format!(
+                "image {id} was created {}, before {}, the oldest image this build boots",
+                image.created.to_rfc3339(),
+                minimum.to_rfc3339()
+            )));
+        }
+        Ok(())
+    }
 }
 
 fn is_id(text: &str, prefix: &str) -> bool {
@@ -280,36 +332,25 @@ fn check_setup_ids(what: &str, asked: Option<&[String]>, setup: &[String]) -> Re
     Ok(())
 }
 
-/// Build the launch template for a roll. `publisher` is the account whose
-/// images this build boots; `image` is what the verifier read about the
-/// requested image.
+/// Build the launch template for a roll. `pins` name the images this build
+/// boots; `image` is what the verifier read about the requested image.
 pub fn plan_roll(
     place: &Place,
     release: &ReleaseBody,
     request: &RollMachines,
-    publisher: Option<&str>,
+    pins: &ImagePins,
     image: &ImageFacts,
 ) -> Result<RollPlan> {
-    let publisher = publisher.ok_or_else(|| {
-        refused("this verifier build names no machine-image publisher, so it launches no machines")
-    })?;
     if !is_id(&request.machine_image, "ami-") {
         return Err(refused(format!(
             "'{}' is not an AMI id",
             request.machine_image
         )));
     }
-    // The caller picks the image, so it may pick any image the publisher
-    // ever released, old ones included. That is an accepted limit: old
-    // publisher images stay bootable. What an old image runs is still the
-    // machine agent build the signed release pins below, which the image
-    // downloads and checks against `digest` before starting it.
-    if image.owner != publisher {
-        return Err(refused(format!(
-            "image {} is owned by {}, not the publisher {publisher}",
-            request.machine_image, image.owner
-        )));
-    }
+    // The caller picks the image: any publisher image no older than the
+    // build's minimum. What it runs is the machine agent build the signed
+    // release pins.
+    pins.check(&request.machine_image, image)?;
     let group = signed_group(release, &request.cluster, &request.group)?;
     let instance_type = match (&group.instance_type, &request.instance_type) {
         (Some(signed), Some(asked)) if signed != asked => {
@@ -573,9 +614,15 @@ impl<E: Ec2Api, A: AutoScalingApi> MachineApi for AwsMachines<E, A> {
                         "ec2:DescribeImages {id} returned no {field}"
                     )))
                 };
+                let created = image
+                    .creation_date
+                    .as_deref()
+                    .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
+                    .ok_or_else(|| missing("creation date"))?;
                 Ok(ImageFacts {
                     owner: image.owner_id.ok_or_else(|| missing("owner"))?,
                     architecture: image.architecture.ok_or_else(|| missing("architecture"))?,
+                    created: created.with_timezone(&Utc),
                 })
             })
             .transpose()
@@ -797,7 +844,48 @@ mod tests {
         ImageFacts {
             owner: owner.to_string(),
             architecture: "arm64".to_string(),
+            created: "2026-09-01T00:00:00Z".parse().unwrap(),
         }
+    }
+
+    fn pins() -> ImagePins {
+        ImagePins {
+            publisher: Some(PUBLISHER.to_string()),
+            minimum_created: Some("2026-08-01T00:00:00Z".parse().unwrap()),
+        }
+    }
+
+    #[test]
+    fn publisher_images_older_than_the_minimum_are_refused() {
+        // Off: an image no older than the minimum boots.
+        plan_roll(
+            &place(),
+            &release(),
+            &request(),
+            &pins(),
+            &arm_image(PUBLISHER),
+        )
+        .unwrap();
+        // Attack: an older image the publisher released before a fix.
+        let mut old = arm_image(PUBLISHER);
+        old.created = "2026-03-01T00:00:00Z".parse().unwrap();
+        assert_eq!(
+            reason(plan_roll(&place(), &release(), &request(), &pins(), &old)),
+            "Refused: image ami-0123456789abcdef0 was created 2026-03-01T00:00:00+00:00, before 2026-08-01T00:00:00+00:00, the oldest image this build boots"
+        );
+        // A build without a minimum launches nothing.
+        let unpinned = ImagePins {
+            minimum_created: None,
+            ..pins()
+        };
+        assert!(reason(plan_roll(
+            &place(),
+            &release(),
+            &request(),
+            &unpinned,
+            &arm_image(PUBLISHER)
+        ))
+        .contains("names no oldest machine image"));
     }
 
     fn reason(result: Result<RollPlan>) -> String {
@@ -810,7 +898,7 @@ mod tests {
             &place(),
             &release(),
             &request(),
-            Some(PUBLISHER),
+            &pins(),
             &arm_image(PUBLISHER),
         )
         .unwrap();
@@ -855,7 +943,7 @@ mod tests {
             &place(),
             &release(),
             &request(),
-            Some(PUBLISHER),
+            &pins(),
             &arm_image("999988887777"),
         ))
         .contains("not the publisher 345678901234"));
@@ -863,7 +951,10 @@ mod tests {
             &place(),
             &release(),
             &request(),
-            None,
+            &ImagePins {
+                publisher: None,
+                ..pins()
+            },
             &arm_image(PUBLISHER)
         ))
         .contains("names no machine-image publisher"));
@@ -873,7 +964,7 @@ mod tests {
             &place(),
             &release(),
             &snapshot,
-            Some(PUBLISHER),
+            &pins(),
             &arm_image(PUBLISHER),
         ))
         .contains("not an AMI id"));
@@ -887,7 +978,7 @@ mod tests {
             &place(),
             &release(),
             &other_type,
-            Some(PUBLISHER),
+            &pins(),
             &arm_image(PUBLISHER),
         ))
         .contains("not the signed m7g.large"));
@@ -899,7 +990,7 @@ mod tests {
             &place(),
             &release(),
             &script,
-            Some(PUBLISHER),
+            &pins(),
             &arm_image(PUBLISHER)
         ))
         .contains("not an https URL"));
@@ -910,7 +1001,7 @@ mod tests {
             &place(),
             &release(),
             &other_group,
-            Some(PUBLISHER),
+            &pins(),
             &arm_image(PUBLISHER),
         ))
         .contains("no capacity group 'gpu'"));
@@ -919,13 +1010,7 @@ mod tests {
     #[test]
     fn machines_join_only_the_network_setup_created() {
         let roll = |place: &Place, request: &RollMachines| {
-            plan_roll(
-                place,
-                &release(),
-                request,
-                Some(PUBLISHER),
-                &arm_image(PUBLISHER),
-            )
+            plan_roll(place, &release(), request, &pins(), &arm_image(PUBLISHER))
         };
         let plan = roll(&place(), &request()).unwrap();
         assert_eq!(
@@ -991,7 +1076,7 @@ mod tests {
             &place(),
             &unpinned,
             &request(),
-            Some(PUBLISHER),
+            &pins(),
             &arm_image(PUBLISHER),
         ))
         .contains("pins no machine-agent/linux-aarch64 build"));
@@ -1101,7 +1186,7 @@ mod tests {
             &place(),
             &release(),
             &request(),
-            Some(PUBLISHER),
+            &pins(),
             &arm_image(PUBLISHER),
         )
         .unwrap()
