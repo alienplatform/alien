@@ -428,6 +428,99 @@ const AZURE_VERIFIER_ACTIONS: &[&str] = &[
 /// Built-in role that reads and writes Key Vault secrets.
 const KEY_VAULT_SECRETS_OFFICER: &str = "b86a8fe4-44ce-4948-aee5-eccb2c155cd7";
 
+/// What a protected install's machines read, in the role `<prefix>-machine-signing`: the
+/// group's `signing-fingerprint` tag, the vaults in the group (the signing vault's name ends in
+/// a random suffix, so machines list them) and the identities (to resolve a workload's client id).
+pub const AZURE_MACHINE_SIGNING_ACTIONS: &[&str] = &[
+    "Microsoft.Resources/subscriptions/resourceGroups/read",
+    "Microsoft.KeyVault/vaults/read",
+    "Microsoft.ManagedIdentity/userAssignedIdentities/read",
+];
+
+/// The grants a protected install's machine identity needs to boot: `<prefix>-machine-signing`
+/// on the install's group and Key Vault Secrets Officer on the signing vault (it reads the
+/// ledger and inputs and writes the ledger back). Labels start with `label`. None on an
+/// unprotected install.
+///
+/// For the emitter that creates the identity the machines run as (compute clusters render
+/// through emitters a composed CLI registers): without these, protected machines refuse to boot.
+pub fn azure_machine_signing_grants(
+    ctx: &EmitContext<'_>,
+    label: &str,
+    principal_id: Expression,
+) -> Result<Vec<hcl::Block>> {
+    if ctx.stack_settings.signing.is_none() {
+        return Ok(Vec::new());
+    }
+    let management = ctx
+        .stack
+        .resources()
+        .find(|(_, entry)| entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
+        .and_then(|(resource_id, _)| ctx.name_for(resource_id))
+        .ok_or_else(|| {
+            alien_error::AlienError::new(ErrorData::OperationNotSupported {
+                operation: "grant a protected Azure install's machines their signing settings"
+                    .to_string(),
+                reason: "the stack has no remote management, which creates the signing vault"
+                    .to_string(),
+            })
+        })?;
+    let resource_group = ctx
+        .stack
+        .resources()
+        .find(|(_, entry)| {
+            entry.config.resource_type() == alien_core::AzureResourceGroup::RESOURCE_TYPE
+        })
+        .and_then(|(resource_id, _)| ctx.name_for(resource_id))
+        .ok_or_else(|| {
+            alien_error::AlienError::new(ErrorData::OperationNotSupported {
+                operation: "grant a protected Azure install's machines their signing settings"
+                    .to_string(),
+                reason: "setup does not create the install's resource group".to_string(),
+            })
+        })?;
+    Ok(vec![
+        resource_block(
+            "azurerm_role_assignment",
+            &format!("{label}_machine_signing"),
+            [
+                attr(
+                    "scope",
+                    expr::traversal(["azurerm_resource_group", resource_group, "id"]),
+                ),
+                attr(
+                    "role_definition_id",
+                    expr::traversal([
+                        "azurerm_role_definition",
+                        &format!("{management}_machine_signing"),
+                        "role_definition_resource_id",
+                    ]),
+                ),
+                attr("principal_id", principal_id.clone()),
+                attr("principal_type", Expression::String("ServicePrincipal".to_string())),
+            ],
+        ),
+        resource_block(
+            "azurerm_role_assignment",
+            &format!("{label}_signing_vault"),
+            [
+                attr(
+                    "scope",
+                    expr::traversal(["azurerm_key_vault", &format!("{management}_signing"), "id"]),
+                ),
+                attr(
+                    "role_definition_id",
+                    expr::template(format!(
+                        "/subscriptions/${{var.azure_subscription_id}}/providers/Microsoft.Authorization/roleDefinitions/{KEY_VAULT_SECRETS_OFFICER}"
+                    )),
+                ),
+                attr("principal_id", principal_id),
+                attr("principal_type", Expression::String("ServicePrincipal".to_string())),
+            ],
+        ),
+    ])
+}
+
 /// The verifier's custom role on the group, and the signing vault: a Key Vault only setup and
 /// the verifier write, holding the ledger. Management holds no vault writes on a protected
 /// install and no secret writes in the group (refused above).
@@ -469,10 +562,40 @@ fn emit_verifier_grants(
             attr("scope", group_id.clone()),
             attr(
                 "role_definition_id",
-                expr::traversal(["azurerm_role_definition", &role, "role_definition_resource_id"]),
+                expr::traversal([
+                    "azurerm_role_definition",
+                    &role,
+                    "role_definition_resource_id",
+                ]),
             ),
             attr("principal_id", principal.clone()),
-            attr("principal_type", Expression::String("ServicePrincipal".to_string())),
+            attr(
+                "principal_type",
+                Expression::String("ServicePrincipal".to_string()),
+            ),
+        ],
+    ));
+
+    fragment.resource_blocks.push(resource_block(
+        "azurerm_role_definition",
+        &format!("{label}_machine_signing"),
+        [
+            attr("name", expr::template("${local.resource_prefix}-machine-signing".to_string())),
+            attr("scope", group_id.clone()),
+            attr(
+                "description",
+                Expression::String(
+                    "What the install's machines read to find their signing settings and the signing vault."
+                        .to_string(),
+                ),
+            ),
+            nested(block(
+                "permissions",
+                [attr("actions", string_array(
+                    AZURE_MACHINE_SIGNING_ACTIONS.iter().map(|action| action.to_string()).collect(),
+                ))],
+            )),
+            attr("assignable_scopes", Expression::Array(vec![group_id.clone()])),
         ],
     ));
 
@@ -481,7 +604,10 @@ fn emit_verifier_grants(
     fragment.resource_blocks.push(resource_block(
         "random_id",
         &format!("{vault}_name_suffix"),
-        [attr("byte_length", Expression::Number(hcl::Number::from(3i64)))],
+        [attr(
+            "byte_length",
+            Expression::Number(hcl::Number::from(3i64)),
+        )],
     ));
     fragment.resource_blocks.push(resource_block(
         "azurerm_key_vault",
@@ -510,7 +636,10 @@ fn emit_verifier_grants(
         ],
     ));
     for (name, member) in [
-        ("setup", expr::raw(format!("data.azurerm_client_config.{current}.object_id"))),
+        (
+            "setup",
+            expr::raw(format!("data.azurerm_client_config.{current}.object_id")),
+        ),
         ("verifier", principal),
     ] {
         fragment.resource_blocks.push(resource_block(
@@ -537,7 +666,10 @@ fn emit_verifier_grants(
                 "name",
                 Expression::String(alien_signing::settings::names::AZURE_LEDGER_SECRET.to_string()),
             ),
-            attr("key_vault_id", expr::traversal(["azurerm_key_vault", &vault, "id"])),
+            attr(
+                "key_vault_id",
+                expr::traversal(["azurerm_key_vault", &vault, "id"]),
+            ),
             attr(
                 "value",
                 expr::template(ledger.replace('\\', "\\\\").replace('"', "\\\"")),
@@ -545,7 +677,10 @@ fn emit_verifier_grants(
             // The ledger only rises; the verifier writes new versions.
             nested(block(
                 "lifecycle",
-                [attr("ignore_changes", Expression::Array(vec![expr::raw("value")]))],
+                [attr(
+                    "ignore_changes",
+                    Expression::Array(vec![expr::raw("value")]),
+                )],
             )),
             attr(
                 "depends_on",
@@ -595,7 +730,11 @@ fn deny_excluded_actions(roles: &AzureManagementRoles) -> Result<Vec<String>> {
         .filter(|action| azure_write_or_delete(action) && azure_runs_no_code(action))
         // A vault write could turn the signing vault to access policies and grant management
         // its secrets, so on a protected install vaults stay under the deny.
-        .filter(|action| !action.to_ascii_lowercase().starts_with("microsoft.keyvault/vaults"))
+        .filter(|action| {
+            !action
+                .to_ascii_lowercase()
+                .starts_with("microsoft.keyvault/vaults")
+        })
         .cloned()
         .collect();
     if actions.len() > DENY_SETTINGS_MAX_EXCLUDED_ACTIONS {
@@ -1175,8 +1314,7 @@ fn generate_management_grant_plan(
 ) -> Result<ManagementGrants> {
     let mut custom_roles = Vec::new();
     let mut bindings = Vec::new();
-    let context = permission_context(label)
-        .with_signing(ctx.stack_settings);
+    let context = permission_context(label).with_signing(ctx.stack_settings);
     let generator = AzureRuntimePermissionsGenerator::new();
 
     for permission_set in global_refs.iter().filter_map(resolve_permission_set) {
