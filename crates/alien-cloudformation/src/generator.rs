@@ -2006,10 +2006,11 @@ fn add_verifier_and_limits(
         .aws_publisher
         .as_deref()
         .ok_or_else(|| missing("machine-image publisher"))?;
-    let digest = pins
-        .aws_verifier_digest
+    let image = pins
+        .aws_verifier_image
         .as_deref()
-        .ok_or_else(|| missing("verifier image"))?;
+        .filter(|image| alien_core::is_pinned_image(image))
+        .ok_or_else(|| missing("verifier image pinned by digest"))?;
     let prefix = "${AWS::StackName}";
     let account = "${AWS::AccountId}";
     let region = "${AWS::Region}";
@@ -2081,7 +2082,7 @@ fn add_verifier_and_limits(
         CfExpression::object([(
             "ImageUri",
             CfExpression::sub(format!(
-                "{publisher}.dkr.ecr.${{AWS::Region}}.amazonaws.com/verifier@{digest}"
+                "{publisher}.dkr.ecr.${{AWS::Region}}.amazonaws.com/{image}"
             )),
         )]),
     );

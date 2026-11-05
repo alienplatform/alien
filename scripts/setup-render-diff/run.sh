@@ -6,6 +6,10 @@
 # on the working tree, then diffs the two. The diff must equal expected.diff exactly: an
 # unprotected stack renders byte-identical to the base except for the changes listed there.
 #
+# Intended today (base = the merge base with main): every AWS management role denies writes
+# under /signed/ (`OnlySetupChangesSigningSettings`); Terraform AWS repacks its management
+# statements among its policies to fit it.
+#
 # Usage: scripts/setup-render-diff/run.sh [base-ref]
 #   SETUP_RENDER_DIFF_BASE_TARGET  cargo target dir for the base build (default: a temp dir)
 #   SETUP_RENDER_DIFF_OUT          keep the rendered trees and the diff here

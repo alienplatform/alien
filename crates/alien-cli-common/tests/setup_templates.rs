@@ -11,12 +11,12 @@ const FINGERPRINT: &str =
     "SHA256:9f2c3b1a77d0e5c20b19a4f36c8e2d5100112233445566778899aabbccddeeff";
 
 const PUBLISHER: &str = "111122223333";
-const VERIFIER: &str = "sha256:5d41402abc4b2a76b9719d911017c592ae9e2b6d7c5c7f2a3f1e0d9c8b7a6f50";
+const VERIFIER: &str = "verifier@sha256:5d41402abc4b2a76b9719d911017c592ae9e2b6d7c5c7f2a3f1e0d9c8b7a6f50";
 
 fn pins() -> SetupPins {
     SetupPins {
         aws_publisher: Some(PUBLISHER.to_string()),
-        aws_verifier_digest: Some(VERIFIER.to_string()),
+        aws_verifier_image: Some(VERIFIER.to_string()),
     }
 }
 
@@ -125,7 +125,7 @@ async fn cloudformation_runs_the_pinned_verifier_and_limits_management() {
     let verifier = &resources["SigningVerifier"]["Properties"];
     assert_eq!(
         verifier["Code"]["ImageUri"]["Fn::Sub"].as_str(),
-        Some(format!("{PUBLISHER}.dkr.ecr.${{AWS::Region}}.amazonaws.com/verifier@{VERIFIER}").as_str())
+        Some(format!("{PUBLISHER}.dkr.ecr.${{AWS::Region}}.amazonaws.com/{VERIFIER}").as_str())
     );
     assert_eq!(verifier["FunctionName"]["Fn::Sub"].as_str(), Some("${AWS::StackName}-verifier"));
     let role = &resources["SigningVerifierRole"]["Properties"];
