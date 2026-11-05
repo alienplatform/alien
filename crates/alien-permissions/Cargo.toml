@@ -27,6 +27,7 @@ uuid = { workspace = true, features = ["v5"], optional = true }
 
 [build-dependencies]
 json5 = "0.4"
+regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 alien-permission-types = { workspace = true }
@@ -39,3 +40,4 @@ tokio = { workspace = true, features = ["sync", "macros", "rt"] }
 anyhow = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
 json5 = "0.4"
+regex = { workspace = true }

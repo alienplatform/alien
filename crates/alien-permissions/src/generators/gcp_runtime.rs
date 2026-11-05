@@ -390,7 +390,11 @@ impl GcpRuntimePermissionsGenerator {
                         target,
                         target_resource_name: target_resource_name.clone(),
                         resource_kind,
-                        condition: condition.clone(),
+                        condition: protected_secret_condition(
+                            condition.clone(),
+                            predefined_role.contains("secretmanager"),
+                            context,
+                        ),
                     });
                 }
             }
@@ -415,6 +419,14 @@ impl GcpRuntimePermissionsGenerator {
                 platform_permission.label.as_deref(),
                 platform_permission.description.as_deref(),
             )?;
+            let condition = protected_secret_condition(
+                condition,
+                custom_role
+                    .included_permissions
+                    .iter()
+                    .any(|permission| permission.starts_with("secretmanager.")),
+                context,
+            );
             bindings.push(GcpIamBinding {
                 role: custom_role.name.clone(),
                 members: vec![service_account.clone()],
@@ -481,6 +493,32 @@ fn granted_permissions(permissions: &[String], context: &PermissionContext) -> V
         .filter(|permission| !(context.signing_protected && gcp_verifier_owned(permission)))
         .cloned()
         .collect()
+}
+
+/// Secrets named `signed-…` hold a protected install's inputs; only setup writes them. On a
+/// protected install, every binding that grants Secret Manager permissions excludes them, for
+/// any prefix, so an install whose prefix extends this one's can't reach them either.
+const SIGNED_SECRETS_EXCLUDED: &str = r#"!resource.name.matches(".*/secrets/signed-.*")"#;
+
+fn protected_secret_condition(
+    condition: Option<GcpIamCondition>,
+    grants_secrets: bool,
+    context: &PermissionContext,
+) -> Option<GcpIamCondition> {
+    if !(context.signing_protected && grants_secrets) {
+        return condition;
+    }
+    Some(match condition {
+        Some(condition) => GcpIamCondition {
+            expression: format!("({}) && {SIGNED_SECRETS_EXCLUDED}", condition.expression),
+            ..condition
+        },
+        None => GcpIamCondition {
+            title: "Not signing inputs".to_string(),
+            description: "Leaves out the secrets only setup writes".to_string(),
+            expression: SIGNED_SECRETS_EXCLUDED.to_string(),
+        },
+    })
 }
 
 fn gcp_residual_permissions(grant: &PermissionGrant) -> Option<&Vec<String>> {
