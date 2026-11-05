@@ -517,10 +517,15 @@ async fn add_config_statement(
         return ErrorData::bad_request("The config statement names another deployment")
             .into_response();
     }
-    match store
+    if let Err(error) = store
         .add_config_statement(&deployment.id, opened.sequence, &request.statement)
         .await
     {
+        return error.into_response();
+    }
+    // The deployment's enforcers take developer values only from this
+    // statement, so it is delivered with the next target.
+    match state.deployment_store.set_redeploy(&subject, &deployment.id).await {
         Ok(()) => StatusCode::CREATED.into_response(),
         Err(error) => error.into_response(),
     }
