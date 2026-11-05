@@ -274,9 +274,11 @@ pub(crate) async fn run_deployment_continuously(
     // still exactly the signed release. Deleting needs no signature.
     if let Some(signing) = &state.config.release_signing {
         if operation == LoopOperation::Deploy {
-            let accepted = state.db.get_accepted_release().await?;
-            if let Err(refusal) =
-                signing.verify_release(current.platform, target_release, accepted.as_ref())
+            let stored =
+                state.db.get_signing_trust().await?.unwrap_or_else(|| {
+                    crate::protected::OperatorTrust::new(&signing.settings.prefix)
+                });
+            if let Err(refusal) = signing.verify_release(current.platform, target_release, &stored)
             {
                 error!(
                     release_id = %target_release_id,

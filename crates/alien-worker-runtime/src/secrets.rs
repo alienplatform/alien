@@ -5,6 +5,51 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info, warn};
 
+/// Env var with the secrets list a protected install's verifier writes from
+/// the signed workload. Same format as `ALIEN_SECRETS`, which unprotected
+/// installs keep; a workload has one or the other.
+pub const ENV_WORKLOAD_SECRETS: &str = "WORKLOAD_SECRETS";
+
+/// The secrets list the workload was started with, and the env var it came
+/// from: `config_env` first, then the process env. Both `ALIEN_SECRETS` and
+/// `WORKLOAD_SECRETS` being set is refused, so a list added beside the one the
+/// install wrote can't add secrets.
+pub fn secrets_list(
+    config_env: &HashMap<String, String>,
+    process_env: &HashMap<String, String>,
+) -> Result<Option<(&'static str, String)>> {
+    let mut found = None;
+    for name in [alien_core::ENV_ALIEN_SECRETS, ENV_WORKLOAD_SECRETS] {
+        let Some(list) = config_env.get(name).or_else(|| process_env.get(name)) else {
+            continue;
+        };
+        if let Some((other, _)) = found {
+            return Err(AlienError::new(ErrorData::SecretLoadFailed {
+                secret_name: name.to_string(),
+                message: format!(
+                    "both {other} and {name} are set; a workload has one secrets list"
+                ),
+            }));
+        }
+        found = Some((name, list.clone()));
+    }
+    Ok(found)
+}
+
+/// Refuse a secret that would become a loader variable such as `LD_PRELOAD`:
+/// a value in a vault must never decide what code the process loads.
+fn refuse_loader_name(name: &str) -> Result<()> {
+    if alien_signing::release::is_loader_env(name) {
+        return Err(AlienError::new(ErrorData::SecretLoadFailed {
+            secret_name: name.to_string(),
+            message: format!(
+                "{name} changes what code the process loads, so it is never set from a vault"
+            ),
+        }));
+    }
+    Ok(())
+}
+
 /// Configuration for ALIEN_SECRETS environment variable
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,9 +94,17 @@ pub async fn load_secrets_from_vault(
     let config: AlienSecretsConfig = serde_json::from_str(alien_secrets_json)
         .into_alien_error()
         .context(ErrorData::SecretLoadFailed {
-            secret_name: "ALIEN_SECRETS".to_string(),
-            message: "Failed to parse ALIEN_SECRETS JSON".to_string(),
+            secret_name: "secrets list".to_string(),
+            message: "Failed to parse the secrets list JSON".to_string(),
         })?;
+
+    for name in config
+        .keys
+        .iter()
+        .chain(config.deployer_secrets.iter().map(|secret| &secret.name))
+    {
+        refuse_loader_name(name)?;
+    }
 
     if config.keys.is_empty() && config.deployer_secrets.is_empty() {
         debug!("ALIEN_SECRETS contains no keys, skipping secret loading");
@@ -251,6 +304,94 @@ mod tests {
             }],
         })
         .to_string()
+    }
+
+    #[tokio::test]
+    async fn a_vault_value_named_like_a_loader_never_becomes_env() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let state_dir = temp.path().to_string_lossy().to_string();
+        let binding = serde_json::to_value(alien_core::VaultBinding::local(
+            alien_core::SECRETS_VAULT_ID,
+            &state_dir,
+        ))
+        .unwrap();
+        let provider = alien_bindings::BindingsProvider::new(
+            alien_core::ClientConfig::Local {
+                state_directory: state_dir,
+            },
+            HashMap::from([(alien_core::SECRETS_VAULT_ID.to_string(), binding)]),
+        )
+        .unwrap();
+        let vault = alien_bindings::BindingsProviderApi::load_vault(
+            &provider,
+            alien_core::SECRETS_VAULT_ID,
+        )
+        .await
+        .unwrap();
+        vault.set_secret("API_KEY", "k").await.unwrap();
+        vault
+            .set_secret("LD_PRELOAD", "/tmp/evil.so")
+            .await
+            .unwrap();
+        vault
+            .set_secret("NODE_OPTIONS", "--require /tmp/evil.js")
+            .await
+            .unwrap();
+
+        // Without a loader name the list loads.
+        let loaded = load_secrets_from_vault(&provider, r#"{"keys":["API_KEY"],"hash":"h"}"#)
+            .await
+            .unwrap();
+        assert_eq!(loaded["API_KEY"], "k");
+
+        for name in ["LD_PRELOAD", "NODE_OPTIONS"] {
+            let list = serde_json::json!({"keys": ["API_KEY", name], "hash": "h"}).to_string();
+            let error = load_secrets_from_vault(&provider, &list)
+                .await
+                .expect_err("a loader name from a vault must be refused");
+            assert!(
+                error.message.contains("never set from a vault"),
+                "{}",
+                error.message
+            );
+        }
+
+        let deployer = serde_json::json!({
+            "keys": [],
+            "hash": "h",
+            "deployerSecrets": [{
+                "name": "LD_AUDIT", "vaultKey": "x", "secretName": "x", "label": "x", "required": false,
+            }],
+        })
+        .to_string();
+        let error = load_secrets_from_vault(&provider, &deployer)
+            .await
+            .expect_err("a loader name from the deployer's vault must be refused");
+        assert!(error.message.contains("LD_AUDIT"), "{}", error.message);
+    }
+
+    #[test]
+    fn a_workload_has_one_secrets_list() {
+        let list = r#"{"keys":[],"hash":"h"}"#.to_string();
+        let none = HashMap::new();
+        let alien = HashMap::from([(alien_core::ENV_ALIEN_SECRETS.to_string(), list.clone())]);
+        let app = HashMap::from([(ENV_WORKLOAD_SECRETS.to_string(), list.clone())]);
+
+        assert_eq!(secrets_list(&none, &none).unwrap(), None);
+        assert_eq!(
+            secrets_list(&alien, &none).unwrap(),
+            Some((alien_core::ENV_ALIEN_SECRETS, list.clone()))
+        );
+        assert_eq!(
+            secrets_list(&none, &app).unwrap(),
+            Some((ENV_WORKLOAD_SECRETS, list.clone()))
+        );
+        let error = secrets_list(&alien, &app).expect_err("two lists are refused");
+        assert!(
+            error.message.contains("one secrets list"),
+            "{}",
+            error.message
+        );
     }
 
     #[tokio::test]

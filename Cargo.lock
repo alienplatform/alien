@@ -854,6 +854,7 @@ version = "3.3.54"
 dependencies = [
  "alien-aws-clients",
  "alien-client-core",
+ "alien-core",
  "alien-error",
  "alien-signing",
  "async-trait",
@@ -945,6 +946,7 @@ dependencies = [
  "alien-macros",
  "alien-permissions",
  "alien-preflights",
+ "alien-signing",
  "anyhow",
  "async-trait",
  "axum 0.8.9",
@@ -1594,6 +1596,7 @@ dependencies = [
  "alien-commands",
  "alien-core",
  "alien-error",
+ "alien-signing",
  "alien-worker-protocol",
  "anyhow",
  "async-trait",
