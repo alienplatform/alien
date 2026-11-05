@@ -1787,108 +1787,100 @@ fn body_is_empty(body: &Body) -> bool {
     body.iter().next().is_none()
 }
 
-/// The blocks that hold a protected deployment's anchor: setup alone writes it. The
-/// management identity has no grant on its name, and on AWS its guard denies writes there. It
-/// carries no deployment tag or label, so no grant conditioned on one reaches it.
+/// The blocks that hold a protected install's signing settings and ledger: setup alone
+/// writes the settings. Their names start with `/signed/` (AWS) or `signed-` (GCP), which no
+/// management grant on `<prefix>-*` reaches.
 ///
-/// On Azure the anchor is not written yet; the Azure management emitter writes the deny
+/// On Azure the settings are not written yet; the Azure management emitter writes the deny
 /// settings that keep the management identity away from what runs code.
 fn release_trust_anchor_blocks(
     settings: &StackSettings,
     target: TerraformTarget,
-    labels: &IndexMap<String, String>,
+    _labels: &IndexMap<String, String>,
 ) -> Result<Vec<Block>> {
-    let Some(release_trust) = &settings.release_trust else {
+    let Some(signing) = &settings.signing else {
         return Ok(Vec::new());
     };
     let prefix = "${local.resource_prefix}";
-    let description =
-        "What this deployment trusts: the signer list, the component key and protection. Written by setup only.";
+    let mut signing_settings = signing.settings("stack")?;
+    signing_settings.prefix = prefix.to_string();
+    let settings_value = expr::template(signing_settings.to_json());
+    let ledger_value = expr::template(alien_signing::Ledger::new(prefix).to_json());
     match target {
-        TerraformTarget::Aws => {
-            let anchor = release_trust.anchor(alien_core::Platform::Aws, prefix)?;
-            Ok(vec![resource_block(
+        TerraformTarget::Aws => Ok(vec![
+            resource_block(
                 "aws_ssm_parameter",
-                "release_trust_anchor",
+                "signing_fingerprint",
                 [
                     attr(
                         "name",
-                        expr::template(alien_core::release_trust_parameter_name(prefix)),
+                        expr::template(alien_signing::settings::names::aws_settings(prefix)),
                     ),
                     attr("type", Expression::String("String".to_string())),
                     attr("tier", Expression::String("Standard".to_string())),
-                    attr("description", Expression::String(description.to_string())),
-                    attr("value", anchor_value(&anchor)?),
+                    attr("value", settings_value),
                 ],
-            )])
-        }
+            ),
+            resource_block(
+                "aws_ssm_parameter",
+                "signing_state",
+                [
+                    attr(
+                        "name",
+                        expr::template(alien_signing::settings::names::aws_ledger(prefix)),
+                    ),
+                    attr("type", Expression::String("String".to_string())),
+                    attr("tier", Expression::String("Advanced".to_string())),
+                    attr("value", ledger_value),
+                ],
+            ),
+        ]),
         TerraformTarget::Gcp => {
-            let anchor = release_trust.anchor(alien_core::Platform::Gcp, prefix)?;
-            let mut secret = vec![
-                attr("project", expr::raw("var.gcp_project")),
-                attr(
-                    "secret_id",
-                    expr::template(alien_core::release_trust_secret_name(prefix)),
+            let mut blocks = Vec::new();
+            for (label, name, value) in [
+                (
+                    "signing_fingerprint",
+                    alien_signing::settings::names::gcp_settings(prefix),
+                    settings_value,
                 ),
-                attr(
-                    "annotations",
-                    expr::object([("description", Expression::String(description.to_string()))]),
+                (
+                    "signing_state",
+                    alien_signing::settings::names::gcp_ledger(prefix),
+                    ledger_value,
                 ),
-                nested(block("replication", [nested(block("auto", []))])),
-            ];
-            if let Some(activation) = labels.get("enable-secret-manager") {
-                secret.push(attr(
-                    "depends_on",
-                    Expression::Array(vec![expr::traversal([
-                        "google_project_service",
-                        activation,
-                    ])]),
+            ] {
+                blocks.push(resource_block(
+                    "google_parameter_manager_parameter",
+                    label,
+                    [
+                        attr("project", expr::raw("var.gcp_project")),
+                        attr("parameter_id", expr::template(name)),
+                        attr("format", Expression::String("JSON".to_string())),
+                    ],
                 ));
-            }
-            Ok(vec![
-                resource_block(
-                    "google_secret_manager_secret",
-                    "release_trust_anchor",
-                    secret,
-                ),
-                resource_block(
-                    "google_secret_manager_secret_version",
-                    "release_trust_anchor",
+                blocks.push(resource_block(
+                    "google_parameter_manager_parameter_version",
+                    label,
                     [
                         attr(
-                            "secret",
-                            expr::traversal([
-                                "google_secret_manager_secret",
-                                "release_trust_anchor",
-                                "id",
-                            ]),
+                            "parameter",
+                            expr::traversal(["google_parameter_manager_parameter", label, "id"]),
                         ),
-                        attr("secret_data", anchor_value(&anchor)?),
+                        attr("parameter_version_id", Expression::String("v1".to_string())),
+                        attr("parameter_data", value),
                     ],
-                ),
-            ])
+                ));
+            }
+            Ok(blocks)
         }
         TerraformTarget::Azure => Ok(Vec::new()),
         TerraformTarget::Eks | TerraformTarget::Gke | TerraformTarget::Aks => {
             Err(AlienError::new(ErrorData::OperationNotSupported {
-                operation: format!("protect a {} deployment through Terraform", target.name()),
-                reason: "on Kubernetes the chart's releaseSigning values hold the anchor"
-                    .to_string(),
+                operation: format!("protect a {} install through Terraform", target.name()),
+                reason: "on Kubernetes the chart's signing values hold the settings".to_string(),
             }))
         }
     }
-}
-
-/// The anchor as the JSON text enforcers parse.
-fn anchor_value(anchor: &impl serde::Serialize) -> Result<Expression> {
-    let value = serde_json::to_value(anchor).into_alien_error().context(
-        ErrorData::JsonSerializationFailed {
-            reason: "cannot serialize the anchor".to_string(),
-        },
-    )?;
-    Ok(expr::jsonencode(
-        crate::emitters::aws::helpers::json_value_to_expression(value),
-    ))
 }
 
 fn resource_label_for_file<'a>(

@@ -227,7 +227,11 @@ mod tests {
                     .check(&stack_with_data_disk_range(0, default, 4096), platform)
                     .await
                     .unwrap();
-                assert!(result.success, "{platform}, default {default}: {:?}", result.errors);
+                assert!(
+                    result.success,
+                    "{platform}, default {default}: {:?}",
+                    result.errors
+                );
             }
         }
     }

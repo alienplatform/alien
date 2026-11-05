@@ -242,16 +242,13 @@ impl PermissionContext {
         self
     }
 
-    /// Apply what setup pins from the deployment's settings: the publisher of the machine
-    /// images the management identity may boot, and whether the deployment is protected.
+    /// Apply what setup pins from the deployment's settings: whether the install is protected,
+    /// and then the publisher of the machine images it may boot, compiled into this build.
     pub fn with_setup_pins(mut self, settings: &StackSettings) -> Result<Self> {
-        if let Some(publisher) = &settings.machine_image_publisher {
-            let account_id = publisher.checked_aws_account_id().map_err(|reason| {
-                AlienError::new(ErrorData::MachineImagePublisherInvalid { reason })
-            })?;
+        self.release_trust_protected = settings.signing.is_some();
+        if let Some(account_id) = alien_core::machine_image_publisher_aws() {
             self.machine_image_owner = Some(account_id.to_string());
         }
-        self.release_trust_protected = settings.release_trust.is_some();
         Ok(self)
     }
 

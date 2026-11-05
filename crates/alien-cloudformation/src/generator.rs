@@ -1853,61 +1853,66 @@ fn add_sandbox_gateway_replica_secret(
     template.resources.insert(secret.logical_id.clone(), secret);
 }
 
-/// Logical ID of the parameter that holds a protected deployment's anchor.
-const RELEASE_TRUST_ANCHOR_ID: &str = "ReleaseTrustAnchor";
+/// Logical IDs of the parameters that hold a protected install's signing settings and ledger.
+const SIGNING_SETTINGS_ID: &str = "SigningFingerprintParameter";
+const SIGNING_LEDGER_ID: &str = "SigningStateParameter";
 
-/// Writes the anchor of a protected deployment: setup alone writes it. The management role has
-/// no grant on its path, and its guard denies writes there.
-///
-/// The parameter carries no deployment tag, so no grant conditioned on that tag reaches it.
+/// Writes a protected install's signing settings and its ledger: setup alone writes the
+/// settings. They live under `/signed/`, which no management grant on `<prefix>-*` reaches.
 fn add_release_trust_anchor(
     template: &mut CfTemplate,
     settings: &StackSettings,
     target: CloudFormationTarget,
 ) -> Result<()> {
-    let Some(release_trust) = &settings.release_trust else {
+    let Some(signing) = &settings.signing else {
         return Ok(());
     };
     if target.is_kubernetes() {
         return Err(AlienError::new(ErrorData::OperationNotSupported {
-            operation: "protect a Kubernetes deployment through CloudFormation".to_string(),
-            reason: "On Kubernetes the chart's releaseSigning values hold the anchor; install the chart with them".to_string(),
+            operation: "protect a Kubernetes install through CloudFormation".to_string(),
+            reason: "On Kubernetes the chart's signing values hold the settings; install the chart with them".to_string(),
         }));
     }
     let prefix = "${AWS::StackName}";
-    let anchor = release_trust.anchor(alien_core::Platform::Aws, prefix)?;
-    // The anchor checks every field it holds: hex, base64, an enum and plain IDs. The only
-    // substitutions in the text are the stack name.
-    let value = serde_json::to_string(&anchor).map_err(|error| {
-        AlienError::new(ErrorData::TemplateSerializationFailed {
-            format: "CloudFormation".to_string(),
-            reason: format!("cannot serialize the anchor: {error}"),
-        })
-    })?;
-    let mut parameter = CfResource::new(
-        RELEASE_TRUST_ANCHOR_ID.to_string(),
-        "AWS::SSM::Parameter".to_string(),
-    );
-    parameter.properties.insert(
-        "Name".to_string(),
-        CfExpression::sub(alien_core::release_trust_parameter_name(prefix)),
-    );
-    parameter
-        .properties
-        .insert("Type".to_string(), CfExpression::from("String"));
-    parameter
-        .properties
-        .insert("Tier".to_string(), CfExpression::from("Standard"));
-    parameter.properties.insert(
-        "Description".to_string(),
-        CfExpression::from(
-            "What this deployment trusts: the signer list, the component key and protection. Written by setup only.",
+    // Check the fingerprint and channel; the prefix is the stack name, substituted by
+    // CloudFormation.
+    let mut signing_settings = signing.settings("stack")?;
+    signing_settings.prefix = prefix.to_string();
+    for (id, name, tier, value, description) in [
+        (
+            SIGNING_SETTINGS_ID,
+            alien_signing::settings::names::aws_settings(prefix),
+            "Standard",
+            signing_settings.to_json(),
+            "Software must be signed with these keys to run here. The vendor's access can't change this value; your administrators can.",
         ),
-    );
-    parameter
-        .properties
-        .insert("Value".to_string(), CfExpression::sub(value));
-    insert_resource(template, parameter)
+        (
+            SIGNING_LEDGER_ID,
+            alien_signing::settings::names::aws_ledger(prefix),
+            "Advanced",
+            alien_signing::Ledger::new(prefix).to_json(),
+            "What this stack has already accepted, so older software can't be sent to new machines. Only the verifier and the stack's machines update it.",
+        ),
+    ] {
+        let mut parameter = CfResource::new(id.to_string(), "AWS::SSM::Parameter".to_string());
+        parameter
+            .properties
+            .insert("Name".to_string(), CfExpression::sub(name));
+        parameter
+            .properties
+            .insert("Type".to_string(), CfExpression::from("String"));
+        parameter
+            .properties
+            .insert("Tier".to_string(), CfExpression::from(tier));
+        parameter
+            .properties
+            .insert("Description".to_string(), CfExpression::from(description));
+        parameter
+            .properties
+            .insert("Value".to_string(), CfExpression::sub(value));
+        insert_resource(template, parameter)?;
+    }
+    Ok(())
 }
 
 fn add_network_parameters(
@@ -2117,10 +2122,9 @@ fn add_compute_parameters(
             );
             parameter.min_value = Some(CfExpression::from(range.min));
             parameter.max_value = Some(CfExpression::from(range.max));
-            template.parameters.insert(
-                compute_data_disk_parameter_name(&group.group_id),
-                parameter,
-            );
+            template
+                .parameters
+                .insert(compute_data_disk_parameter_name(&group.group_id), parameter);
         }
 
         // Setup preflights add workloads the source does not have (an internet sandbox's

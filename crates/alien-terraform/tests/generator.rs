@@ -7,12 +7,12 @@
 //! so PR review can diff a complete module in one place.
 
 mod generator {
+    pub mod cloud_locks_tests;
     pub mod helpers;
     pub mod network_inputs_tests;
+    pub mod release_trust_tests;
     pub mod remote_kv_tests;
     pub mod remote_queue_tests;
-    pub mod cloud_locks_tests;
-    pub mod release_trust_tests;
 
     pub mod aws_boundary_size_tests;
     pub mod aws_bucket_lifecycle_parity_tests;
