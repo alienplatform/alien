@@ -253,6 +253,7 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
     let mut nothing_deleted_yet_method = None;
     let mut has_runtime_setup_inputs_method = None;
     let mut get_progress_method = None;
+    let mut dependency_change_methods = Vec::new();
 
     for item in &item_impl.items {
         match item {
@@ -286,6 +287,14 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
 
                 if method.sig.ident == "get_progress" {
                     get_progress_method = Some(method.clone());
+                    continue;
+                }
+
+                // Forwarded to the trait as written, signature included.
+                if method.sig.ident == "dependents_may_update"
+                    || method.sig.ident == "updates_during_dependency_change"
+                {
+                    dependency_change_methods.push(method.clone());
                     continue;
                 }
 
@@ -367,6 +376,7 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
         nothing_deleted_yet_method.as_ref(),
         has_runtime_setup_inputs_method.as_ref(),
         get_progress_method.as_ref(),
+        &dependency_change_methods,
     );
 
     // Generate handler methods
@@ -536,6 +546,7 @@ fn generate_controller_impl(
     nothing_deleted_yet_method: Option<&ImplItemFn>,
     has_runtime_setup_inputs_method: Option<&ImplItemFn>,
     get_progress_method: Option<&ImplItemFn>,
+    dependency_change_methods: &[ImplItemFn],
 ) -> TokenStream2 {
     let step_match_arms = generate_step_match_arms(state_enum_name, handler_action_name, handlers);
     let get_status_match_arms =
@@ -706,6 +717,8 @@ fn generate_controller_impl(
             #nothing_deleted_yet_impl
 
             #has_runtime_setup_inputs_impl
+
+            #(#dependency_change_methods)*
 
             fn reset_stay_count(&mut self) {
                 self._internal_stay_count = None;

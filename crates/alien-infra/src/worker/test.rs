@@ -5,7 +5,7 @@ use tracing::{info, warn};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_core::{ResourceOutputs, ResourceStatus, Worker, WorkerOutputs};
+use alien_core::{ResourceOutputs, ResourceRef, ResourceStatus, Worker, WorkerOutputs};
 use alien_macros::controller;
 
 pub(crate) const CREATE_POLL_COUNT: u32 = 3; // Reduced from 5 for faster tests
@@ -216,10 +216,24 @@ pub struct TestWorkerController {
     /// Delete polls failed so far under SIMULATE_DELETE_POLL_FAILURE_COUNT.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub(crate) delete_poll_failures_count: u32,
+    /// As a dependency: its dependents may apply their updates in its current state.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) dependents_may_update: bool,
+    /// As a dependent: it can update against a dependency that is not Running.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) updates_during_dependency_change: bool,
 }
 
 #[controller]
 impl TestWorkerController {
+    fn dependents_may_update(&self) -> bool {
+        self.dependents_may_update
+    }
+
+    fn updates_during_dependency_change(&self, _dependency: &ResourceRef) -> bool {
+        self.updates_during_dependency_change
+    }
+
     fn nothing_deleted_yet(&self) -> bool {
         matches!(
             self.state,
