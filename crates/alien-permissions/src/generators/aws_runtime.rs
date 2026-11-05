@@ -118,7 +118,7 @@ impl AwsRuntimePermissionsGenerator {
                 permission_set,
                 platform_permission.label.as_deref(),
                 context,
-            ) {
+            )? {
                 continue;
             }
             let actions = platform_permission.grant.actions.as_ref().ok_or_else(|| {
@@ -357,7 +357,8 @@ mod tests {
         let context = PermissionContext::new()
             .with_aws_region("us-east-1")
             .with_aws_account_id("123456789012")
-            .with_stack_prefix("test-stack");
+            .with_stack_prefix("test-stack")
+            .with_machine_image_owner("210987654321");
 
         let generator = AwsRuntimePermissionsGenerator::new();
         let mut policy = generator

@@ -27,6 +27,7 @@ fn context() -> PermissionContext {
     PermissionContext::new()
         .with_stack_prefix(PREFIX)
         .with_aws_account_id(ACCOUNT)
+        .with_machine_image_owner("345678901234")
         .with_aws_region(REGION)
 }
 
@@ -228,10 +229,13 @@ fn management_passes_dlm_only_the_setup_role() {
                 "{setup_role}"
             );
         }
-        assert_eq!(
-            pass("app-compute-node", "ec2.amazonaws.com"),
-            Decision::Allowed
-        );
+        for node_role in ["app-compute", "app-compute-role"] {
+            assert_eq!(
+                pass(node_role, "ec2.amazonaws.com"),
+                Decision::Allowed,
+                "{node_role}"
+            );
+        }
         // A role earlier releases made at runtime still carries the AWS managed DLM policy, which
         // may share or copy any snapshot. The compute cluster's prefix-wide PassRole names it too.
         assert_eq!(

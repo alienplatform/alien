@@ -28,6 +28,7 @@ const PROFILE_ACTIONS: &[&str] = &[
 
 fn context() -> PermissionContext {
     PermissionContext::new()
+        .with_machine_image_owner("345678901234")
         .with_aws_account_id(ACCOUNT)
         .with_managing_account_id("manager-account")
         .with_aws_region("us-west-2")
@@ -39,6 +40,9 @@ async fn management(mode: SetupManagement) -> Vec<AwsIamStatement> {
     let config = DeploymentConfig::builder()
         .stack_settings(StackSettings {
             setup_management: mode,
+            machine_image_publisher: Some(alien_core::MachineImagePublisher {
+                aws_account_id: "345678901234".to_string(),
+            }),
             ..Default::default()
         })
         .environment_variables(EnvironmentVariablesSnapshot {

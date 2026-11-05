@@ -872,7 +872,8 @@ mod tests {
             .with_aws_permissions_boundary_arn(
                 "arn:aws:iam::${AWS::AccountId}:policy/${AWS::StackName}-deployment-management-boundary"
                     .to_string(),
-            );
+            )
+            .with_machine_image_owner("345678901234");
         let mut statements = Vec::new();
         for id in alien_permissions::list_permission_set_ids() {
             if !id.ends_with("/provision") || id.starts_with("remote-stack-management/") {

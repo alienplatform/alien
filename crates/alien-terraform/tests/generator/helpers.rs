@@ -19,6 +19,20 @@ use indexmap::IndexMap;
 #[path = "../../src/test_utils.rs"]
 pub(super) mod test_utils;
 
+/// AWS account that publishes the machine images in these fixtures.
+pub const MACHINE_IMAGE_PUBLISHER: &str = "345678901234";
+
+/// Fixture settings name [`MACHINE_IMAGE_PUBLISHER`] unless they name a publisher, the way every
+/// setup that launches machines must.
+pub fn fixture_settings(mut settings: StackSettings) -> StackSettings {
+    settings
+        .machine_image_publisher
+        .get_or_insert_with(|| alien_core::MachineImagePublisher {
+            aws_account_id: MACHINE_IMAGE_PUBLISHER.to_string(),
+        });
+    settings
+}
+
 /// The stack as `alien render --target aws` prepares it: template preflights, then mutations
 /// against a configuration without a deployment.
 pub async fn prepare_for_render(stack: Stack) -> Stack {
@@ -37,7 +51,7 @@ pub async fn prepare_for_target(mut stack: Stack, target: TerraformTarget) -> St
         .expect("template preflights pass");
     let config = DeploymentConfig::builder()
         .deployment_name(stack.id().to_string())
-        .stack_settings(StackSettings::default())
+        .stack_settings(fixture_settings(StackSettings::default()))
         .management_config(ManagementConfig::Aws(AwsManagementConfig {
             managing_role_arn: "rendered-from-template-parameter".to_string(),
         }))
@@ -151,7 +165,7 @@ pub fn render_with_registry(
         TerraformOptions {
             display_name: None,
             registry,
-            stack_settings: settings,
+            stack_settings: fixture_settings(settings),
             registration: None,
             helm_install: None,
             supported_aws_regions: Vec::new(),

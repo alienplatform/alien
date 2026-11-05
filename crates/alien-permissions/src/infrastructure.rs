@@ -1,4 +1,9 @@
-use alien_core::{ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY};
+use alien_core::{
+    StackSettings, ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
+};
+use alien_error::AlienError;
+
+use crate::error::{ErrorData, Result};
 
 // Core types are re-exported by the generators that need them
 
@@ -43,6 +48,14 @@ pub struct PermissionContext {
     /// GCP custom-role namespace to use instead of the one derived from
     /// `stack_prefix`, for deployments whose roles already use another one.
     pub gcp_custom_role_namespace: Option<String>,
+
+    /// AWS account that owns the machine images the management identity may boot.
+    /// Setup supplies it; the control plane never does.
+    pub machine_image_owner: Option<String>,
+
+    /// The deployment is protected: it runs only what the developer signed. A protected
+    /// deployment never receives the grants kept for setups that recorded no boundary.
+    pub release_trust_protected: bool,
 }
 
 impl PermissionContext {
@@ -72,6 +85,8 @@ impl PermissionContext {
             managing_role_arn: None,
             managing_account_id: None,
             gcp_custom_role_namespace: None,
+            machine_image_owner: None,
+            release_trust_protected: false,
         }
     }
 
@@ -213,6 +228,31 @@ impl PermissionContext {
         self
     }
 
+    /// Builder pattern for the AWS account that owns bootable machine images
+    pub fn with_machine_image_owner(mut self, account_id: impl Into<String>) -> Self {
+        self.machine_image_owner = Some(account_id.into());
+        self
+    }
+
+    /// Builder pattern for a protected deployment
+    pub fn with_release_trust_protected(mut self, protected: bool) -> Self {
+        self.release_trust_protected = protected;
+        self
+    }
+
+    /// Apply what setup pins from the deployment's settings: the publisher of the machine
+    /// images the management identity may boot, and whether the deployment is protected.
+    pub fn with_setup_pins(mut self, settings: &StackSettings) -> Result<Self> {
+        if let Some(publisher) = &settings.machine_image_publisher {
+            let account_id = publisher.checked_aws_account_id().map_err(|reason| {
+                AlienError::new(ErrorData::MachineImagePublisherInvalid { reason })
+            })?;
+            self.machine_image_owner = Some(account_id.to_string());
+        }
+        self.release_trust_protected = settings.release_trust.is_some();
+        Ok(self)
+    }
+
     /// Extract AWS account ID from an IAM role ARN
     /// Format: arn:aws:iam::ACCOUNT_ID:role/ROLE_NAME
     pub fn extract_account_id_from_role_arn(role_arn: &str) -> Option<String> {
@@ -249,6 +289,7 @@ impl PermissionContext {
             "managingProjectId" => self.managing_project_id.as_deref(),
             "managingSubscriptionId" => self.managing_subscription_id.as_deref(),
             "managingResourceGroup" => self.managing_resource_group.as_deref(),
+            "machineImageOwner" => self.machine_image_owner.as_deref(),
             "stackTag" => Some(ALIEN_STACK_TAG_KEY),
             "resourceTag" => Some(ALIEN_RESOURCE_TAG_KEY),
             "managedByTag" => Some(ALIEN_MANAGED_BY_TAG_KEY),

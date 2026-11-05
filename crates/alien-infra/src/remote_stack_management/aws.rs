@@ -633,6 +633,14 @@ impl AwsRemoteStackManagementController {
             .with_aws_account_id(aws_config.account_id.clone());
 
         permission_context.aws_permissions_boundary_arn = self.permissions_boundary_arn.clone();
+        permission_context = permission_context
+            .with_setup_pins(&ctx.deployment_config.stack_settings)
+            .context(ErrorData::InfrastructureError {
+                message: "Cannot apply the deployment's pinned values to the management policy"
+                    .to_string(),
+                operation: Some("apply_management_permissions".to_string()),
+                resource_id: Some("management".to_string()),
+            })?;
 
         // Add managing role ARN from stack settings for cross-account access (required)
         let aws_management = ctx.get_aws_management_config()?

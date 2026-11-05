@@ -165,7 +165,8 @@ fn test_aws_cloudformation_compute_management_can_use_setup_security_group() {
     let context = PermissionContext::new()
         .with_stack_prefix("")
         .with_aws_region("${AWS::Region}")
-        .with_aws_account_id("${AWS::AccountId}");
+        .with_aws_account_id("${AWS::AccountId}")
+        .with_machine_image_owner("345678901234");
 
     let result = generator
         .generate_policy(permission_set, BindingTarget::Stack, &context)
@@ -246,7 +247,8 @@ fn test_aws_cloudformation_compute_management_cannot_mutate_instance_role_policy
     let context = PermissionContext::new()
         .with_stack_prefix("")
         .with_aws_region("${AWS::Region}")
-        .with_aws_account_id("${AWS::AccountId}");
+        .with_aws_account_id("${AWS::AccountId}")
+        .with_machine_image_owner("345678901234");
 
     let result = generator
         .generate_policy(permission_set, BindingTarget::Stack, &context)
@@ -266,7 +268,8 @@ fn test_aws_cloudformation_compute_management_can_terminate_only_tagged_stack_in
     let context = PermissionContext::new()
         .with_stack_prefix("")
         .with_aws_region("${AWS::Region}")
-        .with_aws_account_id("${AWS::AccountId}");
+        .with_aws_account_id("${AWS::AccountId}")
+        .with_machine_image_owner("345678901234");
 
     let result = generator
         .generate_policy(permission_set, BindingTarget::Stack, &context)
@@ -312,7 +315,8 @@ fn test_aws_cloudformation_container_provision_can_manage_setup_compute_security
         .with_resource_id("api")
         .with_resource_name("alien-manager")
         .with_aws_region("${AWS::Region}")
-        .with_aws_account_id("${AWS::AccountId}");
+        .with_aws_account_id("${AWS::AccountId}")
+        .with_machine_image_owner("345678901234");
 
     let result = generator
         .generate_policy(permission_set, BindingTarget::Resource, &context)
@@ -377,7 +381,8 @@ fn test_aws_cloudformation_resource_id_interpolates_in_conditions() {
         .with_resource_id("job")
         .with_resource_name("${AWS::StackName}-job")
         .with_aws_region("${AWS::Region}")
-        .with_aws_account_id("${AWS::AccountId}");
+        .with_aws_account_id("${AWS::AccountId}")
+        .with_machine_image_owner("345678901234");
 
     let result = generator
         .generate_policy(permission_set, BindingTarget::Resource, &context)

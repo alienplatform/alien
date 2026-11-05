@@ -48,6 +48,7 @@ fn management_policy(cloudformation: bool, binding: BindingTarget) -> AwsIamPoli
         .with_resource_name("compute")
         .with_resource_id("compute")
         .with_aws_account_id("123456789012")
+        .with_machine_image_owner("345678901234")
         .with_aws_region("us-west-2");
     let set = get_permission_set("compute-cluster/management").expect("permission set exists");
     if cloudformation {
@@ -112,6 +113,9 @@ fn management_can_launch_with_this_stacks_compute_security_group_only(
         let mut request = Request::new("ec2:RunInstances", resource).resource_tags(resource_tags);
         if !request_tags.is_empty() {
             request = request.request_tags(request_tags);
+        }
+        if resource.contains("::image/") {
+            request = request.with("ec2:Owner", "345678901234");
         }
         assert!(allowed(&policy, &request), "launch resource {resource}");
     }

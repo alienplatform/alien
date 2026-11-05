@@ -1,6 +1,6 @@
 {
   "id": "remote-stack-management/protect-management-role",
-  "description": "Refuses the management identity any change to its own IAM role",
+  "description": "Refuses the management identity any change to its own IAM role or to what setup pins for the deployment, and machine images from any publisher but the one setup recorded",
   "platforms": {
     "aws": [
       {
@@ -50,6 +50,56 @@
           "stack": {
             "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-management"]
           }
+        }
+      },
+      {
+        // Setup writes the anchor and the deployer's inputs; only the customer changes them.
+        // No grant names these paths, and a stack name starts with a letter, so no
+        // `${stackPrefix}-*` grant reaches them. The Deny still holds if an extended profile or
+        // a policy the customer attaches grants `ssm:*`. It covers every stack's paths.
+        "label": "deny-release-trust-writes",
+        "effect": "Deny",
+        "grant": {
+          "actions": [
+            "ssm:PutParameter",
+            "ssm:DeleteParameter",
+            "ssm:DeleteParameters",
+            "ssm:LabelParameterVersion",
+            "ssm:AddTagsToResource",
+            "ssm:RemoveTagsFromResource"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ssm:*:*:parameter/_release-trust/*",
+              "arn:aws:ssm:*:*:parameter/_deployer-inputs/*"
+            ]
+          }
+        }
+      },
+      {
+        // The machine image is where trust in a machine starts. The compute sets allow only the
+        // publisher's images; this Deny holds that even against another policy on the role.
+        "label": "deny-images-of-other-publishers",
+        "effect": "Deny",
+        "grant": { "actions": ["ec2:RunInstances"] },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:*::image/*"],
+            "condition": {
+              "StringNotEquals": { "ec2:Owner": "${machineImageOwner}" }
+            }
+          }
+        }
+      },
+      {
+        // Without a recorded publisher the management identity boots no image at all.
+        "label": "deny-images-without-publisher",
+        "effect": "Deny",
+        "grant": { "actions": ["ec2:RunInstances"] },
+        "binding": {
+          "stack": { "resources": ["arn:aws:ec2:*::image/*"] }
         }
       }
     ]

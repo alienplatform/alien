@@ -230,9 +230,9 @@ async fn new_releases_with_many_secret_consumers_pass() {
 
 #[tokio::test]
 async fn new_releases_whose_setup_boundary_fits_pass() {
-    // A fifth of the reads fit.
+    // A sixth of the reads fit.
     let mut stack = external_reads_stack();
-    stack.permissions.profiles["application"].0["*"].truncate(EXTERNAL_BUCKETS / 5);
+    stack.permissions.profiles["application"].0["*"].truncate(EXTERNAL_BUCKETS / 6);
     let runner = PreflightRunner::new();
     let summary = runner
         .run_build_time_preflights(&stack, Platform::Aws)
@@ -274,7 +274,12 @@ async fn new_releases_are_not_held_to_default_compute_choices() {
         .build();
     // Planning compute with default settings rejects this workload.
     let config = DeploymentConfig::builder()
-        .stack_settings(StackSettings::default())
+        .stack_settings(StackSettings {
+            machine_image_publisher: Some(alien_core::MachineImagePublisher {
+                aws_account_id: "345678901234".to_string(),
+            }),
+            ..StackSettings::default()
+        })
         .management_config(ManagementConfig::Aws(AwsManagementConfig {
             managing_role_arn: "rendered-from-template-parameter".to_string(),
         }))
@@ -311,7 +316,12 @@ async fn compute_planning_does_not_change_the_boundary() {
     stack.permissions.profiles["jobs"] =
         PermissionProfile::new().global(["compute-cluster/execute"]);
     let config = DeploymentConfig::builder()
-        .stack_settings(StackSettings::default())
+        .stack_settings(StackSettings {
+            machine_image_publisher: Some(alien_core::MachineImagePublisher {
+                aws_account_id: "345678901234".to_string(),
+            }),
+            ..StackSettings::default()
+        })
         .management_config(ManagementConfig::Aws(AwsManagementConfig {
             managing_role_arn: "rendered-from-template-parameter".to_string(),
         }))
@@ -344,6 +354,7 @@ async fn compute_planning_does_not_change_the_boundary() {
     );
 
     let context = PermissionContext::new()
+        .with_machine_image_owner("345678901234")
         .with_stack_prefix("orders-production")
         .with_aws_region("eu-west-1")
         .with_aws_account_id("123456789012")

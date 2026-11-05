@@ -632,6 +632,7 @@ async fn management_policy_documents(
     stack: Stack,
     settings: StackSettings,
 ) -> Vec<(String, Value)> {
+    let settings = super::helpers::fixture_settings(settings);
     let config = DeploymentConfig::builder()
         .stack_settings(settings.clone())
         .environment_variables(EnvironmentVariablesSnapshot {
@@ -839,7 +840,8 @@ async fn terraform_management_passes_roles_only_to_their_intended_services() {
         .await;
         for (role, intended_service) in [
             ("stack-a-volume-backups-compute", "dlm.amazonaws.com"),
-            ("stack-a-compute-node", "ec2.amazonaws.com"),
+            ("stack-a-compute", "ec2.amazonaws.com"),
+            ("stack-a-compute-instances", "ec2.amazonaws.com"),
             ("stack-a-execution-sa", "lambda.amazonaws.com"),
             ("stack-a-build-sa", "codebuild.amazonaws.com"),
         ] {
@@ -968,6 +970,7 @@ async fn flow_log_grants_stay_out_of_the_management_identity_and_the_runtime_bou
             .with_aws_account_id("123456789012")
             .with_aws_region("us-west-2")
             .with_managing_account_id("210987654321")
+            .with_machine_image_owner(super::helpers::MACHINE_IMAGE_PUBLISHER)
             .with_aws_permissions_boundary_arn(
                 "arn:aws:iam::123456789012:policy/stack-a-deployment-management-boundary",
             ),
@@ -987,6 +990,7 @@ async fn flow_log_grants_stay_out_of_the_management_identity_and_the_runtime_bou
     // on its own: the boundary only caps these, so they are what keep the runtime out.
     let runtime_context = PermissionContext::new()
         .with_stack_prefix("stack-a")
+        .with_machine_image_owner(super::helpers::MACHINE_IMAGE_PUBLISHER)
         .with_aws_account_id("123456789012")
         .with_aws_region("us-west-2")
         .with_managing_account_id("210987654321")

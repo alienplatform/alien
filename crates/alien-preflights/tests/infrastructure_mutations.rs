@@ -38,7 +38,12 @@ async fn test_remote_management_dependency_is_wired_after_all_mutations() {
 
     let stack_state = StackState::new(Platform::Aws);
     let config = DeploymentConfig::builder()
-        .stack_settings(StackSettings::default())
+        .stack_settings(StackSettings {
+            machine_image_publisher: Some(alien_core::MachineImagePublisher {
+                aws_account_id: "345678901234".to_string(),
+            }),
+            ..StackSettings::default()
+        })
         .management_config(ManagementConfig::Aws(AwsManagementConfig {
             managing_role_arn: "arn:aws:iam::111122223333:role/alien-management".to_string(),
         }))
@@ -99,7 +104,12 @@ async fn azure_remote_management_dependencies_do_not_cycle() {
 
     let stack_state = StackState::new(Platform::Azure);
     let config = DeploymentConfig::builder()
-        .stack_settings(StackSettings::default())
+        .stack_settings(StackSettings {
+            machine_image_publisher: Some(alien_core::MachineImagePublisher {
+                aws_account_id: "345678901234".to_string(),
+            }),
+            ..StackSettings::default()
+        })
         .management_config(ManagementConfig::Azure(AzureManagementConfig {
             managing_tenant_id: "management-tenant".to_string(),
             oidc_issuer: "https://issuer.example".to_string(),
@@ -218,7 +228,12 @@ async fn apply_mutations_rejects_mutation_created_cycles() {
 
     let stack_state = StackState::new(Platform::Aws);
     let config = DeploymentConfig::builder()
-        .stack_settings(StackSettings::default())
+        .stack_settings(StackSettings {
+            machine_image_publisher: Some(alien_core::MachineImagePublisher {
+                aws_account_id: "345678901234".to_string(),
+            }),
+            ..StackSettings::default()
+        })
         .environment_variables(empty_env_snapshot())
         .allow_frozen_changes(false)
         .external_bindings(ExternalBindings::default())
@@ -263,7 +278,12 @@ async fn test_azure_infrastructure_mutations() {
     // Apply mutations for Azure platform
     let stack_state = StackState::new(Platform::Azure);
     let config = DeploymentConfig::builder()
-        .stack_settings(StackSettings::default())
+        .stack_settings(StackSettings {
+            machine_image_publisher: Some(alien_core::MachineImagePublisher {
+                aws_account_id: "345678901234".to_string(),
+            }),
+            ..StackSettings::default()
+        })
         .environment_variables(empty_env_snapshot())
         .allow_frozen_changes(false)
         .external_bindings(ExternalBindings::default())
@@ -387,7 +407,12 @@ async fn an_azure_sandbox_only_stack_depends_only_on_resources_it_defines() {
         .permissions(PermissionsConfig::new())
         .build();
     let config = DeploymentConfig::builder()
-        .stack_settings(StackSettings::default())
+        .stack_settings(StackSettings {
+            machine_image_publisher: Some(alien_core::MachineImagePublisher {
+                aws_account_id: "345678901234".to_string(),
+            }),
+            ..StackSettings::default()
+        })
         .environment_variables(empty_env_snapshot())
         .allow_frozen_changes(false)
         .external_bindings(ExternalBindings::default())
@@ -453,7 +478,12 @@ async fn test_gcp_infrastructure_mutations() {
     // Apply mutations for GCP platform
     let stack_state = StackState::new(Platform::Gcp);
     let config = DeploymentConfig::builder()
-        .stack_settings(StackSettings::default())
+        .stack_settings(StackSettings {
+            machine_image_publisher: Some(alien_core::MachineImagePublisher {
+                aws_account_id: "345678901234".to_string(),
+            }),
+            ..StackSettings::default()
+        })
         .environment_variables(empty_env_snapshot())
         .allow_frozen_changes(false)
         .external_bindings(ExternalBindings::default())
@@ -505,7 +535,12 @@ async fn test_kubernetes_infrastructure_mutations() {
     // Apply mutations for Kubernetes platform
     let stack_state = StackState::new(Platform::Kubernetes);
     let config = DeploymentConfig::builder()
-        .stack_settings(StackSettings::default())
+        .stack_settings(StackSettings {
+            machine_image_publisher: Some(alien_core::MachineImagePublisher {
+                aws_account_id: "345678901234".to_string(),
+            }),
+            ..StackSettings::default()
+        })
         .environment_variables(empty_env_snapshot())
         .allow_frozen_changes(false)
         .external_bindings(ExternalBindings::default())
@@ -557,7 +592,12 @@ async fn test_no_mutations_for_aws() {
     // Apply mutations for AWS platform
     let stack_state = StackState::new(Platform::Aws);
     let config = DeploymentConfig::builder()
-        .stack_settings(StackSettings::default())
+        .stack_settings(StackSettings {
+            machine_image_publisher: Some(alien_core::MachineImagePublisher {
+                aws_account_id: "345678901234".to_string(),
+            }),
+            ..StackSettings::default()
+        })
         .environment_variables(empty_env_snapshot())
         .allow_frozen_changes(false)
         .external_bindings(ExternalBindings::default())
@@ -602,7 +642,12 @@ async fn test_empty_stack_no_mutations() {
     // Apply mutations for Azure platform
     let stack_state = StackState::new(Platform::Azure);
     let config = DeploymentConfig::builder()
-        .stack_settings(StackSettings::default())
+        .stack_settings(StackSettings {
+            machine_image_publisher: Some(alien_core::MachineImagePublisher {
+                aws_account_id: "345678901234".to_string(),
+            }),
+            ..StackSettings::default()
+        })
         .environment_variables(empty_env_snapshot())
         .allow_frozen_changes(false)
         .external_bindings(ExternalBindings::default())
@@ -650,7 +695,12 @@ async fn test_mutation_ordering() {
     // Get mutations for Azure platform
     let stack_state = StackState::new(Platform::Azure);
     let config = DeploymentConfig::builder()
-        .stack_settings(StackSettings::default())
+        .stack_settings(StackSettings {
+            machine_image_publisher: Some(alien_core::MachineImagePublisher {
+                aws_account_id: "345678901234".to_string(),
+            }),
+            ..StackSettings::default()
+        })
         .environment_variables(empty_env_snapshot())
         .allow_frozen_changes(false)
         .external_bindings(ExternalBindings::default())
@@ -748,7 +798,12 @@ async fn sandbox_consumers_get_signing_access_only_with_management_permissions()
             )
             .build();
         let config = DeploymentConfig::builder()
-            .stack_settings(StackSettings::default())
+            .stack_settings(StackSettings {
+                machine_image_publisher: Some(alien_core::MachineImagePublisher {
+                    aws_account_id: "345678901234".to_string(),
+                }),
+                ..StackSettings::default()
+            })
             .environment_variables(empty_env_snapshot())
             .compute_backend(ComputeBackend::Horizon(HorizonConfig {
                 url: "https://example.invalid".into(),
@@ -843,7 +898,12 @@ async fn internet_sandbox_key_dependencies_respect_setup_ownership() {
             stack = stack.add(sandbox, lifecycle);
         }
         let config = DeploymentConfig::builder()
-            .stack_settings(StackSettings::default())
+            .stack_settings(StackSettings {
+                machine_image_publisher: Some(alien_core::MachineImagePublisher {
+                    aws_account_id: "345678901234".to_string(),
+                }),
+                ..StackSettings::default()
+            })
             .environment_variables(empty_env_snapshot())
             .compute_backend(ComputeBackend::Horizon(HorizonConfig {
                 url: "https://example.invalid".into(),

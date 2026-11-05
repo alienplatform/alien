@@ -47,7 +47,6 @@
             "lambda:RemovePermission",
             "lambda:CreateFunctionUrlConfig",
             "lambda:DeleteFunctionUrlConfig",
-            "lambda:UpdateCodeSigningConfig",
             "lambda:TagResource",
             "lambda:UpdateFunctionCode",
             "lambda:UpdateFunctionConfiguration",
@@ -67,7 +66,6 @@
             "lambda:GetPolicy",
             "lambda:ListTags",
             "lambda:GetFunctionUrlConfig",
-            "lambda:GetCodeSigningConfig",
             "lambda:GetFunctionEventInvokeConfig"
           ]
         },

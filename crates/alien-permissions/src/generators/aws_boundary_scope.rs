@@ -135,8 +135,10 @@ mod tests {
     /// Denies. A stack's own grants outside its prefix, exact key ARNs and exempted Denies must
     /// fit in the rest of IAM's 6,144-character limit, so growing this part shrinks the room of
     /// every stack. It is today's size: a catalog change that grows it needs this budget
-    /// raised, deliberately, in review.
-    const STACK_INDEPENDENT_BUDGET: usize = 5_060;
+    /// raised, deliberately, in review. Raised from 5,060 so machine roles can read the anchor
+    /// and the deployer's inputs: their paths name the stack but sit outside its prefix, so
+    /// the boundary admits only that read there.
+    const STACK_INDEPENDENT_BUDGET: usize = 5_142;
 
     #[test]
     fn stack_independent_boundary_stays_within_its_budget() {

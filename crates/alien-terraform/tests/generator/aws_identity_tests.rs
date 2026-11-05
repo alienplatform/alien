@@ -980,6 +980,13 @@ fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
             format!("arn:aws:iam::{PARITY_ACCOUNT}:role/{PARITY_PREFIX}-*")
         ])
     );
+    // The guards on what setup pins: the anchor and inputs, and the machine image.
+    let (pinned_denies, denies): (Vec<_>, Vec<_>) = denies.into_iter().partition(|statement| {
+        let actions = statement["Action"].as_array().unwrap();
+        actions.contains(&serde_json::json!("ssm:PutParameter"))
+            || actions.contains(&serde_json::json!("ec2:RunInstances"))
+    });
+    assert_eq!(pinned_denies.len(), 2, "{pinned_denies:#?}");
     assert_eq!(denies.len(), 1, "{denies:#?}");
     // Typed, so the snapshot keeps field order whether or not a workspace build turns on
     // serde_json's `preserve_order`, which reorders the raw `Value`'s keys.

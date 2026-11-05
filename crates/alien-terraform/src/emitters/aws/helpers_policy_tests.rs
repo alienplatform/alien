@@ -106,9 +106,11 @@ fn chunking_preserves_expanded_policies_and_rejects_unsplittable_statements() {
 #[test]
 fn bounded_catalog_chunks_preserve_conditions_and_fit_the_attachment_budget() {
     let generator = AwsRuntimePermissionsGenerator::new();
-    let context = aws_terraform_permission_context().with_aws_permissions_boundary_arn(
-        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:policy/${local.resource_prefix}-deployment-management-boundary",
-    );
+    let context = aws_terraform_permission_context()
+        .with_aws_permissions_boundary_arn(
+            "arn:aws:iam::${data.aws_caller_identity.current.account_id}:policy/${local.resource_prefix}-deployment-management-boundary",
+        )
+        .with_machine_image_owner("345678901234");
     let mut statements = Vec::new();
     for id in alien_permissions::list_permission_set_ids() {
         if !id.ends_with("/provision") || id.starts_with("remote-stack-management/") {

@@ -134,6 +134,15 @@ impl StackMutation for ManagementPermissionProfileMutation {
             stack_state.platform,
             config.stack_settings.setup_management,
         );
+        require_machine_image_publisher(&stack, stack_state.platform, config).map_err(
+            |message| {
+                AlienError::new(ErrorData::StackMutationFailed {
+                    mutation_name: self.description().to_string(),
+                    message,
+                    resource_id: None,
+                })
+            },
+        )?;
 
         Ok(stack)
     }
@@ -486,6 +495,37 @@ fn add_role_guards(
     }
 }
 
+/// The sets that let the management identity launch machines.
+const LAUNCHES_MACHINES: [&str; 2] = ["compute-cluster/management", "compute-cluster/provision"];
+
+/// A management identity that can launch machines boots only the images of the publisher
+/// setup records, so on AWS setup must name one. Without a compute set the guard refuses
+/// every image instead, and no publisher is needed. An automatic setup without a publisher
+/// therefore leaves the compute sets out: a compute cluster a later release adds needs a
+/// publisher and a setup rerun.
+fn require_machine_image_publisher(
+    stack: &Stack,
+    platform: Platform,
+    config: &DeploymentConfig,
+) -> std::result::Result<(), String> {
+    if platform != Platform::Aws {
+        return Ok(());
+    }
+    let launches_machines = LAUNCHES_MACHINES
+        .into_iter()
+        .any(|id| management_profile_contains(stack.management(), id));
+    match &config.stack_settings.machine_image_publisher {
+        None if launches_machines => Err(
+            "The management identity can launch machines, so the deployment's settings must \
+             name the AWS account that publishes their machine images \
+             (machineImagePublisher.awsAccountId)"
+                .to_string(),
+        ),
+        Some(publisher) => publisher.checked_aws_account_id().map(|_| ()),
+        None => Ok(()),
+    }
+}
+
 fn management_profile_contains(
     management: &ManagementPermissions,
     permission_set_id: &str,
@@ -532,6 +572,9 @@ fn generate_auto_management_profile(
             if requested_operation
                 && resource_type != "remote-stack-management"
                 && supports_stack_grant(id, platform)
+                && !(platform == Platform::Aws
+                    && LAUNCHES_MACHINES.contains(&id)
+                    && config.stack_settings.machine_image_publisher.is_none())
             {
                 permission_set_ids.insert(id.to_string());
             }
@@ -1174,7 +1217,8 @@ mod tests {
             .with_managing_resource_group("automatic-management-test")
             .with_resource_group("automatic-management-test")
             .with_stack_prefix("automatic-management-test")
-            .with_principal_id("00000000-0000-0000-0000-000000000002");
+            .with_principal_id("00000000-0000-0000-0000-000000000002")
+            .with_machine_image_owner("345678901234");
 
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
             for id in list_permission_set_ids() {
@@ -1292,6 +1336,37 @@ mod tests {
                 .into_iter()
                 .flatten()
                 .any(|grant| grant.id() == "worker/dispatch-command"));
+        }
+    }
+
+    /// An automatic AWS grant covers compute clusters a later release adds only when setup
+    /// names the publisher of their machine images. Without one, the grant cannot launch
+    /// machines at all, and the guard refuses every image.
+    #[tokio::test]
+    async fn automatic_aws_grant_launches_machines_only_with_a_publisher() {
+        let state = StackState::new(Platform::Aws);
+        for publisher in [None, Some("345678901234")] {
+            let mut config = deployment_config_for_management_permission_test();
+            config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+            config.stack_settings.machine_image_publisher =
+                publisher.map(|account| alien_core::MachineImagePublisher {
+                    aws_account_id: account.to_string(),
+                });
+            let prepared = ManagementPermissionProfileMutation
+                .mutate(Stack::new("example".to_string()).build(), &state, &config)
+                .await
+                .expect("an automatic grant without compute clusters prepares");
+            let profile = prepared.management().profile().expect("management grant");
+            let ids: Vec<&str> = profile.0["*"].iter().map(|grant| grant.id()).collect();
+            for id in ["compute-cluster/management", "compute-cluster/provision"] {
+                assert_eq!(
+                    ids.contains(&id),
+                    publisher.is_some(),
+                    "{publisher:?}: {id}"
+                );
+            }
+            assert!(ids.contains(&"compute-cluster/heartbeat"), "{publisher:?}");
+            assert!(ids.contains(&MANAGEMENT_ROLE_GUARD), "{publisher:?}");
         }
     }
 
@@ -2564,15 +2639,40 @@ mod tests {
         };
 
         let stack_state = StackState::new(Platform::Aws);
-        let config = DeploymentConfig::builder()
-            .stack_settings(StackSettings::default())
-            .environment_variables(empty_env_snapshot())
-            .allow_frozen_changes(false)
-            .external_bindings(ExternalBindings::default())
-            .build();
+        let config = |publisher: Option<&str>| {
+            DeploymentConfig::builder()
+                .stack_settings(StackSettings {
+                    machine_image_publisher: publisher.map(|account| {
+                        alien_core::MachineImagePublisher {
+                            aws_account_id: account.to_string(),
+                        }
+                    }),
+                    ..StackSettings::default()
+                })
+                .environment_variables(empty_env_snapshot())
+                .allow_frozen_changes(false)
+                .external_bindings(ExternalBindings::default())
+                .build()
+        };
 
         let mutation = ManagementPermissionProfileMutation;
-        let result_stack = mutation.mutate(stack, &stack_state, &config).await.unwrap();
+        // The management identity launches the cluster's machines, so setup must name the
+        // publisher of their images.
+        for (publisher, reason) in [
+            (None, "machineImagePublisher.awsAccountId"),
+            (Some("12345678901"), "is not 12 digits"),
+        ] {
+            let error = mutation
+                .mutate(stack.clone(), &stack_state, &config(publisher))
+                .await
+                .expect_err("a compute cluster needs a valid machine image publisher");
+            assert_eq!(error.code, "STACK_MUTATION_FAILED");
+            assert!(error.message.contains(reason), "{}", error.message);
+        }
+        let result_stack = mutation
+            .mutate(stack, &stack_state, &config(Some("345678901234")))
+            .await
+            .unwrap();
 
         match result_stack.management() {
             ManagementPermissions::Extend(profile) => {

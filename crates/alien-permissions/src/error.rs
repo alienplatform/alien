@@ -66,6 +66,34 @@ pub enum ErrorData {
         permission_set_id: String,
     },
 
+    /// The machine image publisher in the deployment's settings is not usable.
+    #[error(
+        code = "MACHINE_IMAGE_PUBLISHER_INVALID",
+        message = "Invalid machine image publisher: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    MachineImagePublisherInvalid {
+        /// Why the publisher was refused
+        reason: String,
+    },
+
+    /// A protected deployment would receive the grants kept for setups without a boundary.
+    #[error(
+        code = "PROTECTED_DEPLOYMENT_WITHOUT_BOUNDARY",
+        message = "Permission set '{permission_set_id}' grants '{label}' only to setups that recorded no permissions boundary, and a protected deployment never receives it. Rerun setup so it records the boundary.",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    ProtectedDeploymentWithoutBoundary {
+        /// Permission set holding the legacy grant
+        permission_set_id: String,
+        /// Label of the legacy grant
+        label: String,
+    },
+
     /// Required variable not found in permission context.
     #[error(
         code = "VARIABLE_NOT_FOUND",

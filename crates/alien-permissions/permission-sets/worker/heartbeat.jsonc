@@ -12,7 +12,6 @@
             "lambda:GetPolicy",
             "lambda:ListTags",
             "lambda:GetFunctionUrlConfig",
-            "lambda:GetCodeSigningConfig",
             "lambda:GetFunctionEventInvokeConfig"
           ]
         },

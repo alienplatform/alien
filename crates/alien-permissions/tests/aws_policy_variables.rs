@@ -33,6 +33,15 @@ fn context() -> PermissionContext {
 
 // Evaluate the emitted intrinsics once, as CloudFormation does. Substituted values
 // and escaped literals are not recursively interpreted as template variables.
+fn sorted_resources(mut document: Value) -> Value {
+    for statement in document["Statement"].as_array_mut().unwrap() {
+        if let Some(resources) = statement.get_mut("Resource").and_then(Value::as_array_mut) {
+            resources.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
+        }
+    }
+    document
+}
+
 fn resolve(value: &Value) -> Value {
     if let Some(reference) = value.get("Ref") {
         return match reference.as_str().unwrap() {
@@ -244,7 +253,12 @@ fn compiled_boundary_rendering_matches_runtime_with_custom_request_variables() {
     let rendered = AwsCloudFormationPermissionsGenerator::new()
         .render_document(&symbolic)
         .unwrap();
-    assert_eq!(resolve(&rendered), runtime);
+    // IAM ignores the order of a statement's resources. The symbolic document sorts ARNs
+    // before the stack name is known, so ARNs outside the stack prefix may sort differently.
+    assert_eq!(
+        sorted_resources(resolve(&rendered)),
+        sorted_resources(runtime)
+    );
     assert!(rendered["Statement"]
         .as_array()
         .unwrap()

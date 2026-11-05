@@ -242,7 +242,8 @@ mod tests {
             .with_aws_region("us-east-1")
             .with_aws_account_id("123456789012")
             .with_stack_prefix("test-stack")
-            .with_resource_name("test");
+            .with_resource_name("test")
+            .with_machine_image_owner("210987654321");
 
         let policy = generate_aws_initial_setup_policy(&context).unwrap();
         let actions = policy
@@ -267,7 +268,8 @@ mod tests {
             .with_aws_region("us-east-1")
             .with_aws_account_id("123456789012")
             .with_stack_prefix("test-stack")
-            .with_resource_name("test");
+            .with_resource_name("test")
+            .with_machine_image_owner("210987654321");
 
         let policy = generate_aws_initial_setup_policy(&context).unwrap();
         let mut seen = HashSet::new();
@@ -287,7 +289,8 @@ mod tests {
             .with_aws_region("us-east-1")
             .with_aws_account_id("123456789012")
             .with_stack_prefix("test-stack")
-            .with_resource_name("test");
+            .with_resource_name("test")
+            .with_machine_image_owner("210987654321");
 
         let policy = generate_aws_initial_setup_policy(&context).unwrap();
         let statements = policy

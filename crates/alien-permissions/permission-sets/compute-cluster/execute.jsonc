@@ -30,6 +30,28 @@
           }
         }
       },
+      // The machine agent reads the anchor setup wrote for this deployment, and the deployer's
+      // inputs, one parameter only the customer writes. An unprotected deployment has no anchor.
+      {
+        "label": "read-release-trust",
+        "grant": {
+          "actions": ["ssm:GetParameter"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/_release-trust/${stackPrefix}",
+              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/_deployer-inputs/${stackPrefix}"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/_release-trust/${stackPrefix}",
+              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/_deployer-inputs/${stackPrefix}"
+            ]
+          }
+        }
+      },
       // Per-container SA impersonation: VM assumes any SA role in this stack
       {
         "grant": {

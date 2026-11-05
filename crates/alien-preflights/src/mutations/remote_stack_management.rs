@@ -192,6 +192,7 @@ mod tests {
     ) -> DeploymentConfig {
         DeploymentConfig {
             gcp_federation_scope: None,
+            release_statements: None,
             deployment_name: None,
             stack_settings: StackSettings {
                 deployment_model,
