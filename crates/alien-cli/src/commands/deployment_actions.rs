@@ -2,6 +2,7 @@
 //! stack inputs, health checks, machines, and machine join tokens.
 
 use std::collections::HashMap;
+use std::io::IsTerminal;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -664,20 +665,35 @@ pub(crate) fn input_values_to_save(
 }
 
 /// Reads `--secret-input-file ID=PATH` arguments into `(ID, contents)`. A
-/// `PATH` of `-` reads stdin, which only one argument can do. Every argument
-/// is checked before anything is read, so a bad command never waits on stdin.
-/// Contents are sent unchanged, line breaks included: a PEM certificate or
-/// key keeps its format, and the secret stays out of the command line.
+/// `PATH` of `-` reads stdin, which only one argument can do, and never an
+/// interactive terminal. Every argument is checked before anything is read,
+/// so a bad command never waits on stdin. Contents are sent byte for byte,
+/// including any trailing newline: a PEM certificate or key keeps its
+/// format, and the secret stays out of the command line. Empty contents are
+/// refused.
 pub(crate) fn read_secret_input_files(args: &[String]) -> Result<Vec<(String, String)>> {
     let parsed = args
         .iter()
         .map(|arg| crate::commands::deploy::parse_stack_input_arg(arg, "--secret-input-file"))
         .collect::<Result<Vec<_>>>()?;
-    if parsed.iter().filter(|(_, path)| path == "-").count() > 1 {
-        return Err(AlienError::new(ErrorData::ValidationError {
+    let invalid = |message: String| {
+        AlienError::new(ErrorData::ValidationError {
             field: "secret-input-file".to_string(),
-            message: "Only one --secret-input-file can read stdin (-).".to_string(),
-        }));
+            message,
+        })
+    };
+    let stdin_reads = parsed.iter().filter(|(_, path)| path == "-").count();
+    if stdin_reads > 1 {
+        return Err(invalid(
+            "Only one --secret-input-file can read stdin (-).".to_string(),
+        ));
+    }
+    if stdin_reads == 1 && std::io::stdin().is_terminal() {
+        return Err(invalid(
+            "--secret-input-file ID=- reads stdin, which is a terminal. \
+             Pipe the value in, for example `cat tls.pem | alien ...`, or pass a file path."
+                .to_string(),
+        ));
     }
 
     let mut values = Vec::with_capacity(parsed.len());
@@ -699,6 +715,12 @@ pub(crate) fn read_secret_input_files(args: &[String]) -> Result<Vec<(String, St
                 },
             )?
         };
+        if contents.trim().is_empty() {
+            let source = if path == "-" { "stdin" } else { path.as_str() };
+            return Err(invalid(format!(
+                "Secret input '{id}' is empty: {source} has no content."
+            )));
+        }
         values.push((id, contents));
     }
     Ok(values)
@@ -1704,7 +1726,13 @@ mod tests {
         let error = read_secret_input_files(&["tls.pem".to_string()])
             .expect_err("no id")
             .to_string();
-        assert!(error.contains("id=value"), "{error}");
+        assert!(error.contains("ID=PATH"), "{error}");
+        let empty = dir.path().join("empty.pem");
+        std::fs::write(&empty, "\n").expect("write empty file");
+        let error = read_secret_input_files(&[format!("token={}", empty.display())])
+            .expect_err("empty file")
+            .to_string();
+        assert!(error.contains("'token' is empty"), "{error}");
         // Rejected before reading: this would otherwise block on the test's stdin.
         let error = read_secret_input_files(&["cert=-".to_string(), "key=-".to_string()])
             .expect_err("stdin twice")

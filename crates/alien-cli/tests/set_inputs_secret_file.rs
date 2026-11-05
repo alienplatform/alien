@@ -25,8 +25,8 @@ MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgVGVzdEtleU1hdGVy\n\
 -----END PRIVATE KEY-----\n";
 
 fn run_set_inputs(server: &MockServer, secret_input_file: &str, stdin: Option<&str>) -> Output {
-    let home = TempDir::new().unwrap();
-    let checkout = TempDir::new().unwrap();
+    let home = TempDir::new().expect("home dir");
+    let checkout = TempDir::new().expect("checkout dir");
     let mut command = Command::new(env!("CARGO_BIN_EXE_alien"));
     command
         .current_dir(checkout.path())
@@ -52,13 +52,15 @@ fn run_set_inputs(server: &MockServer, secret_input_file: &str, stdin: Option<&s
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command.spawn().unwrap();
-    let mut child_stdin = child.stdin.take().unwrap();
+    let mut child = command.spawn().expect("alien starts");
+    let mut child_stdin = child.stdin.take().expect("piped stdin");
     if let Some(contents) = stdin {
-        child_stdin.write_all(contents.as_bytes()).unwrap();
+        child_stdin
+            .write_all(contents.as_bytes())
+            .expect("stdin written");
     }
     drop(child_stdin);
-    child.wait_with_output().unwrap()
+    child.wait_with_output().expect("alien exits")
 }
 
 fn output_text(output: &Output) -> String {
@@ -160,9 +162,9 @@ fn mock_api(api: &MockServer) -> Mock<'_> {
 fn sends_a_pem_file_with_its_line_breaks() {
     let api = MockServer::start();
     let save = mock_api(&api);
-    let dir = TempDir::new().unwrap();
+    let dir = TempDir::new().expect("temp dir");
     let path = dir.path().join("tls.pem");
-    std::fs::write(&path, PEM).unwrap();
+    std::fs::write(&path, PEM).expect("write pem");
 
     let output = run_set_inputs(&api, &format!("tlsCertificate={}", path.display()), None);
     let text = output_text(&output);
@@ -191,7 +193,7 @@ fn fails_on_a_missing_file_before_calling_the_api() {
     let any_request = api.mock(|_when, then| {
         then.status(500);
     });
-    let dir = TempDir::new().unwrap();
+    let dir = TempDir::new().expect("temp dir");
     let path = dir.path().join("missing.pem");
 
     let output = run_set_inputs(&api, &format!("tlsCertificate={}", path.display()), None);
@@ -199,5 +201,20 @@ fn fails_on_a_missing_file_before_calling_the_api() {
 
     assert!(!output.status.success(), "{text}");
     assert!(text.contains(&path.display().to_string()), "{text}");
+    any_request.assert_hits(0);
+}
+
+#[test]
+fn refuses_empty_stdin_before_calling_the_api() {
+    let api = MockServer::start();
+    let any_request = api.mock(|_when, then| {
+        then.status(500);
+    });
+
+    let output = run_set_inputs(&api, "tlsCertificate=-", Some(""));
+    let text = output_text(&output);
+
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("'tlsCertificate' is empty"), "{text}");
     any_request.assert_hits(0);
 }
