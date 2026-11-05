@@ -66,13 +66,10 @@ pub struct SetupHostingOptions {
     /// AWS regions the templates accept; empty accepts any.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supported_aws_regions: Vec<String>,
-    /// How Terraform modules report themselves; none for modules registered out of band.
+    /// How Terraform modules report themselves; none for modules registered out of band. The
+    /// setup fingerprint it carries is replaced with the one computed from the stack.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terraform_registration: Option<TerraformRegistration>,
-    /// The hosting service's fingerprint of this setup's shape, reported at registration.
-    pub setup_fingerprint: String,
-    /// Version of the scheme behind `setup_fingerprint`.
-    pub setup_fingerprint_version: u32,
 }
 
 /// Everything a setup template depends on besides the stack.
@@ -144,6 +141,9 @@ pub async fn render_setup_template(
     settings: &StackSettings,
     options: &SetupRenderOptions<'_>,
 ) -> Result<RenderedSetupTemplate> {
+    let stack_json = serde_json::to_value(source)
+        .into_alien_error()
+        .context(step(name, "read the stack as JSON"))?;
     let (platform, base_platform) = match name {
         "cloudformation" | "terraform-aws" => (Platform::Aws, None),
         "terraform-gcp" => (Platform::Gcp, None),
@@ -155,6 +155,9 @@ pub async fn render_setup_template(
     let mut compute = settings.compute.clone();
     alien_core::remove_off_platform_gated_resources(&mut source_stack, platform, compute.as_mut());
     let stack = prepare(name, source_stack.clone(), platform, base_platform, settings).await?;
+    // The hosting service computes the same value from the stack the release sends.
+    let (setup_fingerprint, setup_fingerprint_version) =
+        crate::setup_fingerprint::setup_fingerprint(&stack_json, platform.as_str());
 
     match name {
         "cloudformation" => {
@@ -167,8 +170,8 @@ pub async fn render_setup_template(
                     target: CloudFormationTarget::Aws,
                     stack_settings: settings.clone(),
                     setup_target: "aws".to_string(),
-                    setup_fingerprint: options.hosting.setup_fingerprint.clone(),
-                    setup_fingerprint_version: options.hosting.setup_fingerprint_version,
+                    setup_fingerprint: setup_fingerprint.clone(),
+                    setup_fingerprint_version,
                     registration: options.hosting.registration.clone(),
                     description: options.hosting.description.clone(),
                     management_trust: options.hosting.management_trust.clone(),
@@ -236,7 +239,13 @@ pub async fn render_setup_template(
                     display_name: None,
                     registry: options.terraform_registry,
                     stack_settings: settings.clone(),
-                    registration: options.hosting.terraform_registration.clone(),
+                    registration: options.hosting.terraform_registration.clone().map(
+                        |registration| TerraformRegistration {
+                            setup_fingerprint: setup_fingerprint.clone(),
+                            setup_fingerprint_version,
+                            ..registration
+                        },
+                    ),
                     helm_install: None,
                     supported_aws_regions: options.hosting.supported_aws_regions.clone(),
                 },

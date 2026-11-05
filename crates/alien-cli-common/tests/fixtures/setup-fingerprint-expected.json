@@ -1,0 +1,46 @@
+{
+  "minimal": {
+    "aws": {
+      "target": "aws",
+      "fingerprint": "6f8e9de0d4164b0affcc3bdcbdff4f98cf0d941367dda550ef0f0d98797c17d1",
+      "version": 1
+    },
+    "gcp": {
+      "target": "gcp",
+      "fingerprint": "3b54618f0dce855b0c84986e194f8807057c0f8fc63dc09cf874cea5cd5a1998",
+      "version": 1
+    },
+    "azure": {
+      "target": "azure",
+      "fingerprint": "4082f63c9385461764f2c355ef81d30ce88abedad3b73cf39a16d381933a5ba9",
+      "version": 1
+    },
+    "kubernetes": {
+      "target": "kubernetes",
+      "fingerprint": "8982e0d848153646881bd20d9631f186ae3b5f82fe91ce2d3f59b1c77c5242ef",
+      "version": 1
+    }
+  },
+  "live-workloads": {
+    "aws": {
+      "target": "aws",
+      "fingerprint": "bb78d7f896f512d7f3d63354ced3d2e5c38d0ede387b646fb407a008a9775a7c",
+      "version": 1
+    },
+    "gcp": {
+      "target": "gcp",
+      "fingerprint": "d2b57602bffd70431908cecbe2979654308322038fda7b6ddd976cd6dc5b3286",
+      "version": 1
+    },
+    "azure": {
+      "target": "azure",
+      "fingerprint": "2af61a9de24f16ab94da73472143658b36e7b1098901aed4f63d9567cdef2209",
+      "version": 1
+    },
+    "kubernetes": {
+      "target": "kubernetes",
+      "fingerprint": "6b7a30ab45fab8461ffcc4f108cde9ff7c59b7e5a9b6f8ac0784db794dbc631e",
+      "version": 1
+    }
+  }
+}
