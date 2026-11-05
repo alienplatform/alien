@@ -114,7 +114,20 @@ impl StsClient {
                     if let Some(mapped) =
                         Self::map_sts_error(status, text, operation_name, resource_name)
                     {
-                        Err(e.context(mapped))
+                        // Keep the exact provider code: AccessDenied is different
+                        // from an expired token or an invalid request signature.
+                        let rejection = quick_xml::de::from_str::<StsErrorResponse>(text).ok();
+                        match rejection {
+                            Some(rejection) => Err(e
+                                .context(ErrorData::RemoteRequestRejected {
+                                    service: "STS".to_string(),
+                                    http_status: status.as_u16(),
+                                    provider_code: rejection.error.code.unwrap_or_default(),
+                                    message: rejection.error.message.unwrap_or_default(),
+                                })
+                                .context(mapped)),
+                            None => Err(e.context(mapped)),
+                        }
                     } else {
                         // Couldn't parse STS error, use original error
                         Err(e)
