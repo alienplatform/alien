@@ -427,7 +427,7 @@ pub(crate) fn test_signer_list(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use alien_core::release_statement::{release_body, ReleaseOptions};
     use alien_core::{
@@ -438,19 +438,19 @@ mod tests {
 
     const DIGEST: &str = "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
 
-    fn key() -> SoftwareKey {
+    pub(crate) fn key() -> SoftwareKey {
         SoftwareKey::from_secret_bytes(&[21; 32]).unwrap()
     }
 
-    fn signer_list() -> SignedStatement {
+    pub(crate) fn signer_list() -> SignedStatement {
         test_signer_list("shop", &key())
     }
 
-    fn signing() -> ReleaseSigning {
+    pub(crate) fn signing() -> ReleaseSigning {
         test_signing("shop")
     }
 
-    fn input(id: &str, provider: &str, env: &str) -> StackInputDefinition {
+    pub(crate) fn input(id: &str, provider: &str, env: &str) -> StackInputDefinition {
         serde_json::from_value(serde_json::json!({
             "id": id, "kind": "string", "providedBy": [provider], "required": false,
             "label": id, "description": id,
@@ -459,7 +459,7 @@ mod tests {
         .unwrap()
     }
 
-    fn stack(image: &str) -> Stack {
+    pub(crate) fn stack(image: &str) -> Stack {
         let container = Container::new("api".to_string())
             .code(ContainerCode::Image {
                 image: image.to_string(),
@@ -485,7 +485,7 @@ mod tests {
         stack
     }
 
-    fn signed_release(sequence: u64, stack: &Stack) -> ReleaseInfo {
+    pub(crate) fn signed_release(sequence: u64, stack: &Stack) -> ReleaseInfo {
         let envelope = Envelope {
             kind: Kind::Release.as_str().to_string(),
             project: Some("shop".to_string()),
@@ -508,7 +508,7 @@ mod tests {
         }
     }
 
-    fn variable(name: &str, value: &str) -> EnvironmentVariable {
+    pub(crate) fn variable(name: &str, value: &str) -> EnvironmentVariable {
         EnvironmentVariable {
             name: name.to_string(),
             value: value.to_string(),
@@ -517,7 +517,7 @@ mod tests {
         }
     }
 
-    fn target(release_info: ReleaseInfo, variables: Vec<EnvironmentVariable>) -> TargetDeployment {
+    pub(crate) fn target(release_info: ReleaseInfo, variables: Vec<EnvironmentVariable>) -> TargetDeployment {
         TargetDeployment {
             signed_config: None,
             release_info,
@@ -541,12 +541,12 @@ mod tests {
         }
     }
 
-    fn local_inputs() -> serde_json::Map<String, serde_json::Value> {
+    pub(crate) fn local_inputs() -> serde_json::Map<String, serde_json::Value> {
         serde_json::from_value(serde_json::json!({ "databaseUrl": "postgres://db.internal/shop" }))
             .unwrap()
     }
 
-    fn pinned() -> String {
+    pub(crate) fn pinned() -> String {
         format!("registry.example.com/shop/api@{DIGEST}")
     }
 
@@ -665,7 +665,7 @@ mod tests {
     }
 
     /// A `config/v1` for the test deployment, signed by the release key.
-    fn signed_config(sequence: u64, deployment: &str, body: serde_json::Value) -> SignedStatement {
+    pub(crate) fn signed_config(sequence: u64, deployment: &str, body: serde_json::Value) -> SignedStatement {
         let envelope = Envelope {
             kind: Kind::Config.as_str().to_string(),
             project: Some("shop".to_string()),
@@ -680,7 +680,7 @@ mod tests {
             .unwrap()
     }
 
-    fn values(target: &TargetDeployment) -> HashMap<String, String> {
+    pub(crate) fn values(target: &TargetDeployment) -> HashMap<String, String> {
         target
             .config
             .environment_variables

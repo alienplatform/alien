@@ -549,7 +549,14 @@ async fn sync_with_manager(
     }
 
     let durable_target = match durable_target {
-        Some(target) => protect_target(state, &target).await?,
+        Some(mut target) => {
+            // The newest signed config, which may be newer than the one the
+            // target was built with (a stored target is processed again).
+            if signed_config.is_some() {
+                target.signed_config = signed_config.clone();
+            }
+            protect_target(state, &target).await?
+        }
         None => None,
     };
 
@@ -3140,5 +3147,67 @@ mod tests {
         assert_eq!(reported.error.unwrap().code, "RELEASE_REFUSED");
         assert_eq!(reported.current_release, Some(installed.clone()));
         assert_eq!(reported.target_release, Some(installed));
+    }
+
+    /// A newer signed config reaches the installed release with no new
+    /// release; the same config again changes nothing.
+    #[tokio::test]
+    async fn a_newer_signed_config_applies_the_installed_release_again() {
+        use crate::protected::tests as fixtures;
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(data_dir.path().to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .release_signing(crate::protected::test_signing("shop"))
+                .build(),
+            db: db.clone(),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let release = fixtures::signed_release(5, &fixtures::stack(&fixtures::pinned()));
+        let installed = super::protect_target(&state, &fixtures::target(release, vec![]))
+            .await
+            .unwrap()
+            .expect("the signed release is accepted");
+        super::accept_target(&state, &installed, false).await.unwrap();
+        let finish = || async {
+            let mut deployed = db.get_deployment_state().await.unwrap().unwrap();
+            deployed.status = DeploymentStatus::Running;
+            deployed.current_release = deployed.target_release.clone();
+            db.set_deployment_state(&deployed).await.unwrap();
+        };
+        finish().await;
+
+        let config = fixtures::signed_config(
+            3,
+            "dep_shop",
+            serde_json::json!({"inputs": {"logLevel": "warn"}}),
+        );
+        assert!(super::reapply_with_signed_config(&state, Some(config.clone()))
+            .await
+            .unwrap());
+        let applied = db.get_deployment_config().await.unwrap().unwrap();
+        assert!(
+            applied
+                .environment_variables
+                .variables
+                .iter()
+                .any(|variable| variable.name == "LOG_LEVEL" && variable.value == "warn"),
+            "{:?}",
+            applied.environment_variables.variables
+        );
+        finish().await;
+        assert!(!super::reapply_with_signed_config(&state, Some(config))
+            .await
+            .unwrap());
     }
 }
