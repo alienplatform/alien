@@ -8,6 +8,7 @@ import { PlatformSchema } from "./platform-schema.js";
 import { StackInputConditionSchema } from "./stack-input-condition-schema.js";
 import { StackInputDefaultValueSchema } from "./stack-input-default-value-schema.js";
 import { StackInputEnvironmentMappingSchema } from "./stack-input-environment-mapping-schema.js";
+import { StackInputFileMappingSchema } from "./stack-input-file-mapping-schema.js";
 import { StackInputGenerateSchema } from "./stack-input-generate-schema.js";
 import { StackInputKindSchema } from "./stack-input-kind-schema.js";
 import { StackInputProviderSchema } from "./stack-input-provider-schema.js";
@@ -23,6 +24,9 @@ export const StackInputDefinitionSchema = z.object({
 "description": z.string().describe("Human-facing helper text."),
 get "env"(){
                 return z.array(StackInputEnvironmentMappingSchema.describe("How a resolved stack input is injected into runtime environment variables.")).describe("Runtime env-var mappings for v1 input resolution.").optional()
+              },
+get "files"(){
+                return z.array(StackInputFileMappingSchema.describe("A file delivered from the install-owned input store after a signed release\nauthorizes its exact destination. Values are never part of the release.")).describe("Private file projections. Supported only for unconditional, deployer-only\nsecret inputs in a protected private installation.").optional()
               },
 get "generate"(){
                 return z.union([StackInputGenerateSchema, z.null()]).optional()

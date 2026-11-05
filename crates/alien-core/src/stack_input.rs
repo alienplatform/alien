@@ -302,6 +302,7 @@ impl StackInputDefinition {
         default: Option<bool>,
     ) -> Self {
         Self {
+            files: Vec::new(),
             id: id.to_string(),
             kind: StackInputKind::Boolean,
             when: None,
