@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 alien-aws-clients = { workspace = true }
 alien-client-core = { workspace = true }
+alien-core = { workspace = true }
 alien-error = { workspace = true }
 alien-signing = { workspace = true }
 async-trait = { workspace = true }

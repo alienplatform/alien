@@ -27,6 +27,7 @@ async fn main() -> ExitCode {
             SetupPins {
                 aws_publisher: Some(publisher.clone()),
                 aws_verifier_image: Some(verifier.clone()),
+                operator_digest: Some(format!("sha256:{}", "ef".repeat(32))),
             },
         ),
         _ => {

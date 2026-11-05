@@ -281,23 +281,25 @@ fn emit_protection(
             })
         })?;
     let excluded_actions = deny_excluded_actions(roles)?;
-    let gate = format!("{label}_gate");
+    refuse_management_secret_writes(roles)?;
+    let verifier = format!("{label}_verifier");
     fragment.resource_blocks.push(resource_block(
         "azurerm_user_assigned_identity",
-        &gate,
+        &verifier,
         [
             attr(
                 "name",
-                expr::template("${local.resource_prefix}-gate-identity".to_string()),
+                expr::template("${local.resource_prefix}-verifier".to_string()),
             ),
             attr(
                 "resource_group_name",
                 expr::raw("var.azure_resource_group_name"),
             ),
             attr("location", expr::raw("var.azure_location")),
-            attr("tags", tags(ctx, "gate")),
+            attr("tags", tags(ctx, "verifier")),
         ],
     ));
+    emit_verifier_grants(fragment, label, &verifier, resource_group)?;
     let group =
         |attribute: &str| expr::traversal(["azurerm_resource_group", resource_group, attribute]);
     let template = expr::object([
@@ -349,7 +351,7 @@ fn emit_protection(
                         (
                             "description",
                             Expression::String(
-                                "Only the gate writes what runs code in this deployment."
+                                "Only the verifier writes what runs code in this install."
                                     .to_string(),
                             ),
                         ),
@@ -371,7 +373,7 @@ fn emit_protection(
                                     Expression::Array(vec![
                                         expr::traversal([
                                             "azurerm_user_assigned_identity",
-                                            &gate,
+                                            &verifier,
                                             "principal_id",
                                         ]),
                                         expr::traversal([
@@ -392,6 +394,196 @@ fn emit_protection(
         ],
     ));
     Ok(())
+}
+
+/// What the verifier may do in the install's group (byoc review §1). No `runCommand` and no
+/// `runCommands/write`: those run a script on a machine outside what the release signed.
+const AZURE_VERIFIER_ACTIONS: &[&str] = &[
+    "Microsoft.App/containerApps/read",
+    "Microsoft.App/containerApps/write",
+    "Microsoft.App/containerApps/delete",
+    "Microsoft.App/containerApps/revisions/activate/action",
+    "Microsoft.App/containerApps/revisions/deactivate/action",
+    "Microsoft.App/containerApps/revisions/restart/action",
+    "Microsoft.App/jobs/read",
+    "Microsoft.App/jobs/write",
+    "Microsoft.App/jobs/delete",
+    "Microsoft.App/jobs/start/action",
+    "Microsoft.App/managedEnvironments/join/action",
+    "Microsoft.Compute/virtualMachineScaleSets/read",
+    "Microsoft.Compute/virtualMachineScaleSets/write",
+    "Microsoft.Compute/virtualMachineScaleSets/delete",
+    "Microsoft.Compute/virtualMachineScaleSets/manualupgrade/action",
+    "Microsoft.Compute/virtualMachineScaleSets/reimage/action",
+    "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/read",
+    "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/write",
+    "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/delete",
+    "Microsoft.Compute/virtualMachineScaleSets/extensions/read",
+    "Microsoft.Compute/virtualMachineScaleSets/extensions/write",
+    "Microsoft.Compute/virtualMachineScaleSets/extensions/delete",
+    "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
+    "Microsoft.Network/virtualNetworks/subnets/join/action",
+    "Microsoft.Resources/subscriptions/resourceGroups/read",
+];
+
+/// Built-in role that reads and writes Key Vault secrets.
+const KEY_VAULT_SECRETS_OFFICER: &str = "b86a8fe4-44ce-4948-aee5-eccb2c155cd7";
+
+/// The verifier's custom role on the group, and the signing vault: a Key Vault only setup and
+/// the verifier write, holding the ledger. The deny covers the vault's control plane; its data
+/// plane is closed by role: management holds no secret writes in the group (refused above).
+fn emit_verifier_grants(
+    fragment: &mut TfFragment,
+    label: &str,
+    verifier: &str,
+    resource_group: &str,
+) -> Result<()> {
+    let group_id = expr::traversal(["azurerm_resource_group", resource_group, "id"]);
+    let principal = expr::traversal(["azurerm_user_assigned_identity", verifier, "principal_id"]);
+    let role = format!("{label}_verifier");
+    fragment.resource_blocks.push(resource_block(
+        "azurerm_role_definition",
+        &role,
+        [
+            attr("name", expr::template("${local.resource_prefix}-verifier".to_string())),
+            attr("scope", group_id.clone()),
+            attr(
+                "description",
+                Expression::String(
+                    "Applies only releases the vendor signed: the install's container apps, jobs and scale sets."
+                        .to_string(),
+                ),
+            ),
+            nested(block(
+                "permissions",
+                [attr("actions", string_array(
+                    AZURE_VERIFIER_ACTIONS.iter().map(|action| action.to_string()).collect(),
+                ))],
+            )),
+            attr("assignable_scopes", Expression::Array(vec![group_id.clone()])),
+        ],
+    ));
+    fragment.resource_blocks.push(resource_block(
+        "azurerm_role_assignment",
+        &role,
+        [
+            attr("scope", group_id.clone()),
+            attr(
+                "role_definition_id",
+                expr::traversal(["azurerm_role_definition", &role, "role_definition_resource_id"]),
+            ),
+            attr("principal_id", principal.clone()),
+            attr("principal_type", Expression::String("ServicePrincipal".to_string())),
+        ],
+    ));
+
+    let vault = format!("{label}_signing");
+    let current = format!("{label}_current");
+    fragment.resource_blocks.push(resource_block(
+        "random_id",
+        &format!("{vault}_name_suffix"),
+        [attr("byte_length", Expression::Number(hcl::Number::from(3i64)))],
+    ));
+    fragment.resource_blocks.push(resource_block(
+        "azurerm_key_vault",
+        &vault,
+        [
+            attr(
+                "name",
+                expr::raw(format!(
+                    "format(\"%s-%s\", trim(substr(lower(replace(\"${{local.resource_prefix}}-signing\", \"_\", \"-\")), 0, 17), \"-\"), random_id.{vault}_name_suffix.hex)"
+                )),
+            ),
+            attr("resource_group_name", expr::raw("var.azure_resource_group_name")),
+            attr("location", expr::raw("var.azure_location")),
+            attr(
+                "tenant_id",
+                expr::raw(format!("data.azurerm_client_config.{current}.tenant_id")),
+            ),
+            attr("sku_name", Expression::String("standard".to_string())),
+            attr("rbac_authorization_enabled", Expression::Bool(true)),
+            attr("purge_protection_enabled", Expression::Bool(false)),
+            attr("soft_delete_retention_days", Expression::Number(hcl::Number::from(7i64))),
+            attr(
+                "depends_on",
+                Expression::Array(vec![expr::traversal(["azurerm_resource_group", resource_group])]),
+            ),
+        ],
+    ));
+    for (name, member) in [
+        ("setup", expr::raw(format!("data.azurerm_client_config.{current}.object_id"))),
+        ("verifier", principal),
+    ] {
+        fragment.resource_blocks.push(resource_block(
+            "azurerm_role_assignment",
+            &format!("{vault}_{name}"),
+            [
+                attr("scope", expr::traversal(["azurerm_key_vault", &vault, "id"])),
+                attr(
+                    "role_definition_id",
+                    expr::template(format!(
+                        "/subscriptions/${{var.azure_subscription_id}}/providers/Microsoft.Authorization/roleDefinitions/{KEY_VAULT_SECRETS_OFFICER}"
+                    )),
+                ),
+                attr("principal_id", member),
+            ],
+        ));
+    }
+    let ledger = alien_signing::Ledger::new("${local.resource_prefix}").to_json();
+    fragment.resource_blocks.push(resource_block(
+        "azurerm_key_vault_secret",
+        &format!("{vault}_ledger"),
+        [
+            attr(
+                "name",
+                Expression::String(alien_signing::settings::names::AZURE_LEDGER_SECRET.to_string()),
+            ),
+            attr("key_vault_id", expr::traversal(["azurerm_key_vault", &vault, "id"])),
+            attr(
+                "value",
+                expr::template(ledger.replace('\\', "\\\\").replace('"', "\\\"")),
+            ),
+            // The ledger only rises; the verifier writes new versions.
+            nested(block(
+                "lifecycle",
+                [attr("ignore_changes", Expression::Array(vec![expr::raw("value")]))],
+            )),
+            attr(
+                "depends_on",
+                Expression::Array(vec![expr::traversal([
+                    "azurerm_role_assignment",
+                    &format!("{vault}_setup"),
+                ])]),
+            ),
+        ],
+    ));
+    Ok(())
+}
+
+/// Key Vault secret writes at the group or subscription would reach the signing vault, whose data plane the
+/// deny doesn't cover.
+fn refuse_management_secret_writes(roles: &AzureManagementRoles) -> Result<()> {
+    let writes: Vec<&String> = roles
+        .roles
+        .iter()
+        .flat_map(|role| role.data_actions.iter())
+        .filter(|action| {
+            let action = action.to_ascii_lowercase();
+            action.starts_with("microsoft.keyvault/vaults/secrets/")
+                && !action.ends_with("/readmetadata/action")
+                || action == "microsoft.keyvault/vaults/*"
+                || action == "*"
+        })
+        .collect();
+    if writes.is_empty() {
+        return Ok(());
+    }
+    Err(alien_error::AlienError::new(ErrorData::OperationNotSupported {
+        operation: "protect this Azure install".to_string(),
+        reason: format!(
+            "the management identity would hold {writes:?} on every Key Vault in the group, including the one holding the signing ledger"
+        ),
+    }))
 }
 
 /// The writes and deletes the management roles grant that change only infrastructure running no
