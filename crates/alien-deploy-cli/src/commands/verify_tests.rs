@@ -8,19 +8,25 @@ use chrono::Duration;
 const PREFIX: &str = "acme-prod";
 const STACK_ID: &str =
     "arn:aws:cloudformation:us-east-1:111122223333:stack/acme-prod/0f3a5c00-9b1e-11ef-8a4b-0e5d2f6a1b27";
-const PROJECT: &str = "prj_acme";
+pub(crate) const PROJECT: &str = "prj_acme";
 
-fn now() -> DateTime<Utc> {
+pub(crate) fn now() -> DateTime<Utc> {
     DateTime::parse_from_rfc3339("2026-11-05T12:00:00Z")
         .unwrap()
         .with_timezone(&Utc)
 }
 
-fn key(seed: u8) -> SecretKey {
+pub(crate) fn key(seed: u8) -> SecretKey {
     SecretKey::from_secret_bytes(&[seed; 32]).unwrap()
 }
 
-fn signer(id: &str, seed: u8, kind: SignerKind, roles: &[Role], label: Option<&str>) -> Signer {
+pub(crate) fn signer(
+    id: &str,
+    seed: u8,
+    kind: SignerKind,
+    roles: &[Role],
+    label: Option<&str>,
+) -> Signer {
     Signer {
         id: id.to_string(),
         key: key(seed).public_key().as_str().to_string(),
@@ -30,7 +36,7 @@ fn signer(id: &str, seed: u8, kind: SignerKind, roles: &[Role], label: Option<&s
     }
 }
 
-fn signed<B: serde::Serialize>(
+pub(crate) fn signed<B: serde::Serialize>(
     kind: Kind,
     sequence: u64,
     list_version: u64,
@@ -58,7 +64,7 @@ fn signed<B: serde::Serialize>(
 }
 
 /// Version 1: alice's laptop (admin), CI and the recovery key.
-fn genesis() -> SignedStatement {
+pub(crate) fn genesis() -> SignedStatement {
     signed(
         Kind::SignerList,
         1,
@@ -91,7 +97,7 @@ fn genesis() -> SignedStatement {
     )
 }
 
-fn fingerprint() -> String {
+pub(crate) fn fingerprint() -> String {
     alien_signing::fingerprint(&genesis().open().unwrap().digest)
 }
 

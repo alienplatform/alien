@@ -85,3 +85,5 @@ libc = "0.2"
 
 [dev-dependencies]
 httpmock = { workspace = true }
+alien-cloudformation = { workspace = true }
+alien-terraform = { workspace = true }

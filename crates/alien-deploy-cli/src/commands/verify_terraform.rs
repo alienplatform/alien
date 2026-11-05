@@ -451,3 +451,7 @@ pub(crate) fn key_vault_value(secret: &Value) -> Result<Vec<u8>> {
         .map(|value| value.as_bytes().to_vec())
         .ok_or_else(|| failed("the Key Vault secret has no value"))
 }
+
+#[cfg(test)]
+#[path = "verify_terraform_tests.rs"]
+mod tests;

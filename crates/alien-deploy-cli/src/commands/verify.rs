@@ -1074,4 +1074,4 @@ fn locked_policy(existing: Option<&str>, resources: &[String]) -> Result<String>
 
 #[cfg(test)]
 #[path = "verify_tests.rs"]
-mod tests;
+pub(crate) mod tests;
