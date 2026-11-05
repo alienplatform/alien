@@ -94,6 +94,22 @@ pub enum ErrorData {
         label: String,
     },
 
+    /// A protected deployment's management identity would receive a predefined role that holds
+    /// what only the gate may do.
+    #[error(
+        code = "PROTECTED_MANAGEMENT_ROLE_REFUSED",
+        message = "Permission set '{permission_set_id}' grants '{role}', which holds what only the gate may do in a protected deployment",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    ProtectedManagementRoleRefused {
+        /// Permission set holding the role
+        permission_set_id: String,
+        /// The refused predefined role
+        role: String,
+    },
+
     /// Required variable not found in permission context.
     #[error(
         code = "VARIABLE_NOT_FOUND",

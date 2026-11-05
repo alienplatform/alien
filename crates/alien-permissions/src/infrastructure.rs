@@ -53,8 +53,10 @@ pub struct PermissionContext {
     /// Setup supplies it; the control plane never does.
     pub machine_image_owner: Option<String>,
 
-    /// The deployment is protected: it runs only what the developer signed. A protected
-    /// deployment never receives the grants kept for setups that recorded no boundary.
+    /// The deployment is protected: it runs only what the developer signed. Set only when
+    /// rendering the management identity. It never receives the grants kept for setups that
+    /// recorded no boundary, and on GCP and Azure it loses what only the gate may do
+    /// (see [`crate::generators::gate_owned`]).
     pub release_trust_protected: bool,
 }
 

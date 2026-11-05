@@ -1,7 +1,8 @@
 use crate::{
     error::{ErrorData, Result},
-    generators::labels::{
-        entry_description, entry_snake_label, entry_title_label, has_explicit_label,
+    generators::{
+        gate_owned::{gcp_gate_owned, gcp_refused_predefined_role},
+        labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
     },
     variables::VariableInterpolator,
     BindingTarget, PermissionContext,
@@ -217,12 +218,13 @@ impl GcpRuntimePermissionsGenerator {
             let Some(permissions) = gcp_residual_permissions(&platform_permission.grant) else {
                 continue;
             };
+            let permissions = granted_permissions(permissions, context);
             if permissions.is_empty() {
                 continue;
             }
             let role = self.custom_role_for_permissions(
                 permission_set,
-                permissions.clone(),
+                permissions,
                 context,
                 role_suffix(
                     &platform_permission.grant,
@@ -372,6 +374,16 @@ impl GcpRuntimePermissionsGenerator {
 
             if let Some(predefined_roles) = &platform_permission.grant.predefined_roles {
                 for predefined_role in predefined_roles {
+                    if context.release_trust_protected
+                        && gcp_refused_predefined_role(predefined_role)
+                    {
+                        return Err(alien_error::AlienError::new(
+                            ErrorData::ProtectedManagementRoleRefused {
+                                permission_set_id: permission_set.id.clone(),
+                                role: predefined_role.clone(),
+                            },
+                        ));
+                    }
                     bindings.push(GcpIamBinding {
                         role: predefined_role.clone(),
                         members: vec![service_account.clone()],
@@ -386,13 +398,14 @@ impl GcpRuntimePermissionsGenerator {
             let Some(permissions) = gcp_residual_permissions(&platform_permission.grant) else {
                 continue;
             };
+            let permissions = granted_permissions(permissions, context);
             if permissions.is_empty() {
                 continue;
             }
 
             let custom_role = self.custom_role_for_permissions(
                 permission_set,
-                permissions.clone(),
+                permissions,
                 context,
                 role_suffix(
                     &platform_permission.grant,
@@ -457,6 +470,17 @@ impl GcpRuntimePermissionsGenerator {
             expression: interpolated_expression,
         })
     }
+}
+
+/// The permissions of a catalog entry the rendered identity receives: all of them, except that a
+/// protected deployment's management identity never receives what only the gate may do. The
+/// entry keeps its role ID either way, so a role loses permissions instead of being replaced.
+fn granted_permissions(permissions: &[String], context: &PermissionContext) -> Vec<String> {
+    permissions
+        .iter()
+        .filter(|permission| !(context.release_trust_protected && gcp_gate_owned(permission)))
+        .cloned()
+        .collect()
 }
 
 fn gcp_residual_permissions(grant: &PermissionGrant) -> Option<&Vec<String>> {

@@ -1,7 +1,8 @@
 use crate::{
     error::{ErrorData, Result},
-    generators::labels::{
-        entry_description, entry_snake_label, entry_title_label, has_explicit_label,
+    generators::{
+        gate_owned::azure_gate_owned_action,
+        labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
     },
     variables::VariableInterpolator,
     BindingTarget, PermissionContext,
@@ -391,7 +392,7 @@ impl AzureRuntimePermissionsGenerator {
             declares_target = true;
 
             if let Some(actions) = &platform_permission.grant.actions {
-                all_actions.extend(actions.clone());
+                all_actions.extend(granted_actions(actions, context));
             }
             if let Some(data_actions) = &platform_permission.grant.data_actions {
                 all_data_actions.extend(data_actions.clone());
@@ -512,7 +513,7 @@ impl AzureRuntimePermissionsGenerator {
                 }
             }
 
-            if has_residual_azure_permissions(&platform_permission.grant) {
+            if grants_residual_azure_permissions(&platform_permission.grant, context) {
                 let entry_label = entry_snake_label(
                     platform_permission.label.as_deref(),
                     &platform_permission.grant,
@@ -594,11 +595,10 @@ impl AzureRuntimePermissionsGenerator {
             })
         })?;
 
-        let mut actions = platform_permission
-            .grant
-            .actions
-            .clone()
-            .unwrap_or_default();
+        let mut actions = granted_actions(
+            platform_permission.grant.actions.as_deref().unwrap_or_default(),
+            context,
+        );
         let mut data_actions = platform_permission
             .grant
             .data_actions
@@ -778,6 +778,28 @@ impl Default for AzureRuntimePermissionsGenerator {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The actions of a catalog entry the rendered identity receives: all of them, except that a
+/// protected deployment's management identity never receives what only the gate may do.
+fn granted_actions(actions: &[String], context: &PermissionContext) -> Vec<String> {
+    actions
+        .iter()
+        .filter(|action| !(context.release_trust_protected && azure_gate_owned_action(action)))
+        .cloned()
+        .collect()
+}
+
+/// Whether the entry grants the rendered identity any action or data action.
+fn grants_residual_azure_permissions(grant: &PermissionGrant, context: &PermissionContext) -> bool {
+    grant
+        .actions
+        .as_ref()
+        .is_some_and(|actions| !granted_actions(actions, context).is_empty())
+        || grant
+            .data_actions
+            .as_ref()
+            .is_some_and(|actions| !actions.is_empty())
 }
 
 fn has_residual_azure_permissions(grant: &PermissionGrant) -> bool {
