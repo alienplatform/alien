@@ -25,9 +25,7 @@ fn pins() -> SetupPins {
 
 fn hosting() -> SetupHostingOptions {
     serde_json::from_value(serde_json::json!({
-        "registration": { "mode": "outputsFallback" },
-        "setupFingerprint": "sha256:setup",
-        "setupFingerprintVersion": 1
+        "registration": { "mode": "outputsFallback" }
     }))
     .expect("hosting options parse")
 }
@@ -253,17 +251,13 @@ async fn hosting_options_cannot_weaken_the_protected_locks() {
                 "requireExternalId": true,
                 "allowedManagingRoleArns": ["arn:aws:iam::999999999999:role/anyone"]
             },
-            "supportedAwsRegions": ["us-east-1"],
-            "setupFingerprint": "${AWS::NoValue}",
-            "setupFingerprintVersion": 4294967295u32
+            "supportedAwsRegions": ["us-east-1"]
         }),
         serde_json::json!({
             "registration": {
                 "mode": "customResource",
                 "lambdaArn": "arn:aws:lambda:us-east-1:999999999999:function:anything"
-            },
-            "setupFingerprint": "x",
-            "setupFingerprintVersion": 0
+            }
         }),
     ];
     for options in hostile {
@@ -296,10 +290,35 @@ async fn hosting_options_cannot_weaken_the_protected_locks() {
 fn hosting_options_refuse_unknown_fields() {
     let error = serde_json::from_value::<SetupHostingOptions>(serde_json::json!({
         "registration": { "mode": "outputsFallback" },
-        "setupFingerprint": "x",
-        "setupFingerprintVersion": 1,
         "extraPolicies": []
     }))
     .expect_err("an unknown hosting option is refused");
     assert!(error.to_string().contains("extraPolicies"), "{error}");
+}
+
+/// The hosting service computes the same fingerprint from the stack JSON; these values come from
+/// its implementation for the fixture stacks.
+#[test]
+fn setup_fingerprints_match_the_hosting_service() {
+    let stacks: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/setup-fingerprint-stacks.json"))
+            .expect("fixture stacks");
+    let expected: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/setup-fingerprint-expected.json"))
+            .expect("expected fingerprints");
+    let mut checked = 0;
+    for (name, stack) in &stacks {
+        for platform in ["aws", "gcp", "azure", "kubernetes"] {
+            let (fingerprint, version) =
+                alien_cli_common::setup_fingerprint::setup_fingerprint(stack, platform);
+            assert_eq!(
+                fingerprint,
+                expected[name][platform]["fingerprint"].as_str().unwrap(),
+                "{name} {platform}"
+            );
+            assert_eq!(version, 1);
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 8);
 }

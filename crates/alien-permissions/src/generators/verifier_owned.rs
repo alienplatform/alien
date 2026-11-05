@@ -228,3 +228,22 @@ pub fn azure_write_or_delete(action: &str) -> bool {
     let action = action.to_ascii_lowercase();
     action.ends_with("/write") || action.ends_with("/delete")
 }
+
+/// Whether the Azure `action` writes or deletes what runs code or a Key Vault, or is a wildcard
+/// reaching such writes: a protected install's management identity holds none of these.
+pub fn azure_changes_what_runs(action: &str) -> bool {
+    // A vault write could turn the signing vault to access policies and open the ledger.
+    let vault = action.to_ascii_lowercase().starts_with("microsoft.keyvault/vaults");
+    if azure_write_or_delete(action) {
+        return vault || !azure_runs_no_code(action);
+    }
+    let Some(prefix) = action.strip_suffix('*') else {
+        return false;
+    };
+    let prefix = prefix.to_ascii_lowercase();
+    prefix.is_empty()
+        || AZURE_RUNS_CODE.iter().any(|path| {
+            let path = path.to_ascii_lowercase();
+            path.starts_with(&prefix) || prefix.starts_with(&path)
+        })
+}

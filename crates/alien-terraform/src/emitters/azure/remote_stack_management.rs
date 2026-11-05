@@ -246,19 +246,18 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
 /// Deployment stack deny settings hold at most this many excluded actions.
 const DENY_SETTINGS_MAX_EXCLUDED_ACTIONS: usize = 200;
 
-/// Protect a deployment's resource group: a subscription-scoped deployment stack manages the group
-/// and denies every write and delete in it, to every principal but two: the gate, which alone
-/// writes what runs code, and the principal running setup, so setup can run again. Removing the
-/// deny needs `Microsoft.Resources/deploymentStacks/manageDenySetting/action` at the
-/// subscription, which the management identity never holds. Its own writes and deletes that
-/// change only infrastructure running no code are excluded from the deny, so it keeps them.
+/// Protect an install's resource group: a subscription-scoped deployment stack manages the group
+/// and denies writes and deletes of the group itself (its tags hold the signing settings) to
+/// every principal but two: the verifier and the principal running setup, so setup can run
+/// again. Removing the deny needs `Microsoft.Resources/deploymentStacks/manageDenySetting/action`
+/// at the subscription, which the management identity never holds.
 ///
-/// A deny cannot refuse an `/action`; the management roles leave out the actions that run code
-/// (see `alien_permissions::generators::verifier_owned`).
+/// Azure doesn't carry this deny to the resources in the group (the deny assignment it creates
+/// says `doNotApplyToChildScopes`, whatever the stack asks; seen on real Azure), so the
+/// management roles themselves leave out every write and delete of what runs code, Key Vault
+/// writes and the actions that run code (see `alien_permissions::generators::verifier_owned`).
 ///
-/// To check a change here against Azure, render a protected stack, run `terraform apply` in a
-/// subscription, and as the management identity try to update the scale set and create a
-/// Container Apps job in the group: both must fail with `DenyAssignmentAuthorizationFailed`.
+/// To check a change here against Azure, run `scripts/azure-setup-locks/check.py`.
 fn emit_protection(
     ctx: &EmitContext<'_>,
     fragment: &mut TfFragment,
@@ -430,8 +429,8 @@ const AZURE_VERIFIER_ACTIONS: &[&str] = &[
 const KEY_VAULT_SECRETS_OFFICER: &str = "b86a8fe4-44ce-4948-aee5-eccb2c155cd7";
 
 /// The verifier's custom role on the group, and the signing vault: a Key Vault only setup and
-/// the verifier write, holding the ledger. The deny covers the vault's control plane; its data
-/// plane is closed by role: management holds no secret writes in the group (refused above).
+/// the verifier write, holding the ledger. Management holds no vault writes on a protected
+/// install and no secret writes in the group (refused above).
 fn emit_verifier_grants(
     fragment: &mut TfFragment,
     label: &str,
@@ -594,6 +593,9 @@ fn deny_excluded_actions(roles: &AzureManagementRoles) -> Result<Vec<String>> {
         .iter()
         .flat_map(|role| role.actions.iter())
         .filter(|action| azure_write_or_delete(action) && azure_runs_no_code(action))
+        // A vault write could turn the signing vault to access policies and grant management
+        // its secrets, so on a protected install vaults stay under the deny.
+        .filter(|action| !action.to_ascii_lowercase().starts_with("microsoft.keyvault/vaults"))
         .cloned()
         .collect();
     if actions.len() > DENY_SETTINGS_MAX_EXCLUDED_ACTIONS {

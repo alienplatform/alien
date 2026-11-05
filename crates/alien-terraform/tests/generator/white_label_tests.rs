@@ -33,7 +33,7 @@ use alien_preflights::runner::PreflightRunner;
 use alien_terraform::TerraformTarget;
 use serde_json::Value;
 
-use super::helpers::render;
+use super::helpers::{render, test_pins};
 
 /// The vendor name, matched case-insensitively.
 const VENDOR: &str = "alien";
@@ -207,7 +207,7 @@ fn cloudformation(stack: &Stack, source: &Stack, settings: &StackSettings) -> Va
     let template = generate_cloudformation_template(
         stack,
         CloudFormationOptions {
-            pins: alien_core::SetupPins::compiled_in(),
+            pins: test_pins(),
             registry: &registry,
             source_stack: source,
             target: CloudFormationTarget::Aws,

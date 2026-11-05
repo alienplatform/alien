@@ -2,6 +2,7 @@
 
 pub mod airgap;
 pub mod network;
+pub mod setup_fingerprint;
 pub mod setup_item;
 pub mod setup_templates;
 pub mod tui;

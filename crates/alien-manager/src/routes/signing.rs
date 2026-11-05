@@ -248,8 +248,6 @@ fn manager_setup_hosting() -> SetupHostingOptions {
         management_trust: ManagementTrustOptions::default(),
         supported_aws_regions: Vec::new(),
         terraform_registration: None,
-        setup_fingerprint: "release".to_string(),
-        setup_fingerprint_version: 1,
     }
 }
 
