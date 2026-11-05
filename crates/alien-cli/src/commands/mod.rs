@@ -28,6 +28,7 @@ pub mod release;
 pub mod release_channels_manager;
 pub mod releases;
 pub mod render;
+pub mod signed_session;
 pub mod signing;
 pub mod status;
 pub mod tokens;

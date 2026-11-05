@@ -25,6 +25,7 @@ use std::collections::BTreeMap;
 use std::io::{IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{
@@ -136,6 +137,13 @@ pub struct DebugShellArgs {
     #[arg(long, conflicts_with = "resource")]
     pub machine: Option<String>,
 
+    /// Why you open the session; recorded in the machine's transcript.
+    #[arg(long)]
+    pub reason: Option<String>,
+
+    #[command(flatten)]
+    pub signer: crate::signing::SignerArgs,
+
     /// Emit errors as JSON.
     #[arg(long)]
     pub json: bool,
@@ -157,6 +165,13 @@ pub struct DebugExecArgs {
     /// Timeout in seconds for the remote command.
     #[arg(long, default_value_t = 120)]
     pub timeout_seconds: u64,
+
+    /// Why you open the session; recorded in the machine's transcript.
+    #[arg(long)]
+    pub reason: Option<String>,
+
+    #[command(flatten)]
+    pub signer: crate::signing::SignerArgs,
 
     /// Emit structured JSON with captured output.
     #[arg(long)]
@@ -408,7 +423,19 @@ async fn runtime_shell_task(args: DebugShellArgs, ctx: ExecutionMode) -> Result<
             run_runtime_shell(tunnel, &args.deployment).await
         }
         DebugSessionResponse::RemoteExec(session) => {
-            run_remote_exec_attach(session, None, false).await
+            let signing = crate::commands::signed_session::SessionSigning {
+                ctx: ctx.clone(),
+                deployment_id: deployment_id.clone(),
+                machine: args.machine.clone(),
+                argv: None,
+                tty: true,
+                reason: args
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "interactive shell".to_string()),
+                signer: args.signer.clone(),
+            };
+            run_remote_exec_attach(session, None, false, Some(signing)).await
         }
         _ => Err(AlienError::new(ErrorData::ApiRequestFailed {
             message: "Manager returned a non-runtime debug session for `alien debug shell`"
@@ -439,7 +466,25 @@ async fn runtime_exec_task(args: DebugExecArgs, ctx: ExecutionMode) -> Result<()
             run_runtime_exec(tunnel, args.cmd, args.timeout_seconds, args.json).await
         }
         DebugSessionResponse::RemoteExec(session) => {
-            run_remote_exec_attach(session, Some(args.timeout_seconds), args.json).await
+            let signing = crate::commands::signed_session::SessionSigning {
+                ctx: ctx.clone(),
+                deployment_id: deployment_id.clone(),
+                machine: args.machine.clone(),
+                argv: Some(args.cmd.clone()),
+                tty: false,
+                reason: args
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "remote command".to_string()),
+                signer: args.signer.clone(),
+            };
+            run_remote_exec_attach(
+                session,
+                Some(args.timeout_seconds),
+                args.json,
+                Some(signing),
+            )
+            .await
         }
         _ => Err(AlienError::new(ErrorData::ApiRequestFailed {
             message: "Manager returned a non-runtime debug session for `alien debug exec`"
@@ -770,6 +815,7 @@ async fn run_remote_exec_attach(
     session: RemoteExecDebugSession,
     timeout_seconds: Option<u64>,
     json: bool,
+    signing: Option<crate::commands::signed_session::SessionSigning>,
 ) -> Result<()> {
     let ws_url = remote_exec_ws_url(&session)?;
     let (socket, _) = connect_async(ws_url.as_str())
@@ -803,14 +849,35 @@ async fn run_remote_exec_attach(
     // exit/error/timeout so the writer cannot close the WebSocket first.
     let _session_input_guard = input_tx;
 
+    // A protected machine opens with a challenge, and every frame after the
+    // handshake is sealed. Until the first frame shows which kind of machine
+    // this is, input waits; handshake frames go out unsealed on `raw_tx`.
+    let (raw_tx, mut raw_rx) = mpsc::channel::<Message>(8);
+    let (decided_tx, mut decided_rx) = tokio::sync::watch::channel(signing.is_none());
+    let channel: Arc<std::sync::Mutex<Option<alien_release_trust::session::Channel>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    let writer_channel = channel.clone();
     let writer = tokio::spawn(async move {
-        while let Some(outgoing) = input_rx.recv().await {
+        loop {
+            let decided = *decided_rx.borrow();
+            let outgoing = tokio::select! {
+                raw = raw_rx.recv() => match raw { Some(raw) => raw, None => continue },
+                _ = decided_rx.changed(), if !decided => continue,
+                input = input_rx.recv(), if decided => match input {
+                    Some(input) => match seal_outgoing(&writer_channel, input) {
+                        Some(sealed) => sealed,
+                        None => break,
+                    },
+                    None => break,
+                },
+            };
             if sink.send(outgoing).await.is_err() {
                 break;
             }
         }
         let _ = sink.close().await;
     });
+    let mut first_frame = signing.is_some();
 
     let mut exit_code = None;
     let mut output = Vec::new();
@@ -828,12 +895,50 @@ async fn run_remote_exec_attach(
             None => stream.next().await,
         };
         let Some(incoming) = incoming else { break };
-        match incoming
+        let incoming = incoming
             .into_alien_error()
             .context(ErrorData::ApiRequestFailed {
                 message: "Remote exec session read failed".to_string(),
                 url: Some(session.attach_url.clone()),
-            })? {
+            })?;
+        if std::mem::take(&mut first_frame) {
+            let challenge = match &incoming {
+                Message::Text(text) => crate::commands::signed_session::challenge(text),
+                _ => None,
+            };
+            if let (Some(challenge), Some(signing)) = (challenge, signing.as_ref()) {
+                let sealed = crate::commands::signed_session::handshake(
+                    signing,
+                    challenge,
+                    &raw_tx,
+                    &mut stream,
+                )
+                .await;
+                let sealed = match sealed {
+                    Ok(sealed) => sealed,
+                    Err(error) => {
+                        writer.abort();
+                        return Err(error);
+                    }
+                };
+                let channel_state = Arc::try_unwrap(sealed)
+                    .ok()
+                    .and_then(|mutex| mutex.into_inner().ok())
+                    .expect("the handshake hands over its only channel");
+                *channel.lock().expect("channel lock") = Some(channel_state);
+                let _ = decided_tx.send(true);
+                continue;
+            }
+            let _ = decided_tx.send(true);
+        }
+        let incoming = match open_incoming(&channel, incoming) {
+            Ok(incoming) => incoming,
+            Err(error) => {
+                writer.abort();
+                return Err(error);
+            }
+        };
+        match incoming {
             Message::Binary(bytes) => {
                 if json {
                     output.extend_from_slice(&bytes);
@@ -891,6 +996,58 @@ async fn run_remote_exec_attach(
         }));
     };
     finish_remote_exec(&session, exit_code, output, false, json)
+}
+
+/// Seal an outgoing frame when the session is signed. `None` ends the writer.
+fn seal_outgoing(
+    channel: &std::sync::Mutex<Option<alien_release_trust::session::Channel>>,
+    message: Message,
+) -> Option<Message> {
+    use alien_release_trust::session::FrameKind;
+    let mut guard = channel.lock().ok()?;
+    let Some(channel) = guard.as_mut() else {
+        return Some(message);
+    };
+    let (kind, payload) = match message {
+        Message::Binary(bytes) => (FrameKind::Data, bytes.to_vec()),
+        Message::Text(text) => (FrameKind::Control, text.as_bytes().to_vec()),
+        other => return Some(other),
+    };
+    channel
+        .seal(kind, &payload)
+        .ok()
+        .map(|sealed| Message::Binary(sealed.into()))
+}
+
+/// Open an incoming frame when the session is signed. A plaintext frame then
+/// means the relay injected it.
+fn open_incoming(
+    channel: &std::sync::Mutex<Option<alien_release_trust::session::Channel>>,
+    message: Message,
+) -> Result<Message> {
+    use alien_release_trust::session::FrameKind;
+    let mut guard = channel.lock().expect("channel lock");
+    let Some(channel) = guard.as_mut() else {
+        return Ok(message);
+    };
+    match message {
+        Message::Binary(bytes) => {
+            let (kind, payload) = channel.open(&bytes).context(ErrorData::SigningFailed {
+                message: "A session frame failed to decrypt; the relay changed or injected it"
+                    .to_string(),
+            })?;
+            Ok(match kind {
+                FrameKind::Data => Message::Binary(payload.into()),
+                FrameKind::Control => {
+                    Message::Text(String::from_utf8_lossy(&payload).to_string().into())
+                }
+            })
+        }
+        Message::Text(text) => Err(AlienError::new(ErrorData::SigningFailed {
+            message: format!("The relay sent an unencrypted frame into a signed session: {text}"),
+        })),
+        other => Ok(other),
+    }
 }
 
 fn finish_remote_exec(
@@ -1783,7 +1940,7 @@ mod tests {
         let mut session = remote_exec_session(&format!("ws://{address}/attach"), "token");
         session.tty = false;
 
-        run_remote_exec_attach(session, Some(2), true)
+        run_remote_exec_attach(session, Some(2), true, None)
             .await
             .expect("stdin EOF must not cancel the remote command");
         server.await.expect("server task should finish");
