@@ -83,7 +83,9 @@ fn cases() -> Vec<(&'static str, Case)> {
     })
     .unwrap();
     extra_field["body"]["workloads"][0]["privileged"] = serde_json::json!(true);
-    let extra_bytes = serde_json::to_vec(&extra_field).unwrap();
+    // Keys sorted, so the bytes don't depend on whether the build enables
+    // serde_json's preserve_order.
+    let extra_bytes = serde_json::to_vec(&sorted(extra_field)).unwrap();
     let extra_field = SignedStatement {
         payload: STANDARD.encode(&extra_bytes),
         signatures: vec![alien_signing::Signature {
@@ -374,4 +376,18 @@ fn the_untampered_inputs_are_accepted() {
         statement: version_3(&keys),
     };
     assert_eq!(run(&next), "ACCEPTED");
+}
+
+fn sorted(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let keys: std::collections::BTreeMap<String, serde_json::Value> =
+                map.into_iter().collect();
+            serde_json::Value::Object(keys.into_iter().map(|(k, v)| (k, sorted(v))).collect())
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(sorted).collect())
+        }
+        other => other,
+    }
 }
