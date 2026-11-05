@@ -70,16 +70,38 @@ pub fn release_body(
 ) -> Result<ReleaseBody> {
     let mut workloads = Vec::new();
     for (id, entry) in stack.resources() {
-        if let Some(workload) = workload(id, &entry.config, options)? {
+        if let Some(mut workload) = workload(id, &entry.config, options)? {
+            add_input_env(&mut workload, stack, platform);
             workloads.push(workload);
         }
+    }
+    let mut configurable_env = options.configurable_env.clone();
+    let mut configurable_inputs = options.configurable_inputs.clone();
+    for input in stack
+        .inputs
+        .iter()
+        .filter(|input| developer_input(input, platform))
+    {
+        if !configurable_inputs.contains(&input.id) {
+            configurable_inputs.push(input.id.clone());
+        }
+        for mapping in input.env.iter().filter(|mapping| plain(mapping)) {
+            if !configurable_env.contains(&mapping.name) {
+                configurable_env.push(mapping.name.clone());
+            }
+        }
+    }
+    // Configurable names apply to every workload, so the body reads back
+    // the same from the stack and the release's options.
+    for workload in &mut workloads {
+        workload.configurable_env = configurable_env.clone();
     }
     let body = ReleaseBody {
         platform: platform.as_str().to_string(),
         workloads,
         configurable: Configurable {
-            env: options.configurable_env.clone(),
-            inputs: options.configurable_inputs.clone(),
+            env: configurable_env,
+            inputs: configurable_inputs,
         },
         components: BTreeMap::new(),
         remote_access: Vec::new(),
@@ -128,6 +150,47 @@ pub fn signed_stack(body: &ReleaseBody, platform: Platform) -> Result<Stack> {
     Ok(stack)
 }
 
+/// Env names a workload takes from deployer inputs: the enforcer fills them
+/// from the customer's store. (Developer inputs become configurable names,
+/// set by signed config. Secret inputs keep their own path: the value is
+/// never signed, and the stack binds the name.)
+fn add_input_env(workload: &mut Workload, stack: &Stack, platform: Platform) {
+    for input in stack
+        .inputs
+        .iter()
+        .filter(|input| input.applies_to(platform))
+    {
+        for mapping in input
+            .env
+            .iter()
+            .filter(|mapping| plain(mapping) && mapping.targets(&workload.name))
+        {
+            if input
+                .provided_by
+                .contains(&crate::StackInputProvider::Deployer)
+            {
+                workload
+                    .deployer_env
+                    .insert(mapping.name.clone(), input.id.clone());
+            }
+        }
+    }
+}
+
+fn developer_input(input: &crate::StackInputDefinition, platform: Platform) -> bool {
+    input.applies_to(platform)
+        && !input
+            .provided_by
+            .contains(&crate::StackInputProvider::Deployer)
+}
+
+fn plain(mapping: &crate::StackInputEnvironmentMapping) -> bool {
+    !matches!(
+        mapping.var_type,
+        Some(crate::StackInputEnvironmentVariableType::Secret)
+    )
+}
+
 fn workload(id: &str, config: &Resource, options: &ReleaseOptions) -> Result<Option<Workload>> {
     let base = |kind: WorkloadKind, image: &str| Workload {
         name: id.to_string(),
@@ -146,6 +209,7 @@ fn workload(id: &str, config: &Resource, options: &ReleaseOptions) -> Result<Opt
                 .collect(),
         },
         configurable_env: options.configurable_env.clone(),
+        deployer_env: BTreeMap::new(),
         secrets: Vec::new(),
         runtime: Runtime::default(),
         volume_mount_path: None,
@@ -434,6 +498,33 @@ mod tests {
         assert!(api.provided_env.allows("ALIEN_STORAGE_BINDING"));
         assert!(!api.provided_env.allows("NODE_OPTIONS"));
         assert_eq!(signed_stack(&body, Platform::Aws).unwrap(), stack);
+    }
+
+    #[test]
+    fn stack_inputs_become_configurable_or_deployer_env() {
+        let mut stack = stack(&pinned());
+        stack.inputs = serde_json::from_value(serde_json::json!([
+            {"id": "logLevel", "kind": "string", "providedBy": ["developer"], "required": false,
+             "label": "l", "description": "d", "env": [{"name": "LOG_LEVEL", "targetResources": ["api"]}]},
+            {"id": "databaseUrl", "kind": "string", "providedBy": ["deployer"], "required": false,
+             "label": "l", "description": "d", "env": [{"name": "DATABASE_URL", "targetResources": ["api"]}]},
+        ]))
+        .unwrap();
+        // LOG_LEVEL is also fixed in the container's environment, which a
+        // developer input can't override.
+        let mut container = container(&pinned());
+        container.environment.clear();
+        stack.resources.get_mut("api").unwrap().config = alien_core_resource(container);
+        let body = release_body(Platform::Aws, &stack, &ReleaseOptions::default()).unwrap();
+        let api = &body.workloads[0];
+        assert_eq!(api.deployer_env["DATABASE_URL"], "databaseUrl");
+        assert!(api.configurable_env.contains(&"LOG_LEVEL".to_string()));
+        assert_eq!(body.configurable.inputs, vec!["logLevel".to_string()]);
+        assert_eq!(signed_stack(&body, Platform::Aws).unwrap(), stack);
+    }
+
+    fn alien_core_resource(container: Container) -> Resource {
+        Resource::new(container)
     }
 
     #[test]

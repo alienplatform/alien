@@ -213,6 +213,7 @@ pub fn web_workload() -> Workload {
             prefixes: vec!["APP_BINDING_".to_string()],
         },
         configurable_env: vec!["FEATURE_FLAGS".to_string()],
+        deployer_env: BTreeMap::from([("DATABASE_URL".to_string(), "databaseUrl".to_string())]),
         secrets: vec![alien_release_trust::release::SecretBinding {
             name: "db-password".to_string(),
             env_name: Some("DB_PASSWORD".to_string()),

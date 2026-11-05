@@ -21,6 +21,13 @@ use base64::Engine as _;
 use chrono::Duration;
 use common::*;
 
+fn local_inputs() -> BTreeMap<String, String> {
+    BTreeMap::from([(
+        "databaseUrl".to_string(),
+        "postgres://db.internal/app".to_string(),
+    )])
+}
+
 fn trust(keys: &Keys, chain: &[SignedStatement]) -> Trust {
     Trust::new(anchor(keys), chain).expect("the chain is valid")
 }
@@ -57,6 +64,7 @@ fn a_signed_release_verifies_and_builds_exactly_what_was_signed() {
         cpu: Some("500m".to_string()),
         memory: Some("512Mi".to_string()),
         replicas: Some(2),
+        deployer_inputs: local_inputs(),
     };
     let built = build_workload(&verified.body, "web", &BTreeMap::new(), &request).unwrap();
     assert_eq!(built.image, IMAGE);
@@ -68,7 +76,8 @@ fn a_signed_release_verifies_and_builds_exactly_what_was_signed() {
             "8080".to_string()
         ])
     );
-    assert_eq!(built.env.len(), 3);
+    assert_eq!(built.env.len(), 4);
+    assert_eq!(built.env["DATABASE_URL"], "postgres://db.internal/app");
     assert_eq!(built.env["APP_BINDING_STORE"], "{\"bucket\":\"b\"}");
     assert!(!built.runtime.privileged);
     assert!(built.runtime.mounts.is_empty());
@@ -652,6 +661,7 @@ fn control_plane_changes_to_a_workload_are_refused() {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect(),
+        deployer_inputs: local_inputs(),
         ..WorkloadRequest::default()
     };
     let none = BTreeMap::new();
@@ -699,6 +709,7 @@ fn control_plane_changes_to_a_workload_are_refused() {
             env_name: None,
             file_path: Some("/etc/ld.so.preload".to_string()),
         }],
+        deployer_inputs: local_inputs(),
         ..WorkloadRequest::default()
     };
     assert_eq!(
@@ -709,14 +720,17 @@ fn control_plane_changes_to_a_workload_are_refused() {
     for request in [
         WorkloadRequest {
             cpu: Some("2001m".into()),
+            deployer_inputs: local_inputs(),
             ..WorkloadRequest::default()
         },
         WorkloadRequest {
             memory: Some("2Gi".into()),
+            deployer_inputs: local_inputs(),
             ..WorkloadRequest::default()
         },
         WorkloadRequest {
             replicas: Some(5),
+            deployer_inputs: local_inputs(),
             ..WorkloadRequest::default()
         },
     ] {
@@ -734,6 +748,50 @@ fn control_plane_changes_to_a_workload_are_refused() {
         )),
         "TRUST_WORKLOAD_REFUSED"
     );
+}
+
+#[test]
+fn deployer_inputs_come_from_the_customers_store_only() {
+    let release = release_body();
+    let request = |db: &str, local: Option<&str>| WorkloadRequest {
+        env: BTreeMap::from([("DATABASE_URL".to_string(), db.to_string())]),
+        deployer_inputs: local
+            .map(|value| BTreeMap::from([("databaseUrl".to_string(), value.to_string())]))
+            .unwrap_or_default(),
+        ..WorkloadRequest::default()
+    };
+    let built = build_workload(
+        &release,
+        "web",
+        &BTreeMap::new(),
+        &request(
+            "postgres://attacker.example/steal",
+            Some("postgres://db.internal/app"),
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        built.env["DATABASE_URL"], "postgres://db.internal/app",
+        "the control plane's value is ignored"
+    );
+    let error = build_workload(
+        &release,
+        "web",
+        &BTreeMap::new(),
+        &request("postgres://x", None),
+    )
+    .expect_err("an input the customer never set is refused, not taken from the control plane");
+    assert!(
+        error.message.contains("not set in this deployment's store"),
+        "{}",
+        error.message
+    );
+
+    let mut loader = release_body();
+    loader.workloads[0]
+        .deployer_env
+        .insert("LD_PRELOAD".into(), "preload".into());
+    assert_eq!(code(loader.validate()), "TRUST_WORKLOAD_REFUSED");
 }
 
 #[test]

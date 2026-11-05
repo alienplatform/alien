@@ -166,6 +166,11 @@ pub struct Workload {
     /// Environment names a config statement may set on this workload.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub configurable_env: Vec<String>,
+    /// Environment names whose values come from deployer inputs, by input
+    /// id. The enforcer reads the values from the customer's own store; the
+    /// control plane never supplies them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub deployer_env: BTreeMap<String, String>,
     /// Secrets the workload may receive, by name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<SecretBinding>,
@@ -393,7 +398,13 @@ impl Workload {
                 )));
             }
         }
-        for name in self.provided_env.names.iter().chain(&self.configurable_env) {
+        for name in self
+            .provided_env
+            .names
+            .iter()
+            .chain(&self.configurable_env)
+            .chain(self.deployer_env.keys())
+        {
             check_settable_name(name).map_err(refuse)?;
             if self.env.contains_key(name) {
                 return Err(refuse(format!(
@@ -443,6 +454,9 @@ pub struct WorkloadRequest {
     pub memory: Option<String>,
     /// Replica count the control plane wants.
     pub replicas: Option<u32>,
+    /// Deployer input values, by input id, read by the enforcer from the
+    /// customer's own store (never from the control plane).
+    pub deployer_inputs: BTreeMap<String, String>,
 }
 
 /// A secret delivery the control plane asks for.
@@ -496,7 +510,20 @@ pub fn build_workload(
             env.insert(key.clone(), value.clone());
         }
     }
+    for (key, input) in &workload.deployer_env {
+        let value = request.deployer_inputs.get(input).ok_or_else(|| {
+            refuse(format!(
+                "deployer input '{input}' for env {key} is not set in this deployment's store"
+            ))
+        })?;
+        env.insert(key.clone(), value.clone());
+    }
     for (key, value) in &request.env {
+        // Deployer inputs come from the customer's store; whatever the
+        // control plane sends for them is ignored.
+        if workload.deployer_env.contains_key(key) {
+            continue;
+        }
         if let Some(signed) = env.get(key) {
             if signed != value {
                 return Err(refuse(format!(
