@@ -139,6 +139,7 @@ fn aws_open_search_rejects_invalid_capacity_before_rendering() {
     let error = alien_cloudformation::generate_cloudformation_template(
         &stack,
         alien_cloudformation::CloudFormationOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             registry: &CfRegistry::built_in(),
             source_stack: &stack,
             target: alien_cloudformation::CloudFormationTarget::Aws,
@@ -204,6 +205,7 @@ fn aws_open_search_rejects_id_unusable_as_collection_name() {
         let result = alien_cloudformation::generate_cloudformation_template(
             &stack,
             alien_cloudformation::CloudFormationOptions {
+                pins: alien_core::SetupPins::compiled_in(),
                 registry: &CfRegistry::built_in(),
                 source_stack: &stack,
                 target: alien_cloudformation::CloudFormationTarget::Aws,

@@ -108,6 +108,15 @@ impl AwsCloudFormationPermissionsGenerator {
 
             let (binding_spec, actions) =
                 super::aws_boundary::role_write_binding(binding_spec, actions, context);
+            let actions = super::aws_boundary::protected_management_actions(
+                platform_permission.effect.is_allow(),
+                &binding_spec,
+                actions,
+                context,
+            );
+            if actions.is_empty() {
+                continue;
+            }
 
             let resources =
                 self.interpolate_cloudformation_resources(&binding_spec.resources, context)?;
@@ -221,7 +230,6 @@ impl AwsCloudFormationPermissionsGenerator {
             "${awsAccountId}",
             "${externalId}",
             "${managingAccountId}",
-            "${machineImageOwner}",
             "${stackTag}",
             "${resourceTag}",
             "${managedByTag}",
@@ -273,14 +281,6 @@ impl AwsCloudFormationPermissionsGenerator {
             }
             if let Some(resource_id) = context.resource_id.as_ref() {
                 result = result.replace("${resourceId}", resource_id);
-            }
-            if result.contains("${machineImageOwner}") {
-                let owner = context.machine_image_owner.as_deref().ok_or_else(|| {
-                    alien_error::AlienError::new(ErrorData::VariableNotFound {
-                        variable: "machineImageOwner".to_string(),
-                    })
-                })?;
-                result = result.replace("${machineImageOwner}", owner);
             }
 
             // Handle AWS-specific variables that should map to CloudFormation pseudo parameters

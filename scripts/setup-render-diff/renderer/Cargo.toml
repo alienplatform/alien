@@ -1,0 +1,21 @@
+[package]
+name = "setup-render-diff"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Copied into a checkout's `crates/` and added to its workspace by `../run.sh`, so the same
+# renderer runs against every revision it compares.
+[dependencies]
+alien-cloudformation = { workspace = true }
+alien-core = { workspace = true }
+alien-helm = { workspace = true }
+alien-preflights = { workspace = true }
+alien-terraform = { workspace = true }
+hcl-rs = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[features]
+# Revisions whose setup options take `pins` (the base may predate them).
+pins = []

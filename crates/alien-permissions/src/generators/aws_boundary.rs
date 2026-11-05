@@ -427,7 +427,9 @@ fn render_boundary(
                     }
                     let mut unprefixed = Vec::new();
                     for (template, resource) in binding.resources.iter().zip(statement.resource) {
-                        if stack_owns(template) {
+                        if template.contains("${stackPrefix}")
+                            || template.contains("${resourceName}")
+                        {
                             scoped_resources.insert(resource);
                         } else {
                             unprefixed.push(resource);
@@ -720,32 +722,14 @@ fn minified_size(value: &Value) -> usize {
         .count()
 }
 
-/// Parameter paths that hold what setup pins for a deployment. They name the stack, but the
-/// stack does not own them: a role management writes may only read them, with exactly the
-/// catalog's actions, never anything the scoped Allow admits.
-const SETUP_PINNED_PATHS: [&str; 2] =
-    [":parameter/_release-trust/", ":parameter/_deployer-inputs/"];
+/// Label prefix of catalog statements rendered only for a protected install's management
+/// identity.
+pub const SIGNING_LABEL_PREFIX: &str = "signing-";
 
-/// Whether a catalog resource template names a resource the stack owns, which the scoped
-/// Allow admits for every action but IAM's.
-fn stack_owns(template: &str) -> bool {
-    (template.contains("${stackPrefix}") || template.contains("${resourceName}"))
-        && !SETUP_PINNED_PATHS
-            .iter()
-            .any(|path| template.contains(path))
-}
-
-/// Label of the guard statement that refuses machine images from any account but the
-/// publisher setup recorded.
-const OTHER_PUBLISHERS_IMAGE_GUARD_LABEL: &str = "deny-images-of-other-publishers";
-/// Label of the guard statement that refuses every machine image when setup recorded no
-/// publisher.
-const NO_PUBLISHER_IMAGE_GUARD_LABEL: &str = "deny-images-without-publisher";
-
-/// Select legacy or bounded role grants using the installed setup boundary, and the machine
-/// image guard that matches the recorded publisher.
+/// Select legacy or bounded role grants using the installed setup boundary, and the statements
+/// only a protected install renders.
 ///
-/// A protected deployment never receives a legacy grant: rendering one is an error.
+/// A protected install never receives a legacy grant: rendering one is an error.
 pub(super) fn include_role_statement(
     permission_set: &PermissionSet,
     label: Option<&str>,
@@ -759,7 +743,7 @@ pub(super) fn include_role_statement(
             if context.aws_permissions_boundary_arn.is_some() {
                 return Ok(false);
             }
-            if context.release_trust_protected {
+            if context.signing_protected {
                 return Err(AlienError::new(
                     ErrorData::ProtectedDeploymentWithoutBoundary {
                         permission_set_id: permission_set.id.clone(),
@@ -769,11 +753,8 @@ pub(super) fn include_role_statement(
             }
             return Ok(true);
         }
-        if label == OTHER_PUBLISHERS_IMAGE_GUARD_LABEL {
-            return Ok(context.machine_image_owner.is_some());
-        }
-        if label == NO_PUBLISHER_IMAGE_GUARD_LABEL {
-            return Ok(context.machine_image_owner.is_none());
+        if label.starts_with(SIGNING_LABEL_PREFIX) {
+            return Ok(context.signing_protected);
         }
     }
     if permission_set.id != "container/provision" {
@@ -783,6 +764,22 @@ pub(super) fn include_role_statement(
         Some("deny-volume-backup-role-changes") => context.aws_permissions_boundary_arn.is_none(),
         _ => true,
     })
+}
+
+/// The actions an Allow statement grants the rendered identity: on a protected install's
+/// management identity, all but what only the verifier may do. Denies are kept whole.
+pub(super) fn protected_management_actions<'a>(
+    allow: bool,
+    binding: &AwsBindingSpec,
+    actions: Cow<'a, [String]>,
+    context: &PermissionContext,
+) -> Cow<'a, [String]> {
+    if !allow || !context.signing_protected {
+        return actions;
+    }
+    Cow::Owned(super::verifier_owned::aws_management_actions(
+        &actions, binding,
+    ))
 }
 
 /// Older setups have no boundary policy or adoption grant. Only omit the catalog's

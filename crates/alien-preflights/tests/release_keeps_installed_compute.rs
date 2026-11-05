@@ -100,9 +100,6 @@ fn deployment_config(compute: ComputeSettings) -> DeploymentConfig {
     DeploymentConfig::builder()
         .stack_settings(StackSettings {
             compute: Some(compute),
-            machine_image_publisher: Some(alien_core::MachineImagePublisher {
-                aws_account_id: "345678901234".to_string(),
-            }),
             ..StackSettings::default()
         })
         .management_config(ManagementConfig::Aws(AwsManagementConfig {

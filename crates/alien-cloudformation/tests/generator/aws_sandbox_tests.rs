@@ -1155,13 +1155,6 @@ fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
             {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*"}
         ])
     );
-    // The guards on what setup pins: the anchor and inputs, and the machine image.
-    let (pinned_denies, denies): (Vec<_>, Vec<_>) = denies.into_iter().partition(|statement| {
-        let actions = statement["Action"].as_array().unwrap();
-        actions.contains(&serde_json::json!("ssm:PutParameter"))
-            || actions.contains(&serde_json::json!("ec2:RunInstances"))
-    });
-    assert_eq!(pinned_denies.len(), 2, "{statements:#?}");
     assert_eq!(denies.len(), 1, "{statements:#?}");
     insta::assert_snapshot!(
         "aws_management_role_guards",

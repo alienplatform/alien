@@ -558,6 +558,7 @@ mod tests {
             &stack,
             TerraformTarget::Azure,
             TerraformOptions {
+                pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
                 stack_settings: StackSettings::default(),
@@ -609,6 +610,7 @@ mod tests {
             &stack,
             TerraformTarget::Azure,
             TerraformOptions {
+                pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
                 stack_settings: StackSettings::default(),

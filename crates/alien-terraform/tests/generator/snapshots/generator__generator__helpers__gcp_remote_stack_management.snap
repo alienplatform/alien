@@ -488,7 +488,7 @@ resource "google_project_iam_custom_role" "gcp_role_manage_cloud_run_services" {
   project     = var.gcp_project
   role_id     = format("role_%s_manage_cloud_run_services", local.gcp_custom_role_prefix)
   title       = "${local.deployment_name}: Manage Cloud Run Services"
-  description = "Used by ${local.deployment_name}. Update Cloud Run services, schedulers, Pub/Sub triggers, and IAM bindings owned by this application. Resource prefix: ${local.resource_prefix}."
+  description = "Used by ${local.deployment_name}. Update Cloud Run services, jobs, schedulers, Pub/Sub triggers, and IAM bindings owned by this application. Resource prefix: ${local.resource_prefix}."
   stage       = "GA"
   permissions = [
     "iam.serviceAccounts.actAs",
@@ -507,6 +507,11 @@ resource "google_project_iam_custom_role" "gcp_role_manage_cloud_run_services" {
     "run.executions.delete",
     "run.executions.get",
     "run.executions.list",
+    "run.jobs.createTagBinding",
+    "run.jobs.deleteTagBinding",
+    "run.jobs.getIamPolicy",
+    "run.jobs.setIamPolicy",
+    "run.jobs.update",
     "run.locations.list",
     "run.operations.delete",
     "run.operations.get",
