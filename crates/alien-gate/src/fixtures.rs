@@ -45,6 +45,19 @@ pub fn statement<B: Serialize>(
     not_after: Option<DateTime<Utc>>,
     body: B,
 ) -> SignedStatement {
+    statement_under(project, kind, install, sequence, not_after, 1, body)
+}
+
+/// A statement of `kind` under signer list version `list_version`, unsigned.
+pub fn statement_under<B: Serialize>(
+    project: &str,
+    kind: Kind,
+    install: Option<&str>,
+    sequence: u64,
+    not_after: Option<DateTime<Utc>>,
+    list_version: u64,
+    body: B,
+) -> SignedStatement {
     SignedStatement::new(
         &Envelope {
             kind: kind.as_str().to_string(),
@@ -52,7 +65,7 @@ pub fn statement<B: Serialize>(
             install: install.map(str::to_string),
             sequence,
             not_after,
-            signer_list_version: 1,
+            signer_list_version: list_version,
             body,
         }
         .to_payload()

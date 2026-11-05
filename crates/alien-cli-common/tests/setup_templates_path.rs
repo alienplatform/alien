@@ -33,9 +33,7 @@ async fn render() -> BTreeMap<String, RenderedSetupTemplate> {
         channel: "production".to_string(),
     };
     let hosting: SetupHostingOptions = serde_json::from_value(serde_json::json!({
-        "registration": { "mode": "outputsFallback" },
-        "setupFingerprint": "sha256:setup",
-        "setupFingerprintVersion": 1
+        "registration": { "mode": "outputsFallback" }
     }))
     .expect("hosting options parse");
     let (cloudformation, terraform, helm) =

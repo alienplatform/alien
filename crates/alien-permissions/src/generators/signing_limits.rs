@@ -243,8 +243,7 @@ pub fn aws_verifier_policy(prefix: &str, account: &str, region: &str, publisher:
                     "ec2:DescribeSubnets",
                     "ec2:DescribeSecurityGroups",
                     "autoscaling:DescribeAutoScalingGroups",
-                    "autoscaling:DescribeInstanceRefreshes",
-                    "ecr:GetAuthorizationToken"
+                                        "ecr:GetAuthorizationToken"
                 ],
                 "Resource": "*"
             },
@@ -321,7 +320,6 @@ pub fn aws_verifier_policy(prefix: &str, account: &str, region: &str, publisher:
                 "Action": [
                     "autoscaling:CreateAutoScalingGroup",
                     "autoscaling:UpdateAutoScalingGroup",
-                    "autoscaling:StartInstanceRefresh",
                     "autoscaling:CreateOrUpdateTags"
                 ],
                 "Resource": format!(
