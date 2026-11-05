@@ -22,7 +22,7 @@ lists what still carries the prefix and fails if anything does.
   python3 scripts/azure-setup-locks/check.py --token-file token.json --prefix locks-check \\
       --tag purpose=locks-check --evidence /tmp/azure-locks
 
-The token file holds `accessToken` (ARM scope) and `subscription`.
+The token file holds `accessToken` (ARM scope) and `subscription`; it is read for every call.
 """
 
 import argparse
@@ -44,9 +44,7 @@ FINGERPRINT = "SHA256:" + "9f2c3b1a77d0e5c2" * 4
 class Run:
     def __init__(self, args):
         self.args = args
-        token = json.loads(Path(args.token_file).read_text())
-        self.token = token["accessToken"]
-        self.subscription = token["subscription"]
+        self.subscription = json.loads(Path(args.token_file).read_text())["subscription"]
         self.location = args.location
         key, value = args.tag.split("=", 1)
         self.tags = {key: value}
@@ -69,7 +67,9 @@ class Run:
         url = f"{ARM}{path}{'&' if '?' in path else '?'}api-version={api}"
         data = json.dumps(body).encode() if body is not None else None
         request = urllib.request.Request(url, data=data, method=method)
-        request.add_header("Authorization", f"Bearer {self.token}")
+        # Read for every call: the file is refreshed while a run waits on Azure.
+        token = json.loads(Path(self.args.token_file).read_text())["accessToken"]
+        request.add_header("Authorization", f"Bearer {token}")
         request.add_header("Content-Type", "application/json")
         try:
             with urllib.request.urlopen(request) as response:

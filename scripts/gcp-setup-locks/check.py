@@ -458,7 +458,8 @@ class Run:
             self.wait_operation(pointed, token)
             self.wait_operation(self.call("POST", f"{mig}/setInstanceTemplate", {
                 "instanceTemplate": f"projects/{self.project}/global/instanceTemplates/{self.template}"}))
-        self.expect(variant, "point-group-at-another-template", "denied" if variant == "protected" else "allowed", error)
+        # Compute Engine names what the caller lacks; unprotected management lacks only labels here.
+        self.expect_missing(variant, "point-group-at-another-template", {"compute.instanceGroupManagers.update"}, error)
         patched, error = self.attempt("PATCH", mig, {"allInstancesConfig": {"properties": {
             "metadata": {"startup-script": "true"}}}}, token)
         if patched is not None:
@@ -557,6 +558,7 @@ class Run:
                 self.attempts(variant, token)
         finally:
             self.cleanup()
+            time.sleep(30)  # Deletions reach the listing APIs after a short delay.
             clean = self.audit()
             self.record("results", self.results)
         failed = [r for r in self.results if not r["ok"]]
