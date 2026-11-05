@@ -1694,7 +1694,6 @@ async fn deploy_task_with_environment(
                             .create_deployment()
                             .workspace(&workspace_name)
                             .body(alien_platform_api::types::NewDeploymentRequest {
-            release_protected: Default::default(),
                                 deployment_group_external_id: None,
                                 installation: None,
         base_platform: None,

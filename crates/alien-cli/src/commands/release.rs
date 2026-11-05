@@ -1008,21 +1008,6 @@ async fn create_platform_release(
         .promote(promote)
         .git_metadata(git_metadata)
         .title(parse_release_title(title)?);
-    // Signed statements are the same two strings in either SDK.
-    let body = if signed_stacks.is_empty() {
-        body
-    } else {
-        let signed: alien_platform_api::types::SignedStacksByPlatform =
-            serde_json::to_value(&signed_stacks)
-                .and_then(serde_json::from_value)
-                .into_alien_error()
-                .context(ErrorData::ApiRequestFailed {
-                    message: "Failed to carry the signed statements".to_string(),
-                    url: None,
-                })?;
-        body.signed_stacks(signed)
-    };
-
     let body = alien_platform_api::types::CreateReleaseRequest::try_from(body).map_err(|e| {
         AlienError::new(ErrorData::ApiRequestFailed {
             message: format!("Failed to build release request: {}", e),
@@ -1030,22 +1015,21 @@ async fn create_platform_release(
         })
     })?;
 
-    let mut request = platform_client.create_release();
-    if let Some(workspace) = workspace {
-        let workspace_param = alien_platform_api::types::CreateReleaseWorkspace::try_from(
-            workspace,
-        )
-        .map_err(|e| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "workspace".to_string(),
-                message: format!("Invalid workspace: {}", e),
-            })
-        })?;
-        request = request.workspace(&workspace_param);
-    }
-
-    let response =
-        request
+    let release_id = if signed_stacks.is_empty() {
+        let mut request = platform_client.create_release();
+        if let Some(workspace) = workspace {
+            let workspace_param = alien_platform_api::types::CreateReleaseWorkspace::try_from(
+                workspace,
+            )
+            .map_err(|e| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: "workspace".to_string(),
+                    message: format!("Invalid workspace: {}", e),
+                })
+            })?;
+            request = request.workspace(&workspace_param);
+        }
+        let response = request
             .body(body)
             .send()
             .await
@@ -1054,8 +1038,61 @@ async fn create_platform_release(
                 message: "Failed to create release on platform API".to_string(),
                 url: None,
             })?;
+        response.id.to_string()
+    } else {
+        // The signed statements travel byte for byte beside the stack. The
+        // generated client doesn't carry them yet, so the request is sent
+        // as JSON with the same body plus `signedStacks`.
+        let mut json = serde_json::to_value(&body).into_alien_error().context(
+            ErrorData::ApiRequestFailed {
+                message: "Failed to serialize the release request".to_string(),
+                url: None,
+            },
+        )?;
+        json["signedStacks"] = serde_json::to_value(&signed_stacks)
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to carry the signed statements".to_string(),
+                url: None,
+            })?;
+        let url = format!("{}/v1/releases", http.base_url.trim_end_matches('/'));
+        let mut request = http.client.post(&url).json(&json);
+        if let Some(workspace) = workspace {
+            request = request.query(&[("workspace", workspace)]);
+        }
+        let response = request
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to create release on platform API".to_string(),
+                url: Some(url.clone()),
+            })?;
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                message: format!("Failed to create release on platform API: HTTP {status}: {text}"),
+                url: Some(url),
+            }));
+        }
+        let created: serde_json::Value = serde_json::from_str(&text)
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "The platform API's release response is not JSON".to_string(),
+                url: Some(url.clone()),
+            })?;
+        created["id"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ApiRequestFailed {
+                    message: "The platform API's release response has no id".to_string(),
+                    url: Some(url),
+                })
+            })?
+    };
 
-    let release_id = response.id.to_string();
     info!("Release created successfully!");
     info!("   ID: {}", release_id);
 
