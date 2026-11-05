@@ -2735,6 +2735,14 @@ async fn acknowledge_completed_claim(
     }))
 }
 
+/// Whether the deployment's setup pinned a signing fingerprint.
+fn is_protected(deployment: &DeploymentRecord) -> bool {
+    deployment
+        .stack_settings
+        .as_ref()
+        .is_some_and(|settings| settings.signing.is_some())
+}
+
 /// `POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync
 /// path; `caller: &Subject` is threaded into the store so embedders see
 /// the agent's own scope.
@@ -2750,7 +2758,6 @@ async fn acknowledge_completed_claim(
         ("bearer" = [])
     )
 ))]
-
 async fn agent_sync(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3264,13 +3271,16 @@ async fn agent_sync(
         None
     };
 
-    // The deployment's newest signed config travels with every sync.
+    // A protected deployment's newest signed config travels with every
+    // sync. Unprotected deployments don't touch the signing store at all.
     let signed_config = match &state.signing {
-        Some(signing) => match signing.latest_config_statement(&deployment.id).await {
-            Ok(config) => config,
-            Err(error) => return error.into_response(),
-        },
-        None => None,
+        Some(signing) if is_protected(&deployment) => {
+            match signing.latest_config_statement(&deployment.id).await {
+                Ok(config) => config,
+                Err(error) => return error.into_response(),
+            }
+        }
+        _ => None,
     };
     Json(AgentSyncResponse {
         execution_claim,
@@ -3530,9 +3540,10 @@ pub(crate) async fn build_pull_target(
         _ => Vec::new(),
     };
     // The deployment's newest signed config: a protected deployment takes
-    // developer inputs and configurable env only from it.
+    // developer inputs and configurable env only from it. Unprotected
+    // deployments don't touch the signing store.
     let signed_config = match (&signed, &state.signing) {
-        (Some(_), Some(signing)) => signing
+        (Some(_), Some(signing)) if is_protected(deployment) => signing
             .latest_config_statement(&deployment.id)
             .await
             .map_err(|error| error.into_response())?,

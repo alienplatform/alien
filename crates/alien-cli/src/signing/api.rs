@@ -102,6 +102,36 @@ impl SigningApi {
         Ok(Self::new(http.client.clone(), http.base_url.clone()))
     }
 
+    /// What the control plane renders setup templates with
+    /// (`setupHosting` on `GET /v1/projects/{project}/signing`). A release
+    /// signs the digests of templates rendered with it; without it there is
+    /// nothing to sign against, so its absence is an error.
+    pub async fn setup_hosting(
+        &self,
+        project: &str,
+    ) -> Result<alien_cli_common::setup_templates::SetupHostingOptions> {
+        let mut summary: serde_json::Value = self
+            .send(
+                Method::GET,
+                &format!("/v1/projects/{project}/signing"),
+                None::<&()>,
+            )
+            .await?;
+        let hosting = summary["setupHosting"].take();
+        if hosting.is_null() {
+            return Err(AlienError::new(ErrorData::SigningFailed {
+                message: format!(
+                    "the control plane doesn't say how it hosts setup templates for {project} (setupHosting)"
+                ),
+            }));
+        }
+        serde_json::from_value(hosting)
+            .into_alien_error()
+            .context(ErrorData::SigningFailed {
+                message: format!("setupHosting for {project} doesn't parse"),
+            })
+    }
+
     /// Every signer list version the server holds.
     pub async fn signer_lists(&self, project: &str) -> Result<Vec<SignedStatement>> {
         let items: Items<SignedStatement> = self
