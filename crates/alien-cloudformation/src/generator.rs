@@ -89,7 +89,13 @@ const RULE_SUPPORTED_AWS_REGION: &str = "SupportedAwsRegion";
 const RULE_CUSTOM_DOMAIN_CERTIFICATE: &str = "CustomDomainCertificate";
 
 /// Registration behavior for the generated CloudFormation template.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(
+    tag = "mode",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum RegistrationMode {
     /// Register through a CloudFormation custom resource.
     CustomResource {
@@ -202,7 +208,8 @@ pub struct CloudFormationOptions<'a> {
 /// Both are off by default. Turning one on only narrows the values a
 /// parameter accepts: the resources and trust policies stay the same, so an
 /// installed stack that already satisfies the constraint updates in place.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ManagementTrustOptions {
     /// Make `ManagementExternalId` required: no default, and an empty value is
     /// refused at parameter validation, before anything is created or updated.

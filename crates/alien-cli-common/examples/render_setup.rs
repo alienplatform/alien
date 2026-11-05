@@ -6,8 +6,10 @@
 
 use std::{env, fs, process::ExitCode};
 
-use alien_cli_common::setup_templates::{render_setup_template, SetupRenderOptions};
-use alien_cloudformation::{CfRegistry, RegistrationMode};
+use alien_cli_common::setup_templates::{
+    render_setup_template, SetupHostingOptions, SetupRenderOptions,
+};
+use alien_cloudformation::{CfRegistry, ManagementTrustOptions, RegistrationMode};
 use alien_core::{SetupPins, Stack, StackSettings, StackSigning};
 use alien_helm::HelmRegistry;
 use alien_terraform::TfRegistry;
@@ -46,7 +48,15 @@ async fn main() -> ExitCode {
         .cloudformation_registry(&cloudformation)
         .terraform_registry(&terraform)
         .helm_registry(&helm)
-        .registration(RegistrationMode::OutputsFallback)
+        .hosting(SetupHostingOptions {
+            registration: RegistrationMode::OutputsFallback,
+            description: None,
+            management_trust: ManagementTrustOptions::default(),
+            supported_aws_regions: Vec::new(),
+            terraform_registration: None,
+            setup_fingerprint: "render-setup-example".to_string(),
+            setup_fingerprint_version: 1,
+        })
         .pins(pins)
         .build();
     match render_setup_template(name, &stack, &settings, &options).await {

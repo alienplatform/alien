@@ -1,7 +1,9 @@
 //! Rendering a protected stack's setup templates the way a signed release records them.
 
-use alien_cli_common::setup_templates::{render_setup_templates, SetupRenderOptions};
-use alien_cloudformation::{CfRegistry, RegistrationMode};
+use alien_cli_common::setup_templates::{
+    render_setup_templates, SetupHostingOptions, SetupRenderOptions,
+};
+use alien_cloudformation::CfRegistry;
 use alien_core::{SetupPins, Stack, StackSigning};
 use alien_helm::HelmRegistry;
 use alien_signing::release::SETUP_TEMPLATES;
@@ -18,6 +20,15 @@ fn pins() -> SetupPins {
         aws_publisher: Some(PUBLISHER.to_string()),
         aws_verifier_image: Some(VERIFIER.to_string()),
     }
+}
+
+fn hosting() -> SetupHostingOptions {
+    serde_json::from_value(serde_json::json!({
+        "registration": { "mode": "outputsFallback" },
+        "setupFingerprint": "sha256:setup",
+        "setupFingerprintVersion": 1
+    }))
+    .expect("hosting options parse")
 }
 
 fn stack() -> Stack {
@@ -52,7 +63,7 @@ async fn render(fingerprint: &str) -> std::collections::BTreeMap<String, alien_c
             .cloudformation_registry(&cloudformation)
             .terraform_registry(&terraform)
             .helm_registry(&helm)
-            .registration(RegistrationMode::OutputsFallback)
+            .hosting(hosting())
             .pins(pins())
             .build(),
     )
@@ -173,7 +184,7 @@ async fn a_build_without_pins_refuses_to_render_protected_aws_setup() {
             .cloudformation_registry(&cloudformation)
             .terraform_registry(&terraform)
             .helm_registry(&helm)
-            .registration(RegistrationMode::OutputsFallback)
+            .hosting(hosting())
             .pins(SetupPins::default())
             .build(),
     )
@@ -181,4 +192,110 @@ async fn a_build_without_pins_refuses_to_render_protected_aws_setup() {
     .expect_err("no publisher, no protected AWS setup");
     let text = format!("{error:?}");
     assert!(text.contains("no machine-image publisher"), "{text}");
+}
+
+/// Hosting options come from a service the install doesn't trust. None of them may change what
+/// a protected template locks: the limits, the verifier, its role and the signing settings stay
+/// exactly as they are with the plainest options.
+#[tokio::test]
+async fn hosting_options_cannot_weaken_the_protected_locks() {
+    let locked = |rendered: &std::collections::BTreeMap<
+        String,
+        alien_cli_common::setup_templates::RenderedSetupTemplate,
+    >| {
+        let template: serde_yaml::Value =
+            serde_yaml::from_slice(&rendered["cloudformation"].bytes).expect("template is YAML");
+        let resources = &template["Resources"];
+        let guard = resources
+            .as_mapping()
+            .expect("resources")
+            .values()
+            .filter(|resource| resource["Type"] == "AWS::IAM::ManagedPolicy")
+            .flat_map(|policy| {
+                policy["Properties"]["PolicyDocument"]["Statement"]
+                    .as_sequence()
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .filter(|statement| statement["Sid"] == "OnlySetupChangesSigningSettings")
+            .collect::<Vec<_>>();
+        assert_eq!(guard.len(), 1, "one /signed/ guard on the management role");
+        (
+            [
+                "ManagementLimits",
+                "SigningVerifier",
+                "SigningVerifierRole",
+                "SigningFingerprintParameter",
+                "SigningStateParameter",
+            ]
+            .map(|id| resources[id].clone()),
+            guard,
+            template["Parameters"]["SigningFingerprint"].clone(),
+        )
+    };
+    let baseline = locked(&render(FINGERPRINT).await);
+
+    let hostile = [
+        serde_json::json!({
+            "registration": {
+                "mode": "regionalBoth",
+                "lambdaArnsByRegion": {
+                    "us-east-1": "arn:aws:lambda:us-east-1:999999999999:function:anything"
+                },
+                "callbackUrl": "https://attacker.example/"
+            },
+            "description": "Resources:\n  Evil: {Type: AWS::IAM::Role}",
+            "managementTrust": {
+                "requireExternalId": true,
+                "allowedManagingRoleArns": ["arn:aws:iam::999999999999:role/anyone"]
+            },
+            "supportedAwsRegions": ["us-east-1"],
+            "setupFingerprint": "${AWS::NoValue}",
+            "setupFingerprintVersion": 4294967295u32
+        }),
+        serde_json::json!({
+            "registration": {
+                "mode": "customResource",
+                "lambdaArn": "arn:aws:lambda:us-east-1:999999999999:function:anything"
+            },
+            "setupFingerprint": "x",
+            "setupFingerprintVersion": 0
+        }),
+    ];
+    for options in hostile {
+        let hosting: SetupHostingOptions =
+            serde_json::from_value(options.clone()).expect("hosting options parse");
+        let signing = StackSigning {
+            fingerprint: FINGERPRINT.to_string(),
+            channel: "production".to_string(),
+        };
+        let (cloudformation, terraform, helm) =
+            (CfRegistry::built_in(), TfRegistry::built_in(), HelmRegistry::built_in());
+        let rendered = render_setup_templates(
+            &stack(),
+            SetupRenderOptions::builder()
+                .signing(&signing)
+                .cloudformation_registry(&cloudformation)
+                .terraform_registry(&terraform)
+                .helm_registry(&helm)
+                .hosting(hosting)
+                .pins(pins())
+                .build(),
+        )
+        .await
+        .expect("renders with hostile hosting options");
+        assert_eq!(locked(&rendered), baseline, "{options}");
+    }
+}
+
+#[test]
+fn hosting_options_refuse_unknown_fields() {
+    let error = serde_json::from_value::<SetupHostingOptions>(serde_json::json!({
+        "registration": { "mode": "outputsFallback" },
+        "setupFingerprint": "x",
+        "setupFingerprintVersion": 1,
+        "extraPolicies": []
+    }))
+    .expect_err("an unknown hosting option is refused");
+    assert!(error.to_string().contains("extraPolicies"), "{error}");
 }

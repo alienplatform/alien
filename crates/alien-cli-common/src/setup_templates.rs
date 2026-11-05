@@ -21,7 +21,7 @@ use alien_core::{
 use alien_error::{AlienError, AlienErrorData, Context, IntoAlienError};
 use alien_helm::{HelmOptions, HelmRegistry};
 use alien_signing::release::{SetupTemplate, SETUP_TEMPLATES};
-use alien_terraform::{TerraformOptions, TerraformTarget, TfRegistry};
+use alien_terraform::{TerraformOptions, TerraformRegistration, TerraformTarget, TfRegistry};
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -48,11 +48,34 @@ pub enum ErrorData {
 /// Result type for setup template rendering.
 pub type Result<T> = alien_error::Result<T, ErrorData>;
 
+/// What the service that hosts the setup templates renders them with: who manages the install
+/// and how setup reports back. The CLI takes these from that service, so both render the same
+/// bytes. None of them is trusted: on a protected install the management limits hold whoever
+/// management is, and `verify` prints the management principal from the installed template.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetupHostingOptions {
+    /// How the CloudFormation stack reports itself after it is created.
+    pub registration: RegistrationMode,
+    /// CloudFormation template description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Who may manage the stack.
+    #[serde(default)]
+    pub management_trust: ManagementTrustOptions,
+    /// AWS regions the templates accept; empty accepts any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_aws_regions: Vec<String>,
+    /// How Terraform modules report themselves; none for modules registered out of band.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terraform_registration: Option<TerraformRegistration>,
+    /// The hosting service's fingerprint of this setup's shape, reported at registration.
+    pub setup_fingerprint: String,
+    /// Version of the scheme behind `setup_fingerprint`.
+    pub setup_fingerprint_version: u32,
+}
+
 /// Everything a setup template depends on besides the stack.
-///
-/// The hosting options (`registration`, `description`, `management_trust`,
-/// `supported_aws_regions`) belong to the platform that hosts the templates; the CLI must
-/// use the values that platform renders with, or the digests won't match.
 #[derive(Builder)]
 pub struct SetupRenderOptions<'a> {
     /// Fingerprint and channel the templates pin.
@@ -60,15 +83,8 @@ pub struct SetupRenderOptions<'a> {
     pub cloudformation_registry: &'a CfRegistry,
     pub terraform_registry: &'a TfRegistry,
     pub helm_registry: &'a HelmRegistry,
-    /// How the CloudFormation stack reports itself after it is created.
-    pub registration: RegistrationMode,
-    /// CloudFormation template description.
-    pub description: Option<String>,
-    #[builder(default)]
-    pub management_trust: ManagementTrustOptions,
-    /// AWS regions the Terraform AWS module accepts; empty accepts any.
-    #[builder(default)]
-    pub supported_aws_regions: Vec<String>,
+    /// What the hosting service renders with.
+    pub hosting: SetupHostingOptions,
     /// Machine-image publisher and verifier image. Leave the default, this build's own, except
     /// in tests: a release records templates rendered with it.
     #[builder(default = SetupPins::compiled_in())]
@@ -151,11 +167,11 @@ pub async fn render_setup_template(
                     target: CloudFormationTarget::Aws,
                     stack_settings: settings.clone(),
                     setup_target: "aws".to_string(),
-                    setup_fingerprint: "render-preview".to_string(),
-                    setup_fingerprint_version: 1,
-                    registration: options.registration.clone(),
-                    description: options.description.clone(),
-                    management_trust: options.management_trust.clone(),
+                    setup_fingerprint: options.hosting.setup_fingerprint.clone(),
+                    setup_fingerprint_version: options.hosting.setup_fingerprint_version,
+                    registration: options.hosting.registration.clone(),
+                    description: options.hosting.description.clone(),
+                    management_trust: options.hosting.management_trust.clone(),
                 },
             )
             .context(step(name, "generate the template"))?;
@@ -203,9 +219,9 @@ pub async fn render_setup_template(
                     display_name: None,
                     registry: options.terraform_registry,
                     stack_settings: settings.clone(),
-                    registration: None,
+                    registration: options.hosting.terraform_registration.clone(),
                     helm_install: None,
-                    supported_aws_regions: options.supported_aws_regions.clone(),
+                    supported_aws_regions: options.hosting.supported_aws_regions.clone(),
                 },
             )
             .context(step(name, "generate the module"))?;

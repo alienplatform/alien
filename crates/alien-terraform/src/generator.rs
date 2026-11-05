@@ -118,7 +118,8 @@ pub struct TerraformOptions<'a> {
 }
 
 /// Terraform provider dependency used by self-registering modules.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TerraformRegistration {
     /// Local Terraform provider name, used in `required_providers`.
     pub provider_name: String,
@@ -917,7 +918,12 @@ pub(crate) fn render_terraform_module(
     // `terraform fmt -check` expects. If terraform isn't installed we ship
     // the hcl-rs output as-is \u2014 it parses identically; only attribute
     // equals-sign alignment differs.
-    let _ = format_with_terraform(&mut module);
+    //
+    // A protected module skips it: a signed release records its digest, and
+    // its bytes must not depend on what is on the renderer's PATH.
+    if stack_settings.signing.is_none() {
+        let _ = format_with_terraform(&mut module);
+    }
 
     Ok(module)
 }
