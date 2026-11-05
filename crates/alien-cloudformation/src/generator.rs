@@ -682,7 +682,7 @@ pub fn generate_cloudformation_template_with_profile(
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
     apply_network_iam_dependencies(stack, &emitted_resource_ids, &mut template);
     add_sandbox_gateway_replica_secret(&mut template, stack, options.target);
-    add_release_trust_anchor(&mut template, &stack_settings_value, options.target)?;
+    add_signing_settings(&mut template, &stack_settings_value, options.target)?;
     consolidate_role_inline_policies(&mut template)?;
 
     add_deployer_secret_outputs(
@@ -1853,13 +1853,18 @@ fn add_sandbox_gateway_replica_secret(
     template.resources.insert(secret.logical_id.clone(), secret);
 }
 
+/// Template parameter that shows a protected install's signing fingerprint. It allows exactly
+/// one value, so a Quick-create link can't change it.
+pub const SIGNING_FINGERPRINT_PARAMETER: &str = "SigningFingerprint";
 /// Logical IDs of the parameters that hold a protected install's signing settings and ledger.
 const SIGNING_SETTINGS_ID: &str = "SigningFingerprintParameter";
 const SIGNING_LEDGER_ID: &str = "SigningStateParameter";
 
 /// Writes a protected install's signing settings and its ledger: setup alone writes the
 /// settings. They live under `/signed/`, which no management grant on `<prefix>-*` reaches.
-fn add_release_trust_anchor(
+/// The fingerprint and channel are literals, so the template's digest pins them; the
+/// `SigningFingerprint` parameter only shows the fingerprint to whoever creates the stack.
+fn add_signing_settings(
     template: &mut CfTemplate,
     settings: &StackSettings,
     target: CloudFormationTarget,
@@ -1878,6 +1883,54 @@ fn add_release_trust_anchor(
     // CloudFormation.
     let mut signing_settings = signing.settings("stack")?;
     signing_settings.prefix = prefix.to_string();
+
+    template.parameters.insert(
+        SIGNING_FINGERPRINT_PARAMETER.to_string(),
+        CfParameter {
+            parameter_type: "String".to_string(),
+            description: Some(
+                "Only software and settings signed with the vendor's keys run in this stack. Before creating it, check that this matches the fingerprint on the vendor's security page."
+                    .to_string(),
+            ),
+            default: Some(CfExpression::from(signing.fingerprint.as_str())),
+            allowed_values: Some(vec![CfExpression::from(signing.fingerprint.as_str())]),
+            allowed_pattern: None,
+            constraint_description: Some(
+                "This template runs only software signed with one fingerprint; it can't be changed."
+                    .to_string(),
+            ),
+            min_length: None,
+            max_length: None,
+            min_value: None,
+            max_value: None,
+            no_echo: None,
+        },
+    );
+    if let Some(interface) = template.metadata.get_mut("AWS::CloudFormation::Interface") {
+        if let Some(Value::Array(groups)) = interface.get_mut("ParameterGroups") {
+            groups.insert(
+                0,
+                json!({
+                    "Label": { "default": "Release signing" },
+                    "Parameters": [SIGNING_FINGERPRINT_PARAMETER],
+                }),
+            );
+        }
+        if let Some(Value::Object(labels)) = interface.get_mut("ParameterLabels") {
+            labels.insert(
+                SIGNING_FINGERPRINT_PARAMETER.to_string(),
+                json!({ "default": "Signing fingerprint" }),
+            );
+        }
+    }
+    template.outputs.insert(
+        SIGNING_FINGERPRINT_PARAMETER.to_string(),
+        output(
+            "Compare with the vendor's security page.",
+            CfExpression::from(alien_signing::display_fingerprint(&signing.fingerprint)),
+        ),
+    );
+
     for (id, name, tier, value, description) in [
         (
             SIGNING_SETTINGS_ID,
@@ -3151,6 +3204,14 @@ fn add_custom_resource(
         "StackSettings".to_string() => stack_settings,
         "Resources".to_string() => resources,
     };
+    // What setup reports about protection; the control plane shows it and trusts nothing
+    // else from it.
+    if let Some(signing) = &options.stack_settings.signing {
+        resource.properties.insert(
+            "SigningFingerprint".to_string(),
+            CfExpression::from(signing.fingerprint.as_str()),
+        );
+    }
     if !matches!(&input_values, CfExpression::Object(values) if values.is_empty()) {
         resource
             .properties

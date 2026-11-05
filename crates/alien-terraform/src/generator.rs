@@ -517,8 +517,8 @@ pub(crate) fn render_terraform_module(
     if let Some(barrier) = &gcp_iam_propagation_barrier {
         import_depends_on.push(barrier.clone());
     }
-    let release_trust_anchor = release_trust_anchor_blocks(&stack_settings, target, &labels)?;
-    import_depends_on.extend(release_trust_anchor.iter().filter_map(resource_address));
+    let signing = signing_blocks(&stack_settings, target)?;
+    import_depends_on.extend(signing.iter().filter_map(resource_address));
 
     let network_vars = network_extra_variables(stack, &labels);
     let include_kubernetes_provider = target.is_kubernetes()
@@ -730,11 +730,11 @@ pub(crate) fn render_terraform_module(
             files.insert(file_name, render_body(body)?);
         }
     }
-    if !release_trust_anchor.is_empty() {
+    if !signing.is_empty() {
         files.insert(
-            "release_trust.tf".to_string(),
+            "signing.tf".to_string(),
             render_body(Body::from(
-                release_trust_anchor
+                signing
                     .into_iter()
                     .map(Structure::Block)
                     .collect::<Vec<_>>(),
@@ -1791,23 +1791,24 @@ fn body_is_empty(body: &Body) -> bool {
 /// writes the settings. Their names start with `/signed/` (AWS) or `signed-` (GCP), which no
 /// management grant on `<prefix>-*` reaches.
 ///
+/// The fingerprint and channel are literals, so the module's digest pins them; the
+/// `signing_fingerprint` variable only shows the fingerprint and refuses any other value.
+///
 /// On Azure the settings are not written yet; the Azure management emitter writes the deny
 /// settings that keep the management identity away from what runs code.
-fn release_trust_anchor_blocks(
-    settings: &StackSettings,
-    target: TerraformTarget,
-    _labels: &IndexMap<String, String>,
-) -> Result<Vec<Block>> {
+fn signing_blocks(settings: &StackSettings, target: TerraformTarget) -> Result<Vec<Block>> {
     let Some(signing) = &settings.signing else {
         return Ok(Vec::new());
     };
+    let fingerprint_variable = signing_fingerprint_variable(&signing.fingerprint);
     let prefix = "${local.resource_prefix}";
     let mut signing_settings = signing.settings("stack")?;
     signing_settings.prefix = prefix.to_string();
-    let settings_value = expr::template(signing_settings.to_json());
-    let ledger_value = expr::template(alien_signing::Ledger::new(prefix).to_json());
+    let settings_value = json_template(&signing_settings.to_json());
+    let ledger_value = json_template(&alien_signing::Ledger::new(prefix).to_json());
     match target {
         TerraformTarget::Aws => Ok(vec![
+            fingerprint_variable,
             resource_block(
                 "aws_ssm_parameter",
                 "signing_fingerprint",
@@ -1836,7 +1837,7 @@ fn release_trust_anchor_blocks(
             ),
         ]),
         TerraformTarget::Gcp => {
-            let mut blocks = Vec::new();
+            let mut blocks = vec![fingerprint_variable];
             for (label, name, value) in [
                 (
                     "signing_fingerprint",
@@ -1873,13 +1874,56 @@ fn release_trust_anchor_blocks(
             }
             Ok(blocks)
         }
-        TerraformTarget::Azure => Ok(Vec::new()),
+        TerraformTarget::Azure => Ok(vec![fingerprint_variable]),
         TerraformTarget::Eks | TerraformTarget::Gke | TerraformTarget::Aks => {
             Err(AlienError::new(ErrorData::OperationNotSupported {
                 operation: format!("protect a {} install through Terraform", target.name()),
                 reason: "on Kubernetes the chart's signing values hold the settings".to_string(),
             }))
         }
+    }
+}
+
+/// A quoted template whose value is `json`, keeping its `${...}` interpolations.
+fn json_template(json: &str) -> Expression {
+    expr::template(json.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Variable that shows a protected install's signing fingerprint and accepts only that value.
+pub const SIGNING_FINGERPRINT_VARIABLE: &str = "signing_fingerprint";
+
+fn signing_fingerprint_variable(fingerprint: &str) -> Block {
+    let literal = serde_json::Value::String(fingerprint.to_string()).to_string();
+    Block {
+        identifier: Identifier::sanitized("variable"),
+        labels: vec![BlockLabel::String(SIGNING_FINGERPRINT_VARIABLE.to_string())],
+        body: Body::from(vec![
+            attr("type", expr::raw("string")),
+            attr(
+                "description",
+                Expression::String(
+                    "Only software and settings signed with the vendor's keys run here. Check that this matches the fingerprint on the vendor's security page."
+                        .to_string(),
+                ),
+            ),
+            attr("default", Expression::String(fingerprint.to_string())),
+            nested(block(
+                "validation",
+                [
+                    attr(
+                        "condition",
+                        expr::raw(format!("var.{SIGNING_FINGERPRINT_VARIABLE} == {literal}")),
+                    ),
+                    attr(
+                        "error_message",
+                        Expression::String(
+                            "This module runs only software signed with one fingerprint; it can't be changed."
+                                .to_string(),
+                        ),
+                    ),
+                ],
+            )),
+        ]),
     }
 }
 
