@@ -10,8 +10,8 @@ use crate::{
         helpers::{
             cf_from_json, chunk_managed_policy_statements, managing_role_trust_statement,
             required_logical_id, resource_config, tags, uniquify_iam_statement_sids,
-            CONDITION_HAS_MANAGEMENT_EXTERNAL_ID, PARAM_MANAGEMENT_EXTERNAL_ID,
-            PARAM_MANAGING_ROLE_ARN,
+            CONDITION_HAS_MANAGEMENT_EXTERNAL_ID, CONDITION_HAS_MANAGEMENT_SESSION_CUTOFF,
+            PARAM_MANAGEMENT_EXTERNAL_ID, PARAM_MANAGEMENT_SESSION_CUTOFF, PARAM_MANAGING_ROLE_ARN,
         },
         service_account::permission_context,
     },
@@ -60,7 +60,7 @@ impl CfEmitter for AwsRemoteStackManagementEmitter {
             .properties
             .insert("PolicyDocument".to_string(), boundary_document(ctx)?);
         let policy_documents = remote_management_policy_documents(ctx)?;
-        let mut resources = vec![role, boundary];
+        let mut resources = vec![role, boundary, session_cutoff_policy(&role_id)];
         resources.extend(management_policy_resources(&role_id, policy_documents));
 
         Ok(resources)
@@ -82,6 +82,51 @@ impl CfEmitter for AwsRemoteStackManagementEmitter {
         ];
         Ok(CfExpression::object(fields))
     }
+}
+
+/// Revoking trust alone does not revoke credentials that STS already issued.
+/// Keep this deny setup-owned and separate from generated permission grants.
+/// The administrator must retain it across later updates and only advance it.
+fn session_cutoff_policy(role_id: &str) -> CfResource {
+    let mut policy = CfResource::new(
+        format!("{role_id}SessionCutoff"),
+        "AWS::IAM::Policy".to_string(),
+    );
+    policy.condition = Some(CONDITION_HAS_MANAGEMENT_SESSION_CUTOFF.to_string());
+    policy.properties.insert(
+        "PolicyName".to_string(),
+        CfExpression::from("alien-revoke-older-management-sessions"),
+    );
+    policy.properties.insert(
+        "Roles".to_string(),
+        CfExpression::list([CfExpression::ref_(role_id)]),
+    );
+    policy.properties.insert(
+        "PolicyDocument".to_string(),
+        CfExpression::object([
+            ("Version", CfExpression::from("2012-10-17")),
+            (
+                "Statement",
+                CfExpression::list([CfExpression::object([
+                    ("Sid", CfExpression::from("RevokeOlderManagementSessions")),
+                    ("Effect", CfExpression::from("Deny")),
+                    ("Action", CfExpression::from("*")),
+                    ("Resource", CfExpression::from("*")),
+                    (
+                        "Condition",
+                        CfExpression::object([(
+                            "DateLessThan",
+                            CfExpression::object([(
+                                "aws:TokenIssueTime",
+                                CfExpression::ref_(PARAM_MANAGEMENT_SESSION_CUTOFF),
+                            )]),
+                        )]),
+                    ),
+                ])]),
+            ),
+        ]),
+    );
+    policy
 }
 
 fn boundary_logical_id(resource_logical_id: &str) -> String {
@@ -332,13 +377,36 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
     statements.push(CfExpression::object([
         ("Sid", CfExpression::from("ReadOwnManagementRole")),
         ("Effect", CfExpression::from("Allow")),
-        ("Action", CfExpression::from("iam:GetRole")),
+        (
+            "Action",
+            CfExpression::list([
+                CfExpression::from("iam:GetRole"),
+                CfExpression::from("iam:GetRolePolicy"),
+            ]),
+        ),
         (
             "Resource",
             CfExpression::sub(
                 "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-management",
             ),
         ),
+    ]));
+
+    // Installation verification reads only this setup stack; it cannot update IAM
+    // or apply a CloudFormation change on behalf of the customer administrator.
+    statements.push(CfExpression::object([
+        ("Sid", CfExpression::from("ReadOwnSetupStack")),
+        ("Effect", CfExpression::from("Allow")),
+        (
+            "Action",
+            CfExpression::list([
+                CfExpression::from("cloudformation:GetTemplate"),
+                CfExpression::from("cloudformation:DescribeStacks"),
+                CfExpression::from("cloudformation:DescribeStackResources"),
+                CfExpression::from("cloudformation:DescribeStackEvents"),
+            ]),
+        ),
+        ("Resource", CfExpression::ref_("AWS::StackId")),
     ]));
 
     // Chunk against the complete expanded ARN before replacing it with a short Ref.
