@@ -622,8 +622,9 @@ pub enum DeploymentsCmd {
         secret_inputs: Vec<String>,
 
         /// Secret input read from a file in ID=PATH format, or from piped stdin with
-        /// ID=-. The contents are sent byte for byte, including any trailing
-        /// newline, so use it for PEM certificates and keys (can be used multiple times)
+        /// ID=-. The contents must be UTF-8 text and are sent byte for byte,
+        /// including any trailing newline, so use it for PEM certificates and keys
+        /// (can be used multiple times)
         #[arg(long = "secret-input-file", value_name = "ID=PATH")]
         secret_input_files: Vec<String>,
 
