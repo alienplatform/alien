@@ -513,9 +513,10 @@ pub(crate) mod tests {
             },
         ));
         let spec = planned(&with_config, &reads).await.unwrap();
+        // Compared as JSON: key order depends on serde_json's features.
         assert_eq!(
-            spec.env["ALIEN_UPLOADS_BINDING"],
-            r#"{"bucketName":"acme-prod-uploads","service":"s3"}"#
+            serde_json::from_str::<serde_json::Value>(&spec.env["ALIEN_UPLOADS_BINDING"]).unwrap(),
+            serde_json::json!({"bucketName": "acme-prod-uploads", "service": "s3"})
         );
         assert!(spec.env["ALIEN_SEARCH_BINDING"].contains("acme-prod-search"));
         assert!(spec.env["ALIEN_DB_BINDING"].contains("db.vendor.example"));
