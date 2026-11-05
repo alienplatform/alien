@@ -1015,6 +1015,16 @@ pub fn is_pinned_image(image: &str) -> bool {
         && hex.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
+/// Digest (`sha256:<64 hex>`) of the Operator image protected charts run, if this build has
+/// one. The CLI release workflow writes it into `operator-digest.txt` with the other pins; it
+/// is the `operator` digest a signed release names in `components`.
+pub fn operator_digest() -> Option<&'static str> {
+    let digest = include_str!("../operator-digest.txt").trim();
+    let hex = digest.strip_prefix("sha256:")?;
+    (hex.len() == 64 && hex.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))
+        .then_some(digest)
+}
+
 /// Values a protected setup pins that come with the CLI build, not with the stack: the account
 /// whose machine images machines may boot and the verifier image. Renders that a release
 /// records use [`SetupPins::compiled_in`], so every build of one release renders the same
@@ -1025,6 +1035,8 @@ pub struct SetupPins {
     pub aws_publisher: Option<String>,
     /// AWS verifier image, `<repository>@sha256:<64 hex>` in the publisher's registry.
     pub aws_verifier_image: Option<String>,
+    /// `sha256:<64 hex>` of the Operator image protected charts run.
+    pub operator_digest: Option<String>,
 }
 
 impl SetupPins {
@@ -1033,6 +1045,7 @@ impl SetupPins {
         Self {
             aws_publisher: machine_image_publisher_aws().map(str::to_string),
             aws_verifier_image: verifier_image_aws().map(str::to_string),
+            operator_digest: operator_digest().map(str::to_string),
         }
     }
 }
