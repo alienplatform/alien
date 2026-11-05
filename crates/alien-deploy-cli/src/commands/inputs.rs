@@ -4,9 +4,10 @@
 //! On a protected deployment, the machines and operators read deployer
 //! inputs from a store only the customer can write, and ignore any value the
 //! control plane sends. The store is named by the deployment's trust anchor
-//! (its `inputs` field): `aws-ssm:<parameter name>` for an SSM parameter
-//! holding a JSON object, or a path to a TOML file. A change takes effect on
-//! the next check, with no stack update.
+//! (its `inputs` field). This command writes `aws-ssm:<parameter name>`, an
+//! SSM parameter holding a JSON object, or a path to a TOML file, and refuses
+//! the other stores an anchor can name. A change takes effect on the next
+//! check, with no stack update.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -14,13 +15,15 @@ use std::path::PathBuf;
 use alien_aws_clients::ssm::{GetParameterRequest, PutParameterRequest, SsmApi, SsmClient};
 use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt, AwsCredentialProvider};
 use alien_client_core::ErrorData as CloudClientErrorData;
+use alien_core::{DEPLOYER_INPUTS_STORE_GCP_SECRET, DEPLOYER_INPUTS_STORE_SSM};
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Args, Subcommand};
 
 use crate::error::{ErrorData, Result};
 
-/// Anchor `inputs` prefix naming an SSM parameter.
-const SSM_PREFIX: &str = "aws-ssm:";
+/// Anchor `inputs` prefixes of stores this command doesn't write. Without
+/// them, such a location would be taken for a file path.
+const UNSUPPORTED_PREFIXES: [&str; 2] = [DEPLOYER_INPUTS_STORE_GCP_SECRET, "azure-keyvault:"];
 
 #[derive(Args, Debug, Clone)]
 #[command(about = "Change deployer inputs in your own store")]
@@ -65,11 +68,22 @@ enum Store {
 }
 
 impl Store {
-    fn parse(location: &str) -> Self {
-        match location.strip_prefix(SSM_PREFIX) {
-            Some(name) => Store::Ssm(name.to_string()),
-            None => Store::File(PathBuf::from(location)),
+    fn parse(location: &str) -> Result<Self> {
+        if let Some(name) = location.strip_prefix(DEPLOYER_INPUTS_STORE_SSM) {
+            return Ok(Store::Ssm(name.to_string()));
         }
+        if UNSUPPORTED_PREFIXES
+            .iter()
+            .any(|prefix| location.starts_with(prefix))
+        {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "store".to_string(),
+                message: format!(
+                    "This command writes only an SSM parameter or a file, not {location}"
+                ),
+            }));
+        }
+        Ok(Store::File(PathBuf::from(location)))
     }
 
     async fn read(&self) -> Result<BTreeMap<String, String>> {
@@ -218,7 +232,7 @@ fn apply(
 pub async fn inputs_command(args: InputsArgs) -> Result<()> {
     match args.command {
         InputsCommand::List(store) => {
-            let inputs = Store::parse(&store.store).read().await?;
+            let inputs = Store::parse(&store.store)?.read().await?;
             if inputs.is_empty() {
                 println!("No deployer inputs in {}", store.store);
             }
@@ -234,7 +248,7 @@ pub async fn inputs_command(args: InputsArgs) -> Result<()> {
                     message: "pass --input id=value or --unset id".to_string(),
                 }));
             }
-            let store = Store::parse(&args.store.store);
+            let store = Store::parse(&args.store.store)?;
             let mut inputs = store.read().await?;
             apply(&mut inputs, &args.inputs, &args.unset)?;
             store.write(&inputs).await?;
@@ -318,12 +332,22 @@ mod tests {
     #[test]
     fn the_store_is_named_like_the_anchor_names_it() {
         assert_eq!(
-            Store::parse("aws-ssm:/acme/inputs"),
+            Store::parse("aws-ssm:/acme/inputs").unwrap(),
             Store::Ssm("/acme/inputs".to_string())
         );
         assert_eq!(
-            Store::parse("/etc/acme/inputs.toml"),
+            Store::parse("/etc/acme/inputs.toml").unwrap(),
             Store::File(PathBuf::from("/etc/acme/inputs.toml"))
         );
+        for unsupported in [
+            "gcp-secret:_deployer-inputs-orders",
+            "azure-keyvault:orders/inputs",
+        ] {
+            assert_eq!(
+                Store::parse(unsupported).unwrap_err().code,
+                "VALIDATION_ERROR",
+                "{unsupported} must not be written as a file"
+            );
+        }
     }
 }
