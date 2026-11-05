@@ -17,6 +17,9 @@ pub async fn collect(
     if source.metric_names.is_empty()
         || source.metric_names.len() > 20
         || source.interval_seconds == 0
+        || source.interval_seconds > 86400
+        || window.start.timestamp() % i64::from(source.interval_seconds.max(1)) != 0
+        || window.end.timestamp() % i64::from(source.interval_seconds.max(1)) != 0
         || !matches!(
             source.aggregation.as_str(),
             "Total" | "Average" | "Minimum" | "Maximum" | "Count"
@@ -104,6 +107,22 @@ pub async fn collect(
                 };
                 // Null means unavailable, never zero.
                 if let Some(value) = value {
+                    if source.monotonic && value < 0.0 {
+                        return Err(invalid("Azure counter increment is negative"));
+                    }
+                    if start
+                        < u64::try_from(window.start.timestamp())
+                            .map_err(|_| invalid("Invalid source window"))?
+                            * 1_000_000_000
+                        || end
+                            > u64::try_from(window.end.timestamp())
+                                .map_err(|_| invalid("Invalid source window"))?
+                                * 1_000_000_000
+                    {
+                        return Err(invalid(
+                            "Azure returned an unclosed or out-of-window aggregation period",
+                        ));
+                    }
                     points.push(point(start, end, value, &labels)?);
                 }
             }

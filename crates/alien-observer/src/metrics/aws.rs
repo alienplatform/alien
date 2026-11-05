@@ -29,6 +29,8 @@ pub async fn collect(
                 source.statistic.as_str(),
                 "Sum" | "Average" | "Minimum" | "Maximum" | "SampleCount"
             )
+            || window.start.timestamp() % i64::from(source.period_seconds.max(1)) != 0
+            || window.end.timestamp() % i64::from(source.period_seconds.max(1)) != 0
         {
             return Err(invalid(
                 "Invalid CloudWatch source period or unsupported statistic",
@@ -131,6 +133,16 @@ pub async fn collect(
                 let end = start
                     .checked_add(source.period_seconds as u64 * 1_000_000_000)
                     .ok_or_else(|| invalid("CloudWatch timestamp overflow"))?;
+                if time < window.start.timestamp()
+                    || time + i64::from(source.period_seconds) > window.end.timestamp()
+                {
+                    return Err(invalid(
+                        "CloudWatch returned an unclosed or out-of-window aggregation period",
+                    ));
+                }
+                if source.monotonic && value < 0.0 {
+                    return Err(invalid("CloudWatch counter increment is negative"));
+                }
                 points.push(point(start, end, value, &labels)?);
             }
             batch.metrics.push(scalar(

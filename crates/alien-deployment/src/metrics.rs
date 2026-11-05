@@ -74,7 +74,18 @@ pub async fn collect_and_checkpoint(
             .into_alien_error()
             .context(failure("Could not encode metric source"))?;
         let source_hash = hex::encode(Sha256::digest(source_json));
-        let interval = i64::from(collection.interval_seconds);
+        // Different jobs have different native resolution: a daily capacity
+        // measurement must not become a sequence of partially queried minutes.
+        let source_period = match &job.source {
+            MetricsSource::Aws(sources) => sources
+                .iter()
+                .map(|source| i64::from(source.period_seconds))
+                .max()
+                .unwrap_or(0),
+            MetricsSource::Azure(source) => i64::from(source.interval_seconds),
+            MetricsSource::Gcp(_) | MetricsSource::Scrape(_) => 0,
+        };
+        let interval = i64::from(collection.interval_seconds).max(source_period);
         let end_seconds =
             (now.timestamp() - i64::from(collection.source_lag_seconds)) / interval * interval;
         let end = Utc
