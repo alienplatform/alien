@@ -310,6 +310,8 @@ pub struct ImageFacts {
     pub architecture: String,
     /// When the cloud says it was created.
     pub created: DateTime<Utc>,
+    /// Size of its root disk in GiB; a machine's root disk can't be smaller.
+    pub root_disk_gib: u32,
 }
 
 /// The images this build boots, compiled in by the release workflow.
@@ -428,6 +430,9 @@ pub struct RollBasics {
     pub tags: Vec<(String, String)>,
     /// `<prefix>-<cluster>-<group>`, the group's name in the cloud.
     pub name: String,
+    /// Root disk size in GiB: the signed group's, or the image's when that
+    /// is larger (the clouds refuse a disk smaller than its image).
+    pub root_disk_gib: i32,
 }
 
 /// The checks every cloud's roll shares: the image is the publisher's and
@@ -471,9 +476,16 @@ pub fn roll_basics(
             "the release pins no {component} build, so no machine may boot it"
         )));
     }
+    let image_disk = i32::try_from(image.root_disk_gib).map_err(|_| {
+        refused(format!(
+            "image root disk of {} GiB is too large",
+            image.root_disk_gib
+        ))
+    })?;
     Ok(RollBasics {
         tags: boot_tags(&request.group, request.api_url.as_deref())?,
         name: scale_target(&place.prefix, &request.cluster, &request.group)?,
+        root_disk_gib: group.aws_root_volume_size_gib().max(image_disk),
         group,
         instance_type,
     })
@@ -499,6 +511,7 @@ pub fn plan_roll(
         instance_type,
         tags,
         name: base,
+        root_disk_gib,
     } = roll_basics(place, release, request, pins, image)?;
     let network = place.machine_network.as_ref().ok_or_else(|| {
         refused("setup fixed no machine network for this verifier, so it launches no machines")
@@ -533,7 +546,7 @@ pub fn plan_roll(
     };
     let mut disks = vec![LaunchTemplateBlockDeviceMapping {
         device_name: Some("/dev/xvda".to_string()),
-        ebs: Some(ebs(group.aws_root_volume_size_gib())),
+        ebs: Some(ebs(root_disk_gib)),
     }];
     if let Some(size) = group.aws_runtime_data_volume_size_gib() {
         disks.push(LaunchTemplateBlockDeviceMapping {
@@ -730,10 +743,23 @@ impl<E: Ec2Api, A: AutoScalingApi> MachineApi for AwsMachines<E, A> {
                     .as_deref()
                     .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
                     .ok_or_else(|| missing("creation date"))?;
+                let root = image
+                    .root_device_name
+                    .as_deref()
+                    .ok_or_else(|| missing("root device"))?;
+                let root_disk = image
+                    .block_device_mapping
+                    .iter()
+                    .flat_map(|set| &set.items)
+                    .find(|mapping| mapping.device_name.as_deref() == Some(root))
+                    .and_then(|mapping| mapping.ebs.as_ref()?.volume_size)
+                    .and_then(|size| u32::try_from(size).ok())
+                    .ok_or_else(|| missing("root volume size"))?;
                 Ok(ImageFacts {
                     owner: image.owner_id.ok_or_else(|| missing("owner"))?,
                     architecture: image.architecture.ok_or_else(|| missing("architecture"))?,
                     created: created.with_timezone(&Utc),
+                    root_disk_gib: root_disk,
                 })
             })
             .transpose()
@@ -958,7 +984,32 @@ mod tests {
             owner: owner.to_string(),
             architecture: "arm64".to_string(),
             created: "2026-09-01T00:00:00Z".parse().unwrap(),
+            root_disk_gib: 8,
         }
+    }
+
+    #[test]
+    fn the_root_volume_is_never_smaller_than_the_image() {
+        let root = |image_disk: u32| {
+            let plan = plan_roll(
+                &place(),
+                &release(),
+                &request(),
+                &pins(),
+                &ImageFacts {
+                    root_disk_gib: image_disk,
+                    ..arm_image(PUBLISHER)
+                },
+            )
+            .unwrap();
+            let mappings = plan.data.block_device_mappings.unwrap();
+            assert_eq!(mappings[0].device_name.as_deref(), Some("/dev/xvda"));
+            mappings[0].ebs.as_ref().unwrap().volume_size.unwrap()
+        };
+        // The signed group's size when the image is smaller, the image's
+        // when it is larger (EC2 refuses a volume smaller than its snapshot).
+        assert_eq!(root(8), 20);
+        assert_eq!(root(50), 50);
     }
 
     fn pins() -> ImagePins {
