@@ -97,8 +97,8 @@ pub fn is_loader_env(name: &str) -> bool {
 /// Components whose builds a release pins. An enforcer runs only a build
 /// whose digest the release names.
 pub const COMPONENTS: &[&str] = &[
-    "horizond/linux-x86_64",
-    "horizond/linux-aarch64",
+    "machine-agent/linux-x86_64",
+    "machine-agent/linux-aarch64",
     "operator",
     "verifier/aws",
     "verifier/gcp",

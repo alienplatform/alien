@@ -368,11 +368,4 @@ pub mod names {
     pub fn kubernetes_settings(release: &str) -> String {
         format!("{release}-signing")
     }
-
-    /// File on a machine holding its signing settings. `join` writes it, and
-    /// nothing configures another path.
-    pub const MACHINE_SETTINGS: &str = "/etc/horizond/signing.toml";
-
-    /// File on a machine holding its ledger.
-    pub const MACHINE_LEDGER: &str = "/var/lib/horizond/state";
 }
