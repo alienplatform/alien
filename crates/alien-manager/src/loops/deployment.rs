@@ -1704,6 +1704,7 @@ impl RunnerConfigSources<'_> {
                 native_image_host,
                 volume_restores: Vec::new(),
                 deletion_policy: Default::default(),
+                release_statements: None,
             }
         };
         Ok(config)

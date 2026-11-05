@@ -393,11 +393,12 @@ fn refuse_changes_requiring_setup(
 /// Note: Stack settings are updated during UpdatePending phase and should not change mid-update.
 pub async fn handle_updating(
     current: DeploymentState,
-    config: DeploymentConfig,
+    mut config: DeploymentConfig,
     client_config: alien_core::ClientConfig,
     service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
     info!("Handling Updating status");
+    config.release_statements = crate::helpers::release_statements(current.target_release.as_ref());
 
     // Clone current first before moving any fields
     let mut next = current.clone();

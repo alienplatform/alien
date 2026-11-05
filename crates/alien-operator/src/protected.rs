@@ -310,6 +310,7 @@ fn protect_config(
         compute_backend: None,
         domain_metadata: None,
         native_image_host: None,
+        release_statements: None,
     })
 }
 

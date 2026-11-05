@@ -34,6 +34,18 @@ const SECRETS_SYNC_SCHEMA_VERSION: &[u8] = b"\0vault-sync:vault-backed-consumers
 
 /// The stack the executor reconciles once the deployment is prepared: the prepared stack from
 /// runtime metadata, with the deployment's environment variables and monitoring injected.
+/// The signed statement and signer list chain of the release being
+/// deployed, for controllers that forward them to enforcers.
+pub(crate) fn release_statements(
+    release: Option<&alien_core::ReleaseInfo>,
+) -> Option<alien_core::ReleaseStatements> {
+    let release = release?;
+    Some(alien_core::ReleaseStatements {
+        release: release.signed.clone()?,
+        signer_lists: release.signer_lists.clone(),
+    })
+}
+
 pub(crate) fn injected_target_stack(
     runtime_metadata: &RuntimeMetadata,
     config: &DeploymentConfig,
