@@ -3989,11 +3989,6 @@ mod tests {
         }
     }
 
-    /// A manager that records each release request body and answers it.
-    async fn start_recording_manager() -> (String, Arc<std::sync::Mutex<Vec<serde_json::Value>>>) {
-        start_recording_manager_with_lists(Vec::new()).await
-    }
-
     /// A manager that records release bodies and serves `signer_lists` for
     /// project `default`, as a compromised one could serve any list.
     async fn start_recording_manager_with_lists(

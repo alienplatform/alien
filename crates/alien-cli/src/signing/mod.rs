@@ -75,11 +75,6 @@ impl SigningHome {
         Ok(Self { root })
     }
 
-    /// A home at `root`.
-    pub fn at(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
-    }
-
     fn device_dir(&self) -> PathBuf {
         self.root.join("device")
     }

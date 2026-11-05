@@ -101,15 +101,6 @@ impl Trust {
         finish(opened, signers)
     }
 
-    /// Verify a component statement against the anchor's components key.
-    pub fn verify_component<B: DeserializeOwned>(
-        &self,
-        statement: &SignedStatement,
-        now: DateTime<Utc>,
-    ) -> Result<Verified<B>> {
-        verify_component(&self.anchor.components, statement, now)
-    }
-
     fn check_header(&self, opened: &Opened, kind: Kind, now: DateTime<Utc>) -> Result<()> {
         if kind == Kind::Component || kind == Kind::SignerList {
             return Err(AlienError::new(ErrorData::WrongKind {
