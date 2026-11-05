@@ -60,6 +60,12 @@ impl Gcp {
         }
     }
 
+    /// The same client, sending its calls through `http` (a workstation
+    /// run behind a TLS proxy passes one that trusts the proxy's CA).
+    pub fn with_http(self, http: reqwest::Client) -> Self {
+        Self { http, ..self }
+    }
+
     async fn token(&self) -> Result<String> {
         match &self.tokens {
             TokenSource::File(path) => std::fs::read_to_string(path)
@@ -301,18 +307,19 @@ impl Gcp {
         Ok(())
     }
 
-    /// Resize managed instance group `name`, zonal when `zone` is given.
+    /// Resize managed instance group `name`, zonal when `zone` is given,
+    /// and wait for the operation, so a resize Compute Engine fails is an
+    /// error and the answer's size is the group's.
     pub async fn resize_group(&self, name: &str, zone: Option<&str>, size: u32) -> Result<()> {
         let url = resize_url(&self.project, &self.region, name, zone, size)?;
-        self.call(
-            reqwest::Method::POST,
-            url.as_str(),
-            None,
-            &format!("compute instanceGroupManagers.resize {name}"),
-        )
-        .await?
-        .ok_or_else(|| AlienError::new(failed(format!("instance group {name} does not exist"))))?;
-        Ok(())
+        let what = format!("compute instanceGroupManagers.resize {name}");
+        let operation = self
+            .call(reqwest::Method::POST, url.as_str(), None, &what)
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(failed(format!("instance group {name} does not exist")))
+            })?;
+        self.wait_compute(operation, &what).await
     }
 }
 

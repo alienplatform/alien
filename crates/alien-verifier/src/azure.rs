@@ -51,6 +51,12 @@ impl Azure {
         }
     }
 
+    /// The same client, sending its calls through `http` (a workstation
+    /// run behind a TLS proxy passes one that trusts the proxy's CA).
+    pub fn with_http(self, http: reqwest::Client) -> Self {
+        Self { http, ..self }
+    }
+
     /// A token for `resource` from the Container Apps identity endpoint.
     async fn token(&self, resource: &str) -> Result<String> {
         let endpoint = std::env::var("IDENTITY_ENDPOINT")
@@ -193,15 +199,17 @@ impl Azure {
         })
     }
 
-    /// Set the capacity of scale set `name`.
+    /// Set the capacity of scale set `name` and wait until it is
+    /// provisioned, so a resize Azure fails is an error.
     pub async fn resize_scale_set(&self, name: &str, size: u32) -> Result<()> {
         let url = scale_set_url(&self.resource_group, name)?;
+        let what = format!("virtualMachineScaleSets update {name}");
         self.call(
             reqwest::Method::PATCH,
             url.as_str(),
             ARM,
             Some(&json!({"sku": {"capacity": size}})),
-            &format!("virtualMachineScaleSets update {name}"),
+            &what,
         )
         .await?
         .ok_or_else(|| {
@@ -209,7 +217,34 @@ impl Azure {
                 reason: format!("scale set {name} does not exist"),
             })
         })?;
-        Ok(())
+        self.provisioned(url.as_str(), &what).await.map(|_| ())
+    }
+
+    /// Read `url` until its provisioning state is Succeeded; Failed,
+    /// Canceled or ten minutes without it are errors.
+    async fn provisioned(&self, url: &str, what: &str) -> Result<Value> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(600);
+        loop {
+            let current = self
+                .call(reqwest::Method::GET, url, ARM, None, what)
+                .await?
+                .ok_or_else(|| AlienError::new(failed(format!("{what}: gone after the write"))))?;
+            match current["properties"]["provisioningState"].as_str() {
+                Some("Succeeded") => return Ok(current),
+                Some("Failed") | Some("Canceled") => {
+                    return Err(AlienError::new(failed(format!(
+                        "{what}: provisioning {}",
+                        current["properties"]["provisioningState"]
+                    ))))
+                }
+                _ if tokio::time::Instant::now() > deadline => {
+                    return Err(AlienError::new(failed(format!(
+                        "{what}: not provisioned after 600 s"
+                    ))))
+                }
+                _ => tokio::time::sleep(std::time::Duration::from_secs(5)).await,
+            }
+        }
     }
 }
 
@@ -319,34 +354,7 @@ impl crate::azure_machines::AzureMachineApi for Azure {
         )
         .await?
         .ok_or_else(|| AlienError::new(failed(format!("{what}: not found"))))?;
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(600);
-        loop {
-            let current = self
-                .call(
-                    reqwest::Method::GET,
-                    &format!("{ARM}{path}"),
-                    ARM,
-                    None,
-                    &what,
-                )
-                .await?
-                .ok_or_else(|| AlienError::new(failed(format!("{what}: gone after the write"))))?;
-            match current["properties"]["provisioningState"].as_str() {
-                Some("Succeeded") => return Ok(current),
-                Some("Failed") | Some("Canceled") => {
-                    return Err(AlienError::new(failed(format!(
-                        "{what}: provisioning {}",
-                        current["properties"]["provisioningState"]
-                    ))))
-                }
-                _ if tokio::time::Instant::now() > deadline => {
-                    return Err(AlienError::new(failed(format!(
-                        "{what}: not provisioned after 600 s"
-                    ))))
-                }
-                _ => tokio::time::sleep(std::time::Duration::from_secs(5)).await,
-            }
-        }
+        self.provisioned(&format!("{ARM}{path}"), &what).await
     }
 }
 

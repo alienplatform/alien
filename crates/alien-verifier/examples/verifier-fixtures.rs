@@ -10,7 +10,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use alien_core::release_statement::{self, ReleaseOptions};
-use alien_core::{CapacityGroup, ComputeCluster, Platform, ResourceLifecycle, Stack};
+use alien_core::{
+    CapacityGroup, ComputeCluster, Platform, ResourceLifecycle, ServiceAccount, Stack,
+};
 use alien_signing::envelope::Envelope;
 use alien_signing::release::{
     Bounds, Configurable, FunctionSettings, Runtime, SecretBinding, WorkloadKind,
@@ -160,27 +162,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &release(image_b, "release-60-ld-preload", "production", "LD_PRELOAD"),
         &ci,
     )?;
-    // A machine cluster: one group of one t3.micro, booting the machine
-    // agent build `agent`.
+    // A machine cluster: one group booting the machine agent build `agent`.
+    // One machine on AWS; one to two on GCP and Azure, so scale and
+    // removeMachines have room to move inside the signed bounds. The Azure
+    // stack also names service account `workers-sa`, whose setup-created
+    // identity the verifier attaches to the scale set.
     let agent = format!("sha256:{}", "a".repeat(64));
-    let machines = |platform: Platform, instance_type: &str| {
-        let stack = Stack::new("machines".to_string())
-            .add(
-                ComputeCluster::new("compute".to_string())
-                    .capacity_group(CapacityGroup {
-                        group_id: "general".to_string(),
-                        instance_type: Some(instance_type.to_string()),
-                        profile: None,
-                        min_size: 1,
-                        max_size: 1,
-                        scale_policy: None,
-                        nested_virtualization: None,
-                        data_disk_gib_range: None,
-                    })
-                    .build(),
+    let machines = |platform: Platform, instance_type: &str, max_size: u32| {
+        let stack = Stack::new("machines".to_string()).add(
+            ComputeCluster::new("compute".to_string())
+                .capacity_group(CapacityGroup {
+                    group_id: "general".to_string(),
+                    instance_type: Some(instance_type.to_string()),
+                    profile: None,
+                    min_size: 1,
+                    max_size,
+                    scale_policy: None,
+                    nested_virtualization: None,
+                    data_disk_gib_range: None,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        );
+        let stack = if platform == Platform::Azure {
+            stack.add(
+                ServiceAccount::new("workers-sa".to_string()).build(),
                 ResourceLifecycle::Frozen,
             )
-            .build();
+        } else {
+            stack
+        };
+        let stack = stack.build();
         release_statement::release_body(
             platform,
             &stack,
@@ -197,19 +209,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     signed(
         "release-70-machines",
         70,
-        &machines(Platform::Aws, "t3.micro")?,
+        &machines(Platform::Aws, "t3.micro", 1)?,
         &ci,
     )?;
     signed(
         "release-71-machines-gcp",
         71,
-        &machines(Platform::Gcp, "e2-small")?,
+        &machines(Platform::Gcp, "e2-small", 2)?,
         &ci,
     )?;
     signed(
         "release-72-machines-azure",
         72,
-        &machines(Platform::Azure, "Standard_B2s")?,
+        &machines(Platform::Azure, "Standard_D2s_v3", 2)?,
         &ci,
     )?;
 

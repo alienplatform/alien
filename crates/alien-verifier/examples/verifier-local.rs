@@ -11,6 +11,8 @@
 //!
 //! GCP takes its access token from the file in `VERIFIER_GCP_TOKEN_FILE`;
 //! Azure from `IDENTITY_ENDPOINT`/`IDENTITY_HEADER`, as on Container Apps.
+//! When `SSL_CERT_FILE` is set, its certificates are trusted too (a
+//! workstation behind a TLS proxy).
 //! Prints the answer, or the refusal and exits 1. See
 //! `scripts/verifier-e2e/gcp_machines.py`.
 
@@ -36,10 +38,12 @@ async fn main() -> std::process::ExitCode {
         minimum_created: Some(minimum.parse().expect("the minimum is RFC 3339")),
     };
     let network: SetupNetwork = serde_json::from_str(network).expect("the network is setup JSON");
+    let http = http_client();
     let verifier = match cloud.as_str() {
         "gcp" => {
             let token = std::env::var("VERIFIER_GCP_TOKEN_FILE").expect("VERIFIER_GCP_TOKEN_FILE");
-            let client = Gcp::new(TokenSource::File(token), first.clone(), second.clone());
+            let client =
+                Gcp::new(TokenSource::File(token), first.clone(), second.clone()).with_http(http);
             let project = first.clone();
             Verifier {
                 own_name: own_name.clone(),
@@ -59,7 +63,7 @@ async fn main() -> std::process::ExitCode {
                 panic!("the resource group is /subscriptions/<id>/resourceGroups/<name>");
             };
             let (subscription, group) = (subscription.to_string(), group.to_string());
-            let client = Azure::new(first.clone(), second.clone(), None);
+            let client = Azure::new(first.clone(), second.clone(), None).with_http(http);
             Verifier {
                 own_name: own_name.clone(),
                 install_id: Arc::new(move |_prefix: &str| InstallId::Azure {
@@ -89,4 +93,18 @@ async fn main() -> std::process::ExitCode {
             std::process::ExitCode::from(1)
         }
     }
+}
+
+/// A client trusting the built-in roots and, when set, `SSL_CERT_FILE`.
+fn http_client() -> reqwest::Client {
+    let mut builder = reqwest::Client::builder();
+    if let Ok(path) = std::env::var("SSL_CERT_FILE") {
+        let pem = std::fs::read(&path).expect("read SSL_CERT_FILE");
+        for certificate in
+            reqwest::Certificate::from_pem_bundle(&pem).expect("SSL_CERT_FILE is a PEM bundle")
+        {
+            builder = builder.add_root_certificate(certificate);
+        }
+    }
+    builder.build().expect("build the HTTP client")
 }
