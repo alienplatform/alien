@@ -908,6 +908,7 @@ mod tests {
             project_id: "prj_1".to_string(),
             setup_fingerprints: serde_json::Map::new(),
             signed_stacks: Default::default(),
+            signing: None,
             stack: StackByPlatform::default(),
             workspace_id: "ws_1".to_string(),
         };

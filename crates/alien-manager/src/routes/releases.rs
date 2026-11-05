@@ -93,6 +93,9 @@ pub struct ReleaseResponse {
     /// Signed statements keyed by platform, exactly as they were created.
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub signed_stacks: HashMap<Platform, SignedStatement>,
+    /// Who signed the release and for which channel, decoded from the stored
+    /// statements for display. `null` when the release is unsigned.
+    pub signing: Option<ReleaseSigning>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_metadata: Option<GitMetadataResponse>,
     pub created_at: String,
@@ -103,6 +106,30 @@ pub struct ReleaseResponse {
     /// fingerprints, so we return an empty map.
     #[serde(default)]
     pub setup_fingerprints: serde_json::Map<String, serde_json::Value>,
+}
+
+/// A signed release's channel and signers, for the release badge. Display
+/// only: decoded, never verified, because the manager isn't trusted to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseSigning {
+    /// Channel the statements sign, such as `production`.
+    pub channel: String,
+    /// Signers of the statements, with their label and kind from the signer
+    /// list version they name.
+    pub signers: Vec<ReleaseSigner>,
+}
+
+/// One signer of a release.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseSigner {
+    pub id: String,
+    pub label: Option<String>,
+    /// `device`, `ci` or `recovery`; absent when the signer list doesn't name it.
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -135,6 +162,68 @@ pub fn router() -> Router<AppState> {
 }
 
 // --- Helpers ---
+
+/// The badge fields of a release, decoded from its statements and the
+/// project's signer lists. Statements that don't decode give no badge.
+fn release_signing(r: &ReleaseRecord, lists: &[SignedStatement]) -> Option<ReleaseSigning> {
+    let mut platforms: Vec<&Platform> = r.signed_stacks.keys().collect();
+    platforms.sort_by_key(|platform| platform.as_str());
+    let opened = r.signed_stacks.get(*platforms.first()?)?.open().ok()?;
+    let body: ReleaseBody = opened.body().ok()?;
+    let list = lists
+        .iter()
+        .filter_map(|list| list.open().ok())
+        .find(|list| list.sequence == opened.signer_list_version)
+        .and_then(|list| list.body::<alien_signing::SignerListBody>().ok());
+    let signers = opened
+        .signatures
+        .iter()
+        .map(|signature| {
+            let signer = list.as_ref().and_then(|list| {
+                list.signers
+                    .iter()
+                    .find(|signer| signer.id == signature.signer)
+            });
+            ReleaseSigner {
+                id: signature.signer.clone(),
+                label: signer.and_then(|signer| signer.label.clone()),
+                kind: signer.map(|signer| signer_kind(signer.kind).to_string()),
+            }
+        })
+        .collect();
+    Some(ReleaseSigning {
+        channel: body.channel,
+        signers,
+    })
+}
+
+fn signer_kind(kind: alien_signing::SignerKind) -> &'static str {
+    match kind {
+        alien_signing::SignerKind::Device => "device",
+        alien_signing::SignerKind::Ci => "ci",
+        alien_signing::SignerKind::Recovery => "recovery",
+    }
+}
+
+/// The response for `r`, with its badge decoded against the project's
+/// stored signer lists.
+async fn release_response(
+    state: &AppState,
+    r: &ReleaseRecord,
+) -> std::result::Result<ReleaseResponse, alien_error::AlienError> {
+    let lists = match (&state.signing, r.signed_stacks.is_empty()) {
+        (Some(signing), false) => signing
+            .signer_lists(&r.project_id)
+            .await?
+            .into_iter()
+            .map(|record| record.statement)
+            .collect(),
+        _ => Vec::new(),
+    };
+    let mut response = record_to_response(r).map_err(alien_error::AlienError::into_generic)?;
+    response.signing = release_signing(r, &lists);
+    Ok(response)
+}
 
 fn record_to_response(
     r: &ReleaseRecord,
@@ -186,6 +275,7 @@ fn record_to_response(
         project_id: r.project_id.clone(),
         stack: sbp,
         signed_stacks: r.signed_stacks.clone(),
+        signing: None,
         git_metadata,
         created_at: r.created_at.to_rfc3339(),
         setup_fingerprints: serde_json::Map::new(),
@@ -198,6 +288,7 @@ fn record_to_response(
 /// deployment verifies the statement against its own anchor.
 fn check_signed_stacks_match(
     project_id: &str,
+    channel: &str,
     stacks: &HashMap<Platform, Stack>,
     signed_stacks: &HashMap<Platform, SignedStatement>,
 ) -> std::result::Result<(), alien_error::AlienError<ErrorData>> {
@@ -213,10 +304,10 @@ fn check_signed_stacks_match(
                 "The signed statement for {platform} is not a release statement"
             )));
         }
-        if opened.project.as_deref() != Some(project_id) {
+        if opened.project != project_id {
             return Err(ErrorData::bad_request(format!(
                 "The signed statement for {platform} is for project '{}'",
-                opened.project.as_deref().unwrap_or("none")
+                opened.project
             )));
         }
         let body: ReleaseBody = opened.body().map_err(|error| {
@@ -225,6 +316,12 @@ fn check_signed_stacks_match(
                 error.message
             ))
         })?;
+        if body.channel != channel {
+            return Err(ErrorData::bad_request(format!(
+                "The signed statement for {platform} is for channel '{}', but the release goes to '{channel}'",
+                body.channel
+            )));
+        }
         let signed_stack =
             alien_core::release_statement::signed_stack(&body, *platform).map_err(|error| {
                 ErrorData::bad_request(format!(
@@ -357,7 +454,9 @@ async fn create_release(
     if let Err(e) = refuse_endpoint_host_label_conflicts(&stacks) {
         return e.into_response();
     }
-    if let Err(e) = check_signed_stacks_match(&req.project_id, &stacks, &req.signed_stacks) {
+    if let Err(e) =
+        check_signed_stacks_match(&req.project_id, &channel, &stacks, &req.signed_stacks)
+    {
         return e.into_response();
     }
 
@@ -400,7 +499,7 @@ async fn create_release(
         return e.into_response();
     }
 
-    let response = match record_to_response(&release) {
+    let response = match release_response(&state, &release).await {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
@@ -443,7 +542,7 @@ async fn get_release(
         return ErrorData::forbidden("Cannot read release").into_response();
     }
 
-    match record_to_response(&release) {
+    match release_response(&state, &release).await {
         Ok(resp) => Json(resp).into_response(),
         Err(e) => e.into_response(),
     }
@@ -481,7 +580,7 @@ async fn list_releases(State(state): State<AppState>, headers: HeaderMap) -> Res
         if !state.authz.can_read_release(&subject, release) {
             continue;
         }
-        match record_to_response(release) {
+        match release_response(&state, release).await {
             Ok(resp) => items.push(resp),
             Err(e) => return e.into_response(),
         }
@@ -518,7 +617,7 @@ async fn get_latest_release(State(state): State<AppState>, headers: HeaderMap) -
         return ErrorData::forbidden("Cannot read release").into_response();
     }
 
-    match record_to_response(&release) {
+    match release_response(&state, &release).await {
         Ok(resp) => Json(resp).into_response(),
         Err(e) => e.into_response(),
     }
@@ -571,17 +670,20 @@ mod tests {
         project: &str,
         stack: &Stack,
     ) -> HashMap<Platform, SignedStatement> {
-        let key = alien_signing::SoftwareKey::from_secret_bytes(&[5; 32]).unwrap();
+        let key = alien_signing::SecretKey::from_secret_bytes(&[5; 32]).unwrap();
         let body = alien_core::release_statement::release_body(
             Platform::Kubernetes,
             stack,
-            &alien_core::release_statement::ReleaseOptions::default(),
+            &alien_core::release_statement::ReleaseOptions {
+                channel: "production".to_string(),
+                ..Default::default()
+            },
         )
         .unwrap();
         let envelope = alien_signing::Envelope {
             kind: Kind::Release.as_str().to_string(),
-            project: Some(project.to_string()),
-            deployment: None,
+            project: project.to_string(),
+            install: None,
             sequence: 1,
             not_after: None,
             signer_list_version: 1,
@@ -600,16 +702,18 @@ mod tests {
 
         check_signed_stacks_match(
             "default",
+            "production",
             &stacks,
             &signed_kubernetes_release("default", &stack),
         )
         .expect("a matching statement is accepted");
-        check_signed_stacks_match("default", &stacks, &HashMap::new())
+        check_signed_stacks_match("default", "production", &stacks, &HashMap::new())
             .expect("an unsigned release is accepted as before");
 
         let other = Stack::new("other".to_string()).build();
         let error = check_signed_stacks_match(
             "default",
+            "production",
             &stacks,
             &signed_kubernetes_release("default", &other),
         )
@@ -618,12 +722,28 @@ mod tests {
 
         let error = check_signed_stacks_match(
             "default",
+            "production",
             &stacks,
             &signed_kubernetes_release("billing", &stack),
         )
         .expect_err("a statement for another project is refused");
         assert!(
             error.message.contains("project 'billing'"),
+            "{}",
+            error.message
+        );
+
+        let error = check_signed_stacks_match(
+            "default",
+            "dev",
+            &stacks,
+            &signed_kubernetes_release("default", &stack),
+        )
+        .expect_err("a statement for another channel is refused");
+        assert!(
+            error
+                .message
+                .contains("channel 'production', but the release goes to 'dev'"),
             "{}",
             error.message
         );
@@ -635,10 +755,11 @@ mod tests {
                 signatures: Vec::new(),
             },
         )]);
-        check_signed_stacks_match("default", &stacks, &garbage)
+        check_signed_stacks_match("default", "production", &stacks, &garbage)
             .expect_err("a payload that isn't a statement is refused");
         check_signed_stacks_match(
             "default",
+            "production",
             &HashMap::new(),
             &signed_kubernetes_release("default", &stack),
         )

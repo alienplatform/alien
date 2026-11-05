@@ -1,97 +1,62 @@
-//! The control plane's signing routes. The server stores and forwards what
-//! the CLI sends; nothing it returns is trusted until it verifies here.
+//! The control plane's signing routes, the same on a manager and on the
+//! platform API. The server stores and forwards what the CLI sends; nothing
+//! it returns is trusted until it verifies here.
 
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_signing::{Signature, SignedStatement, Signer};
-use reqwest::{Client, Method};
+use alien_signing::{SignedStatement, SignerListBody};
+use reqwest::{Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ErrorData, Result};
 
-/// What a pending change asks for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum PendingKind {
-    /// A new device asks to be added to the signer list.
-    Device,
-    /// A statement prepared elsewhere waits for signatures.
-    Statement,
-}
-
 /// Where a pending change stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PendingStatus {
-    /// Waiting for a signer.
+    /// Waiting for an admin.
     Pending,
-    /// Signed and applied.
+    /// Carried by a signer list version.
     Approved,
     /// Turned down.
     Rejected,
 }
 
-/// A change the dashboard or a teammate prepared, waiting for a signature.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The body of the next signer list, prepared for an admin to review and
+/// sign: a device request, a removal or a refresh.
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingChange {
-    /// Change id, for `alien approve <id>`.
+    /// Change id, for `alien approve <id>`; the pairing code covers it.
     pub id: String,
-    /// Project.
-    pub project_id: String,
-    /// What the change is.
-    pub kind: PendingKind,
     /// Where it stands.
     pub status: PendingStatus,
-    /// One line for lists. Display only: the CLI prints the statement itself
-    /// before signing.
+    /// One line for lists. Display only.
     pub summary: String,
-    /// Deployment the change is for, if one.
+    /// Signer list version the body was prepared from.
+    pub based_on_version: u64,
+    /// The next list's body. The admin's CLI shows it as a diff against the
+    /// list it verified, and writes the header itself.
+    pub body: SignerListBody,
+    /// Who filed it. Display only.
     #[serde(default)]
-    pub deployment_id: Option<String>,
-    /// For device changes: the signer asking to be added.
-    #[serde(default)]
-    pub device: Option<Signer>,
-    /// For statement changes: base64 of the payload bytes to sign.
-    #[serde(default)]
-    pub payload: Option<String>,
-    /// Signatures gathered so far, for statements that need several.
-    #[serde(default)]
-    pub signatures: Vec<Signature>,
+    pub requested_by: Option<String>,
 }
 
-/// A new pending change.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NewPendingChange {
-    /// What the change is.
-    pub kind: PendingKind,
-    /// One line for lists.
-    pub summary: String,
-    /// Deployment the change is for, if one.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deployment_id: Option<String>,
-    /// For device changes.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub device: Option<Signer>,
-    /// For statement changes: base64 payload bytes.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub payload: Option<String>,
-    /// Signatures already made.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub signatures: Vec<Signature>,
+struct NewPendingChange<'a> {
+    summary: &'a str,
+    based_on_version: u64,
+    body: &'a SignerListBody,
 }
 
-/// How a pending change is resolved.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Resolution {
-    /// Signatures to add to the change.
-    pub signatures: Vec<Signature>,
-    /// The signed statement, once it has every signature it needs. For a
-    /// device change, the next signer list.
+struct Resolution {
+    status: PendingStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub statement: Option<SignedStatement>,
+    signer_list_version: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -102,6 +67,18 @@ struct Items<T> {
 #[derive(Serialize)]
 struct StatementBody<'a> {
     statement: &'a SignedStatement,
+}
+
+/// What storing a signer list version answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListPublished {
+    /// Stored, or the same bytes were already stored.
+    Stored,
+    /// Someone else turned signing on first: another version 1 is stored.
+    AlreadyOn {
+        /// Who turned it on.
+        enabled_by: String,
+    },
 }
 
 /// Client for the signing routes of a manager or the platform API.
@@ -125,7 +102,7 @@ impl SigningApi {
         Ok(Self::new(http.client.clone(), http.base_url.clone()))
     }
 
-    /// Every signer list version the server holds, oldest first.
+    /// Every signer list version the server holds.
     pub async fn signer_lists(&self, project: &str) -> Result<Vec<SignedStatement>> {
         let items: Items<SignedStatement> = self
             .send(
@@ -137,42 +114,60 @@ impl SigningApi {
         Ok(items.items)
     }
 
-    /// Store the next signer list version.
+    /// Store a signer list version. A second version 1 for the project is
+    /// answered with who turned signing on.
     pub async fn publish_signer_list(
         &self,
         project: &str,
         statement: &SignedStatement,
-    ) -> Result<()> {
-        let _: serde_json::Value = self
-            .send(
-                Method::POST,
-                &format!("/v1/projects/{project}/signer-lists"),
-                Some(&StatementBody { statement }),
-            )
+    ) -> Result<ListPublished> {
+        let path = format!("/v1/projects/{project}/signer-lists");
+        let (status, text) = self
+            .request(Method::POST, &path, Some(&StatementBody { statement }))
             .await?;
-        Ok(())
+        if status.is_success() {
+            return Ok(ListPublished::Stored);
+        }
+        if status == StatusCode::CONFLICT {
+            if let Ok(error) = serde_json::from_str::<ErrorBody>(&text) {
+                if error.code == "SIGNING_ALREADY_ON" {
+                    let enabled_by = error
+                        .context
+                        .and_then(|context| context.enabled_by)
+                        .unwrap_or_else(|| "another admin".to_string());
+                    return Ok(ListPublished::AlreadyOn { enabled_by });
+                }
+            }
+        }
+        Err(self.failed(&Method::POST, &path, status, &text))
     }
 
-    /// Create a pending change.
+    /// File a pending change.
     pub async fn create_pending(
         &self,
         project: &str,
-        change: &NewPendingChange,
+        summary: &str,
+        based_on_version: u64,
+        body: &SignerListBody,
     ) -> Result<PendingChange> {
         self.send(
             Method::POST,
             &format!("/v1/projects/{project}/pending-changes"),
-            Some(change),
+            Some(&NewPendingChange {
+                summary,
+                based_on_version,
+                body,
+            }),
         )
         .await
     }
 
-    /// Pending changes of a project.
+    /// The changes of a project still waiting for an admin.
     pub async fn pending(&self, project: &str) -> Result<Vec<PendingChange>> {
         let items: Items<PendingChange> = self
             .send(
                 Method::GET,
-                &format!("/v1/projects/{project}/pending-changes"),
+                &format!("/v1/projects/{project}/pending-changes?status=pending"),
                 None::<&()>,
             )
             .await?;
@@ -189,14 +184,50 @@ impl SigningApi {
         .await
     }
 
-    /// Add signatures to a pending change, or resolve it with its statement.
-    pub async fn resolve(&self, id: &str, resolution: &Resolution) -> Result<PendingChange> {
+    /// Mark a change approved by signer list `version`.
+    pub async fn approve(&self, id: &str, version: u64) -> Result<PendingChange> {
+        self.resolve(
+            id,
+            &Resolution {
+                status: PendingStatus::Approved,
+                signer_list_version: Some(version),
+            },
+        )
+        .await
+    }
+
+    /// Turn a change down.
+    pub async fn reject(&self, id: &str) -> Result<PendingChange> {
+        self.resolve(
+            id,
+            &Resolution {
+                status: PendingStatus::Rejected,
+                signer_list_version: None,
+            },
+        )
+        .await
+    }
+
+    async fn resolve(&self, id: &str, resolution: &Resolution) -> Result<PendingChange> {
         self.send(
             Method::POST,
-            &format!("/v1/pending-changes/{id}/signatures"),
+            &format!("/v1/pending-changes/{id}/resolution"),
             Some(resolution),
         )
         .await
+    }
+
+    /// Every config statement stored for a deployment, lowest sequence
+    /// first. Untrusted: the caller verifies what it uses.
+    pub async fn config_statements(&self, deployment: &str) -> Result<Vec<SignedStatement>> {
+        let items: Items<SignedStatement> = self
+            .send(
+                Method::GET,
+                &format!("/v1/deployments/{deployment}/config-statements"),
+                None::<&()>,
+            )
+            .await?;
+        Ok(items.items)
     }
 
     /// Store a signed config statement for a deployment.
@@ -215,12 +246,12 @@ impl SigningApi {
         Ok(())
     }
 
-    async fn send<B: Serialize + ?Sized, T: DeserializeOwned>(
+    async fn request<B: Serialize + ?Sized>(
         &self,
         method: Method,
         path: &str,
         body: Option<&B>,
-    ) -> Result<T> {
+    ) -> Result<(StatusCode, String)> {
         let url = format!("{}{path}", self.base_url);
         let mut request = self.client.request(method.clone(), &url);
         if let Some(body) = body {
@@ -243,15 +274,35 @@ impl SigningApi {
                 .into_alien_error()
                 .context(ErrorData::ApiRequestFailed {
                     message: format!("{method} {path}: the response could not be read"),
-                    url: Some(url.clone()),
+                    url: Some(url),
                 })?;
+        Ok((status, text))
+    }
+
+    fn failed(
+        &self,
+        method: &Method,
+        path: &str,
+        status: StatusCode,
+        text: &str,
+    ) -> AlienError<ErrorData> {
+        AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!("{method} {path} returned {status}: {}", text.trim()),
+            url: Some(format!("{}{path}", self.base_url)),
+        })
+    }
+
+    async fn send<B: Serialize + ?Sized, T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&B>,
+    ) -> Result<T> {
+        let (status, text) = self.request(method.clone(), path, body).await?;
         if !status.is_success() {
-            return Err(AlienError::new(ErrorData::ApiRequestFailed {
-                message: format!("{method} {path} returned {status}: {}", text.trim()),
-                url: Some(url),
-            }));
+            return Err(self.failed(&method, path, status, &text));
         }
-        // Writes that store something answer with an empty body.
+        // Writes that store something may answer with an empty body.
         let text = if text.trim().is_empty() {
             "null"
         } else {
@@ -261,7 +312,80 @@ impl SigningApi {
             .into_alien_error()
             .context(ErrorData::ApiRequestFailed {
                 message: format!("{method} {path}: the response is not the expected JSON"),
-                url: Some(url),
+                url: Some(format!("{}{path}", self.base_url)),
             })
     }
+}
+
+/// Query parameters that scope a listing to the project on the platform API;
+/// a manager serves one project and needs none.
+pub async fn project_query(
+    ctx: &crate::execution_context::ExecutionMode,
+    project_id: &str,
+) -> Result<Vec<(String, String)>> {
+    if !ctx.is_platform() {
+        return Ok(Vec::new());
+    }
+    let mut query = vec![("project".to_string(), project_id.to_string())];
+    #[cfg(feature = "platform")]
+    if let Some(workspace) = ctx.resolve_workspace_query_with_bootstrap(false).await? {
+        query.push(("workspace".to_string(), workspace));
+    }
+    Ok(query)
+}
+
+/// GET `path` on the control plane as JSON.
+pub async fn get_json(
+    ctx: &crate::execution_context::ExecutionMode,
+    path: &str,
+    query: &[(String, String)],
+) -> Result<serde_json::Value> {
+    let http = ctx.auth_http().await?;
+    let url = format!("{}{path}", http.base_url.trim_end_matches('/'));
+    let response = http
+        .client
+        .get(&url)
+        .query(query)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("GET {path} could not be sent"),
+            url: Some(url.clone()),
+        })?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("GET {path}: the response could not be read"),
+            url: Some(url.clone()),
+        })?;
+    if !status.is_success() {
+        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!("GET {path} returned {status}: {}", text.trim()),
+            url: Some(url),
+        }));
+    }
+    serde_json::from_str(&text)
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("GET {path}: the response is not JSON"),
+            url: Some(url),
+        })
+}
+
+#[derive(Deserialize)]
+struct ErrorBody {
+    code: String,
+    #[serde(default)]
+    context: Option<AlreadyOnContext>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlreadyOnContext {
+    #[serde(default)]
+    enabled_by: Option<String>,
 }

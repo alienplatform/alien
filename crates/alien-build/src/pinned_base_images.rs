@@ -8,8 +8,9 @@
 //! `ALIEN_BASE_IMAGE_DIGESTS` (the same JSON object); otherwise it comes from
 //! `base-image-digests.json` next to this crate's manifest.
 //!
-//! A build that requires pinning resolves every base image through the
-//! table, and refuses one that isn't in it.
+//! Every build resolves its base images through the table, so a pinned
+//! image is always built from its digest. A build that will be signed also
+//! refuses an image the table doesn't pin.
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -76,16 +77,28 @@ fn repository(reference: &str) -> Option<&str> {
 }
 
 fn refused(image: &str) -> AlienError<ErrorData> {
-    AlienError::new(ErrorData::BuildConfigInvalid {
-        message: format!(
-            "base image '{image}' has no digest pinned in this CLI; a signed release builds only from pinned base images"
-        ),
+    AlienError::new(ErrorData::BaseImageNotPinned {
+        image: image.to_string(),
     })
 }
 
 /// `<repository>@<digest>` for `image`, from the table compiled into this CLI.
 pub fn pin(image: &str) -> Result<String> {
     pin_with(table(), image)
+}
+
+/// The image a build uses for `image`: its pinned digest when this CLI
+/// pins it; otherwise `image` itself, unless `required`.
+pub fn resolve(image: &str, required: bool) -> Result<String> {
+    resolve_with(table(), image, required)
+}
+
+fn resolve_with(table: &BTreeMap<String, String>, image: &str, required: bool) -> Result<String> {
+    match pin_with(table, image) {
+        Ok(pinned) => Ok(pinned),
+        Err(_) if !required => Ok(image.to_string()),
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(test)]
@@ -126,14 +139,25 @@ mod tests {
             "localhost:5000/base",
         ] {
             let error = pin_with(&table(), image).unwrap_err();
-            assert!(
-                error.message.contains("has no digest pinned"),
-                "{image}: {error}"
-            );
+            assert_eq!(error.code, "BASE_IMAGE_NOT_PINNED", "{image}: {error}");
         }
         let other = "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
         assert!(pin_with(&table(), &format!("ghcr.io/acme/base@{other}")).is_err());
         assert!(pin_with(&table(), &format!("ghcr.io/attacker/base@{DIGEST}")).is_err());
+    }
+
+    #[test]
+    fn a_pinned_image_is_always_built_from_its_digest_and_others_only_unsigned() {
+        assert_eq!(
+            resolve_with(&table(), "ghcr.io/acme/base:v1", false).unwrap(),
+            format!("ghcr.io/acme/base@{DIGEST}")
+        );
+        assert_eq!(
+            resolve_with(&table(), "ghcr.io/other/base:v1", false).unwrap(),
+            "ghcr.io/other/base:v1"
+        );
+        let error = resolve_with(&table(), "ghcr.io/other/base:v1", true).unwrap_err();
+        assert_eq!(error.code, "BASE_IMAGE_NOT_PINNED");
     }
 
     #[test]
