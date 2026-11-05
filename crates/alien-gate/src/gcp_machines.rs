@@ -42,6 +42,8 @@ pub trait GcpMachineApi: Send + Sync {
     async fn insert(&self, path: &str, body: &Value) -> Result<()>;
     /// PATCH `path` with `body` and wait for the operation to finish.
     async fn patch(&self, path: &str, body: &Value) -> Result<()>;
+    /// The instance URLs of MIG `path`'s members.
+    async fn members(&self, path: &str) -> Result<Vec<String>>;
 }
 
 /// `name` is lower case letters, digits and dashes.
@@ -285,6 +287,56 @@ pub async fn roll(
     Ok(json!({"template": template, "version": version, "group": basics.name}))
 }
 
+/// Delete `machines` (instance names) from MIG `name`, zonal in `zone`,
+/// keeping at least `minimum`. Answers the removed names and the new size.
+#[allow(clippy::too_many_arguments)]
+pub async fn remove(
+    api: &dyn GcpMachineApi,
+    project: &str,
+    region: &str,
+    name: &str,
+    zone: Option<&str>,
+    machines: &[String],
+    minimum: u32,
+) -> Result<(Vec<String>, u32)> {
+    let scope = match zone {
+        Some(zone) => {
+            check_zone(zone, region)?;
+            format!("projects/{project}/zones/{zone}")
+        }
+        None => format!("projects/{project}/regions/{region}"),
+    };
+    let path = format!("{scope}/instanceGroupManagers/{name}");
+    let group = api
+        .get(&path)
+        .await?
+        .ok_or_else(|| refused(format!("group {name} does not exist")))?;
+    let size = group["targetSize"]
+        .as_u64()
+        .and_then(|size| u32::try_from(size).ok())
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::CloudCallFailed {
+                operation: format!("group {name} reports no target size"),
+            })
+        })?;
+    let members = api.members(&path).await?;
+    let mut instances = Vec::new();
+    for machine in machines {
+        let instance = members
+            .iter()
+            .find(|url| url.rsplit('/').next() == Some(machine.as_str()))
+            .ok_or_else(|| refused(format!("machine {machine} is not a member of group {name}")))?;
+        instances.push(instance.clone());
+    }
+    let remaining = crate::machines::size_after_removal(size, machines.len(), minimum)?;
+    api.insert(
+        &format!("{path}/deleteInstances"),
+        &json!({"instances": instances, "skipInstancesOnValidationError": false}),
+    )
+    .await?;
+    Ok((machines.to_vec(), remaining))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,6 +466,13 @@ mod tests {
                 .unwrap()
                 .push(("PATCH".into(), path.into(), body.clone()));
             Ok(())
+        }
+        async fn members(&self, path: &str) -> Result<Vec<String>> {
+            assert!(path.ends_with("/instanceGroupManagers/acme-prod-compute-general"));
+            Ok(vec![
+                "https://www.googleapis.com/compute/v1/projects/shop-prod/zones/us-central1-a/instances/acme-prod-compute-general-a1b2".into(),
+                "https://www.googleapis.com/compute/v1/projects/shop-prod/zones/us-central1-a/instances/acme-prod-compute-general-c3d4".into(),
+            ])
         }
     }
 
@@ -588,6 +647,56 @@ mod tests {
                 "{reason}: nothing written"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn removal_deletes_only_members_and_keeps_the_signed_minimum() {
+        let removal = |machines: &[&str], size: u64| {
+            let api = Recorded {
+                group: Some(json!({"targetSize": size})),
+                ..Default::default()
+            };
+            let machines: Vec<String> = machines.iter().map(|m| m.to_string()).collect();
+            async move {
+                let result = remove(
+                    &api,
+                    "shop-prod",
+                    "us-central1",
+                    "acme-prod-compute-general",
+                    Some("us-central1-a"),
+                    &machines,
+                    1,
+                )
+                .await;
+                (result, api.calls.into_inner().unwrap())
+            }
+        };
+        let (result, calls) = removal(&["acme-prod-compute-general-a1b2"], 2).await;
+        assert_eq!(
+            result.unwrap(),
+            (vec!["acme-prod-compute-general-a1b2".to_string()], 1)
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, "projects/shop-prod/zones/us-central1-a/instanceGroupManagers/acme-prod-compute-general/deleteInstances");
+        assert_eq!(calls[0].2["skipInstancesOnValidationError"], false);
+        assert_eq!(calls[0].2["instances"].as_array().unwrap().len(), 1);
+
+        // Attack: a machine of another group.
+        let (result, calls) = removal(&["acme-prod-compute-big-zz99"], 2).await;
+        assert!(crate::describe(&result.unwrap_err())
+            .contains("is not a member of group acme-prod-compute-general"));
+        assert!(calls.is_empty());
+        // Attack: scale below the signed minimum by deleting.
+        let (result, calls) = removal(
+            &[
+                "acme-prod-compute-general-a1b2",
+                "acme-prod-compute-general-c3d4",
+            ],
+            2,
+        )
+        .await;
+        assert!(crate::describe(&result.unwrap_err()).contains("below the signed minimum 1"));
+        assert!(calls.is_empty());
     }
 
     #[test]

@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use tracing::info;
 
 use crate::error::{ErrorData, Result};
-use crate::machines::{self, RollMachines, Scale};
+use crate::machines::{self, RemoveMachines, RollMachines, Scale};
 use crate::plan::{
     functions, plan_function, FunctionSpec, Place, Reads, ReleaseRequest, Request, SetupNetwork,
 };
@@ -46,6 +46,20 @@ pub trait Backend: Send + Sync {
     async fn resize(&self, _target: &str, _zone: Option<&str>, _size: u32) -> Result<()> {
         Err(refused(
             "on AWS management sets desired capacity and AWS holds the signed bounds",
+        ))
+    }
+    /// Delete `machines`, members of `target`, keeping at least `minimum`
+    /// (GCP, Azure). Answers what was removed and the group's new size.
+    async fn remove(
+        &self,
+        _place: &Place,
+        _target: &str,
+        _zone: Option<&str>,
+        _machines: &[String],
+        _minimum: u32,
+    ) -> Result<(Vec<String>, u32)> {
+        Err(refused(
+            "on AWS management terminates machines and AWS holds the signed bounds",
         ))
     }
 }
@@ -101,6 +115,7 @@ impl Verifier {
             Request::CheckRelease(request) => self.release(&request, false).await,
             Request::RollMachines(request) => self.roll(&request).await,
             Request::Scale(request) => self.scale(&request).await,
+            Request::RemoveMachines(request) => self.remove(&request).await,
         }
     }
 
@@ -174,24 +189,29 @@ impl Verifier {
         Ok(rolled)
     }
 
-    async fn scale(&self, request: &Scale) -> Result<Value> {
+    /// The release a scale or removal reads the signed bounds from: verified,
+    /// or the one kept at the install's floor, and no older than the floor.
+    async fn bounds_release(
+        &self,
+        signer_lists: &[alien_signing::SignedStatement],
+        release: &alien_signing::SignedStatement,
+    ) -> Result<(Place, alien_signing::Verified<alien_signing::ReleaseBody>)> {
         let (install, place) = self.install().await?;
         let now = Utc::now();
         let trust = Trust::new(
             install.settings.clone(),
             install.id.clone(),
-            &request.signer_lists,
+            signer_lists,
             &install.ledger,
             now,
         )
         .context(ErrorData::Refused {
             reason: "the signer lists were refused".to_string(),
         })?;
-        let release = trust
-            .verify_release(&request.release, now)
+        let release = crate::trust::verify_or_keep_release(&trust, &install.ledger, release, now)
             .context(ErrorData::Refused {
-                reason: "the release was refused".to_string(),
-            })?;
+            reason: "the release was refused".to_string(),
+        })?;
         if release.body.platform != place.platform() {
             return Err(refused(format!(
                 "the release is for platform '{}', not '{}'",
@@ -200,6 +220,13 @@ impl Verifier {
             )));
         }
         machines::check_floor(&install.ledger, release.sequence, &release.digest)?;
+        Ok((place, release))
+    }
+
+    async fn scale(&self, request: &Scale) -> Result<Value> {
+        let (place, release) = self
+            .bounds_release(&request.signer_lists, &request.release)
+            .await?;
         let group = machines::signed_group(&release.body, &request.cluster, &request.group)?;
         let target = machines::scale_target(&place.prefix, &request.cluster, &request.group)?;
         let size = machines::clamp(request.desired, &group);
@@ -208,6 +235,27 @@ impl Verifier {
             .await?;
         info!(target = %target, desired = request.desired, size, "resized within the signed bounds");
         Ok(json!({"target": target, "size": size}))
+    }
+
+    async fn remove(&self, request: &RemoveMachines) -> Result<Value> {
+        let (place, release) = self
+            .bounds_release(&request.signer_lists, &request.release)
+            .await?;
+        let group = machines::signed_group(&release.body, &request.cluster, &request.group)?;
+        let target = machines::scale_target(&place.prefix, &request.cluster, &request.group)?;
+        machines::check_removal(&request.machines)?;
+        let (removed, size) = self
+            .backend
+            .remove(
+                &place,
+                &target,
+                request.zone.as_deref(),
+                &request.machines,
+                group.min_size,
+            )
+            .await?;
+        info!(target = %target, ?removed, size, "removed machines within the signed minimum");
+        Ok(json!({"group": target, "removed": removed, "size": size}))
     }
 }
 
@@ -245,6 +293,21 @@ mod tests {
                 .unwrap()
                 .push((target.to_string(), zone.map(str::to_string), size));
             Ok(())
+        }
+        async fn remove(
+            &self,
+            _place: &Place,
+            target: &str,
+            zone: Option<&str>,
+            machines: &[String],
+            minimum: u32,
+        ) -> Result<(Vec<String>, u32)> {
+            self.0.lock().unwrap().push((
+                format!("remove {target} {machines:?}"),
+                zone.map(str::to_string),
+                minimum,
+            ));
+            Ok((machines.to_vec(), 1))
         }
     }
 
@@ -322,6 +385,39 @@ mod tests {
         assert_eq!(
             *backend.0.lock().unwrap(),
             vec![("acme-prod-compute-general".to_string(), None, 4)]
+        );
+    }
+
+    #[tokio::test]
+    async fn removal_names_the_group_itself_and_passes_the_signed_minimum() {
+        let (verifier, backend, scale) = gcp_verifier();
+        let mut request = json!({"removeMachines": {
+            "cluster": "compute", "group": "general", "zone": "us-central1-a",
+            "machines": ["acme-prod-compute-general-a1b2"],
+            "release": scale["scale"]["release"], "signerLists": scale["scale"]["signerLists"],
+        }});
+        let answer = verifier.handle(request.clone()).await.unwrap();
+        assert_eq!(
+            answer,
+            json!({"group": "acme-prod-compute-general", "removed": ["acme-prod-compute-general-a1b2"], "size": 1})
+        );
+        assert_eq!(
+            backend.0.lock().unwrap().clone(),
+            vec![(
+                "remove acme-prod-compute-general [\"acme-prod-compute-general-a1b2\"]".to_string(),
+                Some("us-central1-a".to_string()),
+                1
+            )]
+        );
+        for machines in [json!([]), json!(["../x"]), json!(["a", "a"])] {
+            request["removeMachines"]["machines"] = machines.clone();
+            let reason = refusal(verifier.handle(request.clone()).await);
+            assert!(reason.starts_with("Refused: "), "{machines}: {reason}");
+        }
+        assert_eq!(
+            backend.0.lock().unwrap().len(),
+            1,
+            "refused removals reach no cloud"
         );
     }
 

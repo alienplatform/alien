@@ -99,6 +99,60 @@ pub struct Scale {
     pub signer_lists: Vec<SignedStatement>,
 }
 
+/// Delete named machines of one group (GCP MIG, Azure VMSS). The verifier
+/// removes only members of `<prefix>-<cluster>-<group>` and never below the
+/// signed minimum; removing can't change what a machine boots.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoveMachines {
+    /// Compute cluster resource id in the signed stack.
+    pub cluster: String,
+    /// Capacity group id in that cluster.
+    pub group: String,
+    /// GCP zone of a zonal MIG; absent for a regional one, and on Azure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
+    /// The machines to delete: GCE instance names, or VMSS instance ids.
+    pub machines: Vec<String>,
+    /// The release whose stack holds the bounds.
+    pub release: SignedStatement,
+    /// The signer list chain, from version 1.
+    pub signer_lists: Vec<SignedStatement>,
+}
+
+/// Refuse a removal that names no machine, one twice, or a name that could
+/// leave its URL path segment.
+pub fn check_removal(machines: &[String]) -> Result<()> {
+    if machines.is_empty() {
+        return Err(refused("the removal names no machine"));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for machine in machines {
+        if !is_name_part(machine) {
+            return Err(refused(format!("'{machine}' is not a machine name")));
+        }
+        if !seen.insert(machine) {
+            return Err(refused(format!("machine {machine} is named twice")));
+        }
+    }
+    Ok(())
+}
+
+/// The size of a group after removing `count` machines from `size`, or a
+/// refusal when that goes below the signed `minimum`.
+pub fn size_after_removal(size: u32, count: usize, minimum: u32) -> Result<u32> {
+    let remaining = u32::try_from(count)
+        .ok()
+        .and_then(|count| size.checked_sub(count))
+        .ok_or_else(|| refused(format!("the group has {size} machines, fewer than {count}")))?;
+    if remaining < minimum {
+        return Err(refused(format!(
+            "removing {count} of {size} machines leaves {remaining}, below the signed minimum {minimum}"
+        )));
+    }
+    Ok(remaining)
+}
+
 /// Instance tag (AWS, Azure) or metadata key (GCP, in kebab case) a
 /// machine reads its capacity group from.
 pub const CAPACITY_GROUP_TAG: &str = "HorizonCapacityGroup";

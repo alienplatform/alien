@@ -294,6 +294,20 @@ impl crate::azure_machines::AzureMachineApi for Azure {
         .await
     }
 
+    async fn post(&self, path: &str, body: &Value) -> Result<()> {
+        let what = format!("ARM post {path}");
+        self.call(
+            reqwest::Method::POST,
+            &format!("{ARM}{path}"),
+            ARM,
+            Some(body),
+            &what,
+        )
+        .await?
+        .ok_or_else(|| AlienError::new(failed(format!("{what}: not found"))))?;
+        Ok(())
+    }
+
     async fn put(&self, path: &str, body: &Value) -> Result<Value> {
         let what = format!("ARM put {path}");
         self.call(
@@ -372,6 +386,39 @@ impl Backend for AzureBackend {
             }));
         }
         self.0.resize_scale_set(target, size).await
+    }
+
+    async fn remove(
+        &self,
+        place: &Place,
+        target: &str,
+        zone: Option<&str>,
+        machines: &[String],
+        minimum: u32,
+    ) -> Result<(Vec<String>, u32)> {
+        if zone.is_some() {
+            return Err(AlienError::new(ErrorData::Refused {
+                reason: "a scale set takes no zone".to_string(),
+            }));
+        }
+        let alien_signing::InstallId::Azure {
+            subscription,
+            resource_group,
+        } = &place.install
+        else {
+            return Err(AlienError::new(ErrorData::Refused {
+                reason: "this is the Azure removal".to_string(),
+            }));
+        };
+        crate::azure_machines::remove(
+            &self.0,
+            subscription,
+            resource_group,
+            target,
+            machines,
+            minimum,
+        )
+        .await
     }
 
     async fn roll(
