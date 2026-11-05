@@ -9,6 +9,8 @@ use alien_core::{
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_observer::metrics::{self, CollectionWindow};
 use chrono::{TimeZone, Utc};
+use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+use prost::Message;
 use sha2::{Digest, Sha256};
 
 use crate::{transport::DeploymentLoopTransport, ErrorData, Result};
@@ -32,12 +34,17 @@ pub async fn collect_and_checkpoint(
             message: "Invalid metrics collection bounds".into(),
         }));
     }
+    let (jobs, builtin_errors) = collection_jobs(state, client_config, collection);
+    if jobs.len() > 1000 {
+        return Err(AlienError::new(failure("Too many derived metric jobs")));
+    }
     let mut ids = BTreeSet::new();
-    if collection
-        .jobs
-        .iter()
-        .any(|job| job.id.is_empty() || job.id.len() > 128 || !ids.insert(&job.id))
-    {
+    if collection.jobs.iter().any(|job| {
+        job.id.is_empty()
+            || job.id.len() > 128
+            || job.id.starts_with("builtin:")
+            || !ids.insert(&job.id)
+    }) {
         return Err(AlienError::new(ErrorData::DeploymentError {
             message: "Metric jobs require distinct non-empty IDs".into(),
         }));
@@ -46,19 +53,27 @@ pub async fn collect_and_checkpoint(
     let metadata = candidate
         .runtime_metadata
         .get_or_insert_with(Default::default);
+    let prior_errors = metadata.metrics_collection_errors.clone();
+    metadata
+        .metrics_collection_attempts
+        .retain(|id, _| jobs.iter().any(|job| &job.id == id));
     metadata
         .metrics_checkpoints
-        .retain(|id, _| collection.jobs.iter().any(|job| &job.id == id));
+        .retain(|id, _| jobs.iter().any(|job| &job.id == id));
     metadata
         .metrics_collection_errors
-        .retain(|id, _| collection.jobs.iter().any(|job| &job.id == id));
-    let mut changed = metadata.metrics_checkpoints.len()
-        != state
-            .runtime_metadata
-            .as_ref()
-            .map_or(0, |m| m.metrics_checkpoints.len());
+        .retain(|id, _| jobs.iter().any(|job| &job.id == id));
+    metadata.metrics_collection_errors.extend(builtin_errors);
+    let mut changed = metadata.metrics_collection_errors != prior_errors
+        || metadata.metrics_checkpoints.len()
+            != state
+                .runtime_metadata
+                .as_ref()
+                .map_or(0, |m| m.metrics_checkpoints.len());
     let now = Utc::now();
-    for job in &collection.jobs {
+    let mut export = ExportMetricsServiceRequest::default();
+    let mut pending = Vec::new();
+    for job in &jobs {
         if metadata
             .metrics_collection_attempts
             .get(&job.id)
@@ -86,8 +101,14 @@ pub async fn collect_and_checkpoint(
             MetricsSource::Gcp(_) | MetricsSource::Scrape(_) => 0,
         };
         let interval = i64::from(collection.interval_seconds).max(source_period);
-        let end_seconds =
-            (now.timestamp() - i64::from(collection.source_lag_seconds)) / interval * interval;
+        // Daily S3 storage metrics may arrive much later than workload metrics.
+        // Never close yesterday's capacity window after only a minute of lag.
+        let lag = i64::from(collection.source_lag_seconds).max(if source_period >= 86400 {
+            48 * 3600
+        } else {
+            0
+        });
+        let end_seconds = (now.timestamp() - lag) / interval * interval;
         let end = Utc
             .timestamp_opt(end_seconds, 0)
             .single()
@@ -125,11 +146,7 @@ pub async fn collect_and_checkpoint(
                 provider,
                 region,
             });
-            transport
-                .export_metrics(deployment_id, config, data)
-                .await
-                .context(failure("OTLP metrics export was not acknowledged"))?;
-            Ok::<_, AlienError<ErrorData>>(())
+            Ok::<_, AlienError<ErrorData>>(data)
         }
         .await;
         changed = true;
@@ -137,15 +154,27 @@ pub async fn collect_and_checkpoint(
             .metrics_collection_attempts
             .insert(job.id.clone(), now);
         match result {
-            Ok(()) => {
-                metadata.metrics_checkpoints.insert(
-                    job.id.clone(),
-                    MetricsCollectionCheckpoint {
-                        source_hash,
-                        collected_through: end,
-                    },
-                );
-                metadata.metrics_collection_errors.remove(&job.id);
+            Ok(data) => {
+                let request = ExportMetricsServiceRequest::decode(data.as_slice())
+                    .into_alien_error()
+                    .context(failure("Invalid encoded metric batch"))?;
+                // Keep writes bounded and coalesce provider jobs into a deployment export.
+                // A checkpoint is updated only for jobs included in that full acknowledgement.
+                if export.encoded_len() + request.encoded_len() > 3 * 1024 * 1024
+                    && !pending.is_empty()
+                {
+                    flush_export(
+                        &mut export,
+                        &mut pending,
+                        metadata,
+                        transport,
+                        deployment_id,
+                        config,
+                    )
+                    .await;
+                }
+                export.resource_metrics.extend(request.resource_metrics);
+                pending.push((job.id.clone(), source_hash, end));
             }
             Err(error) => {
                 metadata
@@ -154,6 +183,15 @@ pub async fn collect_and_checkpoint(
             }
         }
     }
+    flush_export(
+        &mut export,
+        &mut pending,
+        metadata,
+        transport,
+        deployment_id,
+        config,
+    )
+    .await;
     if changed {
         let reconciled = transport
             .reconcile_step(
@@ -170,6 +208,217 @@ pub async fn collect_and_checkpoint(
         *state = reconciled.state.unwrap_or(candidate);
     }
     Ok(())
+}
+
+async fn flush_export(
+    export: &mut ExportMetricsServiceRequest,
+    pending: &mut Vec<(String, String, chrono::DateTime<Utc>)>,
+    metadata: &mut alien_core::RuntimeMetadata,
+    transport: &dyn DeploymentLoopTransport,
+    deployment_id: &str,
+    config: &DeploymentConfig,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let result = transport
+        .export_metrics(deployment_id, config, export.encode_to_vec())
+        .await;
+    for (id, source_hash, collected_through) in pending.drain(..) {
+        match &result {
+            Ok(()) => {
+                metadata.metrics_checkpoints.insert(
+                    id.clone(),
+                    MetricsCollectionCheckpoint {
+                        source_hash,
+                        collected_through,
+                    },
+                );
+                metadata.metrics_collection_errors.remove(&id);
+            }
+            Err(error) => {
+                metadata.metrics_collection_errors.insert(
+                    id,
+                    format!(
+                        "OTLP export not acknowledged: {}: {}",
+                        error.code, error.message
+                    ),
+                );
+            }
+        }
+    }
+    export.resource_metrics.clear();
+}
+
+/// Built-ins use only persisted outputs plus the deployment's trusted target context.
+/// Controllers can attach richer exact-identity descriptors without provider discovery.
+fn collection_jobs(
+    state: &DeploymentState,
+    target: &ClientConfig,
+    config: &alien_core::MetricsCollectionConfig,
+) -> (
+    Vec<alien_core::MetricsCollectionJob>,
+    std::collections::BTreeMap<String, String>,
+) {
+    use alien_core::{
+        metric_catalog, AzureStorageAccountOutputs, QueueOutputs, StorageOutputs, WorkerOutputs,
+    };
+    let mut jobs = config.jobs.clone();
+    let mut errors = std::collections::BTreeMap::new();
+    if !config.built_in_resources {
+        return (jobs, errors);
+    }
+    let Some(stack) = &state.stack_state else {
+        errors.insert(
+            "builtin:status".into(),
+            "Needs setup: deployed resource outputs unavailable".into(),
+        );
+        return (jobs, errors);
+    };
+    let mut resources: Vec<_> = stack.resources.iter().collect();
+    resources.sort_by_key(|(id, _)| *id);
+    for (id, resource) in resources {
+        if !matches!(
+            resource.resource_type.as_str(),
+            "worker"
+                | "container"
+                | "daemon"
+                | "storage"
+                | "queue"
+                | "postgres"
+                | "network"
+                | "compute-cluster"
+                | "azure_storage_account"
+        ) {
+            continue;
+        }
+        if matches!(
+            resource.status,
+            alien_core::ResourceStatus::Deleted | alien_core::ResourceStatus::Deleting
+        ) {
+            continue;
+        }
+        let status_id = format!("builtin:{id}:status");
+        let Some(outputs) = &resource.outputs else {
+            errors.insert(
+                status_id,
+                "Needs setup: physical resource outputs unavailable".into(),
+            );
+            continue;
+        };
+        let mut sources = outputs.builtin_metric_sources().to_vec();
+        if sources.is_empty() {
+            if let Some(worker) = outputs.downcast_ref::<WorkerOutputs>() {
+                if target.aws_config().is_some()
+                    && resource.controller_platform.unwrap_or(state.platform)
+                        == alien_core::Platform::Aws
+                {
+                    sources.push(MetricsSource::Aws(metric_catalog::aws::lambda(
+                        &worker.worker_name,
+                    )));
+                } else if let Some(gcp) = target.gcp_config().filter(|_| {
+                    resource.controller_platform.unwrap_or(state.platform)
+                        == alien_core::Platform::Gcp
+                }) {
+                    sources.extend(
+                        metric_catalog::gcp::cloud_run(
+                            &gcp.project_id,
+                            &worker.worker_name,
+                            &gcp.region,
+                        )
+                        .into_iter()
+                        .map(MetricsSource::Gcp),
+                    );
+                } else if target.azure_config().is_some()
+                    && resource.controller_platform.unwrap_or(state.platform)
+                        == alien_core::Platform::Azure
+                {
+                    if let Some(uri) = worker
+                        .identifier
+                        .as_ref()
+                        .filter(|uri| uri.contains("/providers/Microsoft.App/containerApps/"))
+                    {
+                        sources.extend(
+                            metric_catalog::azure::container_app(uri)
+                                .into_iter()
+                                .map(MetricsSource::Azure),
+                        );
+                    }
+                }
+            } else if let Some(storage) = outputs.downcast_ref::<StorageOutputs>() {
+                if target.aws_config().is_some() {
+                    sources.push(MetricsSource::Aws(metric_catalog::aws::s3_capacity(
+                        &storage.bucket_name,
+                        &["StandardStorage".into()],
+                    )));
+                } else if let Some(gcp) = target.gcp_config() {
+                    sources.extend(
+                        metric_catalog::gcp::storage(&gcp.project_id, &storage.bucket_name)
+                            .into_iter()
+                            .map(MetricsSource::Gcp),
+                    );
+                }
+                // Azure container metrics are not account totals. The account has its own job.
+            } else if let Some(queue) = outputs.downcast_ref::<QueueOutputs>() {
+                if target.aws_config().is_some() {
+                    sources.push(MetricsSource::Aws(metric_catalog::aws::sqs(
+                        &queue.queue_name,
+                    )));
+                } else if let (Some(gcp), Some(subscription)) =
+                    (target.gcp_config(), queue.identifier.as_ref())
+                {
+                    sources.extend(
+                        metric_catalog::gcp::pubsub_subscription(&gcp.project_id, subscription)
+                            .into_iter()
+                            .map(MetricsSource::Gcp),
+                    );
+                } else if target.azure_config().is_some() {
+                    if let Some((namespace, entity)) = queue
+                        .identifier
+                        .as_ref()
+                        .and_then(|value| value.split_once('/'))
+                    {
+                        let physical = stack
+                            .resources
+                            .values()
+                            .filter_map(|state| state.outputs.as_ref())
+                            .filter_map(|outputs| {
+                                outputs
+                                    .downcast_ref::<alien_core::AzureServiceBusNamespaceOutputs>()
+                            })
+                            .find(|outputs| outputs.namespace_name == namespace);
+                        if let Some(physical) = physical {
+                            sources.extend(
+                                metric_catalog::azure::service_bus(&physical.resource_id, entity)
+                                    .into_iter()
+                                    .map(MetricsSource::Azure),
+                            );
+                        }
+                    }
+                }
+            } else if let Some(account) = outputs.downcast_ref::<AzureStorageAccountOutputs>() {
+                sources.extend(
+                    metric_catalog::azure::blob_service(&format!(
+                        "{}/blobServices/default",
+                        account.resource_id
+                    ))
+                    .into_iter()
+                    .map(MetricsSource::Azure),
+                );
+            }
+        }
+        if sources.is_empty() {
+            errors.insert(status_id, "Unsupported built-in source: owning controller has no exact physical metric identity; explicit scraping may be configured separately".into());
+        }
+        for (index, source) in sources.into_iter().enumerate() {
+            jobs.push(alien_core::MetricsCollectionJob {
+                id: format!("builtin:{id}:{index}"),
+                resource_id: id.clone(),
+                source,
+            });
+        }
+    }
+    (jobs, errors)
 }
 
 fn has_metrics_grant(state: &DeploymentState) -> bool {

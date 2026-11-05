@@ -5814,6 +5814,16 @@ impl AwsNetworkController {
                 egress_public_ips: self.egress_public_ips.clone(),
                 cidr: self.cidr_block.clone(),
             })
+            .with_builtin_metric_sources(
+                self.nat_gateway_id
+                    .as_ref()
+                    .map(|id| {
+                        vec![alien_core::MetricsSource::Aws(
+                            alien_core::metric_catalog::aws::nat_gateway(id),
+                        )]
+                    })
+                    .unwrap_or_default(),
+            )
         })
     }
 

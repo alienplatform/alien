@@ -3720,6 +3720,12 @@ impl AzureWorkerController {
                     _ => None,
                 },
             })
+            .with_builtin_metric_sources(
+                alien_core::metric_catalog::azure::container_app(id)
+                    .into_iter()
+                    .map(alien_core::MetricsSource::Azure)
+                    .collect(),
+            )
         })
     }
 

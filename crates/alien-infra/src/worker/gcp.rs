@@ -4584,6 +4584,17 @@ impl GcpWorkerController {
                 )]),
                 commands_push_target: self.commands_topic_name.clone(),
             })
+            .with_builtin_metric_sources(
+                match (&self.project_id, &self.service_name, &self.region) {
+                    (Some(project), Some(service), Some(region)) => {
+                        alien_core::metric_catalog::gcp::cloud_run(project, service, region)
+                            .into_iter()
+                            .map(alien_core::MetricsSource::Gcp)
+                            .collect()
+                    }
+                    _ => Vec::new(),
+                },
+            )
         })
     }
 

@@ -177,6 +177,13 @@ impl<'de> Deserialize<'de> for Resource {
             .ok_or_else(|| serde::de::Error::missing_field("type"))?
             .to_string();
 
+        let builtin_metric_sources = value
+            .as_object_mut()
+            .and_then(|obj| obj.remove("builtinMetricSources"))
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(serde::de::Error::custom)?
+            .unwrap_or_default();
         // Remove the "type" tag before passing to concrete deserializer
         // (structs with deny_unknown_fields would reject it)
         if let Some(obj) = value.as_object_mut() {
@@ -535,6 +542,7 @@ impl Clone for Box<dyn ResourceOutputsDefinition> {
 #[derive(Debug, Clone)]
 pub struct ResourceOutputs {
     inner: Box<dyn ResourceOutputsDefinition>,
+    builtin_metric_sources: Vec<crate::MetricsSource>,
 }
 
 impl Serialize for ResourceOutputs {
@@ -552,6 +560,13 @@ impl Serialize for ResourceOutputs {
                 "type".into(),
                 serde_json::Value::String(self.inner.get_resource_type().0.into_owned()),
             );
+        if !self.builtin_metric_sources.is_empty() {
+            v.as_object_mut().expect("validated outputs object").insert(
+                "builtinMetricSources".into(),
+                serde_json::to_value(&self.builtin_metric_sources)
+                    .map_err(serde::ser::Error::custom)?,
+            );
+        }
         v.serialize(serializer)
     }
 }
@@ -715,7 +730,10 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
             }
         };
 
-        Ok(ResourceOutputs { inner })
+        Ok(ResourceOutputs {
+            inner,
+            builtin_metric_sources,
+        })
     }
 }
 
@@ -724,7 +742,18 @@ impl ResourceOutputs {
     pub fn new<T: ResourceOutputsDefinition>(outputs: T) -> Self {
         Self {
             inner: Box::new(outputs),
+            builtin_metric_sources: Vec::new(),
         }
+    }
+
+    /// Attach descriptors using exact physical identities known to the owning controller.
+    pub fn with_builtin_metric_sources(mut self, sources: Vec<crate::MetricsSource>) -> Self {
+        self.builtin_metric_sources = sources;
+        self
+    }
+
+    pub fn builtin_metric_sources(&self) -> &[crate::MetricsSource] {
+        &self.builtin_metric_sources
     }
 
     /// Provides access to the underlying ResourceOutputsDefinition trait object
@@ -741,6 +770,7 @@ impl ResourceOutputs {
 impl PartialEq for ResourceOutputs {
     fn eq(&self, other: &Self) -> bool {
         self.inner.outputs_eq(other.inner.as_ref())
+            && self.builtin_metric_sources == other.builtin_metric_sources
     }
 }
 
@@ -771,6 +801,7 @@ impl PartialSchema for ResourceOutputs {
             ObjectBuilder::new()
                 .schema_type(Type::Object)
                 .property("type", Ref::from_schema_name("ResourceType"))
+                .property("builtinMetricSources", utoipa::openapi::schema::ArrayBuilder::new().items(Ref::from_schema_name("MetricsSource")))
                 .required("type")
                 .additional_properties(Some(AdditionalProperties::FreeForm(true)))
                 .description(Some("Resource outputs that can hold output data for any resource type in the Alien system. All resource outputs share a common 'type' field with additional type-specific output properties."))

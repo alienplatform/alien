@@ -5281,6 +5281,16 @@ impl AwsWorkerController {
                     .unwrap_or_default(),
                 commands_push_target: self.worker_name.clone(),
             })
+            .with_builtin_metric_sources(
+                self.worker_name
+                    .as_ref()
+                    .map(|name| {
+                        vec![alien_core::MetricsSource::Aws(
+                            alien_core::metric_catalog::aws::lambda(name),
+                        )]
+                    })
+                    .unwrap_or_default(),
+            )
         })
     }
 

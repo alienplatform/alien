@@ -93,7 +93,11 @@ pub struct MetricsCollectionJob {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct MetricsCollectionConfig {
+    /// Derive sources only from trusted deployed resource outputs; never grants IAM rights.
+    #[serde(default)]
+    pub built_in_resources: bool,
     /// Explicit sources. Configuring sources never adds IAM permissions.
+    #[serde(default)]
     pub jobs: Vec<MetricsCollectionJob>,
     /// Poll at least this many seconds apart (minimum 60).
     pub interval_seconds: u32,

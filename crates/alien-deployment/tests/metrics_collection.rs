@@ -85,6 +85,7 @@ fn state() -> DeploymentState {
 fn config(server: &MockServer) -> DeploymentConfig {
     let settings = StackSettings {
         metrics_collection: Some(MetricsCollectionConfig {
+            built_in_resources: false,
             interval_seconds: 60,
             source_lag_seconds: 0,
             jobs: vec![MetricsCollectionJob {
@@ -275,4 +276,81 @@ async fn checkpoint_failure_leaves_caller_state_unchanged_after_backend_ack() {
     assert_eq!(serde_json::to_value(state).unwrap(), before);
     assert_eq!(transport.exports.lock().unwrap().len(), 1);
     assert!(!transport.state_file.exists());
+}
+
+#[tokio::test]
+async fn controller_descriptors_derive_jobs_coalesce_exports_and_survive_restart() {
+    let server = MockServer::start();
+    let scrape = server.mock(|when, then| {
+        when.method(GET).path("/metrics");
+        then.status(200)
+            .header("content-type", "text/plain; version=0.0.4")
+            .body("# TYPE pending gauge\npending 7\n");
+    });
+    let mut config = config(&server);
+    let collection = config.stack_settings.metrics_collection.as_mut().unwrap();
+    let source = collection.jobs.remove(0).source;
+    collection.built_in_resources = true;
+    let mut current = state();
+    let mut stack = alien_core::StackState::new(Platform::Test);
+    let mut resource = alien_core::StackResourceState::new_pending(
+        "storage".into(),
+        alien_core::Resource::new(alien_core::Storage::new("bucket".to_string()).build()),
+        None,
+        Vec::new(),
+    );
+    resource.status = alien_core::ResourceStatus::Running;
+    resource.outputs = Some(
+        alien_core::ResourceOutputs::new(alien_core::StorageOutputs {
+            bucket_name: "physical".into(),
+        })
+        .with_builtin_metric_sources(vec![source.clone(), source]),
+    );
+    stack.resources.insert("bucket".into(), resource);
+    current.stack_state = Some(stack);
+    // Exercise serialized persisted metadata rather than sharing in-memory descriptors.
+    current = serde_json::from_slice(&serde_json::to_vec(&current).unwrap()).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let transport = DurableTransport {
+        state_file: dir.path().join("state.json"),
+        exports: Mutex::new(Vec::new()),
+        reject_export: AtomicBool::new(false),
+        reject_checkpoint: AtomicBool::new(false),
+    };
+    collect_and_checkpoint(
+        &mut current,
+        &config,
+        &ClientConfig::Test,
+        "deployment",
+        &transport,
+    )
+    .await
+    .unwrap();
+    scrape.assert_calls(2);
+    let exports = transport.exports.lock().unwrap();
+    assert_eq!(exports.len(), 1);
+    assert_eq!(exports[0].resource_metrics.len(), 2);
+    drop(exports);
+    let persisted: DeploymentState =
+        serde_json::from_slice(&std::fs::read(&transport.state_file).unwrap()).unwrap();
+    assert_eq!(
+        persisted
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .metrics_checkpoints
+            .len(),
+        2
+    );
+    current = persisted;
+    collect_and_checkpoint(
+        &mut current,
+        &config,
+        &ClientConfig::Test,
+        "deployment",
+        &transport,
+    )
+    .await
+    .unwrap();
+    scrape.assert_calls(2);
 }
