@@ -126,14 +126,25 @@ fn role_writes_require_boundary_and_ownership_only_for_bounded_setups() {
     }
 }
 
+/// Sets only setup credentials hold.
+const SETUP_ONLY_SETS: [&str; 5] = [
+    "remote-stack-management/provision",
+    "network/setup",
+    "postgres/setup",
+    "service-account/setup",
+    "storage/setup",
+];
+
 #[test]
 fn catalog_management_role_writes_require_boundary_and_ownership() {
     let context = common::create_test_context().with_aws_permissions_boundary_arn(BOUNDARY);
     let generator = AwsRuntimePermissionsGenerator::new();
     for id in list_permission_set_ids() {
-        if id == "remote-stack-management/provision" {
+        // Setup credentials only: automatic setup management never copies these to the
+        // management identity. Listed by name, so a new set is checked until it is added here.
+        if SETUP_ONLY_SETS.contains(&id) {
             continue;
-        } // setup credentials only
+        }
         let set = get_permission_set(id).unwrap();
         let Some(entries) = &set.platforms.aws else {
             continue;
@@ -218,7 +229,17 @@ fn catalog_management_role_writes_require_boundary_and_ownership() {
                             .is_some_and(|arn| {
                                 arn.starts_with("arn:aws:iam::aws:policy/") && !arn.contains('*')
                             });
-                    if !detaches_aws_managed_policy {
+                    // The VPC flow log delivery role is created by setup without the boundary,
+                    // trusts only the flow logs service, and deleting its inline policy only
+                    // removes that service's write to the log group. Its name and ownership tags
+                    // are still required below.
+                    let deletes_flow_log_delivery_role = id == "network/provision"
+                        && statement.resource
+                            == ["arn:aws:iam::123456789012:role/my-stack-*-flow-logs"]
+                        && statement.action.iter().all(|action| {
+                            action == "iam:DeleteRolePolicy" || action == "iam:DeleteRole"
+                        });
+                    if !detaches_aws_managed_policy && !deletes_flow_log_delivery_role {
                         assert_eq!(
                             conditions["iam:PermissionsBoundary"].as_string(),
                             Some(BOUNDARY),

@@ -601,7 +601,7 @@ mod tests {
                         ephemeral_storage_bytes: 0,
                         architecture: None,
                         gpu: Some(alien_core::GpuSpec {
-                            gpu_type: "nvidia-t4".into(),
+                            gpu_type: "nvidia-a10g".into(),
                             count: 1,
                         }),
                         data_disk: None,

@@ -9,14 +9,14 @@ use crate::{
     CheckResult,
 };
 use alien_aws_clients::{
-    ec2::{DescribeInstancesRequest, Filter},
-    Ec2Api, ServiceQuotasApi,
+    ec2::{DescribeInstanceTypeOfferingsRequest, DescribeInstancesRequest, Filter},
+    Ec2Api, ErrorData, ServiceQuotasApi,
 };
 use alien_core::{
     instance_catalog::find_instance_type, ComputeCluster, ComputeClusterOutputs, Platform,
     ResourceStatus, Stack, StackState,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Quota families are independent pools; never charge specialized machines to Standard.
 pub fn family_quota(instance_type: &str) -> Option<&'static str> {
@@ -183,6 +183,78 @@ pub async fn check(
     }
 }
 
+/// Fails each machine type the region does not offer. Setups without the
+/// `ec2:DescribeInstanceTypeOfferings` grant get a warning instead. Zone placement is
+/// decided at provisioning, which skips zones without the type.
+pub async fn check_offerings(
+    machines: &BTreeSet<String>,
+    region: &str,
+    ec2: &dyn Ec2Api,
+    result: &mut CheckResult,
+) {
+    if machines.is_empty() {
+        return;
+    }
+    let unverified = |reason: &str| {
+        format!(
+            "Could not confirm that AWS region '{region}' offers machine types {}: {reason}",
+            machines.iter().cloned().collect::<Vec<_>>().join(", ")
+        )
+    };
+    let mut offered = BTreeSet::new();
+    let mut next_token: Option<String> = None;
+    loop {
+        let response = ec2
+            .describe_instance_type_offerings(
+                DescribeInstanceTypeOfferingsRequest::builder()
+                    .location_type("region".to_string())
+                    .filters(vec![Filter {
+                        name: "instance-type".into(),
+                        values: machines.iter().cloned().collect(),
+                    }])
+                    .maybe_next_token(next_token.clone())
+                    .build(),
+            )
+            .await;
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                result.add_warning(unverified(
+                    if matches!(error.error, Some(ErrorData::RemoteAccessDenied { .. })) {
+                        "the setup does not grant ec2:DescribeInstanceTypeOfferings"
+                    } else {
+                        "reading instance type offerings failed"
+                    },
+                ));
+                return;
+            }
+        };
+        offered.extend(
+            response
+                .instance_type_offering_set
+                .map(|set| set.items)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|offering| offering.instance_type),
+        );
+        match response.next_token.filter(|token| !token.is_empty()) {
+            None => break,
+            Some(token) if next_token.as_ref() == Some(&token) => {
+                result.add_warning(unverified(
+                    "instance type offerings returned a repeated pagination token",
+                ));
+                return;
+            }
+            token => next_token = token,
+        }
+    }
+    for machine in machines.difference(&offered) {
+        result.add_error(format!(
+            "Machine type '{machine}' is not offered in AWS region '{region}'. Choose a machine type this region offers."
+        ));
+    }
+}
+
 pub async fn read_observation(
     quotas: &dyn ServiceQuotasApi,
     ec2: &dyn Ec2Api,
@@ -308,6 +380,106 @@ mod tests {
         }
         assert_eq!(family_quota("q1.large"), None);
         assert_eq!(family_quota("unknown"), None);
+    }
+
+    #[test]
+    fn current_generation_series_charge_the_standard_quota() {
+        for machine in [
+            "m8g.large",
+            "m8i.24xlarge",
+            "m8i-flex.large",
+            "m8a.large",
+            "c8g.large",
+            "c8i.96xlarge",
+            "c8i-flex.large",
+            "c8a.large",
+            "r8g.large",
+            "r8i.large",
+            "r8i-flex.large",
+            "r8a.large",
+            "i7i.large",
+            "i8g.large",
+        ] {
+            assert!(
+                find_instance_type(Platform::Aws, machine).is_some(),
+                "{machine} is a catalog row"
+            );
+            assert_eq!(family_quota(machine), Some("L-1216C47A"), "{machine}");
+        }
+        for spec in alien_core::instance_catalog::catalog_for_platform(Platform::Aws) {
+            assert!(
+                family_quota(spec.name).is_some(),
+                "{} has a quota",
+                spec.name
+            );
+        }
+    }
+
+    fn offerings(
+        body: &'static str,
+    ) -> alien_aws_clients::ec2::DescribeInstanceTypeOfferingsResponse {
+        serde_json::from_str(body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_machine_the_region_does_not_offer_fails_naming_region_and_machine() {
+        let mut ec2 = alien_aws_clients::ec2::MockEc2Api::new();
+        ec2.expect_describe_instance_type_offerings()
+            .times(1)
+            .withf(|request| {
+                let filters = request.filters.as_ref().unwrap();
+                request.location_type.as_deref() == Some("region")
+                    && request.next_token.is_none()
+                    && filters.len() == 1
+                    && filters[0].name == "instance-type"
+                    && filters[0].values == ["m8i.96xlarge", "m8i.large"]
+            })
+            .returning(|_| {
+                Ok(offerings(
+                    r#"{"instanceTypeOfferingSet":{"item":[{"instanceType":"m8i.large","locationType":"region","location":"eu-north-1"}]},"nextToken":"page-2"}"#,
+                ))
+            });
+        ec2.expect_describe_instance_type_offerings()
+            .times(1)
+            .withf(|request| request.next_token.as_deref() == Some("page-2"))
+            .returning(|_| Ok(offerings(r#"{"instanceTypeOfferingSet":{"item":[]}}"#)));
+        let mut result = CheckResult::success();
+        let machines = BTreeSet::from(["m8i.large".to_string(), "m8i.96xlarge".to_string()]);
+        check_offerings(&machines, "eu-north-1", &ec2, &mut result).await;
+        assert!(!result.success);
+        assert_eq!(
+            result.errors,
+            ["Machine type 'm8i.96xlarge' is not offered in AWS region 'eu-north-1'. Choose a machine type this region offers."]
+        );
+    }
+
+    #[tokio::test]
+    async fn setups_without_the_offerings_grant_warn_and_continue() {
+        let mut ec2 = alien_aws_clients::ec2::MockEc2Api::new();
+        ec2.expect_describe_instance_type_offerings()
+            .times(1)
+            .returning(|_| {
+                Err(alien_error::AlienError::new(
+                    alien_aws_clients::ErrorData::RemoteAccessDenied {
+                        resource_type: "InstanceTypeOffering".into(),
+                        resource_name: "DescribeInstanceTypeOfferings".into(),
+                    },
+                ))
+            });
+        let mut result = CheckResult::success();
+        check_offerings(
+            &BTreeSet::from(["m8i.24xlarge".to_string()]),
+            "us-east-1",
+            &ec2,
+            &mut result,
+        )
+        .await;
+        assert!(result.success);
+        assert!(result.errors.is_empty());
+        assert_eq!(
+            result.warnings,
+            ["Could not confirm that AWS region 'us-east-1' offers machine types m8i.24xlarge: the setup does not grant ec2:DescribeInstanceTypeOfferings"]
+        );
     }
 
     #[test]

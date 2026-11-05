@@ -75,6 +75,25 @@ pub enum ErrorData {
         url: Option<String>,
     },
 
+    /// A command invoke named no target, and the deployment has more than one
+    /// resource that handles commands.
+    #[error(
+        code = "COMMAND_TARGET_REQUIRED",
+        message = "Deployment '{deployment}' has more than one resource that handles commands",
+        hint = "Pick one with `--target <resource-id>`: {invoke} --deployment {deployment} --command {command} --target <resource-id>",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    CommandTargetRequired {
+        /// Deployment the command was sent to, as the user named it
+        deployment: String,
+        /// Command that was invoked
+        command: String,
+        /// CLI invocation to rerun (`alien commands invoke` or `alien dev commands invoke`)
+        invoke: String,
+    },
+
     /// The log search backend rejected the request.
     #[error(
         code = "INVALID_REQUEST",

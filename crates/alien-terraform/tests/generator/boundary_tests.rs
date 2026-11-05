@@ -8,16 +8,18 @@ use alien_core::{
         ImportedResource,
     },
     Ai, DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, Key,
-    ManagementPermissions, PermissionProfile, Platform, RemoteStackManagement, ResourceLifecycle,
-    SetupManagement, Stack, StackSettings, StackState, ALIEN_MANAGED_BY_TAG_KEY,
-    ALIEN_STACK_TAG_KEY,
+    ManagementPermissions, Network, NetworkSettings, PermissionProfile, Platform,
+    RemoteStackManagement, ResourceLifecycle, SetupManagement, Stack, StackSettings, StackState,
+    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
 use alien_permissions::{
     generators::{
         aws_permissions_boundary_covers, aws_stack_permissions_boundary, AwsIamPolicy,
-        AwsIamStatement,
+        AwsIamStatement, AwsRuntimePermissionsGenerator,
     },
-    PermissionContext,
+    get_permission_set,
+    initial_setup::generate_aws_initial_setup_policy,
+    list_permission_set_ids, BindingTarget, PermissionContext,
 };
 use alien_preflights::{mutations::ManagementPermissionProfileMutation, StackMutation};
 use alien_terraform::TerraformTarget;
@@ -291,7 +293,7 @@ fn check_boundary(enabled: Option<bool>) {
         .unwrap();
         assert_eq!(imported.permissions_boundary_arn, Some(arn.clone()));
         assert_eq!(imported.permissions_boundary_document, Some(installed));
-        let mut writes = 0;
+        let mut writes = std::collections::BTreeSet::new();
         for block in &blocks {
             if !block
                 .labels()
@@ -324,7 +326,7 @@ fn check_boundary(enabled: Option<bool>) {
                     ]
                     .contains(&action.as_str().unwrap())
                     {
-                        writes += 1;
+                        writes.insert(action.as_str().unwrap().to_string());
                         assert_eq!(
                             statement["Condition"]["StringEquals"]["iam:PermissionsBoundary"],
                             json!(arn)
@@ -333,7 +335,19 @@ fn check_boundary(enabled: Option<bool>) {
                 }
             }
         }
-        assert!(writes >= 6);
+        // Each role write the management role holds is granted only with the boundary.
+        assert_eq!(
+            writes,
+            [
+                "iam:CreateRole",
+                "iam:DeleteRolePolicy",
+                "iam:PutRolePermissionsBoundary",
+                "iam:PutRolePolicy",
+                "iam:UpdateAssumeRolePolicy",
+            ]
+            .map(String::from)
+            .into(),
+        );
     }
 }
 
@@ -609,6 +623,15 @@ async fn rendered_management_statements(automatic: bool, grants: &[&str]) -> Vec
         },
         ..Default::default()
     };
+    management_policy_statements(stack, settings).await
+}
+
+/// The module's management policy documents, including the permissions boundary that
+/// runtime-written roles get.
+async fn management_policy_documents(
+    stack: Stack,
+    settings: StackSettings,
+) -> Vec<(String, Value)> {
     let config = DeploymentConfig::builder()
         .stack_settings(settings.clone())
         .environment_variables(EnvironmentVariablesSnapshot {
@@ -655,7 +678,7 @@ async fn rendered_management_statements(automatic: bool, grants: &[&str]) -> Vec
     ] {
         context.declare_var(name, hcl::to_value(value).unwrap());
     }
-    let mut statements = Vec::new();
+    let mut documents = Vec::new();
     for (file, contents) in module.iter().filter(|(file, _)| file.ends_with(".tf")) {
         let body: hcl::Body = hcl::parse(contents).unwrap();
         for block in body.blocks() {
@@ -667,29 +690,54 @@ async fn rendered_management_statements(automatic: bool, grants: &[&str]) -> Vec
             let name = labels[1].as_str();
             if ["aws_iam_policy", "aws_iam_role_policy"].contains(&kind)
                 && name.starts_with("management_")
-                && name != "management_permissions_boundary"
             {
-                let Some(mut policy) = granting_document(attribute(block, "policy"), &context)
-                else {
-                    continue;
-                };
-                // IAM accepts a scalar for a single action or resource;
-                // the evaluator's statement type stores both as lists.
-                for statement in policy["Statement"].as_array_mut().unwrap() {
-                    for key in ["Action", "Resource"] {
-                        if statement[key].is_string() {
-                            statement[key] = json!([statement[key].take()]);
-                        }
-                    }
+                if let Some(policy) = granting_document(attribute(block, "policy"), &context) {
+                    documents.push((format!("{file}/{name}"), policy));
                 }
-                let policy: AwsIamPolicy = serde_json::from_value(policy)
-                    .unwrap_or_else(|error| panic!("{file}/{name}: {error}"));
-                statements.extend(policy.statement);
             }
         }
     }
+    documents
+}
+
+async fn management_policy_statements(
+    stack: Stack,
+    settings: StackSettings,
+) -> Vec<AwsIamStatement> {
+    let statements: Vec<_> = management_policies(stack, settings)
+        .await
+        .into_iter()
+        .flat_map(|(_, statements)| statements)
+        .collect();
     assert!(!statements.is_empty());
     statements
+}
+
+/// Each management policy the module renders, other than the runtime boundary, by name.
+async fn management_policies(
+    stack: Stack,
+    settings: StackSettings,
+) -> Vec<(String, Vec<AwsIamStatement>)> {
+    let mut policies = Vec::new();
+    for (name, mut policy) in management_policy_documents(stack, settings).await {
+        if name.ends_with("/management_permissions_boundary") {
+            continue;
+        }
+        // IAM accepts a scalar for a single action or resource;
+        // the evaluator's statement type stores both as lists.
+        for statement in policy["Statement"].as_array_mut().unwrap() {
+            for key in ["Action", "Resource"] {
+                if statement[key].is_string() {
+                    statement[key] = json!([statement[key].take()]);
+                }
+            }
+        }
+        // The statement type has no NotAction, so a policy using it fails to parse here.
+        let policy: AwsIamPolicy =
+            serde_json::from_value(policy).unwrap_or_else(|error| panic!("{name}: {error}"));
+        policies.push((name, policy.statement));
+    }
+    policies
 }
 
 #[tokio::test]
@@ -837,6 +885,229 @@ async fn terraform_management_passes_roles_only_to_their_intended_services() {
                     "automatic={automatic}/{role}/{service}"
                 );
             }
+        }
+    }
+}
+
+/// The flow log objects are made only with setup's credentials: the setup policy allows each
+/// request, no management policy and no runtime role policy allows creating or writing any of
+/// them, and the boundary for roles the runtime writes grants nothing on them.
+///
+/// Deleting them is the exception. With automatic setup management, runtime cleanup deletes a
+/// created network under the management identity, and the network deletes its flow log, delivery
+/// role and log group first. So `network/provision`, which only management and setup hold, allows
+/// the deletes on this stack's runtime-tagged objects, and the automatic management identity gets
+/// them through it. `network/provision` is not a runtime set, so the boundary stays without them.
+#[tokio::test]
+async fn flow_log_grants_stay_out_of_the_management_identity_and_the_runtime_boundary() {
+    let network = NetworkSettings::Create {
+        cidr: Some("10.42.0.0/16".to_string()),
+        availability_zones: 2,
+    };
+    let flow_log_object = |action: &'static str, resource: &'static str| {
+        Request::new(action, resource)
+            .with(format!("aws:RequestTag/{ALIEN_STACK_TAG_KEY}"), "stack-a")
+            .with(
+                format!("aws:RequestTag/{ALIEN_MANAGED_BY_TAG_KEY}"),
+                "runtime",
+            )
+            .with(format!("aws:ResourceTag/{ALIEN_STACK_TAG_KEY}"), "stack-a")
+            .with(
+                format!("aws:ResourceTag/{ALIEN_MANAGED_BY_TAG_KEY}"),
+                "runtime",
+            )
+            .with(format!("iam:ResourceTag/{ALIEN_STACK_TAG_KEY}"), "stack-a")
+            .with(
+                format!("iam:ResourceTag/{ALIEN_MANAGED_BY_TAG_KEY}"),
+                "runtime",
+            )
+    };
+    let role = "arn:aws:iam::123456789012:role/stack-a-default-network-flow-logs";
+    let group = "arn:aws:logs:us-west-2:123456789012:log-group:stack-a-default-network-flow-logs";
+    let requests = [
+        (
+            "ec2:CreateFlowLogs",
+            flow_log_object(
+                "ec2:CreateFlowLogs",
+                "arn:aws:ec2:us-west-2:123456789012:vpc-flow-log/*",
+            ),
+        ),
+        (
+            "ec2:DeleteFlowLogs",
+            flow_log_object(
+                "ec2:DeleteFlowLogs",
+                "arn:aws:ec2:us-west-2:123456789012:vpc-flow-log/fl-0123456789abcdef0",
+            ),
+        ),
+        ("iam:CreateRole", flow_log_object("iam:CreateRole", role)),
+        (
+            "iam:PutRolePolicy",
+            flow_log_object("iam:PutRolePolicy", role),
+        ),
+        (
+            "iam:PassRole",
+            flow_log_object("iam:PassRole", role)
+                .with("iam:PassedToService", "vpc-flow-logs.amazonaws.com"),
+        ),
+        (
+            "logs:CreateLogGroup",
+            flow_log_object("logs:CreateLogGroup", group),
+        ),
+        (
+            "logs:DeleteLogGroup",
+            flow_log_object("logs:DeleteLogGroup", group),
+        ),
+        (
+            "logs:PutRetentionPolicy",
+            flow_log_object("logs:PutRetentionPolicy", group),
+        ),
+    ];
+    let setup = generate_aws_initial_setup_policy(
+        &PermissionContext::new()
+            .with_stack_prefix("stack-a")
+            .with_aws_account_id("123456789012")
+            .with_aws_region("us-west-2")
+            .with_managing_account_id("210987654321")
+            .with_aws_permissions_boundary_arn(
+                "arn:aws:iam::123456789012:policy/stack-a-deployment-management-boundary",
+            ),
+    )
+    .unwrap()
+    .statement;
+    let is_delete = |action: &str| matches!(action, "ec2:DeleteFlowLogs" | "logs:DeleteLogGroup");
+    for (action, request) in &requests {
+        assert_eq!(
+            evaluate(&setup, request),
+            Decision::Allowed,
+            "the setup policy may not {action} on a flow log object"
+        );
+    }
+    // Runtime roles get their policies from permission sets. Render each set's stack and
+    // resource grants, bound to the network for the resource case, and evaluate each policy
+    // on its own: the boundary only caps these, so they are what keep the runtime out.
+    let runtime_context = PermissionContext::new()
+        .with_stack_prefix("stack-a")
+        .with_aws_account_id("123456789012")
+        .with_aws_region("us-west-2")
+        .with_managing_account_id("210987654321")
+        .with_resource_id("default-network")
+        .with_resource_name("stack-a-default-network")
+        .with_aws_permissions_boundary_arn(
+            "arn:aws:iam::123456789012:policy/stack-a-deployment-management-boundary",
+        );
+    let generator = AwsRuntimePermissionsGenerator::new();
+    let mut runtime_policies = 0;
+    for id in list_permission_set_ids() {
+        // Setup credentials only; never a runtime role's policy.
+        if ["network/setup", "remote-stack-management/provision"].contains(&id) {
+            continue;
+        }
+        let set = get_permission_set(id).unwrap();
+        let Some(entries) = &set.platforms.aws else {
+            continue;
+        };
+        for target in [BindingTarget::Stack, BindingTarget::Resource] {
+            let mut set = set.clone();
+            set.platforms.aws = Some(
+                entries
+                    .iter()
+                    .filter(|entry| match target {
+                        BindingTarget::Stack => entry.binding.stack.is_some(),
+                        BindingTarget::Resource => entry.binding.resource.is_some(),
+                    })
+                    .cloned()
+                    .collect(),
+            );
+            let statements = generator
+                .generate_policy(&set, target, &runtime_context)
+                .unwrap_or_else(|error| panic!("{id}: {error}"))
+                .statement;
+            runtime_policies += 1;
+            for (action, request) in &requests {
+                let deletes_flow_log_objects =
+                    id == "network/provision" && target == BindingTarget::Stack;
+                assert_eq!(
+                    evaluate(&statements, request),
+                    if deletes_flow_log_objects && is_delete(action) {
+                        Decision::Allowed
+                    } else {
+                        Decision::NotAllowed
+                    },
+                    "policy {id} ({target:?}) on {action} for a flow log object"
+                );
+            }
+        }
+    }
+    assert!(runtime_policies > 0);
+    for setup_management in [SetupManagement::Automatic, SetupManagement::Manual] {
+        let stack = || {
+            Stack::new("management-boundary".into())
+                .add(
+                    Network::new("default-network".to_string())
+                        .settings(network.clone())
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    RemoteStackManagement::new("management".into()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build()
+        };
+        let settings = StackSettings {
+            setup_management,
+            network: Some(network.clone()),
+            ..Default::default()
+        };
+
+        let management = management_policies(stack(), settings.clone()).await;
+        assert!(!management.is_empty());
+        for (name, statements) in &management {
+            for (action, request) in requests.iter().filter(|(action, _)| !is_delete(action)) {
+                assert_eq!(
+                    evaluate(statements, request),
+                    Decision::NotAllowed,
+                    "{setup_management:?}: management policy {name} may {action} on a flow log object"
+                );
+            }
+        }
+        // IAM allows a request when any policy of the identity does.
+        let identity: Vec<_> = management
+            .iter()
+            .flat_map(|(_, statements)| statements.clone())
+            .collect();
+        for (action, request) in requests.iter().filter(|(action, _)| is_delete(action)) {
+            assert_eq!(
+                evaluate(&identity, request),
+                if setup_management == SetupManagement::Automatic {
+                    Decision::Allowed
+                } else {
+                    Decision::NotAllowed
+                },
+                "{setup_management:?}: the management identity on {action} for a flow log object"
+            );
+        }
+
+        let documents = management_policy_documents(stack(), settings).await;
+        let (_, boundary) = documents
+            .iter()
+            .find(|(name, _)| name.ends_with("/management_permissions_boundary"))
+            .expect("the module installs the runtime boundary");
+        for statement in boundary["Statement"].as_array().unwrap() {
+            let strings = |key: &str| match &statement[key] {
+                Value::Array(values) => values.iter().filter_map(Value::as_str).collect(),
+                Value::String(value) => vec![value.as_str()],
+                _ => Vec::new(),
+            };
+            assert!(
+                !strings("Action")
+                    .iter()
+                    .any(|action| action.starts_with("ec2:") && action.ends_with("FlowLogs"))
+                    && !strings("Resource")
+                        .iter()
+                        .any(|resource| resource.ends_with("-flow-logs")),
+                "{setup_management:?}: the runtime boundary grants flow log objects: {statement}"
+            );
         }
     }
 }

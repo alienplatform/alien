@@ -21,6 +21,13 @@ pub trait CloudWatchApi: Send + Sync + std::fmt::Debug {
         -> Result<GetMetricDataResponse>;
 
     async fn list_metrics(&self, request: ListMetricsRequest) -> Result<ListMetricsResponse>;
+
+    /// Creates the alarm, or replaces every setting of an alarm with the same name. Tags apply
+    /// only when the alarm is created.
+    async fn put_metric_alarm(&self, request: PutMetricAlarmRequest) -> Result<()>;
+
+    /// Deletes up to 100 alarms by name. Names of alarms that do not exist are ignored.
+    async fn delete_alarms(&self, alarm_names: Vec<String>) -> Result<()>;
 }
 
 #[derive(Debug, Clone)]
@@ -68,7 +75,38 @@ impl CloudWatchClient {
         operation: &str,
         resource: &str,
     ) -> Result<T> {
-        let value: serde_json::Value = serde_json::from_str(&body).map_err(|error| {
+        let (builder, body) = self.query_request(&body, operation).await?;
+        let result =
+            crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await;
+
+        Self::map_result(result, operation, resource, Some(&body))
+    }
+
+    /// Sends a query whose response carries only request metadata. An access denial is
+    /// returned at once: the caller's grants do not change between attempts.
+    async fn send_query_no_response(
+        &self,
+        body: String,
+        operation: &str,
+        resource: &str,
+    ) -> Result<()> {
+        let (builder, body) = self.query_request(&body, operation).await?;
+        let result = crate::aws::aws_request_utils::sign_send_no_response_retrying_when(
+            builder,
+            &self.sign_config(),
+            crate::aws::aws_request_utils::is_retryable_unless_denied,
+        )
+        .await;
+
+        Self::map_result(result, operation, resource, Some(&body))
+    }
+
+    async fn query_request(
+        &self,
+        body: &str,
+        operation: &str,
+    ) -> Result<(reqwest::RequestBuilder, String)> {
+        let value: serde_json::Value = serde_json::from_str(body).map_err(|error| {
             alien_error::AlienError::new(ErrorData::InvalidClientConfig {
                 message: error.to_string(),
                 errors: None,
@@ -92,11 +130,7 @@ impl CloudWatchClient {
             .content_type_form()
             .content_sha256(&body)
             .body(body.clone());
-
-        let result =
-            crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await;
-
-        Self::map_result(result, operation, resource, Some(&body))
+        Ok((builder, body))
     }
 
     fn map_result<T>(
@@ -150,6 +184,12 @@ impl CloudWatchClient {
             .unwrap_or_else(|| body.to_string());
 
         match status {
+            StatusCode::FORBIDDEN if matches!(code, "AccessDenied" | "AccessDeniedException") => {
+                Some(ErrorData::RemoteAccessDenied {
+                    resource_type: "CloudWatch".to_string(),
+                    resource_name: resource.to_string(),
+                })
+            }
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
                 Some(ErrorData::AuthenticationError { message })
             }
@@ -233,6 +273,73 @@ impl CloudWatchApi for CloudWatchClient {
                 .unwrap_or_default(),
         })
     }
+
+    async fn put_metric_alarm(&self, request: PutMetricAlarmRequest) -> Result<()> {
+        let body = serde_json::to_string(&request).map_err(|error| {
+            alien_error::AlienError::new(ErrorData::InvalidClientConfig {
+                message: format!("Failed to serialize PutMetricAlarm request: {}", error),
+                errors: None,
+            })
+        })?;
+        self.send_query_no_response(body, "PutMetricAlarm", &request.alarm_name)
+            .await
+    }
+
+    async fn delete_alarms(&self, alarm_names: Vec<String>) -> Result<()> {
+        let resource = alarm_names.join(",");
+        let body =
+            serde_json::to_string(&DeleteAlarmsRequest { alarm_names }).map_err(|error| {
+                alien_error::AlienError::new(ErrorData::InvalidClientConfig {
+                    message: format!("Failed to serialize DeleteAlarms request: {}", error),
+                    errors: None,
+                })
+            })?;
+        self.send_query_no_response(body, "DeleteAlarms", &resource)
+            .await
+    }
+}
+
+/// A metric alarm on one metric of one resource. Fields follow the PutMetricAlarm API.
+#[derive(Debug, Clone, Builder, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct PutMetricAlarmRequest {
+    pub alarm_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alarm_description: Option<String>,
+    pub namespace: String,
+    pub metric_name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[builder(default)]
+    pub dimensions: Vec<Dimension>,
+    /// `Average`, `Sum`, `Minimum`, `Maximum` or `SampleCount`.
+    pub statistic: String,
+    /// Seconds per evaluated datapoint.
+    pub period: i32,
+    pub evaluation_periods: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub datapoints_to_alarm: Option<i32>,
+    pub threshold: f64,
+    /// For example `GreaterThanOrEqualToThreshold` or `LessThanThreshold`.
+    pub comparison_operator: String,
+    /// `breaching`, `notBreaching`, `ignore` or `missing`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub treat_missing_data: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[builder(default)]
+    pub tags: Vec<Tag>,
+}
+
+#[derive(Debug, Clone, Builder, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct Tag {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct DeleteAlarmsRequest {
+    alarm_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Builder, Serialize)]
@@ -539,6 +646,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_denied_call_is_reported_as_access_denied() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/")
+                    .body_contains("Action=ListMetrics");
+                // Recorded from monitoring.us-east-1.amazonaws.com for a role without
+                // cloudwatch:ListMetrics (account id masked).
+                then.status(403).body(
+                    r#"<ErrorResponse xmlns="http://monitoring.amazonaws.com/doc/2010-08-01/">
+  <Error>
+    <Type>Sender</Type>
+    <Code>AccessDenied</Code>
+    <Message>User: arn:aws:sts::000000000000:assumed-role/demo-no-cloudwatch/probe is not authorized to perform: cloudwatch:ListMetrics because no identity-based policy allows the cloudwatch:ListMetrics action</Message>
+  </Error>
+  <RequestId>55b65eaa-cf30-4139-9386-c5aff34d7e5b</RequestId>
+</ErrorResponse>"#,
+                );
+            })
+            .await;
+
+        let error = client(&server)
+            .await
+            .list_metrics(ListMetricsRequest {
+                namespace: Some("AWS/EC2".into()),
+                metric_name: None,
+                dimensions: Vec::new(),
+                next_token: None,
+                recently_active: None,
+                include_linked_accounts: None,
+                owning_account: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                &error.error,
+                Some(ErrorData::RemoteAccessDenied { resource_type, .. })
+                    if resource_type == "CloudWatch"
+            ),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_rejected_signature_stays_an_authentication_error() {
+        let mapped = CloudWatchClient::map_error(StatusCode::FORBIDDEN,
+            "<ErrorResponse><Error><Code>SignatureDoesNotMatch</Code><Message>bad signature</Message></Error></ErrorResponse>",
+            "ListMetrics", "metrics", None).unwrap();
+        assert!(
+            matches!(mapped, ErrorData::AuthenticationError { message } if message == "bad signature")
+        );
+    }
+
+    #[tokio::test]
     async fn get_metric_data_uses_query_protocol_and_decodes_real_xml_shape() {
         let server = MockServer::start_async().await;
         let mock = server.mock_async(|when, then| {
@@ -652,6 +815,144 @@ mod tests {
         );
         mock.assert_async().await;
     }
+    fn unhealthy_hosts_alarm() -> PutMetricAlarmRequest {
+        PutMetricAlarmRequest::builder()
+            .alarm_name("demo-api-alb-unhealthy-hosts".into())
+            .alarm_description("Unhealthy targets behind the load balancer".into())
+            .namespace("AWS/ApplicationELB".into())
+            .metric_name("UnHealthyHostCount".into())
+            .dimensions(vec![
+                Dimension {
+                    name: "TargetGroup".into(),
+                    value: "targetgroup/demo-api-tg/0123456789abcdef".into(),
+                },
+                Dimension {
+                    name: "LoadBalancer".into(),
+                    value: "app/demo-api-alb/fedcba9876543210".into(),
+                },
+            ])
+            .statistic("Maximum".into())
+            .period(60)
+            .evaluation_periods(5)
+            .threshold(1.0)
+            .comparison_operator("GreaterThanOrEqualToThreshold".into())
+            .treat_missing_data("notBreaching".into())
+            .tags(vec![Tag {
+                key: "deployment".into(),
+                value: "demo".into(),
+            }])
+            .build()
+    }
+
+    #[tokio::test]
+    async fn put_metric_alarm_sends_every_setting_as_query_parameters() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .x_www_form_urlencoded_tuple("Action", "PutMetricAlarm")
+                    .x_www_form_urlencoded_tuple("Version", "2010-08-01")
+                    .x_www_form_urlencoded_tuple("AlarmName", "demo-api-alb-unhealthy-hosts")
+                    .x_www_form_urlencoded_tuple("Namespace", "AWS/ApplicationELB")
+                    .x_www_form_urlencoded_tuple("MetricName", "UnHealthyHostCount")
+                    .x_www_form_urlencoded_tuple("Dimensions.member.1.Name", "TargetGroup")
+                    .x_www_form_urlencoded_tuple(
+                        "Dimensions.member.1.Value",
+                        "targetgroup/demo-api-tg/0123456789abcdef",
+                    )
+                    .x_www_form_urlencoded_tuple("Dimensions.member.2.Name", "LoadBalancer")
+                    .x_www_form_urlencoded_tuple(
+                        "Dimensions.member.2.Value",
+                        "app/demo-api-alb/fedcba9876543210",
+                    )
+                    .x_www_form_urlencoded_tuple("Statistic", "Maximum")
+                    .x_www_form_urlencoded_tuple("Period", "60")
+                    .x_www_form_urlencoded_tuple("EvaluationPeriods", "5")
+                    .x_www_form_urlencoded_tuple("Threshold", "1.0")
+                    .x_www_form_urlencoded_tuple("ComparisonOperator", "GreaterThanOrEqualToThreshold")
+                    .x_www_form_urlencoded_tuple("TreatMissingData", "notBreaching")
+                    .x_www_form_urlencoded_tuple("Tags.member.1.Key", "deployment")
+                    .x_www_form_urlencoded_tuple("Tags.member.1.Value", "demo");
+                // Recorded from monitoring.us-east-1.amazonaws.com.
+                then.status(200).body(
+                    r#"<PutMetricAlarmResponse xmlns="http://monitoring.amazonaws.com/doc/2010-08-01/">
+  <ResponseMetadata>
+    <RequestId>28abe351-f29e-4313-b89e-5d9f43ad7949</RequestId>
+  </ResponseMetadata>
+</PutMetricAlarmResponse>"#,
+                );
+            })
+            .await;
+
+        client(&server)
+            .await
+            .put_metric_alarm(unhealthy_hosts_alarm())
+            .await
+            .unwrap();
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn delete_alarms_sends_each_name_as_a_list_member() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/")
+                    .x_www_form_urlencoded_tuple("Action", "DeleteAlarms")
+                    .x_www_form_urlencoded_tuple("AlarmNames.member.1", "demo-db-cpu")
+                    .x_www_form_urlencoded_tuple("AlarmNames.member.2", "demo-db-free-memory");
+                // Recorded from monitoring.us-east-1.amazonaws.com for names that do not exist.
+                then.status(200).body(
+                    r#"<DeleteAlarmsResponse xmlns="http://monitoring.amazonaws.com/doc/2010-08-01/">
+  <ResponseMetadata>
+    <RequestId>e1a8575e-6deb-4e30-9f95-85019fa3b0bf</RequestId>
+  </ResponseMetadata>
+</DeleteAlarmsResponse>"#,
+                );
+            })
+            .await;
+
+        client(&server)
+            .await
+            .delete_alarms(vec!["demo-db-cpu".into(), "demo-db-free-memory".into()])
+            .await
+            .unwrap();
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn a_denied_alarm_write_is_reported_once_as_access_denied() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/")
+                    .x_www_form_urlencoded_tuple("Action", "PutMetricAlarm");
+                then.status(403).body(DENIED_PUT_METRIC_ALARM);
+            })
+            .await;
+
+        let error = client(&server)
+            .await
+            .put_metric_alarm(unhealthy_hosts_alarm())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                &error.error,
+                Some(ErrorData::RemoteAccessDenied { resource_type, resource_name })
+                    if resource_type == "CloudWatch"
+                        && resource_name == "demo-api-alb-unhealthy-hosts"
+            ),
+            "{error:?}"
+        );
+        // A denial is final, so the client does not resend it.
+        mock.assert_hits_async(1).await;
+    }
+
     #[tokio::test]
     async fn query_lists_preserve_multiple_queries_samples_and_empty_series() {
         let server = MockServer::start_async().await;
@@ -709,4 +1010,14 @@ mod tests {
         assert!(response.metric_data_results[1].values.is_empty());
         mock.assert_async().await;
     }
+
+    // Recorded from monitoring.us-east-1.amazonaws.com for a role without CloudWatch grants.
+    const DENIED_PUT_METRIC_ALARM: &str = r#"<ErrorResponse xmlns="http://monitoring.amazonaws.com/doc/2010-08-01/">
+  <Error>
+    <Type>Sender</Type>
+    <Code>AccessDenied</Code>
+    <Message>User: arn:aws:sts::000000000000:assumed-role/demo-no-cloudwatch/probe is not authorized to perform: cloudwatch:PutMetricAlarm on resource: arn:aws:cloudwatch:us-east-1:000000000000:alarm:demo-api-alb-unhealthy-hosts because no identity-based policy allows the cloudwatch:PutMetricAlarm action</Message>
+  </Error>
+  <RequestId>d5ff5040-f191-4b80-942e-55eefc4c1a07</RequestId>
+</ErrorResponse>"#;
 }

@@ -6,6 +6,8 @@ pub const ALIEN_STACK_TAG_KEY: &str = "deployment";
 pub const ALIEN_RESOURCE_TAG_KEY: &str = "resource";
 pub const ALIEN_MANAGED_BY_TAG_KEY: &str = "managed-by";
 pub const ALIEN_MANAGED_BY_TAG_VALUE: &str = "runtime";
+/// `managed-by` value on what the CloudFormation and Terraform setups create.
+pub const ALIEN_SETUP_MANAGED_BY_TAG_VALUE: &str = "setup";
 pub const DEFAULT_ALIEN_LABEL_DOMAIN: &str = "alien.dev";
 
 pub fn standard_resource_tags(
@@ -32,7 +34,10 @@ pub fn setup_resource_tags(
     BTreeMap::from([
         (ALIEN_STACK_TAG_KEY.to_string(), stack_prefix.to_string()),
         (ALIEN_RESOURCE_TAG_KEY.to_string(), resource_id.to_string()),
-        (ALIEN_MANAGED_BY_TAG_KEY.to_string(), "setup".to_string()),
+        (
+            ALIEN_MANAGED_BY_TAG_KEY.to_string(),
+            ALIEN_SETUP_MANAGED_BY_TAG_VALUE.to_string(),
+        ),
         ("resource-type".to_string(), resource_type.to_string()),
     ])
 }

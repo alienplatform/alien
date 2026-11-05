@@ -429,8 +429,8 @@ pub async fn handle_updating(
     // Frozen resources omitted by a newer release remain setup-owned and must
     // not be deleted by an ordinary update. Keep their installed definitions
     // in the execution target while allowing explicitly runtime-managed frozen
-    // resources (ComputeCluster capacity and, on AWS, a same-architecture machine
-    // type) to reconcile changed configuration through their management
+    // resources (ComputeCluster capacity and, on AWS, Google Cloud and Azure, a
+    // same-architecture machine type) to reconcile changed configuration through their management
     // controller. A frozen service account that only lost permissions keeps its
     // installed definition too.
     // Only what is still installed is kept. Once setup has deleted an omitted

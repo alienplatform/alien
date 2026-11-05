@@ -1,0 +1,3491 @@
+[
+  {
+    "Sid": "CheckBedrockAvailability",
+    "Effect": "Allow",
+    "Action": ["bedrock:ListFoundationModels", "bedrock:GetFoundationModelAvailability"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "AiManagement",
+    "Effect": "Allow",
+    "Action": ["bedrock:ListFoundationModels", "bedrock:GetFoundationModelAvailability"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "BoundedRoleWrite1",
+    "Effect": "Allow",
+    "Action": ["iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:PutRolePermissionsBoundary"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:PermissionsBoundary": "${aws_iam_policy.management_permissions_boundary.arn}",
+        "aws:ResourceTag/managed-by": "runtime",
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "AiProvisionIamGetRolePolicyPermissions",
+    "Effect": "Allow",
+    "Action": ["iam:GetRolePolicy", "iam:ListRolePolicies"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "ArtifactRegistryHeartbeatEcrDescribeRepositories",
+    "Effect": "Allow",
+    "Action": ["ecr:DescribeRepositories"],
+    "Resource": [
+      "arn:aws:ecr:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:repository/*"
+    ]
+  },
+  {
+    "Sid": "ArtifactRegistryHeartbeatReadEcrImages",
+    "Effect": "Allow",
+    "Action": [
+      "ecr:DescribeImages",
+      "ecr:ListImages",
+      "ecr:DescribeImageScanFindings",
+      "ecr:GetRepositoryPolicy",
+      "ecr:ListTagsForResource"
+    ],
+    "Resource": [
+      "arn:aws:ecr:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:repository/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "ArtifactRegistryManagementEcrDescribeRepositories",
+    "Effect": "Allow",
+    "Action": ["ecr:DescribeRepositories"],
+    "Resource": [
+      "arn:aws:ecr:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:repository/*"
+    ]
+  },
+  {
+    "Sid": "ArtifactRegistryManagementReadEcrImages",
+    "Effect": "Allow",
+    "Action": [
+      "ecr:DescribeImages",
+      "ecr:ListImages",
+      "ecr:DescribeImageScanFindings",
+      "ecr:GetRepositoryPolicy",
+      "ecr:ListTagsForResource"
+    ],
+    "Resource": [
+      "arn:aws:ecr:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:repository/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "BoundedRoleWrite3",
+    "Effect": "Allow",
+    "Action": [
+      "iam:UpdateAssumeRolePolicy",
+      "iam:PutRolePolicy",
+      "iam:DeleteRolePolicy",
+      "iam:DetachRolePolicy",
+      "iam:PutRolePermissionsBoundary"
+    ],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:PermissionsBoundary": "${aws_iam_policy.management_permissions_boundary.arn}",
+        "aws:ResourceTag/managed-by": "runtime",
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "ArtifactRegistryManagementIamGetRolePermissions",
+    "Effect": "Allow",
+    "Action": [
+      "iam:GetRole",
+      "iam:GetRolePolicy",
+      "iam:ListRolePolicies",
+      "iam:ListAttachedRolePolicies"
+    ],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "BoundedRoleDelete4",
+    "Effect": "Allow",
+    "Action": ["iam:DeleteRole"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed-by": "runtime",
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "ArtifactRegistryProvisionReadEcrImages",
+    "Effect": "Allow",
+    "Action": [
+      "ecr:CreateRepository",
+      "ecr:DeleteRepository",
+      "ecr:SetRepositoryPolicy",
+      "ecr:DeleteRepositoryPolicy",
+      "ecr:TagResource",
+      "ecr:PutLifecyclePolicy",
+      "ecr:DeleteLifecyclePolicy",
+      "ecr:PutImageScanningConfiguration",
+      "ecr:PutImageTagMutability",
+      "ecr:DescribeRepositories",
+      "ecr:DescribeImages",
+      "ecr:ListImages",
+      "ecr:DescribeImageScanFindings",
+      "ecr:GetRepositoryPolicy",
+      "ecr:ListTagsForResource"
+    ],
+    "Resource": [
+      "arn:aws:ecr:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:repository/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "ArtifactRegistryProvisionEcrDescribeRegistry",
+    "Effect": "Allow",
+    "Action": ["ecr:DescribeRegistry"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "BoundedRoleCreate3",
+    "Effect": "Allow",
+    "Action": ["iam:CreateRole"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:PermissionsBoundary": "${aws_iam_policy.management_permissions_boundary.arn}",
+        "aws:RequestTag/managed-by": "runtime",
+        "aws:RequestTag/deployment": "${local.resource_prefix}"
+      },
+      "ForAllValues:StringEquals": {
+        "aws:TagKeys": ["managed-by", "deployment", "resource", "resource-type", "Name"]
+      }
+    }
+  },
+  {
+    "Sid": "ArtifactRegistryProvisionIamGetRolePermissions",
+    "Effect": "Allow",
+    "Action": [
+      "iam:GetRole",
+      "iam:GetRolePolicy",
+      "iam:ListRolePolicies",
+      "iam:ListAttachedRolePolicies"
+    ],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "BoundedRoleTag4",
+    "Effect": "Allow",
+    "Action": ["iam:TagRole"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed-by": "runtime",
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime",
+        "aws:RequestTag/deployment": "${local.resource_prefix}"
+      },
+      "ForAllValues:StringEquals": {
+        "aws:TagKeys": ["managed-by", "deployment", "resource", "resource-type", "Name"]
+      }
+    }
+  },
+  {
+    "Sid": "BuildHeartbeat",
+    "Effect": "Allow",
+    "Action": [
+      "codebuild:BatchGetProjects",
+      "codebuild:ListBuildsForProject",
+      "codebuild:ListCuratedEnvironmentImages",
+      "codebuild:GetResourcePolicy"
+    ],
+    "Resource": [
+      "arn:aws:codebuild:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:project/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "BuildManagement",
+    "Effect": "Allow",
+    "Action": [
+      "codebuild:BatchGetProjects",
+      "codebuild:UpdateProject",
+      "codebuild:ListBuildsForProject",
+      "codebuild:ListCuratedEnvironmentImages",
+      "codebuild:GetResourcePolicy",
+      "codebuild:PutResourcePolicy",
+      "codebuild:DeleteResourcePolicy"
+    ],
+    "Resource": [
+      "arn:aws:codebuild:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:project/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "BuildProvisionCodebuildCreateProjectPermissions",
+    "Effect": "Allow",
+    "Action": [
+      "codebuild:CreateProject",
+      "codebuild:DeleteProject",
+      "codebuild:UpdateProject",
+      "codebuild:BatchGetProjects",
+      "codebuild:ListBuildsForProject",
+      "codebuild:ListCuratedEnvironmentImages",
+      "codebuild:GetResourcePolicy",
+      "codebuild:PutResourcePolicy",
+      "codebuild:DeleteResourcePolicy"
+    ],
+    "Resource": [
+      "arn:aws:codebuild:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:project/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "CreateBuildLogGroups",
+    "Effect": "Allow",
+    "Action": ["logs:CreateLogGroup"],
+    "Resource": [
+      "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/codebuild/${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}"
+      },
+      "ForAllValues:StringEquals": {
+        "aws:TagKeys": ["managed-by", "deployment", "resource"]
+      }
+    }
+  },
+  {
+    "Sid": "TagBuildLogGroups",
+    "Effect": "Allow",
+    "Action": ["logs:TagResource"],
+    "Resource": [
+      "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/codebuild/${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      },
+      "ForAllValues:StringEquals": {
+        "aws:TagKeys": ["managed-by", "deployment", "resource"]
+      }
+    }
+  },
+  {
+    "Sid": "SetBuildLogRetention",
+    "Effect": "Allow",
+    "Action": ["logs:PutRetentionPolicy"],
+    "Resource": [
+      "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/codebuild/${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "BoundedRolePass",
+    "Effect": "Allow",
+    "Action": ["iam:PassRole"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*-sa"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:PassedToService": "codebuild.amazonaws.com"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterHeartbeat",
+    "Effect": "Allow",
+    "Action": [
+      "autoscaling:DescribeAutoScalingGroups",
+      "autoscaling:DescribeScalingActivities",
+      "ec2:DescribeInstances",
+      "ec2:DescribeInstanceStatus",
+      "ec2:DescribeTags"
+    ],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "ComputeClusterManagementCloudwatchPutMetricAlarm",
+    "Effect": "Allow",
+    "Action": ["cloudwatch:PutMetricAlarm"],
+    "Resource": [
+      "arn:aws:cloudwatch:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:alarm:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "Null": {
+        "cloudwatch:AlarmActions": "true"
+      },
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}"
+      },
+      "StringEqualsIfExists": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterManagementCloudwatchTagResource",
+    "Effect": "Allow",
+    "Action": ["cloudwatch:TagResource"],
+    "Resource": [
+      "arn:aws:cloudwatch:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:alarm:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterManagementCloudwatchDeleteAlarms",
+    "Effect": "Allow",
+    "Action": ["cloudwatch:DeleteAlarms"],
+    "Resource": [
+      "arn:aws:cloudwatch:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:alarm:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterManagementServicequotasGetServiceQuotaPermissions",
+    "Effect": "Allow",
+    "Action": ["servicequotas:GetServiceQuota", "ec2:DescribeInstanceTypes"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "ComputeClusterManagementInspectCloudNetworking",
+    "Effect": "Allow",
+    "Action": ["ec2:DescribeLaunchTemplates", "ec2:DescribeSecurityGroups"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "ComputeClusterManagementEc2CreateLaunchTemplate",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateLaunchTemplate"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:launch-template/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterManagementEc2CreateTags",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:launch-template/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "ec2:CreateAction": "CreateLaunchTemplate",
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterManagementInspectCloudNetworking2",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateLaunchTemplateVersion", "ec2:DeleteLaunchTemplate", "ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:launch-template/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "UseRuntimeLaunchTemplates",
+    "Effect": "Allow",
+    "Action": ["ec2:RunInstances"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:launch-template/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "UseSetupComputeSecurityGroups",
+    "Effect": "Allow",
+    "Action": ["ec2:RunInstances"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "setup",
+        "aws:ResourceTag/resource-type": "compute-cluster"
+      }
+    }
+  },
+  {
+    "Sid": "UseRuntimeComputeSecurityGroups",
+    "Effect": "Allow",
+    "Action": ["ec2:RunInstances"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterManagementEc2RunInstances",
+    "Effect": "Allow",
+    "Action": ["ec2:RunInstances"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:instance/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterManagementEc2RunInstances2",
+    "Effect": "Allow",
+    "Action": ["ec2:RunInstances"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}::image/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:subnet/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:volume/*"
+    ]
+  },
+  {
+    "Sid": "ComputeClusterManagementEc2CreateTags2",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:instance/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:volume/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "ec2:CreateAction": "RunInstances",
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterManagementIamCreateServiceLinkedRole",
+    "Effect": "Allow",
+    "Action": ["iam:CreateServiceLinkedRole"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:AWSServiceName": "autoscaling.amazonaws.com"
+      }
+    }
+  },
+  {
+    "Sid": "BoundedRoleAsgCreate",
+    "Effect": "Allow",
+    "Action": ["autoscaling:CreateAutoScalingGroup"],
+    "Resource": [
+      "arn:aws:autoscaling:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:autoScalingGroup:*:autoScalingGroupName/${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "Bool": {
+        "autoscaling:LaunchTemplateVersionSpecified": "true"
+      },
+      "Null": {
+        "autoscaling:LaunchConfigurationName": "true"
+      },
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "BoundedRoleAsgUpdate",
+    "Effect": "Allow",
+    "Action": ["autoscaling:UpdateAutoScalingGroup"],
+    "Resource": [
+      "arn:aws:autoscaling:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:autoScalingGroup:*:autoScalingGroupName/${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "BoolIfExists": {
+        "autoscaling:LaunchTemplateVersionSpecified": "true"
+      },
+      "Null": {
+        "autoscaling:LaunchConfigurationName": "true"
+      },
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "BoundedRoleAsgManagement",
+    "Effect": "Allow",
+    "Action": [
+      "autoscaling:DeleteAutoScalingGroup",
+      "autoscaling:SetDesiredCapacity",
+      "autoscaling:TerminateInstanceInAutoScalingGroup"
+    ],
+    "Resource": [
+      "arn:aws:autoscaling:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:autoScalingGroup:*:autoScalingGroupName/${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterManagementElasticloadbalancingCreateTargetGroupPermissions",
+    "Effect": "Allow",
+    "Action": ["elasticloadbalancing:CreateTargetGroup", "elasticloadbalancing:AddTags"],
+    "Resource": [
+      "arn:aws:elasticloadbalancing:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:targetgroup/${local.resource_prefix}-*/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterManagementElasticloadbalancingModifyTargetGroupAttributes",
+    "Effect": "Allow",
+    "Action": ["elasticloadbalancing:ModifyTargetGroupAttributes"],
+    "Resource": [
+      "arn:aws:elasticloadbalancing:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:targetgroup/${local.resource_prefix}-*/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterManagementElasticloadbalancingDeleteTargetGroup",
+    "Effect": "Allow",
+    "Action": ["elasticloadbalancing:DeleteTargetGroup"],
+    "Resource": [
+      "arn:aws:elasticloadbalancing:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:targetgroup/${local.resource_prefix}-*/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterManagementIamGetInstanceProfile",
+    "Effect": "Allow",
+    "Action": ["iam:GetInstanceProfile"],
+    "Resource": ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/*"]
+  },
+  {
+    "Sid": "ComputeClusterManagementIamGetRole",
+    "Effect": "Allow",
+    "Action": ["iam:GetRole"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "BoundedRolePass2",
+    "Effect": "Allow",
+    "Action": ["iam:PassRole"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:PassedToService": "ec2.amazonaws.com"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterManagementAutoscalingDescribeAutoScalingGroupsPermissions",
+    "Effect": "Allow",
+    "Action": [
+      "autoscaling:DescribeAutoScalingGroups",
+      "autoscaling:DescribeInstanceRefreshes",
+      "autoscaling:DescribeScalingActivities",
+      "ec2:DescribeInstanceTypeOfferings",
+      "ec2:DescribeInstances",
+      "ec2:DescribeInstanceStatus",
+      "ec2:DescribeTags"
+    ],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "ComputeClusterManagementEc2GetConsoleOutput",
+    "Effect": "Allow",
+    "Action": ["ec2:GetConsoleOutput"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:instance/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterProvisionCloudwatchPutMetricAlarm",
+    "Effect": "Allow",
+    "Action": ["cloudwatch:PutMetricAlarm"],
+    "Resource": [
+      "arn:aws:cloudwatch:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:alarm:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "Null": {
+        "cloudwatch:AlarmActions": "true"
+      },
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}"
+      },
+      "StringEqualsIfExists": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterProvisionCloudwatchTagResource",
+    "Effect": "Allow",
+    "Action": ["cloudwatch:TagResource"],
+    "Resource": [
+      "arn:aws:cloudwatch:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:alarm:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterProvisionCloudwatchDeleteAlarms",
+    "Effect": "Allow",
+    "Action": ["cloudwatch:DeleteAlarms"],
+    "Resource": [
+      "arn:aws:cloudwatch:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:alarm:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "BoundedRoleWrite12",
+    "Effect": "Allow",
+    "Action": ["iam:DetachRolePolicy"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*-role"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:PolicyARN": "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+        "aws:ResourceTag/managed-by": "runtime",
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "BoundedRoleWrite2",
+    "Effect": "Allow",
+    "Action": ["iam:DetachRolePolicy"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*-role"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:PolicyARN": "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
+        "aws:ResourceTag/managed-by": "runtime",
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterProvisionServicequotasGetServiceQuotaPermissions",
+    "Effect": "Allow",
+    "Action": ["servicequotas:GetServiceQuota", "ec2:DescribeInstanceTypes"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "ComputeClusterProvisionInspectCloudNetworking",
+    "Effect": "Allow",
+    "Action": ["ec2:DescribeLaunchTemplates", "ec2:DescribeSecurityGroups"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "ComputeClusterProvisionEc2CreateLaunchTemplate",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateLaunchTemplate"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:launch-template/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterProvisionEc2CreateTags",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:launch-template/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "ec2:CreateAction": "CreateLaunchTemplate",
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterProvisionInspectCloudNetworking2",
+    "Effect": "Allow",
+    "Action": ["ec2:DeleteLaunchTemplate", "ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:launch-template/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "UseRuntimeLaunchTemplatesAndSecurityGroups",
+    "Effect": "Allow",
+    "Action": ["ec2:RunInstances"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:launch-template/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "CreateRuntimeWorkerInstances",
+    "Effect": "Allow",
+    "Action": ["ec2:RunInstances"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:instance/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "UseRuninstancesCompanionResources",
+    "Effect": "Allow",
+    "Action": ["ec2:RunInstances"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}::image/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:subnet/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:volume/*"
+    ]
+  },
+  {
+    "Sid": "TagRuntimeWorkerResources",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:instance/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:volume/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "ec2:CreateAction": "RunInstances",
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterProvisionIamCreateServiceLinkedRole",
+    "Effect": "Allow",
+    "Action": ["iam:CreateServiceLinkedRole"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:AWSServiceName": "autoscaling.amazonaws.com"
+      }
+    }
+  },
+  {
+    "Sid": "BoundedRoleAsgManagement2",
+    "Effect": "Allow",
+    "Action": ["autoscaling:DeleteAutoScalingGroup", "autoscaling:SetDesiredCapacity"],
+    "Resource": [
+      "arn:aws:autoscaling:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:autoScalingGroup:*:autoScalingGroupName/${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterProvisionEc2DescribeImagesPermissions",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:DescribeImages",
+      "ec2:DescribeInstanceTypeOfferings",
+      "ec2:DescribeInstances",
+      "ec2:DescribeInstanceStatus",
+      "ec2:DescribeTags",
+      "autoscaling:DescribeAutoScalingGroups",
+      "autoscaling:DescribeScalingActivities"
+    ],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "ComputeClusterProvisionEc2GetConsoleOutput",
+    "Effect": "Allow",
+    "Action": ["ec2:GetConsoleOutput"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:instance/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ManageRuntimeComputeInstanceProfiles",
+    "Effect": "Allow",
+    "Action": [
+      "iam:CreateInstanceProfile",
+      "iam:TagInstanceProfile",
+      "iam:ListInstanceProfileTags",
+      "iam:AddRoleToInstanceProfile",
+      "iam:RemoveRoleFromInstanceProfile",
+      "iam:DeleteInstanceProfile"
+    ],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/${local.resource_prefix}-*-profile"
+    ]
+  },
+  {
+    "Sid": "ComputeClusterProvisionIamGetInstanceProfile",
+    "Effect": "Allow",
+    "Action": ["iam:GetInstanceProfile"],
+    "Resource": ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/*"]
+  },
+  {
+    "Sid": "ComputeClusterProvisionIamGetRole",
+    "Effect": "Allow",
+    "Action": ["iam:GetRole"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "ContainerHeartbeat",
+    "Effect": "Allow",
+    "Action": ["elasticloadbalancing:DescribeTargetHealth", "ec2:DescribeVolumes"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "ContainerManagementElasticloadbalancingDescribeLoadBalancersPermissions",
+    "Effect": "Allow",
+    "Action": [
+      "elasticloadbalancing:DescribeLoadBalancers",
+      "elasticloadbalancing:DescribeTargetGroups",
+      "elasticloadbalancing:DescribeTargetHealth",
+      "elasticloadbalancing:DescribeListeners",
+      "ec2:DescribeVolumes",
+      "ec2:DescribeSnapshots"
+    ],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "ContainerManagementElasticloadbalancingModifyListener",
+    "Effect": "Allow",
+    "Action": ["elasticloadbalancing:ModifyListener"],
+    "Resource": [
+      "arn:aws:elasticloadbalancing:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:listener/app/${local.resource_prefix}-*/*/*",
+      "arn:aws:elasticloadbalancing:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:listener/net/${local.resource_prefix}-*/*/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      },
+      "StringEqualsIfExists": {
+        "elasticloadbalancing:SecurityPolicy": [
+          "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04",
+          "ELBSecurityPolicy-TLS13-1-2-FIPS-PQ-2025-09"
+        ],
+        "elasticloadbalancing:ListenerProtocol": "HTTPS"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerManagementAcmImportCertificate",
+    "Effect": "Allow",
+    "Action": ["acm:ImportCertificate"],
+    "Resource": [
+      "arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerManagementManageTlsCertificates",
+    "Effect": "Allow",
+    "Action": [
+      "acm:AddTagsToCertificate",
+      "acm:DeleteCertificate",
+      "acm:DescribeCertificate",
+      "acm:ListTagsForCertificate"
+    ],
+    "Resource": [
+      "arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ListTlsCertificates",
+    "Effect": "Allow",
+    "Action": ["acm:ListCertificates"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "ContainerProvisionCloudwatchPutMetricAlarm",
+    "Effect": "Allow",
+    "Action": ["cloudwatch:PutMetricAlarm"],
+    "Resource": [
+      "arn:aws:cloudwatch:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:alarm:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "Null": {
+        "cloudwatch:AlarmActions": "true"
+      },
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}"
+      },
+      "StringEqualsIfExists": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionCloudwatchTagResource",
+    "Effect": "Allow",
+    "Action": ["cloudwatch:TagResource"],
+    "Resource": [
+      "arn:aws:cloudwatch:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:alarm:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionCloudwatchDeleteAlarms",
+    "Effect": "Allow",
+    "Action": ["cloudwatch:DeleteAlarms"],
+    "Resource": [
+      "arn:aws:cloudwatch:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:alarm:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionElasticloadbalancingCreateLoadBalancerPermissions",
+    "Effect": "Allow",
+    "Action": ["elasticloadbalancing:CreateLoadBalancer", "elasticloadbalancing:CreateTargetGroup"],
+    "Resource": ["*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionElasticloadbalancingCreateListener",
+    "Effect": "Allow",
+    "Action": ["elasticloadbalancing:CreateListener"],
+    "Resource": [
+      "arn:aws:elasticloadbalancing:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:loadbalancer/app/*/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime",
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime",
+        "elasticloadbalancing:ListenerProtocol": "HTTPS",
+        "elasticloadbalancing:SecurityPolicy": [
+          "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04",
+          "ELBSecurityPolicy-TLS13-1-2-FIPS-PQ-2025-09"
+        ]
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionElasticloadbalancingCreateListener2",
+    "Effect": "Allow",
+    "Action": ["elasticloadbalancing:CreateListener"],
+    "Resource": [
+      "arn:aws:elasticloadbalancing:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:loadbalancer/app/*/*",
+      "arn:aws:elasticloadbalancing:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:loadbalancer/net/*/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime",
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime",
+        "elasticloadbalancing:ListenerProtocol": ["TCP", "HTTP"]
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionElasticloadbalancingAddTags",
+    "Effect": "Allow",
+    "Action": ["elasticloadbalancing:AddTags"],
+    "Resource": ["*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      },
+      "StringLike": {
+        "elasticloadbalancing:CreateAction": "Create*"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionElasticloadbalancingModifyLoadBalancerAttributesPermissions",
+    "Effect": "Allow",
+    "Action": [
+      "elasticloadbalancing:ModifyLoadBalancerAttributes",
+      "elasticloadbalancing:ModifyTargetGroupAttributes",
+      "elasticloadbalancing:DeleteLoadBalancer",
+      "elasticloadbalancing:DeleteTargetGroup",
+      "elasticloadbalancing:DeleteListener"
+    ],
+    "Resource": [
+      "arn:aws:elasticloadbalancing:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:loadbalancer/app/*/*",
+      "arn:aws:elasticloadbalancing:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:loadbalancer/net/*/*",
+      "arn:aws:elasticloadbalancing:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:targetgroup/*/*",
+      "arn:aws:elasticloadbalancing:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:listener/app/*/*/*",
+      "arn:aws:elasticloadbalancing:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:listener/net/*/*/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionElasticloadbalancingModifyListener",
+    "Effect": "Allow",
+    "Action": ["elasticloadbalancing:ModifyListener"],
+    "Resource": [
+      "arn:aws:elasticloadbalancing:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:listener/app/*/*/*",
+      "arn:aws:elasticloadbalancing:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:listener/net/*/*/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      },
+      "StringEqualsIfExists": {
+        "elasticloadbalancing:SecurityPolicy": [
+          "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04",
+          "ELBSecurityPolicy-TLS13-1-2-FIPS-PQ-2025-09"
+        ],
+        "elasticloadbalancing:ListenerProtocol": "HTTPS"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionEc2CreateVolume",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateVolume"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:volume/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionEc2CreateTags",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:volume/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime",
+        "ec2:CreateAction": "CreateVolume"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionEc2CreateTags2",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:volume/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime",
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionInspectCloudNetworking",
+    "Effect": "Allow",
+    "Action": ["ec2:DeleteVolume", "ec2:ModifyVolume"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:volume/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionEc2DetachVolume",
+    "Effect": "Allow",
+    "Action": ["ec2:DetachVolume"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:volume/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionEc2DetachVolume2",
+    "Effect": "Allow",
+    "Action": ["ec2:DetachVolume"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:instance/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionEc2CreateSnapshot",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateSnapshot"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:volume/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionEc2CreateSnapshot2",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateSnapshot"],
+    "Resource": ["arn:aws:ec2:${data.aws_region.current.region}::snapshot/*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionEc2CreateTags3",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": ["arn:aws:ec2:${data.aws_region.current.region}::snapshot/*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime",
+        "ec2:CreateAction": "CreateSnapshot"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionEc2DeleteSnapshot",
+    "Effect": "Allow",
+    "Action": ["ec2:DeleteSnapshot"],
+    "Resource": ["arn:aws:ec2:${data.aws_region.current.region}::snapshot/*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionEc2CreateVolume2",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateVolume"],
+    "Resource": ["arn:aws:ec2:${data.aws_region.current.region}::snapshot/*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionEc2DeleteTags",
+    "Effect": "Allow",
+    "Action": ["ec2:DeleteTags"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:volume/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      },
+      "ForAllValues:StringEquals": {
+        "aws:TagKeys": "deployment-restore-request"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionDlmCreateLifecyclePolicy",
+    "Effect": "Allow",
+    "Action": ["dlm:CreateLifecyclePolicy"],
+    "Resource": ["*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionDlmTagResourcePermissions",
+    "Effect": "Allow",
+    "Action": [
+      "dlm:TagResource",
+      "dlm:GetLifecyclePolicy",
+      "dlm:UpdateLifecyclePolicy",
+      "dlm:DeleteLifecyclePolicy"
+    ],
+    "Resource": [
+      "arn:aws:dlm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:policy/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionIamGetRole",
+    "Effect": "Allow",
+    "Action": ["iam:GetRole"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-volume-backups-*"
+    ]
+  },
+  {
+    "Sid": "ContainerProvisionIamPassRole",
+    "Effect": "Allow",
+    "Action": ["iam:PassRole"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-volume-backups-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:PassedToService": "dlm.amazonaws.com"
+      }
+    }
+  },
+  {
+    "Sid": "DenyPassingLegacyVolumeBackupRoles",
+    "Effect": "Deny",
+    "Action": ["iam:PassRole"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-dlm-*"
+    ]
+  },
+  {
+    "Sid": "ContainerProvisionIamGetRole2",
+    "Effect": "Allow",
+    "Action": ["iam:GetRole"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-dlm-*"
+    ]
+  },
+  {
+    "Sid": "BoundedRoleDelete24",
+    "Effect": "Allow",
+    "Action": ["iam:DeleteRole"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-dlm-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed-by": "runtime",
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "BoundedRoleWrite25",
+    "Effect": "Allow",
+    "Action": ["iam:DetachRolePolicy"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-dlm-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole",
+        "aws:ResourceTag/managed-by": "runtime",
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionEc2DescribeVolumesPermissions",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:DescribeVolumes",
+      "ec2:DescribeVolumesModifications",
+      "ec2:DescribeSnapshots",
+      "dlm:GetLifecyclePolicies",
+      "elasticloadbalancing:DescribeLoadBalancers",
+      "elasticloadbalancing:DescribeTargetGroups",
+      "elasticloadbalancing:DescribeTargetHealth",
+      "elasticloadbalancing:DescribeListeners",
+      "elasticloadbalancing:DescribeTags"
+    ],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "ContainerProvisionEc2CreateSecurityGroup",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateSecurityGroup"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:vpc/*"
+    ]
+  },
+  {
+    "Sid": "ContainerProvisionEc2CreateTags4",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "ec2:CreateAction": "CreateSecurityGroup",
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionInspectCloudNetworking2",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:DeleteSecurityGroup",
+      "ec2:AuthorizeSecurityGroupIngress",
+      "ec2:RevokeSecurityGroupIngress",
+      "ec2:RevokeSecurityGroupEgress"
+    ],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ManageSetupComputeSecurityGroupIngress",
+    "Effect": "Allow",
+    "Action": ["ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/resource-type": "compute-cluster",
+        "aws:ResourceTag/managed-by": "setup"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionInspectCloudNetworking3",
+    "Effect": "Allow",
+    "Action": ["ec2:DescribeSecurityGroups", "ec2:DescribeVpcs"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "ContainerProvisionIamCreateServiceLinkedRole",
+    "Effect": "Allow",
+    "Action": ["iam:CreateServiceLinkedRole"],
+    "Resource": ["*"],
+    "Condition": {
+      "StringEquals": {
+        "iam:AWSServiceName": "elasticloadbalancing.amazonaws.com"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionAcmImportCertificate",
+    "Effect": "Allow",
+    "Action": ["acm:ImportCertificate"],
+    "Resource": [
+      "arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionManageTlsCertificates",
+    "Effect": "Allow",
+    "Action": [
+      "acm:AddTagsToCertificate",
+      "acm:DeleteCertificate",
+      "acm:DescribeCertificate",
+      "acm:ListTagsForCertificate"
+    ],
+    "Resource": [
+      "arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "DaemonProvisionCloudwatchPutMetricAlarm",
+    "Effect": "Allow",
+    "Action": ["cloudwatch:PutMetricAlarm"],
+    "Resource": [
+      "arn:aws:cloudwatch:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:alarm:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "Null": {
+        "cloudwatch:AlarmActions": "true"
+      },
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}"
+      },
+      "StringEqualsIfExists": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "DaemonProvisionCloudwatchTagResource",
+    "Effect": "Allow",
+    "Action": ["cloudwatch:TagResource"],
+    "Resource": [
+      "arn:aws:cloudwatch:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:alarm:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "DaemonProvisionCloudwatchDeleteAlarms",
+    "Effect": "Allow",
+    "Action": ["cloudwatch:DeleteAlarms"],
+    "Resource": [
+      "arn:aws:cloudwatch:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:alarm:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "CreatePublicLoadBalancer",
+    "Effect": "Allow",
+    "Action": ["elasticloadbalancing:CreateLoadBalancer", "elasticloadbalancing:CreateTargetGroup"],
+    "Resource": ["*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "CreatePublicLoadBalancerListener",
+    "Effect": "Allow",
+    "Action": ["elasticloadbalancing:CreateListener"],
+    "Resource": [
+      "arn:aws:elasticloadbalancing:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:loadbalancer/app/*/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime",
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime",
+        "elasticloadbalancing:ListenerProtocol": "HTTPS",
+        "elasticloadbalancing:SecurityPolicy": [
+          "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04",
+          "ELBSecurityPolicy-TLS13-1-2-FIPS-PQ-2025-09"
+        ]
+      }
+    }
+  },
+  {
+    "Sid": "CreatePublicLoadBalancerRedirectListener",
+    "Effect": "Allow",
+    "Action": ["elasticloadbalancing:CreateListener"],
+    "Resource": [
+      "arn:aws:elasticloadbalancing:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:loadbalancer/app/*/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime",
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime",
+        "elasticloadbalancing:ListenerProtocol": "HTTP"
+      }
+    }
+  },
+  {
+    "Sid": "TagPublicLoadBalancerOnCreate",
+    "Effect": "Allow",
+    "Action": ["elasticloadbalancing:AddTags"],
+    "Resource": ["*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      },
+      "StringLike": {
+        "elasticloadbalancing:CreateAction": "Create*"
+      }
+    }
+  },
+  {
+    "Sid": "ManagePublicLoadBalancer",
+    "Effect": "Allow",
+    "Action": [
+      "elasticloadbalancing:DeleteLoadBalancer",
+      "elasticloadbalancing:DeleteTargetGroup",
+      "elasticloadbalancing:DeleteListener"
+    ],
+    "Resource": [
+      "arn:aws:elasticloadbalancing:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:loadbalancer/app/*/*",
+      "arn:aws:elasticloadbalancing:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:targetgroup/*/*",
+      "arn:aws:elasticloadbalancing:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:listener/app/*/*/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "UpdatePublicLoadBalancerListener",
+    "Effect": "Allow",
+    "Action": ["elasticloadbalancing:ModifyListener"],
+    "Resource": [
+      "arn:aws:elasticloadbalancing:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:listener/app/*/*/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      },
+      "StringEqualsIfExists": {
+        "elasticloadbalancing:SecurityPolicy": [
+          "ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04",
+          "ELBSecurityPolicy-TLS13-1-2-FIPS-PQ-2025-09"
+        ],
+        "elasticloadbalancing:ListenerProtocol": "HTTPS"
+      }
+    }
+  },
+  {
+    "Sid": "InspectPublicLoadBalancer",
+    "Effect": "Allow",
+    "Action": [
+      "elasticloadbalancing:DescribeLoadBalancers",
+      "elasticloadbalancing:DescribeTargetGroups",
+      "elasticloadbalancing:DescribeTargetHealth",
+      "elasticloadbalancing:DescribeListeners"
+    ],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "CreatePublicLoadBalancerSecurityGroup",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateSecurityGroup"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:vpc/*"
+    ]
+  },
+  {
+    "Sid": "TagPublicLoadBalancerSecurityGroup",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "ec2:CreateAction": "CreateSecurityGroup",
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ManagePublicLoadBalancerSecurityGroup",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:AuthorizeSecurityGroupIngress",
+      "ec2:RevokeSecurityGroupIngress",
+      "ec2:DeleteSecurityGroup"
+    ],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ManageComputeClusterIngress",
+    "Effect": "Allow",
+    "Action": ["ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/resource-type": "compute-cluster",
+        "aws:ResourceTag/managed-by": "setup"
+      }
+    }
+  },
+  {
+    "Sid": "InspectNetworkSecurityGroups",
+    "Effect": "Allow",
+    "Action": ["ec2:DescribeSecurityGroups", "ec2:DescribeVpcs"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "CreateElbServiceLinkedRole",
+    "Effect": "Allow",
+    "Action": ["iam:CreateServiceLinkedRole"],
+    "Resource": ["*"],
+    "Condition": {
+      "StringEquals": {
+        "iam:AWSServiceName": "elasticloadbalancing.amazonaws.com"
+      }
+    }
+  },
+  {
+    "Sid": "ImportTlsCertificates",
+    "Effect": "Allow",
+    "Action": ["acm:ImportCertificate"],
+    "Resource": [
+      "arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ManageTlsCertificates",
+    "Effect": "Allow",
+    "Action": [
+      "acm:AddTagsToCertificate",
+      "acm:DeleteCertificate",
+      "acm:DescribeCertificate",
+      "acm:ListTagsForCertificate"
+    ],
+    "Resource": [
+      "arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "EmailHeartbeat",
+    "Effect": "Allow",
+    "Action": ["ses:DescribeActiveReceiptRuleSet"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "EmailManagementSesGetEmailIdentityPermissions",
+    "Effect": "Allow",
+    "Action": [
+      "ses:GetEmailIdentity",
+      "ses:GetConfigurationSet",
+      "ses:GetConfigurationSetEventDestinations"
+    ],
+    "Resource": [
+      "arn:aws:ses:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:identity/*",
+      "arn:aws:ses:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:configuration-set/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "EmailManagementSesDescribeReceiptRuleSetPermissions",
+    "Effect": "Allow",
+    "Action": [
+      "ses:DescribeReceiptRuleSet",
+      "ses:DescribeReceiptRule",
+      "ses:DescribeActiveReceiptRuleSet"
+    ],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "EmailProvisionSesCreateEmailIdentityPermissions",
+    "Effect": "Allow",
+    "Action": [
+      "ses:CreateEmailIdentity",
+      "ses:DeleteEmailIdentity",
+      "ses:GetEmailIdentity",
+      "ses:PutEmailIdentityDkimAttributes",
+      "ses:PutEmailIdentityConfigurationSetAttributes"
+    ],
+    "Resource": [
+      "arn:aws:ses:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:identity/*"
+    ]
+  },
+  {
+    "Sid": "EmailProvisionSesCreateConfigurationSetPermissions",
+    "Effect": "Allow",
+    "Action": [
+      "ses:CreateConfigurationSet",
+      "ses:DeleteConfigurationSet",
+      "ses:GetConfigurationSet",
+      "ses:CreateConfigurationSetEventDestination",
+      "ses:UpdateConfigurationSetEventDestination",
+      "ses:DeleteConfigurationSetEventDestination",
+      "ses:GetConfigurationSetEventDestinations"
+    ],
+    "Resource": [
+      "arn:aws:ses:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:configuration-set/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "EmailProvisionSesTagResourcePermissions",
+    "Effect": "Allow",
+    "Action": ["ses:TagResource", "ses:UntagResource"],
+    "Resource": [
+      "arn:aws:ses:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:identity/*",
+      "arn:aws:ses:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:configuration-set/${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "EmailProvisionSesCreateReceiptRuleSetPermissions",
+    "Effect": "Allow",
+    "Action": [
+      "ses:CreateReceiptRuleSet",
+      "ses:DeleteReceiptRuleSet",
+      "ses:DescribeReceiptRuleSet",
+      "ses:CreateReceiptRule",
+      "ses:UpdateReceiptRule",
+      "ses:DeleteReceiptRule",
+      "ses:DescribeReceiptRule",
+      "ses:SetActiveReceiptRuleSet"
+    ],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "EmailProvisionSnsCreateTopicPermissions",
+    "Effect": "Allow",
+    "Action": [
+      "sns:CreateTopic",
+      "sns:DeleteTopic",
+      "sns:GetTopicAttributes",
+      "sns:SetTopicAttributes",
+      "sns:Subscribe",
+      "sns:Unsubscribe"
+    ],
+    "Resource": [
+      "arn:aws:sns:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "EmailProvisionSnsTagResourcePermissions",
+    "Effect": "Allow",
+    "Action": ["sns:TagResource", "sns:UntagResource"],
+    "Resource": [
+      "arn:aws:sns:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "EmailProvisionSqsGetQueueAttributesPermissions",
+    "Effect": "Allow",
+    "Action": ["sqs:GetQueueAttributes", "sqs:SetQueueAttributes"],
+    "Resource": [
+      "arn:aws:sqs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "EmailProvisionManageCloudStorage",
+    "Effect": "Allow",
+    "Action": ["s3:GetBucketPolicy", "s3:PutBucketPolicy", "s3:DeleteBucketPolicy"],
+    "Resource": ["arn:aws:s3:::${local.resource_prefix}-*"]
+  },
+  {
+    "Sid": "KubernetesClusterHeartbeat",
+    "Effect": "Allow",
+    "Action": ["eks:DescribeCluster"],
+    "Resource": [
+      "arn:aws:eks:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "CheckDynamodbTableHealth",
+    "Effect": "Allow",
+    "Action": [
+      "dynamodb:DescribeTable",
+      "dynamodb:ListTables",
+      "dynamodb:DescribeTimeToLive",
+      "dynamodb:ListTagsOfResource",
+      "dynamodb:DescribeContinuousBackups"
+    ],
+    "Resource": [
+      "arn:aws:dynamodb:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:table/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "KvManagement",
+    "Effect": "Allow",
+    "Action": [
+      "dynamodb:DescribeTable",
+      "dynamodb:ListTables",
+      "dynamodb:DescribeTimeToLive",
+      "dynamodb:UpdateTimeToLive",
+      "dynamodb:ListTagsOfResource",
+      "dynamodb:DescribeContinuousBackups",
+      "dynamodb:UpdateContinuousBackups"
+    ],
+    "Resource": [
+      "arn:aws:dynamodb:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:table/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "KvProvision",
+    "Effect": "Allow",
+    "Action": [
+      "dynamodb:CreateTable",
+      "dynamodb:DeleteTable",
+      "dynamodb:DescribeTable",
+      "dynamodb:ListTables",
+      "dynamodb:UpdateTable",
+      "dynamodb:UpdateTimeToLive",
+      "dynamodb:DescribeTimeToLive",
+      "dynamodb:TagResource",
+      "dynamodb:ListTagsOfResource"
+    ],
+    "Resource": [
+      "arn:aws:dynamodb:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:table/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "NetworkHeartbeat",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:DescribeVpcs",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeRouteTables",
+      "ec2:DescribeInternetGateways",
+      "ec2:DescribeNatGateways",
+      "ec2:DescribeAddresses",
+      "ec2:DescribeAvailabilityZones"
+    ],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "NetworkProvisionInspectCloudNetworking",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:CreateVpc",
+      "ec2:CreateInternetGateway",
+      "ec2:CreateSubnet",
+      "ec2:CreateRouteTable",
+      "ec2:CreateNatGateway",
+      "ec2:AllocateAddress",
+      "ec2:CreateSecurityGroup"
+    ],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:vpc/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:internet-gateway/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:subnet/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:route-table/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:natgateway/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:elastic-ip/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "NetworkProvisionEc2CreateTags",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:vpc/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "ec2:CreateAction": "CreateVpc",
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "NetworkProvisionEc2CreateTags2",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:internet-gateway/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "ec2:CreateAction": "CreateInternetGateway",
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "NetworkProvisionEc2CreateTags3",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:subnet/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "ec2:CreateAction": "CreateSubnet",
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "NetworkProvisionEc2CreateTags4",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:route-table/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "ec2:CreateAction": "CreateRouteTable",
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "NetworkProvisionEc2CreateTags5",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:natgateway/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "ec2:CreateAction": "CreateNatGateway",
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "NetworkProvisionEc2CreateTags6",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:elastic-ip/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "ec2:CreateAction": "AllocateAddress",
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "NetworkProvisionEc2CreateTags7",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "ec2:CreateAction": "CreateSecurityGroup",
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "NetworkProvisionInspectCloudNetworking2",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:CreateSubnet",
+      "ec2:CreateRouteTable",
+      "ec2:CreateSecurityGroup",
+      "ec2:CreateNatGateway"
+    ],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:vpc/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:subnet/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:elastic-ip/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "NetworkProvisionInspectCloudNetworking3",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:CreateTags",
+      "ec2:DeleteVpc",
+      "ec2:ModifyVpcAttribute",
+      "ec2:DeleteInternetGateway",
+      "ec2:AttachInternetGateway",
+      "ec2:DetachInternetGateway",
+      "ec2:DeleteSubnet",
+      "ec2:DeleteRouteTable",
+      "ec2:CreateRoute",
+      "ec2:DeleteRoute",
+      "ec2:AssociateRouteTable",
+      "ec2:DisassociateRouteTable",
+      "ec2:DeleteNatGateway",
+      "ec2:ReleaseAddress",
+      "ec2:DeleteSecurityGroup",
+      "ec2:AuthorizeSecurityGroupIngress",
+      "ec2:AuthorizeSecurityGroupEgress",
+      "ec2:RevokeSecurityGroupIngress",
+      "ec2:RevokeSecurityGroupEgress",
+      "ec2:DescribeVpcAttribute"
+    ],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:vpc/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:internet-gateway/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:subnet/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:route-table/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:natgateway/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:elastic-ip/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "NetworkProvisionEc2DeleteNetworkInterface",
+    "Effect": "Allow",
+    "Action": ["ec2:DeleteNetworkInterface"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*"
+    ]
+  },
+  {
+    "Sid": "NetworkProvisionEc2DescribeVpcsPermissions",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:DescribeVpcs",
+      "ec2:DescribeAvailabilityZones",
+      "ec2:DescribeInternetGateways",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeRouteTables",
+      "ec2:DescribeNatGateways",
+      "ec2:DescribeAddresses",
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeSecurityGroupRules",
+      "ec2:DescribeNetworkInterfaces",
+      "ec2:DescribeTags",
+      "servicequotas:GetServiceQuota"
+    ],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "CheckAuroraHealth",
+    "Effect": "Allow",
+    "Action": [
+      "rds:DescribeDBClusters",
+      "rds:DescribeDBInstances",
+      "rds:ListTagsForResource",
+      "cloudwatch:GetMetricData"
+    ],
+    "Resource": [
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster:${local.resource_prefix}-*",
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:db:${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "DescribeSecurityGroups",
+    "Effect": "Allow",
+    "Action": ["ec2:DescribeSecurityGroups"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "ReadAurora",
+    "Effect": "Allow",
+    "Action": ["rds:DescribeDBClusters", "rds:DescribeDBSubnetGroups", "rds:ListTagsForResource"],
+    "Resource": [
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster:${local.resource_prefix}-*",
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:db:${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "ModifyAuroraCluster",
+    "Effect": "Allow",
+    "Action": ["rds:ModifyDBCluster", "rds:StartDBCluster"],
+    "Resource": [
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "ModifyAuroraInstances",
+    "Effect": "Allow",
+    "Action": ["rds:ModifyDBInstance"],
+    "Resource": [
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:db:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEqualsIfExists": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "DescribeDatabaseInstances",
+    "Effect": "Allow",
+    "Action": ["rds:DescribeDBInstances"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "PostgresProvisionCloudwatchPutMetricAlarm",
+    "Effect": "Allow",
+    "Action": ["cloudwatch:PutMetricAlarm"],
+    "Resource": [
+      "arn:aws:cloudwatch:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:alarm:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "Null": {
+        "cloudwatch:AlarmActions": "true"
+      },
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}"
+      },
+      "StringEqualsIfExists": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "PostgresProvisionCloudwatchTagResource",
+    "Effect": "Allow",
+    "Action": ["cloudwatch:TagResource"],
+    "Resource": [
+      "arn:aws:cloudwatch:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:alarm:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "PostgresProvisionCloudwatchDeleteAlarms",
+    "Effect": "Allow",
+    "Action": ["cloudwatch:DeleteAlarms"],
+    "Resource": [
+      "arn:aws:cloudwatch:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:alarm:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "PostgresProvisionCloudwatchDescribeAlarmsPermissions",
+    "Effect": "Allow",
+    "Action": ["cloudwatch:DescribeAlarms", "cloudwatch:ListTagsForResource"],
+    "Resource": [
+      "arn:aws:cloudwatch:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:alarm:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEqualsIfExists": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "CreateAuroraCluster",
+    "Effect": "Allow",
+    "Action": ["rds:CreateDBCluster"],
+    "Resource": [
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "CreateAuroraGroups",
+    "Effect": "Allow",
+    "Action": ["rds:CreateDBSubnetGroup", "rds:CreateDBClusterParameterGroup"],
+    "Resource": [
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:subgrp:${local.resource_prefix}-*",
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster-pg:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "CreateAuroraInstances",
+    "Effect": "Allow",
+    "Action": ["rds:CreateDBInstance"],
+    "Resource": [
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:db:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEqualsIfExists": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "ManageAuroraCluster",
+    "Effect": "Allow",
+    "Action": [
+      "rds:CreateDBInstance",
+      "rds:ModifyDBCluster",
+      "rds:StartDBCluster",
+      "rds:DeleteDBCluster"
+    ],
+    "Resource": [
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "ManageAuroraGroups",
+    "Effect": "Allow",
+    "Action": [
+      "rds:CreateDBCluster",
+      "rds:ModifyDBClusterParameterGroup",
+      "rds:DeleteDBClusterParameterGroup",
+      "rds:DeleteDBSubnetGroup"
+    ],
+    "Resource": [
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:subgrp:${local.resource_prefix}-*",
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster-pg:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEqualsIfExists": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "ModifyAuroraClusterParameterGroup",
+    "Effect": "Allow",
+    "Action": ["rds:ModifyDBCluster"],
+    "Resource": [
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster-pg:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEqualsIfExists": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "ManageAuroraInstances",
+    "Effect": "Allow",
+    "Action": ["rds:ModifyDBInstance", "rds:DeleteDBInstance"],
+    "Resource": [
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:db:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEqualsIfExists": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "TagAuroraResources",
+    "Effect": "Allow",
+    "Action": ["rds:AddTagsToResource"],
+    "Resource": [
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster:${local.resource_prefix}-*",
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:db:${local.resource_prefix}-*",
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:subgrp:${local.resource_prefix}-*",
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster-pg:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEqualsIfExists": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "UntagAuroraResources",
+    "Effect": "Allow",
+    "Action": ["rds:RemoveTagsFromResource"],
+    "Resource": [
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster:${local.resource_prefix}-*",
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:db:${local.resource_prefix}-*",
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:subgrp:${local.resource_prefix}-*",
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster-pg:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      },
+      "ForAllValues:StringNotEquals": {
+        "aws:TagKeys": ["deployment", "resource", "managed-by"]
+      }
+    }
+  },
+  {
+    "Sid": "ReadAuroraResources",
+    "Effect": "Allow",
+    "Action": [
+      "rds:DescribeDBClusters",
+      "rds:DescribeDBInstances",
+      "rds:DescribeDBSubnetGroups",
+      "rds:DescribeDBClusterParameterGroups",
+      "rds:ListTagsForResource"
+    ],
+    "Resource": [
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster:${local.resource_prefix}-*",
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:db:${local.resource_prefix}-*",
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:subgrp:${local.resource_prefix}-*",
+      "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster-pg:${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "CreateRdsServiceLinkedRole",
+    "Effect": "Allow",
+    "Action": ["iam:CreateServiceLinkedRole"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:AWSServiceName": "rds.amazonaws.com"
+      }
+    }
+  },
+  {
+    "Sid": "CreateConnectionSecret",
+    "Effect": "Allow",
+    "Action": ["secretsmanager:CreateSecret"],
+    "Resource": [
+      "arn:aws:secretsmanager:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:secret:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "ManageConnectionSecret",
+    "Effect": "Allow",
+    "Action": ["secretsmanager:DeleteSecret", "secretsmanager:PutSecretValue"],
+    "Resource": [
+      "arn:aws:secretsmanager:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:secret:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "TagConnectionSecret",
+    "Effect": "Allow",
+    "Action": ["secretsmanager:TagResource"],
+    "Resource": [
+      "arn:aws:secretsmanager:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:secret:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      },
+      "StringEqualsIfExists": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "CreateDatabaseSecurityGroup",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateSecurityGroup"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*",
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:vpc/*"
+    ]
+  },
+  {
+    "Sid": "TagDatabaseSecurityGroup",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "ec2:CreateAction": "CreateSecurityGroup",
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ManageDatabaseSecurityGroup",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:AuthorizeSecurityGroupIngress",
+      "ec2:RevokeSecurityGroupIngress",
+      "ec2:DeleteSecurityGroup"
+    ],
+    "Resource": [
+      "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "CheckSqsQueueHealth",
+    "Effect": "Allow",
+    "Action": ["sqs:GetQueueAttributes", "sqs:ListQueueTags"],
+    "Resource": [
+      "arn:aws:sqs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "QueueManagement",
+    "Effect": "Allow",
+    "Action": [
+      "sqs:GetQueueAttributes",
+      "sqs:SetQueueAttributes",
+      "sqs:ListQueueTags",
+      "sqs:PurgeQueue"
+    ],
+    "Resource": [
+      "arn:aws:sqs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "QueueProvision",
+    "Effect": "Allow",
+    "Action": [
+      "sqs:CreateQueue",
+      "sqs:DeleteQueue",
+      "sqs:GetQueueAttributes",
+      "sqs:SetQueueAttributes",
+      "sqs:ListQueues",
+      "sqs:TagQueue"
+    ],
+    "Resource": [
+      "arn:aws:sqs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "SandboxHeartbeat",
+    "Effect": "Allow",
+    "Action": ["lambda:GetMicrovmImage"],
+    "Resource": [
+      "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:microvm-image:${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "SandboxManagementLambdaRunMicrovm",
+    "Effect": "Allow",
+    "Action": ["lambda:RunMicrovm"],
+    "Resource": [
+      "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:microvm-image:${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "PassSandboxEgressConnector",
+    "Effect": "Allow",
+    "Action": ["lambda:PassNetworkConnector"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "SandboxManagementManageLambdaFunctions",
+    "Effect": "Allow",
+    "Action": ["lambda:TerminateMicrovm", "lambda:SuspendMicrovm", "lambda:ResumeMicrovm"],
+    "Resource": [
+      "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:microvm-image:${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "SandboxProvisionManageLambdaFunctions",
+    "Effect": "Allow",
+    "Action": [
+      "lambda:UpdateMicrovmImage",
+      "lambda:DeleteMicrovmImage",
+      "lambda:DeleteMicrovmImageVersion",
+      "lambda:GetMicrovmImage",
+      "lambda:GetMicrovmImageVersion",
+      "lambda:GetMicrovmImageBuild",
+      "lambda:ListMicrovmImageVersions",
+      "lambda:ListMicrovmImageBuilds"
+    ],
+    "Resource": [
+      "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:microvm-image:${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "SandboxProvisionLambdaCreateMicrovmImage",
+    "Effect": "Allow",
+    "Action": ["lambda:CreateMicrovmImage"],
+    "Resource": ["*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "SandboxProvisionLambdaTagResource",
+    "Effect": "Allow",
+    "Action": ["lambda:TagResource"],
+    "NotResource": ["arn:*:lambda:*:*:*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "SandboxProvisionLambdaCreateMicrovmImage2",
+    "Effect": "Allow",
+    "Action": ["lambda:CreateMicrovmImage"],
+    "Resource": ["*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "setup"
+      }
+    }
+  },
+  {
+    "Sid": "SandboxProvisionLambdaTagResource2",
+    "Effect": "Allow",
+    "Action": ["lambda:TagResource"],
+    "NotResource": ["arn:*:lambda:*:*:*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "setup"
+      }
+    }
+  },
+  {
+    "Sid": "BoundedRolePass3",
+    "Effect": "Allow",
+    "Action": ["iam:PassRole"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*-build"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:PassedToService": "lambda.amazonaws.com"
+      }
+    }
+  },
+  {
+    "Sid": "SandboxProvisionManageLambdaFunctions2",
+    "Effect": "Allow",
+    "Action": ["lambda:TagResource", "lambda:ListTags"],
+    "Resource": [
+      "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:microvm-image:${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "SandboxProvisionLambdaListMicrovmImages",
+    "Effect": "Allow",
+    "Action": ["lambda:ListMicrovmImages"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "ServiceAccountHeartbeat",
+    "Effect": "Allow",
+    "Action": ["iam:GetRole", "iam:ListAttachedRolePolicies", "iam:ListRolePolicies"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "ServiceAccountManagement",
+    "Effect": "Allow",
+    "Action": [
+      "iam:GetRole",
+      "iam:GetRolePolicy",
+      "iam:ListRolePolicies",
+      "iam:ListAttachedRolePolicies",
+      "iam:ListRoleTags"
+    ],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "BoundedRoleCreate1",
+    "Effect": "Allow",
+    "Action": ["iam:CreateRole"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:PermissionsBoundary": "${aws_iam_policy.management_permissions_boundary.arn}",
+        "aws:RequestTag/managed-by": "runtime",
+        "aws:RequestTag/deployment": "${local.resource_prefix}"
+      },
+      "ForAllValues:StringEquals": {
+        "aws:TagKeys": ["managed-by", "deployment", "resource", "resource-type", "Name"]
+      }
+    }
+  },
+  {
+    "Sid": "BoundedRoleWrite13",
+    "Effect": "Allow",
+    "Action": ["iam:PutRolePolicy", "iam:PutRolePermissionsBoundary"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:PermissionsBoundary": "${aws_iam_policy.management_permissions_boundary.arn}",
+        "aws:ResourceTag/managed-by": "runtime",
+        "aws:ResourceTag/deployment": "${local.resource_prefix}"
+      }
+    }
+  },
+  {
+    "Sid": "ServiceAccountProvisionIamGetRolePermissions",
+    "Effect": "Allow",
+    "Action": [
+      "iam:GetRole",
+      "iam:GetRolePolicy",
+      "iam:ListRolePolicies",
+      "iam:ListAttachedRolePolicies"
+    ],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "BoundedRoleTag2",
+    "Effect": "Allow",
+    "Action": ["iam:TagRole"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed-by": "runtime",
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime",
+        "aws:RequestTag/deployment": "${local.resource_prefix}"
+      },
+      "ForAllValues:StringEquals": {
+        "aws:TagKeys": ["managed-by", "deployment", "resource", "resource-type", "Name"]
+      }
+    }
+  },
+  {
+    "Sid": "CheckS3BucketHealth",
+    "Effect": "Allow",
+    "Action": [
+      "s3:GetBucketLocation",
+      "s3:GetBucketVersioning",
+      "s3:GetLifecycleConfiguration",
+      "s3:GetBucketPolicy",
+      "s3:GetBucketAcl",
+      "s3:GetEncryptionConfiguration",
+      "s3:GetBucketPublicAccessBlock"
+    ],
+    "Resource": ["arn:aws:s3:::${local.resource_prefix}-*"]
+  },
+  {
+    "Sid": "StorageManagement",
+    "Effect": "Allow",
+    "Action": [
+      "s3:GetBucketLocation",
+      "s3:GetBucketVersioning",
+      "s3:GetLifecycleConfiguration",
+      "s3:GetBucketPolicy",
+      "s3:GetBucketAcl",
+      "s3:GetEncryptionConfiguration",
+      "s3:GetBucketPublicAccessBlock",
+      "s3:ListBucketVersions"
+    ],
+    "Resource": ["arn:aws:s3:::${local.resource_prefix}-*"]
+  },
+  {
+    "Sid": "StorageProvision",
+    "Effect": "Allow",
+    "Action": [
+      "s3:CreateBucket",
+      "s3:DeleteBucket",
+      "s3:PutBucketVersioning",
+      "s3:PutBucketCORS",
+      "s3:PutLifecycleConfiguration",
+      "s3:PutBucketPolicy",
+      "s3:DeleteBucketPolicy",
+      "s3:PutBucketAcl",
+      "s3:PutEncryptionConfiguration",
+      "s3:PutBucketPublicAccessBlock",
+      "s3:PutBucketTagging",
+      "s3:GetBucketNotification",
+      "s3:PutBucketNotification",
+      "s3:GetBucketLocation",
+      "s3:GetBucketVersioning",
+      "s3:GetLifecycleConfiguration",
+      "s3:GetBucketPolicy",
+      "s3:GetBucketAcl",
+      "s3:GetEncryptionConfiguration",
+      "s3:GetBucketPublicAccessBlock",
+      "s3:GetBucketTagging",
+      "s3:ListBucket",
+      "s3:ListBucketVersions",
+      "s3:DeleteObject",
+      "s3:DeleteObjectVersion"
+    ],
+    "Resource": [
+      "arn:aws:s3:::${local.resource_prefix}-*",
+      "arn:aws:s3:::${local.resource_prefix}-*/*"
+    ]
+  },
+  {
+    "Sid": "VaultHeartbeat",
+    "Effect": "Allow",
+    "Action": ["ssm:DescribeParameters"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "VaultManagement",
+    "Effect": "Allow",
+    "Action": ["ssm:DescribeParameters"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "VaultProvision",
+    "Effect": "Allow",
+    "Action": ["ssm:PutParameter", "ssm:DeleteParameter"],
+    "Resource": [
+      "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "WorkerDispatchCommand",
+    "Effect": "Allow",
+    "Action": ["lambda:InvokeFunction", "lambda:InvokeAsync"],
+    "Resource": [
+      "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "WorkerHeartbeatManageLambdaFunctions",
+    "Effect": "Allow",
+    "Action": [
+      "lambda:GetFunctionConfiguration",
+      "lambda:ListVersionsByFunction",
+      "lambda:ListAliases",
+      "lambda:GetPolicy",
+      "lambda:ListTags",
+      "lambda:GetFunctionUrlConfig",
+      "lambda:GetCodeSigningConfig",
+      "lambda:GetFunctionEventInvokeConfig"
+    ],
+    "Resource": [
+      "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "ReadEventSourceMappings",
+    "Effect": "Allow",
+    "Action": ["lambda:GetEventSourceMapping"],
+    "Resource": ["*"],
+    "Condition": {
+      "StringLike": {
+        "lambda:FunctionArn": "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${local.resource_prefix}-*"
+      }
+    }
+  },
+  {
+    "Sid": "ListEventSourceMappings",
+    "Effect": "Allow",
+    "Action": ["lambda:ListEventSourceMappings"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "ReadLambdaAccountQuota",
+    "Effect": "Allow",
+    "Action": ["lambda:GetAccountSettings"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "UpdateLambdaFunctions",
+    "Effect": "Allow",
+    "Action": [
+      "lambda:UpdateFunctionCode",
+      "lambda:UpdateFunctionConfiguration",
+      "lambda:PublishVersion",
+      "lambda:CreateAlias",
+      "lambda:DeleteAlias",
+      "lambda:UpdateAlias",
+      "lambda:PutFunctionConcurrency",
+      "lambda:DeleteFunctionConcurrency",
+      "lambda:PutFunctionEventInvokeConfig",
+      "lambda:DeleteFunctionEventInvokeConfig",
+      "lambda:GetFunction",
+      "lambda:GetFunctionConfiguration",
+      "lambda:GetFunctionConcurrency",
+      "lambda:ListVersionsByFunction",
+      "lambda:ListAliases",
+      "lambda:GetPolicy",
+      "lambda:ListTags",
+      "lambda:GetFunctionUrlConfig",
+      "lambda:GetCodeSigningConfig",
+      "lambda:GetFunctionEventInvokeConfig",
+      "lambda:AddPermission",
+      "lambda:RemovePermission"
+    ],
+    "Resource": [
+      "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ManageEventSourceMappings",
+    "Effect": "Allow",
+    "Action": ["lambda:GetEventSourceMapping", "lambda:UpdateEventSourceMapping"],
+    "Resource": ["*"],
+    "Condition": {
+      "StringLike": {
+        "lambda:FunctionArn": "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${local.resource_prefix}-*"
+      }
+    }
+  },
+  {
+    "Sid": "ReadGoneLambdaFunctions",
+    "Effect": "Allow",
+    "Action": ["lambda:GetFunctionConcurrency"],
+    "Resource": [
+      "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "Null": {
+        "aws:ResourceTag/deployment": "true"
+      }
+    }
+  },
+  {
+    "Sid": "ReadGoneEventSourceMappings",
+    "Effect": "Allow",
+    "Action": ["lambda:GetEventSourceMapping"],
+    "Resource": ["*"],
+    "Condition": {
+      "Null": {
+        "lambda:FunctionArn": "true"
+      }
+    }
+  },
+  {
+    "Sid": "BoundedRolePass4",
+    "Effect": "Allow",
+    "Action": ["iam:PassRole"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*-sa"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:PassedToService": "lambda.amazonaws.com"
+      }
+    }
+  },
+  {
+    "Sid": "GetEcrLoginToken",
+    "Effect": "Allow",
+    "Action": ["ecr:GetAuthorizationToken"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "ReadDeploymentContainerImages",
+    "Effect": "Allow",
+    "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+    "Resource": ["arn:aws:ecr:*:${var.managing_account_id}:repository/*"]
+  },
+  {
+    "Sid": "ManageTlsCertificates2",
+    "Effect": "Allow",
+    "Action": [
+      "acm:ImportCertificate",
+      "acm:AddTagsToCertificate",
+      "acm:DeleteCertificate",
+      "acm:DescribeCertificate",
+      "acm:ListTagsForCertificate"
+    ],
+    "Resource": [
+      "arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ReadGoneTlsCertificates",
+    "Effect": "Allow",
+    "Action": ["acm:DescribeCertificate"],
+    "Resource": [
+      "arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"
+    ],
+    "Condition": {
+      "Null": {
+        "aws:ResourceTag/deployment": "true"
+      }
+    }
+  },
+  {
+    "Sid": "CreateHttpApiEndpoints",
+    "Effect": "Allow",
+    "Action": ["apigateway:POST"],
+    "Resource": [
+      "arn:aws:apigateway:${data.aws_region.current.region}::/apis",
+      "arn:aws:apigateway:${data.aws_region.current.region}::/restapis",
+      "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "CreateHttpApiRoutes",
+    "Effect": "Allow",
+    "Action": ["apigateway:POST"],
+    "Resource": [
+      "arn:aws:apigateway:${data.aws_region.current.region}::/apis/*",
+      "arn:aws:apigateway:${data.aws_region.current.region}::/restapis/*",
+      "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*",
+      "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/apimappings",
+      "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/basepathmappings"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "TagHttpApiEndpoints",
+    "Effect": "Allow",
+    "Action": ["apigateway:POST", "apigateway:PUT"],
+    "Resource": ["arn:aws:apigateway:${data.aws_region.current.region}::/tags/*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ManageHttpApiEndpoints",
+    "Effect": "Allow",
+    "Action": [
+      "apigateway:GET",
+      "apigateway:DELETE",
+      "apigateway:PATCH",
+      "apigateway:PUT",
+      "apigateway:TagResource"
+    ],
+    "Resource": [
+      "arn:aws:apigateway:${data.aws_region.current.region}::/apis/*",
+      "arn:aws:apigateway:${data.aws_region.current.region}::/restapis/*",
+      "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*",
+      "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/apimappings",
+      "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/apimappings/*",
+      "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/basepathmappings",
+      "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/basepathmappings/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ReadGoneHttpApis",
+    "Effect": "Allow",
+    "Action": ["apigateway:GET"],
+    "Resource": [
+      "arn:aws:apigateway:${data.aws_region.current.region}::/apis/??????????",
+      "arn:aws:apigateway:${data.aws_region.current.region}::/restapis/??????????",
+      "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*"
+    ],
+    "Condition": {
+      "Null": {
+        "aws:ResourceTag/deployment": "true"
+      }
+    }
+  },
+  {
+    "Sid": "DenyUntaggedDomainMappingReads",
+    "Effect": "Deny",
+    "Action": ["apigateway:GET"],
+    "Resource": ["arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/*"],
+    "Condition": {
+      "Null": {
+        "aws:ResourceTag/deployment": "true"
+      }
+    }
+  },
+  {
+    "Sid": "CreateEventbridgeSchedules",
+    "Effect": "Allow",
+    "Action": ["events:PutRule", "events:TagResource"],
+    "Resource": [
+      "arn:aws:events:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:rule/${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ManageEventbridgeSchedules",
+    "Effect": "Allow",
+    "Action": [
+      "events:DeleteRule",
+      "events:DescribeRule",
+      "events:PutTargets",
+      "events:RemoveTargets"
+    ],
+    "Resource": [
+      "arn:aws:events:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:rule/${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "CreateLambdaFunctions",
+    "Effect": "Allow",
+    "Action": ["lambda:CreateFunction"],
+    "Resource": [
+      "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/deployment": "${local.resource_prefix}",
+        "aws:RequestTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ManageLambdaFunctions",
+    "Effect": "Allow",
+    "Action": [
+      "lambda:DeleteFunction",
+      "lambda:AddPermission",
+      "lambda:RemovePermission",
+      "lambda:CreateFunctionUrlConfig",
+      "lambda:DeleteFunctionUrlConfig",
+      "lambda:UpdateCodeSigningConfig",
+      "lambda:TagResource",
+      "lambda:UpdateFunctionCode",
+      "lambda:UpdateFunctionConfiguration",
+      "lambda:PublishVersion",
+      "lambda:CreateAlias",
+      "lambda:DeleteAlias",
+      "lambda:UpdateAlias",
+      "lambda:PutFunctionConcurrency",
+      "lambda:DeleteFunctionConcurrency",
+      "lambda:PutFunctionEventInvokeConfig",
+      "lambda:DeleteFunctionEventInvokeConfig",
+      "lambda:GetFunction",
+      "lambda:GetFunctionConfiguration",
+      "lambda:GetFunctionConcurrency",
+      "lambda:ListVersionsByFunction",
+      "lambda:ListAliases",
+      "lambda:GetPolicy",
+      "lambda:ListTags",
+      "lambda:GetFunctionUrlConfig",
+      "lambda:GetCodeSigningConfig",
+      "lambda:GetFunctionEventInvokeConfig"
+    ],
+    "Resource": [
+      "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ManageLambdaLogGroups",
+    "Effect": "Allow",
+    "Action": ["logs:CreateLogGroup", "logs:PutRetentionPolicy", "logs:DeleteLogGroup"],
+    "Resource": [
+      "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "ProvisionEventSourceMappings",
+    "Effect": "Allow",
+    "Action": [
+      "lambda:CreateEventSourceMapping",
+      "lambda:DeleteEventSourceMapping",
+      "lambda:GetEventSourceMapping",
+      "lambda:UpdateEventSourceMapping"
+    ],
+    "Resource": ["*"],
+    "Condition": {
+      "StringLike": {
+        "lambda:FunctionArn": "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${local.resource_prefix}-*"
+      }
+    }
+  },
+  {
+    "Sid": "InspectVpcForLambdaNetworking",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeNetworkInterfaces",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeVpcs"
+    ],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "AttachLambdaRuntimePolicies",
+    "Effect": "Allow",
+    "Action": ["iam:PutRolePolicy", "iam:PutRolePermissionsBoundary"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime",
+        "iam:PermissionsBoundary": "${aws_iam_policy.management_permissions_boundary.arn}"
+      }
+    }
+  },
+  {
+    "Sid": "ReadLambdaRuntimePolicies",
+    "Effect": "Allow",
+    "Action": ["iam:GetRolePolicy", "iam:ListRolePolicies"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "${local.resource_prefix}",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "ConfigureLambdaImagePullAccess",
+    "Effect": "Allow",
+    "Action": [
+      "ecr:BatchGetImage",
+      "ecr:GetDownloadUrlForLayer",
+      "ecr:GetRepositoryPolicy",
+      "ecr:SetRepositoryPolicy"
+    ],
+    "Resource": ["arn:aws:ecr:*:${var.managing_account_id}:repository/*"]
+  },
+  {
+    "Sid": "VaultStackSecretsData",
+    "Effect": "Allow",
+    "Action": ["ssm:GetParameter", "ssm:PutParameter", "ssm:DeleteParameter"],
+    "Resource": [
+      "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "VaultProtectDeployerSecretsSsmGetParameterPermissions",
+    "Effect": "Deny",
+    "Action": [
+      "ssm:GetParameter*",
+      "ssm:PutParameter",
+      "ssm:DeleteParameter*",
+      "ssm:LabelParameterVersion",
+      "ssm:UnlabelParameterVersion",
+      "ssm:AddTagsToResource",
+      "ssm:RemoveTagsFromResource",
+      "ssm:PutResourcePolicy",
+      "ssm:DeleteResourcePolicy"
+    ],
+    "Resource": [
+      "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/${local.resource_prefix}-deployer-secrets-*"
+    ]
+  },
+  {
+    "Sid": "VaultProtectDeployerSecretsSsmGetParametersByPath",
+    "Effect": "Deny",
+    "Action": ["ssm:GetParametersByPath"],
+    "Resource": ["*"]
+  },
+  {
+    "Sid": "VaultProtectDeployerSecretsStsAssumeRole",
+    "Effect": "Deny",
+    "Action": ["sts:AssumeRole"],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "BoundedRoleProtectBoundary",
+    "Effect": "Deny",
+    "Action": [
+      "iam:CreatePolicyVersion",
+      "iam:SetDefaultPolicyVersion",
+      "iam:DeletePolicyVersion",
+      "iam:DeletePolicy",
+      "iam:TagPolicy",
+      "iam:UntagPolicy",
+      "iam:DeleteRolePermissionsBoundary"
+    ],
+    "Resource": [
+      "${aws_iam_policy.management_permissions_boundary.arn}",
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*"
+    ]
+  },
+  {
+    "Sid": "DenyManagementRoleChanges",
+    "Effect": "Deny",
+    "Action": [
+      "iam:DeleteRole",
+      "iam:PutRolePolicy",
+      "iam:DeleteRolePolicy",
+      "iam:AttachRolePolicy",
+      "iam:DetachRolePolicy",
+      "iam:UpdateAssumeRolePolicy",
+      "iam:PutRolePermissionsBoundary",
+      "iam:DeleteRolePermissionsBoundary",
+      "iam:UpdateRole",
+      "iam:TagRole",
+      "iam:UntagRole"
+    ],
+    "Resource": [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-management"
+    ]
+  }
+]

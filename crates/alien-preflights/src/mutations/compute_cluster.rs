@@ -1634,7 +1634,7 @@ mod tests {
             assert!(plan.pools[0]
                 .machines
                 .iter()
-                .any(|option| option.machine == machine));
+                .any(|option| option.machine == machine && option.available));
 
             let config = DeploymentConfig::builder()
                 .stack_settings(StackSettings {

@@ -21,9 +21,9 @@ use tracing::{debug, info};
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::lambda_microvms::{
-    CreateMicrovmImageRequest, MicrovmCodeArtifact, MicrovmCpuConfiguration, MicrovmImageBuild,
-    MicrovmImageBuildHooks, MicrovmImageHooks, MicrovmImageLogging, MicrovmImageResources,
-    MicrovmLifecycleHooks, UpdateMicrovmImageRequest,
+    is_refused_for_running_microvms, CreateMicrovmImageRequest, MicrovmCodeArtifact,
+    MicrovmCpuConfiguration, MicrovmImageBuild, MicrovmImageBuildHooks, MicrovmImageHooks,
+    MicrovmImageLogging, MicrovmImageResources, MicrovmLifecycleHooks, UpdateMicrovmImageRequest,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::sandbox_build_role::{
@@ -50,6 +50,13 @@ const BUILD_MAX_POLLS: u32 = 90;
 /// How many times a delete refused while the image settles is retried, at
 /// `BUILD_POLL_INTERVAL`, before the delete fails: ten minutes.
 const IMAGE_DELETE_MAX_POLLS: u32 = 60;
+/// How often a delete refused for running sessions is asked again.
+const RUNNING_SESSIONS_POLL_INTERVAL: Duration = Duration::from_secs(60);
+/// How long a delete waits for the image's sessions to end before it fails. Sessions cannot be
+/// listed or terminated here (see the module doc), but AWS ends each one within eight hours of
+/// its start, and none can start once the delete has withdrawn the binding; the margin covers a
+/// session started just before that.
+const RUNNING_SESSIONS_MAX_WAIT_MINUTES: i64 = 8 * 60 + 30;
 
 /// A version a roll replaced, and when it stopped serving.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -114,6 +121,16 @@ pub struct AwsSandboxController {
     /// Accepted deletion, retained until the provider confirms absence.
     #[serde(default)]
     pub(crate) deleting_version: Option<String>,
+    /// When the image delete was first refused because sessions started from the image were
+    /// still running. Bounds the wait for them to end. The `wait_for_*_started_at` name makes a
+    /// retry clear it, so a retried delete gets a fresh window.
+    #[serde(default)]
+    pub(crate) wait_for_running_sessions_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Image deletes refused while the image settles, in this delete. Counted here rather than
+    /// through the framework's stay budget, which the running-sessions wait also draws on. The
+    /// `wait_for_*_iterations` name makes a retry reset it.
+    #[serde(default)]
+    pub(crate) wait_for_image_settle_iterations: u32,
     /// Changes only after a build is observed failed, so retries do not
     /// replay an idempotency receipt for a deleted failed build.
     #[serde(default)]
@@ -963,6 +980,9 @@ impl AwsSandboxController {
         // The binding is a promise sessions can be created now; withdraw it before the first
         // delete rather than after the last one.
         self.active_version = None;
+        // Waits left by an earlier delete that ended another way must not count against this one.
+        self.wait_for_running_sessions_started_at = None;
+        self.wait_for_image_settle_iterations = 0;
 
         // A setup-baked image belongs to the setup stack and is removed by stack teardown;
         // deleting it here would act with credentials that were never granted it — and would
@@ -1020,6 +1040,35 @@ impl AwsSandboxController {
             Err(error) if is_remote_resource_absent(&error) => {
                 debug!(sandbox_id = %config.id, image = %image_identifier, "MicroVM image already gone");
             }
+            // AWS refuses to delete an image while sessions started from it are running, and
+            // ends every session within eight hours. Wait them out, bounded by that cap.
+            Err(error) if is_refused_for_running_microvms(&error) => {
+                let now = chrono::Utc::now();
+                let since = *self.wait_for_running_sessions_started_at.get_or_insert(now);
+                if now - since > chrono::Duration::minutes(RUNNING_SESSIONS_MAX_WAIT_MINUTES) {
+                    // A retry starts a new wait rather than failing on this one at once.
+                    self.wait_for_running_sessions_started_at = None;
+                    return Err(error).context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "MicroVM image '{image_identifier}' still has running sessions after \
+                             waiting {} hours for them to end; terminate the sessions started \
+                             from it and retry the delete",
+                            RUNNING_SESSIONS_MAX_WAIT_MINUTES / 60
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    });
+                }
+                info!(
+                    sandbox_id = %config.id,
+                    image = %image_identifier,
+                    waiting_since = %since,
+                    "MicroVM image still has running sessions; deleting it once they end"
+                );
+                return Ok(HandlerAction::Stay {
+                    max_times: None,
+                    suggested_delay: Some(RUNNING_SESSIONS_POLL_INTERVAL),
+                });
+            }
             // An image that is still settling refuses deletion for a while; ask again, bounded.
             Err(error)
                 if matches!(
@@ -1027,9 +1076,16 @@ impl AwsSandboxController {
                     Some(CloudClientErrorData::RemoteResourceConflict { .. })
                 ) =>
             {
+                self.wait_for_image_settle_iterations += 1;
+                if self.wait_for_image_settle_iterations >= IMAGE_DELETE_MAX_POLLS {
+                    return Err(AlienError::new(ErrorData::PollingTimeout {
+                        state: format!("{:?}", self.state),
+                        max_times: IMAGE_DELETE_MAX_POLLS,
+                    }));
+                }
                 info!(sandbox_id = %config.id, image = %image_identifier, "MicroVM image cannot be deleted in its current state yet");
                 return Ok(HandlerAction::Stay {
-                    max_times: Some(IMAGE_DELETE_MAX_POLLS),
+                    max_times: None,
                     suggested_delay: Some(BUILD_POLL_INTERVAL),
                 });
             }
@@ -1042,7 +1098,9 @@ impl AwsSandboxController {
         }
 
         self.active_version = None;
-        info!(sandbox_id = %config.id, "AWS sandbox image deleted; sessions expire on their own");
+        self.wait_for_running_sessions_started_at = None;
+        self.wait_for_image_settle_iterations = 0;
+        info!(sandbox_id = %config.id, "AWS sandbox image deleted");
 
         Ok(HandlerAction::Continue {
             state: DeletingBundles,
@@ -4634,6 +4692,234 @@ mod tests {
             .run_until_terminal()
             .await
             .expect("the second delete succeeds");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    fn running_sessions_refusal() -> alien_error::AlienError<CloudClientErrorData> {
+        alien_error::AlienError::new(CloudClientErrorData::RemoteResourceConflict {
+            resource_type: "MicrovmImage".to_string(),
+            resource_name: "DeleteMicrovmImage".to_string(),
+            message: alien_aws_clients::lambda_microvms::IMAGE_HAS_RUNNING_MICROVMS.to_string(),
+        })
+    }
+
+    /// AWS refuses to delete an image while sessions started from it are running, and accepts
+    /// the same call once they end. The refusal waits rather than failing the delete, past the
+    /// ten minutes a settling image gets.
+    #[tokio::test]
+    async fn a_delete_refused_for_running_sessions_waits_for_them_to_end() {
+        // One past the settling budget: under that budget this refusal would fail the delete.
+        let refusals = IMAGE_DELETE_MAX_POLLS + 1;
+        let mut client = MockLambdaMicrovmsApi::new();
+        let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let seen = calls.clone();
+        client
+            .expect_delete_microvm_image()
+            .withf(|identifier| identifier == IMAGE_ARN)
+            .times(refusals as usize + 1)
+            .returning(move |_| {
+                if seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < refusals {
+                    Err(running_sessions_refusal())
+                } else {
+                    Ok(())
+                }
+            });
+
+        let mut executor = executor(ready_controller(), client).await;
+        executor.delete().expect("transition to delete");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("the delete succeeds once the sessions end");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            refusals + 1
+        );
+        assert_eq!(
+            executor
+                .suggested_delays()
+                .iter()
+                .filter(|delay| **delay == RUNNING_SESSIONS_POLL_INTERVAL)
+                .count(),
+            refusals as usize,
+            "each refusal waits the running-sessions interval"
+        );
+    }
+
+    /// The wait for running sessions is bounded by the eight hours AWS lets a session run. Past
+    /// that, the delete fails and says what to do.
+    #[tokio::test]
+    async fn sessions_still_running_past_the_session_cap_fail_the_delete_with_the_cause() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_delete_microvm_image()
+            .times(1)
+            .returning(|_| Err(running_sessions_refusal()));
+        // Already waiting in the delete flow, since before the cap.
+        let controller = AwsSandboxController {
+            state: AwsSandboxState::DeletingImage,
+            active_version: None,
+            wait_for_running_sessions_started_at: Some(
+                chrono::Utc::now()
+                    - chrono::Duration::minutes(RUNNING_SESSIONS_MAX_WAIT_MINUTES + 1),
+            ),
+            ..ready_controller()
+        };
+
+        let mut executor = executor(controller, client).await;
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("sessions past the cap fail the delete");
+        let rendered = format!("{error:?}");
+        assert!(
+            rendered.contains("still has running sessions")
+                && rendered.contains("terminate the sessions"),
+            "the failure names the cause and the fix: {rendered}"
+        );
+    }
+
+    /// Sessions ending and the image then settling is the order a real teardown sees. The
+    /// settling wait keeps its own budget, whatever the session wait already used.
+    #[tokio::test]
+    async fn an_image_that_settles_after_its_sessions_end_gets_the_full_settling_budget() {
+        let session_refusals = IMAGE_DELETE_MAX_POLLS + 1;
+        let settling_refusals = 3;
+        let mut client = MockLambdaMicrovmsApi::new();
+        let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let seen = calls.clone();
+        client
+            .expect_delete_microvm_image()
+            .times((session_refusals + settling_refusals + 1) as usize)
+            .returning(move |_| {
+                let call = seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if call < session_refusals {
+                    Err(running_sessions_refusal())
+                } else if call < session_refusals + settling_refusals {
+                    Err(settling_refusal())
+                } else {
+                    Ok(())
+                }
+            });
+
+        let mut executor = executor(ready_controller(), client).await;
+        executor.delete().expect("transition to delete");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("the delete succeeds once the image settles");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            session_refusals + settling_refusals + 1
+        );
+    }
+
+    /// A retry resumes the failed delete in `DeletingImage`, not at the flow entry. Both waits
+    /// must start over there: a delete that ran out of its settling budget, or failed while
+    /// sessions ran, is given a full budget again rather than failing on its first refusal.
+    #[tokio::test]
+    async fn a_retried_delete_gets_fresh_settling_and_session_waits() {
+        for (refusal, exhausted) in [
+            (
+                settling_refusal as fn() -> alien_error::AlienError<CloudClientErrorData>,
+                AwsSandboxController {
+                    state: AwsSandboxState::DeletingImage,
+                    active_version: None,
+                    wait_for_image_settle_iterations: IMAGE_DELETE_MAX_POLLS,
+                    ..ready_controller()
+                },
+            ),
+            (
+                running_sessions_refusal as fn() -> alien_error::AlienError<CloudClientErrorData>,
+                AwsSandboxController {
+                    state: AwsSandboxState::DeletingImage,
+                    active_version: None,
+                    wait_for_running_sessions_started_at: Some(
+                        chrono::Utc::now()
+                            - chrono::Duration::minutes(RUNNING_SESSIONS_MAX_WAIT_MINUTES + 60),
+                    ),
+                    ..ready_controller()
+                },
+            ),
+        ] {
+            // The resource as a delete that failed in `DeletingImage` leaves it, retried the way
+            // the executor retries it.
+            let mut resource_state = alien_core::StackResourceState::new_pending(
+                Sandbox::RESOURCE_TYPE.as_ref().to_string(),
+                alien_core::Resource::new(sandbox()),
+                None,
+                Vec::new(),
+            );
+            resource_state.status = ResourceStatus::DeleteFailed;
+            resource_state
+                .set_last_failed_controller(Some(Box::new(exhausted)))
+                .expect("store the failed checkpoint");
+            assert!(resource_state.retry_failed().expect("retry"));
+            assert_eq!(resource_state.status, ResourceStatus::Deleting);
+            let retried = resource_state
+                .get_internal_controller_typed::<AwsSandboxController>()
+                .expect("the retried checkpoint");
+            assert_eq!(retried.state, AwsSandboxState::DeletingImage);
+            assert_eq!(retried.wait_for_image_settle_iterations, 0);
+            assert!(retried.wait_for_running_sessions_started_at.is_none());
+
+            let mut client = MockLambdaMicrovmsApi::new();
+            let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
+            let seen = calls.clone();
+            client
+                .expect_delete_microvm_image()
+                .times(2)
+                .returning(move |_| {
+                    if seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                        Err(refusal())
+                    } else {
+                        Ok(())
+                    }
+                });
+            let mut executor = executor(retried, client).await;
+            executor
+                .run_until_terminal()
+                .await
+                .expect("the retried delete waits out its first refusal");
+            assert_eq!(executor.status(), ResourceStatus::Deleted);
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+        }
+    }
+
+    /// A wait recorded by an earlier delete that failed some other way is not carried into a new
+    /// delete: its first refusal waits instead of failing on the old clock.
+    #[tokio::test]
+    async fn a_new_delete_does_not_inherit_an_earlier_running_sessions_wait() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let seen = calls.clone();
+        client
+            .expect_delete_microvm_image()
+            .times(2)
+            .returning(move |_| {
+                if seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    Err(running_sessions_refusal())
+                } else {
+                    Ok(())
+                }
+            });
+        let controller = AwsSandboxController {
+            wait_for_running_sessions_started_at: Some(
+                chrono::Utc::now()
+                    - chrono::Duration::minutes(RUNNING_SESSIONS_MAX_WAIT_MINUTES + 60),
+            ),
+            ..ready_controller()
+        };
+
+        let mut executor = executor(controller, client).await;
+        executor.delete().expect("transition to delete");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("the new delete waits out its own refusal");
         assert_eq!(executor.status(), ResourceStatus::Deleted);
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     }

@@ -7,7 +7,7 @@ use crate::gcp::{
 use alien_client_core::Result;
 use reqwest::{Client, Method};
 use serde::{Deserialize, Serialize};
-use std::fmt::Debug;
+use std::{collections::HashMap, fmt::Debug};
 
 #[cfg(feature = "test-utils")]
 use mockall::automock;
@@ -90,8 +90,15 @@ pub struct QuotaInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DimensionsInfo {
+    /// Dimension values this group applies to, such as `region` and `vm_family`.
+    /// A dimension absent here applies to every value of it.
+    #[serde(default)]
+    pub dimensions: HashMap<String, String>,
     /// Applied quota, distinct from the catalog default.
     pub details: Option<QuotaDetails>,
+    /// Regions or zones this group applies to.
+    #[serde(default)]
+    pub applicable_locations: Vec<String>,
 }
 
 /// Applied int64 quota value encoded as a decimal string.
@@ -110,6 +117,46 @@ impl QuotaInfo {
         }
         let [info] = self.dimensions_infos.as_deref()? else {
             return None;
+        };
+        let value = info
+            .details
+            .as_ref()?
+            .value
+            .as_deref()?
+            .parse::<u64>()
+            .ok()?;
+        Some(value as f64)
+    }
+
+    /// Applied limit of a quota dimensioned by `region` and `vm_family`, such as
+    /// `CPUS-PER-VM-FAMILY-per-project-region`. A group naming the region wins over a
+    /// group that names only the family and lists the region as applicable. Two
+    /// groups that match equally are ambiguous.
+    pub fn region_family_limit(&self, region: &str, vm_family: &str) -> Option<f64> {
+        let matches = |info: &&DimensionsInfo| {
+            info.dimensions.get("vm_family").map(String::as_str) == Some(vm_family)
+                && info
+                    .dimensions
+                    .keys()
+                    .all(|key| key == "region" || key == "vm_family")
+                && match info.dimensions.get("region") {
+                    Some(group_region) => group_region == region,
+                    None => info
+                        .applicable_locations
+                        .iter()
+                        .any(|location| location == region),
+                }
+        };
+        let infos = self.dimensions_infos.as_deref()?;
+        let candidates = infos.iter().filter(matches).collect::<Vec<_>>();
+        let regional = candidates
+            .iter()
+            .filter(|info| info.dimensions.contains_key("region"))
+            .collect::<Vec<_>>();
+        let info = match (regional.as_slice(), candidates.as_slice()) {
+            ([info], _) => **info,
+            ([], [info]) => *info,
+            _ => return None,
         };
         let value = info
             .details

@@ -303,6 +303,7 @@ fn aws_resource_arns_are_stack_or_resource_scoped_unless_documented_external() {
                         || documented_run_instances_companion_resource(actions, resource)
                         || documented_create_security_group_vpc_resource(actions, resource)
                         || documented_ses_domain_identity_scope(resource)
+                        || documented_global_cluster_membership_read(actions, resource)
                         || documented_detached_network_interface_cleanup(
                             permission_set_id,
                             actions,
@@ -380,6 +381,14 @@ fn documented_detached_network_interface_cleanup(
     permission_set_id == "network/provision"
         && actions == ["ec2:DeleteNetworkInterface"]
         && resource == "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*"
+}
+
+fn documented_global_cluster_membership_read(actions: &[String], resource: &str) -> bool {
+    // The Terraform AWS provider asks which global cluster an Aurora cluster belongs to without
+    // naming one, so AWS authorizes the read against every global cluster in the account. It is
+    // read-only and pinned to the account.
+    actions == ["rds:DescribeGlobalClusters"]
+        && resource == "arn:aws:rds::${awsAccountId}:global-cluster:*"
 }
 
 fn documented_ses_domain_identity_scope(resource: &str) -> bool {
@@ -576,8 +585,13 @@ fn aws_wildcard_resources_are_read_only_or_conditioned_unless_documented() {
     );
 }
 
+/// DynamoDB evaluates tag conditions as if no tags are present in accounts where its ABAC is
+/// off. Only IfExists operators pass there, so a DynamoDB grant may narrow by tag but must not
+/// depend on tags, except for calls whose denial the controller reports as a warning.
 #[test]
 fn dynamodb_permissions_do_not_depend_on_abac() {
+    let denial_only_warns = ["dynamodb:UpdateContinuousBackups"];
+
     let dynamodb_sets = [
         "kv/heartbeat",
         "kv/management",
@@ -602,11 +616,27 @@ fn dynamodb_permissions_do_not_depend_on_abac() {
             .into_iter()
             .flatten()
             {
-                if has_condition_key(binding, "aws:ResourceTag/${stackTag}")
-                    || has_condition_key(binding, "aws:RequestTag/${stackTag}")
-                {
+                let depends_on_tags =
+                    binding
+                        .condition
+                        .iter()
+                        .flatten()
+                        .any(|(operator, values)| {
+                            !operator.ends_with("IfExists")
+                                && values.keys().any(|key| {
+                                    key == "aws:ResourceTag/${stackTag}"
+                                        || key == "aws:RequestTag/${stackTag}"
+                                })
+                        });
+                let only_warns = permission
+                    .grant
+                    .actions
+                    .iter()
+                    .flatten()
+                    .all(|action| denial_only_warns.contains(&action.as_str()));
+                if depends_on_tags && !only_warns {
                     failures.push(format!(
-                        "{permission_set_id} uses DynamoDB tag conditions; add an AWS account preflight before relying on DynamoDB ABAC"
+                        "{permission_set_id} needs DynamoDB tag conditions to hold; use an IfExists operator or add an AWS account preflight before relying on DynamoDB ABAC"
                     ));
                 }
             }
@@ -673,6 +703,37 @@ fn is_tag_absent_binding(binding: &AwsBindingSpec) -> bool {
         })
 }
 
+/// CreateLogGroup with tags authorizes the tagging actions on the group being created. Here
+/// `Null` narrows them: on top of this stack's request tags, the group must not carry the stack
+/// tag yet, so a group another setup tagged cannot be retagged into this one's and deleted.
+fn create_time_log_group_tagging(
+    permission_set_id: &str,
+    actions: &[String],
+    binding: &AwsBindingSpec,
+) -> bool {
+    let Some(conditions) = binding.condition.as_ref() else {
+        return false;
+    };
+    let equals = conditions.get("StringEquals");
+    let requires = |key: &str, value: &str| {
+        equals.is_some_and(|equals| equals.get(key).and_then(|v| v.as_string()) == Some(value))
+    };
+    permission_set_id == "network/setup"
+        && actions == ["logs:TagResource", "logs:TagLogGroup"]
+        && binding.resources
+            == ["arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:${stackPrefix}-*-flow-logs"]
+        && conditions.len() == 2
+        && requires("aws:RequestTag/${stackTag}", "${stackPrefix}")
+        && requires("aws:RequestTag/${managedByTag}", "runtime")
+        && conditions.get("Null").is_some_and(|null| {
+            null.len() == 1
+                && null
+                    .get("aws:ResourceTag/${stackTag}")
+                    .and_then(|value| value.as_string())
+                    == Some("true")
+        })
+}
+
 /// The reads a gone tag-scoped object answers with NotFound once they are granted on objects
 /// without the stack's tag. Each returns metadata only. For Lambda that is the reserved
 /// concurrency: GetFunctionConfiguration and GetFunction return environment variables.
@@ -715,14 +776,22 @@ fn tag_absent_grants_are_reads_of_gone_objects() {
                     .condition
                     .as_ref()
                     .and_then(|conditions| conditions.get("Null"))
+                    // These request keys are not tags: their Null narrows the request.
                     .is_some_and(|keys| {
-                        keys.keys()
-                            .any(|key| key != "autoscaling:LaunchConfigurationName")
+                        keys.keys().any(|key| {
+                            !matches!(
+                                key.as_str(),
+                                "autoscaling:LaunchConfigurationName" | "cloudwatch:AlarmActions"
+                            )
+                        })
                     });
                 if !uses_null {
                     continue;
                 }
                 let at = format!("{permission_set_id}[{statement_index}]");
+                if create_time_log_group_tagging(permission_set_id, actions, binding) {
+                    continue;
+                }
                 if !is_tag_absent_binding(binding) {
                     failures.push(format!(
                         "{at} combines Null with other conditions or keys: {:?}",

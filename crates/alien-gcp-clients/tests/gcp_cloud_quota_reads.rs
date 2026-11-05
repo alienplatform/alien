@@ -71,3 +71,39 @@ fn missing_ambiguous_dimensioned_and_invalid_limits_are_not_zero() {
         );
     }
 }
+
+#[test]
+fn region_family_limit_prefers_the_region_group_and_never_guesses() {
+    // Group shapes Compute Engine returns for CPUS-PER-VM-FAMILY-per-project-region.
+    let quota: QuotaInfo = serde_json::from_value(serde_json::json!({
+        "quotaId": "CPUS-PER-VM-FAMILY-per-project-region",
+        "metric": "compute.googleapis.com/cpus_per_vm_family",
+        "dimensions": ["region", "vm_family"],
+        "dimensionsInfos": [
+            {"dimensions": {"region": "us-central1", "vm_family": "N4"}, "details": {"value": "200"}, "applicableLocations": ["us-central1"]},
+            {"dimensions": {"region": "us-central1", "vm_family": "C4A"}, "details": {"value": "24"}, "applicableLocations": ["us-central1"]},
+            {"dimensions": {"region": "us-central1", "vm_family": "C4"}, "details": {"value": "NaN"}, "applicableLocations": ["us-central1"]},
+            {"dimensions": {"region": "us-central1"}, "details": {}, "applicableLocations": ["us-central1"]},
+            {"dimensions": {"vm_family": "N4"}, "details": {"value": "48"}, "applicableLocations": ["europe-west12", "us-central1"]},
+            {"dimensions": {"vm_family": "C4A"}, "details": {"value": "24"}, "applicableLocations": ["europe-west12"]},
+            {"dimensions": {"vm_family": "C4A"}, "details": {"value": "32"}, "applicableLocations": ["europe-west12"]},
+            {"details": {}, "applicableLocations": ["europe-west12"]}
+        ]
+    }))
+    .unwrap();
+    assert_eq!(quota.region_family_limit("us-central1", "N4"), Some(200.0));
+    assert_eq!(quota.region_family_limit("us-central1", "C4A"), Some(24.0));
+    assert_eq!(quota.region_family_limit("europe-west12", "N4"), Some(48.0));
+    for (region, family) in [
+        ("us-central1", "C4"),
+        ("us-central1", "N4A"),
+        ("europe-west12", "C4A"),
+        ("asia-east1", "N4"),
+    ] {
+        assert_eq!(
+            quota.region_family_limit(region, family),
+            None,
+            "{region} {family}"
+        );
+    }
+}

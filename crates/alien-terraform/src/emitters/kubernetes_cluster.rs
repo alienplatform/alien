@@ -152,7 +152,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
             // 1 item minimum"). The data blocks are gated by `count` so
             // create-new / use-existing modes pay no API cost.
             .with_data(data_block(
-                "aws_vpc",
+                "aws_vpcs",
                 &format!("{label}_default"),
                 [
                     attr(
@@ -161,7 +161,15 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                             "var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"use-default\" ? 1 : 0",
                         ),
                     ),
-                    attr("default", Expression::Bool(true)),
+                    // DescribeVpcs only; the `aws_vpc` data source also calls
+                    // DescribeVpcAttribute on the untagged default VPC.
+                    nested(block(
+                        "filter",
+                        [
+                            attr("name", Expression::String("is-default".to_string())),
+                            attr("values", expr::raw("[\"true\"]")),
+                        ],
+                    )),
                 ],
             ))
             // EKS control plane subnets must live in AZs the service supports.
@@ -206,7 +214,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                             attr(
                                 "values",
                                 expr::raw(format!(
-                                    "[data.aws_vpc.{label}_default[0].id]"
+                                    "[data.aws_vpcs.{label}_default[0].ids[0]]"
                                 )),
                             ),
                         ],
@@ -457,6 +465,15 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 ],
             ),
         ]);
+            fragment
+                .resource_blocks
+                .extend(crate::emitters::aws::flow_logs::blocks(
+                    label,
+                    ctx.resource_id,
+                    "var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"create-new\" ? 1 : 0",
+                    expr::raw(format!("aws_vpc.{label}[0].id")),
+                    crate::emitters::aws::helpers::tags(ctx, "kubernetes-cluster"),
+                ));
         }
         fragment.resource_blocks.extend([
             resource_block(

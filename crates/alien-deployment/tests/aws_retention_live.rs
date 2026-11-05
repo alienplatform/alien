@@ -410,12 +410,13 @@ async fn delete_keeps_data_and_removes_access_then_erase_removes_data() {
     s3.put_bucket_lifecycle_configuration(
         &bucket,
         &LifecycleConfiguration {
-            rules: vec![LifecycleRule {
-                id: Some("expire".to_string()),
-                status: LifecycleRuleStatus::Enabled,
-                filter: LifecycleRuleFilter { prefix: None },
-                expiration: Some(LifecycleExpiration { days: Some(1) }),
-            }],
+            rules: vec![LifecycleRule::builder()
+                .id("expire".to_string())
+                .status(LifecycleRuleStatus::Enabled)
+                .filter(LifecycleRuleFilter::default())
+                .expiration(LifecycleExpiration::builder().days(1).build())
+                .build()],
+            ..Default::default()
         },
     )
     .await

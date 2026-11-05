@@ -285,14 +285,14 @@ impl S3Client {
         resource: &str,
     ) -> AlienError<ErrorData> {
         if let Some(mapped) = Self::map_s3_error(status, &body, operation, resource) {
-            return AlienError::new(ErrorData::HttpResponseError {
+            let error = AlienError::new(ErrorData::HttpResponseError {
                 message: format!("{} failed: {}", operation, body),
                 url,
                 http_status: status.as_u16(),
                 http_request_text: None,
-                http_response_text: Some(body),
-            })
-            .context(mapped);
+                http_response_text: Some(body.clone()),
+            });
+            return Self::with_mapped_error(error, status, &body, mapped);
         }
 
         AlienError::new(ErrorData::HttpResponseError {
@@ -318,7 +318,8 @@ impl S3Client {
                         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                     if let Some(mapped) = Self::map_s3_error(status, text, operation, resource_name)
                     {
-                        Err(e.context(mapped))
+                        let text = text.clone();
+                        Err(Self::with_mapped_error(e, status, &text, mapped))
                     } else {
                         // Couldn't parse S3 error, use original error
                         Err(e)
@@ -327,6 +328,30 @@ impl S3Client {
                     Err(e)
                 }
             }
+        }
+    }
+
+    /// Adds the mapped error to a failed response. A denial also keeps S3's message, which names
+    /// the denied action and the caller, so a warning can show it.
+    fn with_mapped_error(
+        error: AlienError<ErrorData>,
+        status: StatusCode,
+        body: &str,
+        mapped: ErrorData,
+    ) -> AlienError<ErrorData> {
+        let rejection = matches!(mapped, ErrorData::RemoteAccessDenied { .. })
+            .then(|| quick_xml::de::from_str::<S3ErrorResponse>(body).ok())
+            .flatten();
+        match rejection {
+            Some(rejection) => error
+                .context(ErrorData::RemoteRequestRejected {
+                    service: "S3".into(),
+                    http_status: status.as_u16(),
+                    provider_code: rejection.code,
+                    message: rejection.message,
+                })
+                .context(mapped),
+            None => error.context(mapped),
         }
     }
 
@@ -653,16 +678,54 @@ impl S3Api for S3Client {
         &self,
         bucket: &str,
     ) -> Result<LifecycleConfiguration> {
-        let host = self.host(bucket);
-        self.request_xml(
-            Method::GET,
-            self.url(bucket, "?lifecycle"),
-            host,
-            String::new(),
-            "GetBucketLifecycleConfiguration",
-            bucket,
-        )
-        .await
+        let operation = "GetBucketLifecycleConfiguration";
+        let url = self.url(bucket, "?lifecycle");
+        self.credentials.ensure_fresh().await?;
+        let response = self
+            .client
+            .request(Method::GET, &url)
+            .host(&self.host(bucket))
+            .content_sha256("")
+            .sign_aws_request(&self.sign_config())?
+            .with_retry()
+            .send_raw()
+            .await
+            .context(ErrorData::HttpRequestFailed {
+                message: format!("{operation} request failed for '{bucket}'"),
+            })?;
+        let status = response.status();
+        let minimum_size = response
+            .headers()
+            .get(TRANSITION_DEFAULT_MINIMUM_OBJECT_SIZE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let body = if status.is_success() {
+            // A configuration that didn't arrive whole must not read as an unreadable one.
+            response
+                .text()
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpRequestFailed {
+                    message: format!("{operation} response body for '{bucket}' could not be read"),
+                })?
+        } else {
+            response.text().await.unwrap_or_default()
+        };
+        if !status.is_success() {
+            return Err(Self::response_error(status, body, url, operation, bucket));
+        }
+        let mut configuration: LifecycleConfiguration =
+            quick_xml::de::from_str(&body).map_err(|error| {
+                AlienError::new(ErrorData::HttpResponseError {
+                    message: format!("Invalid XML response to {operation}: {error}"),
+                    url: url.clone(),
+                    http_status: status.as_u16(),
+                    http_request_text: None,
+                    http_response_text: Some(body.clone()),
+                })
+            })?;
+        configuration.transition_default_minimum_object_size = minimum_size;
+        Ok(configuration)
     }
 
     async fn get_bucket_encryption(&self, bucket: &str) -> Result<GetBucketEncryptionOutput> {
@@ -876,6 +939,11 @@ impl S3Api for S3Client {
             .header("content-md5", &content_md5)
             .content_sha256(&body)
             .body(body);
+        // Without the header S3 resets the setting to its default.
+        let builder = match &configuration.transition_default_minimum_object_size {
+            Some(size) => builder.header(TRANSITION_DEFAULT_MINIMUM_OBJECT_SIZE, size),
+            None => builder,
+        };
 
         let result =
             crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
@@ -1589,22 +1657,66 @@ pub struct PublicAccessBlockConfiguration {
     pub restrict_public_buckets: Option<bool>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]
-#[serde(rename_all = "PascalCase")]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Builder)]
+#[serde(rename_all = "PascalCase", deny_unknown_fields)]
 pub struct LifecycleConfiguration {
+    /// The namespace S3 sends on the root element, accepted so that any other unknown element
+    /// fails to parse instead of being lost on the way back.
+    #[serde(rename = "@xmlns", default, skip_serializing)]
+    #[builder(default)]
+    pub xmlns: XmlNamespace,
     #[serde(rename = "Rule", default, skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<LifecycleRule>,
+    /// The bucket's `x-amz-transition-default-minimum-object-size` setting. S3 sends it as a
+    /// header next to the rules, not in them, and resets it on a write that leaves it out.
+    #[serde(skip)]
+    pub transition_default_minimum_object_size: Option<String>,
 }
 
+/// An XML namespace attribute, read and dropped.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct XmlNamespace;
+
+impl<'de> Deserialize<'de> for XmlNamespace {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        serde::de::IgnoredAny::deserialize(deserializer).map(|_| XmlNamespace)
+    }
+}
+
+const TRANSITION_DEFAULT_MINIMUM_OBJECT_SIZE: &str = "x-amz-transition-default-minimum-object-size";
+
+/// One S3 lifecycle rule, with every element S3 documents for it. A rule that a caller reads
+/// and writes back keeps all of them, and a rule with an element this model doesn't know fails
+/// to parse instead of losing that element on the way back.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]
-#[serde(rename_all = "PascalCase")]
+#[serde(rename_all = "PascalCase", deny_unknown_fields)]
 pub struct LifecycleRule {
     #[serde(rename = "ID", skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     pub status: LifecycleRuleStatus,
-    pub filter: LifecycleRuleFilter,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<LifecycleRuleFilter>,
+    /// The rule's prefix in the format before `Filter`; S3 still returns it for such rules.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expiration: Option<LifecycleExpiration>,
+    #[serde(rename = "Transition", default, skip_serializing_if = "Vec::is_empty")]
+    #[builder(default)]
+    pub transitions: Vec<LifecycleTransition>,
+    #[serde(
+        rename = "NoncurrentVersionTransition",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[builder(default)]
+    pub noncurrent_version_transitions: Vec<NoncurrentVersionTransition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub noncurrent_version_expiration: Option<NoncurrentVersionExpiration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub abort_incomplete_multipart_upload: Option<AbortIncompleteMultipartUpload>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1614,18 +1726,87 @@ pub enum LifecycleRuleStatus {
     Disabled,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]
-#[serde(rename_all = "PascalCase")]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Builder)]
+#[serde(rename_all = "PascalCase", deny_unknown_fields)]
 pub struct LifecycleRuleFilter {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prefix: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<LifecycleTag>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object_size_greater_than: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object_size_less_than: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub and: Option<LifecycleRuleAndOperator>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Builder)]
-#[serde(rename_all = "PascalCase")]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase", deny_unknown_fields)]
+pub struct LifecycleRuleAndOperator {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+    #[serde(rename = "Tag", default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<LifecycleTag>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object_size_greater_than: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object_size_less_than: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase", deny_unknown_fields)]
+pub struct LifecycleTag {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]
+#[serde(rename_all = "PascalCase", deny_unknown_fields)]
 pub struct LifecycleExpiration {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub days: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expired_object_delete_marker: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase", deny_unknown_fields)]
+pub struct LifecycleTransition {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub days: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_class: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase", deny_unknown_fields)]
+pub struct NoncurrentVersionTransition {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub noncurrent_days: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub newer_noncurrent_versions: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_class: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase", deny_unknown_fields)]
+pub struct NoncurrentVersionExpiration {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub noncurrent_days: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub newer_noncurrent_versions: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Builder)]
+#[serde(rename_all = "PascalCase", deny_unknown_fields)]
+pub struct AbortIncompleteMultipartUpload {
+    pub days_after_initiation: i32,
 }
 
 #[derive(Debug, Serialize, Builder)]
@@ -2054,6 +2235,318 @@ mod tests {
                 .expiration(LifecycleExpiration::builder().days(0).build())
                 .build()])
             .build()
+    }
+
+    /// GetBucketLifecycleConfiguration as S3 answered it for a bucket whose rules use every
+    /// kind of filter and action (recorded in a test account).
+    const RECORDED_LIFECYCLE: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<LifecycleConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Rule><ID>customer-archive</ID><Filter><And><Prefix>archive/</Prefix><Tag><Key>class</Key><Value>cold</Value></Tag><ObjectSizeGreaterThan>1024</ObjectSizeGreaterThan></And></Filter><Status>Enabled</Status><Transition><Days>30</Days><StorageClass>STANDARD_IA</StorageClass></Transition><Transition><Days>90</Days><StorageClass>GLACIER</StorageClass></Transition><Expiration><Days>3650</Days></Expiration><NoncurrentVersionTransition><NoncurrentDays>30</NoncurrentDays><NewerNoncurrentVersions>2</NewerNoncurrentVersions><StorageClass>STANDARD_IA</StorageClass></NoncurrentVersionTransition><NoncurrentVersionExpiration><NoncurrentDays>120</NoncurrentDays><NewerNoncurrentVersions>3</NewerNoncurrentVersions></NoncurrentVersionExpiration></Rule><Rule><ID>customer-tmp</ID><Filter><Tag><Key>tmp</Key><Value>yes</Value></Tag></Filter><Status>Disabled</Status><Expiration><Date>2030-01-01T00:00:00.000Z</Date></Expiration></Rule><Rule><ID>customer-size</ID><Filter><ObjectSizeLessThan>100</ObjectSizeLessThan></Filter><Status>Enabled</Status><Expiration><Days>400</Days></Expiration></Rule><Rule><ID>customer-markers</ID><Filter><Prefix>logs/</Prefix></Filter><Status>Enabled</Status><Expiration><ExpiredObjectDeleteMarker>true</ExpiredObjectDeleteMarker></Expiration><AbortIncompleteMultipartUpload><DaysAfterInitiation>3</DaysAfterInitiation></AbortIncompleteMultipartUpload></Rule></LifecycleConfiguration>";
+
+    /// S3's answer for a bucket without a lifecycle configuration (recorded).
+    const NO_LIFECYCLE_RESPONSE: &str = "<Error><Code>NoSuchLifecycleConfiguration</Code><Message>The lifecycle configuration does not exist</Message><BucketName>bucket-st</BucketName><RequestId>HBKF8M33FS72S4S4</RequestId><HostId>OSaiuNVtWqVXei5jXpbQQ/EJ+MBxGeXnEJ1CDbVfNAV95wWWkGCnAveax+WGKiCe9QdxM/gOqgI=</HostId></Error>";
+
+    /// Every element path and text in an XML document, so two documents compare equal when
+    /// they hold the same elements, whatever order siblings with different names come in.
+    fn xml_leaves(xml: &str) -> Vec<String> {
+        use quick_xml::events::Event;
+        let mut reader = quick_xml::Reader::from_str(xml);
+        reader.config_mut().trim_text(true);
+        let mut path: Vec<String> = Vec::new();
+        let mut seen: Vec<HashMap<String, usize>> = vec![HashMap::new()];
+        let mut leaves = Vec::new();
+        loop {
+            match reader.read_event().unwrap() {
+                Event::Start(element) => {
+                    let name = String::from_utf8(element.name().as_ref().to_vec()).unwrap();
+                    let index = seen.last_mut().unwrap().entry(name.clone()).or_default();
+                    path.push(format!("{name}[{index}]"));
+                    *index += 1;
+                    seen.push(HashMap::new());
+                }
+                Event::Text(text) => {
+                    leaves.push(format!("{}={}", path.join("/"), text.decode().unwrap()))
+                }
+                Event::End(_) => {
+                    path.pop();
+                    seen.pop();
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        leaves.sort();
+        leaves
+    }
+
+    /// A configuration read from S3 and written back holds every element S3 returned, and
+    /// keeps the bucket's minimum transition size, which S3 sends as a header.
+    #[tokio::test]
+    async fn a_lifecycle_configuration_read_from_s3_is_written_back_whole() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/bucket-st")
+                    .query_param_exists("lifecycle");
+                then.status(200)
+                    .header("content-type", "application/xml")
+                    .header(
+                        "x-amz-transition-default-minimum-object-size",
+                        "varies_by_storage_class",
+                    )
+                    .body(RECORDED_LIFECYCLE);
+            })
+            .await;
+        let written = server
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path("/bucket-st")
+                    .query_param_exists("lifecycle")
+                    .header(
+                        "x-amz-transition-default-minimum-object-size",
+                        "varies_by_storage_class",
+                    );
+                then.status(200);
+            })
+            .await;
+        let client = client(&server);
+
+        let configuration = client
+            .get_bucket_lifecycle_configuration("bucket-st")
+            .await
+            .unwrap();
+        assert_eq!(configuration.rules.len(), 4);
+        client
+            .put_bucket_lifecycle_configuration("bucket-st", &configuration)
+            .await
+            .unwrap();
+
+        written.assert_async().await;
+        let body =
+            quick_xml::se::to_string_with_root("LifecycleConfiguration", &configuration).unwrap();
+        assert_eq!(xml_leaves(&body), xml_leaves(RECORDED_LIFECYCLE));
+    }
+
+    /// A rule element this model doesn't know would be lost on the way back, so reading it fails
+    /// instead, with S3's success status.
+    #[tokio::test]
+    async fn a_lifecycle_rule_with_an_unknown_element_is_not_read() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/bucket-st")
+                    .query_param_exists("lifecycle");
+                then.status(200).body(
+                    "<LifecycleConfiguration><Rule><ID>new</ID><Filter/><Status>Enabled</Status><FutureAction><Days>1</Days></FutureAction></Rule></LifecycleConfiguration>",
+                );
+            })
+            .await;
+
+        let error = client(&server)
+            .get_bucket_lifecycle_configuration("bucket-st")
+            .await
+            .expect_err("an unknown element is refused");
+
+        assert!(
+            matches!(
+                error.error,
+                Some(ErrorData::HttpResponseError {
+                    http_status: 200,
+                    ..
+                })
+            ),
+            "{error:?}"
+        );
+    }
+
+    /// A rule someone else added for every object, with an empty `Filter`, is written back with
+    /// it. Without a `Filter` or `Prefix` S3 refuses the whole configuration.
+    #[tokio::test]
+    async fn a_rule_with_an_empty_filter_is_written_back_with_it() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/bucket-st")
+                    .query_param_exists("lifecycle");
+                then.status(200).body(
+                    "<LifecycleConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Rule><ID>everything</ID><Filter/><Status>Enabled</Status><Expiration><Days>400</Days></Expiration></Rule></LifecycleConfiguration>",
+                );
+            })
+            .await;
+        let written = server
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path("/bucket-st")
+                    .query_param_exists("lifecycle")
+                    .body_contains("<Filter/>");
+                then.status(200);
+            })
+            .await;
+        let client = client(&server);
+
+        let configuration = client
+            .get_bucket_lifecycle_configuration("bucket-st")
+            .await
+            .unwrap();
+        assert_eq!(
+            configuration.rules[0].filter,
+            Some(LifecycleRuleFilter::default())
+        );
+        client
+            .put_bucket_lifecycle_configuration("bucket-st", &configuration)
+            .await
+            .unwrap();
+
+        written.assert_async().await;
+    }
+
+    /// An element next to the rules that this model doesn't know would be lost on the way back
+    /// too, so reading it fails.
+    #[tokio::test]
+    async fn a_lifecycle_configuration_with_an_unknown_element_is_not_read() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/bucket-st")
+                    .query_param_exists("lifecycle");
+                then.status(200).body(
+                    "<LifecycleConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Rule><ID>new</ID><Filter/><Status>Enabled</Status><Expiration><Days>1</Days></Expiration></Rule><FutureSetting>on</FutureSetting></LifecycleConfiguration>",
+                );
+            })
+            .await;
+
+        let error = client(&server)
+            .get_bucket_lifecycle_configuration("bucket-st")
+            .await
+            .expect_err("an unknown element is refused");
+
+        assert!(
+            matches!(
+                error.error,
+                Some(ErrorData::HttpResponseError {
+                    http_status: 200,
+                    ..
+                })
+            ),
+            "{error:?}"
+        );
+    }
+
+    /// S3's answer to a lifecycle write the caller's policy doesn't allow (recorded; account,
+    /// role and bucket renamed).
+    const RECORDED_LIFECYCLE_ACCESS_DENIED: &str = "<Error><Code>AccessDenied</Code><Message>User: arn:aws:sts::123456789012:assumed-role/app-management/session is not authorized to perform: s3:PutLifecycleConfiguration on resource: \"arn:aws:s3:::bucket-st\" because no identity-based policy allows the s3:PutLifecycleConfiguration action</Message><RequestId>WX5MS0RPRW45ZACR</RequestId><HostId>0grQHP2pocA+V1WJHZRxkdBegYDyctgCsxpw01RIsxh1TCaoOGlwoDjTShnedz/+FCAc7HranB0=</HostId></Error>";
+
+    /// A denial keeps S3's message, which names the denied action and the caller.
+    #[tokio::test]
+    async fn a_denied_lifecycle_write_keeps_s3s_message() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path("/bucket-st")
+                    .query_param_exists("lifecycle");
+                then.status(403)
+                    .header("content-type", "application/xml")
+                    .body(RECORDED_LIFECYCLE_ACCESS_DENIED);
+            })
+            .await;
+
+        let error = client(&server)
+            .put_bucket_lifecycle_configuration("bucket-st", &zero_day_expiration())
+            .await
+            .expect_err("denied");
+
+        assert!(
+            matches!(
+                error.error,
+                Some(ErrorData::RemoteAccessDenied { ref resource_name, .. })
+                    if resource_name == "bucket-st"
+            ),
+            "{error:?}"
+        );
+        let rejection = error.source.as_deref().expect("S3's rejection");
+        assert_eq!(rejection.code, "REMOTE_REQUEST_REJECTED");
+        assert!(!rejection.internal);
+        assert_eq!(
+            rejection.message,
+            "S3 rejected the request (AccessDenied): User: \
+             arn:aws:sts::123456789012:assumed-role/app-management/session is not authorized to \
+             perform: s3:PutLifecycleConfiguration on resource: \"arn:aws:s3:::bucket-st\" \
+             because no identity-based policy allows the s3:PutLifecycleConfiguration action"
+        );
+    }
+
+    /// A configuration that arrives cut off is a failed request, not one the client can't
+    /// read: callers retry it instead of leaving the bucket as it is.
+    #[tokio::test]
+    async fn a_lifecycle_configuration_cut_off_in_transit_is_a_failed_request() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request).await;
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 500\r\nConnection: close\r\n\r\n<LifecycleConfiguration><Rule>")
+                    .await
+                    .unwrap();
+                stream.shutdown().await.unwrap();
+            }
+        });
+        let credentials = AwsCredentialProvider::from_config_sync(AwsClientConfig {
+            account_id: "123456789012".into(),
+            region: "eu-west-1".into(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "test-access".into(),
+                secret_access_key: "test-secret".into(),
+                session_token: None,
+            },
+            service_overrides: Some(AwsServiceOverrides {
+                endpoints: HashMap::from([("s3".into(), format!("http://{address}"))]),
+            }),
+        });
+        let client = S3Client::new(Client::builder().no_proxy().build().unwrap(), credentials);
+
+        let error = client
+            .get_bucket_lifecycle_configuration("bucket-st")
+            .await
+            .expect_err("the body was cut off");
+
+        assert!(
+            matches!(error.error, Some(ErrorData::HttpRequestFailed { .. })),
+            "{error:?}"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn a_bucket_without_a_lifecycle_configuration_is_not_found() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/bucket-st")
+                    .query_param_exists("lifecycle");
+                then.status(404)
+                    .header("content-type", "application/xml")
+                    .body(NO_LIFECYCLE_RESPONSE);
+            })
+            .await;
+
+        let error = client(&server)
+            .get_bucket_lifecycle_configuration("bucket-st")
+            .await
+            .expect_err("no configuration");
+
+        assert!(
+            matches!(error.error, Some(ErrorData::RemoteResourceNotFound { .. })),
+            "{error:?}"
+        );
     }
 
     #[tokio::test]

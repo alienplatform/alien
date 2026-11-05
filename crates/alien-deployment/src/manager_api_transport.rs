@@ -1792,12 +1792,32 @@ mod tests {
         ec2.expect_describe_vpcs()
             .returning(|_| Ok(serde_json::from_value(serde_json::json!({})).unwrap()));
         ec2.expect_delete_vpc().times(0);
-        let ec2 = Arc::new(ec2);
+        // The network has no flow log, delivery role or log group.
+        ec2.expect_describe_flow_logs()
+            .returning(|_| Ok(serde_json::from_value(serde_json::json!({})).unwrap()));
+        let not_found = || {
+            AlienError::new(alien_aws_clients::ErrorData::RemoteResourceNotFound {
+                resource_type: "flow log delivery".to_string(),
+                resource_name: "bb29c7d7-default-network-flow-logs".to_string(),
+            })
+        };
+        let mut iam = alien_aws_clients::iam::MockIamApi::new();
+        iam.expect_get_role().returning(move |_| Err(not_found()));
+        let mut logs = alien_aws_clients::cloudwatch_logs::MockCloudWatchLogsApi::new();
+        logs.expect_list_tags_for_resource()
+            .returning(move |_| Err(not_found()));
+        let (ec2, iam, logs) = (Arc::new(ec2), Arc::new(iam), Arc::new(logs));
         let mut provider = alien_infra::MockPlatformServiceProvider::new();
         provider.expect_runtime_setup_authority().return_const(None);
         provider
             .expect_get_aws_ec2_client()
             .returning(move |_| Ok(ec2.clone()));
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_aws_logs_client()
+            .returning(move |_| Ok(logs.clone()));
         Arc::new(provider)
     }
 

@@ -1388,6 +1388,7 @@ mod tests {
                         } else {
                             vec![]
                         },
+                        ..Default::default()
                     })
                 });
             let delete_lifecycle = lifecycle_present.clone();
@@ -2133,6 +2134,7 @@ mod tests {
             compute_backend: None,
             allow_frozen_changes: false,
             setup_run: false,
+            setup_run_id: None,
             domain_metadata: None,
             public_endpoints: None,
             monitoring: None,

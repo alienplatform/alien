@@ -32,11 +32,10 @@
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Platform, Stack, Storage};
+use alien_core::{Platform, Stack, Storage, AWS_LIFECYCLE_RULE_LIMIT as S3_MAX_RULES};
 
 /// S3 lifecycle `Days` and Cloud Storage `age` are 32-bit signed integers.
 const INT32_MAX_DAYS: u32 = i32::MAX as u32;
-const S3_MAX_RULES: usize = 1000;
 const S3_MAX_PREFIX_BYTES: usize = 1024;
 const GCS_MAX_PREFIXES: usize = 1000;
 const AZURE_MAX_DAYS: u32 = 99_999;

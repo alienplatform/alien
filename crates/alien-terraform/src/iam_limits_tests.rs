@@ -849,8 +849,9 @@ fn generated_managed_policy_chunks_obey_the_quotas() {
                     sid: format!("Grant{index}"),
                     effect: "Allow".into(),
                     action: vec!["s3:GetObject".into()],
+                    // Distinct resources, so the statements cannot be merged.
                     resource: vec![format!(
-                        "arn:aws:s3:::${{local.resource_prefix}}-managed/{}",
+                        "arn:aws:s3:::${{local.resource_prefix}}-managed-{index}/{}",
                         "x".repeat(4500)
                     )],
                     not_resource: Vec::new(),

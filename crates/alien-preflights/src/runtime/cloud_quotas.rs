@@ -13,7 +13,10 @@ use alien_core::{
     ClientConfig, ComputeCluster, DeploymentConfig, Network, NetworkOutputs, NetworkSettings,
     Platform, ResourceStatus, Stack, StackState, Worker,
 };
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{BTreeSet, HashSet},
+    time::Duration,
+};
 
 pub struct CloudQuotasCheck;
 
@@ -99,6 +102,13 @@ impl RuntimeCheck for CloudQuotasCheck {
                 &config.region,
                 &compute,
                 &cloud_quotas,
+                &mut result,
+            )
+            .await;
+            super::gcp_compute::check_offerings(
+                &machines_to_offer(stack, stack_state),
+                &config.region,
+                &compute,
                 &mut result,
             )
             .await;
@@ -198,6 +208,13 @@ impl RuntimeCheck for CloudQuotasCheck {
                 stack_state,
                 &config.region,
                 &quotas,
+                &ec2,
+                &mut result,
+            )
+            .await;
+            super::aws_compute::check_offerings(
+                &machines_to_offer(stack, stack_state),
+                &config.region,
                 &ec2,
                 &mut result,
             )
@@ -514,6 +531,37 @@ async fn read_vpc_observation(
     Some(QuotaObservation { used, limit })
 }
 
+/// Machine types that pools may launch, leaving out a pool's machine its running
+/// cluster already runs: the region offered it then, and setups without the
+/// offerings grant would otherwise warn on every update.
+pub(super) fn machines_to_offer(stack: &Stack, state: &StackState) -> BTreeSet<String> {
+    let mut machines = BTreeSet::new();
+    for (id, entry) in &stack.resources {
+        let Some(cluster) = entry.config.downcast_ref::<ComputeCluster>() else {
+            continue;
+        };
+        let running = state
+            .resources
+            .get(id)
+            .filter(|current| current.status == ResourceStatus::Running)
+            .and_then(|current| current.config.downcast_ref::<ComputeCluster>());
+        for group in &cluster.capacity_groups {
+            let Some(machine) = group.instance_type.as_deref() else {
+                continue;
+            };
+            let already_running = running.is_some_and(|old| {
+                old.capacity_groups.iter().any(|old| {
+                    old.group_id == group.group_id && old.instance_type.as_deref() == Some(machine)
+                })
+            });
+            if group.max_size > 0 && !already_running {
+                machines.insert(machine.to_string());
+            }
+        }
+    }
+    machines
+}
+
 pub(super) fn record(result: &mut CheckResult, quota_result: QuotaResult) {
     let quota = &quota_result.quota;
     let label = format!("{} ({}, {})", quota.name, quota.provider_id, quota.scope);
@@ -558,6 +606,177 @@ mod tests {
                 ResourceLifecycle::Live,
             )
             .build()
+    }
+
+    #[test]
+    fn offering_checks_skip_machines_the_running_pool_already_runs() {
+        let cluster = |groups: &[(&str, &str, u32)]| {
+            let mut cluster = ComputeCluster::new("compute".into());
+            for (group_id, machine, max_size) in groups {
+                cluster = cluster.capacity_group(alien_core::CapacityGroup {
+                    group_id: (*group_id).into(),
+                    instance_type: Some((*machine).into()),
+                    profile: None,
+                    min_size: 0,
+                    max_size: *max_size,
+                    scale_policy: None,
+                    nested_virtualization: None,
+                    data_disk_gib_range: None,
+                });
+            }
+            cluster.build()
+        };
+        let desired = Stack::new("offerings".into())
+            .add(
+                cluster(&[
+                    ("kept", "m8i.large", 2),
+                    ("resized", "m8i.24xlarge", 2),
+                    ("new", "c8i.large", 1),
+                    ("parked", "r8i.large", 0),
+                ]),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let mut state = StackState::new(Platform::Aws);
+        assert_eq!(
+            machines_to_offer(&desired, &state),
+            BTreeSet::from([
+                "c8i.large".to_string(),
+                "m8i.24xlarge".to_string(),
+                "m8i.large".to_string()
+            ])
+        );
+        let mut current = StackResourceState::new_pending(
+            "compute".into(),
+            alien_core::Resource::new(cluster(&[
+                ("kept", "m8i.large", 2),
+                ("resized", "m8i.4xlarge", 2),
+            ])),
+            None,
+            vec![],
+        );
+        current.status = ResourceStatus::Running;
+        state.resources.insert("compute".into(), current);
+        assert_eq!(
+            machines_to_offer(&desired, &state),
+            BTreeSet::from(["c8i.large".to_string(), "m8i.24xlarge".to_string()])
+        );
+    }
+
+    async fn json_any(server: &MockServer) {
+        server
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body("{}");
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn gcp_quota_check_fails_a_machine_no_zone_of_the_region_offers() {
+        let server = MockServer::start_async().await;
+        let json = |path: &'static str, body: &'static str| {
+            let server = &server;
+            async move {
+                server
+                    .mock_async(|when, then| {
+                        when.method(GET).path(path);
+                        then.status(200)
+                            .header("content-type", "application/json")
+                            .body(body);
+                    })
+                    .await
+            }
+        };
+        json(
+            "/projects/test/regions/us-central1",
+            include_str!("fixtures/gcp-regional-quotas.json"),
+        )
+        .await;
+        json(
+            "/projects/test",
+            r#"{"quotas":[{"metric":"CPUS_ALL_REGIONS","limit":9999,"usage":0}]}"#,
+        )
+        .await;
+        json(
+            "/projects/test/locations/global/services/compute.googleapis.com/quotaInfos/CPUS-ALL-REGIONS-per-project",
+            include_str!("fixtures/gcp-cloud-quota-cpus.json"),
+        )
+        .await;
+        json(
+            "/projects/test/zones",
+            r#"{"items":[{"name":"us-central1-a","status":"UP"}]}"#,
+        )
+        .await;
+        let machine_type = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/projects/test/zones/us-central1-a/machineTypes/n2-standard-2");
+                then.status(404)
+                    .header("content-type", "application/json")
+                    .body(r#"{"error":{"code":404,"message":"The resource was not found","status":"NOT_FOUND"}}"#);
+            })
+            .await;
+        let stack = Stack::new("offerings".into())
+            .add(
+                ComputeCluster::new("compute".into())
+                    .capacity_group(alien_core::CapacityGroup {
+                        group_id: "general".into(),
+                        instance_type: Some("n2-standard-2".into()),
+                        profile: None,
+                        min_size: 0,
+                        max_size: 1,
+                        scale_policy: None,
+                        nested_virtualization: None,
+                        data_disk_gib_range: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(alien_core::StackSettings::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(alien_core::ExternalBindings::default())
+            .build();
+        // The IAM quota reads that follow get empty bodies and stay non-blocking.
+        json_any(&server).await;
+        let endpoint = server.base_url();
+        let client_config = ClientConfig::Gcp(Box::new(alien_core::GcpClientConfig {
+            project_id: "test".into(),
+            region: "us-central1".into(),
+            credentials: alien_core::GcpCredentials::AccessToken {
+                token: "test-token".into(),
+            },
+            service_overrides: Some(alien_core::GcpServiceOverrides {
+                endpoints: ["compute", "cloudquotas", "iam", "serviceusage"]
+                    .into_iter()
+                    .map(|service| (service.to_string(), endpoint.clone()))
+                    .collect(),
+            }),
+            project_number: None,
+        }));
+        let result = CloudQuotasCheck
+            .check(
+                &stack,
+                &StackState::new(Platform::Gcp),
+                &config,
+                &client_config,
+            )
+            .await
+            .unwrap();
+        machine_type.assert_hits_async(1).await;
+        assert!(!result.success);
+        assert!(result.errors.contains(
+            &"Machine type 'n2-standard-2' is not offered in any zone of GCP region 'us-central1'. Choose a machine type this region offers.".to_string()
+        ));
     }
 
     #[test]

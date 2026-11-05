@@ -81,6 +81,67 @@ const DIRECT_NATIVE_INSTALL_SNIPPET: &str =
 const WORKER_BUNDLE_NATIVE_INSTALL_SNIPPET: &str =
     "import { installEmbeddedAddon } from \"@alienplatform/sdk/native-bindings\"\ninstallEmbeddedAddon()\n";
 
+/// Idle timeout, in seconds, a Container/Daemon server gets unless its app
+/// sets one. Bun closes a connection that sends and receives nothing for this
+/// long, even while its handler is still running; its own default of 10 drops
+/// any request that takes longer than that to start its response. 255 is the
+/// most Bun accepts, the same value the Worker runtime uses.
+const DIRECT_ENTRY_IDLE_TIMEOUT_SECS: u8 = 255;
+
+/// Prints whether a module has a default export and cannot read
+/// `import.meta.main`, using Bun's transpiler without running the module. The
+/// transpiled code has no comments and spells `import.meta["main"]` and
+/// `import.meta .main` as `import.meta.main`. In it, any use of `import.meta`
+/// other than reading a property not named `main` counts as possibly reading
+/// `main`: `import.meta.main`, `import.meta?.main`, or `import.meta` passed or
+/// destructured. The module path is the script's only argument.
+const SCAN_ENTRY_SCRIPT: &str = r#"const [path] = process.argv.slice(1)
+const loader = path.endsWith(".tsx") ? "tsx" : path.endsWith(".jsx") ? "jsx" : /\.[cm]?ts$/.test(path) ? "ts" : "js"
+const transpiler = new Bun.Transpiler({ loader })
+const source = await Bun.file(path).text()
+const { exports } = transpiler.scan(source)
+const readsMain = /\bimport\.meta(?!\.(?!main\b)[\w$])/.test(transpiler.transformSync(source))
+console.log(exports.includes("default") && !readsMain)"#;
+
+/// Whether a Container/Daemon entry module without an embedded addon gets the
+/// entry wrapper, which starts the server for its default export. Bun starts
+/// that server itself only for its main module, and inside the wrapper the
+/// entry is not the main module, so `import.meta.main` is `false` there. An
+/// entry without a default export, or one that may read `import.meta.main`
+/// (it may start its own server only when it is the main module), is compiled
+/// directly and keeps Bun's own behaviour.
+async fn entry_gets_entry_wrapper(entry_path: &Path) -> Result<bool> {
+    let output = Command::new("bun")
+        .arg("--eval")
+        .arg(SCAN_ENTRY_SCRIPT)
+        .arg(entry_path)
+        .output()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ImageBuildFailed {
+            resource_name: "typescript-project".to_string(),
+            reason: "Failed to run bun to read the entry point's exports. Is Bun installed?"
+                .to_string(),
+            build_output: None,
+        })?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    match (output.status.success(), stdout.trim()) {
+        (true, "true") => Ok(true),
+        (true, "false") => Ok(false),
+        _ => Err(AlienError::new(ErrorData::ImageBuildFailed {
+            resource_name: "typescript-project".to_string(),
+            reason: format!(
+                "Failed to read the exports of entry point {}",
+                entry_path.display()
+            ),
+            build_output: Some(format!(
+                "{stdout}{}",
+                String::from_utf8_lossy(&output.stderr)
+            )),
+        })),
+    }
+}
+
 /// Rewrite a user entry point (relative to `src_dir`) into an import specifier
 /// usable from a generated file under `src_dir/.alien-build/`.
 fn bootstrap_relative_import(user_entry_point: &str) -> String {
@@ -334,20 +395,43 @@ impl TypeScriptToolchain {
         Ok(bootstrap_path)
     }
 
-    /// Generate a thin entry wrapper for a source-built Container/Daemon whose
-    /// binary embeds the bindings addon. It registers the embedded addon, then
-    /// dynamically imports the user's entry point. The dynamic import is
-    /// required because static imports are evaluated before the wrapper body.
-    /// Because the user module is no longer Bun's entry module, the wrapper
-    /// also preserves Bun's automatic server startup for a default export with
-    /// a `fetch` method. Used only when an addon is staged; otherwise the user
-    /// entry is compiled directly with no wrapper.
+    /// The module a source-built Container/Daemon compiles, and the generated
+    /// directory to clean up after the build. With an embedded addon
+    /// (`addon_route` is set) it is always the entry wrapper, which registers
+    /// the addon. Otherwise it is the wrapper only when
+    /// [`entry_gets_entry_wrapper`] says so, and the entry itself when not.
+    async fn container_compile_entry(
+        &self,
+        src_dir: &Path,
+        entry_point: &str,
+        addon_route: Option<AddonResolutionRoute>,
+    ) -> Result<(PathBuf, Option<PathBuf>)> {
+        let entry_path = src_dir.join(entry_point.trim_start_matches("./"));
+        if addon_route.is_none() && !entry_gets_entry_wrapper(&entry_path).await? {
+            return Ok((entry_path, None));
+        }
+        let bootstrap_dir = src_dir.join(".alien-build");
+        let wrapper_path = self
+            .generate_direct_entry_wrapper(src_dir, entry_point, &bootstrap_dir, addon_route)
+            .await?;
+        Ok((wrapper_path, Some(bootstrap_dir)))
+    }
+
+    /// Generate the thin entry wrapper a source-built Container/Daemon compiles
+    /// when [`entry_gets_entry_wrapper`] says so or its binary embeds the
+    /// bindings addon. With the addon (`addon_route` is set), it registers the addon
+    /// first; then it dynamically imports the
+    /// user's entry point. The dynamic import is required because static
+    /// imports are evaluated before the wrapper body. Because the user module
+    /// is not Bun's entry module, the wrapper starts the server Bun would start
+    /// automatically for a default export with a `fetch` method, defaulting its
+    /// idle timeout to [`DIRECT_ENTRY_IDLE_TIMEOUT_SECS`].
     async fn generate_direct_entry_wrapper(
         &self,
         _src_dir: &Path,
         user_entry_point: &str,
         output_dir: &Path,
-        addon_route: AddonResolutionRoute,
+        addon_route: Option<AddonResolutionRoute>,
     ) -> Result<PathBuf> {
         fs::create_dir_all(output_dir)
             .await
@@ -363,15 +447,29 @@ impl TypeScriptToolchain {
         // actually resolve: bindings when it is a direct dependency, otherwise
         // the SDK's ./native bridge (an SDK-only Container/Daemon).
         let native_install = match addon_route {
-            AddonResolutionRoute::DirectBindings => DIRECT_NATIVE_INSTALL_SNIPPET,
-            AddonResolutionRoute::ViaSdk => WORKER_NATIVE_INSTALL_SNIPPET,
+            None => "",
+            Some(AddonResolutionRoute::DirectBindings) => DIRECT_NATIVE_INSTALL_SNIPPET,
+            Some(AddonResolutionRoute::ViaSdk) => WORKER_NATIVE_INSTALL_SNIPPET,
         };
         let wrapper_code = format!(
             r#"{native_install}import("{user_import_path}")
   .then((userModule) => {{
     const app = userModule.default
     if (app && typeof app.fetch === "function") {{
-      Bun.serve(app)
+      // Bun closes a connection that sends and receives nothing for
+      // idleTimeout seconds, even while its handler is still running, and
+      // defaults to 10. Default to Bun's maximum unless the app sets its own.
+      // Every other option Bun reads comes from the app itself, so getters on
+      // a class (including ones reading private fields) see the app as `this`.
+      Bun.serve(
+        app.idleTimeout === undefined
+          ? new Proxy(app, {{
+              get: (target, key) =>
+                key === "idleTimeout" ? {DIRECT_ENTRY_IDLE_TIMEOUT_SECS} : Reflect.get(target, key, target),
+              has: (target, key) => key === "idleTimeout" || Reflect.has(target, key),
+            }})
+          : app,
+      )
     }}
   }})
   .catch((error) => {{
@@ -486,10 +584,12 @@ impl Toolchain for TypeScriptToolchain {
 
         // Workers compile a generated bootstrap that hands the app to
         // `runWorker` (the binary runs behind alien-worker-runtime).
-        // Containers and Daemons compile the user's entry point directly —
-        // their binary is the image entrypoint and owns its own lifecycle —
-        // except when an addon is embedded, where they get a thin wrapper that
-        // registers it before importing the user entry.
+        // Containers and Daemons own their lifecycle: their binary is the image
+        // entrypoint. When the entry has a default export, or an addon is
+        // embedded, they compile a thin wrapper around it that registers the
+        // addon and starts the default export's server with a longer idle
+        // timeout. Otherwise, and when the entry may read `import.meta.main`,
+        // the entry is compiled directly.
         let (compile_entry, bootstrap_dir) = if context.workload == WorkloadKind::Worker {
             // .alien-build/ lives inside the source directory so bun can
             // resolve node_modules; it is cleaned up after the build.
@@ -504,15 +604,13 @@ impl Toolchain for TypeScriptToolchain {
                 )
                 .await?;
             (bootstrap_path, Some(bootstrap_dir))
-        } else if let Some(staged_addon) = &staged {
-            let route = &staged_addon.route;
-            let bootstrap_dir = src_dir.join(".alien-build");
-            let wrapper_path = self
-                .generate_direct_entry_wrapper(&src_dir, &entry_point, &bootstrap_dir, *route)
-                .await?;
-            (wrapper_path, Some(bootstrap_dir))
         } else {
-            (src_dir.join(entry_point.trim_start_matches("./")), None)
+            self.container_compile_entry(
+                &src_dir,
+                &entry_point,
+                staged.as_ref().map(|staged_addon| staged_addon.route),
+            )
+            .await?
         };
 
         // Cloud Workers reuse Bun from the immutable Worker base. Other
@@ -766,6 +864,7 @@ impl Toolchain for TypeScriptToolchain {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
     use tempfile::tempdir;
     use tokio::fs;
 
@@ -895,5 +994,225 @@ mod tests {
 
         let cmd = toolchain.dev_command(Path::new("./"));
         assert_eq!(cmd, vec!["bun", "run", "dev"]);
+    }
+
+    /// Starts the Container/Daemon entry wrapper with Bun against `app_source`
+    /// (the user's `index.ts`) and sends one request whose handler sleeps
+    /// `sleep_ms` before responding. Returns the raw HTTP response, empty when
+    /// the server dropped the connection. Needs `bun` on PATH, as the build does.
+    async fn request_through_direct_entry(app_source: &str, sleep_ms: u64) -> String {
+        let toolchain = TypeScriptToolchain { binary_name: None };
+        let project = tempdir().unwrap();
+        fs::write(project.path().join("index.ts"), app_source)
+            .await
+            .unwrap();
+        let wrapper = toolchain
+            .generate_direct_entry_wrapper(
+                project.path(),
+                "./index.ts",
+                &project.path().join(".alien-build"),
+                None,
+            )
+            .await
+            .unwrap();
+        serve_and_request(&wrapper, sleep_ms).await
+    }
+
+    /// Runs `entry` with Bun, as the compiled binary would, and sends it the
+    /// request described in [`request_through_direct_entry`].
+    async fn serve_and_request(entry: &Path, sleep_ms: u64) -> String {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let mut server = tokio::process::Command::new("bun")
+            .arg(entry)
+            .env("PORT", port.to_string())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("bun must be installed to run the TypeScript toolchain tests");
+
+        let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        let started = std::time::Instant::now();
+        while std::net::TcpStream::connect(address).is_err() {
+            if let Some(status) = server.try_wait().unwrap() {
+                panic!("the entry exited before listening: {status}");
+            }
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(20),
+                "the entry did not listen on port {port} within 20 s"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        let response = tokio::task::spawn_blocking(move || {
+            let mut stream = std::net::TcpStream::connect(address).unwrap();
+            write!(
+                stream,
+                "GET /?ms={sleep_ms} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+            let mut response = Vec::new();
+            // A connection the server drops reads as EOF, or as a reset on some platforms.
+            let _ = stream.read_to_end(&mut response);
+            String::from_utf8_lossy(&response).into_owned()
+        })
+        .await
+        .unwrap();
+        server.kill().await.unwrap();
+        response
+    }
+
+    const SLEEPING_APP: &str = r#"export default {
+  async fetch(request: Request) {
+    const ms = Number(new URL(request.url).searchParams.get("ms"))
+    await Bun.sleep(ms)
+    return new Response(`slept ${ms}`)
+  },
+}
+"#;
+
+    // Bun's own default idle timeout (10 s) closes this connection at about 12 s,
+    // before the handler responds, and a load balancer in front reports a 502.
+    #[tokio::test]
+    async fn a_container_answers_a_request_that_is_silent_for_longer_than_bun_default_idle_timeout(
+    ) {
+        let response = request_through_direct_entry(SLEEPING_APP, 13_000).await;
+        assert!(
+            response.starts_with("HTTP/1.1 200"),
+            "expected a 200 after a 13 s handler, got {response:?}"
+        );
+        assert!(response.ends_with("slept 13000"), "unexpected body: {response:?}");
+    }
+
+    // Bun reads options such as `port` through getters; a getter that reads a
+    // private field must still see the app itself as `this`.
+    #[tokio::test]
+    async fn a_class_app_whose_options_read_private_fields_still_starts() {
+        let app = r#"class App {
+  #port = Number(process.env.PORT)
+  get port() {
+    return this.#port
+  }
+  async fetch(request: Request) {
+    const ms = Number(new URL(request.url).searchParams.get("ms"))
+    await Bun.sleep(ms)
+    return new Response(`slept ${ms}`)
+  }
+}
+export default new App()
+"#;
+        let response = request_through_direct_entry(app, 100).await;
+        assert!(
+            response.starts_with("HTTP/1.1 200") && response.ends_with("slept 100"),
+            "unexpected response: {response:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_container_keeps_the_idle_timeout_its_app_sets() {
+        let app = SLEEPING_APP.replace("export default {", "export default {\n  idleTimeout: 2,");
+        let response = request_through_direct_entry(&app, 8_000).await;
+        assert_eq!(
+            response, "",
+            "the app's 2 s idle timeout should drop a connection that is silent for 8 s"
+        );
+    }
+
+    // The default export is not an app, and the server starts only when the
+    // entry is Bun's main module. Inside the entry wrapper it is not, so the
+    // build must compile this entry directly.
+    #[tokio::test]
+    async fn a_container_that_serves_under_import_meta_main_still_answers() {
+        let toolchain = TypeScriptToolchain { binary_name: None };
+        let project = tempdir().unwrap();
+        let app = r#"export default function helper() {}
+
+if (import.meta.main) {
+  Bun.serve({
+    port: Number(process.env.PORT),
+    async fetch(request: Request) {
+      const ms = Number(new URL(request.url).searchParams.get("ms"))
+      await Bun.sleep(ms)
+      return new Response(`slept ${ms}`)
+    },
+  })
+}
+"#;
+        fs::write(project.path().join("index.ts"), app)
+            .await
+            .unwrap();
+        let (compile_entry, _) = toolchain
+            .container_compile_entry(project.path(), "./index.ts", None)
+            .await
+            .unwrap();
+        let response = serve_and_request(&compile_entry, 100).await;
+        assert!(
+            response.starts_with("HTTP/1.1 200") && response.ends_with("slept 100"),
+            "unexpected response: {response:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn only_entries_with_a_default_export_and_no_import_meta_main_get_the_entry_wrapper() {
+        let project = tempdir().unwrap();
+        let cases = [
+            ("object.ts", "export default { fetch: () => new Response(\"ok\") }", true),
+            ("named.ts", "const app = { fetch() {} }\nexport { app as default }", true),
+            ("reexport.ts", "export { default } from \"./object.ts\"", true),
+            ("function.ts", "export default function handler() {}", true),
+            (
+                "main-guard.ts",
+                "if (import.meta.main) Bun.serve({ fetch: () => new Response(\"ok\") })",
+                false,
+            ),
+            (
+                "default-and-main-guard.ts",
+                "export default function helper() {}\nif (import.meta.main) Bun.serve({ fetch: () => new Response(\"ok\") })",
+                false,
+            ),
+            (
+                "app-and-main-guard.ts",
+                "const app = { fetch: () => new Response(\"ok\") }\nexport default app\nif (import.meta.main) console.log(\"main\")",
+                false,
+            ),
+            (
+                "spaced-main.ts",
+                "export default function helper() {}\nif (import\n  .meta .main) Bun.serve({ fetch: () => new Response(\"ok\") })",
+                false,
+            ),
+            (
+                "bracket-main.ts",
+                "export default function helper() {}\nif (import.meta[\"main\"]) Bun.serve({ fetch: () => new Response(\"ok\") })",
+                false,
+            ),
+            (
+                "optional-main.ts",
+                "export default function helper() {}\nif (import.meta?.main) Bun.serve({ fetch: () => new Response(\"ok\") })",
+                false,
+            ),
+            (
+                "destructured-main.ts",
+                "export default function helper() {}\nconst { main } = import.meta\nif (main) Bun.serve({ fetch: () => new Response(\"ok\") })",
+                false,
+            ),
+            (
+                "other-meta.ts",
+                "// not import.meta.main\nconsole.log(import.meta.url, import.meta.dir)\nexport default { fetch: () => new Response(\"ok\") }",
+                true,
+            ),
+            ("top-level.ts", "Bun.serve({ fetch: () => new Response(\"ok\") })", false),
+            ("commonjs.js", "module.exports = { fetch() {} }", false),
+        ];
+        for (file, source, expected) in cases {
+            let path = project.path().join(file);
+            fs::write(&path, source).await.unwrap();
+            assert_eq!(
+                entry_gets_entry_wrapper(&path).await.unwrap(),
+                expected,
+                "{file}: {source}"
+            );
+        }
     }
 }

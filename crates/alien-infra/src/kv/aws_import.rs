@@ -22,6 +22,10 @@ impl ResourceImporter for AwsKvImporter {
             state: AwsKvState::Ready,
             table_name: Some(data.table_name),
             table_arn: Some(data.table_arn),
+            // The setup templates declare the table with point-in-time recovery on. The
+            // heartbeat records what it reads.
+            point_in_time_recovery_enabled: true,
+            point_in_time_recovery_denial: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

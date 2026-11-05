@@ -335,6 +335,7 @@ pub struct SingleControllerExecutor {
     // User-provided stack settings
     stack_settings: StackSettings,
     setup_run: bool,
+    setup_run_id: Option<String>,
     // Platform management configuration
     management_config: Option<ManagementConfig>,
     gcp_federation_scope: Option<alien_core::GcpFederationScope>,
@@ -412,6 +413,7 @@ impl SingleControllerExecutor {
             deployment_config: &DeploymentConfig::builder()
                 .stack_settings(self.stack_settings.clone())
                 .setup_run(self.setup_run)
+                .maybe_setup_run_id(self.setup_run_id.clone())
                 .maybe_management_config(self.management_config.clone())
                 .maybe_gcp_federation_scope(self.gcp_federation_scope.clone())
                 .maybe_compute_backend(self.compute_backend.clone())
@@ -675,6 +677,7 @@ impl SingleControllerExecutor {
         let deployment_config = DeploymentConfig::builder()
             .stack_settings(self.stack_settings.clone())
             .setup_run(self.setup_run)
+            .maybe_setup_run_id(self.setup_run_id.clone())
             .maybe_management_config(self.management_config.clone())
             .maybe_gcp_federation_scope(self.gcp_federation_scope.clone())
             .maybe_compute_backend(self.compute_backend.clone())
@@ -1370,9 +1373,12 @@ impl SingleControllerExecutorBuilder {
             _ => None,
         });
 
+        // Each executor stands for one setup run.
+        let setup_run_id = self.setup_run.then(|| uuid::Uuid::new_v4().to_string());
         let mut config = DeploymentConfig::builder()
             .stack_settings(self.stack_settings.clone())
             .setup_run(self.setup_run)
+            .maybe_setup_run_id(setup_run_id.clone())
             .maybe_management_config(management_config.clone())
             .maybe_gcp_federation_scope(self.gcp_federation_scope.clone())
             .maybe_compute_backend(self.compute_backend.clone())
@@ -1522,6 +1528,7 @@ impl SingleControllerExecutorBuilder {
             client_config,
             stack_settings: self.stack_settings,
             setup_run: self.setup_run,
+            setup_run_id,
             management_config,
             gcp_federation_scope: self.gcp_federation_scope,
             compute_backend: self.compute_backend,

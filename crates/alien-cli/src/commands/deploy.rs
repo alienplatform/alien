@@ -2417,6 +2417,7 @@ async fn deploy_task_with_environment(
             })?;
     }
     config.setup_run = setup_owned_status;
+    config.setup_run_id = setup_owned_status.then(|| uuid::Uuid::new_v4().to_string());
     config.manager_url = Some(manager_ctx.manager_url.clone());
     config.deployment_token = Some(tracked_deployment.api_key.clone());
 

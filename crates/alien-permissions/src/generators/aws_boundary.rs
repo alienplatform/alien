@@ -816,7 +816,7 @@ fn is_runtime_set(id: &str) -> bool {
         && !operation.starts_with("protect-")
         && !matches!(
             operation,
-            "provision" | "management" | "heartbeat" | "telemetry"
+            "provision" | "management" | "heartbeat" | "telemetry" | "setup"
         )
 }
 
@@ -1765,8 +1765,10 @@ mod tests {
             "worker/management",
             "storage/heartbeat",
             "storage/telemetry",
+            "postgres/setup",
             "guard/example",
             "sandbox/protect-setup-roles",
+            "network/setup",
             "remote-stack-management/execute",
             "observe/logs",
             "experimental/aws-opensearch/provision",

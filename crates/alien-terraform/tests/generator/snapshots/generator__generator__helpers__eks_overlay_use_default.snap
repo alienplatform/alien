@@ -1,5 +1,6 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
+assertion_line: 229
 expression: buf
 ---
 === versions.tf ===
@@ -620,15 +621,20 @@ if __name__ == '__main__':
     main()
 
 === default_network.tf ===
-data "aws_vpc" "default_network_default" {
-  default = true
+data "aws_vpcs" "default_network_default" {
+  filter {
+    name = "is-default"
+    values = [
+      "true"
+    ]
+  }
 }
 
 data "aws_subnets" "default_network_default" {
   filter {
     name = "vpc-id"
     values = [
-      data.aws_vpc.default_network_default.id
+      data.aws_vpcs.default_network_default.ids[0]
     ]
   }
 }
@@ -847,6 +853,23 @@ resource "aws_s3_bucket_policy" "data" {
   policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "DenyInsecureTransport", Effect = "Deny", Principal = "*", Action = "s3:*", Resource = [aws_s3_bucket.data.arn, "${aws_s3_bucket.data.arn}/*"], Condition = { Bool = { "aws:SecureTransport" = "false" } } }] })
 }
 
+resource "aws_s3_bucket_lifecycle_configuration" "data" {
+  bucket = aws_s3_bucket.data.id
+
+  rule {
+    id     = "abort-incomplete-uploads"
+    status = "Enabled"
+
+    filter {
+      prefix = ""
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
 === execution_sa.tf ===
 data "aws_iam_policy_document" "execution_sa_assume_role" {
   statement {
@@ -964,6 +987,7 @@ resource "terraform_data" "deployment_registration" {
     aws_s3_bucket_ownership_controls.data,
     aws_s3_bucket_public_access_block.data,
     aws_s3_bucket_policy.data,
+    aws_s3_bucket_lifecycle_configuration.data,
     aws_iam_role.execution_sa,
     aws_iam_role_policy.execution_sa_set_0,
     aws_iam_policy.execution_sa_setup_bc2d3d7b,
@@ -1170,7 +1194,7 @@ The receipt contains exact addresses, cloud IDs, state lineage and full before/a
 
 
 
-Retained resources continue to incur cloud charges, including storage and KMS. To explicitly erase data, first finish access revocation, then use the cloud's deletion operations on the exact IDs in the receipt, including stored versions/images, only after confirming that no retained data depends on a key. This workflow covers the AWS setup resources listed above; other database backends, other data types, runtime-owned resources and other clouds require their own retention procedure.
+Retained resources continue to incur cloud charges, including storage and KMS. To explicitly erase data, first finish access revocation, then use the cloud's deletion operations on the exact IDs in the receipt, including stored versions/images, only after confirming that no retained data depends on a key. This workflow covers the AWS setup resources listed above; other database backends, other data types, runtime-owned resources and other clouds require their own retention procedure. DynamoDB tables with point-in-time recovery keep an AWS-managed backup for up to 35 days after the table is deleted.
 
 When retaining DynamoDB tables, install AWS CLI and use the same target-account installer credentials as Terraform. The helper verifies the recorded table ARN, disables its observed TTL attribute and requires AWS to report `DISABLED` before removing any selected resource from state. If TTL is transitioning, or AWS is still processing an earlier TTL change (including the one at table creation; this takes up to an hour), wait and rerun the same command; no resources are detached. Required metadata/control permissions are `DescribeTable`, `DescribeTimeToLive` and `UpdateTimeToLive`.
 

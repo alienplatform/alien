@@ -1,5 +1,6 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
+assertion_line: 229
 expression: buf
 ---
 === versions.tf ===
@@ -595,9 +596,15 @@ data "aws_availability_zones" "kubernetes_available" {
   exclude_zone_ids = var.unsupported_availability_zone_ids
 }
 
-data "aws_vpc" "kubernetes_default" {
-  count   = var.kubernetes_cluster_mode == "create" && var.network_mode == "use-default" ? 1 : 0
-  default = true
+data "aws_vpcs" "kubernetes_default" {
+  count = var.kubernetes_cluster_mode == "create" && var.network_mode == "use-default" ? 1 : 0
+
+  filter {
+    name = "is-default"
+    values = [
+      "true"
+    ]
+  }
 }
 
 data "aws_availability_zones" "kubernetes_eks_supported" {
@@ -612,7 +619,7 @@ data "aws_subnets" "kubernetes_default" {
   filter {
     name = "vpc-id"
     values = [
-      data.aws_vpc.kubernetes_default[0].id
+      data.aws_vpcs.kubernetes_default[0].ids[0]
     ]
   }
 
@@ -757,6 +764,59 @@ resource "aws_route_table_association" "kubernetes_private" {
   route_table_id = aws_route_table.kubernetes_private[0].id
 }
 
+resource "aws_cloudwatch_log_group" "kubernetes_flow_logs" {
+  count             = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  name              = "${local.resource_prefix}-kubernetes-flow-logs"
+  retention_in_days = 365
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "kubernetes"
+    "resource-type" = "kubernetes-cluster"
+  }
+}
+
+resource "aws_iam_role" "kubernetes_flow_logs" {
+  count              = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  name               = length(format("%s-%s", local.resource_prefix, "kubernetes-flow-logs")) <= 64 ? format("%s-%s", local.resource_prefix, "kubernetes-flow-logs") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "kubernetes-flow-logs"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "kubernetes-flow-logs")), 0, 8))
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "vpc-flow-logs.amazonaws.com" }, Action = "sts:AssumeRole", Condition = { StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }, ArnLike = { "aws:SourceArn" = "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:vpc-flow-log/*" } } }] })
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "kubernetes"
+    "resource-type" = "kubernetes-cluster"
+  }
+}
+
+resource "aws_iam_role_policy" "kubernetes_flow_logs" {
+  count  = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  name   = "flow-logs-delivery"
+  role   = aws_iam_role.kubernetes_flow_logs[0].id
+  policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
+  depends_on = [
+    aws_iam_role_policy_attachment.kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_5788ded6_attachment
+  ]
+}
+
+resource "aws_flow_log" "kubernetes" {
+  count                    = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  vpc_id                   = aws_vpc.kubernetes[0].id
+  traffic_type             = "ALL"
+  log_destination_type     = "cloud-watch-logs"
+  log_destination          = aws_cloudwatch_log_group.kubernetes_flow_logs[0].arn
+  iam_role_arn             = aws_iam_role.kubernetes_flow_logs[0].arn
+  max_aggregation_interval = 600
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "kubernetes"
+    "resource-type" = "kubernetes-cluster"
+  }
+  depends_on = [
+    aws_iam_role_policy_attachment.kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_5788ded6_attachment
+  ]
+}
+
 resource "aws_iam_role" "kubernetes_cluster" {
   count              = var.kubernetes_cluster_mode == "create" ? 1 : 0
   name               = "${local.resource_prefix}-kubernetes-eks"
@@ -858,6 +918,40 @@ resource "aws_iam_role_policy" "management_kubernetes_kubernetes-cluster-heartbe
   ]
 }
 
+resource "aws_iam_policy" "kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_5788ded6" {
+  count  = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  name   = length(format("%s-%s", local.resource_prefix, "kubernetes-flow-logs-0-kubernetes-cluster-mode-network-mode-6487e1ea-setup-5788ded6")) <= 128 ? format("%s-%s", local.resource_prefix, "kubernetes-flow-logs-0-kubernetes-cluster-mode-network-mode-6487e1ea-setup-5788ded6") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "kubernetes-flow-logs-0-kubernetes-cluster-mode-network-mode-6487e1ea-setup-5788ded6"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "kubernetes-flow-logs-0-kubernetes-cluster-mode-network-mode-6487e1ea-setup-5788ded6")), 0, 8))
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Action = ["logs:CreateLogStream", "logs:PutLogEvents", "logs:DescribeLogGroups", "logs:DescribeLogStreams"], Resource = ["arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:${local.resource_prefix}-kubernetes-flow-logs", "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:${local.resource_prefix}-kubernetes-flow-logs:*"] }] })
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_5788ded6_attachment" {
+  count      = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  role       = aws_iam_role.kubernetes_flow_logs[0].name
+  policy_arn = aws_iam_policy.kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_5788ded6[0].arn
+  depends_on = [
+    aws_iam_policy.kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_5788ded6
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "terraform_data" "kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_policies_barrier" {
+  count = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  triggers_replace = [
+    aws_iam_role_policy_attachment.kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_5788ded6_attachment[0].id
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
 === management.tf ===
 data "aws_iam_policy_document" "management_assume_role" {
   statement {
@@ -904,7 +998,7 @@ resource "aws_iam_role" "management" {
 
 resource "aws_iam_policy" "management_permissions_boundary" {
   name   = "${local.resource_prefix}-deployment-management-boundary"
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Resource = ["arn:aws:codebuild:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:project/${local.resource_prefix}-*", "arn:aws:codebuild:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:report-group/${local.resource_prefix}-*", "arn:aws:dynamodb:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:table/${local.resource_prefix}-*", "arn:aws:ecr:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:repository/${local.resource_prefix}-*", "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*", "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${local.resource_prefix}-*", "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:microvm-image:${local.resource_prefix}-*", "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/codebuild/${local.resource_prefix}-*:*", "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${local.resource_prefix}-*", "arn:aws:rds:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster:${local.resource_prefix}-*", "arn:aws:s3:::${local.resource_prefix}-*", "arn:aws:secretsmanager:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:secret:${local.resource_prefix}-*", "arn:aws:ses:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:configuration-set/${local.resource_prefix}-*", "arn:aws:sqs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${local.resource_prefix}-*", "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/${local.resource_prefix}-*"], NotAction = "iam:*" }, { Effect = "Allow", Resource = "*", Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}" } }, NotAction = "iam:*" }, { Effect = "Allow", Action = ["bedrock-mantle:CreateInference", "bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"], Resource = ["arn:aws:bedrock-mantle:*:${data.aws_caller_identity.current.account_id}:project/default", "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*", "arn:aws:bedrock:*::foundation-model/*"] }, { Effect = "Allow", Action = ["ec2:AssignPrivateIpAddresses", "ec2:CreateNetworkInterface", "ec2:DeleteNetworkInterface", "ec2:DescribeInstances", "ec2:DescribeNetworkInterfaces", "ec2:DescribeSnapshots", "ec2:DescribeTags", "ec2:DescribeVolumes", "ec2:UnassignPrivateIpAddresses", "ecr:GetAuthorizationToken", "elasticloadbalancing:DescribeTargetHealth", "ses:ListEmailIdentities"], Resource = "*" }, { Effect = "Allow", Action = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], Resource = "arn:aws:ecr:*:${var.managing_account_id}:repository/*" }, { Effect = "Allow", Action = "ec2:CreateSnapshot", Resource = "arn:aws:ec2:${data.aws_region.current.region}::snapshot/*", Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" } } }, { Effect = "Allow", Action = "ec2:CreateTags", Resource = "arn:aws:ec2:${data.aws_region.current.region}::snapshot/*", Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime", "ec2:CreateAction" = "CreateSnapshot" } } }, { Effect = "Allow", Action = ["ses:CreateEmailIdentity", "ses:DeleteEmailIdentity", "ses:GetEmailIdentity", "ses:PutEmailIdentityConfigurationSetAttributes", "ses:PutEmailIdentityDkimAttributes", "ses:PutEmailIdentityFeedbackAttributes", "ses:PutEmailIdentityMailFromAttributes", "ses:SendEmail", "ses:SendRawEmail"], Resource = "arn:aws:ses:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:identity/*" }, { Effect = "Allow", Action = "aoss:APIAccessAll", Resource = "arn:aws:aoss:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:collection/*" }, { Effect = "Allow", Action = "lambda:PassNetworkConnector", Resource = "arn:aws:lambda:${data.aws_region.current.region}:aws:network-connector:aws-network-connector:*" }, { Effect = "Deny", Action = ["aoss:*AccessPolicy", "aoss:*SecurityPolicy", "backup:PutBackupVaultAccessPolicy", "codebuild:PutResourcePolicy", "dlm:*LifecyclePolicy", "dynamodb:PutResourcePolicy", "ec2:CopySnapshot", "ec2:CreateVpcPeeringConnection", "ec2:Modify*ImageAttribute", "ec2:ModifySnapshotAttribute", "ec2:ModifyVpcEndpointServicePermissions", "ecr:*RepositoryCreationTemplate", "ecr:PutRegistryPolicy", "ecr:PutReplicationConfiguration", "ecr:SetRepositoryPolicy", "elasticfilesystem:PutFileSystemPolicy", "es:Create*Domain", "es:Update*DomainConfig", "events:PutPermission", "glacier:SetVaultAccessPolicy", "glue:PutResourcePolicy", "kinesis:PutResourcePolicy", "kms:PutKeyPolicy", "lambda:Add*Permission", "lambda:CreateFunctionUrlConfig", "lambda:UpdateFunctionUrlConfig", "logs:PutDe*Policy", "logs:PutResourcePolicy", "logs:PutSubscriptionFilter", "ram:*", "rds:ModifyDB*SnapshotAttribute", "s3:*BucketPolicy", "s3:Put*PublicAccessBlock", "s3:PutAccessPointPolicy*", "s3:PutBucketAcl", "s3:PutBucketOwnershipControls", "s3:PutMultiRegionAccessPointPolicy", "s3:PutReplicationConfiguration", "secretsmanager:PutResourcePolicy", "ses:*IdentityPolicy", "sns:AddPermission", "sns:CreateTopic", "sns:SetTopicAttributes", "sqs:AddPermission", "sqs:CreateQueue", "sqs:SetQueueAttributes"], Resource = "*" }, { Effect = "Deny", Action = ["kms:CreateGrant"], Resource = "*", Condition = { BoolIfExists = { "kms:GrantIsForAWSResource" = "false" } } }] })
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Resource = ["arn:aws:codebuild:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:project/${local.resource_prefix}-*", "arn:aws:codebuild:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:report-group/${local.resource_prefix}-*", "arn:aws:dynamodb:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:table/${local.resource_prefix}-*", "arn:aws:ecr:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:repository/${local.resource_prefix}-*", "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*", "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${local.resource_prefix}-*", "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:microvm-image:${local.resource_prefix}-*", "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/codebuild/${local.resource_prefix}-*:*", "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${local.resource_prefix}-*", "arn:aws:s3:::${local.resource_prefix}-*", "arn:aws:ses:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:configuration-set/${local.resource_prefix}-*", "arn:aws:sqs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${local.resource_prefix}-*", "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/${local.resource_prefix}-*"], NotAction = "iam:*" }, { Effect = "Allow", Resource = "*", Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}" } }, NotAction = "iam:*" }, { Effect = "Allow", Action = ["bedrock-mantle:CreateInference", "bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"], Resource = ["arn:aws:bedrock-mantle:*:${data.aws_caller_identity.current.account_id}:project/default", "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*", "arn:aws:bedrock:*::foundation-model/*"] }, { Effect = "Allow", Action = ["ec2:AssignPrivateIpAddresses", "ec2:CreateNetworkInterface", "ec2:DeleteNetworkInterface", "ec2:DescribeInstances", "ec2:DescribeNetworkInterfaces", "ec2:DescribeSnapshots", "ec2:DescribeTags", "ec2:DescribeVolumes", "ec2:UnassignPrivateIpAddresses", "ecr:GetAuthorizationToken", "elasticloadbalancing:DescribeTargetHealth", "ses:ListEmailIdentities"], Resource = "*" }, { Effect = "Allow", Action = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], Resource = "arn:aws:ecr:*:${var.managing_account_id}:repository/*" }, { Effect = "Allow", Action = "ec2:CreateSnapshot", Resource = "arn:aws:ec2:${data.aws_region.current.region}::snapshot/*", Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" } } }, { Effect = "Allow", Action = "ec2:CreateTags", Resource = "arn:aws:ec2:${data.aws_region.current.region}::snapshot/*", Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime", "ec2:CreateAction" = "CreateSnapshot" } } }, { Effect = "Allow", Action = ["ses:CreateEmailIdentity", "ses:DeleteEmailIdentity", "ses:GetEmailIdentity", "ses:PutEmailIdentityConfigurationSetAttributes", "ses:PutEmailIdentityDkimAttributes", "ses:PutEmailIdentityFeedbackAttributes", "ses:PutEmailIdentityMailFromAttributes", "ses:SendEmail", "ses:SendRawEmail"], Resource = "arn:aws:ses:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:identity/*" }, { Effect = "Allow", Action = "aoss:APIAccessAll", Resource = "arn:aws:aoss:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:collection/*" }, { Effect = "Allow", Action = "lambda:PassNetworkConnector", Resource = "arn:aws:lambda:${data.aws_region.current.region}:aws:network-connector:aws-network-connector:*" }, { Effect = "Deny", Action = ["aoss:*AccessPolicy", "aoss:*SecurityPolicy", "backup:PutBackupVaultAccessPolicy", "codebuild:PutResourcePolicy", "dlm:*LifecyclePolicy", "dynamodb:PutResourcePolicy", "ec2:CopySnapshot", "ec2:CreateVpcPeeringConnection", "ec2:Modify*ImageAttribute", "ec2:ModifySnapshotAttribute", "ec2:ModifyVpcEndpointServicePermissions", "ecr:*RepositoryCreationTemplate", "ecr:PutRegistryPolicy", "ecr:PutReplicationConfiguration", "ecr:SetRepositoryPolicy", "elasticfilesystem:PutFileSystemPolicy", "es:Create*Domain", "es:Update*DomainConfig", "events:PutPermission", "glacier:SetVaultAccessPolicy", "glue:PutResourcePolicy", "kinesis:PutResourcePolicy", "kms:PutKeyPolicy", "lambda:Add*Permission", "lambda:CreateFunctionUrlConfig", "lambda:UpdateFunctionUrlConfig", "logs:PutDe*Policy", "logs:PutResourcePolicy", "logs:PutSubscriptionFilter", "ram:*", "rds:ModifyDB*SnapshotAttribute", "s3:*BucketPolicy", "s3:Put*PublicAccessBlock", "s3:PutAccessPointPolicy*", "s3:PutBucketAcl", "s3:PutBucketOwnershipControls", "s3:PutMultiRegionAccessPointPolicy", "s3:PutReplicationConfiguration", "secretsmanager:PutResourcePolicy", "ses:*IdentityPolicy", "sns:AddPermission", "sns:CreateTopic", "sns:SetTopicAttributes", "sqs:AddPermission", "sqs:CreateQueue", "sqs:SetQueueAttributes"], Resource = "*" }, { Effect = "Deny", Action = ["kms:CreateGrant"], Resource = "*", Condition = { BoolIfExists = { "kms:GrantIsForAWSResource" = "false" } } }] })
 }
 
 resource "aws_iam_role_policy" "management_self_read" {
@@ -977,6 +1071,10 @@ resource "terraform_data" "deployment_registration" {
     aws_route_table.kubernetes_private,
     aws_route_table_association.kubernetes_public,
     aws_route_table_association.kubernetes_private,
+    aws_cloudwatch_log_group.kubernetes_flow_logs,
+    aws_iam_role.kubernetes_flow_logs,
+    aws_iam_role_policy.kubernetes_flow_logs,
+    aws_flow_log.kubernetes,
     aws_iam_role.kubernetes_cluster,
     aws_iam_role_policy_attachment.kubernetes_cluster,
     aws_iam_role.kubernetes_node,
@@ -986,6 +1084,9 @@ resource "terraform_data" "deployment_registration" {
     aws_eks_addon.kubernetes_kube_proxy,
     aws_eks_addon.kubernetes_coredns,
     aws_iam_role_policy.management_kubernetes_kubernetes-cluster-heartbeat_0,
+    aws_iam_policy.kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_5788ded6,
+    aws_iam_role_policy_attachment.kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_5788ded6_attachment,
+    terraform_data.kubernetes_flow_logs_0_kubernetes_cluster_mode_network_mode_6487e1ea_setup_policies_barrier,
     aws_iam_role.management,
     aws_iam_policy.management_permissions_boundary,
     aws_iam_role_policy.management_self_read,
@@ -1193,7 +1294,7 @@ The receipt contains exact addresses, cloud IDs, state lineage and full before/a
 
 
 
-Retained resources continue to incur cloud charges, including storage and KMS. To explicitly erase data, first finish access revocation, then use the cloud's deletion operations on the exact IDs in the receipt, including stored versions/images, only after confirming that no retained data depends on a key. This workflow covers the AWS setup resources listed above; other database backends, other data types, runtime-owned resources and other clouds require their own retention procedure.
+Retained resources continue to incur cloud charges, including storage and KMS. To explicitly erase data, first finish access revocation, then use the cloud's deletion operations on the exact IDs in the receipt, including stored versions/images, only after confirming that no retained data depends on a key. This workflow covers the AWS setup resources listed above; other database backends, other data types, runtime-owned resources and other clouds require their own retention procedure. DynamoDB tables with point-in-time recovery keep an AWS-managed backup for up to 35 days after the table is deleted.
 
 When retaining DynamoDB tables, install AWS CLI and use the same target-account installer credentials as Terraform. The helper verifies the recorded table ARN, disables its observed TTL attribute and requires AWS to report `DISABLED` before removing any selected resource from state. If TTL is transitioning, or AWS is still processing an earlier TTL change (including the one at table creation; this takes up to an hour), wait and rerun the same command; no resources are detached. Required metadata/control permissions are `DescribeTable`, `DescribeTimeToLive` and `UpdateTimeToLive`.
 

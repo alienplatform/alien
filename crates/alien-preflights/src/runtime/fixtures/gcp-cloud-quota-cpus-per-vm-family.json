@@ -1,0 +1,102 @@
+{
+  "quotaId": "CPUS-PER-VM-FAMILY-per-project-region",
+  "metric": "compute.googleapis.com/cpus_per_vm_family",
+  "service": "compute.googleapis.com",
+  "isPrecise": true,
+  "containerType": "PROJECT",
+  "dimensions": ["region", "vm_family"],
+  "metricDisplayName": "CPU count per VM family.",
+  "quotaDisplayName": "CPUs per VM family",
+  "metricUnit": "1",
+  "dimensionsInfos": [
+    {
+      "dimensions": {
+        "region": "africa-south1",
+        "vm_family": "N4"
+      },
+      "details": {
+        "value": "48"
+      },
+      "applicableLocations": ["africa-south1"]
+    },
+    {
+      "dimensions": {
+        "region": "us-central1",
+        "vm_family": "C3D"
+      },
+      "details": {
+        "value": "24"
+      },
+      "applicableLocations": ["us-central1"]
+    },
+    {
+      "dimensions": {
+        "region": "us-central1",
+        "vm_family": "C4A"
+      },
+      "details": {
+        "value": "24"
+      },
+      "applicableLocations": ["us-central1"]
+    },
+    {
+      "dimensions": {
+        "region": "us-central1",
+        "vm_family": "C4"
+      },
+      "details": {
+        "value": "24"
+      },
+      "applicableLocations": ["us-central1"]
+    },
+    {
+      "dimensions": {
+        "region": "us-central1",
+        "vm_family": "N4A"
+      },
+      "details": {
+        "value": "200"
+      },
+      "applicableLocations": ["us-central1"]
+    },
+    {
+      "dimensions": {
+        "region": "us-central1",
+        "vm_family": "N4"
+      },
+      "details": {
+        "value": "200"
+      },
+      "applicableLocations": ["us-central1"]
+    },
+    {
+      "dimensions": {
+        "region": "us-central1"
+      },
+      "details": {},
+      "applicableLocations": ["us-central1"]
+    },
+    {
+      "dimensions": {
+        "vm_family": "C4A"
+      },
+      "details": {
+        "value": "24"
+      },
+      "applicableLocations": ["europe-west12"]
+    },
+    {
+      "dimensions": {
+        "vm_family": "N4"
+      },
+      "details": {
+        "value": "48"
+      },
+      "applicableLocations": ["europe-west12"]
+    },
+    {
+      "details": {},
+      "applicableLocations": ["europe-west12"]
+    }
+  ]
+}

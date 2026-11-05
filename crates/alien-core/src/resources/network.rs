@@ -14,6 +14,38 @@ use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::fmt::Debug;
 
+/// The flow log on a VPC that Alien creates on AWS. The CloudFormation and Terraform network
+/// emitters and the direct-setup network controller all build their flow log from this one
+/// definition, and a parity test compares the rendered templates with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AwsVpcFlowLogSettings {
+    /// Accepted and rejected traffic.
+    pub traffic_type: &'static str,
+    pub log_destination_type: &'static str,
+    /// Seconds a flow is aggregated into one record. 600 is the AWS default and the cheapest.
+    pub max_aggregation_interval: u32,
+    /// Days the log group keeps records. Compliance checks expect one year of log retention.
+    pub retention_in_days: i32,
+    /// The service that assumes the delivery role.
+    pub delivery_service: &'static str,
+    /// What the delivery role may do on its own log group, and nothing else.
+    pub delivery_actions: &'static [&'static str],
+}
+
+pub const AWS_VPC_FLOW_LOG: AwsVpcFlowLogSettings = AwsVpcFlowLogSettings {
+    traffic_type: "ALL",
+    log_destination_type: "cloud-watch-logs",
+    max_aggregation_interval: 600,
+    retention_in_days: 365,
+    delivery_service: "vpc-flow-logs.amazonaws.com",
+    delivery_actions: &[
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+        "logs:DescribeLogGroups",
+        "logs:DescribeLogStreams",
+    ],
+};
+
 /// Represents cloud-agnostic networking infrastructure (VPC, VNet, subnets, etc.).
 ///
 /// This resource is **always auto-generated** by the NetworkMutation preflight based on

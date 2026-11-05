@@ -11,7 +11,8 @@
 //!   generator's per-target variables list).
 //! * `Create` — full topology: VPC, public + private subnets across N
 //!   AZs (`for_each = data.aws_availability_zones`), IGW, NAT gateway,
-//!   route tables, default routes, subnet associations, security group.
+//!   route tables, default routes, subnet associations, security group,
+//!   and the VPC's flow log.
 
 use crate::{
     block::{attr, resource_block},
@@ -252,16 +253,24 @@ fn default_network_data(label: &str, count: Option<&str>) -> TfFragment {
     if let Some(count) = count {
         vpc_attributes.push(attr("count", expr::raw(count)));
     }
-    vpc_attributes.push(attr("default", Expression::Bool(true)));
+    // `aws_vpcs` lists VPC IDs with DescribeVpcs only. The `aws_vpc` data source would also call
+    // DescribeVpcAttribute, which needs a grant on the untagged default VPC.
+    vpc_attributes.push(nested_block(
+        "filter",
+        vec![
+            attr("name", Expression::String("is-default".to_string())),
+            attr("values", expr::raw("[\"true\"]")),
+        ],
+    ));
 
     let mut subnet_attributes = Vec::new();
     if let Some(count) = count {
         subnet_attributes.push(attr("count", expr::raw(count)));
     }
     let vpc_ref = if count.is_some() {
-        format!("data.aws_vpc.{label}_default[0].id")
+        format!("data.aws_vpcs.{label}_default[0].ids[0]")
     } else {
-        format!("data.aws_vpc.{label}_default.id")
+        format!("data.aws_vpcs.{label}_default.ids[0]")
     };
     subnet_attributes.push(nested_block(
         "filter",
@@ -273,7 +282,7 @@ fn default_network_data(label: &str, count: Option<&str>) -> TfFragment {
 
     TfFragment::default()
         .with_data(crate::block::data_block(
-            "aws_vpc",
+            "aws_vpcs",
             &format!("{label}_default"),
             vpc_attributes,
         ))
@@ -539,6 +548,16 @@ fn create_topology(
             attr("tags", tags(ctx, "network")),
         ],
     ));
+
+    fragment
+        .resource_blocks
+        .extend(crate::emitters::aws::flow_logs::blocks(
+            label,
+            ctx.resource_id,
+            "var.network_mode == \"create-new\" ? 1 : 0",
+            expr::raw(format!("aws_vpc.{label}[0].id")),
+            tags(ctx, "network"),
+        ));
 
     if has_sandboxes(ctx) {
         let one = || {
