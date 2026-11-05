@@ -476,7 +476,8 @@ async fn newest_release(manager: &Manager, fingerprint: &str) -> Option<String> 
     Some(verified.signers.into_iter().collect::<Vec<_>>().join(","))
 }
 
-/// A `gh` standing in for GitHub: environments and branch policies answer as
+/// A `gh` standing in for GitHub: a tag ruleset freezes `v*` tags, and
+/// environments and branch policies answer as
 /// a correctly set up `release` environment does, and `secret set` writes
 /// the secret to a file.
 fn fake_gh(dir: &Path) -> PathBuf {
@@ -487,6 +488,8 @@ fn fake_gh(dir: &Path) -> PathBuf {
         r#"#!/bin/sh
 case "$*" in
   "secret set"*) cat > '{secret}' ;;
+  *"/rulesets/1") echo '{{"id":1,"name":"Release tags","target":"tag","enforcement":"active","conditions":{{"ref_name":{{"include":["refs/tags/v*"],"exclude":[]}}}},"rules":[{{"type":"creation"}},{{"type":"update"}},{{"type":"deletion"}}],"bypass_actors":[]}}' ;;
+  *"/rulesets") echo '[{{"id":1,"target":"tag"}}]' ;;
   *"deployment-branch-policies"*"-X POST"*|*"-X POST"*"deployment-branch-policies"*) echo '{{}}' ;;
   *"deployment-branch-policies"*) echo '{{"branch_policies":[{{"name":"main","type":"branch"}},{{"name":"v*","type":"tag"}}]}}' ;;
   *"-X PUT"*) cat > /dev/null; echo '{{}}' ;;
@@ -743,7 +746,7 @@ async fn signing_from_first_release_to_recovery() {
     // Alice connects CI; the key lands in the `release` environment only.
     let output = ok(world.run_in_terminal(&alice, &app, &["devices", "add-ci", "acme/app"], &[]));
     assert!(
-        output.contains("GitHub Actions (acme/app) can release"),
+        output.contains("GitHub Actions (acme/app) can release · its key is in the `release` environment, which only main and v* tags can use"),
         "{output}"
     );
     let ci_key = std::fs::read_to_string(world.work.path().join("secret.pem")).unwrap();

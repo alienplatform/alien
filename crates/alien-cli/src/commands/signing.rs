@@ -685,10 +685,13 @@ async fn add_ci(ctx: &ExecutionMode, repository: &str) -> Result<()> {
             ),
         }));
     }
+    // The CLI pin is checked before anything changes, so a release that
+    // doesn't verify leaves no key stored and no list published.
+    pin_cli(&current_dir()?)?;
     let key = SecretKey::generate().context(ErrorData::SigningFailed {
         message: "Could not create the CI key".to_string(),
     })?;
-    store_ci_key(repository, &key)?;
+    let who_can = store_ci_key(repository, &key)?;
     let mut body = list.body.clone();
     body.signers.push(Signer {
         id: id.clone(),
@@ -705,10 +708,10 @@ async fn add_ci(ctx: &ExecutionMode, repository: &str) -> Result<()> {
     let statement = admin.sign_next(body, "sign")?;
     admin.publish(&statement).await?;
     println!(
-        "✓ {} can release · its key is in the `{GITHUB_ENVIRONMENT}` environment, which only {RELEASE_BRANCH} and {RELEASE_TAGS} tags can use",
+        "✓ {} can release · its key is in the `{GITHUB_ENVIRONMENT}` environment, which {who_can}",
         ci_label(repository)
     );
-    pin_cli(&current_dir()?)
+    Ok(())
 }
 
 async fn rotate_ci(ctx: &ExecutionMode, revoke: bool, repository: Option<&str>) -> Result<()> {
@@ -756,10 +759,11 @@ async fn rotate_ci(ctx: &ExecutionMode, revoke: bool, repository: Option<&str>) 
     } else {
         Vec::new()
     };
+    pin_cli(&current_dir()?)?;
     let key = SecretKey::generate().context(ErrorData::SigningFailed {
         message: "Could not create the CI key".to_string(),
     })?;
-    store_ci_key(&repository, &key)?;
+    let who_can = store_ci_key(&repository, &key)?;
     let mut body = list.body.clone();
     for signer in body.signers.iter_mut().filter(|signer| signer.id == old.id) {
         signer.key = key.public_key().as_str().to_string();
@@ -779,7 +783,7 @@ async fn rotate_ci(ctx: &ExecutionMode, revoke: bool, repository: Option<&str>) 
     }
     let statement = admin.sign_next(body, "sign")?;
     admin.publish(&statement).await?;
-    println!("✓ New CI key in the `{GITHUB_ENVIRONMENT}` environment of {repository}; the old key can't sign");
+    println!("✓ New CI key in the `{GITHUB_ENVIRONMENT}` environment of {repository}, which {who_can}; the old key can't sign");
     Ok(())
 }
 
@@ -978,20 +982,25 @@ async fn recover(ctx: &ExecutionMode) -> Result<()> {
 }
 
 /// Store `key` as the CI secret of `repository`'s `release` environment with
-/// the admin's own `gh`, after making sure only `main` and release tags can
-/// use that environment.
-fn store_ci_key(repository: &str, key: &SecretKey) -> Result<()> {
+/// the admin's own `gh`, after making sure only `main`, and release tags if
+/// a ruleset protects them, can use that environment. Returns who can.
+fn store_ci_key(repository: &str, key: &SecretKey) -> Result<String> {
     let environment = format!("repos/{repository}/environments/{GITHUB_ENVIRONMENT}");
     gh(
         &["api", "-X", "PUT", &environment, "--input", "-"],
         Some(br#"{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}"#),
     )?;
     let policies_path = format!("{environment}/deployment-branch-policies");
+    let tags = tag_protection_gap(&tag_rulesets(repository));
+    let mut expected = vec![(RELEASE_BRANCH.to_string(), "branch".to_string())];
+    if tags.is_none() {
+        expected.push((RELEASE_TAGS.to_string(), "tag".to_string()));
+    }
     let policies = branch_policies(&policies_path)?;
-    for (name, kind) in [(RELEASE_BRANCH, "branch"), (RELEASE_TAGS, "tag")] {
+    for (name, kind) in &expected {
         if !policies
             .iter()
-            .any(|policy| policy.0 == name && policy.1 == kind)
+            .any(|policy| &policy.0 == name && &policy.1 == kind)
         {
             gh(
                 &[
@@ -1008,7 +1017,13 @@ fn store_ci_key(repository: &str, key: &SecretKey) -> Result<()> {
             )?;
         }
     }
-    check_environment(repository, &environment, &policies_path)?;
+    check_environment(
+        repository,
+        &environment,
+        &policies_path,
+        &expected,
+        tags.as_deref(),
+    )?;
     let pem = key.to_pkcs8_pem().context(ErrorData::SigningFailed {
         message: "Could not encode the CI key".to_string(),
     })?;
@@ -1024,7 +1039,95 @@ fn store_ci_key(repository: &str, key: &SecretKey) -> Result<()> {
         ],
         Some(pem.as_bytes()),
     )?;
-    Ok(())
+    Ok(match tags {
+        None => format!("only {RELEASE_BRANCH} and {RELEASE_TAGS} tags can use"),
+        Some(_) => format!("only {RELEASE_BRANCH} can use"),
+    })
+}
+
+/// The repository's tag rulesets, in full, or why they couldn't be read.
+fn tag_rulesets(repository: &str) -> std::result::Result<Vec<serde_json::Value>, String> {
+    let text = gh(&["api", &format!("repos/{repository}/rulesets")], None)
+        .map_err(|error| format!("its rulesets can't be read ({})", error.message))?;
+    let list: Vec<serde_json::Value> = serde_json::from_str(&text)
+        .map_err(|error| format!("its rulesets didn't parse ({error})"))?;
+    let mut rulesets = Vec::new();
+    for ruleset in list.iter().filter(|ruleset| ruleset["target"] == "tag") {
+        let id = &ruleset["id"];
+        let text = gh(&["api", &format!("repos/{repository}/rulesets/{id}")], None)
+            .map_err(|error| format!("ruleset {id} can't be read ({})", error.message))?;
+        rulesets.push(
+            serde_json::from_str(&text)
+                .map_err(|error| format!("ruleset {id} didn't parse ({error})"))?,
+        );
+    }
+    Ok(rulesets)
+}
+
+/// Why release tags may not use the `release` environment, or `None` when an
+/// active tag ruleset covering `refs/tags/v*` blocks creating, moving and
+/// deleting them and no app can bypass it. Without that, anyone who can push
+/// a tag could run a workflow that reads the key.
+fn tag_protection_gap(
+    rulesets: &std::result::Result<Vec<serde_json::Value>, String>,
+) -> Option<String> {
+    let rulesets = match rulesets {
+        Ok(rulesets) => rulesets,
+        Err(reason) => return Some(reason.clone()),
+    };
+    let pattern = format!("refs/tags/{RELEASE_TAGS}");
+    let mut gaps = Vec::new();
+    for ruleset in rulesets {
+        let name = ruleset["name"].as_str().unwrap_or("unnamed");
+        let covers = ruleset["target"] == "tag"
+            && ruleset["enforcement"] == "active"
+            && ruleset["conditions"]["ref_name"]["include"]
+                .as_array()
+                .is_some_and(|include| {
+                    include
+                        .iter()
+                        .any(|item| item == pattern.as_str() || item == "~ALL")
+                })
+            && ruleset["conditions"]["ref_name"]["exclude"]
+                .as_array()
+                .is_some_and(Vec::is_empty);
+        if !covers {
+            continue;
+        }
+        let types: Vec<&str> = ruleset["rules"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|rule| rule["type"].as_str())
+            .collect();
+        let missing: Vec<&str> = ["creation", "update", "deletion"]
+            .into_iter()
+            .filter(|rule| !types.contains(rule))
+            .collect();
+        let app_bypass = match ruleset["bypass_actors"].as_array() {
+            Some(actors) => actors
+                .iter()
+                .any(|actor| actor["actor_type"] == "Integration"),
+            // Only admins see bypass actors; unknown counts as a bypass.
+            None => true,
+        };
+        if missing.is_empty() && !app_bypass {
+            return None;
+        }
+        let mut gap = Vec::new();
+        if !missing.is_empty() {
+            gap.push(format!("doesn't restrict {}", missing.join(", ")));
+        }
+        if app_bypass {
+            gap.push("lets an app bypass it".to_string());
+        }
+        gaps.push(format!("ruleset '{name}' {}", gap.join(" and ")));
+    }
+    Some(if gaps.is_empty() {
+        format!("no active tag ruleset covers {pattern}")
+    } else {
+        gaps.join("; ")
+    })
 }
 
 /// `(name, type)` of each deployment policy of an environment.
@@ -1049,9 +1152,16 @@ fn branch_policies(path: &str) -> Result<Vec<(String, String)>> {
         .collect())
 }
 
-/// Refuse to store the key unless the environment allows only `main` and
-/// release tags: any other branch could run a workflow that reads it.
-fn check_environment(repository: &str, environment: &str, policies_path: &str) -> Result<()> {
+/// Refuse to store the key unless the environment allows exactly
+/// `expected`: any other branch or tag could run a workflow that reads it.
+/// `tags` is why release tags aren't among them, if they aren't.
+fn check_environment(
+    repository: &str,
+    environment: &str,
+    policies_path: &str,
+    expected: &[(String, String)],
+    tags: Option<&str>,
+) -> Result<()> {
     let text = gh(&["api", environment], None)?;
     let value: serde_json::Value =
         serde_json::from_str(&text)
@@ -1064,23 +1174,32 @@ fn check_environment(repository: &str, environment: &str, policies_path: &str) -
         && policy["protected_branches"].as_bool() == Some(false);
     let mut policies = branch_policies(policies_path)?;
     policies.sort();
-    let expected = vec![
-        (RELEASE_BRANCH.to_string(), "branch".to_string()),
-        (RELEASE_TAGS.to_string(), "tag".to_string()),
-    ];
-    if !custom || policies != expected {
-        let allowed: Vec<String> = policies
-            .iter()
-            .map(|(name, kind)| format!("{kind} {name}"))
-            .collect();
-        return Err(AlienError::new(ErrorData::SigningFailed {
-            message: format!(
-                "The `{GITHUB_ENVIRONMENT}` environment of {repository} must allow only branch {RELEASE_BRANCH} and tags {RELEASE_TAGS}, but allows: {}. Remove the others in the repository's Settings → Environments, then run this again. The CI key was not stored.",
-                if custom { allowed.join(", ") } else { "every branch".to_string() }
-            ),
-        }));
+    let mut expected = expected.to_vec();
+    expected.sort();
+    if custom && policies == expected {
+        return Ok(());
     }
-    Ok(())
+    let allowed: Vec<String> = policies
+        .iter()
+        .map(|(name, kind)| format!("{kind} {name}"))
+        .collect();
+    let wanted: Vec<String> = expected
+        .iter()
+        .map(|(name, kind)| format!("{kind} {name}"))
+        .collect();
+    let why_no_tags = match tags {
+        Some(gap) => format!(
+            " Tags {RELEASE_TAGS} may not use it: {gap}. Add an active tag ruleset on refs/tags/{RELEASE_TAGS} that restricts creation, update and deletion with no app bypass to allow them."
+        ),
+        None => String::new(),
+    };
+    Err(AlienError::new(ErrorData::SigningFailed {
+        message: format!(
+            "The `{GITHUB_ENVIRONMENT}` environment of {repository} must allow only {}, but allows: {}.{why_no_tags} Remove the others in the repository's Settings → Environments, then run this again. The CI key was not stored.",
+            wanted.join(" and "),
+            if custom { allowed.join(", ") } else { "every branch".to_string() }
+        ),
+    }))
 }
 
 /// Pin this CLI's own version in the release workflow, by the checksums of
@@ -1325,6 +1444,76 @@ mod tests {
         attested_checksums("0.0.1").expect_err("no such release");
     }
 
+    /// `GET repos/alienplatform/alien/rulesets/19766651`, recorded
+    /// 2026-11-05 (links and timestamps dropped).
+    const RECORDED_TAG_RULESET: &str = r#"{
+        "id": 19766651,
+        "name": "Immutable release tags",
+        "target": "tag",
+        "enforcement": "active",
+        "conditions": {"ref_name": {"exclude": [], "include": ["refs/tags/v*"]}},
+        "rules": [{"type": "deletion"}, {"type": "update"}],
+        "bypass_actors": []
+    }"#;
+
+    #[test]
+    fn release_tags_count_only_behind_a_ruleset_that_freezes_them() {
+        let recorded: serde_json::Value = serde_json::from_str(RECORDED_TAG_RULESET).unwrap();
+        // The recorded ruleset stops moving and deleting tags, not creating
+        // them: anyone who can push could create v9.9.9 and deploy.
+        assert_eq!(
+            tag_protection_gap(&Ok(vec![recorded.clone()])).as_deref(),
+            Some("ruleset 'Immutable release tags' doesn't restrict creation")
+        );
+        let mut frozen = recorded.clone();
+        frozen["rules"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"type": "creation"}));
+        assert_eq!(tag_protection_gap(&Ok(vec![frozen.clone()])), None);
+
+        let mut app = frozen.clone();
+        app["bypass_actors"] = serde_json::json!([
+            {"actor_id": 1, "actor_type": "Integration", "bypass_mode": "always"}
+        ]);
+        assert_eq!(
+            tag_protection_gap(&Ok(vec![app])).as_deref(),
+            Some("ruleset 'Immutable release tags' lets an app bypass it")
+        );
+        let mut unseen = frozen.clone();
+        unseen.as_object_mut().unwrap().remove("bypass_actors");
+        assert!(
+            tag_protection_gap(&Ok(vec![unseen])).is_some(),
+            "unknown bypass counts"
+        );
+
+        for (field, value) in [
+            ("enforcement", serde_json::json!("evaluate")),
+            ("target", serde_json::json!("branch")),
+            (
+                "conditions",
+                serde_json::json!({"ref_name": {"exclude": [], "include": ["refs/tags/release-*"]}}),
+            ),
+            (
+                "conditions",
+                serde_json::json!({"ref_name": {"exclude": ["refs/tags/v0*"], "include": ["refs/tags/v*"]}}),
+            ),
+        ] {
+            let mut other = frozen.clone();
+            other[field] = value;
+            assert_eq!(
+                tag_protection_gap(&Ok(vec![other])).as_deref(),
+                Some("no active tag ruleset covers refs/tags/v*"),
+                "{field}"
+            );
+        }
+        assert_eq!(
+            tag_protection_gap(&Err("its rulesets can't be read (HTTP 403)".to_string()))
+                .as_deref(),
+            Some("its rulesets can't be read (HTTP 403)")
+        );
+    }
+
     /// When GitHub last updated the CI key secret.
     fn secret_updated_at(repository: &str) -> String {
         let text = gh(
@@ -1342,56 +1531,85 @@ mod tests {
     }
 
     /// Against a real GitHub repository (`TEST_GITHUB_REPOSITORY`, with `gh`
-    /// logged in as an admin of it): with a policy letting every branch use
-    /// the `release` environment, the CI key is refused and the secret is not
-    /// touched; with only `main` and release tags, it is stored.
+    /// logged in as an admin of it, on a plan without rulesets for it): with a
+    /// policy letting every branch use the `release` environment, or one for
+    /// release tags that no ruleset protects, the CI key is refused and the
+    /// secret is not touched; with only `main`, it is stored.
     #[test]
     #[ignore = "needs a GitHub repository and gh"]
-    fn the_ci_key_is_stored_only_where_other_branches_cant_read_it() {
+    fn the_ci_key_is_stored_only_where_other_refs_cant_read_it() {
         let repository =
             std::env::var("TEST_GITHUB_REPOSITORY").expect("set TEST_GITHUB_REPOSITORY");
         let policies = format!(
             "repos/{repository}/environments/{GITHUB_ENVIRONMENT}/deployment-branch-policies"
         );
+        let add = |name: &str, kind: &str| {
+            let text = gh(
+                &[
+                    "api",
+                    "-X",
+                    "POST",
+                    &policies,
+                    "-f",
+                    &format!("name={name}"),
+                    "-f",
+                    &format!("type={kind}"),
+                ],
+                None,
+            )
+            .unwrap();
+            let policy: serde_json::Value = serde_json::from_str(&text).unwrap();
+            format!("{policies}/{}", policy["id"])
+        };
+        // Start from `main` only.
+        let text = gh(&["api", &policies], None).unwrap();
+        let existing: serde_json::Value = serde_json::from_str(&text).unwrap();
+        for policy in existing["branch_policies"].as_array().unwrap() {
+            if !(policy["name"] == "main" && policy["type"] == "branch") {
+                gh(
+                    &[
+                        "api",
+                        "-X",
+                        "DELETE",
+                        &format!("{policies}/{}", policy["id"]),
+                    ],
+                    None,
+                )
+                .unwrap();
+            }
+        }
         let before = secret_updated_at(&repository);
 
-        let text = gh(
-            &[
-                "api",
-                "-X",
-                "POST",
-                &policies,
-                "-f",
-                "name=*",
-                "-f",
-                "type=branch",
-            ],
-            None,
-        )
-        .unwrap();
-        let every_branch: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let every_branch = format!("{policies}/{}", every_branch["id"]);
+        let every_branch = add("*", "branch");
         let refused = store_ci_key(&repository, &SecretKey::generate().unwrap());
         gh(&["api", "-X", "DELETE", &every_branch], None).unwrap();
         let error = refused.expect_err("a key any branch can read must not be stored");
         assert!(
-            error.to_string().contains("allows: branch *"),
+            error.to_string().contains("allows: branch *, branch main"),
             "the refusal names the extra policy: {error}"
+        );
+        assert_eq!(secret_updated_at(&repository), before);
+
+        let tags = add(RELEASE_TAGS, "tag");
+        let refused = store_ci_key(&repository, &SecretKey::generate().unwrap());
+        gh(&["api", "-X", "DELETE", &tags], None).unwrap();
+        let error = refused.expect_err("a key unprotected tags can read must not be stored");
+        assert!(
+            error
+                .to_string()
+                .contains("must allow only branch main, but allows: branch main, tag v*. Tags v* may not use it: its rulesets can't be read"),
+            "the refusal says why tags don't count: {error}"
         );
         assert_eq!(secret_updated_at(&repository), before);
 
         // GitHub reports secret times to the second.
         std::thread::sleep(std::time::Duration::from_secs(2));
-        store_ci_key(&repository, &SecretKey::generate().unwrap()).unwrap();
+        let who_can = store_ci_key(&repository, &SecretKey::generate().unwrap()).unwrap();
+        assert_eq!(who_can, "only main can use");
         assert_ne!(secret_updated_at(&repository), before);
-        let mut left = branch_policies(&policies).unwrap();
-        left.sort();
         assert_eq!(
-            left,
-            [
-                ("main".to_string(), "branch".to_string()),
-                ("v*".to_string(), "tag".to_string())
-            ]
+            branch_policies(&policies).unwrap(),
+            [("main".to_string(), "branch".to_string())]
         );
     }
 
