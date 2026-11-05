@@ -751,6 +751,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_binding_is_what_the_enforcers_derive() {
+        let mut mock = MockSqsApi::new();
+        // SQS answers with the URL of the queue name asked for.
+        mock.expect_create_queue().returning(|request| {
+            Ok(CreateQueueResponse {
+                create_queue_result: CreateQueueResult {
+                    queue_url: format!(
+                        "https://sqs.us-east-1.amazonaws.com/123456789012/{}",
+                        request.queue_name
+                    ),
+                },
+            })
+        });
+        mock.expect_set_queue_attributes().returning(|_, _| Ok(()));
+        mock.expect_get_queue_attributes().returning(|_, _| {
+            Ok(GetQueueAttributesResponse {
+                get_queue_attributes_result: GetQueueAttributesResult { attributes: vec![] },
+            })
+        });
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(Queue::new("my-queue".to_string()).build())
+            .controller(AwsQueueController::default())
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_provider(Arc::new(mock)))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let engine = crate::core::ResourceController::get_binding_params(
+            executor.internal_state::<AwsQueueController>().unwrap(),
+        )
+        .unwrap()
+        .expect("a running queue has a binding");
+        crate::core::binding_equivalence::assert_enforcers_derive(
+            Platform::Aws,
+            "queue",
+            "my-queue",
+            engine,
+        );
+    }
+
+    #[tokio::test]
     async fn test_create_and_delete_queue_succeeds() {
         let queue = Queue::new("my-queue".to_string()).build();
         let mock_sqs =

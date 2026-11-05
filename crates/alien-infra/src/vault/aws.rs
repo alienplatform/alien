@@ -1178,3 +1178,40 @@ mod permission_update_tests {
         assert_eq!(iam.policies(CONSUMER_ROLE), vec![READ_POLICY]);
     }
 }
+
+#[cfg(test)]
+mod binding_tests {
+    use super::*;
+    use crate::core::{
+        controller_test::SingleControllerExecutor, MockPlatformServiceProvider, ResourceController,
+    };
+    use alien_core::{Platform, ResourceStatus};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn the_binding_is_what_the_enforcers_derive() {
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(Vault::new("secrets".to_string()).build())
+            .controller(AwsVaultController::default())
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let engine = executor
+            .internal_state::<AwsVaultController>()
+            .unwrap()
+            .get_binding_params()
+            .unwrap()
+            .expect("a running vault has a binding");
+        crate::core::binding_equivalence::assert_enforcers_derive(
+            Platform::Aws,
+            "vault",
+            "secrets",
+            engine,
+        );
+    }
+}

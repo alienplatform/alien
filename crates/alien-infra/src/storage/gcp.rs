@@ -1322,6 +1322,69 @@ mod tests {
 
     // ─────────────── CREATE AND DELETE FLOW TESTS ────────────────────
 
+    #[tokio::test]
+    async fn the_binding_is_what_the_enforcers_derive() {
+        let storage = basic_storage();
+        let id = storage.id.clone();
+        let mut mock_gcs = MockGcsApi::new();
+        // GCS names the bucket what the request asks for.
+        let created = Arc::new(std::sync::Mutex::new(None::<String>));
+        let record = created.clone();
+        mock_gcs
+            .expect_create_bucket()
+            .returning(move |name: String, _| {
+                *record.lock().unwrap() = Some(name.clone());
+                Ok(create_successful_bucket_response(&name))
+            });
+        let read = created.clone();
+        mock_gcs.expect_get_bucket().returning(move |_| {
+            Ok(create_successful_bucket_response(
+                read.lock().unwrap().as_deref().unwrap(),
+            ))
+        });
+        let read = created.clone();
+        mock_gcs.expect_update_bucket().returning(move |_, _| {
+            Ok(create_successful_bucket_response(
+                read.lock().unwrap().as_deref().unwrap(),
+            ))
+        });
+        mock_gcs.expect_get_bucket_iam_policy().returning(|_| {
+            Ok(IamPolicy {
+                version: Some(1),
+                bindings: vec![],
+                etag: None,
+                kind: Some("storage#policy".to_string()),
+                resource_id: None,
+            })
+        });
+        mock_gcs
+            .expect_set_bucket_iam_policy()
+            .returning(|_, policy| Ok(policy));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage)
+            .controller(GcpStorageController::default())
+            .platform(Platform::Gcp)
+            .service_provider(setup_mock_service_provider(Arc::new(mock_gcs)))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let engine = crate::core::ResourceController::get_binding_params(
+            executor.internal_state::<GcpStorageController>().unwrap(),
+        )
+        .unwrap()
+        .expect("a running bucket has a binding");
+        crate::core::binding_equivalence::assert_enforcers_derive(
+            Platform::Gcp,
+            "storage",
+            &id,
+            engine,
+        );
+    }
+
     #[rstest]
     #[case::basic(basic_storage())]
     #[case::versioning(storage_with_versioning())]
