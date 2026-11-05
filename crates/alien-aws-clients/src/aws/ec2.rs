@@ -655,6 +655,14 @@ impl Ec2Client {
                 resource_type: "SecurityGroupRule".into(),
                 resource_name: resource.into(),
             },
+            // DescribeLaunchTemplates naming a template that doesn't exist answers 400
+            // with this code, not an empty set.
+            "InvalidLaunchTemplateName.NotFoundException" | "InvalidLaunchTemplateId.NotFound" => {
+                ErrorData::RemoteResourceNotFound {
+                    resource_type: "LaunchTemplate".into(),
+                    resource_name: resource.into(),
+                }
+            }
             "InvalidSnapshot.NotFound" | "InvalidSnapshotID.NotFound" => {
                 ErrorData::RemoteResourceNotFound {
                     resource_type: "Snapshot".into(),
@@ -4710,6 +4718,22 @@ mod error_mapping_tests {
         ] {
             assert!(
                 matches!(mapped(code), Some(ErrorData::QuotaExceeded { message }) if message == "m")
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_launch_template_is_not_found() {
+        for code in [
+            "InvalidLaunchTemplateName.NotFoundException",
+            "InvalidLaunchTemplateId.NotFound",
+        ] {
+            assert!(
+                matches!(
+                    mapped(code),
+                    Some(ErrorData::RemoteResourceNotFound { resource_type, .. }) if resource_type == "LaunchTemplate"
+                ),
+                "{code}"
             );
         }
     }

@@ -605,7 +605,6 @@ impl<E: Ec2Api, A: AutoScalingApi> MachineApi for AwsMachines<E, A> {
                 if matches!(
                     error.error,
                     Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                        | Some(CloudClientErrorData::InvalidInput { .. })
                 ) =>
             {
                 Ok(None)
