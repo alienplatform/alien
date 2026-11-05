@@ -263,6 +263,8 @@ class Suite:
         app = self.wait_for(f"{message} to run", lambda app: app["env"].get("MESSAGE") == message and app["image"] == IMAGES[image]
                             and all(app["env"].get(k) == v for k, v in (env or {}).items()), timeout=timeout)
         self.record(name, app is not None, json.dumps(app or self.app())[:500])
+        (self.evidence / "lands").mkdir(exist_ok=True)
+        (self.evidence / "lands" / f"{serve}.log").write_text(self.operator_logs(since))
         if app is not None:
             # A target sent mid-update waits for it, so attacks start from rest.
             self.settled(since)
