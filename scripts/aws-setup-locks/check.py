@@ -5,7 +5,8 @@ Renders `app/` as CloudFormation twice with the `render_setup` example of alien-
 (`cargo build -p alien-cli-common --example render_setup`), pinned to this account as the
 publisher and to `<prefix>-verifier@<digest>` as the verifier image, once unprotected and once
 protected, deploys both into the default VPC, assumes each stack's
-management role, attaches a policy that allows everything a compromised control plane would
+management role, reads the install's signing settings and a neighbor's (only a protected
+management reads its own), attaches a policy that allows everything a compromised control plane would
 try (as an extended profile or a customer policy could), and tries:
 
   * RunInstances with user-data (dry run);
@@ -391,6 +392,15 @@ class Run:
         self.expect("protected", "settings-written-by-setup", "True", str(settings == expected), settings)
         self.expect("protected", "ledger-names-the-prefix", "True", str(ledger.get("prefix") == stack_name), ledger)
 
+    def settings_reads(self, variant, session, stack_name, neighbor):
+        """Before the allow-all grant: only a protected install's management reads its own
+        settings (the runtime refuses a config without signing when it can), and no one's else."""
+        ssm = session.client("ssm")
+        code, detail = self.call(ssm.get_parameter, Name=f"/signed/{stack_name}/fingerprint")
+        self.expect(variant, "read-own-settings", "Success" if variant == "protected" else "Denied", denied(code), detail)
+        code, detail = self.call(ssm.get_parameter, Name=f"/signed/{neighbor}/fingerprint")
+        self.expect(variant, "read-neighbor-settings", "Denied", denied(code), detail)
+
     def variant(self, variant, template, caller_role, subnet):
         stack_name = f"{self.args.prefix}-{variant[0]}"
         url = self.upload(f"{variant}.yaml", template)
@@ -398,6 +408,7 @@ class Run:
         if variant == "protected":
             self.check_settings(stack_name)
         things = self.install_resources(stack_name, subnet)
+        self.settings_reads(variant, self.assume(caller_role, stack_name), stack_name, f"{stack_name}-eu")
         self.allow_everything(stack_name)
         time.sleep(20)  # IAM propagation for the extra grant.
         session = self.assume(caller_role, stack_name)
