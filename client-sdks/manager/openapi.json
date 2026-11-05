@@ -8556,6 +8556,32 @@
             "type": "string",
             "description": "Project this release belongs to. Required. The standalone server\nuses the canonical value `\"default\"`.\n\nThe OSS CLI sends this field as `project` on `alien release`\n(see `alien-cli` release flow); the underlying alien-managerx\nrelease endpoint accepts both forms. Accept both here too so\n`alien release` against an OSS standalone manager doesn't fail\nat the schema layer with a confusing\n`unknown field \"project\", expected \"projectId\"`."
           },
+          "setupTemplates": {
+            "type": "object",
+            "description": "Setup template bytes (base64) keyed by platform and template name, as\nthe release signed them. Required for every template a signed\nstatement names, and refused unless each hashes to its signed digest.",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string",
+              "description": "Represents the target cloud platform.",
+              "enum": [
+                "aws",
+                "gcp",
+                "azure",
+                "kubernetes",
+                "machines",
+                "local",
+                "test"
+              ]
+            }
+          },
           "signedStacks": {
             "type": "object",
             "description": "Signed statements keyed by platform, from `alien release` with a\nsigning key. Stored and returned exactly as received; deployments in\nprotected mode verify them and deploy only the stack they contain.",
@@ -9040,7 +9066,6 @@
           "deploymentProtocolVersion",
           "projectId",
           "workspaceId",
-          "protected",
           "retryRequested",
           "createdAt"
         ],
@@ -9106,7 +9131,8 @@
           },
           "protected": {
             "type": "boolean",
-            "description": "Whether the deployment's setup pins a signing fingerprint, so it runs\nonly signed releases. Only the install's own verification proves it."
+            "description": "Whether the deployment's setup pins a signing fingerprint, so it runs\nonly signed releases. Only the install's own verification proves it.\nAbsent from older managers, which have no protected deployments;\na protected install refuses unsigned releases whatever this says, so\nreading it as false can't skip a signature.",
+            "default": false
           },
           "retryRequested": {
             "type": "boolean"
@@ -17368,6 +17394,32 @@
             "additionalProperties": {},
             "propertyNames": {
               "type": "string"
+            }
+          },
+          "setupTemplates": {
+            "type": "object",
+            "description": "Setup template bytes (base64) keyed by platform and template name,\nexactly as the release uploaded them; each hashes to its signed digest.",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string",
+              "description": "Represents the target cloud platform.",
+              "enum": [
+                "aws",
+                "gcp",
+                "azure",
+                "kubernetes",
+                "machines",
+                "local",
+                "test"
+              ]
             }
           },
           "signedStacks": {

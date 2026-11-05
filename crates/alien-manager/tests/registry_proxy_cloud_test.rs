@@ -429,6 +429,7 @@ impl CloudProxyTest {
                     git_commit_ref: None,
                     git_commit_message: None,
                     signed_stacks: Default::default(),
+                    setup_templates: Default::default(),
                 },
             )
             .await

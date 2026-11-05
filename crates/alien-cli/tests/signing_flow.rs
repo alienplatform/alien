@@ -23,6 +23,8 @@ use std::time::{Duration, Instant};
 use alien_signing::{
     InstallId, Ledger, ReleaseBody, SecretKey, SignedStatement, SignerChain, SigningSettings, Trust,
 };
+use base64::Engine as _;
+use sha2::Digest as _;
 use tempfile::TempDir;
 
 const TOKEN: &str = "ax_admin_signingflowtesttoken0000000000000000";
@@ -557,7 +559,7 @@ async fn signing_from_first_release_to_recovery() {
         "{output}"
     );
     assert!(
-        output.contains("Setup as the control plane hosts it · registers through stack outputs · managed by any managing role · setup release v1"),
+        output.contains("Setup as the control plane hosts it · registers through stack outputs · managed by any managing role"),
         "{output}"
     );
     assert!(
@@ -857,4 +859,163 @@ async fn signing_from_first_release_to_recovery() {
     let output = ok(world.run(&carol, &app, RELEASE));
     assert!(output.contains("do not verify from"), "{output}");
     assert_eq!(newest_release(&world.manager, &fingerprint).await, None);
+}
+
+/// A storage-only stack: its AWS setup renders without images.
+fn storage_stack() -> alien_core::Stack {
+    serde_json::from_value(serde_json::json!({
+        "id": "app",
+        "resources": {
+            "assets": {
+                "config": {
+                    "corsAllowedOrigins": [], "id": "assets", "lifecycleRules": [],
+                    "publicRead": false, "type": "storage", "versioning": false
+                },
+                "lifecycle": "frozen", "dependencies": [], "remoteAccess": false
+            }
+        },
+        "permissions": { "profiles": { "execution": {} }, "management": "auto" }
+    }))
+    .unwrap()
+}
+
+async fn post_release(manager: &Manager, body: &serde_json::Value) -> (u16, serde_json::Value) {
+    let response = reqwest::Client::new()
+        .post(format!("{}/v1/releases", manager.url))
+        .bearer_auth(TOKEN)
+        .json(body)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    (status, response.json().await.unwrap())
+}
+
+/// The setup templates a signed release uploads are stored and served
+/// exactly as signed: the manager hands back bytes that hash to the
+/// statement's digests, and refuses bytes that don't or that are missing.
+/// Source builds carry no verifier or publisher pins, so the release's
+/// renderer runs here with test pins instead of through `alien release`.
+#[tokio::test]
+async fn setup_templates_are_stored_as_signed() {
+    let manager = start_manager().await;
+    let stack = storage_stack();
+    let signing = alien_core::StackSigning {
+        fingerprint: format!("SHA256:{}", "9f".repeat(32)),
+        channel: "production".to_string(),
+    };
+    let hosting: alien_cli_common::setup_templates::SetupHostingOptions =
+        serde_json::from_value(serde_json::json!({
+            "registration": { "mode": "outputsFallback" },
+            "managementTrust": {
+                "requireExternalId": true,
+                "allowedManagingRoleArns": ["arn:aws:iam::999988887777:role/manager"]
+            }
+        }))
+        .unwrap();
+    let pins = alien_core::SetupPins {
+        aws_publisher: Some("111122223333".to_string()),
+        aws_verifier_image: Some(format!("verifier@sha256:{}", "5d".repeat(32))),
+        operator_digest: None,
+    };
+    let rendered = alien_cli::signing::release::setup_templates(
+        &stack,
+        alien_core::Platform::Aws,
+        &signing,
+        &hosting,
+        pins,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        rendered.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["cloudformation", "terraform-aws"]
+    );
+    let body = alien_cli::signing::release::body(
+        alien_core::Platform::Aws,
+        &stack,
+        "production",
+        &Default::default(),
+        alien_cli::signing::release::signed_setup(&rendered),
+    )
+    .unwrap();
+    let envelope = alien_signing::Envelope {
+        kind: alien_signing::Kind::Release.as_str().to_string(),
+        project: PROJECT.to_string(),
+        install: None,
+        sequence: 1,
+        not_after: None,
+        signer_list_version: 1,
+        body,
+    };
+    let key = SecretKey::from_secret_bytes(&[7; 32]).unwrap();
+    let statement = SignedStatement::new(&envelope.to_payload().unwrap())
+        .sign_with("ci", &key)
+        .unwrap();
+    let upload = alien_cli::signing::release::setup_upload(&rendered);
+    let request = |templates: &serde_json::Value| {
+        serde_json::json!({
+            "projectId": PROJECT,
+            "stack": { "aws": stack },
+            "signedStacks": { "aws": statement },
+            "setupTemplates": { "aws": templates },
+        })
+    };
+
+    // Other bytes than the signed ones are refused with the reason.
+    let mut tampered = rendered["cloudformation"].bytes.clone();
+    tampered.extend_from_slice(b"\n# extra\n");
+    let mut changed = upload.clone();
+    changed.insert(
+        "cloudformation".to_string(),
+        base64::engine::general_purpose::STANDARD.encode(&tampered),
+    );
+    let (status, error) = post_release(&manager, &request(&serde_json::json!(changed))).await;
+    assert_eq!(status, 400, "{error}");
+    let message = error["message"].as_str().unwrap();
+    assert!(
+        message.contains("The aws setup template 'cloudformation' hashes to sha256:")
+            && message.contains("but the release signed sha256:"),
+        "{message}"
+    );
+    // A signed template without its bytes is refused.
+    let mut missing = upload.clone();
+    missing.remove("terraform-aws");
+    let (status, error) = post_release(&manager, &request(&serde_json::json!(missing))).await;
+    assert_eq!(status, 400, "{error}");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("names the setup template 'terraform-aws', but its bytes weren't sent"),
+        "{error}"
+    );
+    assert!(get(&manager, "/v1/releases").await["items"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    // The signed bytes are stored, and served back hashing to the signed digests.
+    let (status, created) = post_release(&manager, &request(&serde_json::json!(upload))).await;
+    assert_eq!(status, 201, "{created}");
+    let release = get(
+        &manager,
+        &format!("/v1/releases/{}", created["id"].as_str().unwrap()),
+    )
+    .await;
+    let served: SignedStatement =
+        serde_json::from_value(release["signedStacks"]["aws"].clone()).unwrap();
+    let signed: ReleaseBody = served.open().unwrap().body().unwrap();
+    assert_eq!(signed.setup.len(), 2);
+    for (name, template) in &signed.setup {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(release["setupTemplates"]["aws"][name].as_str().unwrap())
+            .unwrap();
+        assert_eq!(
+            format!("sha256:{}", hex::encode(sha2::Sha256::digest(&bytes))),
+            template.sha256,
+            "{name}"
+        );
+        assert_eq!(bytes, rendered[name].bytes, "{name}");
+    }
 }

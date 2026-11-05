@@ -8,19 +8,25 @@ use chrono::Duration;
 const PREFIX: &str = "acme-prod";
 const STACK_ID: &str =
     "arn:aws:cloudformation:us-east-1:111122223333:stack/acme-prod/0f3a5c00-9b1e-11ef-8a4b-0e5d2f6a1b27";
-const PROJECT: &str = "prj_acme";
+pub(crate) const PROJECT: &str = "prj_acme";
 
-fn now() -> DateTime<Utc> {
+pub(crate) fn now() -> DateTime<Utc> {
     DateTime::parse_from_rfc3339("2026-11-05T12:00:00Z")
         .unwrap()
         .with_timezone(&Utc)
 }
 
-fn key(seed: u8) -> SecretKey {
+pub(crate) fn key(seed: u8) -> SecretKey {
     SecretKey::from_secret_bytes(&[seed; 32]).unwrap()
 }
 
-fn signer(id: &str, seed: u8, kind: SignerKind, roles: &[Role], label: Option<&str>) -> Signer {
+pub(crate) fn signer(
+    id: &str,
+    seed: u8,
+    kind: SignerKind,
+    roles: &[Role],
+    label: Option<&str>,
+) -> Signer {
     Signer {
         id: id.to_string(),
         key: key(seed).public_key().as_str().to_string(),
@@ -30,7 +36,7 @@ fn signer(id: &str, seed: u8, kind: SignerKind, roles: &[Role], label: Option<&s
     }
 }
 
-fn signed<B: serde::Serialize>(
+pub(crate) fn signed<B: serde::Serialize>(
     kind: Kind,
     sequence: u64,
     list_version: u64,
@@ -58,7 +64,7 @@ fn signed<B: serde::Serialize>(
 }
 
 /// Version 1: alice's laptop (admin), CI and the recovery key.
-fn genesis() -> SignedStatement {
+pub(crate) fn genesis() -> SignedStatement {
     signed(
         Kind::SignerList,
         1,
@@ -91,7 +97,7 @@ fn genesis() -> SignedStatement {
     )
 }
 
-fn fingerprint() -> String {
+pub(crate) fn fingerprint() -> String {
     alien_signing::fingerprint(&genesis().open().unwrap().digest)
 }
 
@@ -148,7 +154,12 @@ fn release(channel: &str, sequence: u64, template: &str, by: (&str, u8)) -> Sign
                 CLOUDFORMATION.to_string(),
                 SetupTemplate {
                     sha256: sha256(template),
-                    allowed: vec!["SubnetIds".to_string(), "VpcId".to_string()],
+                    allowed: vec![
+                        "ManagementExternalId".to_string(),
+                        "ManagingRoleArn".to_string(),
+                        "SubnetIds".to_string(),
+                        "VpcId".to_string(),
+                    ],
                 },
             )]),
             stack: None,
@@ -181,6 +192,11 @@ fn observed() -> Observed {
         stack_name: PREFIX.to_string(),
         parameters: BTreeMap::from([
             ("SigningFingerprint".to_string(), fingerprint()),
+            (
+                "ManagingRoleArn".to_string(),
+                "arn:aws:iam::999988887777:role/vendor-manager".to_string(),
+            ),
+            ("ManagementExternalId".to_string(), "ext-1".to_string()),
             ("SubnetIds".to_string(), "subnet-1,subnet-2".to_string()),
             ("VpcId".to_string(), "vpc-1".to_string()),
         ]),
@@ -215,13 +231,15 @@ fn a_protected_stack_that_matches_its_signed_release_passes_on_one_screen() {
     let lines = check(&observed, now()).unwrap();
     let display = display_fingerprint(&fingerprint());
     let digest = observed.releases[0].1.open().unwrap().digest;
+    let template = sha256(&template());
     assert_eq!(
         render(&lines),
         format!(
             "Install              aws:111122223333:us-east-1:acme-prod\n\
-             Signing fingerprint  {display}   (set by this stack, 2026-11-04)\n\
-             Template             matches release 2026-11-04.3 · production  ✓\n\
-             Parameters           fingerprint pinned · 2 customer choices allowed  ✓\n\
+             Signing fingerprint  {display}   (set by setup, 2026-11-04)\n\
+             Template             matches release 2026-11-04.3 · production · {template}  ✓\n\
+             Parameters           fingerprint pinned · 4 customer choices allowed  ✓\n\
+             Managed by           arn:aws:iam::999988887777:role/vendor-manager · with an external id\n\
              Running              release 2026-11-04.3 · signed by GitHub Actions (acme/app) · {digest}  ✓\n\
              Trusted keys         alice@acme.com, GitHub Actions (acme/app), recovery  (list v1, expires 2027-01-24)\n"
         )
@@ -238,7 +256,7 @@ fn a_tampered_template_fails() {
     assert_eq!(marks(&lines)[2], ("Template", Mark::Fail));
     assert!(lines[2]
         .text
-        .contains("is not the template of any release signed for production"));
+        .contains("is not the cloudformation template of any release signed for production"));
     // With no signed template to compare against, no parameter is a choice.
     assert_eq!(marks(&lines)[3], ("Parameters", Mark::Fail));
 }
@@ -329,7 +347,7 @@ fn a_stack_without_settings_or_ledger_is_not_reported_as_protected() {
     unprotected.settings = None;
     let error = check(&unprotected, now()).unwrap_err();
     assert!(
-        error.message.contains("this stack is not protected"),
+        error.message.contains("this install is not protected"),
         "{}",
         error.message
     );
@@ -370,14 +388,15 @@ fn a_release_whose_signer_was_removed_keeps_running_and_says_so() {
         body,
         &[("alice-mbp", 1)],
     ));
+    let line = running(&observed);
+    assert_eq!(line.mark, Mark::Info);
+    assert!(line.text.contains("no longer on the list"), "{}", line.text);
     let lines = check(&observed, now()).unwrap();
-    assert_eq!(marks(&lines)[4], ("Running", Mark::Info));
-    assert!(
-        lines[4].text.contains("no longer on the list"),
-        "{}",
-        lines[4].text
-    );
-    assert!(lines[5].text.contains("list v2"), "{}", lines[5].text);
+    let keys = lines
+        .iter()
+        .find(|line| line.label == "Trusted keys")
+        .unwrap();
+    assert!(keys.text.contains("list v2"), "{}", keys.text);
 }
 
 fn running(observed: &Observed) -> Line {
@@ -469,4 +488,199 @@ fn locking_keeps_the_existing_policy_and_adds_one_deny() {
         merged["Statement"][0]["Resource"],
         "LogicalResourceId/Database"
     );
+}
+
+#[tokio::test]
+async fn ssm_is_read_in_the_stacks_own_region_and_account_only() {
+    let aws = aws_config::SdkConfig::builder()
+        .region(aws_config::Region::new("eu-west-1"))
+        .build();
+    let error = ssm_client(&aws, STACK_ID)
+        .await
+        .expect_err("a stack in us-east-1 isn't read with eu-west-1 credentials");
+    assert!(
+        error
+            .to_string()
+            .contains("the stack is in us-east-1, but the credentials are for eu-west-1"),
+        "{error}"
+    );
+    let error = ssm_client(&aws, "acme-prod")
+        .await
+        .expect_err("a stack name is not an ARN");
+    assert!(
+        error
+            .to_string()
+            .contains("is not a CloudFormation stack ARN"),
+        "{error}"
+    );
+}
+
+/// Creates `stack` from `template` (or updates it) and waits until it settles.
+async fn apply_stack(
+    cloudformation: &aws_sdk_cloudformation::Client,
+    stack: &str,
+    template: &str,
+    tag: &str,
+    update: bool,
+) {
+    use aws_sdk_cloudformation::types::{Parameter, Tag};
+    let parameters = [
+        ("SigningFingerprint", fingerprint()),
+        ("VpcId", "vpc-1".to_string()),
+        ("SubnetIds", "subnet-1,subnet-2".to_string()),
+    ]
+    .map(|(key, value)| {
+        Parameter::builder()
+            .parameter_key(key)
+            .parameter_value(value)
+            .build()
+    });
+    if update {
+        cloudformation
+            .update_stack()
+            .stack_name(stack)
+            .template_body(template)
+            .set_parameters(Some(parameters.to_vec()))
+            .send()
+            .await
+            .unwrap();
+    } else {
+        cloudformation
+            .create_stack()
+            .stack_name(stack)
+            .template_body(template)
+            .set_parameters(Some(parameters.to_vec()))
+            .tags(Tag::builder().key(tag).value("true").build())
+            .send()
+            .await
+            .unwrap();
+    }
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        let described = cloudformation
+            .describe_stacks()
+            .stack_name(stack)
+            .send()
+            .await
+            .unwrap();
+        let status = described.stacks()[0]
+            .stack_status()
+            .unwrap()
+            .as_str()
+            .to_string();
+        if status.ends_with("_IN_PROGRESS") {
+            continue;
+        }
+        assert!(
+            status == "CREATE_COMPLETE" || status == "UPDATE_COMPLETE",
+            "stack {stack} ended {status}"
+        );
+        return;
+    }
+}
+
+/// The whole of `verify` against a real CloudFormation stack and its SSM
+/// parameters, with the signed release and lists from a control plane: a
+/// stack created from the signed template passes, and the same stack
+/// updated to another template fails. Needs AWS credentials and
+/// `TEST_RESOURCE_PREFIX`; the stack is deleted afterwards.
+#[tokio::test]
+#[ignore = "needs AWS credentials"]
+async fn verify_reads_a_real_stack_and_catches_a_changed_template() {
+    let tag = std::env::var("TEST_RESOURCE_PREFIX").expect("set TEST_RESOURCE_PREFIX");
+    let stack = format!("{tag}-verify-{}", std::process::id());
+    let aws = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .load()
+        .await;
+    let cloudformation = aws_sdk_cloudformation::Client::new(&aws);
+
+    let control_plane = httpmock::MockServer::start_async().await;
+    let signed = release("production", 20, &template(), ("github-acme-app", 2));
+    control_plane
+        .mock_async(|when, then| {
+            when.method(httpmock::Method::GET).path("/v1/releases");
+            then.status(200).json_body(serde_json::json!({
+                "items": [{ "id": "rel_live", "signedStacks": { "aws": signed } }]
+            }));
+        })
+        .await;
+    control_plane
+        .mock_async(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path(format!("/v1/projects/{PROJECT}/signer-lists"));
+            then.status(200)
+                .json_body(serde_json::json!({ "items": [genesis()] }));
+        })
+        .await;
+    let run = {
+        let (aws, cloudformation, stack, url) = (
+            aws.clone(),
+            cloudformation.clone(),
+            stack.clone(),
+            control_plane.base_url(),
+        );
+        tokio::spawn(async move {
+            apply_stack(&cloudformation, &stack, &template(), &tag, false).await;
+            let observed = observe(&stack, None, &aws, &cloudformation, &url, None)
+                .await
+                .unwrap();
+            let lines = check(&observed, Utc::now()).unwrap();
+            let screen = render(&lines);
+            println!("{screen}");
+            assert!(lines.iter().all(|line| line.mark != Mark::Fail), "{screen}");
+            assert!(
+                screen.contains(&format!(
+                    "matches release rel_live · production · {}",
+                    sha256(&template())
+                )),
+                "{screen}"
+            );
+            assert!(screen.contains(&format!(":{stack}")), "{screen}");
+
+            let changed = template().replace(
+                "Resources:\n",
+                "Resources:\n  Extra:\n    Type: AWS::SSM::Parameter\n    Properties:\n      Type: String\n      Value: extra\n",
+            );
+            apply_stack(&cloudformation, &stack, &changed, &tag, true).await;
+            let observed = observe(&stack, None, &aws, &cloudformation, &url, None)
+                .await
+                .unwrap();
+            let lines = check(&observed, Utc::now()).unwrap();
+            let screen = render(&lines);
+            println!("{screen}");
+            let template_line = lines.iter().find(|line| line.label == "Template").unwrap();
+            assert_eq!(template_line.mark, Mark::Fail, "{screen}");
+        })
+    };
+    let outcome = run.await;
+    cloudformation
+        .delete_stack()
+        .stack_name(&stack)
+        .send()
+        .await
+        .unwrap();
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        match cloudformation
+            .describe_stacks()
+            .stack_name(&stack)
+            .send()
+            .await
+        {
+            Ok(described) => {
+                let status = described.stacks()[0]
+                    .stack_status()
+                    .unwrap()
+                    .as_str()
+                    .to_string();
+                if status == "DELETE_COMPLETE" {
+                    break;
+                }
+                assert!(!status.ends_with("_FAILED"), "deleting {stack}: {status}");
+            }
+            // Gone.
+            Err(_) => break,
+        }
+    }
+    outcome.expect("the verify run passed");
 }

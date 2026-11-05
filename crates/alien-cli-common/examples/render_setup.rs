@@ -37,15 +37,19 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let read = |path: &str| fs::read_to_string(path).unwrap_or_else(|error| panic!("{path}: {error}"));
+    let read =
+        |path: &str| fs::read_to_string(path).unwrap_or_else(|error| panic!("{path}: {error}"));
     let stack: Stack = serde_json::from_str(&read(stack)).expect("stack JSON");
     let settings: StackSettings = serde_json::from_str(&read(settings)).expect("settings JSON");
     let unused = StackSigning {
         fingerprint: String::new(),
         channel: String::new(),
     };
-    let (cloudformation, terraform, helm) =
-        (CfRegistry::built_in(), TfRegistry::built_in(), HelmRegistry::built_in());
+    let (cloudformation, terraform, helm) = (
+        CfRegistry::built_in(),
+        TfRegistry::built_in(),
+        HelmRegistry::built_in(),
+    );
     let options = SetupRenderOptions::builder()
         .signing(&unused)
         .cloudformation_registry(&cloudformation)

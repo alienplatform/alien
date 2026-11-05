@@ -66,9 +66,12 @@ fn projection(stack: &Value, platform: &str) -> Value {
             };
             resources.insert(id.clone(), normalized_entry(fields, platform));
             let config = fields.get("config").and_then(Value::as_object);
-            let kind = config.and_then(|config| config.get("type")).and_then(Value::as_str);
+            let kind = config
+                .and_then(|config| config.get("type"))
+                .and_then(Value::as_str);
             if let (Some(config), Some(kind)) = (config, kind) {
-                if fields.get("lifecycle") == Some(&json!("live")) && LIVE_WORKLOADS.contains(&kind) {
+                if fields.get("lifecycle") == Some(&json!("live")) && LIVE_WORKLOADS.contains(&kind)
+                {
                     let mut entry = fields.clone();
                     entry.insert("config".into(), Value::Object(live_config(config)));
                     live.insert(id.clone(), Value::Object(entry));
@@ -212,7 +215,13 @@ fn stable_json(value: &Value) -> String {
             keys.sort();
             let entries: Vec<String> = keys
                 .into_iter()
-                .map(|key| format!("{}:{}", Value::String(key.clone()), stable_json(&fields[key])))
+                .map(|key| {
+                    format!(
+                        "{}:{}",
+                        Value::String(key.clone()),
+                        stable_json(&fields[key])
+                    )
+                })
                 .collect();
             format!("{{{}}}", entries.join(","))
         }
