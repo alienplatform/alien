@@ -14,8 +14,8 @@ use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::embedded_config::DeployCliConfig;
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_signing::{
-    display_fingerprint, settings::names, InstallId, Kind, Ledger, ReleaseBody, SignedStatement,
-    SignerKind, SigningSettings, Trust,
+    display_fingerprint, settings::names, InstallId, Kind, Ledger, ReleaseBody, Role,
+    SignedStatement, SignerChain, SignerKind, SigningSettings, Trust,
 };
 use chrono::{DateTime, Utc};
 use clap::Args;
@@ -289,42 +289,37 @@ pub fn check(observed: &Observed, now: DateTime<Utc>) -> Result<Vec<Line>> {
         })?;
     lines.push(match running {
         None => line("Running", "nothing yet: no release has been accepted", Mark::Info),
-        Some(entry) => match verified
-            .iter()
-            .find(|(_, verified)| verified.digest == entry.digest)
-        {
-            Some((id, verified)) => line(
-                "Running",
-                format!(
-                    "release {id} · signed by {}",
-                    verified
-                        .signers
-                        .iter()
-                        .map(|id| label(id))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                Mark::Pass,
-            ),
-            None => {
-                let known = observed.releases.iter().find(|(_, statement)| {
-                    statement
-                        .open()
-                        .is_ok_and(|opened| opened.digest == entry.digest)
-                });
-                let text = match known {
-                    // It verified when the install accepted it; its signer
-                    // has since left the list, which doesn't stop it.
-                    Some((id, _)) => format!(
-                        "release {id} · its signer is no longer on the list; it keeps running until the next release"
-                    ),
-                    None => format!(
-                        "the release with digest {} (the control plane didn't return it)",
-                        entry.digest
-                    ),
-                };
-                line("Running", text, Mark::Info)
+        Some(entry) => match running_release(&trust, &settings, observed, &entry.digest, now) {
+            Ok((id, signers, still_trusted)) => {
+                let signed_by = signers
+                    .iter()
+                    .map(|id| label(id))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if still_trusted {
+                    line(
+                        "Running",
+                        format!("release {id} · signed by {signed_by} · {}", entry.digest),
+                        Mark::Pass,
+                    )
+                } else {
+                    // It verified against the list it names; its signer has
+                    // since left the list, which doesn't stop it.
+                    line(
+                        "Running",
+                        format!(
+                            "release {id} · signed by {signed_by}, no longer on the list; it keeps running until the next release · {}",
+                            entry.digest
+                        ),
+                        Mark::Info,
+                    )
+                }
             }
+            Err(reason) => line(
+                "Running",
+                format!("the release with digest {}: {reason}", entry.digest),
+                Mark::Fail,
+            ),
         },
     });
 
@@ -349,6 +344,77 @@ pub fn check(observed: &Observed, now: DateTime<Utc>) -> Result<Vec<Line>> {
         Mark::Info,
     ));
     Ok(lines)
+}
+
+/// The release the ledger says runs, checked from the statement the control
+/// plane returned for its digest: not deny-listed, a release of this project
+/// for this install's channel, signed with the release role by the list
+/// version it names. Returns its id (the control plane's name for it), its
+/// signers and whether they all still hold the release role now.
+fn running_release<'a>(
+    trust: &Trust,
+    settings: &SigningSettings,
+    observed: &'a Observed,
+    digest: &str,
+    now: DateTime<Utc>,
+) -> std::result::Result<(&'a str, Vec<String>, bool), String> {
+    trust
+        .keeps(digest)
+        .map_err(|_| "it is deny-listed on the current signer list".to_string())?;
+    let (id, opened) = observed
+        .releases
+        .iter()
+        .find_map(|(id, statement)| {
+            statement
+                .open()
+                .ok()
+                .filter(|opened| opened.digest == digest)
+                .map(|opened| (id.as_str(), opened))
+        })
+        .ok_or_else(|| "the control plane didn't return it, so it can't be checked".to_string())?;
+    if opened.kind != Kind::Release || opened.project != trust.project() {
+        return Err(format!(
+            "it is a {} statement of project {}, not a release of {}",
+            opened.kind.as_str(),
+            opened.project,
+            trust.project()
+        ));
+    }
+    let body: ReleaseBody = opened
+        .body()
+        .map_err(|error| format!("its body doesn't parse: {error}"))?;
+    if body.channel != settings.channel {
+        return Err(format!(
+            "it is signed for channel {}, but this install follows {}",
+            body.channel, settings.channel
+        ));
+    }
+    let chain = trust.chain();
+    let version = opened.signer_list_version;
+    if version == 0 || version > chain.current().version {
+        return Err(format!(
+            "it names signer list v{version}, which the chain doesn't hold"
+        ));
+    }
+    let named = SignerChain::from_statements(
+        &settings.fingerprint,
+        &chain.statements()[..version as usize],
+        now,
+    )
+    .map_err(|error| format!("signer list v{version} doesn't verify: {error}"))?;
+    let signers = named
+        .current()
+        .check_signatures(&opened, Role::Release)
+        .map_err(|error| {
+            format!("it isn't signed by release keys of signer list v{version}: {error}")
+        })?;
+    let still_trusted = signers.iter().all(|id| {
+        chain
+            .current()
+            .signer(id)
+            .is_some_and(|(_, roles)| roles.contains(&Role::Release))
+    });
+    Ok((id, signers.into_iter().collect(), still_trusted))
 }
 
 /// The screen for `lines`.

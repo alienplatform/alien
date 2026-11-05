@@ -211,8 +211,10 @@ fn marks(lines: &[Line]) -> Vec<(&'static str, Mark)> {
 
 #[test]
 fn a_protected_stack_that_matches_its_signed_release_passes_on_one_screen() {
-    let lines = check(&observed(), now()).unwrap();
+    let observed = observed();
+    let lines = check(&observed, now()).unwrap();
     let display = display_fingerprint(&fingerprint());
+    let digest = observed.releases[0].1.open().unwrap().digest;
     assert_eq!(
         render(&lines),
         format!(
@@ -220,7 +222,7 @@ fn a_protected_stack_that_matches_its_signed_release_passes_on_one_screen() {
              Signing fingerprint  {display}   (set by this stack, 2026-11-04)\n\
              Template             matches release 2026-11-04.3 · production  ✓\n\
              Parameters           fingerprint pinned · 2 customer choices allowed  ✓\n\
-             Running              release 2026-11-04.3 · signed by GitHub Actions (acme/app)  ✓\n\
+             Running              release 2026-11-04.3 · signed by GitHub Actions (acme/app) · {digest}  ✓\n\
              Trusted keys         alice@acme.com, GitHub Actions (acme/app), recovery  (list v1, expires 2027-01-24)\n"
         )
     );
@@ -376,6 +378,67 @@ fn a_release_whose_signer_was_removed_keeps_running_and_says_so() {
         lines[4].text
     );
     assert!(lines[5].text.contains("list v2"), "{}", lines[5].text);
+}
+
+fn running(observed: &Observed) -> Line {
+    let lines = check(observed, now()).unwrap();
+    lines
+        .into_iter()
+        .find(|line| line.label == "Running")
+        .expect("a Running line")
+}
+
+#[test]
+fn a_running_release_that_doesnt_verify_now_fails() {
+    // The control plane withholds the statement the ledger names.
+    let mut withheld = observed();
+    withheld.releases.retain(|(id, _)| id != "2026-11-04.3");
+    let line = running(&withheld);
+    assert_eq!(line.mark, Mark::Fail);
+    assert!(line.text.contains("didn't return it"), "{}", line.text);
+
+    // An admin deny-listed it since.
+    let mut denied = observed();
+    let digest = denied.releases[0].1.open().unwrap().digest;
+    let mut body: SignerListBody = genesis().open().unwrap().body().unwrap();
+    body.previous = Some(genesis().open().unwrap().digest);
+    body.deny = vec![digest];
+    denied.signer_lists.push(signed(
+        Kind::SignerList,
+        2,
+        1,
+        Some(now() + Duration::days(85)),
+        body,
+        &[("alice-mbp", 1)],
+    ));
+    let line = running(&denied);
+    assert_eq!(line.mark, Mark::Fail);
+    assert!(line.text.contains("deny-listed"), "{}", line.text);
+
+    // The ledger names a release signed for another channel.
+    let mut other_channel = observed();
+    let dev = other_channel.releases[1].1.clone();
+    other_channel.ledger = Some(ledger(Some(&dev)));
+    let line = running(&other_channel);
+    assert_eq!(line.mark, Mark::Fail);
+    assert!(
+        line.text.contains("signed for channel dev"),
+        "{}",
+        line.text
+    );
+
+    // The control plane returns the running payload signed by a key that
+    // isn't CI's, under CI's id.
+    let mut forged = observed();
+    forged.releases[0].1 = release("production", 20, &template(), ("github-acme-app", 9));
+    let line = running(&forged);
+    assert_eq!(line.mark, Mark::Fail);
+    assert!(
+        line.text
+            .contains("isn't signed by release keys of signer list v1"),
+        "{}",
+        line.text
+    );
 }
 
 #[test]
