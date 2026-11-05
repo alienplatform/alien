@@ -76,9 +76,9 @@ pub fn aws_management_actions(actions: &[String], binding: &AwsBindingSpec) -> V
                 key.eq_ignore_ascii_case("iam:PassedToService")
                     && match value {
                         AwsConditionValue::String(service) => service == "ec2.amazonaws.com",
-                        AwsConditionValue::List(services) => {
-                            services.iter().any(|service| service == "ec2.amazonaws.com")
-                        }
+                        AwsConditionValue::List(services) => services
+                            .iter()
+                            .any(|service| service == "ec2.amazonaws.com"),
                     }
             })
         })
@@ -232,8 +232,15 @@ pub fn azure_write_or_delete(action: &str) -> bool {
 /// Whether the Azure `action` writes or deletes what runs code or a Key Vault, or is a wildcard
 /// reaching such writes: a protected install's management identity holds none of these.
 pub fn azure_changes_what_runs(action: &str) -> bool {
+    // A pattern that starts with a wildcard (`*/write`) names no provider, so it reaches every
+    // provider's writes unless it only reads.
+    if action.starts_with('*') {
+        return !action.to_ascii_lowercase().ends_with("/read");
+    }
     // A vault write could turn the signing vault to access policies and open the ledger.
-    let vault = action.to_ascii_lowercase().starts_with("microsoft.keyvault/vaults");
+    let vault = action
+        .to_ascii_lowercase()
+        .starts_with("microsoft.keyvault/vaults");
     if azure_write_or_delete(action) {
         return vault || !azure_runs_no_code(action);
     }
@@ -246,4 +253,32 @@ pub fn azure_changes_what_runs(action: &str) -> bool {
             let path = path.to_ascii_lowercase();
             path.starts_with(&prefix) || prefix.starts_with(&path)
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::azure_changes_what_runs;
+
+    #[test]
+    fn azure_patterns_that_reach_what_runs_are_dropped() {
+        for action in [
+            "*",
+            "*/write",
+            "*/delete",
+            "Microsoft.Compute/*",
+            "Microsoft.Compute/virtualMachineScaleSets/write",
+            "Microsoft.Resources/tags/write",
+            "Microsoft.KeyVault/vaults/write",
+        ] {
+            assert!(azure_changes_what_runs(action), "{action}");
+        }
+        for action in [
+            "Microsoft.Storage/storageAccounts/write",
+            "Microsoft.Compute/virtualMachineScaleSets/read",
+            "Microsoft.Network/virtualNetworks/write",
+            "*/read",
+        ] {
+            assert!(!azure_changes_what_runs(action), "{action}");
+        }
+    }
 }
