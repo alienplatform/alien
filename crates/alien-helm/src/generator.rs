@@ -1997,6 +1997,16 @@ fn generate_operator_manifest_inner(
     image_identity: Option<OperatorImageIdentityOptions<'_>>,
     dynamic_containers: bool,
 ) -> Result<String> {
+    if options
+        .stack_settings
+        .is_some_and(|settings| settings.signing.is_some())
+    {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: "An Operator manifest has no signing settings ConfigMaps or locked RBAC; \
+                      install a stack with release signing from its signed Helm chart"
+                .to_string(),
+        }));
+    }
     if options.format == OperatorOutputFormat::RawManifest && credentials_secret_name.is_none() {
         validate_runtime_encryption_key(options.encryption_key)?;
     }

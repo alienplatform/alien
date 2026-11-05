@@ -28,10 +28,10 @@ pub use generator::{
     generate_operator_manifest_with_image_identity, generate_product_helm_chart,
     generate_product_helm_chart_with_image_identity, generate_product_operator_manifest,
     generate_product_operator_manifest_with_image_identity, generate_signed_helm_chart,
-    render_manager_fetch_values, HelmChart,
-    HelmOptions, ManagerFetchHelmValuesOptions, OperatorImageIdentityOptions,
-    OperatorLogCollectorOptions, OperatorManifestOptions, OperatorOutputFormat, OperatorPermission,
-    OperatorScope, ProductOperatorManifestOptions, OPERATOR_RBAC_POLICY_VERSION,
+    render_manager_fetch_values, HelmChart, HelmOptions, ManagerFetchHelmValuesOptions,
+    OperatorImageIdentityOptions, OperatorLogCollectorOptions, OperatorManifestOptions,
+    OperatorOutputFormat, OperatorPermission, OperatorScope, ProductOperatorManifestOptions,
+    OPERATOR_RBAC_POLICY_VERSION,
 };
 pub use package::{
     apply_package_defaults, package_chart, LogCollectorDefault, OperatorImageDefault,
