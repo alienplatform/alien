@@ -2,20 +2,19 @@
 """Check on real Azure what a protected setup's deny keeps from the management identity.
 
 A protected Terraform module puts the install's resource group under a subscription deployment
-stack whose deny settings refuse every write and delete in the group to all principals but the
-verifier and the principal running setup. This check builds the same deployment stack around a
-group holding a machine scale set (capacity 0, so nothing runs) and tries, as a principal that
-is not excluded (standing in for management, which never holds
-`deploymentStacks/manageDenySetting/action`), what a compromised control plane would try:
+stack whose deny settings refuse writes and deletes to all principals but the verifier and the
+principal running setup. This check builds the same deployment stack around a group holding a
+machine scale set (capacity 0, so nothing runs) and the signing vault, and tries, as a principal
+that is not excluded (standing in for management, which never holds
+`deploymentStacks/manageDenySetting/action`), what a compromised control plane would try.
 
-  * change the scale set's custom data (what its machines boot with);
-  * scale it;
-  * change the group's `signing-fingerprint` tag;
-  * turn the signing vault to access policies, which would open its secrets.
-
-Without the deployment stack each succeeds; with it each fails with
-DenyAssignmentAuthorizationFailed. The calling principal plays management: it is not in
-`excludedPrincipals` (the stack excludes only a stand-in verifier identity).
+Without the stack everything succeeds. With it, writing the group itself (where the
+`signing-fingerprint` tag lives) and deleting it fail with DenyAssignmentAuthorizationFailed.
+Azure does not carry the deny to the resources in the group: the deny assignment it creates
+says `doNotApplyToChildScopes` even though the stack asks for child scopes. The check records
+that the scale set's custom data, its scale, the tags extension and the vault stay writable to a
+principal that holds the permissions, which is why protected management roles leave those
+writes out (`alien_permissions::generators::verifier_owned::azure_changes_what_runs`).
 
 Everything is named with --prefix and tagged with --tag, and deleted before exit; the run then
 lists what still carries the prefix and fails if anything does.
@@ -176,18 +175,20 @@ class Run:
         if done["properties"]["provisioningState"].lower() != "succeeded":
             raise SystemExit(f"deployment stack failed: {done['properties'].get('error')}")
         # Deny assignments reach authorization a few minutes after the stack succeeds. Write the
-        # group's tags unchanged until that is refused, and record how long it took.
+        # group unchanged until that is refused, and record how long it took.
         status, group, _ = self.call("GET", self.rg, api="2021-04-01")
-        same = {"operation": "Merge", "properties": {"tags": group["tags"]}}
+        same = {"tags": group["tags"]}
         started = time.time()
         while True:
-            status, body, _ = self.call("PATCH", f"{self.rg}/providers/Microsoft.Resources/tags/default", same, api="2021-04-01")
+            status, body, _ = self.call("PATCH", self.rg, same, api="2021-04-01")
             if self.code(status, body) == "DenyAssignmentAuthorizationFailed":
                 break
             if time.time() - started > 1800:
                 raise SystemExit("the deny never applied to an unchanged tag write")
             time.sleep(30)
         self.record("deny-applied-after", {"seconds": round(time.time() - started)})
+        status, assignments, _ = self.call("GET", f"{self.rg}/providers/Microsoft.Authorization/denyAssignments", api="2022-04-01")
+        self.record("deny-assignments", assignments)
 
     def unprotect(self):
         status, body, _ = self.call("DELETE", f"{self.stack}?actionOnUnmanage=detachAll&bypassStackOutOfSyncError=true")
@@ -207,22 +208,28 @@ class Run:
 
     def attempts(self, variant):
         protected = variant == "protected"
-        refused = "DenyAssignmentAuthorizationFailed" if protected else "Success"
+        denied = "DenyAssignmentAuthorizationFailed" if protected else "Success"
+        settings = json.dumps({"fingerprint": "SHA256:" + "00" * 32, "prefix": self.args.prefix, "channel": "production"}, separators=(",", ":"))
+        status, group, _ = self.call("GET", self.rg, api="2021-04-01")
+        status, body, _ = self.call("PATCH", self.rg, {"tags": {**group["tags"], "signing-fingerprint": settings}}, api="2021-04-01")
+        self.expect(variant, "change-settings-on-the-group", denied, self.code(status, body), body)
+        if status < 300:
+            self.call("PATCH", self.rg, {"tags": group["tags"]}, api="2021-04-01")
+        # Not reached by the deny (see the module docs); the roles leave these out instead.
+        status, body, _ = self.call("PATCH", f"{self.rg}/providers/Microsoft.Resources/tags/default", {"operation": "Merge", "properties": {"tags": {"probe": variant}}}, api="2021-04-01")
+        self.expect(variant, "tags-extension-not-under-deny", "Success", self.code(status, body), body)
         status, body, _ = self.call("PATCH", self.vmss, {"properties": {"virtualMachineProfile": {"osProfile": {"customData": base64.b64encode(f"unsigned {variant}".encode()).decode()}}}}, api="2024-07-01")
-        self.expect(variant, "change-machine-custom-data", refused, self.code(status, body), body)
+        self.expect(variant, "scale-set-not-under-deny", "Success", self.code(status, body), body)
         if status < 300:
             self.wait(self.vmss, "2024-07-01", lambda s, b: b.get("properties", {}).get("provisioningState") == "Succeeded")
-        status, body, _ = self.call("PATCH", self.vmss, {"sku": {"name": "Standard_B1s", "tier": "Standard", "capacity": 0}}, api="2024-07-01")
-        self.expect(variant, "scale-machines", refused, self.code(status, body), body)
-        if status < 300:
-            self.wait(self.vmss, "2024-07-01", lambda s, b: b.get("properties", {}).get("provisioningState") == "Succeeded")
-        status, body, _ = self.call("PATCH", f"{self.rg}/providers/Microsoft.Resources/tags/default", {"operation": "Merge", "properties": {"tags": {"signing-fingerprint": json.dumps({"fingerprint": "SHA256:" + "00" * 32, "prefix": self.args.prefix, "channel": "production"}, separators=(",", ":"))}}}, api="2021-04-01")
-        self.expect(variant, "change-signing-settings-tag", refused, self.code(status, body), body)
         status, body, _ = self.call("PATCH", self.vault, {"properties": {"enableRbacAuthorization": False}}, api="2023-07-01")
-        self.expect(variant, "open-the-signing-vault", refused, self.code(status, body), body)
+        self.expect(variant, "vault-not-under-deny", "Success", self.code(status, body), body)
         if status < 300:
             self.call("PATCH", self.vault, {"properties": {"enableRbacAuthorization": True}}, api="2023-07-01")
             self.wait(self.vault, "2023-07-01", lambda s, b: b.get("properties", {}).get("enableRbacAuthorization") is True)
+        if protected:
+            status, body, _ = self.call("DELETE", self.rg, api="2021-04-01")
+            self.expect(variant, "delete-the-group", denied, self.code(status, body), body)
 
     def cleanup(self):
         failures = []

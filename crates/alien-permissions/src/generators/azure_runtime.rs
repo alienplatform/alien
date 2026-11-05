@@ -1,7 +1,7 @@
 use crate::{
     error::{ErrorData, Result},
     generators::{
-        verifier_owned::azure_verifier_owned_action,
+        verifier_owned::{azure_changes_what_runs, azure_verifier_owned_action},
         labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
     },
     variables::VariableInterpolator,
@@ -789,11 +789,17 @@ impl Default for AzureRuntimePermissionsGenerator {
 }
 
 /// The actions of a catalog entry the rendered identity receives: all of them, except that a
-/// protected install's management identity never receives what only the verifier may do.
+/// protected install's management identity never receives what only the verifier may do, nor
+/// any write or delete of what runs code. The deployment stack's deny holds the resource group
+/// itself, but Azure doesn't carry it to the resources in the group, so the roles must leave
+/// those writes out.
 fn granted_actions(actions: &[String], context: &PermissionContext) -> Vec<String> {
     actions
         .iter()
-        .filter(|action| !(context.signing_protected && azure_verifier_owned_action(action)))
+        .filter(|action| {
+            !(context.signing_protected
+                && (azure_verifier_owned_action(action) || azure_changes_what_runs(action)))
+        })
         .cloned()
         .collect()
 }
