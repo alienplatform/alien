@@ -12,9 +12,11 @@
 //!
 //! Nothing that picks code or the Operator's rights is left to values: the Operator runs the
 //! image digest the vendor's signed release names, every other image in the chart's values is
-//! pinned by digest in the schema, workload RBAC is the signed stack's, and chart-provisioned
-//! databases (picked by tag) stay off. Registries and tags stay choosable, for mirrors; a
-//! digest names the same bytes in any registry.
+//! pinned by digest, workload RBAC is the signed stack's, and chart-provisioned databases
+//! (picked by tag) stay off. Templates render each image as `repository@<digest>` through
+//! `quote`, with the digest written into the template, and the schema holds repositories to the
+//! image reference grammar. Registries stay choosable, for mirrors; a digest names the same
+//! bytes in any registry.
 
 use alien_core::{ErrorData, Result, StackSettings};
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -63,6 +65,22 @@ const CLEANUP_IMAGE_VALUES: &str =
     "      image:\n        repository: alpine/k8s\n        tag: \"1.32.0\"\n";
 const METRICS_SERVER_IMAGE_VALUES: &str =
     "    image: registry.k8s.io/metrics-server/metrics-server:v0.8.1\n";
+
+/// Image references the generator renders inside a quoted string, by template. A value with
+/// `"` or `#` could end that string and drop what follows, so a protected chart renders
+/// `repository@<digest>` through `quote`, with the digest written into the template.
+const OPERATOR_IMAGE_TEMPLATE: &str =
+    r#"image: "{{ .Values.runtime.image.repository }}:{{ .Values.runtime.image.tag }}""#;
+const LOG_COLLECTOR_IMAGE_TEMPLATE: &str =
+    r#"image: "{{ .Values.logCollector.image.repository }}:{{ .Values.logCollector.image.tag }}""#;
+const CLEANUP_IMAGE_TEMPLATE: &str = r#"image: "{{ dig "image" "repository" "alpine/k8s" $cleanup }}:{{ dig "image" "tag" "1.32.0" $cleanup }}""#;
+
+/// A registry host (with an optional port) and repository path, as image references allow
+/// them: no tag, digest, quote, comment or whitespace.
+const REPOSITORY_PATTERN: &str = r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*(?::[0-9]+)?/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*";
+
+/// An image tag.
+const TAG_PATTERN: &str = "[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}";
 
 /// Add the signing values, schema, ConfigMaps and namespace read to a chart when the stack
 /// settings pin signing. Unprotected charts are left exactly as they are.
@@ -135,6 +153,8 @@ signing:
                 message: "the chart's values.yaml is not YAML".to_string(),
             })?;
 
+    pin_templates(files, &defaults, &pins.operator_digest)?;
+
     let schema = file(files, "values.schema.json")?;
     let mut document: Value = serde_json::from_str(schema).into_alien_error().context(
         ErrorData::JsonSerializationFailed {
@@ -153,6 +173,77 @@ signing:
         "templates/signing.yaml".to_string(),
         signing_tpl(&checked.channel),
     );
+    Ok(())
+}
+
+/// Render every image from values as `repository@<digest>`, quoted, with the digest the chart
+/// pins, and refuse a chart that still interpolates a value inside a quoted image string.
+fn pin_templates(
+    files: &mut IndexMap<String, String>,
+    defaults: &Value,
+    operator_digest: &str,
+) -> Result<()> {
+    let log_collector_digest = defaults["logCollector"]["image"]["tag"]
+        .as_str()
+        .and_then(|tag| tag.rsplit_once('@'))
+        .map(|(_, digest)| digest)
+        .filter(|digest| is_digest(digest))
+        .ok_or_else(|| missing("values.yaml logCollector.image digest"))?;
+    let cleanup_digest = CLEANUP_IMAGE_TAG
+        .rsplit_once('@')
+        .map(|(_, digest)| digest)
+        .ok_or_else(|| missing("the cleanup image digest"))?;
+    let pinned = |repository: &str, digest: &str| {
+        format!(r#"image: {{{{ printf "%s@%s" {repository} "{digest}" | quote }}}}"#)
+    };
+    for (path, template, replacement) in [
+        (
+            "templates/deployment.yaml",
+            OPERATOR_IMAGE_TEMPLATE,
+            pinned(".Values.runtime.image.repository", operator_digest),
+        ),
+        (
+            "templates/whitelabeled-log-collector-daemonset.yaml",
+            LOG_COLLECTOR_IMAGE_TEMPLATE,
+            pinned(
+                ".Values.logCollector.image.repository",
+                log_collector_digest,
+            ),
+        ),
+        (
+            "templates/cleanup-job.yaml",
+            CLEANUP_IMAGE_TEMPLATE,
+            pinned(
+                r#"(dig "image" "repository" "alpine/k8s" $cleanup)"#,
+                cleanup_digest,
+            ),
+        ),
+        (
+            "templates/runtime-cleanup-history-prune.yaml",
+            CLEANUP_IMAGE_TEMPLATE,
+            pinned(
+                r#"(dig "image" "repository" "alpine/k8s" $cleanup)"#,
+                cleanup_digest,
+            ),
+        ),
+    ] {
+        replace_once(file(files, path)?, template, &replacement)?;
+    }
+    for (path, contents) in files.iter() {
+        if !path.starts_with("templates/") {
+            continue;
+        }
+        if let Some(line) = contents
+            .lines()
+            .find(|line| line.trim_start().starts_with("image:") && line.contains("\"{{"))
+        {
+            return Err(refused(format!(
+                "{path} renders an image from values inside a quoted string ({}), which a \
+                 value could end early; a protected chart can't pin it",
+                line.trim()
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -279,7 +370,14 @@ fn pin_schema(schema: &mut Value, defaults: &Value, fingerprint: &str) -> Result
                     field.to_string(),
                     json!({
                         "type": "string",
-                        "pattern": format!("^[A-Za-z0-9_][A-Za-z0-9_.-]{{0,127}}@{digest}$"),
+                        "pattern": format!("^{TAG_PATTERN}@{digest}$"),
+                    }),
+                );
+                image_properties.insert(
+                    "repository".to_string(),
+                    json!({
+                        "type": "string",
+                        "pattern": format!("^{REPOSITORY_PATTERN}$"),
                     }),
                 );
                 node["required"] = json!(["repository", "tag"]);
@@ -287,7 +385,7 @@ fn pin_schema(schema: &mut Value, defaults: &Value, fingerprint: &str) -> Result
             None => {
                 *schema_at(schema, &path)? = json!({
                     "type": "string",
-                    "pattern": format!("^[^@\\s]+@{digest}$"),
+                    "pattern": format!("^{REPOSITORY_PATTERN}(?::{TAG_PATTERN})?@{digest}$"),
                 });
             }
         }
@@ -534,6 +632,25 @@ mod tests {
         let error = add_signing(&mut files, &protected(), Some(&pins)).unwrap_err();
         assert!(
             error.to_string().contains("image value 'extra.image'"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_protected_render_refuses_an_image_interpolated_inside_a_string() {
+        let mut files = render(StackSettings::default(), None).unwrap().files;
+        files.insert(
+            "templates/extra.yaml".to_string(),
+            "spec:\n  image: \"{{ .Values.extra.repository }}:v1\"\n".to_string(),
+        );
+        let pins = SignedChartPins {
+            operator_digest: DIGEST.to_string(),
+        };
+        let error = add_signing(&mut files, &protected(), Some(&pins)).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("templates/extra.yaml renders an image from values"),
             "{error}"
         );
     }

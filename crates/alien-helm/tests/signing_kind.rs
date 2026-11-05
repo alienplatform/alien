@@ -22,6 +22,8 @@ const OPERATOR_DIGEST: &str =
 const UNSIGNED_DIGEST: &str =
     "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const RELEASE: &str = "shop";
+/// Ends the template's quoted image string and comments out the rest of the line.
+const EVIL_REPOSITORY: &str = "evil.example/operator:unsigned\" #";
 
 struct Cluster {
     kubeconfig: String,
@@ -264,7 +266,7 @@ fn protected_chart_keeps_signing_state_and_locks_the_operator() {
     assert_eq!(ledger, Ledger::new(RELEASE));
     assert_eq!(
         operator_image(&cluster, namespace),
-        format!("registry.example.com/deployment/operator:latest@{OPERATOR_DIGEST}")
+        format!("registry.example.com/deployment/operator@{OPERATOR_DIGEST}")
     );
 
     // R14 on: the Operator's ServiceAccount can't rewrite its settings, by any verb.
@@ -376,6 +378,23 @@ fn protected_chart_keeps_signing_state_and_locks_the_operator() {
             format!("runtime.image.tag=latest@{UNSIGNED_DIGEST}"),
             "runtime.image.tag",
         ),
+        // A repository that ends the quoted image string and comments out the digest.
+        (
+            format!("runtime.image.repository={EVIL_REPOSITORY}"),
+            "runtime.image.repository",
+        ),
+        (
+            format!("logCollector.image.repository={EVIL_REPOSITORY}"),
+            "logCollector.image.repository",
+        ),
+        (
+            format!("runtime.cleanup.onUninstall.image.repository={EVIL_REPOSITORY}"),
+            "runtime.cleanup.onUninstall.image.repository",
+        ),
+        (
+            format!("runtime.image.repository=evil.example/operator@{UNSIGNED_DIGEST}"),
+            "runtime.image.repository",
+        ),
         (
             "runtime.image.tag=unsigned".to_string(),
             "runtime.image.tag",
@@ -415,7 +434,7 @@ fn protected_chart_keeps_signing_state_and_locks_the_operator() {
     );
     assert_eq!(
         operator_image(&cluster, namespace),
-        format!("registry.example.com/deployment/operator:latest@{OPERATOR_DIGEST}")
+        format!("registry.example.com/deployment/operator@{OPERATOR_DIGEST}")
     );
     // A mirror serves the same digest: the registry and tag label may change.
     cluster.ok(
@@ -434,7 +453,7 @@ fn protected_chart_keeps_signing_state_and_locks_the_operator() {
     );
     assert_eq!(
         operator_image(&cluster, namespace),
-        format!("mirror.example.com/operator:1.4.0@{OPERATOR_DIGEST}")
+        format!("mirror.example.com/operator@{OPERATOR_DIGEST}")
     );
 
     // Uninstall keeps both signing ConfigMaps; a reinstall adopts them with the ledger intact.
@@ -486,6 +505,22 @@ fn unprotected_chart_leaves_the_operator_and_its_image_open() {
     assert_eq!(
         operator_image(&cluster, namespace),
         "attacker.example.com/operator:unsigned"
+    );
+    // The same through the repository alone: the value ends the quoted string.
+    cluster.ok(
+        "helm",
+        &install(
+            chart,
+            namespace,
+            &[
+                "--set",
+                &format!("runtime.image.repository={EVIL_REPOSITORY}"),
+            ],
+        ),
+    );
+    assert_eq!(
+        operator_image(&cluster, namespace),
+        "evil.example/operator:unsigned"
     );
 
     // R14 off: the Operator's ServiceAccount may rewrite a ConfigMap of that name.
