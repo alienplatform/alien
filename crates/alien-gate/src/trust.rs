@@ -178,7 +178,7 @@ fn kept<B: serde::de::DeserializeOwned>(
 }
 
 /// `release` verified for this install, or kept at its floor.
-fn verify_or_keep_release(
+pub(crate) fn verify_or_keep_release(
     trust: &Trust,
     ledger: &Ledger,
     release: &SignedStatement,

@@ -78,6 +78,25 @@ fn stack(image: &str, message: &str, deployer_env: &str) -> Result<Stack, Error>
     }))?)
 }
 
+/// The app linked to a storage resource `data` outside the cluster, whose
+/// binding comes from signed config.
+fn stack_with_data(image: &str, message: &str) -> Result<Stack, Error> {
+    let mut stack = serde_json::to_value(stack(image, message, "DATABASE_URL")?)?;
+    let mut data = serde_json::to_value(alien_core::Storage::new("data".to_string()).build())?;
+    data["type"] = serde_json::json!(alien_core::Storage::RESOURCE_TYPE.to_string());
+    stack["resources"]["data"] = serde_json::json!({
+        "config": data,
+        "dependencies": [],
+        "lifecycle": "frozen",
+    });
+    stack["resources"]["app"]["config"]["links"] =
+        serde_json::json!([alien_core::ResourceRef::new(
+            alien_core::Storage::RESOURCE_TYPE,
+            "data"
+        )]);
+    Ok(serde_json::from_value(stack)?)
+}
+
 fn release_options(channel: &str) -> ReleaseOptions {
     ReleaseOptions {
         channel: channel.to_string(),
@@ -517,6 +536,44 @@ fn main() -> Result<(), Error> {
             &[],
         )?),
     )?;
+    // Bindings: the signed config binds `data`; the manager points it elsewhere.
+    let twelve = stack_with_data(image_b, "release-12")?;
+    let r12 = signed(&twelve, "production", 12, 2, "alice-laptop", &laptop)?;
+    let c3 = config(
+        3,
+        2,
+        "alice-laptop",
+        &laptop,
+        serde_json::json!({"inputs": {"logLevel": "warn"},
+                           "bindings": {"data": {"service": "s3", "bucketName": "shop-data"}}}),
+    )?;
+    write(
+        &dir,
+        "binding-signed",
+        &sync(target(
+            "release-12",
+            Some(r12.clone()),
+            twelve.clone(),
+            &both,
+            Some(&c3),
+            &[],
+            &[],
+        )?),
+    )?;
+    let mut redirect = target(
+        "binding-redirect",
+        Some(r12),
+        twelve,
+        &both,
+        Some(&c3),
+        &[],
+        &[],
+    )?;
+    redirect.config.external_bindings.insert(
+        "data",
+        alien_core::ExternalBinding::Storage(alien_core::StorageBinding::s3("attacker-bucket")),
+    );
+    write(&dir, "binding-redirect", &sync(redirect))?;
     println!("{}", out.display());
     Ok(())
 }

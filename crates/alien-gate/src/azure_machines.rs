@@ -18,13 +18,20 @@ use alien_error::AlienError;
 use alien_signing::ReleaseBody;
 
 use crate::error::{ErrorData, Result};
-use crate::machines::{roll_basics, ImageFacts, ImagePins, RollBasics, RollMachines};
+use crate::machines::{
+    check_setup_ids, roll_basics, ImageFacts, ImagePins, RollBasics, RollMachines,
+};
 use crate::plan::Place;
 
 /// API version of the scale set calls.
 pub const VMSS_API: &str = "2024-07-01";
 /// API version of the community gallery reads.
 pub const GALLERY_API: &str = "2023-07-03";
+/// API version of the user-assigned identity reads.
+pub const IDENTITY_API: &str = "2023-01-31";
+/// Scale set tag naming the client id of the identity a machine runs its
+/// agent as, among the identities attached to it.
+pub const MACHINE_IDENTITY_TAG: &str = "machine-identity-client-id";
 
 fn refused(reason: impl Into<String>) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::Refused {
@@ -40,6 +47,8 @@ pub trait AzureMachineApi: Send + Sync {
     async fn get(&self, path: &str) -> Result<Option<Value>>;
     /// PUT `body` to `path` and wait until it is provisioned.
     async fn put(&self, path: &str, body: &Value) -> Result<Value>;
+    /// POST `body` to the action `path`; returns once ARM accepts it.
+    async fn post(&self, path: &str, body: &Value) -> Result<()>;
 }
 
 fn is_azure_name(name: &str) -> bool {
@@ -141,6 +150,7 @@ fn machine_network(place: &Place) -> Result<(&str, Option<&str>, &str)> {
 }
 
 /// The scale set as the verifier writes it.
+#[allow(clippy::too_many_arguments)]
 pub fn scale_set_body(
     place: &Place,
     basics: &RollBasics,
@@ -148,8 +158,10 @@ pub fn scale_set_body(
     location: &str,
     capacity: u32,
     ssh_key: &str,
+    identities: &[String],
+    machine_client_id: &str,
 ) -> Result<Value> {
-    let (subnet, security_group, identity) = machine_network(place)?;
+    let (subnet, security_group, _) = machine_network(place)?;
     let mut interface = json!({
         "primary": true,
         "ipConfigurations": [{"name": "primary", "properties": {"subnet": {"id": subnet}}}],
@@ -169,17 +181,22 @@ pub fn scale_set_body(
     if let Some(size) = basics.group.data_disk_size_gib() {
         storage["dataDisks"] = json!([{"lun": 0, "createOption": "Empty", "diskSizeGB": size}]);
     }
-    let tags: serde_json::Map<String, Value> = basics
+    let mut tags: serde_json::Map<String, Value> = basics
         .tags
         .iter()
         .map(|(key, value)| (key.clone(), json!(value)))
+        .collect();
+    tags.insert(MACHINE_IDENTITY_TAG.to_string(), json!(machine_client_id));
+    let identities: serde_json::Map<String, Value> = identities
+        .iter()
+        .map(|id| (id.clone(), json!({})))
         .collect();
     let prefix: String = basics.name.chars().take(15).collect();
     Ok(json!({
         "location": location,
         "tags": tags,
         "sku": {"name": basics.instance_type, "tier": "Standard", "capacity": capacity},
-        "identity": {"type": "UserAssigned", "userAssignedIdentities": {identity: {}}},
+        "identity": {"type": "UserAssigned", "userAssignedIdentities": identities},
         "properties": {
             "upgradePolicy": {"mode": "Manual"},
             "overprovision": false,
@@ -243,6 +260,19 @@ pub async fn roll(
         .ok_or_else(not_found)?;
     let facts = image_facts(&request.machine_image, &definition_body, &version_body)?;
     let basics = roll_basics(place, release, request, pins, &facts)?;
+    // The caller may name the network it expects; it must be setup's.
+    let (subnet, security_group, _) = machine_network(place)?;
+    check_setup_ids(
+        "subnet",
+        request.subnet_ids.as_deref(),
+        &[subnet.to_string()],
+    )?;
+    let security_groups: Vec<String> = security_group.map(str::to_string).into_iter().collect();
+    check_setup_ids(
+        "network security group",
+        request.security_group_ids.as_deref(),
+        &security_groups,
+    )?;
     let set_path = format!(
         "{group_path}/providers/Microsoft.Compute/virtualMachineScaleSets/{}?api-version={VMSS_API}",
         basics.name
@@ -261,6 +291,34 @@ pub async fn roll(
             &basics.group,
         ),
     };
+    // The machine's own identity, and the ones setup created for the signed
+    // stack's service accounts, `<prefix>-<service account>`.
+    let (_, _, machine_identity) = machine_network(place)?;
+    let client_id = api
+        .get(&format!("{machine_identity}?api-version={IDENTITY_API}"))
+        .await?
+        .and_then(|identity| {
+            identity["properties"]["clientId"]
+                .as_str()
+                .map(str::to_string)
+        })
+        .ok_or_else(|| {
+            refused(format!(
+                "identity {machine_identity} does not exist or has no client id"
+            ))
+        })?;
+    let stack =
+        alien_core::release_statement::signed_stack(release, alien_core::Platform::Azure)
+            .map_err(|error| refused(format!("the release carries no usable stack: {error}")))?;
+    let mut identities = vec![machine_identity.to_string()];
+    for (id, entry) in stack.resources() {
+        if entry.config.resource_type() == alien_core::ServiceAccount::RESOURCE_TYPE {
+            identities.push(format!(
+                "{group_path}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}-{id}",
+                place.prefix
+            ));
+        }
+    }
     let body = scale_set_body(
         place,
         &basics,
@@ -268,6 +326,8 @@ pub async fn roll(
         &location,
         capacity,
         &unusable_ssh_key()?,
+        &identities,
+        &client_id,
     )?;
     let written = api.put(&set_path, &body).await?;
     Ok(json!({
@@ -275,6 +335,86 @@ pub async fn roll(
         "version": written["etag"],
         "group": basics.name,
     }))
+}
+
+/// Delete `machines` (instance ids) from scale set `name`, keeping at
+/// least `minimum`. Answers the removed ids and the new capacity.
+pub async fn remove(
+    api: &dyn AzureMachineApi,
+    subscription: &str,
+    resource_group: &str,
+    name: &str,
+    machines: &[String],
+    minimum: u32,
+) -> Result<(Vec<String>, u32)> {
+    let set = format!(
+        "/subscriptions/{subscription}/resourceGroups/{resource_group}/providers/Microsoft.Compute/virtualMachineScaleSets/{name}"
+    );
+    let capacity = |set_body: &Value| {
+        set_body["sku"]["capacity"]
+            .as_u64()
+            .and_then(|capacity| u32::try_from(capacity).ok())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::CloudCallFailed {
+                    operation: format!("scale set {name} reports no capacity"),
+                })
+            })
+    };
+    let current = api
+        .get(&format!("{set}?api-version={VMSS_API}"))
+        .await?
+        .ok_or_else(|| refused(format!("scale set {name} does not exist")))?;
+    let size = capacity(&current)?;
+    let mut members = Vec::new();
+    let mut page = Some(format!("{set}/virtualMachines?api-version={VMSS_API}"));
+    while let Some(path) = page.take() {
+        let listed = api
+            .get(&path)
+            .await?
+            .ok_or_else(|| refused(format!("scale set {name} does not exist")))?;
+        members.extend(
+            listed["value"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|vm| vm["instanceId"].as_str().map(str::to_string)),
+        );
+        page = listed["nextLink"].as_str().map(|link| {
+            link.trim_start_matches("https://management.azure.com")
+                .to_string()
+        });
+    }
+    for machine in machines {
+        if !members.contains(machine) {
+            return Err(refused(format!(
+                "machine {machine} is not a member of scale set {name}"
+            )));
+        }
+    }
+    let remaining = crate::machines::size_after_removal(size, machines.len(), minimum)?;
+    api.post(
+        &format!("{set}/delete?api-version={VMSS_API}"),
+        &json!({"instanceIds": machines}),
+    )
+    .await?;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(600);
+    loop {
+        let now = api
+            .get(&format!("{set}?api-version={VMSS_API}"))
+            .await?
+            .ok_or_else(|| refused(format!("scale set {name} disappeared")))?;
+        if capacity(&now)? == remaining
+            && now["properties"]["provisioningState"].as_str() == Some("Succeeded")
+        {
+            return Ok((machines.to_vec(), remaining));
+        }
+        if tokio::time::Instant::now() > deadline {
+            return Err(AlienError::new(ErrorData::CloudCallFailed {
+                operation: format!("scale set {name} did not reach {remaining} machines in 600 s"),
+            }));
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    }
 }
 
 #[cfg(test)]
@@ -374,13 +514,25 @@ mod tests {
         published: String,
         existing: Option<Value>,
         puts: Mutex<Vec<(String, Value)>>,
+        posts: Mutex<Vec<(String, Value)>>,
     }
 
     #[async_trait]
     impl AzureMachineApi for Recorded {
         async fn get(&self, path: &str) -> Result<Option<Value>> {
-            Ok(if path.contains("/virtualMachineScaleSets/") {
-                self.existing.clone()
+            Ok(if path.contains("/userAssignedIdentities/") {
+                Some(json!({"properties": {"clientId": "11111111-2222-3333-4444-555555555555"}}))
+            } else if path.contains("/virtualMachines?") {
+                Some(json!({"value": [{"instanceId": "0"}, {"instanceId": "4"}]}))
+            } else if path.contains("/virtualMachineScaleSets/") {
+                let posted = self.posts.lock().unwrap().len();
+                self.existing.clone().map(|mut set| {
+                    if posted > 0 {
+                        set["sku"]["capacity"] = json!(1);
+                        set["properties"] = json!({"provisioningState": "Succeeded"});
+                    }
+                    set
+                })
             } else if path.contains("/versions/") {
                 Some(
                     json!({"properties": {"publishingProfile": {"publishedDate": self.published}}}),
@@ -397,6 +549,13 @@ mod tests {
                 .unwrap()
                 .push((path.to_string(), body.clone()));
             Ok(json!({"etag": "\"3\""}))
+        }
+        async fn post(&self, path: &str, body: &Value) -> Result<()> {
+            self.posts
+                .lock()
+                .unwrap()
+                .push((path.to_string(), body.clone()));
+            Ok(())
         }
     }
 
@@ -462,7 +621,10 @@ mod tests {
         );
         assert_eq!(
             body["tags"],
-            json!({crate::machines::CAPACITY_GROUP_TAG: "general"})
+            json!({
+                crate::machines::CAPACITY_GROUP_TAG: "general",
+                MACHINE_IDENTITY_TAG: "11111111-2222-3333-4444-555555555555",
+            })
         );
         let linux = &profile["osProfile"]["linuxConfiguration"];
         assert_eq!(linux["disablePasswordAuthentication"], true);
@@ -500,6 +662,127 @@ mod tests {
             assert!(error.contains(reason), "{reason}: {error}");
             assert!(api.puts.into_inner().unwrap().is_empty());
         }
+    }
+
+    #[tokio::test]
+    async fn a_network_that_is_not_setups_writes_nothing() {
+        let api = Recorded {
+            published: "2026-11-01T00:00:00Z".to_string(),
+            ..Default::default()
+        };
+        let mut request = request();
+        request.subnet_ids = Some(vec![
+            "/subscriptions/x/resourceGroups/y/providers/Microsoft.Network/virtualNetworks/z/subnets/public".into(),
+        ]);
+        let error = crate::describe(&roll_with(&api, &request).await.unwrap_err());
+        assert!(
+            error.contains("is not one setup created for this install's machines"),
+            "{error}"
+        );
+        assert!(api.puts.into_inner().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_signed_service_accounts_identities_are_attached() {
+        let stack = Stack::new("shop".to_string())
+            .add(
+                ComputeCluster::new("compute".to_string())
+                    .capacity_group(CapacityGroup {
+                        group_id: "general".to_string(),
+                        instance_type: Some("Standard_D2s_v5".to_string()),
+                        profile: None,
+                        min_size: 1,
+                        max_size: 3,
+                        scale_policy: None,
+                        nested_virtualization: None,
+                        data_disk_gib_range: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::ServiceAccount::new("workers-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let body = release_body(
+            Platform::Azure,
+            &stack,
+            &ReleaseOptions {
+                channel: CHANNEL.to_string(),
+                components: BTreeMap::from([(
+                    "machine-agent/linux-x86_64".to_string(),
+                    format!("sha256:{}", "2".repeat(64)),
+                )]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let api = Recorded {
+            published: "2026-11-01T00:00:00Z".to_string(),
+            ..Default::default()
+        };
+        let mut request = request();
+        request.release = signed_release(1, &body);
+        roll(
+            &api,
+            &place(),
+            SUBSCRIPTION,
+            "acme-prod",
+            &body,
+            &request,
+            &pins(),
+        )
+        .await
+        .unwrap();
+        let puts = api.puts.into_inner().unwrap();
+        assert_eq!(
+            puts[0].1["identity"]["userAssignedIdentities"],
+            json!({
+                IDENTITY: {},
+                format!("/subscriptions/{SUBSCRIPTION}/resourceGroups/acme-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{PREFIX}-workers-sa"): {},
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn removal_deletes_only_members_and_keeps_the_signed_minimum() {
+        let removal = |machines: &[&str]| {
+            let api = Recorded {
+                existing: Some(json!({"sku": {"capacity": 2}})),
+                ..Default::default()
+            };
+            let machines: Vec<String> = machines.iter().map(|m| m.to_string()).collect();
+            async move {
+                let result = remove(
+                    &api,
+                    SUBSCRIPTION,
+                    "acme-prod",
+                    "acme-prod-compute-general",
+                    &machines,
+                    1,
+                )
+                .await;
+                (result, api.posts.into_inner().unwrap())
+            }
+        };
+        let (result, posts) = removal(&["4"]).await;
+        assert_eq!(result.unwrap(), (vec!["4".to_string()], 1));
+        assert_eq!(
+            posts,
+            vec![(
+                format!("/subscriptions/{SUBSCRIPTION}/resourceGroups/acme-prod/providers/Microsoft.Compute/virtualMachineScaleSets/acme-prod-compute-general/delete?api-version={VMSS_API}"),
+                json!({"instanceIds": ["4"]}),
+            )]
+        );
+        // Attack: an instance of another scale set.
+        let (result, posts) = removal(&["9"]).await;
+        assert!(crate::describe(&result.unwrap_err()).contains("is not a member of scale set"));
+        assert!(posts.is_empty());
+        // Attack: below the signed minimum.
+        let (result, posts) = removal(&["0", "4"]).await;
+        assert!(crate::describe(&result.unwrap_err()).contains("below the signed minimum 1"));
+        assert!(posts.is_empty());
     }
 
     #[test]
