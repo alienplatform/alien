@@ -187,7 +187,10 @@ fn reads_a_secret_from_stdin() {
 #[test]
 fn fails_on_a_missing_file_before_calling_the_api() {
     let api = MockServer::start();
-    let save = mock_api(&api);
+    // Matches every request: the command must fail before sending any.
+    let any_request = api.mock(|_when, then| {
+        then.status(500);
+    });
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("missing.pem");
 
@@ -196,5 +199,5 @@ fn fails_on_a_missing_file_before_calling_the_api() {
 
     assert!(!output.status.success(), "{text}");
     assert!(text.contains(&path.display().to_string()), "{text}");
-    save.assert_hits(0);
+    any_request.assert_hits(0);
 }

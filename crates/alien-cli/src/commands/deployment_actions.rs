@@ -664,23 +664,25 @@ pub(crate) fn input_values_to_save(
 }
 
 /// Reads `--secret-input-file ID=PATH` arguments into `(ID, contents)`. A
-/// `PATH` of `-` reads stdin, which only one argument can do. Contents are
-/// sent unchanged, line breaks included: a PEM certificate or key keeps its
-/// format, and the secret stays out of the command line.
+/// `PATH` of `-` reads stdin, which only one argument can do. Every argument
+/// is checked before anything is read, so a bad command never waits on stdin.
+/// Contents are sent unchanged, line breaks included: a PEM certificate or
+/// key keeps its format, and the secret stays out of the command line.
 pub(crate) fn read_secret_input_files(args: &[String]) -> Result<Vec<(String, String)>> {
-    let mut stdin_read = false;
-    let mut values = Vec::with_capacity(args.len());
-    for arg in args {
-        let (id, path) =
-            crate::commands::deploy::parse_stack_input_arg(arg, "--secret-input-file")?;
+    let parsed = args
+        .iter()
+        .map(|arg| crate::commands::deploy::parse_stack_input_arg(arg, "--secret-input-file"))
+        .collect::<Result<Vec<_>>>()?;
+    if parsed.iter().filter(|(_, path)| path == "-").count() > 1 {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "secret-input-file".to_string(),
+            message: "Only one --secret-input-file can read stdin (-).".to_string(),
+        }));
+    }
+
+    let mut values = Vec::with_capacity(parsed.len());
+    for (id, path) in parsed {
         let contents = if path == "-" {
-            if stdin_read {
-                return Err(AlienError::new(ErrorData::ValidationError {
-                    field: "secret-input-file".to_string(),
-                    message: "Only one --secret-input-file can read stdin (-).".to_string(),
-                }));
-            }
-            stdin_read = true;
             std::io::read_to_string(std::io::stdin())
                 .into_alien_error()
                 .context(ErrorData::FileOperationFailed {
@@ -1703,5 +1705,10 @@ mod tests {
             .expect_err("no id")
             .to_string();
         assert!(error.contains("id=value"), "{error}");
+        // Rejected before reading: this would otherwise block on the test's stdin.
+        let error = read_secret_input_files(&["cert=-".to_string(), "key=-".to_string()])
+            .expect_err("stdin twice")
+            .to_string();
+        assert!(error.contains("Only one --secret-input-file"), "{error}");
     }
 }
