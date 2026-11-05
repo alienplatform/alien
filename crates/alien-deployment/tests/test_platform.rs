@@ -1295,10 +1295,15 @@ async fn a_release_that_supersedes_a_failing_update_is_applied_without_a_retry()
         error.message,
         "Release rel_v2 failed to roll out after release rel_v3 superseded it; applying rel_v3 next"
     );
-    let cause = error.source.as_ref().expect("the resource failures stay attached");
+    let cause = error
+        .source
+        .as_ref()
+        .expect("the resource failures stay attached");
     assert_eq!(cause.code, "DEPLOYMENT_FAILED");
     assert!(
-        serde_json::to_string(&cause.context).unwrap().contains("test-function"),
+        serde_json::to_string(&cause.context)
+            .unwrap()
+            .contains("test-function"),
         "{cause:?}"
     );
     assert_eq!(

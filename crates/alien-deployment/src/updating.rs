@@ -718,7 +718,9 @@ pub async fn handle_updating(
         // retry unlocks (a denied replace) is unlocked here. A stack prepared before the
         // release was recorded has no id and keeps the old behavior.
         let superseded = match (&failed_release_id, &target_release_id) {
-            (Some(failed), Some(next_release)) if failed != next_release && setup_required.is_none() => {
+            (Some(failed), Some(next_release))
+                if failed != next_release && setup_required.is_none() =>
+            {
                 Some((failed.clone(), next_release.clone()))
             }
             _ => None,
