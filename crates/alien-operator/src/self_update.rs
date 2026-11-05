@@ -62,9 +62,9 @@ pub async fn apply(state: &OperatorState, target_image: &str) -> Result<()> {
     if state.config.is_protected() {
         let signed = state
             .db
-            .get_accepted_release()
+            .get_signing_trust()
             .await?
-            .and_then(|accepted| accepted.operator_digest);
+            .and_then(|stored| stored.operator_digest);
         let target_digest = alien_core::release_statement::image_digest(target_image);
         if signed.is_none() || signed.as_deref() != target_digest {
             warn!(
