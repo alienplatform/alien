@@ -158,6 +158,11 @@ async fn turn_on(
     record: &super::DeviceRecord,
     device: StatementSigner,
 ) -> Result<SigningPlan> {
+    // Someone already turned signing on: say who (the first admin of
+    // version 1) without showing a code that would never be used.
+    if let Some(first) = api.signer_lists(project).await?.first() {
+        return Ok(already_on(project, &first_admin(first)));
+    }
     let code = RecoveryCode::generate().context(ErrorData::SigningFailed {
         message: "Could not create the recovery code".to_string(),
     })?;
@@ -214,19 +219,6 @@ async fn turn_on(
     .context(ErrorData::SigningFailed {
         message: "The new device list does not verify".to_string(),
     })?;
-    match api.publish_signer_list(project, &statement).await? {
-        ListPublished::Stored => {}
-        ListPublished::AlreadyOn { enabled_by } => {
-            return Ok(unsigned(format!(
-                "signing was already turned on for {project} by {enabled_by} — pull {REPO_SIGNING_FILE}"
-            )))
-        }
-    }
-    let repo = RepoSigning {
-        fingerprint: fingerprint(&opened.digest),
-        project: project.to_string(),
-    };
-    repo.write(dir)?;
     let this = match record.backend {
         Backend::SecureEnclave => "this Mac",
         Backend::Tpm | Backend::Yubikey => "this machine",
@@ -247,12 +239,30 @@ async fn turn_on(
             message: "Failed to show the recovery code".to_string(),
         })?;
     let mut line = String::new();
-    std::io::stdin()
+    let read = std::io::stdin()
         .read_line(&mut line)
         .into_alien_error()
         .context(ErrorData::CliInteractionFailed {
             message: "Failed to read the confirmation".to_string(),
         })?;
+    if read == 0 {
+        println!();
+        return Err(AlienError::new(ErrorData::CliInteractionFailed {
+            message: "The recovery code wasn't confirmed, so signing was not turned on and nothing was released. Run the release again.".to_string(),
+        }));
+    }
+    match api.publish_signer_list(project, &statement).await? {
+        ListPublished::Stored => {}
+        ListPublished::AlreadyOn { enabled_by } => {
+            println!("  That recovery code was not used; discard it.");
+            return Ok(already_on(project, &enabled_by));
+        }
+    }
+    let repo = RepoSigning {
+        fingerprint: fingerprint(&opened.digest),
+        project: project.to_string(),
+    };
+    repo.write(dir)?;
     println!("  Wrote {REPO_SIGNING_FILE} — commit it.");
     println!("  Fingerprint {}", display_fingerprint(&repo.fingerprint));
     println!();
@@ -260,6 +270,29 @@ async fn turn_on(
         signer: device,
         chain,
     })))
+}
+
+fn already_on(project: &str, enabled_by: &str) -> SigningPlan {
+    unsigned(format!(
+        "signing was already turned on for {project} by {enabled_by} — pull {REPO_SIGNING_FILE}"
+    ))
+}
+
+/// Who turned signing on: the label (or id) of version 1's device admin.
+fn first_admin(first: &SignedStatement) -> String {
+    first
+        .open()
+        .and_then(|opened| opened.body::<SignerListBody>())
+        .ok()
+        .and_then(|body| {
+            body.signers
+                .into_iter()
+                .find(|signer| {
+                    signer.kind == SignerKind::Device && signer.roles.contains(&Role::Admin)
+                })
+                .map(|signer| signer.label.unwrap_or(signer.id))
+        })
+        .unwrap_or_else(|| "another admin".to_string())
 }
 
 /// Signer id of the recovery key on every list.

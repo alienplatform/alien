@@ -526,6 +526,21 @@ async fn signing_from_first_release_to_recovery() {
     );
     assert!(lists(&world.manager).await.is_empty());
 
+    // Alice closes the terminal input at the recovery code: nothing is
+    // published or written, since the code was never confirmed saved.
+    let output = failed(world.run_in_terminal(
+        &alice,
+        &app,
+        RELEASE,
+        &[("Press Enter once saved", "\u{4}")],
+    ));
+    assert!(
+        output.contains("The recovery code wasn't confirmed"),
+        "{output}"
+    );
+    assert!(lists(&world.manager).await.is_empty());
+    assert!(!app.join(".alien/signing.json").exists());
+
     // Alice's first release in a terminal turns signing on.
     let output =
         ok(world.run_in_terminal(&alice, &app, RELEASE, &[("Press Enter once saved", "\n")]));
@@ -573,10 +588,11 @@ async fn signing_from_first_release_to_recovery() {
     let other = world.checkout("other-clone");
     let output = ok(world.run_in_terminal(&dave, &other, RELEASE, &[]));
     assert!(
-        output.contains("signing was already turned on for default by"),
+        output.contains("signing was already turned on for default by alice@example.com — pull .alien/signing.json"),
         "{output}"
     );
     assert!(output.contains("pull .alien/signing.json"), "{output}");
+    assert!(!output.contains("Recovery code"), "{output}");
     assert!(!other.join(".alien/signing.json").exists());
     assert_eq!(lists(&world.manager).await.len(), 1);
     assert_eq!(newest_release(&world.manager, &fingerprint).await, None);
