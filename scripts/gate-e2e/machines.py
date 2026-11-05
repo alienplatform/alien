@@ -21,8 +21,8 @@ in for "not the publisher's". Then:
      same security group written straight into a launch template lands);
   4. an instance type other than the signed one is refused;
   5. desired capacity above the signed maximum is refused by AWS itself;
-  6. a second roll adds a template version, keeps the signed bounds and
-     starts an instance refresh.
+  6. a second roll adds a template version and keeps the signed bounds;
+     it starts no instance refresh (the platform replaces machines).
 
 Usage (credentials for a test account in the environment):
     scripts/gate-e2e/machines.py \\
@@ -114,7 +114,7 @@ class Run:
                                            "ec2:CreateLaunchTemplate", "ec2:CreateLaunchTemplateVersion", "ec2:RunInstances",
                                            "ec2:CreateTags", "ec2:Describe*",
                                            "autoscaling:DescribeAutoScalingGroups", "autoscaling:CreateAutoScalingGroup",
-                                           "autoscaling:UpdateAutoScalingGroup", "autoscaling:StartInstanceRefresh"],
+                                           "autoscaling:UpdateAutoScalingGroup"],
              "Resource": "*"},
             {"Effect": "Allow", "Action": "iam:PassRole", "Resource": f"arn:aws:iam::{self.account}:role/{self.group}"},
             {"Effect": "Allow", "Action": "iam:CreateServiceLinkedRole", "Resource": "*",
@@ -204,7 +204,7 @@ class Run:
 
         # 1. The signed roll.
         ok, body = self.invoke(securityGroupIds=[self.security_group], subnetIds=[self.subnet])
-        self.record("1 a signed release rolls", ok and body.get("version") == 1 and body.get("group") == self.group and body.get("instanceRefreshId") is None, str(body)[:400])
+        self.record("1 a signed release rolls", ok and body.get("version") == 1 and body.get("group") == self.group and "instanceRefreshId" not in body, str(body)[:400])
         if ok:
             aws("ec2", "create-tags", "--resources", body["launchTemplateId"], "--tags", f"Key={self.tag_key},Value={self.tag_value}")
         data = self.template_version(1)
@@ -249,15 +249,16 @@ class Run:
         # 6. A second roll.
         ok, body = self.invoke()
         group = self.asg()
-        self.record("6 a second roll adds a version and starts a refresh", ok and body.get("version") == 3 and body.get("instanceRefreshId")
+        refreshes = aws("autoscaling", "describe-instance-refreshes", "--auto-scaling-group-name", self.group)["InstanceRefreshes"]
+        self.record("6 a second roll adds a version, keeps the bounds, starts no refresh", ok and body.get("version") == 3
+                    and "instanceRefreshId" not in body and not refreshes
                     and group["LaunchTemplate"]["Version"] == "3" and group["MinSize"] == 1 and group["MaxSize"] == 1
-                    and self.template_version(3)["SecurityGroupIds"] == [self.security_group], str(body)[:400])
+                    and self.template_version(3)["SecurityGroupIds"] == [self.security_group], f"{str(body)[:300]} refreshes={refreshes}")
 
     # --- teardown -----------------------------------------------------------
 
     def cleanup(self):
         log("cleaning up")
-        aws("autoscaling", "cancel-instance-refresh", "--auto-scaling-group-name", self.group, check=False, parse=False)
         aws("autoscaling", "delete-auto-scaling-group", "--auto-scaling-group-name", self.group, "--force-delete", check=False, parse=False)
         for _ in range(60):
             if self.asg() is None:

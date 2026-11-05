@@ -62,10 +62,11 @@ updates Homebrew and, last, `channels/stable`.
 
 Before it builds `alien`, the distribution writes
 `crates/alien-cli/enforcer-digests.json`: the `enforcer-digests` artifact of
-the publish run (the promoted `alien-operator` image digest) plus the
-`machine-agent/linux-x86_64`, `machine-agent/linux-aarch64` and
-`verifier/{aws,gcp,azure}` digests of the builds this version ships, each
-`sha256:<hex>`. Signed releases pin those builds; an install refuses any
+the publish run (the promoted `alien-operator` image digest, and the
+`alien-verifier` image digest as `verifier/{aws,gcp,azure}`: one linux/amd64
+image serves every cloud, and the AWS copy in the publisher's ECR keeps its
+digest) plus the `machine-agent/linux-x86_64` and `machine-agent/linux-aarch64`
+digests of the builds this version ships, each `sha256:<hex>`. Signed releases pin those builds; an install refuses any
 other. The GitHub release must stay immutable so that
 `gh release verify-asset` vouches for each archive: `alien devices add-ci`
 pins CI to the archive checksums it checks that way.
