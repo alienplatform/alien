@@ -286,6 +286,13 @@ pub(crate) fn render_terraform_module(
     requires_remote_operator_collector_token: bool,
     profile: alien_core::SetupConfigurationProfile,
 ) -> Result<ModuleFiles> {
+    // Advanced settings replace the deployment settings whole at apply time; a protected
+    // module fixes what it runs with in the module itself.
+    let profile = if options.stack_settings.signing.is_some() {
+        alien_core::SetupConfigurationProfile::Standard
+    } else {
+        profile
+    };
     if target == TerraformTarget::Eks
         && matches!(
             options
@@ -3037,17 +3044,48 @@ fn variables_body(
             Some(Expression::String(String::new())),
             false,
         )));
-        blocks.push(nested(bool_variable_block(
+        let mut manage_roles = bool_variable_block(
             "gcp_manage_custom_roles",
             "Whether this module creates the GCP project custom roles it binds. Set to false when those roles are managed outside this stack.",
             Some(true),
-        )));
-        blocks.push(nested(variable_block(
+        );
+        let mut role_prefix = variable_block(
             "gcp_custom_role_prefix",
             "Prefix used for GCP project custom role IDs when gcp_manage_custom_roles is false. Empty uses resource_prefix.",
             Some(Expression::String(String::new())),
             false,
-        )));
+        );
+        // Roles managed outside the module could grant management what only the verifier
+        // may do, so a protected module creates its own.
+        if stack_settings.signing.is_some() {
+            manage_roles.body.0.push(nested(block(
+                "validation",
+                [
+                    attr("condition", expr::raw("var.gcp_manage_custom_roles")),
+                    attr(
+                        "error_message",
+                        Expression::String(
+                            "A protected module creates its own custom roles.".to_string(),
+                        ),
+                    ),
+                ],
+            )));
+            role_prefix.body.0.push(nested(block(
+                "validation",
+                [
+                    attr("condition", expr::raw("var.gcp_custom_role_prefix == \"\"")),
+                    attr(
+                        "error_message",
+                        Expression::String(
+                            "A protected module names its custom roles after its own prefix."
+                                .to_string(),
+                        ),
+                    ),
+                ],
+            )));
+        }
+        blocks.push(nested(manage_roles));
+        blocks.push(nested(role_prefix));
         if has_dynamic_gcp_network_settings(stack_settings.network.as_ref()) {
             blocks.push(nested(variable_block(
                 "network_mode",
