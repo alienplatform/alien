@@ -198,7 +198,7 @@ mod tpm {
     pub(super) fn create(dir: &Path) -> Result<PublicKey> {
         let pin = super::pin("Choose a PIN for the TPM signing key")?;
         primary(dir)?;
-        run(
+        tpm(
             Command::new("tpm2_create").args([
                 "-Q",
                 "-C",
@@ -219,7 +219,7 @@ mod tpm {
             "create the TPM key",
         )?;
         load(dir)?;
-        run(
+        tpm(
             Command::new("tpm2_readpublic")
                 .args(["-Q", "-c", "key.ctx", "-f", "der", "-o", "key.der"]),
             dir,
@@ -237,7 +237,7 @@ mod tpm {
         std::fs::write(dir.join("message.bin"), message)
             .into_alien_error()
             .context(file_failed(dir, "write the message to sign"))?;
-        let result = run(
+        let result = tpm(
             Command::new("tpm2_sign").args([
                 "-Q",
                 "-c",
@@ -268,7 +268,7 @@ mod tpm {
     }
 
     fn primary(dir: &Path) -> Result<()> {
-        run(
+        tpm(
             Command::new("tpm2_createprimary").args([
                 "-Q",
                 "-C",
@@ -287,7 +287,7 @@ mod tpm {
     }
 
     fn load(dir: &Path) -> Result<()> {
-        run(
+        tpm(
             Command::new("tpm2_load").args([
                 "-Q",
                 "-C",
@@ -309,7 +309,21 @@ mod tpm {
         // Transient contexts only; the wrapped key stays.
         let _ = std::fs::remove_file(dir.join("primary.ctx"));
         let _ = std::fs::remove_file(dir.join("key.ctx"));
-        let _ = Command::new("tpm2_flushcontext").arg("-t").status();
+    }
+
+    /// Runs one tpm2-tools command, then flushes the transient objects it
+    /// loaded. Without a resource manager (a TPM simulator, or `/dev/tpm0`)
+    /// they stay loaded, and a TPM has only a few slots for them. The
+    /// context files stay usable: later commands load them again.
+    fn tpm(command: &mut Command, dir: &Path, input: Option<&[u8]>, action: &str) -> Result<()> {
+        let result = run(command, dir, input, action);
+        let flushed = run(
+            Command::new("tpm2_flushcontext").arg("-t"),
+            dir,
+            None,
+            "flush the TPM's transient objects",
+        );
+        result.and(flushed)
     }
 }
 
