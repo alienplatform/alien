@@ -525,11 +525,28 @@ pub(crate) fn render_terraform_module(
         .resources()
         .find(|(_, entry)| entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
         .map(|(id, _)| resource_label_for_file(&labels, id).to_string());
+    // The runtime service accounts the module creates, by Terraform label; never management's.
+    let runtime_service_accounts: Vec<String> = per_resource
+        .iter()
+        .filter(|(id, _)| {
+            stack.resources.get(id.as_str()).is_some_and(|entry| {
+                entry.config.resource_type() == alien_core::ServiceAccount::RESOURCE_TYPE
+            })
+        })
+        .flat_map(|(_, fragment)| fragment.resource_blocks.iter())
+        .filter_map(|block| match block.labels.as_slice() {
+            [kind, label] if kind.as_str() == "google_service_account" => {
+                Some(label.as_str().to_string())
+            }
+            _ => None,
+        })
+        .collect();
     let signing = signing_blocks(
         &stack_settings,
         target,
         &options.pins,
         management_label.as_deref(),
+        &runtime_service_accounts,
     )?;
     import_depends_on.extend(signing.iter().filter_map(resource_address));
 
@@ -1814,6 +1831,7 @@ fn signing_blocks(
     target: TerraformTarget,
     pins: &alien_core::SetupPins,
     management_label: Option<&str>,
+    runtime_service_accounts: &[String],
 ) -> Result<Vec<Block>> {
     let Some(signing) = &settings.signing else {
         return Ok(Vec::new());
@@ -1822,8 +1840,8 @@ fn signing_blocks(
     let prefix = "${local.resource_prefix}";
     let mut signing_settings = signing.settings("stack")?;
     signing_settings.prefix = prefix.to_string();
-    let settings_value = json_template(&signing_settings.to_json());
-    let ledger_value = json_template(&alien_signing::Ledger::new(prefix).to_json());
+    let settings_value = escaped_template(&signing_settings.to_json());
+    let ledger_value = escaped_template(&alien_signing::Ledger::new(prefix).to_json());
     match target {
         TerraformTarget::Aws => Ok([
             vec![fingerprint_variable],
@@ -1860,6 +1878,7 @@ fn signing_blocks(
         .concat()),
         TerraformTarget::Gcp => {
             let mut blocks = vec![fingerprint_variable];
+            blocks.extend(gcp_verifier_blocks(runtime_service_accounts));
             for (label, name, value) in [
                 (
                     "signing_fingerprint",
@@ -2062,9 +2081,217 @@ fn aws_verifier_blocks(
     Ok(blocks)
 }
 
-/// A quoted template whose value is `json`, keeping its `${...}` interpolations.
-fn json_template(json: &str) -> Expression {
-    expr::template(json.replace('\\', "\\\\").replace('"', "\\\""))
+/// What the GCP verifier may change: the install's own machine templates and groups, the
+/// machines and disks those create, and its Cloud Run services and jobs (byoc review §1).
+const GCP_VERIFIER_OWN_RESOURCE_PERMISSIONS: &[&str] = &[
+    "compute.instanceTemplates.create",
+    "compute.instanceTemplates.delete",
+    "compute.instanceTemplates.get",
+    "compute.instanceTemplates.useReadOnly",
+    "compute.regionInstanceTemplates.create",
+    "compute.regionInstanceTemplates.delete",
+    "compute.regionInstanceTemplates.get",
+    "compute.regionInstanceTemplates.useReadOnly",
+    "compute.instanceGroupManagers.create",
+    "compute.instanceGroupManagers.update",
+    "compute.instanceGroupManagers.delete",
+    "compute.instanceGroupManagers.get",
+    "compute.instances.create",
+    "compute.instances.setMetadata",
+    "compute.instances.setServiceAccount",
+    "compute.instances.delete",
+    "compute.disks.create",
+    "run.services.create",
+    "run.services.update",
+    "run.services.delete",
+    "run.services.get",
+    "run.jobs.create",
+    "run.jobs.update",
+    "run.jobs.delete",
+    "run.jobs.get",
+    "run.jobs.run",
+];
+
+/// What the GCP verifier uses that the install doesn't name: the network its machines join and
+/// the images they boot.
+const GCP_VERIFIER_SHARED_PERMISSIONS: &[&str] =
+    &["compute.subnetworks.use", "compute.images.useReadOnly"];
+
+/// A protected GCP install's verifier identity: a service account with one custom role on the
+/// install's own resources, `actAs` on each runtime service account only, and reads of the
+/// signing parameters. Management never writes compute; it asks the verifier.
+fn gcp_verifier_blocks(runtime_service_accounts: &[String]) -> Vec<Block> {
+    let member = expr::template("serviceAccount:${google_service_account.signing_verifier.email}");
+    let custom_role = |label: &str, suffix: &str, title: &str, permissions: &[&str]| {
+        resource_block(
+            "google_project_iam_custom_role",
+            label,
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "role_id",
+                    expr::raw(format!(
+                        "format(\"%s_{suffix}\", replace(local.resource_prefix, \"-\", \"_\"))"
+                    )),
+                ),
+                attr("title", expr::template(format!("${{local.resource_prefix}} {title}"))),
+                attr(
+                    "permissions",
+                    Expression::Array(
+                        permissions
+                            .iter()
+                            .map(|permission| Expression::String(permission.to_string()))
+                            .collect(),
+                    ),
+                ),
+            ],
+        )
+    };
+    let own_resources = [
+        "instanceTemplates",
+        "instanceGroupManagers",
+        "instances",
+        "disks",
+        "services",
+        "jobs",
+    ]
+    .iter()
+    .map(|collection| {
+        format!(
+            r#"resource.name.extract("/{collection}/{{name}}").startsWith("${{local.resource_prefix}}-")"#
+        )
+    })
+    .collect::<Vec<_>>()
+    .join(" || ");
+    let mut blocks = vec![
+        resource_block(
+            "google_service_account",
+            "signing_verifier",
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "account_id",
+                    crate::emitters::gcp::helpers::service_account_id_template("verifier"),
+                ),
+                attr(
+                    "display_name",
+                    expr::template("${local.resource_prefix}-verifier"),
+                ),
+                attr(
+                    "description",
+                    Expression::String(
+                        "Applies only releases the vendor signed. The management identity can't change what runs here."
+                            .to_string(),
+                    ),
+                ),
+            ],
+        ),
+        custom_role(
+            "signing_verifier",
+            "verifier",
+            "verifier: the install's machines and services",
+            GCP_VERIFIER_OWN_RESOURCE_PERMISSIONS,
+        ),
+        custom_role(
+            "signing_verifier_shared",
+            "verifier_shared",
+            "verifier: network and images",
+            GCP_VERIFIER_SHARED_PERMISSIONS,
+        ),
+        resource_block(
+            "google_project_iam_member",
+            "signing_verifier",
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "role",
+                    expr::traversal(["google_project_iam_custom_role", "signing_verifier", "name"]),
+                ),
+                attr("member", member.clone()),
+                nested(block(
+                    "condition",
+                    [
+                        attr("title", Expression::String("The install's own resources".to_string())),
+                        attr("expression", escaped_template(&own_resources)),
+                    ],
+                )),
+            ],
+        ),
+        resource_block(
+            "google_project_iam_member",
+            "signing_verifier_shared",
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "role",
+                    expr::traversal([
+                        "google_project_iam_custom_role",
+                        "signing_verifier_shared",
+                        "name",
+                    ]),
+                ),
+                attr("member", member.clone()),
+            ],
+        ),
+        // The settings and ledger are public values; reading them needs no name condition.
+        resource_block(
+            "google_project_iam_member",
+            "signing_verifier_reads_settings",
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "role",
+                    Expression::String("roles/parametermanager.parameterAccessor".to_string()),
+                ),
+                attr("member", member.clone()),
+            ],
+        ),
+        resource_block(
+            "google_project_iam_member",
+            "signing_verifier_records_ledger",
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "role",
+                    Expression::String("roles/parametermanager.parameterVersionAdder".to_string()),
+                ),
+                attr("member", member.clone()),
+                nested(block(
+                    "condition",
+                    [
+                        attr("title", Expression::String("This install's ledger".to_string())),
+                        attr(
+                            "expression",
+                            escaped_template(
+                                r#"resource.name.startsWith("projects/${var.gcp_project}/locations/global/parameters/signed-${local.resource_prefix}-state")"#,
+                            ),
+                        ),
+                    ],
+                )),
+            ],
+        ),
+    ];
+    for label in runtime_service_accounts {
+        blocks.push(resource_block(
+            "google_service_account_iam_member",
+            &format!("signing_verifier_acts_as_{label}"),
+            [
+                attr(
+                    "service_account_id",
+                    expr::traversal(["google_service_account", label, "name"]),
+                ),
+                attr("role", Expression::String("roles/iam.serviceAccountUser".to_string())),
+                attr("member", member.clone()),
+            ],
+        ));
+    }
+    blocks
+}
+
+/// A quoted template whose value is `text` (JSON, a CEL condition), keeping its `${...}`
+/// interpolations.
+fn escaped_template(text: &str) -> Expression {
+    expr::template(text.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 /// Variable that shows a protected install's signing fingerprint and accepts only that value.
