@@ -86,6 +86,7 @@ async fn build_app(output_dir: &std::path::Path, app_path: &str) -> PathBuf {
         debug_mode: false,
         rebuild: false,
         pull_base_images: false,
+        require_pinned_base_images: false,
     };
 
     // Build the stack
