@@ -164,7 +164,12 @@ async fn turn_on(
 ) -> Result<SigningPlan> {
     // Someone already turned signing on: say who (the first admin of
     // version 1) without showing a code that would never be used.
-    if let Some(first) = api.signer_lists(project).await?.first() {
+    let Some(lists) = api.signer_lists_if_supported(project).await? else {
+        return Ok(unsigned(
+            "the control plane doesn't support signed releases yet",
+        ));
+    };
+    if let Some(first) = lists.first() {
         return Ok(already_on(project, &first_admin(first)));
     }
     let code = RecoveryCode::generate().context(ErrorData::SigningFailed {
@@ -661,7 +666,10 @@ mod tests {
             aws_publisher: Some("111122223333".to_string()),
             aws_verifier_image: Some(format!("verifier@sha256:{}", "5d".repeat(32))),
             gcp_verifier_image: Some(format!("gcr.example/verifier@sha256:{}", "6e".repeat(32))),
-            azure_verifier_image: Some(format!("registry.example/verifier@sha256:{}", "7f".repeat(32))),
+            azure_verifier_image: Some(format!(
+                "registry.example/verifier@sha256:{}",
+                "7f".repeat(32)
+            )),
             operator_digest: Some(format!("sha256:{}", "0b".repeat(32))),
         }
     }
@@ -775,5 +783,64 @@ mod tests {
             ]
         );
         assert!(component_changes(&next, &next).is_empty());
+    }
+
+    /// A control plane from before signed releases has no signer list route.
+    /// The first release on a device with a hardware key goes out unsigned
+    /// with the reason instead of failing, and writes no repository pin.
+    #[tokio::test]
+    async fn a_control_plane_without_signing_gets_an_unsigned_release() {
+        let server = httpmock::MockServer::start_async().await;
+        let lists = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/projects/shop/signer-lists");
+                then.status(404).body("404 Not Found");
+            })
+            .await;
+        let api = SigningApi::new(reqwest::Client::new(), server.base_url());
+        let dir = tempfile::tempdir().unwrap();
+        let record = super::super::DeviceRecord {
+            backend: Backend::Tpm,
+            signer_id: "laptop".to_string(),
+            label: None,
+        };
+        let device = StatementSigner::Key {
+            id: "laptop".to_string(),
+            key: alien_signing::SecretKey::generate().unwrap(),
+        };
+
+        let plan = turn_on(&api, dir.path(), "shop", &record, device)
+            .await
+            .unwrap();
+
+        lists.assert_async().await;
+        match plan {
+            SigningPlan::Unsigned(reason) => {
+                assert_eq!(
+                    reason,
+                    "the control plane doesn't support signed releases yet"
+                )
+            }
+            _ => panic!("expected an unsigned release"),
+        }
+        assert!(RepoSigning::read(dir.path()).unwrap().is_none());
+
+        // Any other failure still stops the release.
+        let server = httpmock::MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.path("/v1/projects/shop/signer-lists");
+                then.status(500).body("boom");
+            })
+            .await;
+        let api = SigningApi::new(reqwest::Client::new(), server.base_url());
+        let device = StatementSigner::Key {
+            id: "laptop".to_string(),
+            key: alien_signing::SecretKey::generate().unwrap(),
+        };
+        assert!(turn_on(&api, dir.path(), "shop", &record, device)
+            .await
+            .is_err());
     }
 }
