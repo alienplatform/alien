@@ -9,9 +9,9 @@ mod common;
 use std::collections::BTreeMap;
 
 use alien_signing::{
-    binding_env, build_workload, candidate_prefixes, discover, BindingContext, InstallId, Kind,
-    Ledger, LocalValues, Lookup, RecoveryCode, Role, Signer, SignerKind, SigningSettings, Trust,
-    WorkloadRequest,
+    binding_env, build_workload, candidate_prefixes, discover, resolve_bindings, BindingContext,
+    InstallId, Kind, Ledger, LocalValues, Lookup, RecoveryCode, Role, Signer, SignerKind,
+    SigningSettings, Trust, WorkloadRequest,
 };
 use chrono::Duration;
 use common::*;
@@ -501,7 +501,12 @@ fn bindings_come_from_the_install_not_the_control_plane() {
         account: "111122223333".to_string(),
         region: Some("us-east-1".to_string()),
     };
-    let bindings = binding_env(&release.workloads[0].bindings, &context).unwrap();
+    let bindings = resolve_bindings(
+        binding_env(&release.workloads[0].bindings, &context).unwrap(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
     let local = LocalValues {
         deployer_inputs: BTreeMap::from([("databaseUrl".to_string(), "postgres://db".to_string())]),
         bindings,
@@ -544,15 +549,64 @@ fn bindings_come_from_the_install_not_the_control_plane() {
     )
     .unwrap();
     assert_eq!(
-        queue["ALIEN_JOBS_BINDING"],
+        queue.values["ALIEN_JOBS_BINDING"],
         r#"{"queueUrl":"https://sqs.us-east-1.amazonaws.com/111122223333/acme-prod-jobs","service":"sqs"}"#
     );
-    // A type whose value doesn't follow from the install is refused.
+    // A database endpoint doesn't follow from names: the enforcer reads it
+    // from its own install, or a signed config carries it for an external
+    // database. The control plane never does.
+    let db = BTreeMap::from([("db".to_string(), "postgres".to_string())]);
+    let derived = binding_env(&db, &context).unwrap();
+    assert!(derived.values.is_empty());
+    assert_eq!(derived.unresolved, db);
+    let read = BTreeMap::from([(
+        "db".to_string(),
+        r#"{"host":"acme-prod-db.abc.us-east-1.rds.amazonaws.com"}"#.to_string(),
+    )]);
+    let signed = BTreeMap::from([(
+        "db".to_string(),
+        serde_json::json!({ "host": "db.vendor-hosted.example" }),
+    )]);
+    let from_cloud = resolve_bindings(derived.clone(), &read, &signed).unwrap();
+    assert!(
+        from_cloud["ALIEN_DB_BINDING"].contains("rds.amazonaws.com"),
+        "what the enforcer found in its install wins over config"
+    );
+    let from_config = resolve_bindings(derived.clone(), &BTreeMap::new(), &signed).unwrap();
+    assert!(from_config["ALIEN_DB_BINDING"].contains("vendor-hosted"));
     assert_eq!(
-        code(binding_env(
-            &BTreeMap::from([("db".to_string(), "postgres".to_string())]),
-            &context
+        code(resolve_bindings(
+            derived,
+            &BTreeMap::new(),
+            &BTreeMap::new()
         )),
         "SIGNING_WORKLOAD_REFUSED"
     );
+    // A derived value can't be overridden by config.
+    let uploads = binding_env(&release.workloads[0].bindings, &context).unwrap();
+    let overridden = resolve_bindings(
+        uploads,
+        &BTreeMap::new(),
+        &BTreeMap::from([(
+            "uploads".to_string(),
+            serde_json::json!({"bucketName": "x"}),
+        )]),
+    )
+    .unwrap();
+    assert!(overridden["ALIEN_UPLOADS_BINDING"].contains("acme-prod-uploads"));
+}
+
+#[test]
+fn config_sets_only_bindings_the_release_has() {
+    let release = release_body();
+    let ok = alien_signing::ConfigBody {
+        bindings: BTreeMap::from([("uploads".to_string(), serde_json::json!({}))]),
+        ..alien_signing::ConfigBody::default()
+    };
+    ok.check(&release).unwrap();
+    let other = alien_signing::ConfigBody {
+        bindings: BTreeMap::from([("payments".to_string(), serde_json::json!({}))]),
+        ..alien_signing::ConfigBody::default()
+    };
+    assert_eq!(code(other.check(&release)), "SIGNING_BODY_REFUSED");
 }

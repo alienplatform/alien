@@ -3,10 +3,19 @@
 //! A binding tells a workload which resource to use, such as the bucket
 //! behind `ALIEN_UPLOADS_BINDING`. On a protected install the control plane
 //! must not choose it, or it could point the vendor's code at another
-//! customer's bucket. Setup names each owned resource `<prefix>-<id>`, so the
-//! value follows from the install's prefix, account and region. The engine
-//! and every enforcer use this one function, and a test in the engine checks
-//! that its controllers produce the same values.
+//! customer's bucket. Each value comes from the first of:
+//!
+//! 1. [`binding_env`]: setup names each owned resource `<prefix>-<id>`, so for
+//!    most types the value follows from the install's prefix, account and
+//!    region. The engine and every enforcer use this one function, and a test
+//!    in the engine checks that its controllers produce the same values.
+//! 2. The enforcer's own cloud reads, for types whose value isn't a name
+//!    (a database endpoint, a service URL): it describes the resource it
+//!    finds by the derived name or setup's tag in its own install.
+//! 3. A signed `config/v1`, for resources outside the customer's cloud.
+//!
+//! [`resolve_bindings`] applies that order. The control plane supplies none of
+//! them.
 
 use std::collections::BTreeMap;
 
@@ -33,14 +42,24 @@ pub fn binding_env_name(id: &str) -> String {
     format!("ALIEN_{}_BINDING", id.replace('-', "_").to_uppercase())
 }
 
-/// The value of every binding in `bindings` (resource id to resource type),
-/// by environment name. A binding whose value doesn't follow from the
-/// install is refused: on a protected install nothing else may supply it.
+/// Binding values derived from the install, and the bindings that need
+/// another source.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Bindings {
+    /// Values by environment name.
+    pub values: BTreeMap<String, String>,
+    /// Resource id to type, for bindings whose value doesn't follow from the
+    /// install's names.
+    pub unresolved: BTreeMap<String, String>,
+}
+
+/// The value of every binding in `bindings` (resource id to resource type)
+/// that follows from the install, by environment name.
 pub fn binding_env(
     bindings: &BTreeMap<String, String>,
     context: &BindingContext,
-) -> Result<BTreeMap<String, String>> {
-    let mut env = BTreeMap::new();
+) -> Result<Bindings> {
+    let mut derived = Bindings::default();
     for (id, resource_type) in bindings {
         let name = format!("{}-{id}", context.prefix);
         let region = || {
@@ -51,7 +70,9 @@ pub fn binding_env(
         };
         let value = match (context.platform.as_str(), resource_type.as_str()) {
             ("aws", "storage") => json!({ "service": "s3", "bucketName": name }),
-            ("aws", "kv") => json!({ "service": "dynamodb", "tableName": name, "region": region()? }),
+            ("aws", "kv") => {
+                json!({ "service": "dynamodb", "tableName": name, "region": region()? })
+            }
             ("aws", "queue") => json!({
                 "service": "sqs",
                 "queueUrl": format!("https://sqs.{}.amazonaws.com/{}/{name}", region()?, context.account),
@@ -60,17 +81,43 @@ pub fn binding_env(
             ("gcp", "storage") => json!({ "service": "gcs", "bucketName": name }),
             ("gcp", "vault") => json!({ "service": "secret-manager", "vaultPrefix": name }),
             _ => {
-                return Err(refused(
-                    id,
-                    resource_type,
-                    context,
-                    "its value doesn't follow from the install, so a protected install can't use it yet",
-                ))
+                derived.unresolved.insert(id.clone(), resource_type.clone());
+                continue;
             }
         };
-        env.insert(binding_env_name(id), value.to_string());
+        derived
+            .values
+            .insert(binding_env_name(id), value.to_string());
     }
-    Ok(env)
+    Ok(derived)
+}
+
+/// Every binding's value, by environment name: derived values first, then
+/// what the enforcer read from its own cloud (by resource id), then values a
+/// verified `config/v1` carries (by resource id). A source never overrides an
+/// earlier one, and a binding none of them covers is refused by name.
+pub fn resolve_bindings(
+    derived: Bindings,
+    read: &BTreeMap<String, String>,
+    signed_config: &BTreeMap<String, serde_json::Value>,
+) -> Result<BTreeMap<String, String>> {
+    let mut values = derived.values;
+    for (id, resource_type) in &derived.unresolved {
+        let value = match (read.get(id), signed_config.get(id)) {
+            (Some(value), _) => value.clone(),
+            (None, Some(value)) => value.to_string(),
+            (None, None) => {
+                return Err(AlienError::new(ErrorData::WorkloadRefused {
+                    workload: id.clone(),
+                    reason: format!(
+                        "binding '{id}' ({resource_type}) has no value: it doesn't follow from the install's names, the enforcer found no such resource in its install, and no signed config sets it"
+                    ),
+                }))
+            }
+        };
+        values.insert(binding_env_name(id), value);
+    }
+    Ok(values)
 }
 
 fn refused(
