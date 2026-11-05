@@ -23,10 +23,10 @@ by reading the service back with the caller's own credentials:
      control plane.
 
 Usage (an access token for the test project in --token-file):
-    scripts/gate-e2e/gcp.py --gate target/release/alien-gate \\
-        --fixtures target/debug/examples/gate-fixtures \\
+    scripts/verifier-e2e/gcp.py --gate target/release/alien-verifier \\
+        --fixtures target/debug/examples/verifier-fixtures \\
         --project my-test-project --region us-central1 --token-file /path/to/token \\
-        --prefix test-gate --label purpose=e2e --evidence /tmp/gate-e2e-gcp
+        --prefix test-gate --label purpose=e2e --evidence /tmp/verifier-e2e-gcp
 """
 
 import argparse
@@ -55,7 +55,7 @@ class Run:
         self.label = args.label
         self.evidence = pathlib.Path(args.evidence)
         self.evidence.mkdir(parents=True, exist_ok=True)
-        self.work = pathlib.Path(tempfile.mkdtemp(prefix="gate-e2e-gcp-"))
+        self.work = pathlib.Path(tempfile.mkdtemp(prefix="verifier-e2e-gcp-"))
         self.registry = f"{self.region}-docker.pkg.dev/{self.project}/{self.name}"
         self.workload_service = f"{self.name}-fn-api"
         self.gate_service = f"{self.name}-gate"
@@ -125,11 +125,11 @@ class Run:
             self.images[tag] = f"{self.registry}/app@{self.digest(f'{self.registry}/app:{tag}')}"
         build = self.work / "gate-image"
         build.mkdir()
-        (build / "alien-gate").write_bytes(pathlib.Path(self.args.gate).read_bytes())
+        (build / "alien-verifier").write_bytes(pathlib.Path(self.args.gate).read_bytes())
         (build / "Dockerfile").write_text(
             "FROM public.ecr.aws/docker/library/debian:bookworm-slim\n"
             "RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*\n"
-            "COPY alien-gate /alien-gate\nRUN chmod +x /alien-gate\nENTRYPOINT [\"/alien-gate\"]\n"
+            "COPY alien-verifier /alien-verifier\nRUN chmod +x /alien-verifier\nENTRYPOINT [\"/alien-verifier\"]\n"
         )
         self.docker("build", "--platform", "linux/amd64", "-t", f"{self.registry}/gate:latest", str(build))
         self.docker("push", f"{self.registry}/gate:latest")
@@ -310,8 +310,8 @@ class Run:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--gate", required=True, help="alien-gate binary for linux/amd64")
-    parser.add_argument("--fixtures", required=True, help="the gate-fixtures example binary")
+    parser.add_argument("--gate", required=True, help="alien-verifier binary for linux/amd64")
+    parser.add_argument("--fixtures", required=True, help="the verifier-fixtures example binary")
     parser.add_argument("--project", required=True)
     parser.add_argument("--region", default="us-central1")
     parser.add_argument("--token-file", required=True, help="file holding an access token for the project")

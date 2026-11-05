@@ -1,12 +1,12 @@
 [package]
-name = "alien-gate"
+name = "alien-verifier"
 version.workspace = true
 edition = "2021"
 description = "Writes serverless workloads only as their signed release describes them"
 license-file.workspace = true
 
 [[bin]]
-name = "alien-gate"
+name = "alien-verifier"
 path = "src/main.rs"
 
 [dependencies]

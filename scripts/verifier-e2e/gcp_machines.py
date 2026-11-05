@@ -25,7 +25,7 @@ the publisher's". Then, each refusal checked to write nothing:
   6. a second roll adds template 2 and points the MIG at it.
 
 Usage (an access token for the project in --token-file):
-    scripts/gate-e2e/gcp_machines.py --verifier-local <example> --fixtures <gate-fixtures> \\
+    scripts/verifier-e2e/gcp_machines.py --verifier-local <example> --fixtures <verifier-fixtures> \\
         --project <project> --region us-central1 --token-file <file> --evidence <dir>
 """
 

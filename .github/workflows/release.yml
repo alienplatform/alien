@@ -1696,7 +1696,7 @@ jobs:
             target/x86_64-unknown-linux-musl/release/alien-manager
             target/x86_64-unknown-linux-musl/release/alien-sandbox-agent
             target/x86_64-unknown-linux-musl/release/alien-egress-gateway
-            target/x86_64-unknown-linux-musl/release/alien-gate
+            target/x86_64-unknown-linux-musl/release/alien-verifier
           # Bump the -bN suffix whenever the set of cached binaries changes.
           key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b4-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
 
@@ -1715,14 +1715,14 @@ jobs:
         run: |
           depot cargo build --release \
             -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager -p alien-sandbox-agent -p alien-egress-gateway \
-            -p alien-gate \
+            -p alien-verifier \
             --features alien-egress-gateway/cloud,alien-egress-gateway/local \
             --target x86_64-unknown-linux-musl
 
       - name: Stage binaries for upload
         run: |
           mkdir -p staged/x86_64-unknown-linux-musl
-          for binary in alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent alien-egress-gateway alien-gate; do
+          for binary in alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent alien-egress-gateway alien-verifier; do
             cp "target/x86_64-unknown-linux-musl/release/${binary}" "staged/x86_64-unknown-linux-musl/${binary}"
           done
 
@@ -2081,8 +2081,8 @@ jobs:
             done
           done
           # The verifier runs on x86_64 only (Lambda's default, Cloud Run, Container Apps).
-          cp ./linux-bins/binaries-x86_64-unknown-linux-musl/alien-gate target/x86_64-unknown-linux-musl/release/alien-gate
-          chmod +x target/x86_64-unknown-linux-musl/release/alien-gate
+          cp ./linux-bins/binaries-x86_64-unknown-linux-musl/alien-verifier target/x86_64-unknown-linux-musl/release/alien-verifier
+          chmod +x target/x86_64-unknown-linux-musl/release/alien-verifier
 
       - name: Download Linux AI gateway binaries
         uses: actions/download-artifact@v8

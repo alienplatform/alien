@@ -863,30 +863,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "alien-gate"
-version = "3.3.54"
-dependencies = [
- "alien-aws-clients",
- "alien-client-core",
- "alien-core",
- "alien-error",
- "alien-signing",
- "async-trait",
- "axum 0.8.9",
- "base64 0.22.1",
- "chrono",
- "ed25519-compact",
- "lambda_runtime",
- "rand 0.9.5",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "alien-gcp-clients"
 version = "3.3.54"
 dependencies = [
@@ -1586,6 +1562,30 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "alien-verifier"
+version = "3.3.54"
+dependencies = [
+ "alien-aws-clients",
+ "alien-client-core",
+ "alien-core",
+ "alien-error",
+ "alien-signing",
+ "async-trait",
+ "axum 0.8.9",
+ "base64 0.22.1",
+ "chrono",
+ "ed25519-compact",
+ "lambda_runtime",
+ "rand 0.9.5",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

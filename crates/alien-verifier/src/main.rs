@@ -34,14 +34,14 @@ use alien_aws_clients::lambda::LambdaClient;
 use alien_aws_clients::ssm::SsmClient;
 use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt, AwsCredentialProvider};
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_gate::aws::{self, AwsBackend, SsmInstall};
-use alien_gate::azure::{Azure, AzureBackend, AzureInstall};
-use alien_gate::gcp::{self, Gcp, GcpBackend, GcpInstall, TokenSource};
-use alien_gate::machines::AwsMachines;
-use alien_gate::plan::SetupNetwork;
-use alien_gate::trust::InstallStore;
-use alien_gate::{describe, Backend, ErrorData, Result, Verifier};
 use alien_signing::InstallId;
+use alien_verifier::aws::{self, AwsBackend, SsmInstall};
+use alien_verifier::azure::{Azure, AzureBackend, AzureInstall};
+use alien_verifier::gcp::{self, Gcp, GcpBackend, GcpInstall, TokenSource};
+use alien_verifier::machines::AwsMachines;
+use alien_verifier::plan::SetupNetwork;
+use alien_verifier::trust::InstallStore;
+use alien_verifier::{describe, Backend, ErrorData, Result, Verifier};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use lambda_runtime::{service_fn, LambdaEvent};
@@ -122,7 +122,7 @@ impl Aws {
                     autoscaling: AutoScalingClient::new(http, credentials),
                 },
                 region,
-                images: alien_gate::machines::ImagePins::aws(),
+                images: alien_verifier::machines::ImagePins::aws(),
             }),
             vpc,
             machine_network,
@@ -157,7 +157,10 @@ async fn gcp_verifier() -> Result<Verifier> {
             prefix: prefix.to_string(),
         }),
         store: Arc::new(GcpInstall(client.clone())),
-        backend: Arc::new(GcpBackend(client, alien_gate::machines::ImagePins::gcp())),
+        backend: Arc::new(GcpBackend(
+            client,
+            alien_verifier::machines::ImagePins::gcp(),
+        )),
         vpc: None,
         machine_network: None,
     })
@@ -195,7 +198,7 @@ fn azure_verifier() -> Result<Verifier> {
         store: Arc::new(AzureInstall(client.clone())),
         backend: Arc::new(AzureBackend(
             client,
-            alien_gate::machines::ImagePins::azure(),
+            alien_verifier::machines::ImagePins::azure(),
         )),
         vpc: None,
         machine_network: None,

@@ -33,9 +33,9 @@ reason, and the function keeps running the signed release):
      settings and refuses (with the role scoped, the same install works).
 
 Usage (credentials for a test account in the environment):
-    scripts/gate-e2e/aws.py \\
-        --verifier target/x86_64-unknown-linux-musl/debug/alien-gate \\
-        --fixtures target/debug/examples/gate-fixtures \\
+    scripts/verifier-e2e/aws.py \\
+        --verifier target/x86_64-unknown-linux-musl/debug/alien-verifier \\
+        --fixtures target/debug/examples/verifier-fixtures \\
         --evidence /tmp/verifier-e2e   # resources named $TEST_RESOURCE_PREFIX-<random>
 """
 
@@ -397,8 +397,8 @@ class Run:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--verifier", required=True, help="alien-gate binary for x86_64 Linux (musl)")
-    parser.add_argument("--fixtures", required=True, help="the gate-fixtures example binary")
+    parser.add_argument("--verifier", required=True, help="alien-verifier binary for x86_64 Linux (musl)")
+    parser.add_argument("--fixtures", required=True, help="the verifier-fixtures example binary")
     parser.add_argument("--prefix", default=os.environ.get("TEST_RESOURCE_PREFIX"),
                         help="prefix for every resource name (default: $TEST_RESOURCE_PREFIX)")
     parser.add_argument("--tag", help="key=value tag for every resource (default: <prefix>=true)")
