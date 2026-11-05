@@ -144,6 +144,30 @@ impl SigningApi {
         Ok(items.items)
     }
 
+    /// Every signer list version the server holds, or `None` when the server
+    /// has no signer list route at all: a control plane or manager from before
+    /// signed releases, which can't have protected installs either.
+    pub async fn signer_lists_if_supported(
+        &self,
+        project: &str,
+    ) -> Result<Option<Vec<SignedStatement>>> {
+        let path = format!("/v1/projects/{project}/signer-lists");
+        let (status, text) = self.request(Method::GET, &path, None::<&()>).await?;
+        if status == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            return Err(self.failed(&Method::GET, &path, status, &text));
+        }
+        let items: Items<SignedStatement> = serde_json::from_str(&text)
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: format!("GET {path} answered with a body that doesn't parse"),
+                url: Some(format!("{}{path}", self.base_url)),
+            })?;
+        Ok(Some(items.items))
+    }
+
     /// Store a signer list version. A second version 1 for the project is
     /// answered with who turned signing on.
     pub async fn publish_signer_list(

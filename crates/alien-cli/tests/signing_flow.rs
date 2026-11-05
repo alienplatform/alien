@@ -916,8 +916,14 @@ async fn setup_templates_are_stored_as_signed() {
     let pins = alien_core::SetupPins {
         aws_publisher: Some("111122223333".to_string()),
         aws_verifier_image: Some(format!("verifier@sha256:{}", "5d".repeat(32))),
-        gcp_verifier_image: Some(format!("us-docker.pkg.dev/publisher/verifier/verifier@sha256:{}", "5d".repeat(32))),
-        azure_verifier_image: Some(format!("publisher.azurecr.io/verifier@sha256:{}", "5d".repeat(32))),
+        gcp_verifier_image: Some(format!(
+            "us-docker.pkg.dev/publisher/verifier/verifier@sha256:{}",
+            "5d".repeat(32)
+        )),
+        azure_verifier_image: Some(format!(
+            "publisher.azurecr.io/verifier@sha256:{}",
+            "5d".repeat(32)
+        )),
         operator_digest: None,
     };
     let rendered = alien_cli::signing::release::setup_templates(
