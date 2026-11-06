@@ -1361,19 +1361,53 @@ mod tests {
             }
         }
 
+        /// The signing settings the module merges last into the settings it reports.
+        fn reported_signing(files: &std::collections::BTreeMap<String, String>) -> JsonValue {
+            let locals: hcl::Body = hcl::from_str(&files["locals.tf"]).expect("locals.tf");
+            let settings = locals
+                .blocks()
+                .filter(|block| block.identifier() == "locals")
+                .flat_map(|block| block.body().attributes())
+                .find(|attribute| attribute.key() == "deployment_settings")
+                .expect("deployment_settings local")
+                .expr()
+                .clone();
+            let hcl::Expression::FuncCall(call) = settings else {
+                panic!("deployment_settings reports no signing settings: {settings}");
+            };
+            assert_eq!(call.name.to_string(), "merge");
+            let object = |expression: &hcl::Expression| -> Vec<(String, hcl::Expression)> {
+                let hcl::Expression::Object(object) = expression else {
+                    panic!("expected an object, got {expression}");
+                };
+                object
+                    .iter()
+                    .map(|(key, value)| {
+                        (key.to_string().trim_matches('"').to_string(), value.clone())
+                    })
+                    .collect()
+            };
+            let last = call.args.last().expect("merge arguments");
+            let (_, signing) = object(last)
+                .into_iter()
+                .find(|(key, _)| key == "signing")
+                .unwrap_or_else(|| panic!("the last settings merged are not signing: {last}"));
+            JsonValue::Object(
+                object(&signing)
+                    .into_iter()
+                    .map(|(key, value)| (key, literal(&value)))
+                    .collect(),
+            )
+        }
+
         /// What `terraform output -json` prints after apply: the module's literals as
         /// written, the computed values as each cloud resolves them.
         fn recorded_outputs(
             cloud: ModuleCloud,
             declared: &std::collections::BTreeMap<String, hcl::Expression>,
+            signing: JsonValue,
         ) -> JsonValue {
-            let settings = serde_json::json!({
-                "setupManagement": "manual",
-                "signing": {
-                    "fingerprint": crate::commands::verify::tests::fingerprint(),
-                    "channel": "production"
-                }
-            });
+            let settings = serde_json::json!({ "setupManagement": "manual", "signing": signing });
             let (region, management, resources) = match cloud {
                 ModuleCloud::Aws => (
                     "us-east-1",
@@ -1458,7 +1492,17 @@ mod tests {
                     "{cloud:?}: the signing vault output is Azure's only"
                 );
                 let dir = tempfile::tempdir().unwrap();
-                let terraform = stand_in_terraform(dir.path(), &recorded_outputs(cloud, &declared));
+                let signing = reported_signing(&files);
+                assert_eq!(
+                    signing,
+                    serde_json::json!({
+                        "fingerprint": crate::commands::verify::tests::fingerprint(),
+                        "channel": "production"
+                    }),
+                    "{cloud:?}: the module reports the signing settings it pins"
+                );
+                let terraform =
+                    stand_in_terraform(dir.path(), &recorded_outputs(cloud, &declared, signing));
                 let outputs = read_terraform_outputs(terraform.to_str().unwrap(), dir.path())
                     .expect("outputs read");
                 let request = build_import_request(
@@ -1495,13 +1539,11 @@ mod tests {
                 assert_eq!(request.resource_prefix, "acme-prod");
                 assert_eq!(request.platform.as_str(), cloud.platform());
                 assert_eq!(request.base_platform, None);
+                let signing = request.stack_settings.signing.as_ref().expect("protected");
+                assert_eq!(signing.channel, "production");
                 assert_eq!(
-                    request
-                        .stack_settings
-                        .signing
-                        .as_ref()
-                        .map(|s| s.channel.as_str()),
-                    Some("production")
+                    signing.fingerprint,
+                    crate::commands::verify::tests::fingerprint()
                 );
                 assert_eq!(request.resources.len(), 1);
                 assert_eq!(request.resources[0].id, "assets");
@@ -1552,7 +1594,11 @@ mod tests {
             );
             (
                 tempfile::tempdir().unwrap(),
-                recorded_outputs(ModuleCloud::Aws, &declared),
+                recorded_outputs(
+                    ModuleCloud::Aws,
+                    &declared,
+                    serde_json::json!({ "fingerprint": "SHA256:abc", "channel": "production" }),
+                ),
             )
         }
 
