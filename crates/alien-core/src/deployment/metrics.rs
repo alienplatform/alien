@@ -55,6 +55,7 @@ pub struct ScrapeEndpoint {
     pub url: String,
     pub replica_id: String,
     /// Replica addresses supplied by the trusted runtime resolver; DNS is never consulted.
+    #[cfg_attr(feature = "openapi", schema(value_type = Vec<String>))]
     pub addresses: Vec<IpAddr>,
     pub max_response_bytes: usize,
     pub max_samples: usize,
