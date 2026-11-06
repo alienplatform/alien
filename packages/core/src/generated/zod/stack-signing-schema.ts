@@ -11,6 +11,7 @@ import * as z from "zod";
 export const StackSigningSchema = z.object({
     "channel": z.string().describe("Release channel the install follows, such as `production`."),
 "fingerprint": z.string().describe("`SHA256:<64 hex>` fingerprint of the vendor's signer list version 1."),
+"privateInputCustody": z.optional(z.boolean().describe("Resolve private inputs locally even when machine coordination remains hosted.")),
 "privateMachineApiUrl": z.string().describe("Customer setup pins this private instance machine endpoint and enables\ninstall-local input custody. It cannot be changed by the runtime role.").nullish()
     }).describe("What setup pins for a protected install.\n\nTake the values from the vendor's install guide or signed release, not from the\ncontrol plane.")
 
