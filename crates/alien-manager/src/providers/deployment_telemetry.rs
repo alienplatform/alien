@@ -64,7 +64,7 @@ impl DeploymentTelemetryBackend {
                 record
                     .supplied_stacks
                     .as_ref()
-                    .and_then(|stacks| stacks.current.as_ref())
+                    .and_then(|stacks| stacks.current.as_ref().or(stacks.desired.as_ref()))
             });
         let settings = record
             .deployment_config
@@ -72,6 +72,12 @@ impl DeploymentTelemetryBackend {
             .map(|config| &config.stack_settings)
             .or(record.stack_settings.as_ref())
             .ok_or_else(|| failure("Telemetry deployment configuration is unavailable"))?;
+        if stack.is_none()
+            && settings.telemetry_destinations.is_none()
+            && (record.current_release_id.is_some() || record.desired_release_id.is_some())
+        {
+            return Err(failure("Released telemetry defaults are unavailable; deployment reconciliation is required"));
+        }
         let variables = record
             .deployment_config
             .as_ref()

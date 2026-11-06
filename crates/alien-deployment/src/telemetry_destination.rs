@@ -337,7 +337,8 @@ pub fn for_deployment(
         .runtime_metadata
         .as_ref()
         .and_then(|metadata| metadata.prepared_stack.as_ref())
-        .or_else(|| state.current_release.as_ref().map(|release| &release.stack));
+        .or_else(|| state.current_release.as_ref().map(|release| &release.stack))
+        .or_else(|| state.target_release.as_ref().map(|release| &release.stack));
     let Some(destinations) = destinations(&config.stack_settings, stack) else {
         return Ok(None);
     };
