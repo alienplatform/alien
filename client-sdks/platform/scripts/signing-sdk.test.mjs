@@ -65,6 +65,22 @@ for (const retry of [false, true]) {
   });
 }
 
+test("published secret-reference object aliases retain their wire validation", async () => {
+  const models = await import("../typescript/esm/models/index.js");
+  const deep = await import("../typescript/esm/models/externalbindingecr.js");
+  const valid = { secretRef: { key: "credential", name: "application-secrets" } };
+  for (const [module, names] of [[models, ["ClusterEndpoint", "PasswordSecretArn", "DataDir1", "ConnectionUrl"]], [deep, ["ClusterEndpoint", "PasswordSecretArn"]]]) {
+    for (const name of names) {
+      assert.deepEqual(module[`${name}$inboundSchema`].parse(valid), valid);
+      assert.deepEqual(module[`${name}$outboundSchema`].parse(valid), valid);
+      for (const invalid of [{}, { secretRef: {} }, { secretRef: { key: 7, name: "application-secrets" } }, { secretRef: { key: "credential", name: 7 } }]) {
+        assert.equal(module[`${name}$inboundSchema`].safeParse(invalid).success, false);
+        assert.equal(module[`${name}$outboundSchema`].safeParse(invalid).success, false);
+      }
+    }
+  }
+});
+
 test("signed statements keep the exact signed bytes through HTTP writes and list replies", async () => {
   const observed = [];
   const sdk = client(async request => {

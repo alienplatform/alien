@@ -41,8 +41,13 @@ cp -R "$sdk_dir/docs/models" "$published_models/model-docs"
 )
 
 # Copy only missing files; current generated models always win over old output.
-cp -Rn "$published_models/models/." "$sdk_dir/src/models/"
-cp -Rn "$published_models/model-docs/." "$sdk_dir/docs/models/"
+node --input-type=module - "$published_models" "$sdk_dir" <<'JS'
+import { cp } from "node:fs/promises";
+const [, , snapshot, sdk] = process.argv;
+const options = { recursive: true, force: false, errorOnExist: false };
+await cp(`${snapshot}/models`, `${sdk}/src/models`, options);
+await cp(`${snapshot}/model-docs`, `${sdk}/docs/models`, options);
+JS
 
 while IFS= read -r -d '' generated_file; do
   if [[ "$generated_file" == *.md && -f "$repo_root/$generated_file" ]]; then
