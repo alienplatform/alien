@@ -839,14 +839,26 @@ async fn run_remote_exec_attach(
         token.set_sensitive(true);
         request.headers_mut().insert("x-alien-exec-session", token);
     }
-    let (socket, _) =
-        connect_async(request)
+    let connect = connect_async(request);
+    let connected = if private {
+        let connect_timeout = std::time::Duration::from_secs(timeout_seconds.unwrap_or(20).min(20));
+        tokio::time::timeout(connect_timeout, connect)
             .await
-            .into_alien_error()
-            .context(ErrorData::ApiRequestFailed {
-                message: "Failed to dial remote exec session".to_string(),
-                url: Some(session.attach_url.clone()),
-            })?;
+            .map_err(|_| {
+                AlienError::new(ErrorData::ApiRequestFailed {
+                    message: "Private exec connection timed out".into(),
+                    url: None,
+                })
+            })?
+    } else {
+        connect.await
+    };
+    let (socket, _) = connected
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to dial remote exec session".to_string(),
+            url: Some(session.attach_url.clone()),
+        })?;
     let (mut sink, mut stream) = socket.split();
 
     let _raw_guard = if session.tty && std::io::stdin().is_terminal() {
@@ -1935,6 +1947,44 @@ fn shell_echo_block(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn private_exec_cancels_a_stalled_websocket_upgrade() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            // Keep the HTTP upgrade pending until the client cancels it.
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                stream.read_to_end(&mut request),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let request = String::from_utf8(request).unwrap();
+            assert!(request.starts_with("GET /v1/debug/private-exec/sessions/"));
+            assert!(!request.contains("private-command-canary"));
+        });
+        let session = remote_exec_session(&format!("http://{address}/v1/debug/private-exec/sessions/dbg_1234567890123456789012345678/client"), "fixture-private-token");
+        let signing = crate::commands::signed_session::SessionSigning {
+            ctx: ExecutionMode::Dev { port: 0 },
+            machine: Some("node-1".into()),
+            workload: None,
+            argv: Some(vec!["private-command-canary".into()]),
+            tty: false,
+            reason: "fixture".into(),
+        };
+        let error = run_remote_exec_attach(session, Some(1), false, Some(signing))
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Private exec connection timed out"));
+        server.await.unwrap();
+    }
 
     #[tokio::test]
     async fn private_exec_uses_header_capability_and_refuses_unsigned_session_downgrade() {
