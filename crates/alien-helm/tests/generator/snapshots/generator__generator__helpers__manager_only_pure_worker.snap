@@ -16,6 +16,12 @@ management:
   existingSecret:
     name: ""
     tokenKey: sync-token
+  # One-hour, one-use code that enrolls the Operator for a registered
+  # deployment, instead of token. The Operator then keeps its own key, which
+  # it replaces every day. Requires deploymentId, audience and persistence.
+  enrollmentCode: ""
+  # The manager audience returned with the enrollment code.
+  audience: ""
   name: ""
   # Resolved management endpoint captured when this package was built.
   defaultUrl: ""
@@ -297,6 +303,8 @@ postgres: {}
             "tokenKey": { "type": "string", "minLength": 1 }
           }
         },
+        "enrollmentCode": { "type": "string" },
+        "audience": { "type": "string" },
         "name": { "type": "string" },
         "url": { "type": "string" },
         "defaultUrl": { "type": "string" },
@@ -305,6 +313,19 @@ postgres: {}
         "updates": { "type": "string", "enum": ["auto", "approval-required"] },
         "telemetry": { "type": "string", "enum": ["auto", "approval-required", "off"] },
         "healthChecks": { "type": "string", "enum": ["on", "off"] }
+      },
+      "if": {
+        "required": ["enrollmentCode"],
+        "properties": { "enrollmentCode": { "minLength": 1 } }
+      },
+      "then": {
+        "required": ["audience", "deploymentId"],
+        "properties": {
+          "audience": { "minLength": 1 },
+          "deploymentId": { "type": "string", "minLength": 1 },
+          "token": { "enum": [""] },
+          "existingSecret": { "properties": { "name": { "enum": [""] } } }
+        }
       }
     },
     "runtime": {
@@ -931,7 +952,15 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{- define "deployment.managementSecretTokenKey" -}}
+{{- if .Values.management.enrollmentCode -}}
+enrollment-code
+{{- else -}}
 {{- default "sync-token" .Values.management.existingSecret.tokenKey -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "deployment.managementCredentialFile" -}}
+{{- ternary "enrollment-code" "sync-token" (not (empty .Values.management.enrollmentCode)) -}}
 {{- end -}}
 
 {{- define "deployment.encryptionSecretName" -}}
@@ -955,6 +984,9 @@ different namespaces of one cluster from colliding. */ -}}
 {{- $credentialConfigured := or .Values.management.token .Values.management.existingSecret.name -}}
 {{- if and $credentialConfigured (not .Values.management.deploymentId) (not $storage.enabled) -}}
   {{- fail "A bootstrap installation requires persistent runtime storage. Set runtime.data.persistence.enabled=true; ephemeral storage requires an existing deployment ID and its deployment credential." -}}
+{{- end -}}
+{{- if and .Values.management.enrollmentCode (not $storage.enabled) -}}
+  {{- fail "Enrollment keeps the Operator's daily key in runtime storage. Set runtime.data.persistence.enabled=true." -}}
 {{- end -}}
 {{- $name := include "deployment.fullname" . -}}
 {{- $installed := lookup "apps/v1" "Deployment" .Release.Namespace $name -}}
@@ -1241,7 +1273,11 @@ metadata:
 type: Opaque
 stringData:
   {{- if $createManagementSecret }}
+  {{- if .Values.management.enrollmentCode }}
+  enrollment-code: {{ .Values.management.enrollmentCode | quote }}
+  {{- else }}
   sync-token: {{ .Values.management.token | quote }}
+  {{- end }}
   {{- end }}
   {{- if $createEncryptionSecret }}
   encryption-key: {{ include "deployment.runtimeEncryptionKey" . | quote }}
@@ -1329,7 +1365,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
-        checksum/management-credential: {{ toJson (dict "token" .Values.management.token "existingSecret" .Values.management.existingSecret) | sha256sum | quote }}
+        checksum/management-credential: {{ toJson (dict "token" .Values.management.token "existingSecret" .Values.management.existingSecret "enrollmentCode" .Values.management.enrollmentCode) | sha256sum | quote }}
         checksum/pod-log-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}
         {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
         checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
@@ -1454,8 +1490,15 @@ spec:
             - name: DATA_DIR
               value: {{ .Values.runtime.data.mountPath | quote }}
             {{- if not (dig "enabled" false (default dict .Values.airgapped)) }}
+            {{- if .Values.management.enrollmentCode }}
+            - name: OPERATOR_ENROLLMENT_CODE_FILE
+              value: /etc/deployment/secrets/enrollment-code
+            - name: ALIEN_MANAGER_AUDIENCE
+              value: {{ .Values.management.audience | quote }}
+            {{- else }}
             - name: SYNC_TOKEN_FILE
               value: /etc/deployment/secrets/sync-token
+            {{- end }}
             {{- end }}
             - name: OPERATOR_ENCRYPTION_KEY_FILE
               value: /etc/deployment/secrets/encryption-key
@@ -1541,8 +1584,8 @@ spec:
               readOnly: true
             {{- end }}
             - name: management-token
-              mountPath: /etc/deployment/secrets/sync-token
-              subPath: sync-token
+              mountPath: /etc/deployment/secrets/{{ include "deployment.managementCredentialFile" . }}
+              subPath: {{ include "deployment.managementCredentialFile" . }}
               readOnly: true
             - name: encryption-key
               mountPath: /etc/deployment/secrets/encryption-key
@@ -1586,7 +1629,7 @@ spec:
             secretName: {{ include "deployment.managementSecretName" . }}
             items:
               - key: {{ include "deployment.managementSecretTokenKey" . }}
-                path: sync-token
+                path: {{ include "deployment.managementCredentialFile" . }}
             defaultMode: 384
         - name: encryption-key
           secret:

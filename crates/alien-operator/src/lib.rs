@@ -291,6 +291,23 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
 
     // Initialize encrypted database
     let db = Arc::new(db::OperatorDb::new(&config.data_dir, &config.encryption_key).await?);
+    let service_provider = if db.read_daily_identity().await?.is_some()
+        && (service_provider.is_none() || local_bindings.is_some())
+    {
+        let provider = if let Some(local) = local_bindings.clone() {
+            alien_infra::DefaultPlatformServiceProvider::with_local_bindings(local)
+        } else {
+            alien_infra::DefaultPlatformServiceProvider::default()
+        };
+        Some(
+            Arc::new(provider.with_runtime_registry_credentials(Arc::new(
+                daily_identity::OperatorRegistryCredentials(db.clone()),
+            ))) as Arc<dyn alien_infra::PlatformServiceProvider>,
+        )
+    } else {
+        service_provider
+    };
+
     validate_runtime_deployment_scope(
         &db,
         config.label_domain.as_deref(),
@@ -1593,3 +1610,5 @@ impl alien_infra::BrokerAuthorizationProvider for OperatorBrokerAuthorization {
         })
     }
 }
+
+mod daily_identity;
