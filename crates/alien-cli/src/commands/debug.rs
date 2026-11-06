@@ -1974,12 +1974,18 @@ mod tests {
 
     #[tokio::test]
     async fn private_exec_create_omits_argv_and_refuses_hosted_or_legacy_attach() {
-        for outcome in ["private", "hosted", "legacy", "unavailable"] {
+        for outcome in [
+            "private",
+            "hosted",
+            "legacy",
+            "unavailable",
+            "legacy-create",
+        ] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let origin = format!("http://{}", listener.local_addr().unwrap());
             let id = "dbg_1234567890123456789012345678";
             let attach = match outcome {
-                "hosted" => format!(
+                "hosted" | "legacy-create" => format!(
                     "https://hosted.example.test/v1/debug/private-exec/sessions/{id}/client"
                 ),
                 "legacy" => format!("{origin}/v1/exec/sessions/{id}/attach"),
@@ -2021,7 +2027,7 @@ mod tests {
             let manager = ManagerContext {
                 manager_url: origin.clone(),
                 manager_name: None,
-                manager_is_system: Some(false),
+                manager_is_system: Some(outcome == "legacy-create"),
                 manager_cloud: None,
                 client: alien_manager_api::Client::new(&origin),
                 http_client: reqwest::Client::new(),
@@ -2043,16 +2049,28 @@ mod tests {
                 },
             )
             .await;
-            assert_eq!(result.is_ok(), outcome == "private", "{outcome}");
+            assert_eq!(
+                result.is_ok(),
+                matches!(outcome, "private" | "legacy-create"),
+                "{outcome}"
+            );
             let observed = requests.lock().await;
             assert_eq!(
                 observed.len(),
                 1,
                 "private requests must never retry on a legacy route"
             );
-            assert_eq!(observed[0].0, "/v1/debug/private-exec/sessions");
-            assert!(observed[0].1.get("command").is_none());
-            assert!(!observed[0].1.to_string().contains("private-argv-canary"));
+            if outcome == "legacy-create" {
+                assert_eq!(observed[0].0, DEBUG_SESSIONS_PATH);
+                assert_eq!(
+                    observed[0].1["command"],
+                    serde_json::json!(["private-argv-canary"])
+                );
+            } else {
+                assert_eq!(observed[0].0, "/v1/debug/private-exec/sessions");
+                assert!(observed[0].1.get("command").is_none());
+                assert!(!observed[0].1.to_string().contains("private-argv-canary"));
+            }
             assert_eq!(observed[0].1["deploymentId"], "dep_fixture");
             server.abort();
         }
