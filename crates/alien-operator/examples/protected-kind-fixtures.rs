@@ -232,6 +232,7 @@ fn main() -> Result<(), Error> {
     )?
     .sign_with("alice-laptop", &laptop)?;
     let settings = SigningSettings {
+        private_input_custody: false,
         private_machine_api_url: None,
         fingerprint: fingerprint(&v1.open()?.digest),
         prefix: release_name.clone(),

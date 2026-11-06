@@ -57,6 +57,7 @@ async fn render(
     fingerprint: &str,
 ) -> std::collections::BTreeMap<String, alien_cli_common::setup_templates::RenderedSetupTemplate> {
     let signing = StackSigning {
+        private_input_custody: false,
         private_machine_api_url: None,
         fingerprint: fingerprint.to_string(),
         channel: "production".to_string(),
@@ -198,6 +199,7 @@ async fn cloudformation_runs_the_pinned_verifier_and_limits_management() {
 #[tokio::test]
 async fn a_build_without_pins_refuses_to_render_protected_aws_setup() {
     let signing = StackSigning {
+        private_input_custody: false,
         private_machine_api_url: None,
         fingerprint: FINGERPRINT.to_string(),
         channel: "production".to_string(),
@@ -227,6 +229,7 @@ async fn a_build_without_pins_refuses_to_render_protected_aws_setup() {
 #[tokio::test]
 async fn a_build_without_the_azure_verifier_image_refuses_protected_azure_setup() {
     let signing = StackSigning {
+        private_input_custody: false,
         private_machine_api_url: None,
         fingerprint: FINGERPRINT.to_string(),
         channel: "production".to_string(),
@@ -330,6 +333,7 @@ async fn hosting_options_cannot_weaken_the_protected_locks() {
         let hosting: SetupHostingOptions =
             serde_json::from_value(options.clone()).expect("hosting options parse");
         let signing = StackSigning {
+            private_input_custody: false,
             private_machine_api_url: None,
             fingerprint: FINGERPRINT.to_string(),
             channel: "production".to_string(),

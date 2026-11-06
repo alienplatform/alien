@@ -25,6 +25,7 @@ fn main() {
         [_, _, fingerprint, channel, digest] => {
             let settings = StackSettings {
                 signing: Some(StackSigning {
+                    private_input_custody: false,
                     private_machine_api_url: None,
                     fingerprint: fingerprint.clone(),
                     channel: channel.clone(),

@@ -29,6 +29,7 @@ async fn render() -> BTreeMap<String, RenderedSetupTemplate> {
     }))
     .expect("fixture stack parses");
     let signing = StackSigning {
+        private_input_custody: false,
         private_machine_api_url: None,
         fingerprint: format!("SHA256:{}", "ab".repeat(32)),
         channel: "production".to_string(),

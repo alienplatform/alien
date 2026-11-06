@@ -104,6 +104,10 @@ pub struct ReleaseArgs {
     #[arg(long, conflicts_with = "no_stack")]
     pub private_machine_api_url: Option<String>,
 
+    /// Keep input values in the setup-owned store without changing the machine API.
+    #[arg(long, conflicts_with = "no_stack")]
+    pub private_input_custody: bool,
+
     /// Create the release without advancing a channel or scheduling deployment updates (platform mode).
     #[arg(long, conflicts_with = "channel")]
     pub no_promote: bool,
@@ -365,6 +369,7 @@ struct SigningState {
     protected: u64,
     channel: String,
     private_machine_api_url: Option<String>,
+    private_input_custody: bool,
     /// Whether the release goes to the channel now. With `--no-promote` it is
     /// signed for the channel but no deployment runs it until it's promoted.
     promoted: bool,
@@ -394,7 +399,7 @@ impl SigningState {
             SigningPlan::Sign(_) => return Ok(()),
             SigningPlan::Unsigned(reason) | SigningPlan::Requested(reason) => reason,
         };
-        if self.private_machine_api_url.is_some() {
+        if self.private_input_custody || self.private_machine_api_url.is_some() {
             return Err(AlienError::new(ErrorData::ReleaseFailed {
                 message: format!(
                     "Private machine setup cannot fall back to an unsigned release: {reason}"
@@ -709,6 +714,7 @@ async fn plan_signing(
     }
     if ctx.is_dev() {
         return Ok(SigningState {
+            private_input_custody: false,
             private_machine_api_url: None,
             plan: SigningPlan::Unsigned("local development is unsigned".to_string()),
             protected: 0,
@@ -721,12 +727,15 @@ async fn plan_signing(
     let api = SigningApi::from_context(ctx).await?;
     let protected = protected_following(ctx, project_id, &channel).await?;
     let plan = signing::release::plan(&api, dir, project_id, interactive).await?;
-    if args.private_machine_api_url.is_some() && !matches!(&plan, SigningPlan::Sign(_)) {
+    if (args.private_input_custody || args.private_machine_api_url.is_some())
+        && !matches!(&plan, SigningPlan::Sign(_))
+    {
         return Err(AlienError::new(ErrorData::SigningFailed {
             message: "Private machine setup requires a usable signing key".to_string(),
         }));
     }
     Ok(SigningState {
+        private_input_custody: args.private_input_custody,
         private_machine_api_url: args.private_machine_api_url.clone(),
         plan,
         protected,
@@ -928,7 +937,7 @@ async fn release_task_core(
         // Push images if needed (the test platform skips pushing). --prebuilt skips the build,
         // not the push: it reuses already-pushed artifacts via the cache and pushes any local ones.
         // Local platform pushes to a cloud registry — the alien-operator pulls from it.
-        let mut pushed_stack = if platform != Platform::Test {
+        let pushed_stack = if platform != Platform::Test {
             if args.prebuilt {
                 rebase_prebuilt_stack_image_paths(&mut built_stack, &output_dir)?;
             }
@@ -950,14 +959,6 @@ async fn release_task_core(
         } else {
             built_stack
         };
-
-        if signing.private_machine_api_url.is_some() {
-            alien_core::release_statement::add_private_tls_inputs(&mut pushed_stack)
-                .into_alien_error()
-                .context(ErrorData::SigningFailed {
-                    message: "Cannot bind private managed TLS files".to_string(),
-                })?;
-        }
 
         // Convert to JSON for the API
         let stack_json = serde_json::to_value(&pushed_stack)
@@ -1078,10 +1079,11 @@ async fn sign_release(
     if pushed
         .iter()
         .any(|(_, stack)| stack.inputs.iter().any(|input| !input.files.is_empty()))
-        && (signing.signing().is_none() || signing.private_machine_api_url.is_none())
+        && (signing.signing().is_none()
+            || (!signing.private_input_custody && signing.private_machine_api_url.is_none()))
     {
         return Err(AlienError::new(ErrorData::SigningFailed {
-            message: "Private file inputs require a signed release with --private-machine-api-url"
+            message: "Private file inputs require a signed release with --private-input-custody or --private-machine-api-url"
                 .to_string(),
         }));
     }
@@ -1098,6 +1100,7 @@ async fn sign_release(
                 })
             })?;
         let settings = alien_core::StackSigning {
+            private_input_custody: signing.private_input_custody,
             private_machine_api_url: signing.private_machine_api_url.clone(),
             fingerprint,
             channel: signing.channel.clone(),
@@ -3434,6 +3437,7 @@ mod tests {
             plan: SigningPlan::Unsigned("setup renderer unavailable".to_string()),
             protected: 0,
             channel: "production".to_string(),
+            private_input_custody: false,
             private_machine_api_url: Some("https://instance.example/v1/horizon".to_string()),
             promoted: false,
             json: false,
@@ -3442,6 +3446,9 @@ mod tests {
         assert!(state.refuse_unsigned().is_err());
         assert!(state.cannot_sign("signing device disconnected").is_err());
         state.private_machine_api_url = None;
+        state.private_input_custody = true;
+        assert!(state.refuse_unsigned().is_err());
+        state.private_input_custody = false;
         state.refuse_unsigned().unwrap();
     }
 
@@ -3554,6 +3561,7 @@ mod tests {
             platforms: vec!["test".to_string()],
             onboarding_inputs: vec![],
             signing: SigningState {
+                private_input_custody: false,
                 private_machine_api_url: None,
                 plan: SigningPlan::Unsigned("not under test".to_string()),
                 protected: 0,

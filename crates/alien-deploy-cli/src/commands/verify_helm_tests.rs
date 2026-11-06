@@ -24,6 +24,7 @@ const RELEASE: &str = "shop";
 
 async fn chart() -> RenderedSetupTemplate {
     let signing = StackSigning {
+        private_input_custody: false,
         private_machine_api_url: None,
         fingerprint: fingerprint(),
         channel: "production".to_string(),

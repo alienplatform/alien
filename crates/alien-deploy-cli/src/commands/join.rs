@@ -3218,6 +3218,10 @@ fn install_state_path(paths: &InstallPaths) -> PathBuf {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SigningSettingsFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    private_machine_api_url: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    private_input_custody: bool,
     fingerprint: String,
     prefix: String,
     channel: String,
@@ -3236,6 +3240,7 @@ fn resolve_signing(args: &JoinArgs) -> Result<Option<SigningSettings>> {
     ) {
         (Some(fingerprint), Some(prefix), Some(channel)) => {
             let settings = SigningSettings {
+                private_input_custody: false,
                 private_machine_api_url: None,
                 fingerprint: fingerprint.clone(),
                 prefix: prefix.clone(),
@@ -3303,7 +3308,8 @@ fn read_signing_settings(install_root: &Path) -> Result<Option<(SigningSettings,
         .into_alien_error()
         .context(unreadable())?;
     let settings = SigningSettings {
-        private_machine_api_url: None,
+        private_input_custody: file.private_input_custody,
+        private_machine_api_url: file.private_machine_api_url,
         fingerprint: file.fingerprint,
         prefix: file.prefix,
         channel: file.channel,
@@ -3348,6 +3354,8 @@ fn write_signing_settings(
         reason: reason.to_string(),
     };
     let text = toml::to_string(&SigningSettingsFile {
+        private_input_custody: settings.private_input_custody,
+        private_machine_api_url: settings.private_machine_api_url.clone(),
         fingerprint: settings.fingerprint.clone(),
         prefix: settings.prefix.clone(),
         channel: settings.channel.clone(),
@@ -6042,6 +6050,7 @@ mod tests {
 
         fn signing_settings(fingerprint: &str) -> SigningSettings {
             SigningSettings {
+                private_input_custody: false,
                 private_machine_api_url: None,
                 fingerprint: fingerprint.to_string(),
                 prefix: "acme-edge".to_string(),

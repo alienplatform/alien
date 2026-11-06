@@ -1128,6 +1128,9 @@ pub struct StackSigning {
     /// install-local input custody. It cannot be changed by the runtime role.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private_machine_api_url: Option<String>,
+    /// Resolve private inputs locally even when machine coordination remains hosted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private_input_custody: bool,
     /// `SHA256:<64 hex>` fingerprint of the vendor's signer list version 1.
     pub fingerprint: String,
     /// Release channel the install follows, such as `production`.
@@ -1139,6 +1142,7 @@ impl StackSigning {
     /// the way enforcers check them when they read them.
     pub fn settings(&self, prefix: &str) -> Result<SigningSettings> {
         let settings = SigningSettings {
+            private_input_custody: self.private_input_custody,
             private_machine_api_url: self.private_machine_api_url.clone(),
             fingerprint: self.fingerprint.clone(),
             prefix: prefix.to_string(),

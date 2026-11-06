@@ -23,6 +23,9 @@ pub struct SigningSettings {
     /// from this install's input store and machine traffic uses this endpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private_machine_api_url: Option<String>,
+    /// Resolve private inputs locally even when machine coordination remains hosted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private_input_custody: bool,
     /// `SHA256:<hex>` fingerprint of the project's signer list version 1.
     pub fingerprint: String,
     /// The install's resource prefix. It must equal the place the settings
@@ -451,9 +454,18 @@ mod private_endpoint_tests {
         let mut settings =
             SigningSettings::parse(&serde_json::to_vec(&legacy).unwrap(), "owned-install").unwrap();
         assert_eq!(settings.private_machine_api_url, None);
+        assert!(!settings.private_input_custody);
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&settings.to_json()).unwrap(),
             legacy
+        );
+        settings.private_input_custody = true;
+        let private =
+            SigningSettings::parse(settings.to_json().as_bytes(), "owned-install").unwrap();
+        assert!(private.private_input_custody);
+        assert_eq!(
+            private.private_machine_api_url, None,
+            "custody must not redirect bootstrap coordination"
         );
         settings.private_machine_api_url = Some("https://instance.example/v1/horizon".to_string());
         assert_eq!(

@@ -118,6 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?
     .sign_with("ci", &ci)?;
     let settings = SigningSettings {
+        private_input_custody: false,
         private_machine_api_url: None,
         fingerprint: fingerprint(&list.open()?.digest),
         prefix: prefix.clone(),

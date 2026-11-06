@@ -102,6 +102,7 @@ fn write_chart(directory: &Path, protected: bool) {
     let chart = if protected {
         let settings = StackSettings {
             signing: Some(StackSigning {
+                private_input_custody: false,
                 private_machine_api_url: None,
                 fingerprint: FINGERPRINT.to_string(),
                 channel: "production".to_string(),
@@ -267,6 +268,7 @@ fn protected_chart_keeps_signing_state_and_locks_the_operator() {
     assert_eq!(
         parsed,
         SigningSettings {
+            private_input_custody: false,
             private_machine_api_url: None,
             fingerprint: FINGERPRINT.to_string(),
             prefix: RELEASE.to_string(),

@@ -692,6 +692,7 @@ mod tests {
     async fn release_digests_are_of_the_templates_the_control_plane_renders() {
         let stack = storage_stack();
         let signing = StackSigning {
+            private_input_custody: false,
             private_machine_api_url: None,
             fingerprint: format!("SHA256:{}", "9f".repeat(32)),
             channel: "production".to_string(),

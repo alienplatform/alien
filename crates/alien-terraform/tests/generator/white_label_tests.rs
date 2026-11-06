@@ -49,6 +49,7 @@ fn settings(setup_management: SetupManagement) -> StackSettings {
             availability_zones: 2,
         }),
         signing: Some(StackSigning {
+            private_input_custody: false,
             private_machine_api_url: None,
             fingerprint: format!("SHA256:{}", "9f".repeat(32)),
             channel: "production".to_string(),
