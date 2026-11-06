@@ -87,3 +87,4 @@ libc = "0.2"
 httpmock = { workspace = true }
 alien-cloudformation = { workspace = true }
 alien-terraform = { workspace = true }
+hcl-rs = { workspace = true }

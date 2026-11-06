@@ -454,4 +454,4 @@ pub(crate) fn key_vault_value(secret: &Value) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 #[path = "verify_terraform_tests.rs"]
-mod tests;
+pub(crate) mod tests;

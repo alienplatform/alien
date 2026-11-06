@@ -20,10 +20,9 @@ use alien_cloudformation::{
 };
 use alien_core::{
     AwsManagementConfig, Build, Container, ContainerCode, DeploymentConfig,
-    EnvironmentVariablesSnapshot, ExternalBindings, Kv, ManagementConfig,
-    NetworkSettings, Platform, Queue, ResourceLifecycle, ResourceSpec,
-    SetupManagement, Stack, StackSettings, StackSigning, StackState, Storage, Vault, Worker, WorkerCode,
-    WorkerTrigger,
+    EnvironmentVariablesSnapshot, ExternalBindings, Kv, ManagementConfig, NetworkSettings,
+    Platform, Queue, ResourceLifecycle, ResourceSpec, SetupManagement, Stack, StackSettings,
+    StackSigning, StackState, Storage, Vault, Worker, WorkerCode, WorkerTrigger,
 };
 use alien_permissions::{
     generators::AwsRuntimePermissionsGenerator, get_permission_set, list_permission_set_ids,

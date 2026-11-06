@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use alien_core::{Platform, SignedStatement, Stack};
 use alien_error::AlienError;
+use alien_signing::{Kind, ReleaseBody};
 
 /// Setup template bytes by template name (`cloudformation`, `helm`, ...),
 /// base64-encoded.
@@ -56,6 +57,53 @@ pub struct CreateReleaseParams {
     pub git_commit_message: Option<String>,
 }
 
+/// Which release a protected setup installs when it registers without a
+/// release id: one signed for `platform` on `channel` whose stack has this
+/// setup fingerprint. Setup templates are signed before their release exists,
+/// so they can't name it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtectedSetupQuery {
+    pub platform: Platform,
+    /// The channel the setup pins (its signing settings).
+    pub channel: String,
+    /// The setup target the fingerprint was computed for (`aws`, `gcp`, ...).
+    pub setup_target: String,
+    pub setup_fingerprint: String,
+    pub setup_fingerprint_version: u32,
+}
+
+impl ProtectedSetupQuery {
+    /// Whether `release` is signed for this setup's platform and channel and
+    /// its stack has this setup fingerprint. Signatures aren't checked here:
+    /// the deployment verifies the statement against its own settings.
+    pub fn matches(&self, release: &ReleaseRecord) -> bool {
+        let Some(body) = release
+            .signed_stacks
+            .get(&self.platform)
+            .and_then(|statement| statement.open().ok())
+            .filter(|opened| opened.kind == Kind::Release)
+            .and_then(|opened| opened.body::<ReleaseBody>().ok())
+        else {
+            return false;
+        };
+        if body.channel != self.channel {
+            return false;
+        }
+        let Some(stack) = release
+            .stacks
+            .get(&self.platform)
+            .and_then(|stack| serde_json::to_value(stack).ok())
+        else {
+            return false;
+        };
+        alien_cli_common::setup_fingerprint::setup_fingerprint(&stack, &self.setup_target)
+            == (
+                self.setup_fingerprint.clone(),
+                self.setup_fingerprint_version,
+            )
+    }
+}
+
 /// Persistence for releases. `caller` is metadata-about-who; `params` is
 /// data-to-persist — never conflate the two on a single struct.
 #[async_trait]
@@ -93,4 +141,19 @@ pub trait ReleaseStore: Send + Sync {
         &self,
         caller: &crate::auth::Subject,
     ) -> Result<Vec<ReleaseRecord>, AlienError>;
+
+    /// The newest release a protected setup that registered without a release
+    /// id installs (see [`ProtectedSetupQuery`]). None when there is none.
+    async fn get_release_for_protected_setup(
+        &self,
+        caller: &crate::auth::Subject,
+        query: &ProtectedSetupQuery,
+    ) -> Result<Option<ReleaseRecord>, AlienError> {
+        Ok(self
+            .list_releases(caller)
+            .await?
+            .into_iter()
+            .filter(|release| query.matches(release))
+            .max_by_key(|release| release.created_at))
+    }
 }

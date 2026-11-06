@@ -33,7 +33,7 @@ pub use emitter::{TfEmitter, TfFragment};
 pub use generator::{
     generate_product_terraform_module, generate_product_terraform_module_with_profile,
     generate_terraform_module, ModuleFiles, TerraformHelmInstall, TerraformOptions,
-    TerraformRegistration, SIGNING_FINGERPRINT_VARIABLE,
+    TerraformRegistration, TerraformSetupIdentity, SIGNING_FINGERPRINT_VARIABLE,
 };
 pub use registry::TfRegistry;
 pub use target::TerraformTarget;

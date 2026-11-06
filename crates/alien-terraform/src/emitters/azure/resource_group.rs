@@ -34,7 +34,10 @@ fn group_tags(ctx: &EmitContext<'_>) -> Result<Expression> {
     };
     let mut settings = signing.settings("stack")?;
     settings.prefix = "${local.resource_prefix}".to_string();
-    let value = settings.to_json().replace('\\', "\\\\").replace('"', "\\\"");
+    let value = settings
+        .to_json()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
     Ok(Expression::FuncCall(Box::new(
         hcl::expr::FuncCall::builder(hcl::Identifier::sanitized("merge"))
             .arg(tags)

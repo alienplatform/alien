@@ -19,3 +19,5 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 [features]
 # Revisions whose setup options take `pins` (the base may predate them).
 pins = []
+# Revisions whose Terraform options take `setup_identity`.
+setup-identity = []

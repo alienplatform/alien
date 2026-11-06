@@ -243,11 +243,10 @@ pub struct ProjectSigningResponse {
 /// render them with `alien render`, which registers through stack outputs.
 fn manager_setup_hosting() -> SetupHostingOptions {
     SetupHostingOptions {
-        registration: RegistrationMode::OutputsFallback,
+        registration: Some(RegistrationMode::OutputsFallback),
         description: None,
         management_trust: ManagementTrustOptions::default(),
         supported_aws_regions: Vec::new(),
-        terraform_registration: None,
     }
 }
 

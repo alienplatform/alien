@@ -13,7 +13,8 @@
 # Usage: scripts/setup-render-diff/run.sh [base-ref]
 #   SETUP_RENDER_DIFF_BASE_TARGET  cargo target dir for the base build (default: a temp dir)
 #   SETUP_RENDER_DIFF_OUT          keep the rendered trees and the diff here
-#   SETUP_RENDER_DIFF_BASE_FEATURES  renderer features for the base (`pins` if it has SetupPins)
+#   SETUP_RENDER_DIFF_BASE_FEATURES  renderer features for the base (`pins` if it has SetupPins,
+#                                    `setup-identity` if its TerraformOptions have setup_identity)
 #   UPDATE=1                       write the actual diff to expected.diff
 set -euo pipefail
 
@@ -49,7 +50,7 @@ CARGO_TARGET_DIR=${SETUP_RENDER_DIFF_BASE_TARGET:-$work/target} render "$work/ba
 
 cp "$repo/Cargo.toml" "$work/Cargo.toml"
 cp "$repo/Cargo.lock" "$work/Cargo.lock"
-render "$repo" "$out/head" pins
+render "$repo" "$out/head" pins,setup-identity
 
 # Without the timestamps diff puts on file headers, so equal renders give equal diffs.
 (cd "$out" && diff -ru base head || true) |

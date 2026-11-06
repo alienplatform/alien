@@ -21,7 +21,7 @@ use alien_core::{
 use alien_error::{AlienError, AlienErrorData, Context, IntoAlienError};
 use alien_helm::{HelmOptions, HelmRegistry};
 use alien_signing::release::{SetupTemplate, SETUP_TEMPLATES};
-use alien_terraform::{TerraformOptions, TerraformRegistration, TerraformTarget, TfRegistry};
+use alien_terraform::{TerraformOptions, TerraformSetupIdentity, TerraformTarget, TfRegistry};
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -55,8 +55,12 @@ pub type Result<T> = alien_error::Result<T, ErrorData>;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SetupHostingOptions {
-    /// How the CloudFormation stack reports itself after it is created.
-    pub registration: RegistrationMode,
+    /// How the CloudFormation stack reports itself after it is created. None when the service
+    /// hosts no CloudFormation setup (a project without AWS); rendering the CloudFormation
+    /// template then fails. Terraform modules need none: a protected module reports through its
+    /// outputs and `register --import terraform`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registration: Option<RegistrationMode>,
     /// CloudFormation template description.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -66,10 +70,6 @@ pub struct SetupHostingOptions {
     /// AWS regions the templates accept; empty accepts any.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supported_aws_regions: Vec<String>,
-    /// How Terraform modules report themselves; none for modules registered out of band. The
-    /// setup fingerprint it carries is replaced with the one computed from the stack.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub terraform_registration: Option<TerraformRegistration>,
 }
 
 /// Everything a setup template depends on besides the stack.
@@ -179,7 +179,12 @@ pub async fn render_setup_template(
                     setup_target: "aws".to_string(),
                     setup_fingerprint: setup_fingerprint.clone(),
                     setup_fingerprint_version,
-                    registration: options.hosting.registration.clone(),
+                    registration: options.hosting.registration.clone().ok_or_else(|| {
+                        render_failed(
+                            name,
+                            "the service that hosts the templates gave no CloudFormation registration",
+                        )
+                    })?,
                     description: options.hosting.description.clone(),
                     management_trust: options.hosting.management_trust.clone(),
                 },
@@ -244,17 +249,18 @@ pub async fn render_setup_template(
                 &stack,
                 target,
                 TerraformOptions {
+                    // A protected module carries no registration provider; it reports this
+                    // setup through its outputs for `register --import terraform`.
+                    setup_identity: settings.signing.as_ref().map(|_| TerraformSetupIdentity {
+                        setup_target: platform.as_str().to_string(),
+                        setup_fingerprint: setup_fingerprint.clone(),
+                        setup_fingerprint_version,
+                    }),
                     pins: options.pins.clone(),
                     display_name: None,
                     registry: options.terraform_registry,
                     stack_settings: settings.clone(),
-                    registration: options.hosting.terraform_registration.clone().map(
-                        |registration| TerraformRegistration {
-                            setup_fingerprint: setup_fingerprint.clone(),
-                            setup_fingerprint_version,
-                            ..registration
-                        },
-                    ),
+                    registration: None,
                     helm_install: None,
                     supported_aws_regions: options.hosting.supported_aws_regions.clone(),
                 },

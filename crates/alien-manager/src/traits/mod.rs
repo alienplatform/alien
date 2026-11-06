@@ -40,7 +40,9 @@ pub use project_store::{ProjectRecord, ProjectStore};
 pub use release_channel_store::{
     DeploymentRouting, ReleaseChannelRecord, ReleaseChannelStore, DEFAULT_CHANNEL,
 };
-pub use release_store::{CreateReleaseParams, ReleaseRecord, ReleaseStore, SetupTemplateBytes};
+pub use release_store::{
+    CreateReleaseParams, ProtectedSetupQuery, ReleaseRecord, ReleaseStore, SetupTemplateBytes,
+};
 pub use server_bindings::ServerBindings;
 pub use signing_store::{
     PendingChangeRecord, PendingChangeStatus, SignerListRecord, SignerListWrite, SigningStore,
