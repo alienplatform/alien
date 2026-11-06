@@ -2124,7 +2124,10 @@ export function packageFromJSON(
   );
 }
 
-// Published deep-import compatibility declarations.
+// Preserve published model imports across generator naming changes.
 export type PackageRule = PermissionsRule;
 export const PackageRule$inboundSchema = PermissionsRule$inboundSchema;
 export const packageRuleFromJSON = permissionsRuleFromJSON;
+
+// Published deep-import compatibility declarations.
+
