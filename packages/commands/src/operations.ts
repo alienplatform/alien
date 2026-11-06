@@ -22,6 +22,7 @@ const ConnectionSchema = z.object({
   command: z.string().min(1),
   targetResourceId: z.string().min(1),
   deadline: z.iso.datetime({ offset: true }),
+  idempotencyKey: z.string().min(1),
   operationResultContract: z.unknown(),
 })
 export type OperationConnection = z.infer<typeof ConnectionSchema>

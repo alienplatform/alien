@@ -18,6 +18,7 @@ struct Connection {
     command: String,
     target_resource_id: String,
     deadline: String,
+    idempotency_key: String,
     operation_result_contract: Value,
 }
 
@@ -132,7 +133,7 @@ pub(super) async fn invoke(
             url: None,
         })?;
     let selected = endpoint(&connection.manager_url, "/v1/commands")?;
-    let created = json_response(http.post(selected).bearer_auth(&connection.token).json(&json!({"deploymentId": deployment, "command":connection.command, "targetResourceId":connection.target_resource_id, "deadline":connection.deadline, "operationResultContract":connection.operation_result_contract, "params":{"mode":"inline", "inlineBase64":STANDARD.encode(serde_json::to_vec(&params).into_alien_error().context(ErrorData::NetworkError { message:"Encoding operation input".into() })?)}})).send().await.into_alien_error().context(ErrorData::NetworkError { message:"Dispatching directly to selected instance".into() })?).await?;
+    let created = json_response(http.post(selected).bearer_auth(&connection.token).json(&json!({"deploymentId": deployment, "command":connection.command, "targetResourceId":connection.target_resource_id, "deadline":connection.deadline, "idempotencyKey":connection.idempotency_key, "operationResultContract":connection.operation_result_contract, "params":{"mode":"inline", "inlineBase64":STANDARD.encode(serde_json::to_vec(&params).into_alien_error().context(ErrorData::NetworkError { message:"Encoding operation input".into() })?)}})).send().await.into_alien_error().context(ErrorData::NetworkError { message:"Dispatching directly to selected instance".into() })?).await?;
     let command_id = created["commandId"]
         .as_str()
         .filter(|id| {

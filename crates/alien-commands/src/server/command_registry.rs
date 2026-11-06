@@ -280,6 +280,17 @@ pub trait CommandRegistry: Send + Sync {
         false
     }
 
+    /// Validate locally held result bytes against an immutable dispatch snapshot.
+    /// Implementations must not forward the response to a metadata service.
+    async fn validate_response(
+        &self,
+        _command_id: &str,
+        _contract: Option<&serde_json::Value>,
+        _response: &alien_core::commands_types::CommandResponse,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Resolve which command-capable resource a command is addressed to.
     ///
     /// `command` is the name being invoked. Registries that know about

@@ -143,6 +143,7 @@ pub fn client_with_header(auth_value: &str) -> Result<Client> {
     );
     Ok(crate::http_client::builder()
         .default_headers(headers)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .into_alien_error()
         .context(ErrorData::NetworkError {
@@ -180,6 +181,7 @@ pub fn client_with_auth_and_workspace(auth_value: &str, workspace: &str) -> Resu
     );
     Ok(crate::http_client::builder()
         .default_headers(headers)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .into_alien_error()
         .context(ErrorData::NetworkError {

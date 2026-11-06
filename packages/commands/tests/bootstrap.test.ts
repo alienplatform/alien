@@ -419,6 +419,7 @@ describe("direct operations", () => {
               connection: {
                 managerUrl: target.baseUrl,
                 token: "dispatch-capability",
+                idempotencyKey: "prepared-single-invocation",
                 command: "demo@1.0.0/echo",
                 targetResourceId: "operator",
                 deadline: new Date(Date.now() + 60_000).toISOString(),
@@ -461,6 +462,7 @@ describe("direct operations", () => {
       expect(target.requests[0]?.headers.authorization).toBe("Bearer dispatch-capability")
       expect(target.requests[0]?.body).toMatchObject({
         operationResultContract: contract,
+        idempotencyKey: "prepared-single-invocation",
         targetResourceId: "operator",
       })
       expect(target.requests[1]?.headers.authorization).toBe("Bearer status-capability")
