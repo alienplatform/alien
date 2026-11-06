@@ -32,6 +32,8 @@ mod package;
 mod permissions;
 #[cfg(feature = "platform")]
 mod platform_actions;
+#[cfg(feature = "platform")]
+mod private;
 mod test;
 
 pub use check::check_task;

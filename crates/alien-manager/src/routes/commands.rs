@@ -310,6 +310,11 @@ async fn create_command(
         return response;
     }
 
+    if !crate::auth::command_capability::operation_contract_matches(&subject, &request) {
+        return ErrorData::forbidden("Operation invocation does not match its authorized contract")
+            .into_response();
+    }
+
     match state.command_server.create_command(request).await {
         Ok(response) => Json(response).into_response(),
         Err(e) => e.into_response(),
@@ -734,6 +739,7 @@ mod tests {
                 deployment_id: deployment_id.to_string(),
                 capability: CommandCapability::Operations {
                     command: command.to_string(),
+                    invocation: None,
                 },
             },
             role: Role::CommandCapability,

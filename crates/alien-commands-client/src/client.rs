@@ -146,6 +146,8 @@ impl CommandsClient {
 
         let http_client = reqwest::Client::builder()
             .default_headers(headers)
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(30))
             .build()
             .expect("failed to build HTTP client");
 
@@ -405,7 +407,13 @@ impl CommandsClient {
                 let method = get_request.backend.method.as_deref().unwrap_or("GET");
 
                 // Use a plain client (no auth headers — presigned URL carries auth)
-                let plain_http = reqwest::Client::new();
+                let plain_http = reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .timeout(Duration::from_secs(30))
+                    .build()
+                    .map_err(|_| CommandError::StorageOperationFailed {
+                        reason: "Cannot initialize storage downloader".into(),
+                    })?;
                 let mut req = match method {
                     "PUT" => plain_http.put(url),
                     "POST" => plain_http.post(url),
