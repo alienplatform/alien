@@ -341,3 +341,56 @@ describe("hosted command receiver bootstrap", () => {
     expect(server.requests).toHaveLength(1)
   })
 })
+
+describe("command destination custody", () => {
+  it("does not resend inputs when credential refresh changes the selected instance", async () => {
+    const other = await startStubServer(() => ({ json: createResponse() }))
+    try {
+      let bootstraps = 0
+      server = await startStubServer(req => {
+        if (req.path === "/v1/commands/bootstrap") {
+          bootstraps += 1
+          return {
+            json: bootstrapResponse(bootstraps === 1 ? server!.baseUrl : other.baseUrl, "token"),
+          }
+        }
+        return { status: 401 }
+      })
+      const client = await CommandsClient.forDeployment({
+        deploymentId: "dep_1",
+        apiKey: "key",
+        platformUrl: server.baseUrl,
+      })
+      await expect(
+        client.invoke("echo", { sensitive: "private-input" }, FAST_POLL),
+      ).rejects.toThrow()
+      expect(bootstraps).toBe(2)
+      expect(other.requests).toHaveLength(0)
+      expect(server.requests.filter(req => req.path === "/v1/commands")).toHaveLength(1)
+    } finally {
+      await other.close()
+    }
+  })
+
+  it("does not follow a redirect carrying command inputs or capability", async () => {
+    const other = await startStubServer(() => ({ json: createResponse() }))
+    try {
+      server = await startStubServer(req =>
+        req.path === "/v1/commands/bootstrap"
+          ? { json: bootstrapResponse(server!.baseUrl, "token") }
+          : { status: 307, headers: { location: `${other.baseUrl}/v1/commands` } },
+      )
+      const client = await CommandsClient.forDeployment({
+        deploymentId: "dep_1",
+        apiKey: "key",
+        platformUrl: server.baseUrl,
+      })
+      await expect(
+        client.invoke("echo", { sensitive: "private-input" }, FAST_POLL),
+      ).rejects.toThrow()
+      expect(other.requests).toHaveLength(0)
+    } finally {
+      await other.close()
+    }
+  })
+})

@@ -497,7 +497,7 @@ class PullCommandReceiver implements CommandReceiver {
         const headers = new Headers(init.headers)
         headers.set("Authorization", `Bearer ${connection.token}`)
         return {
-          response: await this.fetchImpl(endpoint, { ...init, headers }),
+          response: await this.fetchImpl(endpoint, { ...init, headers, redirect: "error" }),
           endpoint,
           connection,
         }

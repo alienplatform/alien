@@ -19,6 +19,7 @@ export interface CapturedRequest {
 }
 
 export interface RouteResult {
+  headers?: Record<string, string>
   status?: number
   json?: unknown
   text?: string
@@ -58,6 +59,7 @@ export async function startStubServer(route: RouteHandler): Promise<StubServer> 
       try {
         const result = await route(captured)
         const status = result.status ?? 200
+        for (const [name, value] of Object.entries(result.headers ?? {})) res.setHeader(name, value)
         if (result.json !== undefined) {
           res.writeHead(status, { "content-type": "application/json" })
           res.end(JSON.stringify(result.json))
