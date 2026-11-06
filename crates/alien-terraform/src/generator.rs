@@ -6891,6 +6891,7 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
             alien_core::SetupManagement::Manual,
             Some(&registration),
             Some(&registration.setup_identity()),
+            false,
             &[],
             Expression::Object(Default::default()),
         ))

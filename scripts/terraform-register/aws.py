@@ -50,6 +50,15 @@ def run(command, **kwargs):
     return subprocess.run([str(part) for part in command], check=True, **kwargs)
 
 
+# StackSettings fields serde leaves out at their default (alien-core stack_settings.rs), so the
+# typed request carries them only when they differ.
+SETTINGS_DEFAULTS = {"deploymentModel": "push", "updates": "auto", "telemetry": "auto", "heartbeats": "on"}
+
+
+def typed_settings(settings):
+    return {key: value for key, value in settings.items() if SETTINGS_DEFAULTS.get(key, object()) != value}
+
+
 def compare(request, outputs, state_input, region):
     """Each import request field against what the module computed for registration."""
     decoded = lambda name: json.loads(outputs[name]["value"])
@@ -63,13 +72,13 @@ def compare(request, outputs, state_input, region):
         ("setupFingerprint", request["setupFingerprint"], state_input["setup_fingerprint"]),
         ("setupFingerprintVersion", request["setupFingerprintVersion"], state_input["setup_fingerprint_version"]),
         ("managementConfig", request["managementConfig"], state_input["management_config"]),
-        ("stackSettings", request["stackSettings"], state_input["stack_settings"]),
+        ("stackSettings", request["stackSettings"], typed_settings(state_input["stack_settings"])),
         ("resources", request["resources"], state_input["resources"]),
         ("inputValues", request.get("inputValues", {}), state_input["inputValues"]),
         ("sourceKind", request.get("sourceKind"), "terraform"),
         ("releaseId", request.get("releaseId"), None),
         ("managementConfig (output)", request["managementConfig"], decoded("deployment_management_config")),
-        ("stackSettings (output)", request["stackSettings"], decoded("deployment_stack_settings")),
+        ("stackSettings (output)", request["stackSettings"], typed_settings(decoded("deployment_stack_settings"))),
     ]
     return [{"field": field, "request": got, "module": want, "ok": got == want} for field, got, want in rows]
 
@@ -171,8 +180,14 @@ def main():
         failures = ["run"]
     finally:
         if applied:
-            # Setup-owned buckets refuse destroy; detach the bucket, destroy the rest, then delete it.
-            subprocess.run(["terraform", f"-chdir={work}", "state", "rm", "aws_s3_bucket.assets"], env=env)
+            # Setup-owned buckets refuse destroy: detach the bucket and its settings (deleting
+            # those waits for them to vanish, and S3 keeps default encryption and public access
+            # blocks), destroy the rest, then delete the bucket, which drops its settings.
+            listed = subprocess.run(["terraform", f"-chdir={work}", "state", "list"], env=env,
+                                    capture_output=True, text=True).stdout.split()
+            bucket = [address for address in listed if address.startswith("aws_s3_bucket")]
+            if bucket:
+                subprocess.run(["terraform", f"-chdir={work}", "state", "rm", *bucket], env=env)
             subprocess.run(["terraform", f"-chdir={work}", "destroy", "-auto-approve", "-input=false",
                             "-no-color"], env=env, check=False)
             s3 = check.session.client("s3")
