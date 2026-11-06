@@ -841,7 +841,10 @@ if (!modelIndex.includes(resourceExport)) {
 // Preserve root imports as well as historical deep paths for shared providers.
 const providerAliasesMarker = "\n// Published shared-provider compatibility exports.\n";
 const currentModelIndex = (await readFile(modelIndexUrl, "utf8")).split(providerAliasesMarker)[0];
+const generatedRootModules = new Set([...currentModelIndex.matchAll(/export \* from "\.\/([^"\n]+)\.js"/g)].map(([, module]) => module));
 const providerAliasExports = Object.entries(publishedAliases).map(([previous, target]) => {
+  const generatedOwner = exportDeclarations.get(previous)?.find(owner => generatedRootModules.has(owner.module));
+  if (generatedOwner) throw new Error(`Published alias ${previous} now has a generated root declaration in ${generatedOwner.module}.ts; review its contract before retaining the alias.`);
   const declaration = exportDeclarations.get(target.name)?.find(owner => owner.module === target.module);
   if (!declaration) throw new Error(`Missing published provider alias target ${target.name}`);
   return `export ${declaration.value ? "" : "type "}{ ${target.name} as ${previous} } from "./${target.module}.js";`;
@@ -855,10 +858,17 @@ const deepAliasMarker = "\n// Published deep-import compatibility declarations.\
 for (const [module, aliases] of Object.entries(deepAliases)) {
   const url = new URL(`${module}.ts`, models);
   const source = (await readFile(url, "utf8")).split(deepAliasMarker)[0];
+  const namedExports = new Set();
+  for (const [, specifiers] of source.matchAll(/export\s+(?:type\s+)?\{([^}]+)\}/g)) {
+    for (const specifier of specifiers.split(",")) {
+      const name = specifier.trim().split(/\s+as\s+/).at(-1).replace(/^type\s+/, "");
+      namedExports.add(name);
+    }
+  }
   const exports = [];
   for (const alias of aliases) {
     const declarationPattern = name => new RegExp(`export (?:type|const|function) ${name.replaceAll("$", "\\$")}(?![\\w$])`);
-    if (declarationPattern(alias.name).test(source)) continue;
+    if (declarationPattern(alias.name).test(source) || namedExports.has(alias.name)) continue;
     const targetModule = alias.module ?? module;
     const targetSource = targetModule === module ? source : await readFile(new URL(`${targetModule}.ts`, models), "utf8");
     if (!declarationPattern(alias.target).test(targetSource)) throw new Error(`Missing published deep-import source ${alias.target} in ${targetModule}.ts`);
@@ -866,5 +876,6 @@ for (const [module, aliases] of Object.entries(deepAliases)) {
       ? `export ${alias.kind === "type" ? "type " : ""}{ ${alias.target} as ${alias.name} } from "./${alias.module}.js";`
       : `export ${alias.kind} ${alias.name} = ${alias.target};`);
   }
-  await writeFile(url, `${source}${deepAliasMarker}${exports.join("\n")}\n`);
+  const output = exports.length ? `${source.trimEnd()}${deepAliasMarker}${exports.join("\n")}` : source.trimEnd();
+  await writeFile(url, `${output}\n`);
 }
