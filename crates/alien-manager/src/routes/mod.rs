@@ -200,9 +200,24 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
         // Commands (authenticated handlers defined in routes/commands.rs)
         .merge(commands::router())
         // Telemetry
-        .route("/v1/logs", post(telemetry::ingest_logs))
-        .route("/v1/traces", post(telemetry::ingest_traces))
-        .route("/v1/metrics", post(telemetry::ingest_metrics))
+        .route(
+            "/v1/logs",
+            post(telemetry::ingest_logs).layer(axum::extract::DefaultBodyLimit::max(
+                telemetry::MAX_OTLP_BYTES,
+            )),
+        )
+        .route(
+            "/v1/traces",
+            post(telemetry::ingest_traces).layer(axum::extract::DefaultBodyLimit::max(
+                telemetry::MAX_OTLP_BYTES,
+            )),
+        )
+        .route(
+            "/v1/metrics",
+            post(telemetry::ingest_metrics).layer(axum::extract::DefaultBodyLimit::max(
+                telemetry::MAX_OTLP_BYTES,
+            )),
+        )
         // Sync (acquire / reconcile / release / agent-sync)
         .merge(sync::router())
         // Credentials

@@ -111,7 +111,7 @@ async fn ingest(
     }
 }
 
-const MAX_OTLP_BYTES: usize = 4 * 1024 * 1024;
+pub(super) const MAX_OTLP_BYTES: usize = 4 * 1024 * 1024;
 
 fn decode_body(headers: &HeaderMap, body: Bytes) -> Result<Bytes, Response> {
     use axum::http::StatusCode;
