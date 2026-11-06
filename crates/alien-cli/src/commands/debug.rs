@@ -1938,6 +1938,7 @@ mod tests {
 
     #[tokio::test]
     async fn private_exec_uses_header_capability_and_refuses_unsigned_session_downgrade() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -1986,6 +1987,7 @@ mod tests {
 
     #[tokio::test]
     async fn private_exec_create_omits_argv_and_refuses_hosted_or_legacy_attach() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
         for outcome in [
             "private",
             "hosted",
