@@ -416,6 +416,58 @@ pub struct ReconcileData {
     pub operations_report: Option<alien_core::sync::OperationsReport>,
 }
 
+/// In-process evidence that the manager verified an immutable image source.
+/// This type has no wire representation and cannot be constructed by a runtime report.
+#[derive(Debug, Clone)]
+pub struct WorkerImageResolutionReceipt {
+    resolution: alien_core::WorkerImageResolution,
+    previous_authority: Option<alien_core::WorkerImageResolution>,
+    current_release_id: Option<String>,
+    target_release_id: Option<String>,
+    prepared_release_id: Option<String>,
+}
+
+impl WorkerImageResolutionReceipt {
+    pub(crate) fn new(
+        resolution: alien_core::WorkerImageResolution,
+        previous_authority: Option<alien_core::WorkerImageResolution>,
+        state: &DeploymentState,
+    ) -> Self {
+        Self {
+            resolution,
+            previous_authority,
+            current_release_id: state
+                .current_release
+                .as_ref()
+                .and_then(|release| release.release_id.clone()),
+            target_release_id: state
+                .target_release
+                .as_ref()
+                .and_then(|release| release.release_id.clone()),
+            prepared_release_id: state
+                .runtime_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.pending_prepared_release_id.clone()),
+        }
+    }
+
+    pub fn resolution(&self) -> &alien_core::WorkerImageResolution {
+        &self.resolution
+    }
+    pub fn previous_authority(&self) -> Option<&alien_core::WorkerImageResolution> {
+        self.previous_authority.as_ref()
+    }
+    pub fn expected_current_release_id(&self) -> Option<&str> {
+        self.current_release_id.as_deref()
+    }
+    pub fn expected_target_release_id(&self) -> Option<&str> {
+        self.target_release_id.as_deref()
+    }
+    pub fn expected_prepared_release_id(&self) -> Option<&str> {
+        self.prepared_release_id.as_deref()
+    }
+}
+
 /// Extensible input for reconciliation metadata that is not part of the
 /// long-standing [`ReconcileData`] struct-literal contract.
 #[derive(Debug, Clone)]
@@ -426,6 +478,7 @@ pub struct ReconcileInput {
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
     operations_config: Option<alien_core::OperationsConfig>,
     applied_configuration_revision: Option<String>,
+    worker_image_resolution_receipts: Vec<WorkerImageResolutionReceipt>,
 }
 
 impl ReconcileInput {
@@ -437,7 +490,13 @@ impl ReconcileInput {
             dynamic_containers: None,
             operations_config: None,
             applied_configuration_revision: None,
+            worker_image_resolution_receipts: Vec::new(),
         }
+    }
+
+    /// Read before consuming the input; stores must commit these with the checkpoint.
+    pub fn worker_image_resolution_receipts(&self) -> &[WorkerImageResolutionReceipt] {
+        &self.worker_image_resolution_receipts
     }
 
     /// Approved configuration revision confirmed Running by an offline site.
@@ -475,9 +534,18 @@ pub struct ReconcileInputBuilder {
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
     operations_config: Option<alien_core::OperationsConfig>,
     applied_configuration_revision: Option<String>,
+    worker_image_resolution_receipts: Vec<WorkerImageResolutionReceipt>,
 }
 
 impl ReconcileInputBuilder {
+    pub fn worker_image_resolution_receipts(
+        mut self,
+        receipts: Vec<WorkerImageResolutionReceipt>,
+    ) -> Self {
+        self.worker_image_resolution_receipts = receipts;
+        self
+    }
+
     /// Attach the approved configuration revision confirmed by the site.
     pub fn applied_configuration_revision(mut self, revision: String) -> Self {
         self.applied_configuration_revision = Some(revision);
@@ -515,6 +583,7 @@ impl ReconcileInputBuilder {
             dynamic_containers: self.dynamic_containers,
             operations_config: self.operations_config,
             applied_configuration_revision: self.applied_configuration_revision,
+            worker_image_resolution_receipts: self.worker_image_resolution_receipts,
         }
     }
 }
@@ -830,6 +899,12 @@ pub trait DeploymentStore: Send + Sync {
         caller: &crate::auth::Subject,
         request: ReconcileInput,
     ) -> Result<ReconcileOutcome, AlienError> {
+        if !request.worker_image_resolution_receipts().is_empty() {
+            return Err(crate::error::ErrorData::bad_request(
+                "This store cannot commit immutable image source receipts",
+            )
+            .into_generic());
+        }
         let (data, _) = request.into_parts();
         self.reconcile(caller, data).await
     }
