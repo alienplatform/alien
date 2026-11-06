@@ -3205,50 +3205,34 @@ impl AwsWorkerController {
         let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &current_config.id);
 
-        // An update whose own configuration is unchanged (new code, or a dependency's update)
-        // still re-renders the linked bindings: they may have moved since this worker rendered.
+        // Runtime endpoints and credentials can change while the resource config
+        // remains identical. Compare the complete rendered environment before
+        // skipping an update; binding-only comparison misses those changes.
+        let final_env_vars = self
+            .prepare_environment_variables(
+                &current_config.environment,
+                &current_config.links,
+                ctx,
+                &aws_worker_name,
+            )
+            .await?;
         if !config_changed {
-            let bindings_drifted = match self
-                .linked_binding_environment(ctx, &current_config)
-                .await?
-            {
-                Some(expected) => {
-                    let live = client
-                        .get_function_environment(&aws_worker_name)
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: "Failed to read the worker environment for an update"
-                                .to_string(),
-                            resource_id: Some(current_config.id.clone()),
-                        })?;
-                    !linked_bindings::drifted_bindings(&expected, &live).is_empty()
-                }
-                None if current_config.runtime_binding_links().is_empty() => false,
-                // A linked resource is still in its own flow; wait for the value it settles on.
-                None => {
-                    return Err(AlienError::new(ErrorData::DependencyNotReady {
-                        resource_id: current_config.id.clone(),
-                        dependency_id: linked_bindings::unsettled_link(
-                            ctx,
-                            &current_config.runtime_binding_links(),
-                        )
-                        .map(|link| link.id().to_string())
-                        .unwrap_or_default(),
-                    }))
-                }
-            };
-            if !bindings_drifted {
+            let live = client
+                .get_function_environment(&aws_worker_name)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to read the worker environment for an update".to_string(),
+                    resource_id: Some(current_config.id.clone()),
+                })?;
+            if live == final_env_vars {
                 self.wait_for_lambda_started_at = None;
                 return Ok(HandlerAction::Continue {
                     state: UpdateConfigWaitForActive,
                     suggested_delay: None,
                 });
             }
-            info!(
-                worker = %current_config.id,
-                reason = "linked binding drift",
-                "Re-rendering the worker's linked bindings during its update"
-            );
+            info!(worker = %current_config.id,
+                "Refreshing the worker runtime environment during its update");
         }
 
         // Get the ServiceAccount for this worker's permission profile
@@ -3274,15 +3258,6 @@ impl AwsWorkerController {
                 })
             })?
             .to_string();
-
-        let final_env_vars = self
-            .prepare_environment_variables(
-                &current_config.environment,
-                &current_config.links,
-                ctx,
-                &aws_worker_name,
-            )
-            .await?;
 
         let lambda_environment = if !final_env_vars.is_empty() {
             Some(Environment::builder().variables(final_env_vars).build())
@@ -11639,6 +11614,58 @@ mod tests {
                 .step()
                 .await
                 .expect("the update re-renders the binding");
+            assert_eq!(
+                executor
+                    .internal_state::<AwsWorkerController>()
+                    .unwrap()
+                    .state,
+                AwsWorkerState::UpdateConfigWaitForActive
+            );
+        }
+
+        /// Runtime endpoint drift must refresh the existing ARN even when resource
+        /// configuration and linked bindings are unchanged.
+        #[tokio::test]
+        async fn a_code_only_update_refreshes_a_changed_runtime_endpoint() {
+            let mut lambda = MockLambdaApi::new();
+            active(&mut lambda);
+            let expected = rendered_environment("2.0").await;
+            let mut live = expected.clone();
+            live.insert(
+                "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT".into(),
+                "https://previous.example.test/v1/logs".into(),
+            );
+            lambda
+                .expect_get_function_environment()
+                .times(1)
+                .returning(move |_| Ok(live.clone()));
+            lambda
+                .expect_update_function_configuration()
+                .times(1)
+                .withf(move |name, request| {
+                    name.ends_with("basic-func")
+                        && request
+                            .environment
+                            .as_ref()
+                            .and_then(|env| env.variables.as_ref())
+                            == Some(&expected)
+                })
+                .returning(|name, _| Ok(create_successful_function_response(name)));
+            let previous = previous_release().await;
+            let mut executor = executor(
+                lambda,
+                AwsWorkerController {
+                    state: AwsWorkerState::UpdateConfigStart,
+                    ..AwsWorkerController::mock_ready("basic-func")
+                },
+                sandbox_on("2.0", AwsSandboxState::Ready),
+                Some(previous),
+            )
+            .await;
+            executor
+                .step()
+                .await
+                .expect("runtime routing is refreshed in place");
             assert_eq!(
                 executor
                     .internal_state::<AwsWorkerController>()
