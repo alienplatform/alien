@@ -95,7 +95,8 @@ def main():
     failures = []
     try:
         digest = check.copy_verifier_image()
-        image = f"{check.account}.dkr.ecr.{args.region}.amazonaws.com/{args.prefix}-verifier@{digest}"
+        # The module adds the account's registry host to the pinned repository.
+        image = f"{args.prefix}-verifier@{digest}"
         caller = check.caller_role()
 
         settings = {"setupManagement": "manual", "signing": {"fingerprint": FINGERPRINT, "channel": "production"}}
@@ -154,14 +155,20 @@ def main():
                      "ok": "releaseId" not in forward})
         rows.append({"field": "forward.mode", "request": requests["platform"].get("mode"), "module": "forward",
                      "ok": requests["platform"].get("mode") == "forward"})
-        settings_parameter = check.ssm.get_parameter(Name=f"/signed/{args.prefix}/fingerprint")["Parameter"]["Value"]
-        rows.append({"field": "settings parameter channel", "request": json.loads(settings_parameter)["channel"],
-                     "module": requests["standalone"]["stackSettings"]["signing"]["channel"],
-                     "ok": json.loads(settings_parameter)["channel"] == requests["standalone"]["stackSettings"]["signing"]["channel"]})
+        parameter = json.loads(check.ssm.get_parameter(Name=f"/signed/{args.prefix}/fingerprint")["Parameter"]["Value"])
+        rows.append({"field": "settings parameter", "request": parameter,
+                     "module": settings["signing"],
+                     "ok": (parameter["fingerprint"], parameter["channel"]) == (FINGERPRINT, "production")})
+        signing = requests["standalone"]["stackSettings"].get("signing")
+        rows.append({"field": "stackSettings.signing", "request": signing, "module": settings["signing"],
+                     "ok": signing == settings["signing"]})
         (evidence / "comparison.json").write_text(json.dumps(rows, indent=2, default=str) + "\n")
         for row in rows:
             print(f"{'ok  ' if row['ok'] else 'FAIL'} {row['field']}", flush=True)
         failures = [row["field"] for row in rows if not row["ok"]]
+    except Exception as error:  # noqa: BLE001 - cleaned up and audited below, then failed
+        print(f"FAIL run: {error!r}", flush=True)
+        failures = ["run"]
     finally:
         if applied:
             # Setup-owned buckets refuse destroy; detach the bucket, destroy the rest, then delete it.

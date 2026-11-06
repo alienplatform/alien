@@ -4970,22 +4970,40 @@ fn locals_body(
             ),
         ));
     }
-    body.push(attr(
-        "deployment_settings",
-        if setup_only {
-            expr::object([
-                ("deploymentModel", Expression::String("push".to_string())),
-                (
-                    "updates",
-                    Expression::String("approval-required".to_string()),
-                ),
-                ("telemetry", Expression::String("off".to_string())),
-                ("heartbeats", Expression::String("on".to_string())),
-            ])
-        } else {
-            stack_settings_expression(target, stack_settings, profile)
-        },
-    ));
+    let deployment_settings = if setup_only {
+        expr::object([
+            ("deploymentModel", Expression::String("push".to_string())),
+            (
+                "updates",
+                Expression::String("approval-required".to_string()),
+            ),
+            ("telemetry", Expression::String("off".to_string())),
+            ("heartbeats", Expression::String("on".to_string())),
+        ])
+    } else {
+        stack_settings_expression(target, stack_settings, profile)
+    };
+    // A protected install registers as protected: the signing settings the module pins ride in
+    // the settings it reports, last, so nothing merged before them can change them.
+    let deployment_settings = match &stack_settings.signing {
+        Some(signing) => Expression::FuncCall(Box::new(
+            hcl::expr::FuncCall::builder(Identifier::sanitized("merge"))
+                .arg(deployment_settings)
+                .arg(expr::object([(
+                    "signing",
+                    expr::object([
+                        (
+                            "fingerprint",
+                            Expression::String(signing.fingerprint.clone()),
+                        ),
+                        ("channel", Expression::String(signing.channel.clone())),
+                    ]),
+                )]))
+                .build(),
+        )),
+        None => deployment_settings,
+    };
+    body.push(attr("deployment_settings", deployment_settings));
     body.push(attr(
         "deployment_resources",
         crate::emitters::enabled::registration_list(registration_resources),
