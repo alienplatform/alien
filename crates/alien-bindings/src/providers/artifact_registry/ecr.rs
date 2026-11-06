@@ -953,7 +953,22 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             }));
         }
         if region == self.credentials.region() {
-            return Ok(());
+            let available = tokio::time::timeout(
+                Duration::from_secs(10),
+                self.regional_image_available(repository, digest, region),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::RegionalImageTransferFailed {
+                operation: "check source-region image within request budget".into(),
+            })??;
+            return if available {
+                Ok(())
+            } else {
+                Err(AlienError::new(ErrorData::RegionalImageInvalid {
+                    reason: "immutable image does not exist in the source registry".into(),
+                }))
+            };
         }
         let key = (
             repository.to_string(),
