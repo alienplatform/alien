@@ -1366,7 +1366,13 @@ export function updateProjectToJSON(updateProject: UpdateProject): string {
   return JSON.stringify(UpdateProject$outboundSchema.parse(updateProject));
 }
 
-// Preserve published model imports across generator naming changes.
+// Published portal-appearance compatibility exports.
+export type { DeploymentPortalAppearanceInput as UpdateProjectDeploymentPortalAppearance } from "./deploymentportalappearanceinput.js";
+export type { DeploymentPortalAppearanceInput$Outbound as UpdateProjectDeploymentPortalAppearance$Outbound } from "./deploymentportalappearanceinput.js";
+export { DeploymentPortalAppearanceInput$outboundSchema as UpdateProjectDeploymentPortalAppearance$outboundSchema } from "./deploymentportalappearanceinput.js";
+export { deploymentPortalAppearanceInputToJSON as updateProjectDeploymentPortalAppearanceToJSON } from "./deploymentportalappearanceinput.js";
+
+// Published deep-import compatibility declarations.
 export const UpdateProjectBinaryTarget = UpdateProjectPackagesConfigBinaryTarget;
 export type UpdateProjectBinaryTarget = UpdateProjectPackagesConfigBinaryTarget;
 export const UpdateProjectBinaryTarget$outboundSchema = UpdateProjectPackagesConfigBinaryTarget$outboundSchema;
@@ -1390,9 +1396,3 @@ export type UpdateProjectTerraform = UpdateProjectPackagesConfigTerraform;
 export type UpdateProjectTerraform$Outbound = UpdateProjectPackagesConfigTerraform$Outbound;
 export const UpdateProjectTerraform$outboundSchema = UpdateProjectPackagesConfigTerraform$outboundSchema;
 export const updateProjectTerraformToJSON = updateProjectPackagesConfigTerraformToJSON;
-
-// Published portal-appearance compatibility exports.
-export type { DeploymentPortalAppearanceInput as UpdateProjectDeploymentPortalAppearance } from "./deploymentportalappearanceinput.js";
-export type { DeploymentPortalAppearanceInput$Outbound as UpdateProjectDeploymentPortalAppearance$Outbound } from "./deploymentportalappearanceinput.js";
-export { DeploymentPortalAppearanceInput$outboundSchema as UpdateProjectDeploymentPortalAppearance$outboundSchema } from "./deploymentportalappearanceinput.js";
-export { deploymentPortalAppearanceInputToJSON as updateProjectDeploymentPortalAppearanceToJSON } from "./deploymentportalappearanceinput.js";

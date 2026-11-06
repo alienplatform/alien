@@ -17,3 +17,4 @@ const value: models.ManagerManagementConfigsFederationTrust = {
 ```typescript
 const value: string = "<value>";
 ```
+

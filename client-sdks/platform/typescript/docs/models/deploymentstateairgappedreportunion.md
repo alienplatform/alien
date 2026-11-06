@@ -16,3 +16,4 @@ const value: models.DeploymentStateAirgappedReport = {
 ```typescript
 const value: string = "<value>";
 ```
+

@@ -18,3 +18,4 @@ const value: models.SyncListResponsePreparedStackOverrideConditionGcpResource =
 ```typescript
 const value: string = "<value>";
 ```
+

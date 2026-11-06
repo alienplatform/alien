@@ -33,7 +33,7 @@ queryClient.setMutationDefaults(["@alienplatform/platform-api"], { retry: false 
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <AlienProvider client={alien}>
+      <AlienProvider client={alien}> 
         {/* Your app logic starts here */}
       </AlienProvider>
     </QueryClientProvider>
@@ -59,7 +59,7 @@ export function Example() {
 
   // Render the UI here...
 }
-```
+``` 
 
 ### Query timeouts and retries
 
@@ -129,12 +129,12 @@ export function Example() {
         });
       }}
     >
-      {/* Form fields go here... */}
+      {/* Form fields go here... */} 
       <button type="submit" disabled={status === "pending"}>Submit</button>
     </form>
   );
 }
-```
+``` 
 
 ### Mutation timeouts and retries
 
@@ -202,7 +202,7 @@ export function Example() {
         });
       }}
     >
-      {/* Form fields go here... */}
+      {/* Form fields go here... */} 
 
       <button type="submit" disabled={status === "pending"}>Submit</button>
     </form>
@@ -235,7 +235,7 @@ const alien = new AlienCore({
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <AlienProvider client={alien}>
+      <AlienProvider client={alien}> 
         <QueryErrorResetBoundary>
           {({ reset }) => (
             <ErrorBoundary

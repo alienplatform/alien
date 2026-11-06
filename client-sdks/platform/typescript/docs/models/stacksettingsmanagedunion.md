@@ -14,3 +14,4 @@ const value: models.StackSettingsManaged = {};
 ```typescript
 const value: string = "<value>";
 ```
+

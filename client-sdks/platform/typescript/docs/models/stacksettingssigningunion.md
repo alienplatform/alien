@@ -17,3 +17,4 @@ const value: models.StackSettingsSigning = {
 ```typescript
 const value: string = "<value>";
 ```
+

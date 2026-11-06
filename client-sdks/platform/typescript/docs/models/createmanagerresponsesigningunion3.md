@@ -17,3 +17,4 @@ const value: models.CreateManagerResponseSigning3 = {
 ```typescript
 const value: string = "<value>";
 ```
+

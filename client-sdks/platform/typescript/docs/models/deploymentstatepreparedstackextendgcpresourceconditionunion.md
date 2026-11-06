@@ -17,3 +17,4 @@ const value: models.DeploymentStatePreparedStackExtendConditionGcpResource = {
 ```typescript
 const value: string = "<value>";
 ```
+

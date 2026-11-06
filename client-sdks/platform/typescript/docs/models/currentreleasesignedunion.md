@@ -22,3 +22,4 @@ const value: models.CurrentReleaseSigned = {
 ```typescript
 const value: string = "<value>";
 ```
+

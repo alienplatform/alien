@@ -210,7 +210,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchDynamicContainersGet,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateDynamicContainersGet,
@@ -411,7 +411,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchDynamicContainersList,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateDynamicContainersList,
@@ -518,7 +518,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchDynamicContainersLogs,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateDynamicContainersLogs,

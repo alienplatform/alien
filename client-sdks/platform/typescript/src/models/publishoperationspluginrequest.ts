@@ -10,13 +10,6 @@ import {
   KubernetesPermissions$outboundSchema,
 } from "./kubernetespermissions.js";
 
-// Preserve published deep imports while the model is regenerated.
-export type { KubernetesPermissions, KubernetesPermissions$Outbound } from "./kubernetespermissions.js";
-export { KubernetesPermissions$outboundSchema, kubernetesPermissionsToJSON } from "./kubernetespermissions.js";
-export type { Rule, Rule$Outbound } from "./rule.js";
-export { Rule$outboundSchema, ruleToJSON } from "./rule.js";
-export { Verb, Verb$outboundSchema } from "./verb.js";
-
 /**
  * Plugin-level default risk tier.
  */
@@ -1927,7 +1920,18 @@ export function publishOperationsPluginRequestToJSON(
   );
 }
 
+// Published deep-import compatibility declarations.
 export type Operation = PublishOperationsPluginRequestOperation;
 export type Operation$Outbound = PublishOperationsPluginRequestOperation$Outbound;
 export const Operation$outboundSchema = PublishOperationsPluginRequestOperation$outboundSchema;
 export const operationToJSON = publishOperationsPluginRequestOperationToJSON;
+export type { KubernetesPermissions as KubernetesPermissions } from "./kubernetespermissions.js";
+export type { KubernetesPermissions$Outbound as KubernetesPermissions$Outbound } from "./kubernetespermissions.js";
+export type { Rule as Rule } from "./rule.js";
+export type { Rule$Outbound as Rule$Outbound } from "./rule.js";
+export { KubernetesPermissions$outboundSchema as KubernetesPermissions$outboundSchema } from "./kubernetespermissions.js";
+export { kubernetesPermissionsToJSON as kubernetesPermissionsToJSON } from "./kubernetespermissions.js";
+export { Rule$outboundSchema as Rule$outboundSchema } from "./rule.js";
+export { ruleToJSON as ruleToJSON } from "./rule.js";
+export { Verb as Verb } from "./verb.js";
+export { Verb$outboundSchema as Verb$outboundSchema } from "./verb.js";

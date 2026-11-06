@@ -17,3 +17,4 @@ const value: models.ImportSourceFederationTrust = {
 ```typescript
 const value: string = "<value>";
 ```
+

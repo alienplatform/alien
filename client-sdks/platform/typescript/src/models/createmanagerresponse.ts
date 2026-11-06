@@ -8,285 +8,2066 @@ import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import {
-  CreateManagerResponseCertificateUnion1,
-  CreateManagerResponseCertificateUnion1$inboundSchema,
-  CreateManagerResponseClusterUnion1,
-  CreateManagerResponseClusterUnion1$inboundSchema,
-  CreateManagerResponseComputeUnion1,
-  CreateManagerResponseComputeUnion1$inboundSchema,
-  CreateManagerResponseDeploymentModel1,
-  CreateManagerResponseDeploymentModel1$inboundSchema,
-  CreateManagerResponseDomainsUnion1,
-  CreateManagerResponseDomainsUnion1$inboundSchema,
-  CreateManagerResponseEndpointAccess1,
-  CreateManagerResponseEndpointAccess1$inboundSchema,
-  CreateManagerResponseExposureCustom1,
-  CreateManagerResponseExposureCustom1$inboundSchema,
-  CreateManagerResponseHeartbeats1,
-  CreateManagerResponseHeartbeats1$inboundSchema,
-  CreateManagerResponseModeGenerated1,
-  CreateManagerResponseModeGenerated1$inboundSchema,
-  CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum2,
-  CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum2$inboundSchema,
-  CreateManagerResponseSetupGoogleOauth,
-  CreateManagerResponseSetupGoogleOauth$inboundSchema,
-} from "./createmanagerresponseproviderazureapplicationgatewayforcontainersenum2.js";
+  DeploymentSetupPolicy,
+  DeploymentSetupPolicy$inboundSchema,
+} from "./deploymentsetuppolicy.js";
 import {
-  CreateManagerResponseSetupConfig,
-  CreateManagerResponseSetupConfig$inboundSchema,
-  CreateManagerResponseSetupStatus,
-  CreateManagerResponseSetupStatus$inboundSchema,
-  CreateManagerResponseSetupTerraform,
-  CreateManagerResponseSetupTerraform$inboundSchema,
-} from "./createmanagerresponsepublicendpointtargetmachineaddresses2.js";
+  EncryptedStackInputValue,
+  EncryptedStackInputValue$inboundSchema,
+} from "./encryptedstackinputvalue.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
   ExternalBindingUnion,
   ExternalBindingUnion$inboundSchema,
 } from "./externalbindingunion.js";
+import {
+  KubernetesExposureCustom,
+  KubernetesExposureCustom$inboundSchema,
+} from "./kubernetesexposurecustom.js";
+import {
+  KubernetesExposureCustomBaseDomain,
+  KubernetesExposureCustomBaseDomain$inboundSchema,
+} from "./kubernetesexposurecustombasedomain.js";
+import {
+  KubernetesExposureDisabled,
+  KubernetesExposureDisabled$inboundSchema,
+} from "./kubernetesexposuredisabled.js";
+import {
+  KubernetesExposureGenerated,
+  KubernetesExposureGenerated$inboundSchema,
+} from "./kubernetesexposuregenerated.js";
 
-export type CreateManagerResponseProviderAzureApplicationGatewayForContainers2 =
-  {
-    /**
-     * Optional ALB name when using BYO Application Gateway resources.
-     */
-    albName?: string | null | undefined;
-    /**
-     * Optional ALB namespace when using BYO Application Gateway resources.
-     */
-    albNamespace?: string | null | undefined;
-    /**
-     * Public or internal frontend exposure.
-     */
-    frontend: string;
-    provider:
-      CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum2;
-  };
-
-export const CreateManagerResponseProviderGkeGatewayEnum2 = {
-  GkeGateway: "gkeGateway",
+export const CreateManagerResponseSetupStatus = {
+  Pending: "pending",
 } as const;
-export type CreateManagerResponseProviderGkeGatewayEnum2 = ClosedEnum<
-  typeof CreateManagerResponseProviderGkeGatewayEnum2
+export type CreateManagerResponseSetupStatus = ClosedEnum<
+  typeof CreateManagerResponseSetupStatus
 >;
-
-export type CreateManagerResponseProviderGkeGateway2 = {
-  provider: CreateManagerResponseProviderGkeGatewayEnum2;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const CreateManagerResponseProviderAwsAlbEnum2 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type CreateManagerResponseProviderAwsAlbEnum2 = ClosedEnum<
-  typeof CreateManagerResponseProviderAwsAlbEnum2
->;
-
-export type CreateManagerResponseProviderAwsAlb2 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: CreateManagerResponseProviderAwsAlbEnum2;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type CreateManagerResponseProviderUnion2 =
-  | CreateManagerResponseProviderAwsAlb2
-  | CreateManagerResponseProviderAzureApplicationGatewayForContainers2
-  | CreateManagerResponseProviderGkeGateway2
-  | string;
 
 /**
- * Shared Gateway API route profile values.
+ * Represents the target cloud platform.
  */
-export type CreateManagerResponseRouteGateway1 = {
+export const CreateManagerResponsePlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Machines: "machines",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type CreateManagerResponsePlatform = ClosedEnum<
+  typeof CreateManagerResponsePlatform
+>;
+
+/**
+ * Immutable Release whose schema validated first-party inputs for this platform and channel.
+ */
+export type CreateManagerResponseValidatedReleaseSelection = {
   /**
-   * Annotations applied to route objects.
+   * Unique identifier for the release.
    */
-  annotations?: { [k: string]: string } | undefined;
+  releaseId: string;
+  releaseChannel: string;
   /**
-   * Route controller identifier, for example a cloud Gateway controller.
+   * Represents the target cloud platform.
    */
-  controller?: string | null | undefined;
+  platform: CreateManagerResponsePlatform;
+};
+
+export const CreateManagerResponseItemEnum = {
+  Deployment: "deployment",
+  Models: "models",
+  Keys: "keys",
+  Bucket: "bucket",
+  Registry: "registry",
+  Sandbox: "sandbox",
+} as const;
+export type CreateManagerResponseItemEnum = ClosedEnum<
+  typeof CreateManagerResponseItemEnum
+>;
+
+export const CreateManagerResponseDefinitionId = {
+  CustomerAi: "customer-ai",
+  CustomerKey: "customer-key",
+  CustomerStorage: "customer-storage",
+  CustomerRegistry: "customer-registry",
+  CustomerSandbox: "customer-sandbox",
+} as const;
+export type CreateManagerResponseDefinitionId = ClosedEnum<
+  typeof CreateManagerResponseDefinitionId
+>;
+
+export type CreateManagerResponseSourceBuiltIn = {
+  type: "built-in";
+  definitionId: CreateManagerResponseDefinitionId;
+  version: string;
   /**
-   * GatewayClass selected for generated Gateways.
+   * Unique identifier for the release.
    */
-  gatewayClassName: string;
+  sourceReleaseId: string;
+};
+
+export type CreateManagerResponseSourceProjectRelease = {
+  type: "project-release";
+  releaseChannel: string;
   /**
-   * Labels applied to route objects.
+   * Unique identifier for the release.
    */
-  labels?: { [k: string]: string } | undefined;
+  releaseId: string;
+  resourceId?: string | undefined;
+};
+
+export type CreateManagerResponseSourceUnion =
+  | CreateManagerResponseSourceProjectRelease
+  | CreateManagerResponseSourceBuiltIn;
+
+export const CreateManagerResponseAllowedProvider = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+  Databricks: "databricks",
+  Openai: "openai",
+} as const;
+export type CreateManagerResponseAllowedProvider = ClosedEnum<
+  typeof CreateManagerResponseAllowedProvider
+>;
+
+export const CreateManagerResponseProviderAllowlist = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+  Databricks: "databricks",
+  Openai: "openai",
+} as const;
+export type CreateManagerResponseProviderAllowlist = ClosedEnum<
+  typeof CreateManagerResponseProviderAllowlist
+>;
+
+export const CreateManagerResponseClientApi = {
+  OpenaiChat: "openai-chat",
+  OpenaiResponses: "openai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+export type CreateManagerResponseClientApi = ClosedEnum<
+  typeof CreateManagerResponseClientApi
+>;
+
+export type CreateManagerResponseModelRequirement = {
+  publicModelId: string;
+  clientApis: Array<CreateManagerResponseClientApi>;
+  required: boolean;
+};
+
+export type CreateManagerResponseConfiguration = {
+  allowedProviders?: Array<CreateManagerResponseAllowedProvider> | undefined;
+  providerAllowlist?: Array<CreateManagerResponseProviderAllowlist> | undefined;
+  modelRequirements?: Array<CreateManagerResponseModelRequirement> | undefined;
+};
+
+export type CreateManagerResponseItem = {
+  item: CreateManagerResponseItemEnum;
+  source:
+    | CreateManagerResponseSourceProjectRelease
+    | CreateManagerResponseSourceBuiltIn;
+  required: boolean;
+  configuration?: CreateManagerResponseConfiguration | undefined;
+};
+
+export const CreateManagerResponseEnvironmentVariableType = {
+  Plain: "plain",
+  Secret: "secret",
+} as const;
+export type CreateManagerResponseEnvironmentVariableType = ClosedEnum<
+  typeof CreateManagerResponseEnvironmentVariableType
+>;
+
+export type CreateManagerResponseEnvironmentVariable = {
+  name: string;
+  type: CreateManagerResponseEnvironmentVariableType;
+  targetResources: Array<string> | null;
+};
+
+export type CreateManagerResponseSetupConfig = {
   /**
-   * Listener port, usually 443.
+   * Vendor destination when leaving or completing setup. Must be an absolute HTTPS URL without userinfo (embedded credentials), at most 2048 characters. Null clears the destination; omit to keep it unchanged.
    */
-  listenerPort: number;
-  provider?:
-    | CreateManagerResponseProviderAwsAlb2
-    | CreateManagerResponseProviderAzureApplicationGatewayForContainers2
-    | CreateManagerResponseProviderGkeGateway2
+  returnUrl?: string | null | undefined;
+  /**
+   * Vendor destination for expired, revoked or disabled setup links. This URL remains available for unusable links; the endpoint must authenticate the user before minting a new link. Must be an absolute HTTPS URL without userinfo (embedded credentials), at most 2048 characters. Null clears the destination; omit to keep it unchanged.
+   */
+  refreshUrl?: string | null | undefined;
+  metadata: { [k: string]: any | null };
+  policy: DeploymentSetupPolicy;
+  inputValues?: { [k: string]: EncryptedStackInputValue } | undefined;
+  /**
+   * Immutable Release whose schema validated first-party inputs for this platform and channel.
+   */
+  validatedReleaseSelection?:
+    | CreateManagerResponseValidatedReleaseSelection
+    | undefined;
+  /**
+   * Immutable setup items and exact sources captured when this setup link is created.
+   */
+  items?: Array<CreateManagerResponseItem> | undefined;
+  /**
+   * Operator-pinned deployment subdomain for this setup token.
+   */
+  publicSubdomain?: string | undefined;
+  environmentVariables: Array<CreateManagerResponseEnvironmentVariable>;
+};
+
+/**
+ * Deployment-time resource allocation for a container. Omitted fields use release defaults.
+ */
+export type CreateManagerResponseContainers3 = {
+  /**
+   * CPU allocation in vCPUs.
+   */
+  cpu?: number | null | undefined;
+  /**
+   * Memory allocation, using binary units such as Mi or Gi.
+   */
+  memory?: string | null | undefined;
+  /**
+   * Persistent volume capacity per replica, in whole GiB. Omitted values
+   *
+   * @remarks
+   * use the release default. Existing volumes can only grow.
+   */
+  volumeSizeGib?: number | null | undefined;
+};
+
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type CreateManagerResponseFailureDomains6 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type CreateManagerResponseFailureDomainsUnion6 =
+  | CreateManagerResponseFailureDomains6
+  | string;
+
+export type CreateManagerResponsePoolsAutoscale3 = {
+  /**
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
+   */
+  dataDiskGib?: number | null | undefined;
+  failureDomains?:
+    | CreateManagerResponseFailureDomains6
     | string
     | null
     | undefined;
-  routeApi: "gateway";
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
 };
-
-export const CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum1 =
-  {
-    AzureApplicationGatewayForContainers:
-      "azureApplicationGatewayForContainers",
-  } as const;
-export type CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum1 =
-  ClosedEnum<
-    typeof CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum1
-  >;
-
-export type CreateManagerResponseProviderAzureApplicationGatewayForContainers1 =
-  {
-    /**
-     * Optional ALB name when using BYO Application Gateway resources.
-     */
-    albName?: string | null | undefined;
-    /**
-     * Optional ALB namespace when using BYO Application Gateway resources.
-     */
-    albNamespace?: string | null | undefined;
-    /**
-     * Public or internal frontend exposure.
-     */
-    frontend: string;
-    provider:
-      CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum1;
-  };
-
-export const CreateManagerResponseProviderGkeGatewayEnum1 = {
-  GkeGateway: "gkeGateway",
-} as const;
-export type CreateManagerResponseProviderGkeGatewayEnum1 = ClosedEnum<
-  typeof CreateManagerResponseProviderGkeGatewayEnum1
->;
-
-export type CreateManagerResponseProviderGkeGateway1 = {
-  provider: CreateManagerResponseProviderGkeGatewayEnum1;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const CreateManagerResponseProviderAwsAlbEnum1 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type CreateManagerResponseProviderAwsAlbEnum1 = ClosedEnum<
-  typeof CreateManagerResponseProviderAwsAlbEnum1
->;
-
-export type CreateManagerResponseProviderAwsAlb1 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: CreateManagerResponseProviderAwsAlbEnum1;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type CreateManagerResponseProviderUnion1 =
-  | CreateManagerResponseProviderAwsAlb1
-  | CreateManagerResponseProviderAzureApplicationGatewayForContainers1
-  | CreateManagerResponseProviderGkeGateway1
-  | string;
 
 /**
- * Shared Ingress route profile values.
+ * Failure-domain policy selected for a compute pool.
  */
-export type CreateManagerResponseRouteIngress1 = {
+export type CreateManagerResponseFailureDomains5 = {
   /**
-   * Annotations applied to route objects.
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
    */
-  annotations?: { [k: string]: string } | undefined;
+  selectedFailureDomains?: Array<string> | undefined;
   /**
-   * Route controller identifier, for example `eks.amazonaws.com/alb`.
+   * Number of distinct failure domains across which new stateful replicas may be spread.
    */
-  controller?: string | null | undefined;
+  spread: number;
+};
+
+export type CreateManagerResponseFailureDomainsUnion5 =
+  | CreateManagerResponseFailureDomains5
+  | string;
+
+export type CreateManagerResponsePoolsFixed3 = {
   /**
-   * `spec.ingressClassName` for generated Ingresses.
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
    */
-  ingressClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  provider?:
-    | CreateManagerResponseProviderAwsAlb1
-    | CreateManagerResponseProviderAzureApplicationGatewayForContainers1
-    | CreateManagerResponseProviderGkeGateway1
+  dataDiskGib?: number | null | undefined;
+  failureDomains?:
+    | CreateManagerResponseFailureDomains5
     | string
     | null
     | undefined;
-  routeApi: "ingress";
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
 };
 
 /**
- * Kubernetes route API selected for public endpoints.
+ * User-selected deployment settings for one compute pool.
  */
-export type CreateManagerResponseRouteUnion1 =
-  | CreateManagerResponseRouteIngress1
-  | CreateManagerResponseRouteGateway1;
+export type CreateManagerResponsePoolsUnion3 =
+  | CreateManagerResponsePoolsFixed3
+  | CreateManagerResponsePoolsAutoscale3;
 
-export type CreateManagerResponseExposureGenerated1 = {
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type CreateManagerResponseCompute3 = {
   /**
-   * Certificate publication or reference mode for Kubernetes public endpoints.
+   * Per-replica resources selected within each container's declared ranges.
    */
-  certificate: CreateManagerResponseCertificateUnion1;
-  mode: CreateManagerResponseModeGenerated1;
+  containers?: { [k: string]: CreateManagerResponseContainers3 } | undefined;
   /**
-   * Kubernetes route API selected for public endpoints.
+   * Selected compute choices keyed by pool ID.
    */
-  route:
-    | CreateManagerResponseRouteIngress1
-    | CreateManagerResponseRouteGateway1;
+  pools?: {
+    [k: string]:
+      | CreateManagerResponsePoolsFixed3
+      | CreateManagerResponsePoolsAutoscale3;
+  } | undefined;
 };
 
-export const CreateManagerResponseModeDisabled1 = {
-  Disabled: "disabled",
+export type CreateManagerResponseComputeUnion3 =
+  | CreateManagerResponseCompute3
+  | string;
+
+/**
+ * Deployment model: how updates are delivered to the remote environment.
+ */
+export const CreateManagerResponseDeploymentModel3 = {
+  Push: "push",
+  Pull: "pull",
 } as const;
-export type CreateManagerResponseModeDisabled1 = ClosedEnum<
-  typeof CreateManagerResponseModeDisabled1
+/**
+ * Deployment model: how updates are delivered to the remote environment.
+ */
+export type CreateManagerResponseDeploymentModel3 = ClosedEnum<
+  typeof CreateManagerResponseDeploymentModel3
 >;
 
-export type CreateManagerResponseExposureDisabled1 = {
-  mode: CreateManagerResponseModeDisabled1;
+export type CreateManagerResponseAws3 = {
+  certificateArn: string;
 };
 
-export type CreateManagerResponseExposureUnion1 =
-  | CreateManagerResponseExposureCustom1
-  | CreateManagerResponseExposureGenerated1
-  | CreateManagerResponseExposureDisabled1
+export type CreateManagerResponseAwsUnion3 = CreateManagerResponseAws3 | string;
+
+export type CreateManagerResponseAzure3 = {
+  keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
+};
+
+export type CreateManagerResponseAzureUnion3 =
+  | CreateManagerResponseAzure3
+  | string;
+
+export type CreateManagerResponseGcp3 = {
+  certificateName: string;
+};
+
+export type CreateManagerResponseGcpUnion3 = CreateManagerResponseGcp3 | string;
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type CreateManagerResponseTlsSecretRef3 = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+};
+
+export type CreateManagerResponseDomainsKubernetes3 = {
+  /**
+   * Namespace-scoped Kubernetes TLS Secret reference.
+   */
+  tlsSecretRef: CreateManagerResponseTlsSecretRef3;
+};
+
+export type CreateManagerResponseDomainsKubernetesUnion3 =
+  | CreateManagerResponseDomainsKubernetes3
+  | string;
+
+/**
+ * Managed certificate issuance settings.
+ */
+export type CreateManagerResponseManaged3 = {};
+
+export type CreateManagerResponseManagedUnion3 =
+  | CreateManagerResponseManaged3
+  | string;
+
+/**
+ * Platform-specific certificate references for custom domains.
+ */
+export type CreateManagerResponseCertificate3 = {
+  aws?: CreateManagerResponseAws3 | string | null | undefined;
+  azure?: CreateManagerResponseAzure3 | string | null | undefined;
+  gcp?: CreateManagerResponseGcp3 | string | null | undefined;
+  kubernetes?:
+    | CreateManagerResponseDomainsKubernetes3
+    | string
+    | null
+    | undefined;
+  managed?: CreateManagerResponseManaged3 | string | null | undefined;
+};
+
+/**
+ * Custom domain configuration for a single resource.
+ */
+export type CreateManagerResponseCustomDomains3 = {
+  /**
+   * Platform-specific certificate references for custom domains.
+   */
+  certificate: CreateManagerResponseCertificate3;
+  /**
+   * Fully qualified domain name for a supplied certificate.
+   */
+  domain?: string | undefined;
+  /**
+   * Hostnames keyed by endpoint name for a managed certificate.
+   */
+  endpoints?: { [k: string]: string } | undefined;
+};
+
+export const CreateManagerResponseModeLoadBalancer3 = {
+  LoadBalancer: "loadBalancer",
+} as const;
+export type CreateManagerResponseModeLoadBalancer3 = ClosedEnum<
+  typeof CreateManagerResponseModeLoadBalancer3
+>;
+
+export type CreateManagerResponsePublicEndpointTargetLoadBalancer3 = {
+  /**
+   * DNS name or URL for the external load balancer.
+   */
+  cnameTarget: string;
+  mode: CreateManagerResponseModeLoadBalancer3;
+};
+
+export const CreateManagerResponseModeMachineAddresses3 = {
+  MachineAddresses: "machineAddresses",
+} as const;
+export type CreateManagerResponseModeMachineAddresses3 = ClosedEnum<
+  typeof CreateManagerResponseModeMachineAddresses3
+>;
+
+export type CreateManagerResponsePublicEndpointTargetMachineAddresses3 = {
+  mode: CreateManagerResponseModeMachineAddresses3;
+};
+
+export type CreateManagerResponsePublicEndpointTargetUnion3 =
+  | CreateManagerResponsePublicEndpointTargetLoadBalancer3
+  | CreateManagerResponsePublicEndpointTargetMachineAddresses3
+  | string;
+
+/**
+ * Domain configuration for the stack.
+ *
+ * @remarks
+ *
+ * When `custom_domains` is set, the specified resources use customer-provided
+ * domains with supplied or managed certificates. Otherwise, Alien auto-generates domains.
+ */
+export type CreateManagerResponseDomains3 = {
+  /**
+   * Custom domain configuration per resource ID.
+   */
+  customDomains?:
+    | { [k: string]: CreateManagerResponseCustomDomains3 }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | CreateManagerResponsePublicEndpointTargetLoadBalancer3
+    | CreateManagerResponsePublicEndpointTargetMachineAddresses3
+    | string
+    | null
+    | undefined;
+};
+
+export type CreateManagerResponseDomainsUnion3 =
+  | CreateManagerResponseDomains3
+  | string;
+
+/**
+ * Reachability of the deployment's public endpoints, fixed at setup.
+ */
+export const CreateManagerResponseEndpointAccess3 = {
+  Internet: "internet",
+  Private: "private",
+} as const;
+/**
+ * Reachability of the deployment's public endpoints, fixed at setup.
+ */
+export type CreateManagerResponseEndpointAccess3 = ClosedEnum<
+  typeof CreateManagerResponseEndpointAccess3
+>;
+
+/**
+ * How heartbeat health checks are handled.
+ */
+export const CreateManagerResponseHeartbeats3 = {
+  Off: "off",
+  On: "on",
+} as const;
+/**
+ * How heartbeat health checks are handled.
+ */
+export type CreateManagerResponseHeartbeats3 = ClosedEnum<
+  typeof CreateManagerResponseHeartbeats3
+>;
+
+/**
+ * Optional provider-specific identity for a cloud-backed Kubernetes cluster.
+ */
+export type CreateManagerResponseCloud3 = {
+  accountId?: string | null | undefined;
+  clusterId?: string | null | undefined;
+  clusterName?: string | null | undefined;
+  projectId?: string | null | undefined;
+  region?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  subscriptionId?: string | null | undefined;
+};
+
+export type CreateManagerResponseCloudUnion3 =
+  | CreateManagerResponseCloud3
+  | string;
+
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export const CreateManagerResponseOwnership3 = {
+  Managed: "managed",
+  Existing: "existing",
+  External: "external",
+} as const;
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export type CreateManagerResponseOwnership3 = ClosedEnum<
+  typeof CreateManagerResponseOwnership3
+>;
+
+/**
+ * Kubernetes cluster setup settings.
+ */
+export type CreateManagerResponseCluster3 = {
+  cloud?: CreateManagerResponseCloud3 | string | null | undefined;
+  /**
+   * Namespace where the Alien chart and application resources run.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Ownership model for the Kubernetes cluster.
+   */
+  ownership: CreateManagerResponseOwnership3;
+};
+
+export type CreateManagerResponseClusterUnion3 =
+  | CreateManagerResponseCluster3
+  | string;
+
+export type CreateManagerResponseExposure3 =
+  | KubernetesExposureCustom
+  | KubernetesExposureCustomBaseDomain
+  | KubernetesExposureGenerated
+  | KubernetesExposureDisabled
+  | string;
+
+/**
+ * Kubernetes runtime substrate configuration.
+ *
+ * @remarks
+ *
+ * This controls how setup chooses the cluster backing `Platform::Kubernetes`
+ * deployments. When omitted, cloud-backed Kubernetes deployments default to a
+ * managed cluster and generic/on-prem Kubernetes defaults to an external
+ * cluster.
+ */
+export type CreateManagerResponseKubernetes3 = {
+  cluster?: CreateManagerResponseCluster3 | string | null | undefined;
+  exposure?:
+    | KubernetesExposureCustom
+    | KubernetesExposureCustomBaseDomain
+    | KubernetesExposureGenerated
+    | KubernetesExposureDisabled
+    | string
+    | null
+    | undefined;
+};
+
+export type CreateManagerResponseKubernetesUnion3 =
+  | CreateManagerResponseKubernetes3
+  | string;
+
+export const CreateManagerResponseTypeByoVnetAzure3 = {
+  ByoVnetAzure: "byo-vnet-azure",
+} as const;
+export type CreateManagerResponseTypeByoVnetAzure3 = ClosedEnum<
+  typeof CreateManagerResponseTypeByoVnetAzure3
+>;
+
+export type CreateManagerResponseNetworkByoVnetAzure3 = {
+  /**
+   * Name of the dedicated classic Application Gateway subnet within the VNet.
+   */
+  applicationGatewaySubnetName?: string | null | undefined;
+  /**
+   * Name of the dedicated subnet that hosts Private Endpoints (e.g. for a
+   *
+   * @remarks
+   * Postgres Flexible Server). A Private Endpoint must not share the private
+   * subnet, which is already claimed by the Container Apps environment's
+   * `infrastructure_subnet_id`. Required only when the stack contains a
+   * Postgres resource; otherwise unused.
+   */
+  privateEndpointSubnetName?: string | null | undefined;
+  /**
+   * Name of the private subnet within the VNet
+   */
+  privateSubnetName: string;
+  /**
+   * Name of the public subnet within the VNet
+   */
+  publicSubnetName: string;
+  type: CreateManagerResponseTypeByoVnetAzure3;
+  /**
+   * The full resource ID of the existing VNet
+   */
+  vnetResourceId: string;
+};
+
+export const CreateManagerResponseTypeByoVpcGcp3 = {
+  ByoVpcGcp: "byo-vpc-gcp",
+} as const;
+export type CreateManagerResponseTypeByoVpcGcp3 = ClosedEnum<
+  typeof CreateManagerResponseTypeByoVpcGcp3
+>;
+
+export type CreateManagerResponseNetworkByoVpcGcp3 = {
+  /**
+   * The name of the existing VPC network
+   */
+  networkName: string;
+  /**
+   * The region of the subnet
+   */
+  region: string;
+  /**
+   * The name of the subnet to use
+   */
+  subnetName: string;
+  type: CreateManagerResponseTypeByoVpcGcp3;
+};
+
+export const CreateManagerResponseTypeByoVpcAws3 = {
+  ByoVpcAws: "byo-vpc-aws",
+} as const;
+export type CreateManagerResponseTypeByoVpcAws3 = ClosedEnum<
+  typeof CreateManagerResponseTypeByoVpcAws3
+>;
+
+export type CreateManagerResponseNetworkByoVpcAws3 = {
+  /**
+   * IDs of private subnets
+   */
+  privateSubnetIds: Array<string>;
+  /**
+   * IDs of public subnets (required for public ingress)
+   */
+  publicSubnetIds: Array<string>;
+  /**
+   * Optional security group IDs to use
+   */
+  securityGroupIds?: Array<string> | undefined;
+  type: CreateManagerResponseTypeByoVpcAws3;
+  /**
+   * The ID of the existing VPC
+   */
+  vpcId: string;
+};
+
+export const CreateManagerResponseTypeCreate3 = {
+  Create: "create",
+} as const;
+export type CreateManagerResponseTypeCreate3 = ClosedEnum<
+  typeof CreateManagerResponseTypeCreate3
+>;
+
+export type CreateManagerResponseNetworkCreate3 = {
+  /**
+   * Number of availability zones (default: 2).
+   */
+  availabilityZones?: number | undefined;
+  /**
+   * VPC/VNet CIDR block. If not specified, auto-generated from stack ID
+   *
+   * @remarks
+   * to reduce conflicts (e.g., "10.{hash}.0.0/16").
+   */
+  cidr?: string | null | undefined;
+  type: CreateManagerResponseTypeCreate3;
+};
+
+export const CreateManagerResponseTypeUseDefault3 = {
+  UseDefault: "use-default",
+} as const;
+export type CreateManagerResponseTypeUseDefault3 = ClosedEnum<
+  typeof CreateManagerResponseTypeUseDefault3
+>;
+
+export type CreateManagerResponseNetworkUseDefault3 = {
+  type: CreateManagerResponseTypeUseDefault3;
+};
+
+export type CreateManagerResponseNetworkUnion3 =
+  | CreateManagerResponseNetworkByoVpcAws3
+  | CreateManagerResponseNetworkByoVpcGcp3
+  | CreateManagerResponseNetworkByoVnetAzure3
+  | CreateManagerResponseNetworkUseDefault3
+  | CreateManagerResponseNetworkCreate3
+  | string;
+
+/**
+ * Whether setup remains a separate administrator operation.
+ */
+export const CreateManagerResponseSetupManagement3 = {
+  Manual: "manual",
+  Automatic: "automatic",
+} as const;
+/**
+ * Whether setup remains a separate administrator operation.
+ */
+export type CreateManagerResponseSetupManagement3 = ClosedEnum<
+  typeof CreateManagerResponseSetupManagement3
+>;
+
+/**
+ * What setup pins for a protected install.
+ *
+ * @remarks
+ *
+ * Take the values from the vendor's install guide or signed release, not from the
+ * control plane.
+ */
+export type CreateManagerResponseSigning3 = {
+  /**
+   * Release channel the install follows, such as `production`.
+   */
+  channel: string;
+  /**
+   * `SHA256:<64 hex>` fingerprint of the vendor's signer list version 1.
+   */
+  fingerprint: string;
+  /**
+   * Customer setup pins this private instance machine endpoint and enables
+   *
+   * @remarks
+   * install-local input custody. It cannot be changed by the runtime role.
+   */
+  privateMachineApiUrl?: string | null | undefined;
+};
+
+export type CreateManagerResponseSigningUnion3 =
+  | CreateManagerResponseSigning3
+  | string;
+
+/**
+ * How telemetry (logs, metrics, traces) is handled.
+ */
+export const CreateManagerResponseTelemetry3 = {
+  Off: "off",
+  Auto: "auto",
+  ApprovalRequired: "approval-required",
+} as const;
+/**
+ * How telemetry (logs, metrics, traces) is handled.
+ */
+export type CreateManagerResponseTelemetry3 = ClosedEnum<
+  typeof CreateManagerResponseTelemetry3
+>;
+
+/**
+ * How updates are delivered to the deployment.
+ */
+export const CreateManagerResponseUpdates3 = {
+  Auto: "auto",
+  ApprovalRequired: "approval-required",
+} as const;
+/**
+ * How updates are delivered to the deployment.
+ */
+export type CreateManagerResponseUpdates3 = ClosedEnum<
+  typeof CreateManagerResponseUpdates3
+>;
+
+/**
+ * User-customizable deployment settings specified at deploy time.
+ *
+ * @remarks
+ *
+ * These settings are provided by the customer via CloudFormation parameters,
+ * Terraform attributes, CLI flags, or Helm values. They customize how the
+ * deployment runs and what capabilities are enabled.
+ *
+ * **Key distinction**: StackSettings is user-customizable, while ManagementConfig
+ * is platform-derived (from the Manager's ServiceAccount).
+ */
+export type CreateManagerResponseStackSettings3 = {
+  /**
+   * Deliver Kubernetes updates and reports as carried bundles instead of a live connection.
+   *
+   * @remarks
+   * The Operator still executes deployments with the pull model.
+   */
+  airgapped?: boolean | undefined;
+  compute?: CreateManagerResponseCompute3 | string | null | undefined;
+  /**
+   * Deployment model: how updates are delivered to the remote environment.
+   */
+  deploymentModel?: CreateManagerResponseDeploymentModel3 | undefined;
+  domains?: CreateManagerResponseDomains3 | string | null | undefined;
+  /**
+   * Reachability of the deployment's public endpoints, fixed at setup.
+   */
+  endpointAccess?: CreateManagerResponseEndpointAccess3 | undefined;
+  externalBindings?: { [k: string]: ExternalBindingUnion } | null | undefined;
+  /**
+   * How heartbeat health checks are handled.
+   */
+  heartbeats?: CreateManagerResponseHeartbeats3 | undefined;
+  kubernetes?: CreateManagerResponseKubernetes3 | string | null | undefined;
+  network?:
+    | CreateManagerResponseNetworkByoVpcAws3
+    | CreateManagerResponseNetworkByoVpcGcp3
+    | CreateManagerResponseNetworkByoVnetAzure3
+    | CreateManagerResponseNetworkUseDefault3
+    | CreateManagerResponseNetworkCreate3
+    | string
+    | null
+    | undefined;
+  /**
+   * Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.
+   *
+   * @remarks
+   *
+   * This is intended for adopted Machines deployments whose DNS and certificates remain
+   * customer-owned. The platform passes these URLs to the runtime without creating or
+   * replacing DNS records or certificates.
+   */
+  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Provider quota identities whose preflight failures become visible warnings
+   *
+   * @remarks
+   * for this deployment. Checks still run; deploy-time provider limits still apply.
+   * Unknown identities are rejected. An empty list restores normal blocking.
+   */
+  quotaWarningOverrides?: Array<string> | undefined;
+  /**
+   * Whether setup remains a separate administrator operation.
+   */
+  setupManagement?: CreateManagerResponseSetupManagement3 | undefined;
+  signing?: CreateManagerResponseSigning3 | string | null | undefined;
+  /**
+   * How telemetry (logs, metrics, traces) is handled.
+   */
+  telemetry?: CreateManagerResponseTelemetry3 | undefined;
+  /**
+   * How updates are delivered to the deployment.
+   */
+  updates?: CreateManagerResponseUpdates3 | undefined;
+};
+
+export type CreateManagerResponseSetupTerraform = {
+  method: "terraform";
+  deploymentPortalUrl: string;
+  managerUrl: string;
+  providerSource: string;
+  moduleSource: string;
+  moduleVersion?: string | undefined;
+  moduleInputs: { [k: string]: string };
+  mainTf: string;
+  tfvars: string;
+  commands: string;
+  /**
+   * User-customizable deployment settings specified at deploy time.
+   *
+   * @remarks
+   *
+   * These settings are provided by the customer via CloudFormation parameters,
+   * Terraform attributes, CLI flags, or Helm values. They customize how the
+   * deployment runs and what capabilities are enabled.
+   *
+   * **Key distinction**: StackSettings is user-customizable, while ManagementConfig
+   * is platform-derived (from the Manager's ServiceAccount).
+   */
+  stackSettings: CreateManagerResponseStackSettings3;
+};
+
+/**
+ * Deployment-time resource allocation for a container. Omitted fields use release defaults.
+ */
+export type CreateManagerResponseContainers2 = {
+  /**
+   * CPU allocation in vCPUs.
+   */
+  cpu?: number | null | undefined;
+  /**
+   * Memory allocation, using binary units such as Mi or Gi.
+   */
+  memory?: string | null | undefined;
+  /**
+   * Persistent volume capacity per replica, in whole GiB. Omitted values
+   *
+   * @remarks
+   * use the release default. Existing volumes can only grow.
+   */
+  volumeSizeGib?: number | null | undefined;
+};
+
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type CreateManagerResponseFailureDomains4 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type CreateManagerResponseFailureDomainsUnion4 =
+  | CreateManagerResponseFailureDomains4
+  | string;
+
+export type CreateManagerResponsePoolsAutoscale2 = {
+  /**
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
+   */
+  dataDiskGib?: number | null | undefined;
+  failureDomains?:
+    | CreateManagerResponseFailureDomains4
+    | string
+    | null
+    | undefined;
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type CreateManagerResponseFailureDomains3 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type CreateManagerResponseFailureDomainsUnion3 =
+  | CreateManagerResponseFailureDomains3
+  | string;
+
+export type CreateManagerResponsePoolsFixed2 = {
+  /**
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
+   */
+  dataDiskGib?: number | null | undefined;
+  failureDomains?:
+    | CreateManagerResponseFailureDomains3
+    | string
+    | null
+    | undefined;
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type CreateManagerResponsePoolsUnion2 =
+  | CreateManagerResponsePoolsFixed2
+  | CreateManagerResponsePoolsAutoscale2;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type CreateManagerResponseCompute2 = {
+  /**
+   * Per-replica resources selected within each container's declared ranges.
+   */
+  containers?: { [k: string]: CreateManagerResponseContainers2 } | undefined;
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?: {
+    [k: string]:
+      | CreateManagerResponsePoolsFixed2
+      | CreateManagerResponsePoolsAutoscale2;
+  } | undefined;
+};
+
+export type CreateManagerResponseComputeUnion2 =
+  | CreateManagerResponseCompute2
+  | string;
+
+/**
+ * Deployment model: how updates are delivered to the remote environment.
+ */
+export const CreateManagerResponseDeploymentModel2 = {
+  Push: "push",
+  Pull: "pull",
+} as const;
+/**
+ * Deployment model: how updates are delivered to the remote environment.
+ */
+export type CreateManagerResponseDeploymentModel2 = ClosedEnum<
+  typeof CreateManagerResponseDeploymentModel2
+>;
+
+export type CreateManagerResponseAws2 = {
+  certificateArn: string;
+};
+
+export type CreateManagerResponseAwsUnion2 = CreateManagerResponseAws2 | string;
+
+export type CreateManagerResponseAzure2 = {
+  keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
+};
+
+export type CreateManagerResponseAzureUnion2 =
+  | CreateManagerResponseAzure2
+  | string;
+
+export type CreateManagerResponseGcp2 = {
+  certificateName: string;
+};
+
+export type CreateManagerResponseGcpUnion2 = CreateManagerResponseGcp2 | string;
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type CreateManagerResponseTlsSecretRef2 = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+};
+
+export type CreateManagerResponseDomainsKubernetes2 = {
+  /**
+   * Namespace-scoped Kubernetes TLS Secret reference.
+   */
+  tlsSecretRef: CreateManagerResponseTlsSecretRef2;
+};
+
+export type CreateManagerResponseDomainsKubernetesUnion2 =
+  | CreateManagerResponseDomainsKubernetes2
+  | string;
+
+/**
+ * Managed certificate issuance settings.
+ */
+export type CreateManagerResponseManaged2 = {};
+
+export type CreateManagerResponseManagedUnion2 =
+  | CreateManagerResponseManaged2
+  | string;
+
+/**
+ * Platform-specific certificate references for custom domains.
+ */
+export type CreateManagerResponseCertificate2 = {
+  aws?: CreateManagerResponseAws2 | string | null | undefined;
+  azure?: CreateManagerResponseAzure2 | string | null | undefined;
+  gcp?: CreateManagerResponseGcp2 | string | null | undefined;
+  kubernetes?:
+    | CreateManagerResponseDomainsKubernetes2
+    | string
+    | null
+    | undefined;
+  managed?: CreateManagerResponseManaged2 | string | null | undefined;
+};
+
+/**
+ * Custom domain configuration for a single resource.
+ */
+export type CreateManagerResponseCustomDomains2 = {
+  /**
+   * Platform-specific certificate references for custom domains.
+   */
+  certificate: CreateManagerResponseCertificate2;
+  /**
+   * Fully qualified domain name for a supplied certificate.
+   */
+  domain?: string | undefined;
+  /**
+   * Hostnames keyed by endpoint name for a managed certificate.
+   */
+  endpoints?: { [k: string]: string } | undefined;
+};
+
+export const CreateManagerResponseModeLoadBalancer2 = {
+  LoadBalancer: "loadBalancer",
+} as const;
+export type CreateManagerResponseModeLoadBalancer2 = ClosedEnum<
+  typeof CreateManagerResponseModeLoadBalancer2
+>;
+
+export type CreateManagerResponsePublicEndpointTargetLoadBalancer2 = {
+  /**
+   * DNS name or URL for the external load balancer.
+   */
+  cnameTarget: string;
+  mode: CreateManagerResponseModeLoadBalancer2;
+};
+
+export const CreateManagerResponseModeMachineAddresses2 = {
+  MachineAddresses: "machineAddresses",
+} as const;
+export type CreateManagerResponseModeMachineAddresses2 = ClosedEnum<
+  typeof CreateManagerResponseModeMachineAddresses2
+>;
+
+export type CreateManagerResponsePublicEndpointTargetMachineAddresses2 = {
+  mode: CreateManagerResponseModeMachineAddresses2;
+};
+
+export type CreateManagerResponsePublicEndpointTargetUnion2 =
+  | CreateManagerResponsePublicEndpointTargetLoadBalancer2
+  | CreateManagerResponsePublicEndpointTargetMachineAddresses2
+  | string;
+
+/**
+ * Domain configuration for the stack.
+ *
+ * @remarks
+ *
+ * When `custom_domains` is set, the specified resources use customer-provided
+ * domains with supplied or managed certificates. Otherwise, Alien auto-generates domains.
+ */
+export type CreateManagerResponseDomains2 = {
+  /**
+   * Custom domain configuration per resource ID.
+   */
+  customDomains?:
+    | { [k: string]: CreateManagerResponseCustomDomains2 }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | CreateManagerResponsePublicEndpointTargetLoadBalancer2
+    | CreateManagerResponsePublicEndpointTargetMachineAddresses2
+    | string
+    | null
+    | undefined;
+};
+
+export type CreateManagerResponseDomainsUnion2 =
+  | CreateManagerResponseDomains2
+  | string;
+
+/**
+ * Reachability of the deployment's public endpoints, fixed at setup.
+ */
+export const CreateManagerResponseEndpointAccess2 = {
+  Internet: "internet",
+  Private: "private",
+} as const;
+/**
+ * Reachability of the deployment's public endpoints, fixed at setup.
+ */
+export type CreateManagerResponseEndpointAccess2 = ClosedEnum<
+  typeof CreateManagerResponseEndpointAccess2
+>;
+
+/**
+ * How heartbeat health checks are handled.
+ */
+export const CreateManagerResponseHeartbeats2 = {
+  Off: "off",
+  On: "on",
+} as const;
+/**
+ * How heartbeat health checks are handled.
+ */
+export type CreateManagerResponseHeartbeats2 = ClosedEnum<
+  typeof CreateManagerResponseHeartbeats2
+>;
+
+/**
+ * Optional provider-specific identity for a cloud-backed Kubernetes cluster.
+ */
+export type CreateManagerResponseCloud2 = {
+  accountId?: string | null | undefined;
+  clusterId?: string | null | undefined;
+  clusterName?: string | null | undefined;
+  projectId?: string | null | undefined;
+  region?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  subscriptionId?: string | null | undefined;
+};
+
+export type CreateManagerResponseCloudUnion2 =
+  | CreateManagerResponseCloud2
+  | string;
+
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export const CreateManagerResponseOwnership2 = {
+  Managed: "managed",
+  Existing: "existing",
+  External: "external",
+} as const;
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export type CreateManagerResponseOwnership2 = ClosedEnum<
+  typeof CreateManagerResponseOwnership2
+>;
+
+/**
+ * Kubernetes cluster setup settings.
+ */
+export type CreateManagerResponseCluster2 = {
+  cloud?: CreateManagerResponseCloud2 | string | null | undefined;
+  /**
+   * Namespace where the Alien chart and application resources run.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Ownership model for the Kubernetes cluster.
+   */
+  ownership: CreateManagerResponseOwnership2;
+};
+
+export type CreateManagerResponseClusterUnion2 =
+  | CreateManagerResponseCluster2
+  | string;
+
+export type CreateManagerResponseExposure2 =
+  | KubernetesExposureCustom
+  | KubernetesExposureCustomBaseDomain
+  | KubernetesExposureGenerated
+  | KubernetesExposureDisabled
+  | string;
+
+/**
+ * Kubernetes runtime substrate configuration.
+ *
+ * @remarks
+ *
+ * This controls how setup chooses the cluster backing `Platform::Kubernetes`
+ * deployments. When omitted, cloud-backed Kubernetes deployments default to a
+ * managed cluster and generic/on-prem Kubernetes defaults to an external
+ * cluster.
+ */
+export type CreateManagerResponseKubernetes2 = {
+  cluster?: CreateManagerResponseCluster2 | string | null | undefined;
+  exposure?:
+    | KubernetesExposureCustom
+    | KubernetesExposureCustomBaseDomain
+    | KubernetesExposureGenerated
+    | KubernetesExposureDisabled
+    | string
+    | null
+    | undefined;
+};
+
+export type CreateManagerResponseKubernetesUnion2 =
+  | CreateManagerResponseKubernetes2
+  | string;
+
+export const CreateManagerResponseTypeByoVnetAzure2 = {
+  ByoVnetAzure: "byo-vnet-azure",
+} as const;
+export type CreateManagerResponseTypeByoVnetAzure2 = ClosedEnum<
+  typeof CreateManagerResponseTypeByoVnetAzure2
+>;
+
+export type CreateManagerResponseNetworkByoVnetAzure2 = {
+  /**
+   * Name of the dedicated classic Application Gateway subnet within the VNet.
+   */
+  applicationGatewaySubnetName?: string | null | undefined;
+  /**
+   * Name of the dedicated subnet that hosts Private Endpoints (e.g. for a
+   *
+   * @remarks
+   * Postgres Flexible Server). A Private Endpoint must not share the private
+   * subnet, which is already claimed by the Container Apps environment's
+   * `infrastructure_subnet_id`. Required only when the stack contains a
+   * Postgres resource; otherwise unused.
+   */
+  privateEndpointSubnetName?: string | null | undefined;
+  /**
+   * Name of the private subnet within the VNet
+   */
+  privateSubnetName: string;
+  /**
+   * Name of the public subnet within the VNet
+   */
+  publicSubnetName: string;
+  type: CreateManagerResponseTypeByoVnetAzure2;
+  /**
+   * The full resource ID of the existing VNet
+   */
+  vnetResourceId: string;
+};
+
+export const CreateManagerResponseTypeByoVpcGcp2 = {
+  ByoVpcGcp: "byo-vpc-gcp",
+} as const;
+export type CreateManagerResponseTypeByoVpcGcp2 = ClosedEnum<
+  typeof CreateManagerResponseTypeByoVpcGcp2
+>;
+
+export type CreateManagerResponseNetworkByoVpcGcp2 = {
+  /**
+   * The name of the existing VPC network
+   */
+  networkName: string;
+  /**
+   * The region of the subnet
+   */
+  region: string;
+  /**
+   * The name of the subnet to use
+   */
+  subnetName: string;
+  type: CreateManagerResponseTypeByoVpcGcp2;
+};
+
+export const CreateManagerResponseTypeByoVpcAws2 = {
+  ByoVpcAws: "byo-vpc-aws",
+} as const;
+export type CreateManagerResponseTypeByoVpcAws2 = ClosedEnum<
+  typeof CreateManagerResponseTypeByoVpcAws2
+>;
+
+export type CreateManagerResponseNetworkByoVpcAws2 = {
+  /**
+   * IDs of private subnets
+   */
+  privateSubnetIds: Array<string>;
+  /**
+   * IDs of public subnets (required for public ingress)
+   */
+  publicSubnetIds: Array<string>;
+  /**
+   * Optional security group IDs to use
+   */
+  securityGroupIds?: Array<string> | undefined;
+  type: CreateManagerResponseTypeByoVpcAws2;
+  /**
+   * The ID of the existing VPC
+   */
+  vpcId: string;
+};
+
+export const CreateManagerResponseTypeCreate2 = {
+  Create: "create",
+} as const;
+export type CreateManagerResponseTypeCreate2 = ClosedEnum<
+  typeof CreateManagerResponseTypeCreate2
+>;
+
+export type CreateManagerResponseNetworkCreate2 = {
+  /**
+   * Number of availability zones (default: 2).
+   */
+  availabilityZones?: number | undefined;
+  /**
+   * VPC/VNet CIDR block. If not specified, auto-generated from stack ID
+   *
+   * @remarks
+   * to reduce conflicts (e.g., "10.{hash}.0.0/16").
+   */
+  cidr?: string | null | undefined;
+  type: CreateManagerResponseTypeCreate2;
+};
+
+export const CreateManagerResponseTypeUseDefault2 = {
+  UseDefault: "use-default",
+} as const;
+export type CreateManagerResponseTypeUseDefault2 = ClosedEnum<
+  typeof CreateManagerResponseTypeUseDefault2
+>;
+
+export type CreateManagerResponseNetworkUseDefault2 = {
+  type: CreateManagerResponseTypeUseDefault2;
+};
+
+export type CreateManagerResponseNetworkUnion2 =
+  | CreateManagerResponseNetworkByoVpcAws2
+  | CreateManagerResponseNetworkByoVpcGcp2
+  | CreateManagerResponseNetworkByoVnetAzure2
+  | CreateManagerResponseNetworkUseDefault2
+  | CreateManagerResponseNetworkCreate2
+  | string;
+
+/**
+ * Whether setup remains a separate administrator operation.
+ */
+export const CreateManagerResponseSetupManagement2 = {
+  Manual: "manual",
+  Automatic: "automatic",
+} as const;
+/**
+ * Whether setup remains a separate administrator operation.
+ */
+export type CreateManagerResponseSetupManagement2 = ClosedEnum<
+  typeof CreateManagerResponseSetupManagement2
+>;
+
+/**
+ * What setup pins for a protected install.
+ *
+ * @remarks
+ *
+ * Take the values from the vendor's install guide or signed release, not from the
+ * control plane.
+ */
+export type CreateManagerResponseSigning2 = {
+  /**
+   * Release channel the install follows, such as `production`.
+   */
+  channel: string;
+  /**
+   * `SHA256:<64 hex>` fingerprint of the vendor's signer list version 1.
+   */
+  fingerprint: string;
+  /**
+   * Customer setup pins this private instance machine endpoint and enables
+   *
+   * @remarks
+   * install-local input custody. It cannot be changed by the runtime role.
+   */
+  privateMachineApiUrl?: string | null | undefined;
+};
+
+export type CreateManagerResponseSigningUnion2 =
+  | CreateManagerResponseSigning2
+  | string;
+
+/**
+ * How telemetry (logs, metrics, traces) is handled.
+ */
+export const CreateManagerResponseTelemetry2 = {
+  Off: "off",
+  Auto: "auto",
+  ApprovalRequired: "approval-required",
+} as const;
+/**
+ * How telemetry (logs, metrics, traces) is handled.
+ */
+export type CreateManagerResponseTelemetry2 = ClosedEnum<
+  typeof CreateManagerResponseTelemetry2
+>;
+
+/**
+ * How updates are delivered to the deployment.
+ */
+export const CreateManagerResponseUpdates2 = {
+  Auto: "auto",
+  ApprovalRequired: "approval-required",
+} as const;
+/**
+ * How updates are delivered to the deployment.
+ */
+export type CreateManagerResponseUpdates2 = ClosedEnum<
+  typeof CreateManagerResponseUpdates2
+>;
+
+/**
+ * User-customizable deployment settings specified at deploy time.
+ *
+ * @remarks
+ *
+ * These settings are provided by the customer via CloudFormation parameters,
+ * Terraform attributes, CLI flags, or Helm values. They customize how the
+ * deployment runs and what capabilities are enabled.
+ *
+ * **Key distinction**: StackSettings is user-customizable, while ManagementConfig
+ * is platform-derived (from the Manager's ServiceAccount).
+ */
+export type CreateManagerResponseStackSettings2 = {
+  /**
+   * Deliver Kubernetes updates and reports as carried bundles instead of a live connection.
+   *
+   * @remarks
+   * The Operator still executes deployments with the pull model.
+   */
+  airgapped?: boolean | undefined;
+  compute?: CreateManagerResponseCompute2 | string | null | undefined;
+  /**
+   * Deployment model: how updates are delivered to the remote environment.
+   */
+  deploymentModel?: CreateManagerResponseDeploymentModel2 | undefined;
+  domains?: CreateManagerResponseDomains2 | string | null | undefined;
+  /**
+   * Reachability of the deployment's public endpoints, fixed at setup.
+   */
+  endpointAccess?: CreateManagerResponseEndpointAccess2 | undefined;
+  externalBindings?: { [k: string]: ExternalBindingUnion } | null | undefined;
+  /**
+   * How heartbeat health checks are handled.
+   */
+  heartbeats?: CreateManagerResponseHeartbeats2 | undefined;
+  kubernetes?: CreateManagerResponseKubernetes2 | string | null | undefined;
+  network?:
+    | CreateManagerResponseNetworkByoVpcAws2
+    | CreateManagerResponseNetworkByoVpcGcp2
+    | CreateManagerResponseNetworkByoVnetAzure2
+    | CreateManagerResponseNetworkUseDefault2
+    | CreateManagerResponseNetworkCreate2
+    | string
+    | null
+    | undefined;
+  /**
+   * Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.
+   *
+   * @remarks
+   *
+   * This is intended for adopted Machines deployments whose DNS and certificates remain
+   * customer-owned. The platform passes these URLs to the runtime without creating or
+   * replacing DNS records or certificates.
+   */
+  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Provider quota identities whose preflight failures become visible warnings
+   *
+   * @remarks
+   * for this deployment. Checks still run; deploy-time provider limits still apply.
+   * Unknown identities are rejected. An empty list restores normal blocking.
+   */
+  quotaWarningOverrides?: Array<string> | undefined;
+  /**
+   * Whether setup remains a separate administrator operation.
+   */
+  setupManagement?: CreateManagerResponseSetupManagement2 | undefined;
+  signing?: CreateManagerResponseSigning2 | string | null | undefined;
+  /**
+   * How telemetry (logs, metrics, traces) is handled.
+   */
+  telemetry?: CreateManagerResponseTelemetry2 | undefined;
+  /**
+   * How updates are delivered to the deployment.
+   */
+  updates?: CreateManagerResponseUpdates2 | undefined;
+};
+
+export type CreateManagerResponseSetupGoogleOauth = {
+  method: "google-oauth";
+  deploymentPortalUrl: string;
+  managerUrl: string;
+  oauthStartUrl: string;
+  region: string;
+  /**
+   * User-customizable deployment settings specified at deploy time.
+   *
+   * @remarks
+   *
+   * These settings are provided by the customer via CloudFormation parameters,
+   * Terraform attributes, CLI flags, or Helm values. They customize how the
+   * deployment runs and what capabilities are enabled.
+   *
+   * **Key distinction**: StackSettings is user-customizable, while ManagementConfig
+   * is platform-derived (from the Manager's ServiceAccount).
+   */
+  stackSettings: CreateManagerResponseStackSettings2;
+};
+
+/**
+ * Deployment-time resource allocation for a container. Omitted fields use release defaults.
+ */
+export type CreateManagerResponseContainers1 = {
+  /**
+   * CPU allocation in vCPUs.
+   */
+  cpu?: number | null | undefined;
+  /**
+   * Memory allocation, using binary units such as Mi or Gi.
+   */
+  memory?: string | null | undefined;
+  /**
+   * Persistent volume capacity per replica, in whole GiB. Omitted values
+   *
+   * @remarks
+   * use the release default. Existing volumes can only grow.
+   */
+  volumeSizeGib?: number | null | undefined;
+};
+
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type CreateManagerResponseFailureDomains2 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type CreateManagerResponseFailureDomainsUnion2 =
+  | CreateManagerResponseFailureDomains2
+  | string;
+
+export type CreateManagerResponsePoolsAutoscale1 = {
+  /**
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
+   */
+  dataDiskGib?: number | null | undefined;
+  failureDomains?:
+    | CreateManagerResponseFailureDomains2
+    | string
+    | null
+    | undefined;
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type CreateManagerResponseFailureDomains1 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type CreateManagerResponseFailureDomainsUnion1 =
+  | CreateManagerResponseFailureDomains1
+  | string;
+
+export type CreateManagerResponsePoolsFixed1 = {
+  /**
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
+   */
+  dataDiskGib?: number | null | undefined;
+  failureDomains?:
+    | CreateManagerResponseFailureDomains1
+    | string
+    | null
+    | undefined;
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type CreateManagerResponsePoolsUnion1 =
+  | CreateManagerResponsePoolsFixed1
+  | CreateManagerResponsePoolsAutoscale1;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type CreateManagerResponseCompute1 = {
+  /**
+   * Per-replica resources selected within each container's declared ranges.
+   */
+  containers?: { [k: string]: CreateManagerResponseContainers1 } | undefined;
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?: {
+    [k: string]:
+      | CreateManagerResponsePoolsFixed1
+      | CreateManagerResponsePoolsAutoscale1;
+  } | undefined;
+};
+
+export type CreateManagerResponseComputeUnion1 =
+  | CreateManagerResponseCompute1
+  | string;
+
+/**
+ * Deployment model: how updates are delivered to the remote environment.
+ */
+export const CreateManagerResponseDeploymentModel1 = {
+  Push: "push",
+  Pull: "pull",
+} as const;
+/**
+ * Deployment model: how updates are delivered to the remote environment.
+ */
+export type CreateManagerResponseDeploymentModel1 = ClosedEnum<
+  typeof CreateManagerResponseDeploymentModel1
+>;
+
+export type CreateManagerResponseAws1 = {
+  certificateArn: string;
+};
+
+export type CreateManagerResponseAwsUnion1 = CreateManagerResponseAws1 | string;
+
+export type CreateManagerResponseAzure1 = {
+  keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
+};
+
+export type CreateManagerResponseAzureUnion1 =
+  | CreateManagerResponseAzure1
+  | string;
+
+export type CreateManagerResponseGcp1 = {
+  certificateName: string;
+};
+
+export type CreateManagerResponseGcpUnion1 = CreateManagerResponseGcp1 | string;
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type CreateManagerResponseTlsSecretRef1 = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+};
+
+export type CreateManagerResponseDomainsKubernetes1 = {
+  /**
+   * Namespace-scoped Kubernetes TLS Secret reference.
+   */
+  tlsSecretRef: CreateManagerResponseTlsSecretRef1;
+};
+
+export type CreateManagerResponseDomainsKubernetesUnion1 =
+  | CreateManagerResponseDomainsKubernetes1
+  | string;
+
+/**
+ * Managed certificate issuance settings.
+ */
+export type CreateManagerResponseManaged1 = {};
+
+export type CreateManagerResponseManagedUnion1 =
+  | CreateManagerResponseManaged1
+  | string;
+
+/**
+ * Platform-specific certificate references for custom domains.
+ */
+export type CreateManagerResponseCertificate1 = {
+  aws?: CreateManagerResponseAws1 | string | null | undefined;
+  azure?: CreateManagerResponseAzure1 | string | null | undefined;
+  gcp?: CreateManagerResponseGcp1 | string | null | undefined;
+  kubernetes?:
+    | CreateManagerResponseDomainsKubernetes1
+    | string
+    | null
+    | undefined;
+  managed?: CreateManagerResponseManaged1 | string | null | undefined;
+};
+
+/**
+ * Custom domain configuration for a single resource.
+ */
+export type CreateManagerResponseCustomDomains1 = {
+  /**
+   * Platform-specific certificate references for custom domains.
+   */
+  certificate: CreateManagerResponseCertificate1;
+  /**
+   * Fully qualified domain name for a supplied certificate.
+   */
+  domain?: string | undefined;
+  /**
+   * Hostnames keyed by endpoint name for a managed certificate.
+   */
+  endpoints?: { [k: string]: string } | undefined;
+};
+
+export const CreateManagerResponseModeLoadBalancer1 = {
+  LoadBalancer: "loadBalancer",
+} as const;
+export type CreateManagerResponseModeLoadBalancer1 = ClosedEnum<
+  typeof CreateManagerResponseModeLoadBalancer1
+>;
+
+export type CreateManagerResponsePublicEndpointTargetLoadBalancer1 = {
+  /**
+   * DNS name or URL for the external load balancer.
+   */
+  cnameTarget: string;
+  mode: CreateManagerResponseModeLoadBalancer1;
+};
+
+export const CreateManagerResponseModeMachineAddresses1 = {
+  MachineAddresses: "machineAddresses",
+} as const;
+export type CreateManagerResponseModeMachineAddresses1 = ClosedEnum<
+  typeof CreateManagerResponseModeMachineAddresses1
+>;
+
+export type CreateManagerResponsePublicEndpointTargetMachineAddresses1 = {
+  mode: CreateManagerResponseModeMachineAddresses1;
+};
+
+export type CreateManagerResponsePublicEndpointTargetUnion1 =
+  | CreateManagerResponsePublicEndpointTargetLoadBalancer1
+  | CreateManagerResponsePublicEndpointTargetMachineAddresses1
+  | string;
+
+/**
+ * Domain configuration for the stack.
+ *
+ * @remarks
+ *
+ * When `custom_domains` is set, the specified resources use customer-provided
+ * domains with supplied or managed certificates. Otherwise, Alien auto-generates domains.
+ */
+export type CreateManagerResponseDomains1 = {
+  /**
+   * Custom domain configuration per resource ID.
+   */
+  customDomains?:
+    | { [k: string]: CreateManagerResponseCustomDomains1 }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | CreateManagerResponsePublicEndpointTargetLoadBalancer1
+    | CreateManagerResponsePublicEndpointTargetMachineAddresses1
+    | string
+    | null
+    | undefined;
+};
+
+export type CreateManagerResponseDomainsUnion1 =
+  | CreateManagerResponseDomains1
+  | string;
+
+/**
+ * Reachability of the deployment's public endpoints, fixed at setup.
+ */
+export const CreateManagerResponseEndpointAccess1 = {
+  Internet: "internet",
+  Private: "private",
+} as const;
+/**
+ * Reachability of the deployment's public endpoints, fixed at setup.
+ */
+export type CreateManagerResponseEndpointAccess1 = ClosedEnum<
+  typeof CreateManagerResponseEndpointAccess1
+>;
+
+/**
+ * How heartbeat health checks are handled.
+ */
+export const CreateManagerResponseHeartbeats1 = {
+  Off: "off",
+  On: "on",
+} as const;
+/**
+ * How heartbeat health checks are handled.
+ */
+export type CreateManagerResponseHeartbeats1 = ClosedEnum<
+  typeof CreateManagerResponseHeartbeats1
+>;
+
+/**
+ * Optional provider-specific identity for a cloud-backed Kubernetes cluster.
+ */
+export type CreateManagerResponseCloud1 = {
+  accountId?: string | null | undefined;
+  clusterId?: string | null | undefined;
+  clusterName?: string | null | undefined;
+  projectId?: string | null | undefined;
+  region?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  subscriptionId?: string | null | undefined;
+};
+
+export type CreateManagerResponseCloudUnion1 =
+  | CreateManagerResponseCloud1
+  | string;
+
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export const CreateManagerResponseOwnership1 = {
+  Managed: "managed",
+  Existing: "existing",
+  External: "external",
+} as const;
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export type CreateManagerResponseOwnership1 = ClosedEnum<
+  typeof CreateManagerResponseOwnership1
+>;
+
+/**
+ * Kubernetes cluster setup settings.
+ */
+export type CreateManagerResponseCluster1 = {
+  cloud?: CreateManagerResponseCloud1 | string | null | undefined;
+  /**
+   * Namespace where the Alien chart and application resources run.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Ownership model for the Kubernetes cluster.
+   */
+  ownership: CreateManagerResponseOwnership1;
+};
+
+export type CreateManagerResponseClusterUnion1 =
+  | CreateManagerResponseCluster1
+  | string;
+
+export type CreateManagerResponseExposure1 =
+  | KubernetesExposureCustom
+  | KubernetesExposureCustomBaseDomain
+  | KubernetesExposureGenerated
+  | KubernetesExposureDisabled
   | string;
 
 /**
@@ -300,11 +2081,12 @@ export type CreateManagerResponseExposureUnion1 =
  * cluster.
  */
 export type CreateManagerResponseKubernetes1 = {
-  cluster?: CreateManagerResponseClusterUnion1 | null | undefined;
+  cluster?: CreateManagerResponseCluster1 | string | null | undefined;
   exposure?:
-    | CreateManagerResponseExposureCustom1
-    | CreateManagerResponseExposureGenerated1
-    | CreateManagerResponseExposureDisabled1
+    | KubernetesExposureCustom
+    | KubernetesExposureCustomBaseDomain
+    | KubernetesExposureGenerated
+    | KubernetesExposureDisabled
     | string
     | null
     | undefined;
@@ -457,6 +2239,36 @@ export type CreateManagerResponseSetupManagement1 = ClosedEnum<
 >;
 
 /**
+ * What setup pins for a protected install.
+ *
+ * @remarks
+ *
+ * Take the values from the vendor's install guide or signed release, not from the
+ * control plane.
+ */
+export type CreateManagerResponseSigning1 = {
+  /**
+   * Release channel the install follows, such as `production`.
+   */
+  channel: string;
+  /**
+   * `SHA256:<64 hex>` fingerprint of the vendor's signer list version 1.
+   */
+  fingerprint: string;
+  /**
+   * Customer setup pins this private instance machine endpoint and enables
+   *
+   * @remarks
+   * install-local input custody. It cannot be changed by the runtime role.
+   */
+  privateMachineApiUrl?: string | null | undefined;
+};
+
+export type CreateManagerResponseSigningUnion1 =
+  | CreateManagerResponseSigning1
+  | string;
+
+/**
  * How telemetry (logs, metrics, traces) is handled.
  */
 export const CreateManagerResponseTelemetry1 = {
@@ -498,12 +2310,19 @@ export type CreateManagerResponseUpdates1 = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type CreateManagerResponseStackSettings1 = {
-  compute?: CreateManagerResponseComputeUnion1 | null | undefined;
+  /**
+   * Deliver Kubernetes updates and reports as carried bundles instead of a live connection.
+   *
+   * @remarks
+   * The Operator still executes deployments with the pull model.
+   */
+  airgapped?: boolean | undefined;
+  compute?: CreateManagerResponseCompute1 | string | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
   deploymentModel?: CreateManagerResponseDeploymentModel1 | undefined;
-  domains?: CreateManagerResponseDomainsUnion1 | null | undefined;
+  domains?: CreateManagerResponseDomains1 | string | null | undefined;
   /**
    * Reachability of the deployment's public endpoints, fixed at setup.
    */
@@ -545,6 +2364,7 @@ export type CreateManagerResponseStackSettings1 = {
    * Whether setup remains a separate administrator operation.
    */
   setupManagement?: CreateManagerResponseSetupManagement1 | undefined;
+  signing?: CreateManagerResponseSigning1 | string | null | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -583,6 +2403,9 @@ export type CreateManagerResponseSetupUnion =
   | CreateManagerResponseSetupTerraform;
 
 export type CreateManagerResponse = {
+  /**
+   * Unique identifier for a manager.
+   */
   managerId: string;
   setupStatus: CreateManagerResponseSetupStatus;
   setupToken: string;
@@ -596,393 +2419,3446 @@ export type CreateManagerResponse = {
 };
 
 /** @internal */
-export const CreateManagerResponseProviderAzureApplicationGatewayForContainers2$inboundSchema:
-  z.ZodType<
-    CreateManagerResponseProviderAzureApplicationGatewayForContainers2,
-    unknown
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum2$inboundSchema,
-  });
+export const CreateManagerResponseSetupStatus$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseSetupStatus
+> = z.enum(CreateManagerResponseSetupStatus);
 
-export function createManagerResponseProviderAzureApplicationGatewayForContainers2FromJSON(
+/** @internal */
+export const CreateManagerResponsePlatform$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponsePlatform
+> = z.enum(CreateManagerResponsePlatform);
+
+/** @internal */
+export const CreateManagerResponseValidatedReleaseSelection$inboundSchema:
+  z.ZodType<CreateManagerResponseValidatedReleaseSelection, unknown> = z.object(
+    {
+      releaseId: z.string(),
+      releaseChannel: z.string(),
+      platform: CreateManagerResponsePlatform$inboundSchema,
+    },
+  );
+
+export function createManagerResponseValidatedReleaseSelectionFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  CreateManagerResponseProviderAzureApplicationGatewayForContainers2,
+  CreateManagerResponseValidatedReleaseSelection,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      CreateManagerResponseProviderAzureApplicationGatewayForContainers2$inboundSchema
-        .parse(JSON.parse(x)),
-    `Failed to parse 'CreateManagerResponseProviderAzureApplicationGatewayForContainers2' from JSON`,
-  );
-}
-
-/** @internal */
-export const CreateManagerResponseProviderGkeGatewayEnum2$inboundSchema:
-  z.ZodEnum<typeof CreateManagerResponseProviderGkeGatewayEnum2> = z.enum(
-    CreateManagerResponseProviderGkeGatewayEnum2,
-  );
-
-/** @internal */
-export const CreateManagerResponseProviderGkeGateway2$inboundSchema: z.ZodType<
-  CreateManagerResponseProviderGkeGateway2,
-  unknown
-> = z.object({
-  provider: CreateManagerResponseProviderGkeGatewayEnum2$inboundSchema,
-  staticAddressName: z.nullable(z.string()).optional(),
-});
-
-export function createManagerResponseProviderGkeGateway2FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  CreateManagerResponseProviderGkeGateway2,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      CreateManagerResponseProviderGkeGateway2$inboundSchema.parse(
+      CreateManagerResponseValidatedReleaseSelection$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'CreateManagerResponseProviderGkeGateway2' from JSON`,
+    `Failed to parse 'CreateManagerResponseValidatedReleaseSelection' from JSON`,
   );
 }
 
 /** @internal */
-export const CreateManagerResponseProviderAwsAlbEnum2$inboundSchema: z.ZodEnum<
-  typeof CreateManagerResponseProviderAwsAlbEnum2
-> = z.enum(CreateManagerResponseProviderAwsAlbEnum2);
+export const CreateManagerResponseItemEnum$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseItemEnum
+> = z.enum(CreateManagerResponseItemEnum);
 
 /** @internal */
-export const CreateManagerResponseProviderAwsAlb2$inboundSchema: z.ZodType<
-  CreateManagerResponseProviderAwsAlb2,
+export const CreateManagerResponseDefinitionId$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseDefinitionId
+> = z.enum(CreateManagerResponseDefinitionId);
+
+/** @internal */
+export const CreateManagerResponseSourceBuiltIn$inboundSchema: z.ZodType<
+  CreateManagerResponseSourceBuiltIn,
   unknown
 > = z.object({
-  ipAddressType: z.nullable(z.string()).optional(),
-  provider: CreateManagerResponseProviderAwsAlbEnum2$inboundSchema,
-  scheme: z.string(),
-  subnetIds: z.array(z.string()).optional(),
-  targetType: z.string(),
+  type: z.literal("built-in"),
+  definitionId: CreateManagerResponseDefinitionId$inboundSchema,
+  version: z.string(),
+  sourceReleaseId: z.string(),
 });
 
-export function createManagerResponseProviderAwsAlb2FromJSON(
+export function createManagerResponseSourceBuiltInFromJSON(
   jsonString: string,
-): SafeParseResult<CreateManagerResponseProviderAwsAlb2, SDKValidationError> {
+): SafeParseResult<CreateManagerResponseSourceBuiltIn, SDKValidationError> {
   return safeParse(
     jsonString,
     (x) =>
-      CreateManagerResponseProviderAwsAlb2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CreateManagerResponseProviderAwsAlb2' from JSON`,
+      CreateManagerResponseSourceBuiltIn$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseSourceBuiltIn' from JSON`,
   );
 }
 
 /** @internal */
-export const CreateManagerResponseProviderUnion2$inboundSchema: z.ZodType<
-  CreateManagerResponseProviderUnion2,
-  unknown
-> = z.union([
-  z.lazy(() => CreateManagerResponseProviderAwsAlb2$inboundSchema),
-  z.lazy(() =>
-    CreateManagerResponseProviderAzureApplicationGatewayForContainers2$inboundSchema
-  ),
-  z.lazy(() => CreateManagerResponseProviderGkeGateway2$inboundSchema),
-  z.string(),
-]);
-
-export function createManagerResponseProviderUnion2FromJSON(
-  jsonString: string,
-): SafeParseResult<CreateManagerResponseProviderUnion2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      CreateManagerResponseProviderUnion2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CreateManagerResponseProviderUnion2' from JSON`,
-  );
-}
-
-/** @internal */
-export const CreateManagerResponseRouteGateway1$inboundSchema: z.ZodType<
-  CreateManagerResponseRouteGateway1,
+export const CreateManagerResponseSourceProjectRelease$inboundSchema: z.ZodType<
+  CreateManagerResponseSourceProjectRelease,
   unknown
 > = z.object({
-  annotations: z.record(z.string(), z.string()).optional(),
-  controller: z.nullable(z.string()).optional(),
-  gatewayClassName: z.string(),
-  labels: z.record(z.string(), z.string()).optional(),
-  listenerPort: z.int(),
-  provider: z.nullable(
-    z.union([
-      z.lazy(() => CreateManagerResponseProviderAwsAlb2$inboundSchema),
-      z.lazy(() =>
-        CreateManagerResponseProviderAzureApplicationGatewayForContainers2$inboundSchema
-      ),
-      z.lazy(() => CreateManagerResponseProviderGkeGateway2$inboundSchema),
-      z.string(),
-    ]),
-  ).optional(),
-  routeApi: z.literal("gateway"),
+  type: z.literal("project-release"),
+  releaseChannel: z.string(),
+  releaseId: z.string(),
+  resourceId: z.string().optional(),
 });
 
-export function createManagerResponseRouteGateway1FromJSON(
-  jsonString: string,
-): SafeParseResult<CreateManagerResponseRouteGateway1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      CreateManagerResponseRouteGateway1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CreateManagerResponseRouteGateway1' from JSON`,
-  );
-}
-
-/** @internal */
-export const CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum1$inboundSchema:
-  z.ZodEnum<
-    typeof CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum1
-  > = z.enum(
-    CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum1,
-  );
-
-/** @internal */
-export const CreateManagerResponseProviderAzureApplicationGatewayForContainers1$inboundSchema:
-  z.ZodType<
-    CreateManagerResponseProviderAzureApplicationGatewayForContainers1,
-    unknown
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum1$inboundSchema,
-  });
-
-export function createManagerResponseProviderAzureApplicationGatewayForContainers1FromJSON(
+export function createManagerResponseSourceProjectReleaseFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  CreateManagerResponseProviderAzureApplicationGatewayForContainers1,
+  CreateManagerResponseSourceProjectRelease,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      CreateManagerResponseProviderAzureApplicationGatewayForContainers1$inboundSchema
-        .parse(JSON.parse(x)),
-    `Failed to parse 'CreateManagerResponseProviderAzureApplicationGatewayForContainers1' from JSON`,
-  );
-}
-
-/** @internal */
-export const CreateManagerResponseProviderGkeGatewayEnum1$inboundSchema:
-  z.ZodEnum<typeof CreateManagerResponseProviderGkeGatewayEnum1> = z.enum(
-    CreateManagerResponseProviderGkeGatewayEnum1,
-  );
-
-/** @internal */
-export const CreateManagerResponseProviderGkeGateway1$inboundSchema: z.ZodType<
-  CreateManagerResponseProviderGkeGateway1,
-  unknown
-> = z.object({
-  provider: CreateManagerResponseProviderGkeGatewayEnum1$inboundSchema,
-  staticAddressName: z.nullable(z.string()).optional(),
-});
-
-export function createManagerResponseProviderGkeGateway1FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  CreateManagerResponseProviderGkeGateway1,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      CreateManagerResponseProviderGkeGateway1$inboundSchema.parse(
+      CreateManagerResponseSourceProjectRelease$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'CreateManagerResponseProviderGkeGateway1' from JSON`,
+    `Failed to parse 'CreateManagerResponseSourceProjectRelease' from JSON`,
   );
 }
 
 /** @internal */
-export const CreateManagerResponseProviderAwsAlbEnum1$inboundSchema: z.ZodEnum<
-  typeof CreateManagerResponseProviderAwsAlbEnum1
-> = z.enum(CreateManagerResponseProviderAwsAlbEnum1);
-
-/** @internal */
-export const CreateManagerResponseProviderAwsAlb1$inboundSchema: z.ZodType<
-  CreateManagerResponseProviderAwsAlb1,
-  unknown
-> = z.object({
-  ipAddressType: z.nullable(z.string()).optional(),
-  provider: CreateManagerResponseProviderAwsAlbEnum1$inboundSchema,
-  scheme: z.string(),
-  subnetIds: z.array(z.string()).optional(),
-  targetType: z.string(),
-});
-
-export function createManagerResponseProviderAwsAlb1FromJSON(
-  jsonString: string,
-): SafeParseResult<CreateManagerResponseProviderAwsAlb1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      CreateManagerResponseProviderAwsAlb1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CreateManagerResponseProviderAwsAlb1' from JSON`,
-  );
-}
-
-/** @internal */
-export const CreateManagerResponseProviderUnion1$inboundSchema: z.ZodType<
-  CreateManagerResponseProviderUnion1,
+export const CreateManagerResponseSourceUnion$inboundSchema: z.ZodType<
+  CreateManagerResponseSourceUnion,
   unknown
 > = z.union([
-  z.lazy(() => CreateManagerResponseProviderAwsAlb1$inboundSchema),
-  z.lazy(() =>
-    CreateManagerResponseProviderAzureApplicationGatewayForContainers1$inboundSchema
-  ),
-  z.lazy(() => CreateManagerResponseProviderGkeGateway1$inboundSchema),
-  z.string(),
+  z.lazy(() => CreateManagerResponseSourceProjectRelease$inboundSchema),
+  z.lazy(() => CreateManagerResponseSourceBuiltIn$inboundSchema),
 ]);
 
-export function createManagerResponseProviderUnion1FromJSON(
+export function createManagerResponseSourceUnionFromJSON(
   jsonString: string,
-): SafeParseResult<CreateManagerResponseProviderUnion1, SDKValidationError> {
+): SafeParseResult<CreateManagerResponseSourceUnion, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      CreateManagerResponseProviderUnion1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CreateManagerResponseProviderUnion1' from JSON`,
+    (x) => CreateManagerResponseSourceUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseSourceUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const CreateManagerResponseRouteIngress1$inboundSchema: z.ZodType<
-  CreateManagerResponseRouteIngress1,
+export const CreateManagerResponseAllowedProvider$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseAllowedProvider
+> = z.enum(CreateManagerResponseAllowedProvider);
+
+/** @internal */
+export const CreateManagerResponseProviderAllowlist$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseProviderAllowlist
+> = z.enum(CreateManagerResponseProviderAllowlist);
+
+/** @internal */
+export const CreateManagerResponseClientApi$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseClientApi
+> = z.enum(CreateManagerResponseClientApi);
+
+/** @internal */
+export const CreateManagerResponseModelRequirement$inboundSchema: z.ZodType<
+  CreateManagerResponseModelRequirement,
   unknown
 > = z.object({
-  annotations: z.record(z.string(), z.string()).optional(),
-  controller: z.nullable(z.string()).optional(),
-  ingressClassName: z.string(),
-  labels: z.record(z.string(), z.string()).optional(),
-  provider: z.nullable(
-    z.union([
-      z.lazy(() => CreateManagerResponseProviderAwsAlb1$inboundSchema),
-      z.lazy(() =>
-        CreateManagerResponseProviderAzureApplicationGatewayForContainers1$inboundSchema
-      ),
-      z.lazy(() => CreateManagerResponseProviderGkeGateway1$inboundSchema),
-      z.string(),
-    ]),
+  publicModelId: z.string(),
+  clientApis: z.array(CreateManagerResponseClientApi$inboundSchema),
+  required: z.boolean(),
+});
+
+export function createManagerResponseModelRequirementFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseModelRequirement, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseModelRequirement$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseModelRequirement' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseConfiguration$inboundSchema: z.ZodType<
+  CreateManagerResponseConfiguration,
+  unknown
+> = z.object({
+  allowedProviders: z.array(CreateManagerResponseAllowedProvider$inboundSchema)
+    .optional(),
+  providerAllowlist: z.array(
+    CreateManagerResponseProviderAllowlist$inboundSchema,
   ).optional(),
-  routeApi: z.literal("ingress"),
+  modelRequirements: z.array(
+    z.lazy(() => CreateManagerResponseModelRequirement$inboundSchema),
+  ).optional(),
 });
 
-export function createManagerResponseRouteIngress1FromJSON(
+export function createManagerResponseConfigurationFromJSON(
   jsonString: string,
-): SafeParseResult<CreateManagerResponseRouteIngress1, SDKValidationError> {
+): SafeParseResult<CreateManagerResponseConfiguration, SDKValidationError> {
   return safeParse(
     jsonString,
     (x) =>
-      CreateManagerResponseRouteIngress1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CreateManagerResponseRouteIngress1' from JSON`,
+      CreateManagerResponseConfiguration$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseConfiguration' from JSON`,
   );
 }
 
 /** @internal */
-export const CreateManagerResponseRouteUnion1$inboundSchema: z.ZodType<
-  CreateManagerResponseRouteUnion1,
-  unknown
-> = z.union([
-  z.lazy(() => CreateManagerResponseRouteIngress1$inboundSchema),
-  z.lazy(() => CreateManagerResponseRouteGateway1$inboundSchema),
-]);
-
-export function createManagerResponseRouteUnion1FromJSON(
-  jsonString: string,
-): SafeParseResult<CreateManagerResponseRouteUnion1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CreateManagerResponseRouteUnion1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CreateManagerResponseRouteUnion1' from JSON`,
-  );
-}
-
-/** @internal */
-export const CreateManagerResponseExposureGenerated1$inboundSchema: z.ZodType<
-  CreateManagerResponseExposureGenerated1,
+export const CreateManagerResponseItem$inboundSchema: z.ZodType<
+  CreateManagerResponseItem,
   unknown
 > = z.object({
-  certificate: CreateManagerResponseCertificateUnion1$inboundSchema,
-  mode: CreateManagerResponseModeGenerated1$inboundSchema,
-  route: z.union([
-    z.lazy(() => CreateManagerResponseRouteIngress1$inboundSchema),
-    z.lazy(() => CreateManagerResponseRouteGateway1$inboundSchema),
+  item: CreateManagerResponseItemEnum$inboundSchema,
+  source: z.union([
+    z.lazy(() => CreateManagerResponseSourceProjectRelease$inboundSchema),
+    z.lazy(() => CreateManagerResponseSourceBuiltIn$inboundSchema),
   ]),
+  required: z.boolean(),
+  configuration: z.lazy(() => CreateManagerResponseConfiguration$inboundSchema)
+    .optional(),
 });
 
-export function createManagerResponseExposureGenerated1FromJSON(
+export function createManagerResponseItemFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseItem, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseItem$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseItem' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseEnvironmentVariableType$inboundSchema:
+  z.ZodEnum<typeof CreateManagerResponseEnvironmentVariableType> = z.enum(
+    CreateManagerResponseEnvironmentVariableType,
+  );
+
+/** @internal */
+export const CreateManagerResponseEnvironmentVariable$inboundSchema: z.ZodType<
+  CreateManagerResponseEnvironmentVariable,
+  unknown
+> = z.object({
+  name: z.string(),
+  type: CreateManagerResponseEnvironmentVariableType$inboundSchema,
+  targetResources: z.nullable(z.array(z.string())),
+});
+
+export function createManagerResponseEnvironmentVariableFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  CreateManagerResponseExposureGenerated1,
+  CreateManagerResponseEnvironmentVariable,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      CreateManagerResponseExposureGenerated1$inboundSchema.parse(
+      CreateManagerResponseEnvironmentVariable$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'CreateManagerResponseExposureGenerated1' from JSON`,
+    `Failed to parse 'CreateManagerResponseEnvironmentVariable' from JSON`,
   );
 }
 
 /** @internal */
-export const CreateManagerResponseModeDisabled1$inboundSchema: z.ZodEnum<
-  typeof CreateManagerResponseModeDisabled1
-> = z.enum(CreateManagerResponseModeDisabled1);
-
-/** @internal */
-export const CreateManagerResponseExposureDisabled1$inboundSchema: z.ZodType<
-  CreateManagerResponseExposureDisabled1,
+export const CreateManagerResponseSetupConfig$inboundSchema: z.ZodType<
+  CreateManagerResponseSetupConfig,
   unknown
 > = z.object({
-  mode: CreateManagerResponseModeDisabled1$inboundSchema,
+  returnUrl: z.nullable(z.string()).optional(),
+  refreshUrl: z.nullable(z.string()).optional(),
+  metadata: z.record(z.string(), z.nullable(z.any())),
+  policy: DeploymentSetupPolicy$inboundSchema,
+  inputValues: z.record(z.string(), EncryptedStackInputValue$inboundSchema)
+    .optional(),
+  validatedReleaseSelection: z.lazy(() =>
+    CreateManagerResponseValidatedReleaseSelection$inboundSchema
+  ).optional(),
+  items: z.array(z.lazy(() => CreateManagerResponseItem$inboundSchema))
+    .optional(),
+  publicSubdomain: z.string().optional(),
+  environmentVariables: z.array(
+    z.lazy(() => CreateManagerResponseEnvironmentVariable$inboundSchema),
+  ),
 });
 
-export function createManagerResponseExposureDisabled1FromJSON(
+export function createManagerResponseSetupConfigFromJSON(
   jsonString: string,
-): SafeParseResult<CreateManagerResponseExposureDisabled1, SDKValidationError> {
+): SafeParseResult<CreateManagerResponseSetupConfig, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseSetupConfig$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseSetupConfig' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseContainers3$inboundSchema: z.ZodType<
+  CreateManagerResponseContainers3,
+  unknown
+> = z.object({
+  cpu: z.nullable(z.number()).optional(),
+  memory: z.nullable(z.string()).optional(),
+  volumeSizeGib: z.nullable(z.int()).optional(),
+});
+
+export function createManagerResponseContainers3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseContainers3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseContainers3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseContainers3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseFailureDomains6$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomains6,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function createManagerResponseFailureDomains6FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseFailureDomains6, SDKValidationError> {
   return safeParse(
     jsonString,
     (x) =>
-      CreateManagerResponseExposureDisabled1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CreateManagerResponseExposureDisabled1' from JSON`,
+      CreateManagerResponseFailureDomains6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseFailureDomains6' from JSON`,
   );
 }
 
 /** @internal */
-export const CreateManagerResponseExposureUnion1$inboundSchema: z.ZodType<
-  CreateManagerResponseExposureUnion1,
+export const CreateManagerResponseFailureDomainsUnion6$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomainsUnion6,
   unknown
 > = z.union([
-  CreateManagerResponseExposureCustom1$inboundSchema,
-  z.lazy(() => CreateManagerResponseExposureGenerated1$inboundSchema),
-  z.lazy(() => CreateManagerResponseExposureDisabled1$inboundSchema),
+  z.lazy(() => CreateManagerResponseFailureDomains6$inboundSchema),
   z.string(),
 ]);
 
-export function createManagerResponseExposureUnion1FromJSON(
+export function createManagerResponseFailureDomainsUnion6FromJSON(
   jsonString: string,
-): SafeParseResult<CreateManagerResponseExposureUnion1, SDKValidationError> {
+): SafeParseResult<
+  CreateManagerResponseFailureDomainsUnion6,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
     (x) =>
-      CreateManagerResponseExposureUnion1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CreateManagerResponseExposureUnion1' from JSON`,
+      CreateManagerResponseFailureDomainsUnion6$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseFailureDomainsUnion6' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePoolsAutoscale3$inboundSchema: z.ZodType<
+  CreateManagerResponsePoolsAutoscale3,
+  unknown
+> = z.object({
+  dataDiskGib: z.nullable(z.int()).optional(),
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseFailureDomains6$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
+});
+
+export function createManagerResponsePoolsAutoscale3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponsePoolsAutoscale3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePoolsAutoscale3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePoolsAutoscale3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseFailureDomains5$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomains5,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function createManagerResponseFailureDomains5FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseFailureDomains5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomains5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseFailureDomains5' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseFailureDomainsUnion5$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomainsUnion5,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseFailureDomains5$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseFailureDomainsUnion5FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseFailureDomainsUnion5,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomainsUnion5$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseFailureDomainsUnion5' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePoolsFixed3$inboundSchema: z.ZodType<
+  CreateManagerResponsePoolsFixed3,
+  unknown
+> = z.object({
+  dataDiskGib: z.nullable(z.int()).optional(),
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseFailureDomains5$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
+});
+
+export function createManagerResponsePoolsFixed3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponsePoolsFixed3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponsePoolsFixed3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePoolsFixed3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePoolsUnion3$inboundSchema: z.ZodType<
+  CreateManagerResponsePoolsUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponsePoolsFixed3$inboundSchema),
+  z.lazy(() => CreateManagerResponsePoolsAutoscale3$inboundSchema),
+]);
+
+export function createManagerResponsePoolsUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponsePoolsUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponsePoolsUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePoolsUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseCompute3$inboundSchema: z.ZodType<
+  CreateManagerResponseCompute3,
+  unknown
+> = z.object({
+  containers: z.record(
+    z.string(),
+    z.lazy(() => CreateManagerResponseContainers3$inboundSchema),
+  ).optional(),
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => CreateManagerResponsePoolsFixed3$inboundSchema),
+      z.lazy(() => CreateManagerResponsePoolsAutoscale3$inboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function createManagerResponseCompute3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseCompute3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseCompute3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseCompute3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseComputeUnion3$inboundSchema: z.ZodType<
+  CreateManagerResponseComputeUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseCompute3$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseComputeUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseComputeUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseComputeUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseComputeUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseDeploymentModel3$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseDeploymentModel3
+> = z.enum(CreateManagerResponseDeploymentModel3);
+
+/** @internal */
+export const CreateManagerResponseAws3$inboundSchema: z.ZodType<
+  CreateManagerResponseAws3,
+  unknown
+> = z.object({
+  certificateArn: z.string(),
+});
+
+export function createManagerResponseAws3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseAws3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseAws3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseAws3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseAwsUnion3$inboundSchema: z.ZodType<
+  CreateManagerResponseAwsUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseAws3$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseAwsUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseAwsUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseAwsUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseAwsUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseAzure3$inboundSchema: z.ZodType<
+  CreateManagerResponseAzure3,
+  unknown
+> = z.object({
+  keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
+});
+
+export function createManagerResponseAzure3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseAzure3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseAzure3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseAzure3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseAzureUnion3$inboundSchema: z.ZodType<
+  CreateManagerResponseAzureUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseAzure3$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseAzureUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseAzureUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseAzureUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseAzureUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseGcp3$inboundSchema: z.ZodType<
+  CreateManagerResponseGcp3,
+  unknown
+> = z.object({
+  certificateName: z.string(),
+});
+
+export function createManagerResponseGcp3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseGcp3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseGcp3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseGcp3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseGcpUnion3$inboundSchema: z.ZodType<
+  CreateManagerResponseGcpUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseGcp3$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseGcpUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseGcpUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseGcpUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseGcpUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseTlsSecretRef3$inboundSchema: z.ZodType<
+  CreateManagerResponseTlsSecretRef3,
+  unknown
+> = z.object({
+  namespace: z.nullable(z.string()).optional(),
+  secretName: z.string(),
+});
+
+export function createManagerResponseTlsSecretRef3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseTlsSecretRef3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseTlsSecretRef3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseTlsSecretRef3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseDomainsKubernetes3$inboundSchema: z.ZodType<
+  CreateManagerResponseDomainsKubernetes3,
+  unknown
+> = z.object({
+  tlsSecretRef: z.lazy(() => CreateManagerResponseTlsSecretRef3$inboundSchema),
+});
+
+export function createManagerResponseDomainsKubernetes3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseDomainsKubernetes3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseDomainsKubernetes3$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseDomainsKubernetes3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseDomainsKubernetesUnion3$inboundSchema:
+  z.ZodType<CreateManagerResponseDomainsKubernetesUnion3, unknown> = z.union([
+    z.lazy(() => CreateManagerResponseDomainsKubernetes3$inboundSchema),
+    z.string(),
+  ]);
+
+export function createManagerResponseDomainsKubernetesUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseDomainsKubernetesUnion3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseDomainsKubernetesUnion3$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseDomainsKubernetesUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseManaged3$inboundSchema: z.ZodType<
+  CreateManagerResponseManaged3,
+  unknown
+> = z.object({});
+
+export function createManagerResponseManaged3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseManaged3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseManaged3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseManaged3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseManagedUnion3$inboundSchema: z.ZodType<
+  CreateManagerResponseManagedUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseManaged3$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseManagedUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseManagedUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseManagedUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseManagedUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseCertificate3$inboundSchema: z.ZodType<
+  CreateManagerResponseCertificate3,
+  unknown
+> = z.object({
+  aws: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseAws3$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  azure: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseAzure3$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  gcp: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseGcp3$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  kubernetes: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseDomainsKubernetes3$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  managed: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseManaged3$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+});
+
+export function createManagerResponseCertificate3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseCertificate3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseCertificate3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseCertificate3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseCustomDomains3$inboundSchema: z.ZodType<
+  CreateManagerResponseCustomDomains3,
+  unknown
+> = z.object({
+  certificate: z.lazy(() => CreateManagerResponseCertificate3$inboundSchema),
+  domain: z.string().optional(),
+  endpoints: z.record(z.string(), z.string()).optional(),
+});
+
+export function createManagerResponseCustomDomains3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseCustomDomains3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseCustomDomains3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseCustomDomains3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseModeLoadBalancer3$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseModeLoadBalancer3
+> = z.enum(CreateManagerResponseModeLoadBalancer3);
+
+/** @internal */
+export const CreateManagerResponsePublicEndpointTargetLoadBalancer3$inboundSchema:
+  z.ZodType<CreateManagerResponsePublicEndpointTargetLoadBalancer3, unknown> = z
+    .object({
+      cnameTarget: z.string(),
+      mode: CreateManagerResponseModeLoadBalancer3$inboundSchema,
+    });
+
+export function createManagerResponsePublicEndpointTargetLoadBalancer3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponsePublicEndpointTargetLoadBalancer3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePublicEndpointTargetLoadBalancer3$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePublicEndpointTargetLoadBalancer3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseModeMachineAddresses3$inboundSchema:
+  z.ZodEnum<typeof CreateManagerResponseModeMachineAddresses3> = z.enum(
+    CreateManagerResponseModeMachineAddresses3,
+  );
+
+/** @internal */
+export const CreateManagerResponsePublicEndpointTargetMachineAddresses3$inboundSchema:
+  z.ZodType<
+    CreateManagerResponsePublicEndpointTargetMachineAddresses3,
+    unknown
+  > = z.object({
+    mode: CreateManagerResponseModeMachineAddresses3$inboundSchema,
+  });
+
+export function createManagerResponsePublicEndpointTargetMachineAddresses3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponsePublicEndpointTargetMachineAddresses3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePublicEndpointTargetMachineAddresses3$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePublicEndpointTargetMachineAddresses3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePublicEndpointTargetUnion3$inboundSchema:
+  z.ZodType<CreateManagerResponsePublicEndpointTargetUnion3, unknown> = z.union(
+    [
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetLoadBalancer3$inboundSchema
+      ),
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetMachineAddresses3$inboundSchema
+      ),
+      z.string(),
+    ],
+  );
+
+export function createManagerResponsePublicEndpointTargetUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponsePublicEndpointTargetUnion3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePublicEndpointTargetUnion3$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponsePublicEndpointTargetUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseDomains3$inboundSchema: z.ZodType<
+  CreateManagerResponseDomains3,
+  unknown
+> = z.object({
+  customDomains: z.nullable(
+    z.record(
+      z.string(),
+      z.lazy(() => CreateManagerResponseCustomDomains3$inboundSchema),
+    ),
+  ).optional(),
+  publicEndpointTarget: z.nullable(
+    z.union([
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetLoadBalancer3$inboundSchema
+      ),
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetMachineAddresses3$inboundSchema
+      ),
+      z.string(),
+    ]),
+  ).optional(),
+});
+
+export function createManagerResponseDomains3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseDomains3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseDomains3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseDomains3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseDomainsUnion3$inboundSchema: z.ZodType<
+  CreateManagerResponseDomainsUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseDomains3$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseDomainsUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseDomainsUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseDomainsUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseDomainsUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseEndpointAccess3$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseEndpointAccess3
+> = z.enum(CreateManagerResponseEndpointAccess3);
+
+/** @internal */
+export const CreateManagerResponseHeartbeats3$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseHeartbeats3
+> = z.enum(CreateManagerResponseHeartbeats3);
+
+/** @internal */
+export const CreateManagerResponseCloud3$inboundSchema: z.ZodType<
+  CreateManagerResponseCloud3,
+  unknown
+> = z.object({
+  accountId: z.nullable(z.string()).optional(),
+  clusterId: z.nullable(z.string()).optional(),
+  clusterName: z.nullable(z.string()).optional(),
+  projectId: z.nullable(z.string()).optional(),
+  region: z.nullable(z.string()).optional(),
+  resourceGroup: z.nullable(z.string()).optional(),
+  subscriptionId: z.nullable(z.string()).optional(),
+});
+
+export function createManagerResponseCloud3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseCloud3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseCloud3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseCloud3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseCloudUnion3$inboundSchema: z.ZodType<
+  CreateManagerResponseCloudUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseCloud3$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseCloudUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseCloudUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseCloudUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseCloudUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseOwnership3$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseOwnership3
+> = z.enum(CreateManagerResponseOwnership3);
+
+/** @internal */
+export const CreateManagerResponseCluster3$inboundSchema: z.ZodType<
+  CreateManagerResponseCluster3,
+  unknown
+> = z.object({
+  cloud: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseCloud3$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  namespace: z.nullable(z.string()).optional(),
+  ownership: CreateManagerResponseOwnership3$inboundSchema,
+});
+
+export function createManagerResponseCluster3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseCluster3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseCluster3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseCluster3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseClusterUnion3$inboundSchema: z.ZodType<
+  CreateManagerResponseClusterUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseCluster3$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseClusterUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseClusterUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseClusterUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseClusterUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseExposure3$inboundSchema: z.ZodType<
+  CreateManagerResponseExposure3,
+  unknown
+> = z.union([
+  KubernetesExposureCustom$inboundSchema,
+  KubernetesExposureCustomBaseDomain$inboundSchema,
+  KubernetesExposureGenerated$inboundSchema,
+  KubernetesExposureDisabled$inboundSchema,
+  z.string(),
+]);
+
+export function createManagerResponseExposure3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseExposure3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseExposure3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseExposure3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseKubernetes3$inboundSchema: z.ZodType<
+  CreateManagerResponseKubernetes3,
+  unknown
+> = z.object({
+  cluster: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseCluster3$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  exposure: z.nullable(
+    z.union([
+      KubernetesExposureCustom$inboundSchema,
+      KubernetesExposureCustomBaseDomain$inboundSchema,
+      KubernetesExposureGenerated$inboundSchema,
+      KubernetesExposureDisabled$inboundSchema,
+      z.string(),
+    ]),
+  ).optional(),
+});
+
+export function createManagerResponseKubernetes3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseKubernetes3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseKubernetes3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseKubernetes3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseKubernetesUnion3$inboundSchema: z.ZodType<
+  CreateManagerResponseKubernetesUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseKubernetes3$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseKubernetesUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseKubernetesUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseKubernetesUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseKubernetesUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseTypeByoVnetAzure3$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeByoVnetAzure3
+> = z.enum(CreateManagerResponseTypeByoVnetAzure3);
+
+/** @internal */
+export const CreateManagerResponseNetworkByoVnetAzure3$inboundSchema: z.ZodType<
+  CreateManagerResponseNetworkByoVnetAzure3,
+  unknown
+> = z.object({
+  application_gateway_subnet_name: z.nullable(z.string()).optional(),
+  private_endpoint_subnet_name: z.nullable(z.string()).optional(),
+  private_subnet_name: z.string(),
+  public_subnet_name: z.string(),
+  type: CreateManagerResponseTypeByoVnetAzure3$inboundSchema,
+  vnet_resource_id: z.string(),
+}).transform((v) => {
+  return remap$(v, {
+    "application_gateway_subnet_name": "applicationGatewaySubnetName",
+    "private_endpoint_subnet_name": "privateEndpointSubnetName",
+    "private_subnet_name": "privateSubnetName",
+    "public_subnet_name": "publicSubnetName",
+    "vnet_resource_id": "vnetResourceId",
+  });
+});
+
+export function createManagerResponseNetworkByoVnetAzure3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseNetworkByoVnetAzure3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseNetworkByoVnetAzure3$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseNetworkByoVnetAzure3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseTypeByoVpcGcp3$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeByoVpcGcp3
+> = z.enum(CreateManagerResponseTypeByoVpcGcp3);
+
+/** @internal */
+export const CreateManagerResponseNetworkByoVpcGcp3$inboundSchema: z.ZodType<
+  CreateManagerResponseNetworkByoVpcGcp3,
+  unknown
+> = z.object({
+  network_name: z.string(),
+  region: z.string(),
+  subnet_name: z.string(),
+  type: CreateManagerResponseTypeByoVpcGcp3$inboundSchema,
+}).transform((v) => {
+  return remap$(v, {
+    "network_name": "networkName",
+    "subnet_name": "subnetName",
+  });
+});
+
+export function createManagerResponseNetworkByoVpcGcp3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseNetworkByoVpcGcp3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseNetworkByoVpcGcp3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseNetworkByoVpcGcp3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseTypeByoVpcAws3$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeByoVpcAws3
+> = z.enum(CreateManagerResponseTypeByoVpcAws3);
+
+/** @internal */
+export const CreateManagerResponseNetworkByoVpcAws3$inboundSchema: z.ZodType<
+  CreateManagerResponseNetworkByoVpcAws3,
+  unknown
+> = z.object({
+  private_subnet_ids: z.array(z.string()),
+  public_subnet_ids: z.array(z.string()),
+  security_group_ids: z.array(z.string()).optional(),
+  type: CreateManagerResponseTypeByoVpcAws3$inboundSchema,
+  vpc_id: z.string(),
+}).transform((v) => {
+  return remap$(v, {
+    "private_subnet_ids": "privateSubnetIds",
+    "public_subnet_ids": "publicSubnetIds",
+    "security_group_ids": "securityGroupIds",
+    "vpc_id": "vpcId",
+  });
+});
+
+export function createManagerResponseNetworkByoVpcAws3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseNetworkByoVpcAws3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseNetworkByoVpcAws3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseNetworkByoVpcAws3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseTypeCreate3$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeCreate3
+> = z.enum(CreateManagerResponseTypeCreate3);
+
+/** @internal */
+export const CreateManagerResponseNetworkCreate3$inboundSchema: z.ZodType<
+  CreateManagerResponseNetworkCreate3,
+  unknown
+> = z.object({
+  availability_zones: z.int().optional(),
+  cidr: z.nullable(z.string()).optional(),
+  type: CreateManagerResponseTypeCreate3$inboundSchema,
+}).transform((v) => {
+  return remap$(v, {
+    "availability_zones": "availabilityZones",
+  });
+});
+
+export function createManagerResponseNetworkCreate3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseNetworkCreate3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseNetworkCreate3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseNetworkCreate3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseTypeUseDefault3$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeUseDefault3
+> = z.enum(CreateManagerResponseTypeUseDefault3);
+
+/** @internal */
+export const CreateManagerResponseNetworkUseDefault3$inboundSchema: z.ZodType<
+  CreateManagerResponseNetworkUseDefault3,
+  unknown
+> = z.object({
+  type: CreateManagerResponseTypeUseDefault3$inboundSchema,
+});
+
+export function createManagerResponseNetworkUseDefault3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseNetworkUseDefault3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseNetworkUseDefault3$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseNetworkUseDefault3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseNetworkUnion3$inboundSchema: z.ZodType<
+  CreateManagerResponseNetworkUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseNetworkByoVpcAws3$inboundSchema),
+  z.lazy(() => CreateManagerResponseNetworkByoVpcGcp3$inboundSchema),
+  z.lazy(() => CreateManagerResponseNetworkByoVnetAzure3$inboundSchema),
+  z.lazy(() => CreateManagerResponseNetworkUseDefault3$inboundSchema),
+  z.lazy(() => CreateManagerResponseNetworkCreate3$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseNetworkUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseNetworkUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseNetworkUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseNetworkUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseSetupManagement3$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseSetupManagement3
+> = z.enum(CreateManagerResponseSetupManagement3);
+
+/** @internal */
+export const CreateManagerResponseSigning3$inboundSchema: z.ZodType<
+  CreateManagerResponseSigning3,
+  unknown
+> = z.object({
+  channel: z.string(),
+  fingerprint: z.string(),
+  privateMachineApiUrl: z.nullable(z.string()).optional(),
+});
+
+export function createManagerResponseSigning3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseSigning3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseSigning3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseSigning3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseSigningUnion3$inboundSchema: z.ZodType<
+  CreateManagerResponseSigningUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseSigning3$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseSigningUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseSigningUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseSigningUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseSigningUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseTelemetry3$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTelemetry3
+> = z.enum(CreateManagerResponseTelemetry3);
+
+/** @internal */
+export const CreateManagerResponseUpdates3$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseUpdates3
+> = z.enum(CreateManagerResponseUpdates3);
+
+/** @internal */
+export const CreateManagerResponseStackSettings3$inboundSchema: z.ZodType<
+  CreateManagerResponseStackSettings3,
+  unknown
+> = z.object({
+  airgapped: z.boolean().optional(),
+  compute: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseCompute3$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  deploymentModel: CreateManagerResponseDeploymentModel3$inboundSchema
+    .optional(),
+  domains: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseDomains3$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  endpointAccess: CreateManagerResponseEndpointAccess3$inboundSchema.optional(),
+  externalBindings: z.nullable(
+    z.record(z.string(), ExternalBindingUnion$inboundSchema),
+  ).optional(),
+  heartbeats: CreateManagerResponseHeartbeats3$inboundSchema.optional(),
+  kubernetes: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseKubernetes3$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  network: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseNetworkByoVpcAws3$inboundSchema),
+      z.lazy(() => CreateManagerResponseNetworkByoVpcGcp3$inboundSchema),
+      z.lazy(() => CreateManagerResponseNetworkByoVnetAzure3$inboundSchema),
+      z.lazy(() => CreateManagerResponseNetworkUseDefault3$inboundSchema),
+      z.lazy(() => CreateManagerResponseNetworkCreate3$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  publicEndpoints: z.nullable(
+    z.record(z.string(), z.record(z.string(), z.string())),
+  ).optional(),
+  quotaWarningOverrides: z.array(z.string()).optional(),
+  setupManagement: CreateManagerResponseSetupManagement3$inboundSchema
+    .optional(),
+  signing: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseSigning3$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  telemetry: CreateManagerResponseTelemetry3$inboundSchema.optional(),
+  updates: CreateManagerResponseUpdates3$inboundSchema.optional(),
+});
+
+export function createManagerResponseStackSettings3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseStackSettings3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseStackSettings3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseStackSettings3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseSetupTerraform$inboundSchema: z.ZodType<
+  CreateManagerResponseSetupTerraform,
+  unknown
+> = z.object({
+  method: z.literal("terraform"),
+  deploymentPortalUrl: z.string(),
+  managerUrl: z.string(),
+  providerSource: z.string(),
+  moduleSource: z.string(),
+  moduleVersion: z.string().optional(),
+  moduleInputs: z.record(z.string(), z.string()),
+  mainTf: z.string(),
+  tfvars: z.string(),
+  commands: z.string(),
+  stackSettings: z.lazy(() =>
+    CreateManagerResponseStackSettings3$inboundSchema
+  ),
+});
+
+export function createManagerResponseSetupTerraformFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseSetupTerraform, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseSetupTerraform$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseSetupTerraform' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseContainers2$inboundSchema: z.ZodType<
+  CreateManagerResponseContainers2,
+  unknown
+> = z.object({
+  cpu: z.nullable(z.number()).optional(),
+  memory: z.nullable(z.string()).optional(),
+  volumeSizeGib: z.nullable(z.int()).optional(),
+});
+
+export function createManagerResponseContainers2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseContainers2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseContainers2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseContainers2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseFailureDomains4$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomains4,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function createManagerResponseFailureDomains4FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseFailureDomains4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomains4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseFailureDomains4' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseFailureDomainsUnion4$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomainsUnion4,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseFailureDomains4$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseFailureDomainsUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseFailureDomainsUnion4,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomainsUnion4$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseFailureDomainsUnion4' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePoolsAutoscale2$inboundSchema: z.ZodType<
+  CreateManagerResponsePoolsAutoscale2,
+  unknown
+> = z.object({
+  dataDiskGib: z.nullable(z.int()).optional(),
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseFailureDomains4$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
+});
+
+export function createManagerResponsePoolsAutoscale2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponsePoolsAutoscale2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePoolsAutoscale2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePoolsAutoscale2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseFailureDomains3$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomains3,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function createManagerResponseFailureDomains3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseFailureDomains3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomains3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseFailureDomains3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseFailureDomainsUnion3$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomainsUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseFailureDomains3$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseFailureDomainsUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseFailureDomainsUnion3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomainsUnion3$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseFailureDomainsUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePoolsFixed2$inboundSchema: z.ZodType<
+  CreateManagerResponsePoolsFixed2,
+  unknown
+> = z.object({
+  dataDiskGib: z.nullable(z.int()).optional(),
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseFailureDomains3$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
+});
+
+export function createManagerResponsePoolsFixed2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponsePoolsFixed2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponsePoolsFixed2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePoolsFixed2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePoolsUnion2$inboundSchema: z.ZodType<
+  CreateManagerResponsePoolsUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponsePoolsFixed2$inboundSchema),
+  z.lazy(() => CreateManagerResponsePoolsAutoscale2$inboundSchema),
+]);
+
+export function createManagerResponsePoolsUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponsePoolsUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponsePoolsUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePoolsUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseCompute2$inboundSchema: z.ZodType<
+  CreateManagerResponseCompute2,
+  unknown
+> = z.object({
+  containers: z.record(
+    z.string(),
+    z.lazy(() => CreateManagerResponseContainers2$inboundSchema),
+  ).optional(),
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => CreateManagerResponsePoolsFixed2$inboundSchema),
+      z.lazy(() => CreateManagerResponsePoolsAutoscale2$inboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function createManagerResponseCompute2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseCompute2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseCompute2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseCompute2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseComputeUnion2$inboundSchema: z.ZodType<
+  CreateManagerResponseComputeUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseCompute2$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseComputeUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseComputeUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseComputeUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseComputeUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseDeploymentModel2$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseDeploymentModel2
+> = z.enum(CreateManagerResponseDeploymentModel2);
+
+/** @internal */
+export const CreateManagerResponseAws2$inboundSchema: z.ZodType<
+  CreateManagerResponseAws2,
+  unknown
+> = z.object({
+  certificateArn: z.string(),
+});
+
+export function createManagerResponseAws2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseAws2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseAws2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseAws2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseAwsUnion2$inboundSchema: z.ZodType<
+  CreateManagerResponseAwsUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseAws2$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseAwsUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseAwsUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseAwsUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseAwsUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseAzure2$inboundSchema: z.ZodType<
+  CreateManagerResponseAzure2,
+  unknown
+> = z.object({
+  keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
+});
+
+export function createManagerResponseAzure2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseAzure2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseAzure2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseAzure2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseAzureUnion2$inboundSchema: z.ZodType<
+  CreateManagerResponseAzureUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseAzure2$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseAzureUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseAzureUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseAzureUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseAzureUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseGcp2$inboundSchema: z.ZodType<
+  CreateManagerResponseGcp2,
+  unknown
+> = z.object({
+  certificateName: z.string(),
+});
+
+export function createManagerResponseGcp2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseGcp2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseGcp2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseGcp2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseGcpUnion2$inboundSchema: z.ZodType<
+  CreateManagerResponseGcpUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseGcp2$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseGcpUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseGcpUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseGcpUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseGcpUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseTlsSecretRef2$inboundSchema: z.ZodType<
+  CreateManagerResponseTlsSecretRef2,
+  unknown
+> = z.object({
+  namespace: z.nullable(z.string()).optional(),
+  secretName: z.string(),
+});
+
+export function createManagerResponseTlsSecretRef2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseTlsSecretRef2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseTlsSecretRef2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseTlsSecretRef2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseDomainsKubernetes2$inboundSchema: z.ZodType<
+  CreateManagerResponseDomainsKubernetes2,
+  unknown
+> = z.object({
+  tlsSecretRef: z.lazy(() => CreateManagerResponseTlsSecretRef2$inboundSchema),
+});
+
+export function createManagerResponseDomainsKubernetes2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseDomainsKubernetes2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseDomainsKubernetes2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseDomainsKubernetes2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseDomainsKubernetesUnion2$inboundSchema:
+  z.ZodType<CreateManagerResponseDomainsKubernetesUnion2, unknown> = z.union([
+    z.lazy(() => CreateManagerResponseDomainsKubernetes2$inboundSchema),
+    z.string(),
+  ]);
+
+export function createManagerResponseDomainsKubernetesUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseDomainsKubernetesUnion2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseDomainsKubernetesUnion2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseDomainsKubernetesUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseManaged2$inboundSchema: z.ZodType<
+  CreateManagerResponseManaged2,
+  unknown
+> = z.object({});
+
+export function createManagerResponseManaged2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseManaged2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseManaged2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseManaged2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseManagedUnion2$inboundSchema: z.ZodType<
+  CreateManagerResponseManagedUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseManaged2$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseManagedUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseManagedUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseManagedUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseManagedUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseCertificate2$inboundSchema: z.ZodType<
+  CreateManagerResponseCertificate2,
+  unknown
+> = z.object({
+  aws: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseAws2$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  azure: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseAzure2$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  gcp: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseGcp2$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  kubernetes: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseDomainsKubernetes2$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  managed: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseManaged2$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+});
+
+export function createManagerResponseCertificate2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseCertificate2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseCertificate2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseCertificate2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseCustomDomains2$inboundSchema: z.ZodType<
+  CreateManagerResponseCustomDomains2,
+  unknown
+> = z.object({
+  certificate: z.lazy(() => CreateManagerResponseCertificate2$inboundSchema),
+  domain: z.string().optional(),
+  endpoints: z.record(z.string(), z.string()).optional(),
+});
+
+export function createManagerResponseCustomDomains2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseCustomDomains2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseCustomDomains2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseCustomDomains2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseModeLoadBalancer2$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseModeLoadBalancer2
+> = z.enum(CreateManagerResponseModeLoadBalancer2);
+
+/** @internal */
+export const CreateManagerResponsePublicEndpointTargetLoadBalancer2$inboundSchema:
+  z.ZodType<CreateManagerResponsePublicEndpointTargetLoadBalancer2, unknown> = z
+    .object({
+      cnameTarget: z.string(),
+      mode: CreateManagerResponseModeLoadBalancer2$inboundSchema,
+    });
+
+export function createManagerResponsePublicEndpointTargetLoadBalancer2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponsePublicEndpointTargetLoadBalancer2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePublicEndpointTargetLoadBalancer2$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePublicEndpointTargetLoadBalancer2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseModeMachineAddresses2$inboundSchema:
+  z.ZodEnum<typeof CreateManagerResponseModeMachineAddresses2> = z.enum(
+    CreateManagerResponseModeMachineAddresses2,
+  );
+
+/** @internal */
+export const CreateManagerResponsePublicEndpointTargetMachineAddresses2$inboundSchema:
+  z.ZodType<
+    CreateManagerResponsePublicEndpointTargetMachineAddresses2,
+    unknown
+  > = z.object({
+    mode: CreateManagerResponseModeMachineAddresses2$inboundSchema,
+  });
+
+export function createManagerResponsePublicEndpointTargetMachineAddresses2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponsePublicEndpointTargetMachineAddresses2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePublicEndpointTargetMachineAddresses2$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePublicEndpointTargetMachineAddresses2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePublicEndpointTargetUnion2$inboundSchema:
+  z.ZodType<CreateManagerResponsePublicEndpointTargetUnion2, unknown> = z.union(
+    [
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetLoadBalancer2$inboundSchema
+      ),
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetMachineAddresses2$inboundSchema
+      ),
+      z.string(),
+    ],
+  );
+
+export function createManagerResponsePublicEndpointTargetUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponsePublicEndpointTargetUnion2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePublicEndpointTargetUnion2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponsePublicEndpointTargetUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseDomains2$inboundSchema: z.ZodType<
+  CreateManagerResponseDomains2,
+  unknown
+> = z.object({
+  customDomains: z.nullable(
+    z.record(
+      z.string(),
+      z.lazy(() => CreateManagerResponseCustomDomains2$inboundSchema),
+    ),
+  ).optional(),
+  publicEndpointTarget: z.nullable(
+    z.union([
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetLoadBalancer2$inboundSchema
+      ),
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetMachineAddresses2$inboundSchema
+      ),
+      z.string(),
+    ]),
+  ).optional(),
+});
+
+export function createManagerResponseDomains2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseDomains2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseDomains2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseDomains2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseDomainsUnion2$inboundSchema: z.ZodType<
+  CreateManagerResponseDomainsUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseDomains2$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseDomainsUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseDomainsUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseDomainsUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseDomainsUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseEndpointAccess2$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseEndpointAccess2
+> = z.enum(CreateManagerResponseEndpointAccess2);
+
+/** @internal */
+export const CreateManagerResponseHeartbeats2$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseHeartbeats2
+> = z.enum(CreateManagerResponseHeartbeats2);
+
+/** @internal */
+export const CreateManagerResponseCloud2$inboundSchema: z.ZodType<
+  CreateManagerResponseCloud2,
+  unknown
+> = z.object({
+  accountId: z.nullable(z.string()).optional(),
+  clusterId: z.nullable(z.string()).optional(),
+  clusterName: z.nullable(z.string()).optional(),
+  projectId: z.nullable(z.string()).optional(),
+  region: z.nullable(z.string()).optional(),
+  resourceGroup: z.nullable(z.string()).optional(),
+  subscriptionId: z.nullable(z.string()).optional(),
+});
+
+export function createManagerResponseCloud2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseCloud2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseCloud2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseCloud2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseCloudUnion2$inboundSchema: z.ZodType<
+  CreateManagerResponseCloudUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseCloud2$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseCloudUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseCloudUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseCloudUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseCloudUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseOwnership2$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseOwnership2
+> = z.enum(CreateManagerResponseOwnership2);
+
+/** @internal */
+export const CreateManagerResponseCluster2$inboundSchema: z.ZodType<
+  CreateManagerResponseCluster2,
+  unknown
+> = z.object({
+  cloud: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseCloud2$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  namespace: z.nullable(z.string()).optional(),
+  ownership: CreateManagerResponseOwnership2$inboundSchema,
+});
+
+export function createManagerResponseCluster2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseCluster2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseCluster2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseCluster2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseClusterUnion2$inboundSchema: z.ZodType<
+  CreateManagerResponseClusterUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseCluster2$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseClusterUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseClusterUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseClusterUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseClusterUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseExposure2$inboundSchema: z.ZodType<
+  CreateManagerResponseExposure2,
+  unknown
+> = z.union([
+  KubernetesExposureCustom$inboundSchema,
+  KubernetesExposureCustomBaseDomain$inboundSchema,
+  KubernetesExposureGenerated$inboundSchema,
+  KubernetesExposureDisabled$inboundSchema,
+  z.string(),
+]);
+
+export function createManagerResponseExposure2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseExposure2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseExposure2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseExposure2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseKubernetes2$inboundSchema: z.ZodType<
+  CreateManagerResponseKubernetes2,
+  unknown
+> = z.object({
+  cluster: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseCluster2$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  exposure: z.nullable(
+    z.union([
+      KubernetesExposureCustom$inboundSchema,
+      KubernetesExposureCustomBaseDomain$inboundSchema,
+      KubernetesExposureGenerated$inboundSchema,
+      KubernetesExposureDisabled$inboundSchema,
+      z.string(),
+    ]),
+  ).optional(),
+});
+
+export function createManagerResponseKubernetes2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseKubernetes2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseKubernetes2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseKubernetes2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseKubernetesUnion2$inboundSchema: z.ZodType<
+  CreateManagerResponseKubernetesUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseKubernetes2$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseKubernetesUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseKubernetesUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseKubernetesUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseKubernetesUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseTypeByoVnetAzure2$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeByoVnetAzure2
+> = z.enum(CreateManagerResponseTypeByoVnetAzure2);
+
+/** @internal */
+export const CreateManagerResponseNetworkByoVnetAzure2$inboundSchema: z.ZodType<
+  CreateManagerResponseNetworkByoVnetAzure2,
+  unknown
+> = z.object({
+  application_gateway_subnet_name: z.nullable(z.string()).optional(),
+  private_endpoint_subnet_name: z.nullable(z.string()).optional(),
+  private_subnet_name: z.string(),
+  public_subnet_name: z.string(),
+  type: CreateManagerResponseTypeByoVnetAzure2$inboundSchema,
+  vnet_resource_id: z.string(),
+}).transform((v) => {
+  return remap$(v, {
+    "application_gateway_subnet_name": "applicationGatewaySubnetName",
+    "private_endpoint_subnet_name": "privateEndpointSubnetName",
+    "private_subnet_name": "privateSubnetName",
+    "public_subnet_name": "publicSubnetName",
+    "vnet_resource_id": "vnetResourceId",
+  });
+});
+
+export function createManagerResponseNetworkByoVnetAzure2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseNetworkByoVnetAzure2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseNetworkByoVnetAzure2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseNetworkByoVnetAzure2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseTypeByoVpcGcp2$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeByoVpcGcp2
+> = z.enum(CreateManagerResponseTypeByoVpcGcp2);
+
+/** @internal */
+export const CreateManagerResponseNetworkByoVpcGcp2$inboundSchema: z.ZodType<
+  CreateManagerResponseNetworkByoVpcGcp2,
+  unknown
+> = z.object({
+  network_name: z.string(),
+  region: z.string(),
+  subnet_name: z.string(),
+  type: CreateManagerResponseTypeByoVpcGcp2$inboundSchema,
+}).transform((v) => {
+  return remap$(v, {
+    "network_name": "networkName",
+    "subnet_name": "subnetName",
+  });
+});
+
+export function createManagerResponseNetworkByoVpcGcp2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseNetworkByoVpcGcp2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseNetworkByoVpcGcp2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseNetworkByoVpcGcp2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseTypeByoVpcAws2$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeByoVpcAws2
+> = z.enum(CreateManagerResponseTypeByoVpcAws2);
+
+/** @internal */
+export const CreateManagerResponseNetworkByoVpcAws2$inboundSchema: z.ZodType<
+  CreateManagerResponseNetworkByoVpcAws2,
+  unknown
+> = z.object({
+  private_subnet_ids: z.array(z.string()),
+  public_subnet_ids: z.array(z.string()),
+  security_group_ids: z.array(z.string()).optional(),
+  type: CreateManagerResponseTypeByoVpcAws2$inboundSchema,
+  vpc_id: z.string(),
+}).transform((v) => {
+  return remap$(v, {
+    "private_subnet_ids": "privateSubnetIds",
+    "public_subnet_ids": "publicSubnetIds",
+    "security_group_ids": "securityGroupIds",
+    "vpc_id": "vpcId",
+  });
+});
+
+export function createManagerResponseNetworkByoVpcAws2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseNetworkByoVpcAws2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseNetworkByoVpcAws2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseNetworkByoVpcAws2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseTypeCreate2$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeCreate2
+> = z.enum(CreateManagerResponseTypeCreate2);
+
+/** @internal */
+export const CreateManagerResponseNetworkCreate2$inboundSchema: z.ZodType<
+  CreateManagerResponseNetworkCreate2,
+  unknown
+> = z.object({
+  availability_zones: z.int().optional(),
+  cidr: z.nullable(z.string()).optional(),
+  type: CreateManagerResponseTypeCreate2$inboundSchema,
+}).transform((v) => {
+  return remap$(v, {
+    "availability_zones": "availabilityZones",
+  });
+});
+
+export function createManagerResponseNetworkCreate2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseNetworkCreate2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseNetworkCreate2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseNetworkCreate2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseTypeUseDefault2$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeUseDefault2
+> = z.enum(CreateManagerResponseTypeUseDefault2);
+
+/** @internal */
+export const CreateManagerResponseNetworkUseDefault2$inboundSchema: z.ZodType<
+  CreateManagerResponseNetworkUseDefault2,
+  unknown
+> = z.object({
+  type: CreateManagerResponseTypeUseDefault2$inboundSchema,
+});
+
+export function createManagerResponseNetworkUseDefault2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseNetworkUseDefault2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseNetworkUseDefault2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseNetworkUseDefault2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseNetworkUnion2$inboundSchema: z.ZodType<
+  CreateManagerResponseNetworkUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseNetworkByoVpcAws2$inboundSchema),
+  z.lazy(() => CreateManagerResponseNetworkByoVpcGcp2$inboundSchema),
+  z.lazy(() => CreateManagerResponseNetworkByoVnetAzure2$inboundSchema),
+  z.lazy(() => CreateManagerResponseNetworkUseDefault2$inboundSchema),
+  z.lazy(() => CreateManagerResponseNetworkCreate2$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseNetworkUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseNetworkUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseNetworkUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseNetworkUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseSetupManagement2$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseSetupManagement2
+> = z.enum(CreateManagerResponseSetupManagement2);
+
+/** @internal */
+export const CreateManagerResponseSigning2$inboundSchema: z.ZodType<
+  CreateManagerResponseSigning2,
+  unknown
+> = z.object({
+  channel: z.string(),
+  fingerprint: z.string(),
+  privateMachineApiUrl: z.nullable(z.string()).optional(),
+});
+
+export function createManagerResponseSigning2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseSigning2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseSigning2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseSigning2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseSigningUnion2$inboundSchema: z.ZodType<
+  CreateManagerResponseSigningUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseSigning2$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseSigningUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseSigningUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseSigningUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseSigningUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseTelemetry2$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTelemetry2
+> = z.enum(CreateManagerResponseTelemetry2);
+
+/** @internal */
+export const CreateManagerResponseUpdates2$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseUpdates2
+> = z.enum(CreateManagerResponseUpdates2);
+
+/** @internal */
+export const CreateManagerResponseStackSettings2$inboundSchema: z.ZodType<
+  CreateManagerResponseStackSettings2,
+  unknown
+> = z.object({
+  airgapped: z.boolean().optional(),
+  compute: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseCompute2$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  deploymentModel: CreateManagerResponseDeploymentModel2$inboundSchema
+    .optional(),
+  domains: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseDomains2$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  endpointAccess: CreateManagerResponseEndpointAccess2$inboundSchema.optional(),
+  externalBindings: z.nullable(
+    z.record(z.string(), ExternalBindingUnion$inboundSchema),
+  ).optional(),
+  heartbeats: CreateManagerResponseHeartbeats2$inboundSchema.optional(),
+  kubernetes: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseKubernetes2$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  network: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseNetworkByoVpcAws2$inboundSchema),
+      z.lazy(() => CreateManagerResponseNetworkByoVpcGcp2$inboundSchema),
+      z.lazy(() => CreateManagerResponseNetworkByoVnetAzure2$inboundSchema),
+      z.lazy(() => CreateManagerResponseNetworkUseDefault2$inboundSchema),
+      z.lazy(() => CreateManagerResponseNetworkCreate2$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  publicEndpoints: z.nullable(
+    z.record(z.string(), z.record(z.string(), z.string())),
+  ).optional(),
+  quotaWarningOverrides: z.array(z.string()).optional(),
+  setupManagement: CreateManagerResponseSetupManagement2$inboundSchema
+    .optional(),
+  signing: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseSigning2$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  telemetry: CreateManagerResponseTelemetry2$inboundSchema.optional(),
+  updates: CreateManagerResponseUpdates2$inboundSchema.optional(),
+});
+
+export function createManagerResponseStackSettings2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseStackSettings2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseStackSettings2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseStackSettings2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseSetupGoogleOauth$inboundSchema: z.ZodType<
+  CreateManagerResponseSetupGoogleOauth,
+  unknown
+> = z.object({
+  method: z.literal("google-oauth"),
+  deploymentPortalUrl: z.string(),
+  managerUrl: z.string(),
+  oauthStartUrl: z.string(),
+  region: z.string(),
+  stackSettings: z.lazy(() =>
+    CreateManagerResponseStackSettings2$inboundSchema
+  ),
+});
+
+export function createManagerResponseSetupGoogleOauthFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseSetupGoogleOauth, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseSetupGoogleOauth$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseSetupGoogleOauth' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseContainers1$inboundSchema: z.ZodType<
+  CreateManagerResponseContainers1,
+  unknown
+> = z.object({
+  cpu: z.nullable(z.number()).optional(),
+  memory: z.nullable(z.string()).optional(),
+  volumeSizeGib: z.nullable(z.int()).optional(),
+});
+
+export function createManagerResponseContainers1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseContainers1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseContainers1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseContainers1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseFailureDomains2$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomains2,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function createManagerResponseFailureDomains2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseFailureDomains2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomains2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseFailureDomains2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseFailureDomainsUnion2$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomainsUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseFailureDomains2$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseFailureDomainsUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseFailureDomainsUnion2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomainsUnion2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseFailureDomainsUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePoolsAutoscale1$inboundSchema: z.ZodType<
+  CreateManagerResponsePoolsAutoscale1,
+  unknown
+> = z.object({
+  dataDiskGib: z.nullable(z.int()).optional(),
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseFailureDomains2$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
+});
+
+export function createManagerResponsePoolsAutoscale1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponsePoolsAutoscale1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePoolsAutoscale1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePoolsAutoscale1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseFailureDomains1$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomains1,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function createManagerResponseFailureDomains1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseFailureDomains1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomains1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseFailureDomains1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseFailureDomainsUnion1$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomainsUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseFailureDomains1$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseFailureDomainsUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseFailureDomainsUnion1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomainsUnion1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseFailureDomainsUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePoolsFixed1$inboundSchema: z.ZodType<
+  CreateManagerResponsePoolsFixed1,
+  unknown
+> = z.object({
+  dataDiskGib: z.nullable(z.int()).optional(),
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseFailureDomains1$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
+});
+
+export function createManagerResponsePoolsFixed1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponsePoolsFixed1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponsePoolsFixed1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePoolsFixed1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePoolsUnion1$inboundSchema: z.ZodType<
+  CreateManagerResponsePoolsUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponsePoolsFixed1$inboundSchema),
+  z.lazy(() => CreateManagerResponsePoolsAutoscale1$inboundSchema),
+]);
+
+export function createManagerResponsePoolsUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponsePoolsUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponsePoolsUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePoolsUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseCompute1$inboundSchema: z.ZodType<
+  CreateManagerResponseCompute1,
+  unknown
+> = z.object({
+  containers: z.record(
+    z.string(),
+    z.lazy(() => CreateManagerResponseContainers1$inboundSchema),
+  ).optional(),
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => CreateManagerResponsePoolsFixed1$inboundSchema),
+      z.lazy(() => CreateManagerResponsePoolsAutoscale1$inboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function createManagerResponseCompute1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseCompute1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseCompute1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseCompute1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseComputeUnion1$inboundSchema: z.ZodType<
+  CreateManagerResponseComputeUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseCompute1$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseComputeUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseComputeUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseComputeUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseComputeUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseDeploymentModel1$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseDeploymentModel1
+> = z.enum(CreateManagerResponseDeploymentModel1);
+
+/** @internal */
+export const CreateManagerResponseAws1$inboundSchema: z.ZodType<
+  CreateManagerResponseAws1,
+  unknown
+> = z.object({
+  certificateArn: z.string(),
+});
+
+export function createManagerResponseAws1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseAws1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseAws1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseAws1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseAwsUnion1$inboundSchema: z.ZodType<
+  CreateManagerResponseAwsUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseAws1$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseAwsUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseAwsUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseAwsUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseAwsUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseAzure1$inboundSchema: z.ZodType<
+  CreateManagerResponseAzure1,
+  unknown
+> = z.object({
+  keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
+});
+
+export function createManagerResponseAzure1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseAzure1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseAzure1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseAzure1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseAzureUnion1$inboundSchema: z.ZodType<
+  CreateManagerResponseAzureUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseAzure1$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseAzureUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseAzureUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseAzureUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseAzureUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseGcp1$inboundSchema: z.ZodType<
+  CreateManagerResponseGcp1,
+  unknown
+> = z.object({
+  certificateName: z.string(),
+});
+
+export function createManagerResponseGcp1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseGcp1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseGcp1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseGcp1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseGcpUnion1$inboundSchema: z.ZodType<
+  CreateManagerResponseGcpUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseGcp1$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseGcpUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseGcpUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseGcpUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseGcpUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseTlsSecretRef1$inboundSchema: z.ZodType<
+  CreateManagerResponseTlsSecretRef1,
+  unknown
+> = z.object({
+  namespace: z.nullable(z.string()).optional(),
+  secretName: z.string(),
+});
+
+export function createManagerResponseTlsSecretRef1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseTlsSecretRef1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseTlsSecretRef1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseTlsSecretRef1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseDomainsKubernetes1$inboundSchema: z.ZodType<
+  CreateManagerResponseDomainsKubernetes1,
+  unknown
+> = z.object({
+  tlsSecretRef: z.lazy(() => CreateManagerResponseTlsSecretRef1$inboundSchema),
+});
+
+export function createManagerResponseDomainsKubernetes1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseDomainsKubernetes1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseDomainsKubernetes1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseDomainsKubernetes1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseDomainsKubernetesUnion1$inboundSchema:
+  z.ZodType<CreateManagerResponseDomainsKubernetesUnion1, unknown> = z.union([
+    z.lazy(() => CreateManagerResponseDomainsKubernetes1$inboundSchema),
+    z.string(),
+  ]);
+
+export function createManagerResponseDomainsKubernetesUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseDomainsKubernetesUnion1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseDomainsKubernetesUnion1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseDomainsKubernetesUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseManaged1$inboundSchema: z.ZodType<
+  CreateManagerResponseManaged1,
+  unknown
+> = z.object({});
+
+export function createManagerResponseManaged1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseManaged1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseManaged1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseManaged1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseManagedUnion1$inboundSchema: z.ZodType<
+  CreateManagerResponseManagedUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseManaged1$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseManagedUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseManagedUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseManagedUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseManagedUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseCertificate1$inboundSchema: z.ZodType<
+  CreateManagerResponseCertificate1,
+  unknown
+> = z.object({
+  aws: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseAws1$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  azure: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseAzure1$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  gcp: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseGcp1$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  kubernetes: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseDomainsKubernetes1$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  managed: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseManaged1$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+});
+
+export function createManagerResponseCertificate1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseCertificate1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseCertificate1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseCertificate1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseCustomDomains1$inboundSchema: z.ZodType<
+  CreateManagerResponseCustomDomains1,
+  unknown
+> = z.object({
+  certificate: z.lazy(() => CreateManagerResponseCertificate1$inboundSchema),
+  domain: z.string().optional(),
+  endpoints: z.record(z.string(), z.string()).optional(),
+});
+
+export function createManagerResponseCustomDomains1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseCustomDomains1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseCustomDomains1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseCustomDomains1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseModeLoadBalancer1$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseModeLoadBalancer1
+> = z.enum(CreateManagerResponseModeLoadBalancer1);
+
+/** @internal */
+export const CreateManagerResponsePublicEndpointTargetLoadBalancer1$inboundSchema:
+  z.ZodType<CreateManagerResponsePublicEndpointTargetLoadBalancer1, unknown> = z
+    .object({
+      cnameTarget: z.string(),
+      mode: CreateManagerResponseModeLoadBalancer1$inboundSchema,
+    });
+
+export function createManagerResponsePublicEndpointTargetLoadBalancer1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponsePublicEndpointTargetLoadBalancer1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePublicEndpointTargetLoadBalancer1$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePublicEndpointTargetLoadBalancer1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseModeMachineAddresses1$inboundSchema:
+  z.ZodEnum<typeof CreateManagerResponseModeMachineAddresses1> = z.enum(
+    CreateManagerResponseModeMachineAddresses1,
+  );
+
+/** @internal */
+export const CreateManagerResponsePublicEndpointTargetMachineAddresses1$inboundSchema:
+  z.ZodType<
+    CreateManagerResponsePublicEndpointTargetMachineAddresses1,
+    unknown
+  > = z.object({
+    mode: CreateManagerResponseModeMachineAddresses1$inboundSchema,
+  });
+
+export function createManagerResponsePublicEndpointTargetMachineAddresses1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponsePublicEndpointTargetMachineAddresses1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePublicEndpointTargetMachineAddresses1$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePublicEndpointTargetMachineAddresses1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePublicEndpointTargetUnion1$inboundSchema:
+  z.ZodType<CreateManagerResponsePublicEndpointTargetUnion1, unknown> = z.union(
+    [
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetLoadBalancer1$inboundSchema
+      ),
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetMachineAddresses1$inboundSchema
+      ),
+      z.string(),
+    ],
+  );
+
+export function createManagerResponsePublicEndpointTargetUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponsePublicEndpointTargetUnion1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePublicEndpointTargetUnion1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponsePublicEndpointTargetUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseDomains1$inboundSchema: z.ZodType<
+  CreateManagerResponseDomains1,
+  unknown
+> = z.object({
+  customDomains: z.nullable(
+    z.record(
+      z.string(),
+      z.lazy(() => CreateManagerResponseCustomDomains1$inboundSchema),
+    ),
+  ).optional(),
+  publicEndpointTarget: z.nullable(
+    z.union([
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetLoadBalancer1$inboundSchema
+      ),
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetMachineAddresses1$inboundSchema
+      ),
+      z.string(),
+    ]),
+  ).optional(),
+});
+
+export function createManagerResponseDomains1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseDomains1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseDomains1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseDomains1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseDomainsUnion1$inboundSchema: z.ZodType<
+  CreateManagerResponseDomainsUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseDomains1$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseDomainsUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseDomainsUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseDomainsUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseDomainsUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseEndpointAccess1$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseEndpointAccess1
+> = z.enum(CreateManagerResponseEndpointAccess1);
+
+/** @internal */
+export const CreateManagerResponseHeartbeats1$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseHeartbeats1
+> = z.enum(CreateManagerResponseHeartbeats1);
+
+/** @internal */
+export const CreateManagerResponseCloud1$inboundSchema: z.ZodType<
+  CreateManagerResponseCloud1,
+  unknown
+> = z.object({
+  accountId: z.nullable(z.string()).optional(),
+  clusterId: z.nullable(z.string()).optional(),
+  clusterName: z.nullable(z.string()).optional(),
+  projectId: z.nullable(z.string()).optional(),
+  region: z.nullable(z.string()).optional(),
+  resourceGroup: z.nullable(z.string()).optional(),
+  subscriptionId: z.nullable(z.string()).optional(),
+});
+
+export function createManagerResponseCloud1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseCloud1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseCloud1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseCloud1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseCloudUnion1$inboundSchema: z.ZodType<
+  CreateManagerResponseCloudUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseCloud1$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseCloudUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseCloudUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseCloudUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseCloudUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseOwnership1$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseOwnership1
+> = z.enum(CreateManagerResponseOwnership1);
+
+/** @internal */
+export const CreateManagerResponseCluster1$inboundSchema: z.ZodType<
+  CreateManagerResponseCluster1,
+  unknown
+> = z.object({
+  cloud: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseCloud1$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  namespace: z.nullable(z.string()).optional(),
+  ownership: CreateManagerResponseOwnership1$inboundSchema,
+});
+
+export function createManagerResponseCluster1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseCluster1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseCluster1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseCluster1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseClusterUnion1$inboundSchema: z.ZodType<
+  CreateManagerResponseClusterUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseCluster1$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseClusterUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseClusterUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseClusterUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseClusterUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseExposure1$inboundSchema: z.ZodType<
+  CreateManagerResponseExposure1,
+  unknown
+> = z.union([
+  KubernetesExposureCustom$inboundSchema,
+  KubernetesExposureCustomBaseDomain$inboundSchema,
+  KubernetesExposureGenerated$inboundSchema,
+  KubernetesExposureDisabled$inboundSchema,
+  z.string(),
+]);
+
+export function createManagerResponseExposure1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseExposure1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseExposure1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseExposure1' from JSON`,
   );
 }
 
@@ -991,13 +5867,18 @@ export const CreateManagerResponseKubernetes1$inboundSchema: z.ZodType<
   CreateManagerResponseKubernetes1,
   unknown
 > = z.object({
-  cluster: z.nullable(CreateManagerResponseClusterUnion1$inboundSchema)
-    .optional(),
+  cluster: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseCluster1$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
   exposure: z.nullable(
     z.union([
-      CreateManagerResponseExposureCustom1$inboundSchema,
-      z.lazy(() => CreateManagerResponseExposureGenerated1$inboundSchema),
-      z.lazy(() => CreateManagerResponseExposureDisabled1$inboundSchema),
+      KubernetesExposureCustom$inboundSchema,
+      KubernetesExposureCustomBaseDomain$inboundSchema,
+      KubernetesExposureGenerated$inboundSchema,
+      KubernetesExposureDisabled$inboundSchema,
       z.string(),
     ]),
   ).optional(),
@@ -1231,6 +6112,46 @@ export const CreateManagerResponseSetupManagement1$inboundSchema: z.ZodEnum<
 > = z.enum(CreateManagerResponseSetupManagement1);
 
 /** @internal */
+export const CreateManagerResponseSigning1$inboundSchema: z.ZodType<
+  CreateManagerResponseSigning1,
+  unknown
+> = z.object({
+  channel: z.string(),
+  fingerprint: z.string(),
+  privateMachineApiUrl: z.nullable(z.string()).optional(),
+});
+
+export function createManagerResponseSigning1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseSigning1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseSigning1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseSigning1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseSigningUnion1$inboundSchema: z.ZodType<
+  CreateManagerResponseSigningUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseSigning1$inboundSchema),
+  z.string(),
+]);
+
+export function createManagerResponseSigningUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseSigningUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseSigningUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseSigningUnion1' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateManagerResponseTelemetry1$inboundSchema: z.ZodEnum<
   typeof CreateManagerResponseTelemetry1
 > = z.enum(CreateManagerResponseTelemetry1);
@@ -1245,12 +6166,21 @@ export const CreateManagerResponseStackSettings1$inboundSchema: z.ZodType<
   CreateManagerResponseStackSettings1,
   unknown
 > = z.object({
-  compute: z.nullable(CreateManagerResponseComputeUnion1$inboundSchema)
-    .optional(),
+  airgapped: z.boolean().optional(),
+  compute: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseCompute1$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
   deploymentModel: CreateManagerResponseDeploymentModel1$inboundSchema
     .optional(),
-  domains: z.nullable(CreateManagerResponseDomainsUnion1$inboundSchema)
-    .optional(),
+  domains: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseDomains1$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
   endpointAccess: CreateManagerResponseEndpointAccess1$inboundSchema.optional(),
   externalBindings: z.nullable(
     z.record(z.string(), ExternalBindingUnion$inboundSchema),
@@ -1278,6 +6208,12 @@ export const CreateManagerResponseStackSettings1$inboundSchema: z.ZodType<
   quotaWarningOverrides: z.array(z.string()).optional(),
   setupManagement: CreateManagerResponseSetupManagement1$inboundSchema
     .optional(),
+  signing: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseSigning1$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
   telemetry: CreateManagerResponseTelemetry1$inboundSchema.optional(),
   updates: CreateManagerResponseUpdates1$inboundSchema.optional(),
 });
@@ -1331,8 +6267,8 @@ export const CreateManagerResponseSetupUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => CreateManagerResponseSetupCloudformation$inboundSchema),
-  CreateManagerResponseSetupGoogleOauth$inboundSchema,
-  CreateManagerResponseSetupTerraform$inboundSchema,
+  z.lazy(() => CreateManagerResponseSetupGoogleOauth$inboundSchema),
+  z.lazy(() => CreateManagerResponseSetupTerraform$inboundSchema),
 ]);
 
 export function createManagerResponseSetupUnionFromJSON(
@@ -1355,11 +6291,11 @@ export const CreateManagerResponse$inboundSchema: z.ZodType<
   setupToken: z.string(),
   setupTokenId: z.string(),
   deploymentLink: z.string(),
-  setupConfig: CreateManagerResponseSetupConfig$inboundSchema,
+  setupConfig: z.lazy(() => CreateManagerResponseSetupConfig$inboundSchema),
   setup: z.union([
     z.lazy(() => CreateManagerResponseSetupCloudformation$inboundSchema),
-    CreateManagerResponseSetupGoogleOauth$inboundSchema,
-    CreateManagerResponseSetupTerraform$inboundSchema,
+    z.lazy(() => CreateManagerResponseSetupGoogleOauth$inboundSchema),
+    z.lazy(() => CreateManagerResponseSetupTerraform$inboundSchema),
   ]),
 });
 

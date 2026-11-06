@@ -17,3 +17,4 @@ const value: models.CurrentReleaseExtendConditionGcpResource = {
 ```typescript
 const value: string = "<value>";
 ```
+

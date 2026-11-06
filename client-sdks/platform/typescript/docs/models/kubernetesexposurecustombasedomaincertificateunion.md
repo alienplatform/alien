@@ -50,3 +50,4 @@ const value: models.KubernetesExposureCustomBaseDomainCertificateNone = {
   mode: "none",
 };
 ```
+

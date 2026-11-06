@@ -19,3 +19,4 @@ const value: string[] = [
 ```typescript
 const value: string = "<value>";
 ```
+

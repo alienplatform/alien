@@ -87,7 +87,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchWorkspacesList,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateWorkspacesList,
@@ -192,7 +192,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchWorkspacesGet,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateWorkspacesGet,
@@ -359,7 +359,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-
+    
   } else {
     console.log("workspacesDelete failed:", res.error);
   }
@@ -482,7 +482,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchWorkspacesListMembers,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateWorkspacesListMembers,
@@ -759,7 +759,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-
+    
   } else {
     console.log("workspacesRemoveMember failed:", res.error);
   }
@@ -882,7 +882,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchWorkspacesGetSettings,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateWorkspacesGetSettings,

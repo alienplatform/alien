@@ -117,7 +117,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchGetWorkspaceInvitationPreview,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateGetWorkspaceInvitationPreview,
@@ -216,7 +216,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchGetPendingWorkspaceInvitation,
-
+  
   // Utility to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateAllGetPendingWorkspaceInvitation,
@@ -408,7 +408,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchGetProjectLogExport,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateGetProjectLogExport,
@@ -487,7 +487,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchGetProjectLogExport,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateGetProjectLogExport,
@@ -901,7 +901,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchGetLogExportDeliveryConfig,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateGetLogExportDeliveryConfig,
@@ -1091,7 +1091,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchListWorkspaceInvitations,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateListWorkspaceInvitations,
@@ -1356,7 +1356,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-
+    
   } else {
     console.log("revokeWorkspaceInvitation failed:", res.error);
   }
@@ -1477,7 +1477,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchGetWorkspaceInviteLink,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateGetWorkspaceInviteLink,
@@ -1644,7 +1644,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-
+    
   } else {
     console.log("revokeWorkspaceInviteLink failed:", res.error);
   }
@@ -1866,7 +1866,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchGetDeploymentPreparation,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateGetDeploymentPreparation,
@@ -1969,7 +1969,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchGetInstallationDeployment,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateGetInstallationDeployment,
@@ -2262,7 +2262,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchGetDeploymentMetricsHistory,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateGetDeploymentMetricsHistory,
@@ -2365,7 +2365,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchGetDeploymentCredentialRotation,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateGetDeploymentCredentialRotation,
@@ -3014,7 +3014,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchListAwsVirtualKeys,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateListAwsVirtualKeys,
@@ -3091,7 +3091,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchListAwsVirtualKeys,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateListAwsVirtualKeys,
@@ -3636,7 +3636,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchGetAwsVirtualKey,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateGetAwsVirtualKey,
@@ -3822,7 +3822,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchListAwsKeySetupCleanup,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateListAwsKeySetupCleanup,
@@ -4151,7 +4151,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchGetTerraformKeySetupOperation,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateGetTerraformKeySetupOperation,

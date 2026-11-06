@@ -87,7 +87,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchApiKeysList,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateApiKeysList,
@@ -166,7 +166,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchApiKeysList,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateApiKeysList,
@@ -379,7 +379,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchApiKeysGet,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateApiKeysGet,
@@ -546,7 +546,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-
+    
   } else {
     console.log("apiKeysRevoke failed:", res.error);
   }

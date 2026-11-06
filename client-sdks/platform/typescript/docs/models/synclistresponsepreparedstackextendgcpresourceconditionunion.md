@@ -17,3 +17,4 @@ const value: models.SyncListResponsePreparedStackExtendConditionGcpResource = {
 ```typescript
 const value: string = "<value>";
 ```
+

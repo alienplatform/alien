@@ -21,3 +21,4 @@ const value: models.HistoryAvailable = {
   buckets: [],
 };
 ```
+

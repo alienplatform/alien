@@ -96,7 +96,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchOperationsListPlugins,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateOperationsListPlugins,
@@ -175,7 +175,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchOperationsListPlugins,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateOperationsListPlugins,
@@ -1018,7 +1018,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchOperationsListAccessRequests,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateOperationsListAccessRequests,
@@ -1099,7 +1099,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchOperationsListAccessRequests,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateOperationsListAccessRequests,
@@ -1487,7 +1487,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchOperationsGetAccessRequestCoordinates,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateOperationsGetAccessRequestCoordinates,
@@ -1593,7 +1593,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchOperationsGetLiveDebugGrant,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateOperationsGetLiveDebugGrant,
@@ -1697,7 +1697,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchOperationsGetAccessRequestActivity,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateOperationsGetAccessRequestActivity,
@@ -1893,7 +1893,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchOperationsGetAccessRequest,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateOperationsGetAccessRequest,

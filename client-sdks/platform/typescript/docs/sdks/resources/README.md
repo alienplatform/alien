@@ -83,7 +83,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchResourcesListInventory,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateResourcesListInventory,
@@ -162,7 +162,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchResourcesListInventory,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateResourcesListInventory,
@@ -267,7 +267,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchResourcesListOverview,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateResourcesListOverview,
@@ -348,7 +348,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchResourcesListOverview,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateResourcesListOverview,
@@ -457,7 +457,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchResourcesListDeployments,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateResourcesListDeployments,
@@ -540,7 +540,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchResourcesListDeployments,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateResourcesListDeployments,
@@ -649,7 +649,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchResourcesGetDeploymentDetail,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateResourcesGetDeploymentDetail,
@@ -734,7 +734,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchResourcesGetDeploymentDetail,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateResourcesGetDeploymentDetail,

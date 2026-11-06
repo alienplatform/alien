@@ -83,7 +83,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchEventsList,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateEventsList,
@@ -162,7 +162,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchEventsList,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateEventsList,
@@ -267,7 +267,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchEventsGet,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateEventsGet,

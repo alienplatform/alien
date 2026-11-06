@@ -85,7 +85,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchWebhooksListWebhookEndpoints,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateWebhooksListWebhookEndpoints,
@@ -283,7 +283,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchWebhooksGetWebhookEndpoint,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateWebhooksGetWebhookEndpoint,
@@ -574,7 +574,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchWebhooksGetWebhookSigningSecret,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateWebhooksGetWebhookSigningSecret,
@@ -769,7 +769,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchWebhooksListWebhookDeliveries,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateWebhooksListWebhookDeliveries,
