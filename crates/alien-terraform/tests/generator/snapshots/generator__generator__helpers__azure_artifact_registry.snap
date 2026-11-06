@@ -197,12 +197,14 @@ locals {
       id   = "registry"
       type = "artifact-registry"
       importData = {
-        subscriptionId  = var.azure_subscription_id
-        resourceGroup   = var.azure_resource_group_name
-        registryName    = azurerm_container_registry.registry.name
-        loginServer     = azurerm_container_registry.registry.login_server
-        pullPrincipalId = azurerm_user_assigned_identity.registry_pull.principal_id
-        pushPrincipalId = azurerm_user_assigned_identity.registry_push.principal_id
+        subscriptionId         = var.azure_subscription_id
+        resourceGroup          = var.azure_resource_group_name
+        registryName           = azurerm_container_registry.registry.name
+        loginServer            = azurerm_container_registry.registry.login_server
+        pullPrincipalId        = azurerm_user_assigned_identity.registry_pull.principal_id
+        pullIdentityResourceId = azurerm_user_assigned_identity.registry_pull.id
+        pullRoleAssignmentId   = azurerm_role_assignment.registry_pull_role.id
+        pushPrincipalId        = azurerm_user_assigned_identity.registry_push.principal_id
       }
     }
   ]

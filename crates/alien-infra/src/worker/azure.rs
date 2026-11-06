@@ -487,6 +487,8 @@ fn gone_unless_failed<T>(
 
 #[controller]
 pub struct AzureWorkerController {
+    /// Imported image references only; no source credential persists here.
+    pub(crate) registry_image: Option<super::azure_registry::ImportedImage>,
     // ─────────── Persisted fields ───────────
     /// Azure Container App name. Filled on *create* and reused for update/delete.
     pub(crate) container_app_name: Option<String>,
@@ -721,6 +723,14 @@ impl AzureWorkerController {
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let azure_cfg = ctx.get_azure_config()?;
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
+        if let Some(delay) =
+            super::azure_registry::prepare(&mut self.registry_image, func_cfg, ctx).await?
+        {
+            return Ok(HandlerAction::Stay {
+                max_times: Some(120),
+                suggested_delay: Some(delay),
+            });
+        }
 
         if self.container_app_name.is_none() {
             self.pre_container_app_rbac_wait_until_epoch_secs = None;
@@ -1007,6 +1017,14 @@ impl AzureWorkerController {
     ) -> Result<HandlerAction> {
         let azure_cfg = ctx.get_azure_config()?;
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
+        if let Some(delay) =
+            super::azure_registry::prepare(&mut self.registry_image, func_cfg, ctx).await?
+        {
+            return Ok(HandlerAction::Stay {
+                max_times: Some(120),
+                suggested_delay: Some(delay),
+            });
+        }
         let container_app_name = self
             .container_app_name
             .as_ref()
@@ -1049,6 +1067,9 @@ impl AzureWorkerController {
 
         match op_result {
             OperationResult::Completed(immediate_app) => {
+                if let Some(image) = &mut self.registry_image {
+                    image.applied = true;
+                }
                 info!(name=%container_app_name, "Container app creation completed immediately");
                 self.handle_creation_completed(ctx, &immediate_app);
 
@@ -1158,6 +1179,9 @@ impl AzureWorkerController {
                 if let Some(props) = &app.properties {
                     match props.provisioning_state.as_ref() {
                         Some(ContainerAppPropertiesProvisioningState::Succeeded) => {
+                            if let Some(image) = &mut self.registry_image {
+                                image.applied = true;
+                            }
                             info!(name=%container_app_name, "Provisioning succeeded – configuring Dapr components");
                             self.handle_creation_completed(ctx, &app);
 
@@ -2578,6 +2602,19 @@ impl AzureWorkerController {
         }
 
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
+        if let Some(delay) =
+            super::azure_registry::prepare(&mut self.registry_image, func_cfg, ctx).await?
+        {
+            return Ok(HandlerAction::Stay {
+                max_times: Some(120),
+                suggested_delay: Some(delay),
+            });
+        }
+        let registry_migration = ctx.deployment_config.runtime_identity_audience.is_some()
+            && self
+                .registry_image
+                .as_ref()
+                .is_some_and(|image| !image.applied);
         let previous_cfg = ctx.previous_resource_config::<Worker>()?;
         self.ready_rbac_wait_until_epoch_secs = None;
         self.update_dapr_components_deleted = false;
@@ -2598,7 +2635,7 @@ impl AzureWorkerController {
         // An update whose own configuration is unchanged was planned because a linked resource
         // was. It still re-renders the linked bindings: the resource it links may publish a new
         // binding, such as a sandbox's rebuilt disk image.
-        if func_cfg == previous_cfg {
+        if func_cfg == previous_cfg && !registry_migration {
             self.update_rbac_wait_required = false;
             let links = func_cfg.runtime_binding_links();
             if !linked_bindings::links_settled(ctx, &links) {
@@ -2765,6 +2802,9 @@ impl AzureWorkerController {
         if let Some(props) = &app.properties {
             match props.provisioning_state.as_ref() {
                 Some(ContainerAppPropertiesProvisioningState::Succeeded) => {
+                    if let Some(image) = &mut self.registry_image {
+                        image.applied = true;
+                    }
                     info!(name=%container_app_name, "Update provisioning succeeded – updating Dapr components");
 
                     let container_app_url = self.extract_url_from_container_app(&app);
@@ -4356,6 +4396,18 @@ impl AzureWorkerController {
             }
         };
 
+        // Present only when the setup owns a registry to copy the image into.
+        let imported = if self.registry_image.is_some() {
+            Some(self.registry_image.as_ref().filter(|saved| saved.complete && saved.source == image)
+                .ok_or_else(|| AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "Setup registry import must complete before creating bounded workload configuration".into(),
+                    resource_id: Some(func.id.clone()),
+                }))?)
+        } else {
+            None
+        };
+        let image = imported.map(|saved| saved.image.clone()).unwrap_or(image);
+
         // Prepare environment variables using shared logic
         let env_vars = self.prepare_environment_variables_azure(func, ctx).await?;
 
@@ -4476,29 +4528,45 @@ impl AzureWorkerController {
             }
         }
 
-        // Configure registry credentials for image pull.
-        // The image URI points at the manager's registry (proxy URI from release).
-        // Add Basic auth with the deployment token so the Container App can pull.
-        let registry_token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
+        if let Some(imported) = imported {
+            identity_map.insert(
+                imported.identity_id.clone(),
+                UserAssignedIdentity {
+                    client_id: None,
+                    principal_id: None,
+                },
+            );
+            registries.push(RegistryCredentials {
+                identity: Some(imported.identity_id.clone()),
+                password_secret_ref: None,
+                server: Some(imported.image.split('/').next().unwrap_or_default().into()),
+                username: None,
+            });
+        } else {
+            // Configure registry credentials for image pull.
+            // The image URI points at the manager's registry (proxy URI from release).
+            // Add Basic auth with the deployment token so the Container App can pull.
+            let registry_token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: "deployment_token is required for Azure Container Apps to pull images from the registry proxy".to_string(),
                 resource_id: Some(func.id.clone()),
             })
         })?;
-        let registry_server = image.split('/').next().unwrap_or_default().to_string();
-        let secret_name = "registry-proxy-password";
-        secrets.push(Secret {
-            name: Some(secret_name.to_string()),
-            value: Some(registry_token.clone()),
-            identity: None,
-            key_vault_url: None,
-        });
-        registries.push(RegistryCredentials {
-            identity: None,
-            password_secret_ref: Some(secret_name.to_string()),
-            server: Some(registry_server),
-            username: Some("deployment".to_string()),
-        });
+            let registry_server = image.split('/').next().unwrap_or_default().to_string();
+            let secret_name = "registry-proxy-password";
+            secrets.push(Secret {
+                name: Some(secret_name.to_string()),
+                value: Some(registry_token.clone()),
+                identity: None,
+                key_vault_url: None,
+            });
+            registries.push(RegistryCredentials {
+                identity: None,
+                password_secret_ref: Some(secret_name.to_string()),
+                server: Some(registry_server),
+                username: Some("deployment".to_string()),
+            });
+        }
 
         // Create managed identity spec if we have any identities
         let identity_resource_ids: Vec<String> = identity_map.keys().cloned().collect();
@@ -4949,10 +5017,7 @@ impl AzureWorkerController {
         );
         let queue_resource_id = format!(
             "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ServiceBus/namespaces/{}/queues/{}",
-            azure_config.subscription_id,
-            service_bus_resource_group,
-            namespace_name,
-            queue_name
+            azure_config.subscription_id, service_bus_resource_group, namespace_name, queue_name
         );
 
         let mgmt = ctx
@@ -5475,6 +5540,7 @@ impl AzureWorkerController {
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(function_name: &str) -> Self {
         Self {
+            registry_image: None,
             state: AzureWorkerState::Ready,
             container_app_name: Some(function_name.to_string()),
             resource_id: Some(format!(
@@ -6113,6 +6179,7 @@ mod tests {
             });
         let provider = setup_mock_service_provider(Arc::new(apps), None);
         let mut controller = AzureWorkerController {
+            registry_image: None,
             container_apps_certificate_id: Some("test-certificate-id".to_string()),
             certificate_issued_at: Some("2023-01-01T00:00:00Z".to_string()),
             fqdn: Some("public-func.test.example.com".to_string()),
@@ -6226,6 +6293,7 @@ mod tests {
         }
         let provider = setup_mock_service_provider(Arc::new(apps), None);
         let controller = AzureWorkerController {
+            registry_image: None,
             container_apps_certificate_id: Some("test-certificate-id".to_string()),
             certificate_issued_at: Some("2023-01-01T00:00:00Z".to_string()),
             fqdn: Some("public-func.test.example.com".to_string()),
@@ -6505,6 +6573,7 @@ mod tests {
             });
         let provider = setup_mock_service_provider(Arc::new(apps), None);
         let controller = AzureWorkerController {
+            registry_image: None,
             state: AzureWorkerState::DeletingCommandsInfrastructure,
             commands_dapr_component: Some("commands-dapr".to_string()),
             ..AzureWorkerController::mock_ready("test-func")
@@ -7260,6 +7329,7 @@ mod tests {
                 });
             // A saved UpdateStart has no batch rollout state; old checkpoints remain readable.
             let controller = AzureWorkerController {
+                registry_image: None,
                 state: AzureWorkerState::UpdateStart,
                 ..AzureWorkerController::mock_ready("test-queue-func")
             };
@@ -7330,6 +7400,7 @@ mod tests {
                     Ok(OperationResult::Completed(component.clone()))
                 });
             let controller = AzureWorkerController {
+                registry_image: None,
                 state: AzureWorkerState::UpdateDaprComponents,
                 dapr_components: vec!["servicebus-test-queue-func-test-queue".into()],
                 ..AzureWorkerController::mock_ready("test-queue-func")
@@ -7475,6 +7546,7 @@ mod tests {
             });
         let provider = setup_mock_service_provider(Arc::new(apps), None);
         let controller = AzureWorkerController {
+            registry_image: None,
             state: AzureWorkerState::CreatingContainerAppResource,
             ..AzureWorkerController::mock_ready("test-queue-func")
         };
@@ -7609,6 +7681,51 @@ mod tests {
         assert_eq!(executor.status(), ResourceStatus::Running);
     }
 
+    /// A setup from before the registry copy has no registry. Turning on
+    /// runtime identity must not break its deploys: it keeps the stored pull.
+    #[tokio::test]
+    async fn container_app_without_a_setup_registry_keeps_the_legacy_pull() {
+        let worker = basic_function();
+        let app_name = format!("test-{}", worker.id);
+        let mut apps = MockContainerAppsApi::new();
+        let created = app_name.clone();
+        apps.expect_create_or_update_container_app()
+            .withf(|_, _, app| {
+                let configuration = app
+                    .properties
+                    .as_ref()
+                    .and_then(|properties| properties.configuration.as_ref())
+                    .unwrap();
+                configuration.registries.iter().any(|registry| {
+                    registry.identity.is_none()
+                        && registry.password_secret_ref.as_deref()
+                            == Some("registry-proxy-password")
+                })
+            })
+            .times(1..)
+            .returning(move |_, _, _| {
+                Ok(OperationResult::Completed(
+                    create_successful_container_app_response(&created, false),
+                ))
+            });
+        apps.expect_get_container_app()
+            .returning(move |_, _| Ok(create_successful_container_app_response(&app_name, false)))
+            .times(0..);
+        let provider = setup_mock_service_provider(Arc::new(apps), None);
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(AzureWorkerController::default())
+            .platform(Platform::Azure)
+            .service_provider(provider)
+            .runtime_identity_audience("manager-one".into())
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+    }
+
     /// Test that verifies environment variables are correctly passed
     #[tokio::test]
     async fn test_environment_variable_handling() {
@@ -7696,6 +7813,7 @@ mod tests {
 
         // Create a controller with no container app name set (simulating early creation failure)
         let controller = AzureWorkerController {
+            registry_image: None,
             state: AzureWorkerState::CreateFailed,
             container_app_name: None, // This is the key - no container app name set
             resource_id: None,
@@ -7902,6 +8020,7 @@ mod tests {
             let mut executor = executor(
                 apps,
                 AzureWorkerController {
+                    registry_image: None,
                     state: AzureWorkerState::UpdateStart,
                     ..AzureWorkerController::mock_ready("basic-func")
                 },
@@ -8002,6 +8121,7 @@ mod tests {
                 worker,
                 apps,
                 AzureWorkerController {
+                    registry_image: None,
                     state: AzureWorkerState::RefreshingLinkedBindingsWaitForApp,
                     url: Some(server.base_url()),
                     ..AzureWorkerController::mock_ready("basic-func")
@@ -8163,6 +8283,7 @@ mod tests {
             let mut executor = executor(
                 apps,
                 AzureWorkerController {
+                    registry_image: None,
                     state: AzureWorkerState::UpdateStart,
                     ..AzureWorkerController::mock_ready("basic-func")
                 },
@@ -8192,6 +8313,7 @@ mod tests {
             let mut executor = executor(
                 apps,
                 AzureWorkerController {
+                    registry_image: None,
                     state: AzureWorkerState::UpdateStart,
                     ..AzureWorkerController::mock_ready("basic-func")
                 },
