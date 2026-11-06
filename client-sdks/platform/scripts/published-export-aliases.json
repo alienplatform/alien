@@ -1,0 +1,502 @@
+{
+  "ClusterEndpoint": {
+    "module": "externalbindingunion",
+    "name": "BindingValueString"
+  },
+  "ClusterEndpoint$Outbound": {
+    "module": "externalbindingunion",
+    "name": "BindingValueString$Outbound"
+  },
+  "ClusterEndpoint$inboundSchema": {
+    "module": "externalbindingunion",
+    "name": "BindingValueString$inboundSchema"
+  },
+  "ClusterEndpoint$outboundSchema": {
+    "module": "externalbindingunion",
+    "name": "BindingValueString$outboundSchema"
+  },
+  "ClusterEndpointSecretRef": {
+    "module": "externalbindingunion",
+    "name": "BindingValueStringSecretRef"
+  },
+  "ClusterEndpointSecretRef$Outbound": {
+    "module": "externalbindingunion",
+    "name": "BindingValueStringSecretRef$Outbound"
+  },
+  "ClusterEndpointSecretRef$inboundSchema": {
+    "module": "externalbindingunion",
+    "name": "BindingValueStringSecretRef$inboundSchema"
+  },
+  "ClusterEndpointSecretRef$outboundSchema": {
+    "module": "externalbindingunion",
+    "name": "BindingValueStringSecretRef$outboundSchema"
+  },
+  "ConnectionUrl": {
+    "module": "externalbindingunion",
+    "name": "BindingValueString"
+  },
+  "ConnectionUrl$Outbound": {
+    "module": "externalbindingunion",
+    "name": "BindingValueString$Outbound"
+  },
+  "ConnectionUrl$inboundSchema": {
+    "module": "externalbindingunion",
+    "name": "BindingValueString$inboundSchema"
+  },
+  "ConnectionUrl$outboundSchema": {
+    "module": "externalbindingunion",
+    "name": "BindingValueString$outboundSchema"
+  },
+  "ConnectionUrlSecretRef": {
+    "module": "externalbindingunion",
+    "name": "BindingValueStringSecretRef"
+  },
+  "ConnectionUrlSecretRef$Outbound": {
+    "module": "externalbindingunion",
+    "name": "BindingValueStringSecretRef$Outbound"
+  },
+  "ConnectionUrlSecretRef$inboundSchema": {
+    "module": "externalbindingunion",
+    "name": "BindingValueStringSecretRef$inboundSchema"
+  },
+  "ConnectionUrlSecretRef$outboundSchema": {
+    "module": "externalbindingunion",
+    "name": "BindingValueStringSecretRef$outboundSchema"
+  },
+  "CreateManagerResponseProviderAwsAlb1": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAwsAlb1"
+  },
+  "CreateManagerResponseProviderAwsAlb1$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAwsAlb1$inboundSchema"
+  },
+  "CreateManagerResponseProviderAwsAlb2": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAwsAlb2"
+  },
+  "CreateManagerResponseProviderAwsAlb2$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAwsAlb2$inboundSchema"
+  },
+  "CreateManagerResponseProviderAwsAlbEnum1": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAwsAlbEnum1"
+  },
+  "CreateManagerResponseProviderAwsAlbEnum1$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAwsAlbEnum1$inboundSchema"
+  },
+  "CreateManagerResponseProviderAwsAlbEnum2": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAwsAlbEnum2"
+  },
+  "CreateManagerResponseProviderAwsAlbEnum2$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAwsAlbEnum2$inboundSchema"
+  },
+  "CreateManagerResponseProviderAzureApplicationGatewayForContainers1": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAzureApplicationGatewayForContainers1"
+  },
+  "CreateManagerResponseProviderAzureApplicationGatewayForContainers1$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAzureApplicationGatewayForContainers1$inboundSchema"
+  },
+  "CreateManagerResponseProviderAzureApplicationGatewayForContainers2": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAzureApplicationGatewayForContainers2"
+  },
+  "CreateManagerResponseProviderAzureApplicationGatewayForContainers2$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAzureApplicationGatewayForContainers2$inboundSchema"
+  },
+  "CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum1": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAzureApplicationGatewayForContainersEnum1"
+  },
+  "CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum1$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAzureApplicationGatewayForContainersEnum1$inboundSchema"
+  },
+  "CreateManagerResponseProviderGkeGateway1": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderGkeGateway1"
+  },
+  "CreateManagerResponseProviderGkeGateway1$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderGkeGateway1$inboundSchema"
+  },
+  "CreateManagerResponseProviderGkeGateway2": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderGkeGateway2"
+  },
+  "CreateManagerResponseProviderGkeGateway2$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderGkeGateway2$inboundSchema"
+  },
+  "CreateManagerResponseProviderGkeGatewayEnum1": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderGkeGatewayEnum1"
+  },
+  "CreateManagerResponseProviderGkeGatewayEnum1$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderGkeGatewayEnum1$inboundSchema"
+  },
+  "CreateManagerResponseProviderGkeGatewayEnum2": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderGkeGatewayEnum2"
+  },
+  "CreateManagerResponseProviderGkeGatewayEnum2$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderGkeGatewayEnum2$inboundSchema"
+  },
+  "CreateManagerResponseProviderUnion1": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderUnion1"
+  },
+  "CreateManagerResponseProviderUnion1$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderUnion1$inboundSchema"
+  },
+  "CreateManagerResponseProviderUnion2": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderUnion2"
+  },
+  "CreateManagerResponseProviderUnion2$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderUnion2$inboundSchema"
+  },
+  "DataDir1": {
+    "module": "externalbindingunion",
+    "name": "BindingValueString"
+  },
+  "DataDir1$Outbound": {
+    "module": "externalbindingunion",
+    "name": "BindingValueString$Outbound"
+  },
+  "DataDir1$inboundSchema": {
+    "module": "externalbindingunion",
+    "name": "BindingValueString$inboundSchema"
+  },
+  "DataDir1$outboundSchema": {
+    "module": "externalbindingunion",
+    "name": "BindingValueString$outboundSchema"
+  },
+  "DataDirSecretRef1": {
+    "module": "externalbindingunion",
+    "name": "BindingValueStringSecretRef"
+  },
+  "DataDirSecretRef1$Outbound": {
+    "module": "externalbindingunion",
+    "name": "BindingValueStringSecretRef$Outbound"
+  },
+  "DataDirSecretRef1$inboundSchema": {
+    "module": "externalbindingunion",
+    "name": "BindingValueStringSecretRef$inboundSchema"
+  },
+  "DataDirSecretRef1$outboundSchema": {
+    "module": "externalbindingunion",
+    "name": "BindingValueStringSecretRef$outboundSchema"
+  },
+  "Database1": {
+    "module": "externalbindingunion",
+    "name": "Database"
+  },
+  "Database1$Outbound": {
+    "module": "externalbindingunion",
+    "name": "Database$Outbound"
+  },
+  "Database1$inboundSchema": {
+    "module": "externalbindingunion",
+    "name": "Database$inboundSchema"
+  },
+  "Database1$outboundSchema": {
+    "module": "externalbindingunion",
+    "name": "Database$outboundSchema"
+  },
+  "DatabaseSecretRef1": {
+    "module": "externalbindingunion",
+    "name": "DatabaseSecretRef"
+  },
+  "DatabaseSecretRef1$Outbound": {
+    "module": "externalbindingunion",
+    "name": "DatabaseSecretRef$Outbound"
+  },
+  "DatabaseSecretRef1$inboundSchema": {
+    "module": "externalbindingunion",
+    "name": "DatabaseSecretRef$inboundSchema"
+  },
+  "DatabaseSecretRef1$outboundSchema": {
+    "module": "externalbindingunion",
+    "name": "DatabaseSecretRef$outboundSchema"
+  },
+  "ManagerRetryResponseProviderAwsAlb1": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAwsAlb1"
+  },
+  "ManagerRetryResponseProviderAwsAlb1$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAwsAlb1$inboundSchema"
+  },
+  "ManagerRetryResponseProviderAwsAlb2": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAwsAlb2"
+  },
+  "ManagerRetryResponseProviderAwsAlb2$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAwsAlb2$inboundSchema"
+  },
+  "ManagerRetryResponseProviderAwsAlbEnum1": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAwsAlbEnum1"
+  },
+  "ManagerRetryResponseProviderAwsAlbEnum1$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAwsAlbEnum1$inboundSchema"
+  },
+  "ManagerRetryResponseProviderAwsAlbEnum2": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAwsAlbEnum2"
+  },
+  "ManagerRetryResponseProviderAwsAlbEnum2$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAwsAlbEnum2$inboundSchema"
+  },
+  "ManagerRetryResponseProviderAzureApplicationGatewayForContainers1": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAzureApplicationGatewayForContainers1"
+  },
+  "ManagerRetryResponseProviderAzureApplicationGatewayForContainers1$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAzureApplicationGatewayForContainers1$inboundSchema"
+  },
+  "ManagerRetryResponseProviderAzureApplicationGatewayForContainersEnum1": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAzureApplicationGatewayForContainersEnum1"
+  },
+  "ManagerRetryResponseProviderAzureApplicationGatewayForContainersEnum1$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderAzureApplicationGatewayForContainersEnum1$inboundSchema"
+  },
+  "ManagerRetryResponseProviderGkeGateway1": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderGkeGateway1"
+  },
+  "ManagerRetryResponseProviderGkeGateway1$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderGkeGateway1$inboundSchema"
+  },
+  "ManagerRetryResponseProviderGkeGateway2": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderGkeGateway2"
+  },
+  "ManagerRetryResponseProviderGkeGateway2$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderGkeGateway2$inboundSchema"
+  },
+  "ManagerRetryResponseProviderGkeGatewayEnum1": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderGkeGatewayEnum1"
+  },
+  "ManagerRetryResponseProviderGkeGatewayEnum1$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderGkeGatewayEnum1$inboundSchema"
+  },
+  "ManagerRetryResponseProviderGkeGatewayEnum2": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderGkeGatewayEnum2"
+  },
+  "ManagerRetryResponseProviderGkeGatewayEnum2$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderGkeGatewayEnum2$inboundSchema"
+  },
+  "ManagerRetryResponseProviderUnion1": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderUnion1"
+  },
+  "ManagerRetryResponseProviderUnion1$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderUnion1$inboundSchema"
+  },
+  "ManagerRetryResponseProviderUnion2": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderUnion2"
+  },
+  "ManagerRetryResponseProviderUnion2$inboundSchema": {
+    "module": "kubernetesexposurecustom",
+    "name": "KubernetesExposureCustomProviderUnion2$inboundSchema"
+  },
+  "PasswordSecretArn": {
+    "module": "externalbindingunion",
+    "name": "BindingValueString"
+  },
+  "PasswordSecretArn$Outbound": {
+    "module": "externalbindingunion",
+    "name": "BindingValueString$Outbound"
+  },
+  "PasswordSecretArn$inboundSchema": {
+    "module": "externalbindingunion",
+    "name": "BindingValueString$inboundSchema"
+  },
+  "PasswordSecretArn$outboundSchema": {
+    "module": "externalbindingunion",
+    "name": "BindingValueString$outboundSchema"
+  },
+  "PasswordSecretArnSecretRef": {
+    "module": "externalbindingunion",
+    "name": "BindingValueStringSecretRef"
+  },
+  "PasswordSecretArnSecretRef$Outbound": {
+    "module": "externalbindingunion",
+    "name": "BindingValueStringSecretRef$Outbound"
+  },
+  "PasswordSecretArnSecretRef$inboundSchema": {
+    "module": "externalbindingunion",
+    "name": "BindingValueStringSecretRef$inboundSchema"
+  },
+  "PasswordSecretArnSecretRef$outboundSchema": {
+    "module": "externalbindingunion",
+    "name": "BindingValueStringSecretRef$outboundSchema"
+  },
+  "clusterEndpointFromJSON": {
+    "module": "externalbindingunion",
+    "name": "bindingValueStringFromJSON"
+  },
+  "clusterEndpointSecretRefFromJSON": {
+    "module": "externalbindingunion",
+    "name": "bindingValueStringSecretRefFromJSON"
+  },
+  "clusterEndpointSecretRefToJSON": {
+    "module": "externalbindingunion",
+    "name": "bindingValueStringSecretRefToJSON"
+  },
+  "clusterEndpointToJSON": {
+    "module": "externalbindingunion",
+    "name": "bindingValueStringToJSON"
+  },
+  "connectionUrlFromJSON": {
+    "module": "externalbindingunion",
+    "name": "bindingValueStringFromJSON"
+  },
+  "connectionUrlSecretRefFromJSON": {
+    "module": "externalbindingunion",
+    "name": "bindingValueStringSecretRefFromJSON"
+  },
+  "connectionUrlSecretRefToJSON": {
+    "module": "externalbindingunion",
+    "name": "bindingValueStringSecretRefToJSON"
+  },
+  "connectionUrlToJSON": {
+    "module": "externalbindingunion",
+    "name": "bindingValueStringToJSON"
+  },
+  "createManagerResponseProviderAwsAlb1FromJSON": {
+    "module": "kubernetesexposurecustom",
+    "name": "kubernetesExposureCustomProviderAwsAlb1FromJSON"
+  },
+  "createManagerResponseProviderAwsAlb2FromJSON": {
+    "module": "kubernetesexposurecustom",
+    "name": "kubernetesExposureCustomProviderAwsAlb2FromJSON"
+  },
+  "createManagerResponseProviderAzureApplicationGatewayForContainers1FromJSON": {
+    "module": "kubernetesexposurecustom",
+    "name": "kubernetesExposureCustomProviderAzureApplicationGatewayForContainers1FromJSON"
+  },
+  "createManagerResponseProviderAzureApplicationGatewayForContainers2FromJSON": {
+    "module": "kubernetesexposurecustom",
+    "name": "kubernetesExposureCustomProviderAzureApplicationGatewayForContainers2FromJSON"
+  },
+  "createManagerResponseProviderGkeGateway1FromJSON": {
+    "module": "kubernetesexposurecustom",
+    "name": "kubernetesExposureCustomProviderGkeGateway1FromJSON"
+  },
+  "createManagerResponseProviderGkeGateway2FromJSON": {
+    "module": "kubernetesexposurecustom",
+    "name": "kubernetesExposureCustomProviderGkeGateway2FromJSON"
+  },
+  "createManagerResponseProviderUnion1FromJSON": {
+    "module": "kubernetesexposurecustom",
+    "name": "kubernetesExposureCustomProviderUnion1FromJSON"
+  },
+  "createManagerResponseProviderUnion2FromJSON": {
+    "module": "kubernetesexposurecustom",
+    "name": "kubernetesExposureCustomProviderUnion2FromJSON"
+  },
+  "dataDir1FromJSON": {
+    "module": "externalbindingunion",
+    "name": "bindingValueStringFromJSON"
+  },
+  "dataDir1ToJSON": {
+    "module": "externalbindingunion",
+    "name": "bindingValueStringToJSON"
+  },
+  "dataDirSecretRef1FromJSON": {
+    "module": "externalbindingunion",
+    "name": "bindingValueStringSecretRefFromJSON"
+  },
+  "dataDirSecretRef1ToJSON": {
+    "module": "externalbindingunion",
+    "name": "bindingValueStringSecretRefToJSON"
+  },
+  "database1FromJSON": {
+    "module": "externalbindingunion",
+    "name": "databaseFromJSON"
+  },
+  "database1ToJSON": {
+    "module": "externalbindingunion",
+    "name": "databaseToJSON"
+  },
+  "databaseSecretRef1FromJSON": {
+    "module": "externalbindingunion",
+    "name": "databaseSecretRefFromJSON"
+  },
+  "databaseSecretRef1ToJSON": {
+    "module": "externalbindingunion",
+    "name": "databaseSecretRefToJSON"
+  },
+  "managerRetryResponseProviderAwsAlb1FromJSON": {
+    "module": "kubernetesexposurecustom",
+    "name": "kubernetesExposureCustomProviderAwsAlb1FromJSON"
+  },
+  "managerRetryResponseProviderAwsAlb2FromJSON": {
+    "module": "kubernetesexposurecustom",
+    "name": "kubernetesExposureCustomProviderAwsAlb2FromJSON"
+  },
+  "managerRetryResponseProviderAzureApplicationGatewayForContainers1FromJSON": {
+    "module": "kubernetesexposurecustom",
+    "name": "kubernetesExposureCustomProviderAzureApplicationGatewayForContainers1FromJSON"
+  },
+  "managerRetryResponseProviderGkeGateway1FromJSON": {
+    "module": "kubernetesexposurecustom",
+    "name": "kubernetesExposureCustomProviderGkeGateway1FromJSON"
+  },
+  "managerRetryResponseProviderGkeGateway2FromJSON": {
+    "module": "kubernetesexposurecustom",
+    "name": "kubernetesExposureCustomProviderGkeGateway2FromJSON"
+  },
+  "managerRetryResponseProviderUnion1FromJSON": {
+    "module": "kubernetesexposurecustom",
+    "name": "kubernetesExposureCustomProviderUnion1FromJSON"
+  },
+  "managerRetryResponseProviderUnion2FromJSON": {
+    "module": "kubernetesexposurecustom",
+    "name": "kubernetesExposureCustomProviderUnion2FromJSON"
+  },
+  "passwordSecretArnFromJSON": {
+    "module": "externalbindingunion",
+    "name": "bindingValueStringFromJSON"
+  },
+  "passwordSecretArnSecretRefFromJSON": {
+    "module": "externalbindingunion",
+    "name": "bindingValueStringSecretRefFromJSON"
+  },
+  "passwordSecretArnSecretRefToJSON": {
+    "module": "externalbindingunion",
+    "name": "bindingValueStringSecretRefToJSON"
+  },
+  "passwordSecretArnToJSON": {
+    "module": "externalbindingunion",
+    "name": "bindingValueStringToJSON"
+  }
+}

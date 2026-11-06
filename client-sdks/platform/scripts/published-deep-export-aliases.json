@@ -1,0 +1,218 @@
+{
+  "package": [
+    {
+      "kind": "type",
+      "name": "PackageRule",
+      "target": "PermissionsRule"
+    },
+    {
+      "kind": "const",
+      "name": "PackageRule$inboundSchema",
+      "target": "PermissionsRule$inboundSchema"
+    },
+    {
+      "kind": "const",
+      "name": "packageRuleFromJSON",
+      "target": "permissionsRuleFromJSON"
+    }
+  ],
+  "updateproject": [
+    {
+      "kind": "const",
+      "name": "UpdateProjectBinaryTarget",
+      "target": "UpdateProjectPackagesConfigBinaryTarget"
+    },
+    {
+      "kind": "type",
+      "name": "UpdateProjectBinaryTarget",
+      "target": "UpdateProjectPackagesConfigBinaryTarget"
+    },
+    {
+      "kind": "const",
+      "name": "UpdateProjectBinaryTarget$outboundSchema",
+      "target": "UpdateProjectPackagesConfigBinaryTarget$outboundSchema"
+    },
+    {
+      "kind": "type",
+      "name": "UpdateProjectCli",
+      "target": "UpdateProjectPackagesConfigCli"
+    },
+    {
+      "kind": "type",
+      "name": "UpdateProjectCli$Outbound",
+      "target": "UpdateProjectPackagesConfigCli$Outbound"
+    },
+    {
+      "kind": "const",
+      "name": "UpdateProjectCli$outboundSchema",
+      "target": "UpdateProjectPackagesConfigCli$outboundSchema"
+    },
+    {
+      "kind": "const",
+      "name": "updateProjectCliToJSON",
+      "target": "updateProjectPackagesConfigCliToJSON"
+    },
+    {
+      "kind": "type",
+      "name": "UpdateProjectCloudformation",
+      "target": "UpdateProjectPackagesConfigCloudformation"
+    },
+    {
+      "kind": "type",
+      "name": "UpdateProjectCloudformation$Outbound",
+      "target": "UpdateProjectPackagesConfigCloudformation$Outbound"
+    },
+    {
+      "kind": "const",
+      "name": "UpdateProjectCloudformation$outboundSchema",
+      "target": "UpdateProjectPackagesConfigCloudformation$outboundSchema"
+    },
+    {
+      "kind": "const",
+      "name": "updateProjectCloudformationToJSON",
+      "target": "updateProjectPackagesConfigCloudformationToJSON"
+    },
+    {
+      "kind": "type",
+      "name": "UpdateProjectHelm",
+      "target": "UpdateProjectPackagesConfigHelm"
+    },
+    {
+      "kind": "type",
+      "name": "UpdateProjectHelm$Outbound",
+      "target": "UpdateProjectPackagesConfigHelm$Outbound"
+    },
+    {
+      "kind": "const",
+      "name": "UpdateProjectHelm$outboundSchema",
+      "target": "UpdateProjectPackagesConfigHelm$outboundSchema"
+    },
+    {
+      "kind": "const",
+      "name": "updateProjectHelmToJSON",
+      "target": "updateProjectPackagesConfigHelmToJSON"
+    },
+    {
+      "kind": "type",
+      "name": "UpdateProjectOperatorImage",
+      "target": "UpdateProjectPackagesConfigOperatorImage"
+    },
+    {
+      "kind": "type",
+      "name": "UpdateProjectOperatorImage$Outbound",
+      "target": "UpdateProjectPackagesConfigOperatorImage$Outbound"
+    },
+    {
+      "kind": "const",
+      "name": "UpdateProjectOperatorImage$outboundSchema",
+      "target": "UpdateProjectPackagesConfigOperatorImage$outboundSchema"
+    },
+    {
+      "kind": "const",
+      "name": "updateProjectOperatorImageToJSON",
+      "target": "updateProjectPackagesConfigOperatorImageToJSON"
+    },
+    {
+      "kind": "type",
+      "name": "UpdateProjectTerraform",
+      "target": "UpdateProjectPackagesConfigTerraform"
+    },
+    {
+      "kind": "type",
+      "name": "UpdateProjectTerraform$Outbound",
+      "target": "UpdateProjectPackagesConfigTerraform$Outbound"
+    },
+    {
+      "kind": "const",
+      "name": "UpdateProjectTerraform$outboundSchema",
+      "target": "UpdateProjectPackagesConfigTerraform$outboundSchema"
+    },
+    {
+      "kind": "const",
+      "name": "updateProjectTerraformToJSON",
+      "target": "updateProjectPackagesConfigTerraformToJSON"
+    }
+  ],
+  "publishoperationspluginrequest": [
+    {
+      "kind": "type",
+      "name": "Operation",
+      "target": "PublishOperationsPluginRequestOperation"
+    },
+    {
+      "kind": "type",
+      "name": "Operation$Outbound",
+      "target": "PublishOperationsPluginRequestOperation$Outbound"
+    },
+    {
+      "kind": "const",
+      "name": "Operation$outboundSchema",
+      "target": "PublishOperationsPluginRequestOperation$outboundSchema"
+    },
+    {
+      "kind": "const",
+      "name": "operationToJSON",
+      "target": "publishOperationsPluginRequestOperationToJSON"
+    },
+    {
+      "kind": "type",
+      "name": "KubernetesPermissions",
+      "target": "KubernetesPermissions",
+      "module": "kubernetespermissions"
+    },
+    {
+      "kind": "type",
+      "name": "KubernetesPermissions$Outbound",
+      "target": "KubernetesPermissions$Outbound",
+      "module": "kubernetespermissions"
+    },
+    {
+      "kind": "type",
+      "name": "Rule",
+      "target": "Rule",
+      "module": "rule"
+    },
+    {
+      "kind": "type",
+      "name": "Rule$Outbound",
+      "target": "Rule$Outbound",
+      "module": "rule"
+    },
+    {
+      "kind": "const",
+      "name": "KubernetesPermissions$outboundSchema",
+      "target": "KubernetesPermissions$outboundSchema",
+      "module": "kubernetespermissions"
+    },
+    {
+      "kind": "const",
+      "name": "kubernetesPermissionsToJSON",
+      "target": "kubernetesPermissionsToJSON",
+      "module": "kubernetespermissions"
+    },
+    {
+      "kind": "const",
+      "name": "Rule$outboundSchema",
+      "target": "Rule$outboundSchema",
+      "module": "rule"
+    },
+    {
+      "kind": "const",
+      "name": "ruleToJSON",
+      "target": "ruleToJSON",
+      "module": "rule"
+    },
+    {
+      "kind": "const",
+      "name": "Verb",
+      "target": "Verb",
+      "module": "verb"
+    },
+    {
+      "kind": "const",
+      "name": "Verb$outboundSchema",
+      "target": "Verb$outboundSchema",
+      "module": "verb"
+    }
+  ]
+}

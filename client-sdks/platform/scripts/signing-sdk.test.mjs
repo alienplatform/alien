@@ -3,6 +3,7 @@ import test from "node:test";
 import { Alien } from "../typescript/esm/sdk/sdk.js";
 import { HTTPClient } from "../typescript/esm/lib/http.js";
 import { APIError } from "../typescript/esm/models/errors/apierror.js";
+import { generateKeyPairSync, sign, verify } from "node:crypto";
 
 function client(fetcher) {
   return new Alien({
@@ -17,6 +18,52 @@ const statement = {
   payload: canonicalBytes.toString("base64"),
   signatures: [{ signer: "ci-primary", sig: "MEUCIQAB+/==" }],
 };
+
+test("signed statement transport preserves a verifiable device signature", async () => {
+  const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const signature = sign("sha256", canonicalBytes, privateKey);
+  const signed = { payload: canonicalBytes.toString("base64"), signatures: [{ signer: "device-primary", sig: signature.toString("base64") }] };
+  const sdk = client(async request => {
+    const body = await request.json();
+    assert.deepEqual(body.statement, signed);
+    const transported = Buffer.from(body.statement.payload, "base64");
+    assert.deepEqual(transported, canonicalBytes);
+    assert.ok(verify("sha256", transported, publicKey, Buffer.from(body.statement.signatures[0].sig, "base64")));
+    return Response.json({ version: 7 }, { status: 201 });
+  });
+  await sdk.signing.addSignerList("example", { statement: signed });
+});
+
+for (const retry of [false, true]) {
+  test(`private instance ${retry ? "retry" : "creation"} retains nested protected setup settings`, async () => {
+    // This is the current public producer's CloudFormation setup response shape.
+    const stackSettings = {
+      airgapped: true,
+      signing: { channel: "production", fingerprint: `SHA256:${"a".repeat(64)}`, privateMachineApiUrl: "https://instance.example/machine" },
+      domains: { customDomains: { application: { domain: "app.example", certificate: { managed: {} }, endpoints: { https: "web" } } } },
+    };
+    const response = {
+      managerId: "mgr_test", setupStatus: "pending", setupToken: "test-only-token", setupTokenId: "token_test",
+      deploymentLink: "https://setup.example/instance",
+      setupConfig: { metadata: { test: true }, policy: { allowedPlatforms: ["aws"], allowedSetupMethods: ["cloudformation"] }, environmentVariables: [] },
+      setup: { method: "cloudformation", deploymentPortalUrl: "https://setup.example/instance", launchUrl: "https://console.aws.amazon.com/cloudformation/", templateUrl: "https://packages.example/template.yaml", stackName: "test-instance", region: "us-east-1", stackSettings },
+      ...(retry ? { mode: "setup" } : {}),
+    };
+    const sdk = client(async request => {
+      assert.equal(request.method, "POST");
+      assert.equal(new URL(request.url).pathname, retry ? "/v1/managers/mgr_test/retry" : "/v1/managers");
+      if (!retry) assert.deepEqual(await request.json(), { name: "test-instance", cloud: "aws", region: "us-east-1", setupMethod: "cloudformation" });
+      return Response.json(response, { status: retry ? 200 : 201 });
+    });
+    const reply = retry
+      ? await sdk.managers.retry({ id: "mgr_test" })
+      : await sdk.managers.create({ name: "test-instance", cloud: "aws", region: "us-east-1", setupMethod: "cloudformation" });
+    assert.deepEqual(reply.setup.stackSettings, stackSettings);
+    assert.deepEqual(reply.setupConfig, response.setupConfig);
+    assert.equal(reply.managerId, response.managerId);
+    if (retry) assert.equal(reply.mode, "setup");
+  });
+}
 
 test("signed statements keep the exact signed bytes through HTTP writes and list replies", async () => {
   const observed = [];
