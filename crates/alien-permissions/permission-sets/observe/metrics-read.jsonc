@@ -4,9 +4,9 @@
   "platforms": {
     "aws": [{
       "label": "read-metric-samples",
-      "description": "Read Classic CloudWatch samples in the target account. CloudWatch cannot restrict these reads to individual workload ARNs.",
+      "description": "Read Classic CloudWatch samples only in the selected target account and region. CloudWatch cannot restrict these reads to individual workload ARNs.",
       "grant": { "actions": ["cloudwatch:GetMetricData"] },
-      "binding": { "stack": { "resources": ["*"] } }
+      "binding": { "stack": { "resources": ["*"], "condition": { "StringEquals": { "aws:RequestedRegion": "${awsRegion}" } } } }
     }],
     "gcp": [{
       "label": "read-metric-samples",
