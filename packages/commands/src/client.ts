@@ -35,6 +35,11 @@ import {
   ResponseDecodingFailedError,
   StorageOperationFailedError,
 } from "./errors.js"
+import {
+  type OperationConnection,
+  type OperationConnectionOptions,
+  OperationConnections,
+} from "./operations.js"
 import { downloadPresigned, redactUrlForError } from "./presigned.js"
 import type {
   BodySpec,
@@ -215,6 +220,7 @@ export class CommandsClient {
   private readonly allowLocalStorage: boolean
   private readonly fetchImpl: typeof fetch
   private connectionProvider: CommandConnectionProvider
+  private operationConnection?: { metadata: OperationConnections; selected: OperationConnection }
 
   constructor(config: CommandsClientConfig) {
     this.deploymentId = config.deploymentId
@@ -254,6 +260,35 @@ export class CommandsClient {
     })
     client.connectionProvider = provider
     return client
+  }
+
+  /** Prepare an auto-approved operation without sending its inputs to the discovery API. */
+  static async forOperation(config: OperationConnectionOptions): Promise<CommandsClient> {
+    const metadata = new OperationConnections(config)
+    const selected = await metadata.prepare()
+    const client = new CommandsClient({
+      managerUrl: selected.managerUrl,
+      deploymentId: config.deploymentId,
+      token: selected.token,
+      fetch: config.fetch,
+    })
+    client.operationConnection = { metadata, selected }
+    return client
+  }
+
+  async invokeOperation<TResponse = unknown>(
+    input: unknown,
+    options?: InvokeOptions,
+  ): Promise<TResponse> {
+    if (!this.operationConnection)
+      throw new AlienError(
+        CommandCreationFailedError.create({
+          deploymentId: this.deploymentId,
+          command: "operation",
+          reason: "Create this connection with forOperation first",
+        }),
+      )
+    return this.invoke<TResponse>(this.operationConnection.selected.command, input, options)
   }
 
   /**
@@ -353,10 +388,11 @@ export class CommandsClient {
       body?: unknown
       describeError: (reason: string) => Parameters<AlienError["withContext"]>[0]
     },
+    provider: CommandConnectionProvider = this.connectionProvider,
   ): Promise<T> {
     try {
       const { response, url } = await requestWithRefreshingConnection(
-        this.connectionProvider,
+        provider,
         async connection => {
           const url = this.buildManagerUrl(connection.managerUrl, path)
           const headers: Record<string, string> = { Authorization: `Bearer ${connection.token}` }
@@ -406,9 +442,11 @@ export class CommandsClient {
         deploymentId: this.deploymentId,
         command,
         params: createBodySpec(input),
-        deadline: options?.deadline?.toISOString(),
+        deadline: this.operationConnection?.selected.deadline ?? options?.deadline?.toISOString(),
         idempotencyKey: options?.idempotencyKey,
-        targetResourceId: options?.targetResourceId,
+        targetResourceId:
+          this.operationConnection?.selected.targetResourceId ?? options?.targetResourceId,
+        operationResultContract: this.operationConnection?.selected.operationResultContract,
       },
       describeError: reason =>
         CommandCreationFailedError.create({
@@ -422,10 +460,27 @@ export class CommandsClient {
   /**
    * Get a command's status.
    */
-  private getCommandStatus(commandId: string): Promise<CommandStatusResponse> {
-    return this.managerFetch("GET", `/v1/commands/${commandId}`, CommandStatusResponseSchema, {
-      describeError: reason => CommandStatusFailedError.create({ commandId, reason }),
-    })
+  private async getCommandStatus(commandId: string): Promise<CommandStatusResponse> {
+    const connection = this.operationConnection
+      ? await this.operationConnection.metadata.status(commandId, this.operationConnection.selected)
+      : undefined
+    const provider = connection
+      ? new FixedCommandConnectionProvider({
+          role: "sender",
+          managerUrl: connection.managerUrl,
+          token: connection.token,
+          expiresAt: new Date(Date.now() + 60_000),
+        })
+      : this.connectionProvider
+    return this.managerFetch(
+      "GET",
+      `/v1/commands/${commandId}`,
+      CommandStatusResponseSchema,
+      {
+        describeError: reason => CommandStatusFailedError.create({ commandId, reason }),
+      },
+      provider,
+    )
   }
 
   /**

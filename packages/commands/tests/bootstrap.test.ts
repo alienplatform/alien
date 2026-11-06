@@ -394,3 +394,95 @@ describe("command destination custody", () => {
     }
   })
 })
+
+describe("direct operations", () => {
+  it("sends inputs and reads results only at the selected instance", async () => {
+    const contract = {
+      plugin: "demo",
+      pluginVersion: "1.0.0",
+      operation: "echo",
+      sensitiveOutput: { kind: "none" },
+      verification: null,
+      outputSchema: null,
+    }
+    const target = await startStubServer(req =>
+      req.method === "POST"
+        ? { json: createResponse() }
+        : { json: successStatus({ privateResult: "result-only-at-instance" }) },
+    )
+    try {
+      server = await startStubServer(req => {
+        if (req.path.startsWith("/v1/operations/invoke?"))
+          return {
+            json: {
+              status: "prepared",
+              connection: {
+                managerUrl: target.baseUrl,
+                token: "dispatch-capability",
+                command: "demo@1.0.0/echo",
+                targetResourceId: "operator",
+                deadline: new Date(Date.now() + 60_000).toISOString(),
+                operationResultContract: contract,
+              },
+            },
+          }
+        return {
+          json: {
+            managerUrl: target.baseUrl,
+            token: "status-capability",
+            commandId: "cmd_1",
+            operationResultContract: contract,
+          },
+        }
+      })
+      const client = await CommandsClient.forOperation({
+        deploymentId: "dep_1",
+        workspace: "workspace_1",
+        project: "project_1",
+        plugin: "demo",
+        operation: "echo",
+        apiKey: "api-key",
+        platformUrl: server.baseUrl,
+      })
+      const result = await client.invokeOperation(
+        { sensitive: "input-only-at-instance" },
+        FAST_POLL,
+      )
+      expect(result).toEqual({ privateResult: "result-only-at-instance" })
+      expect(server.requests).toHaveLength(2)
+      expect(JSON.stringify(server.requests)).not.toContain("input-only-at-instance")
+      expect(JSON.stringify(server.requests)).not.toContain("result-only-at-instance")
+      expect(server.requests[0]?.body).toEqual({
+        deploymentId: "dep_1",
+        plugin: "demo",
+        operation: "echo",
+        delivery: "direct",
+      })
+      expect(target.requests[0]?.headers.authorization).toBe("Bearer dispatch-capability")
+      expect(target.requests[0]?.body).toMatchObject({
+        operationResultContract: contract,
+        targetResourceId: "operator",
+      })
+      expect(target.requests[1]?.headers.authorization).toBe("Bearer status-capability")
+    } finally {
+      await target.close()
+    }
+  })
+
+  it("does not dispatch when approval is required", async () => {
+    server = await startStubServer(() => ({ json: { status: "pending-approval" } }))
+    await expect(
+      CommandsClient.forOperation({
+        deploymentId: "dep_1",
+        workspace: "workspace_1",
+        project: "project_1",
+        plugin: "demo",
+        operation: "echo",
+        apiKey: "api-key",
+        platformUrl: server.baseUrl,
+      }),
+    ).rejects.toThrow()
+    expect(server.requests).toHaveLength(1)
+    expect(server.requests[0]?.body).not.toHaveProperty("params")
+  })
+})

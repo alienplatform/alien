@@ -39,6 +39,7 @@ pub fn create_request_decision(
         CommandCapability::Send => !requested_target.is_some_and(is_operations_command_target),
         CommandCapability::Operations {
             command: scoped_command,
+            ..
         } => {
             requested_target.is_some_and(is_operations_command_target) && scoped_command == command
         }
@@ -53,6 +54,27 @@ pub fn create_request_decision(
     )
 }
 
+/// Enforce the immutable dispatch snapshot carried by a direct invocation capability.
+pub fn operation_contract_matches(
+    subject: &Subject,
+    request: &alien_core::commands_types::CreateCommandRequest,
+) -> bool {
+    let Scope::Commands {
+        capability:
+            CommandCapability::Operations {
+                invocation: Some(binding),
+                ..
+            },
+        ..
+    } = &subject.scope
+    else {
+        return true;
+    };
+    request.target_resource_id.as_deref() == Some(binding.target_resource_id.as_str())
+        && request.operation_result_contract.as_ref() == Some(&binding.result_contract)
+        && request.deadline == Some(binding.deadline)
+}
+
 /// Authorize completion of an operations command's presigned params upload.
 pub fn operator_upload_complete_allowed(subject: &Subject, command: &CommandStatus) -> bool {
     matches!(
@@ -62,6 +84,7 @@ pub fn operator_upload_complete_allowed(subject: &Subject, command: &CommandStat
             deployment_id,
             capability: CommandCapability::Operations {
                 command: scoped_command,
+            ..
             },
         } if subject.role == Role::CommandCapability
             && subject.workspace_id == command.workspace_id
@@ -259,6 +282,46 @@ mod tests {
 
     use crate::auth::SubjectKind;
 
+    #[test]
+    fn signed_direct_contract_rejects_target_deadline_and_result_policy_substitution() {
+        let deadline = Utc::now();
+        let contract =
+            serde_json::json!({"plugin":"demo", "sensitiveOutput":{"kind":"requireConfirmation"}});
+        let mut subject = operations_subject("workspace", "project", "deployment", "demo@1/echo");
+        if let Scope::Commands { capability, .. } = &mut subject.scope {
+            *capability = serde_json::from_value(serde_json::json!({"type":"operations", "command":"demo@1/echo", "invocation":{"targetResourceId":"operator", "resultContract":contract, "deadline":deadline}})).unwrap();
+        }
+        let request: alien_core::commands_types::CreateCommandRequest = serde_json::from_value(serde_json::json!({"deploymentId":"deployment", "command":"demo@1/echo", "targetResourceId":"operator", "deadline":deadline, "params":{"mode":"inline", "inlineBase64":"e30="}, "operationResultContract":contract})).unwrap();
+        assert!(operation_contract_matches(&subject, &request));
+        assert_eq!(
+            create_request_decision(&subject, "deployment", "demo@1/echo", Some("operator")),
+            Some(true)
+        );
+        let mut changed = request.clone();
+        changed.operation_result_contract =
+            Some(serde_json::json!({"sensitiveOutput":{"kind":"none"}}));
+        assert!(!operation_contract_matches(&subject, &changed));
+        changed = request.clone();
+        changed.target_resource_id = Some("operations-worker".into());
+        assert!(!operation_contract_matches(&subject, &changed));
+        changed = request.clone();
+        changed.deadline = None;
+        assert!(!operation_contract_matches(&subject, &changed));
+        assert_eq!(
+            create_request_decision(
+                &subject,
+                "another-deployment",
+                "demo@1/echo",
+                Some("operator")
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            create_request_decision(&subject, "deployment", "other@1/write", Some("operator")),
+            Some(false)
+        );
+    }
+
     fn operations_subject(
         workspace_id: &str,
         project_id: &str,
@@ -275,6 +338,7 @@ mod tests {
                 deployment_id: deployment_id.to_string(),
                 capability: CommandCapability::Operations {
                     command: command.to_string(),
+                    invocation: None,
                 },
             },
             role: Role::CommandCapability,

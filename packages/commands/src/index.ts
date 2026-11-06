@@ -53,6 +53,7 @@ export {
   ResponseDecodingFailedError,
   StorageOperationFailedError,
 } from "./errors.js"
+export type { OperationConnectionOptions } from "./operations.js"
 // Wire protocol types
 export type {
   BodySpec,

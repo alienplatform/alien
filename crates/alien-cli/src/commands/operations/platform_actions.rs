@@ -96,6 +96,35 @@ pub async fn invoke_task(
     )
     .await?;
     let deployment_id = String::from(deployment.id.clone());
+    // Resolve routing with metadata before any invocation parameters leave this process.
+    let manager = sdk_client
+        .get_manager()
+        .id(deployment.manager_id.to_string())
+        .workspace(workspace)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "resolving the selected operation instance".into(),
+            url: None,
+        })?
+        .into_inner();
+    if !manager.is_system {
+        return super::private::invoke(
+            ctx,
+            workspace,
+            project,
+            super::private::Invocation {
+                deployment: &deployment_id,
+                plugin,
+                operation,
+                params,
+                timeout_secs: options.timeout_secs,
+                print_as_json: options.json,
+            },
+        )
+        .await;
+    }
     let invocation = sdk_client
         .invoke_operation()
         .workspace(workspace)

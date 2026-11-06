@@ -203,7 +203,11 @@ pub enum CommandCapability {
     /// Create commands and read their status.
     Send,
     /// Create one exact command addressed to the manager's reserved operations target.
-    Operations { command: String },
+    Operations {
+        command: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        invocation: Option<OperationInvocation>,
+    },
     /// Read the status and response for one exact command through an authorized proxy.
     Status {
         #[serde(rename = "commandId")]
@@ -211,6 +215,15 @@ pub enum CommandCapability {
     },
     /// Lease and complete commands for one exact app-owned receiver target.
     Receive { target: CommandTarget },
+}
+
+/// Immutable metadata bound by the existing operations capability signer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OperationInvocation {
+    pub target_resource_id: String,
+    pub result_contract: serde_json::Value,
+    pub deadline: chrono::DateTime<chrono::Utc>,
 }
 
 impl<'de> Deserialize<'de> for CommandCapability {
@@ -224,6 +237,8 @@ impl<'de> Deserialize<'de> for CommandCapability {
             Send {},
             Operations {
                 command: String,
+                #[serde(default)]
+                invocation: Option<OperationInvocation>,
             },
             Status {
                 #[serde(rename = "commandId")]
@@ -243,13 +258,19 @@ impl<'de> Deserialize<'de> for CommandCapability {
 
         Ok(match WireCapability::deserialize(deserializer)? {
             WireCapability::Send {} => Self::Send,
-            WireCapability::Operations { command } => {
+            WireCapability::Operations {
+                command,
+                invocation,
+            } => {
                 if command.is_empty() {
                     return Err(serde::de::Error::custom(
                         "operations capability command must not be empty",
                     ));
                 }
-                Self::Operations { command }
+                Self::Operations {
+                    command,
+                    invocation,
+                }
             }
             WireCapability::Status { command_id } => {
                 if command_id.is_empty() {
@@ -555,6 +576,7 @@ mod tests {
     fn operations_command_capability_has_a_strict_stable_wire_shape() {
         let capability = CommandCapability::Operations {
             command: "postgres/health".to_string(),
+            invocation: None,
         };
         let json = serde_json::to_value(&capability).expect("serialize operations capability");
         assert_eq!(
