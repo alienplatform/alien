@@ -881,7 +881,7 @@ pub struct KubernetesTlsSecretRef {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct StackSettings {
-    /// Explicit destination override. An empty object disables released destination defaults.
+    /// Explicit destination override. An empty object clears released overrides and uses the manager defaults.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telemetry_destinations: Option<crate::TelemetryDestinations>,
     /// Explicit infrastructure metric sources. Absent disables collection and grants no new cloud access.

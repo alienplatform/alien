@@ -94,9 +94,13 @@ pub async fn collect_and_checkpoint(
             continue;
         }
 
-        let source_json = serde_json::to_vec(job)
-            .into_alien_error()
-            .context(failure("Could not encode metric source"))?;
+        let source_json = serde_json::to_vec(&(
+            job,
+            collection.interval_seconds,
+            collection.source_lag_seconds,
+        ))
+        .into_alien_error()
+        .context(failure("Could not encode metric source"))?;
         let source_hash = hex::encode(Sha256::digest(source_json));
         // Different jobs have different native resolution: a daily capacity
         // measurement must not become a sequence of partially queried minutes.
