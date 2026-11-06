@@ -105,6 +105,48 @@ pub(crate) async fn run_sync_loop_with_command_address_support(
     }
 }
 
+/// Discard manager credentials from older responses before writing durable state.
+fn sanitize_identity_config(
+    config: &mut alien_core::DeploymentConfig,
+    manager_url: &str,
+    audience: &str,
+) -> crate::error::Result<()> {
+    if config.compute_backend.is_some() {
+        return Err(alien_error::AlienError::new(
+            crate::error::ErrorData::ConfigurationError {
+                message:
+                    "Bounded operator identity does not support cluster management credentials"
+                        .into(),
+            },
+        ));
+    }
+    config.deployment_token = None;
+    config.runtime_identity_audience = Some(audience.to_owned());
+    let manager = reqwest::Url::parse(manager_url).map_err(|_| {
+        alien_error::AlienError::new(crate::error::ErrorData::ConfigurationError {
+            message: "Invalid identity manager URL".into(),
+        })
+    })?;
+    if let Some(monitoring) = config.monitoring.as_mut() {
+        let same_origin = |endpoint: &str| {
+            reqwest::Url::parse(endpoint)
+                .map(|url| url.origin() == manager.origin())
+                .unwrap_or(false)
+        };
+        if same_origin(&monitoring.logs_endpoint) {
+            monitoring.logs_auth_header.clear();
+        }
+        if monitoring
+            .metrics_endpoint
+            .as_deref()
+            .is_some_and(same_origin)
+        {
+            monitoring.metrics_auth_header = None;
+        }
+    }
+    Ok(())
+}
+
 /// Create an authenticated HTTP client
 fn create_authenticated_client(token: &str) -> crate::error::Result<Client> {
     use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
@@ -122,6 +164,7 @@ fn create_authenticated_client(token: &str) -> crate::error::Result<Client> {
     headers.insert(USER_AGENT, HeaderValue::from_static("operator"));
 
     Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .default_headers(headers)
         .build()
         .into_alien_error()
@@ -384,15 +427,12 @@ async fn sync_with_manager(
 
     debug!(url = %url, deployment_id = %deployment_id, "Sending sync request to manager");
 
-    let response = client
-        .post(&url)
-        .json(&sync_input)
-        .send()
-        .await
-        .into_alien_error()
-        .context(crate::error::ErrorData::SyncFailed {
-            message: "Failed to send sync request".to_string(),
-        })?;
+    let response = crate::daily_identity::send_manager_request(
+        state,
+        serde_json::json!({"type":"operatorSync"}),
+        client.post(&url).json(&sync_input),
+    )
+    .await?;
 
     let status = response.status();
     if !status.is_success() {
@@ -432,7 +472,7 @@ async fn sync_with_manager(
         ));
     }
 
-    let sync_response: SyncResponse =
+    let mut sync_response: SyncResponse =
         response
             .json()
             .await
@@ -441,11 +481,24 @@ async fn sync_with_manager(
                 message: "Failed to parse sync response".to_string(),
             })?;
 
-    let durable_target = sync_response.target.clone().or_else(|| {
+    let identity = state
+        .db
+        .read_daily_identity()
+        .await?
+        .map(|identity| (identity.manager_url, identity.audience));
+    if let (Some((manager_url, audience)), Some(target)) =
+        (&identity, sync_response.target.as_mut())
+    {
+        sanitize_identity_config(&mut target.config, manager_url, audience)?;
+    }
+    let mut durable_target = sync_response.target.clone().or_else(|| {
         (sync_response.execution_claim == durable_execution.claim)
             .then(|| durable_execution.target.clone())
             .flatten()
     });
+    if let (Some((manager_url, audience)), Some(target)) = (&identity, durable_target.as_mut()) {
+        sanitize_identity_config(&mut target.config, manager_url, audience)?;
+    }
     // A claim and its target are one durable receipt. Persist them in one
     // SQLite value before changing deployment state/config so a crash can
     // resume the exact immutable target rather than asking for "latest".
@@ -1031,6 +1084,276 @@ mod tests {
 
     const TEST_ENCRYPTION_KEY: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[tokio::test]
+    #[ignore = "child process for enrollment durability tests"]
+    async fn enrollment_commit_child() {
+        let directory = std::env::var("ALIEN_TEST_ENROLLMENT_DIRECTORY").unwrap();
+        let manager_url = std::env::var("ALIEN_TEST_ENROLLMENT_MANAGER").unwrap();
+        let db = Arc::new(
+            OperatorDb::new(&directory, TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let result = crate::daily_identity::DailyIdentity::new(db.clone())
+            .unwrap()
+            .enroll(crate::daily_identity::EnrollmentRequest {
+                manager_url: &manager_url,
+                audience: "manager-one",
+                code: "enrollment-fixture",
+                deployment_id: Some("deployment-one"),
+                revision: 0,
+            })
+            .await;
+        assert_eq!(result.unwrap(), "deployment-one");
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Local)
+                .data_dir(&directory)
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .sync(SyncConfig {
+                    url: manager_url.parse().unwrap(),
+                    token: String::new(),
+                })
+                .build(),
+            db,
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        sync_with_manager(
+            &state,
+            &create_authenticated_client("").unwrap(),
+            &manager_url,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        std::process::exit(0);
+    }
+
+    async fn enrollment_commit_process(
+        directory: &std::path::Path,
+        manager: &str,
+        crash: bool,
+    ) -> std::process::Output {
+        let directory = directory.to_owned();
+        let manager = manager.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "loops::sync::tests::enrollment_commit_child",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .env("ALIEN_TEST_ENROLLMENT_DIRECTORY", directory)
+                .env("ALIEN_TEST_ENROLLMENT_MANAGER", manager);
+            if crash {
+                command.env("ALIEN_TEST_ENROLLMENT_COMMIT_EXIT", "1");
+            }
+            command.output().unwrap()
+        })
+        .await
+        .unwrap()
+    }
+
+    /// The Operator dies right after enrollment commits. The restarted
+    /// Operator syncs with its saved key and never reuses the one-use code.
+    #[tokio::test]
+    async fn enrollment_restart_after_commit_completes_sync() {
+        let directory = tempfile::tempdir().unwrap();
+        let enrollments = Arc::new(AtomicUsize::new(0));
+        let syncs = Arc::new(AtomicUsize::new(0));
+        let enrollment_count = enrollments.clone();
+        let sync_count = syncs.clone();
+        let app = Router::new()
+            .route("/v1/identity/enroll", post(move |Json(body): Json<Value>| {
+                assert_eq!(body["code"], "enrollment-fixture");
+                enrollment_count.fetch_add(1, Ordering::SeqCst);
+                async { Json(json!({"deploymentId":"deployment-one", "expiresAt":chrono::Utc::now()+chrono::Duration::hours(23)})) }
+            }))
+            .route("/v1/identity/exchange", post(|Json(body): Json<Value>| async move {
+                assert_eq!(body["deploymentId"], "deployment-one");
+                Json(json!({"token":"ax_cap_v1_restart-fixture", "expiresAt":chrono::Utc::now()+chrono::Duration::minutes(5)}))
+            }))
+            .route("/v1/sync", post(move |Json(body): Json<Value>| {
+                assert_eq!(body["deploymentId"], "deployment-one");
+                sync_count.fetch_add(1, Ordering::SeqCst);
+                async { Json(json!({})) }
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let manager = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let crashed = enrollment_commit_process(directory.path(), &manager, true).await;
+        assert_eq!(
+            crashed.status.code(),
+            Some(73),
+            "must terminate at durable commit boundary"
+        );
+        let restarted = enrollment_commit_process(directory.path(), &manager, false).await;
+        let diagnostic = String::from_utf8_lossy(&restarted.stderr);
+        assert!(
+            restarted.status.success(),
+            "restart must complete: {diagnostic}"
+        );
+        assert_eq!(
+            enrollments.load(Ordering::SeqCst),
+            1,
+            "restart must not reuse consumed enrollment authority"
+        );
+        assert_eq!(syncs.load(Ordering::SeqCst), 1);
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn enrollment_refuses_a_saved_operator_of_another_deployment() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(directory.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        db.set_deployment_id("foreign-deployment").await.unwrap();
+        let result = crate::daily_identity::DailyIdentity::new(db.clone())
+            .unwrap()
+            .enroll(crate::daily_identity::EnrollmentRequest {
+                manager_url: "https://manager.example",
+                audience: "manager-one",
+                code: "enrollment-fixture",
+                deployment_id: Some("deployment-one"),
+                revision: 0,
+            })
+            .await;
+        assert!(result.is_err());
+        assert_eq!(
+            db.get_deployment_id().await.unwrap().as_deref(),
+            Some("foreign-deployment")
+        );
+        assert!(db.read_daily_identity().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn enrolled_operator_sync_renews_rejected_authority_and_refuses_other_origins() {
+        use axum::{
+            http::{HeaderMap, StatusCode},
+            response::IntoResponse,
+        };
+        use sha2::{Digest, Sha256};
+
+        let directory = tempfile::tempdir().unwrap();
+        let hash = Arc::new(Mutex::new(String::new()));
+        let exchanges = Arc::new(AtomicUsize::new(0));
+        let syncs = Arc::new(AtomicUsize::new(0));
+        let foreign_requests = Arc::new(AtomicUsize::new(0));
+        let captured_foreign = foreign_requests.clone();
+        let foreign = Router::new().fallback(move || {
+            captured_foreign.fetch_add(1, Ordering::SeqCst);
+            async { StatusCode::OK }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let foreign_url = format!("http://{}", listener.local_addr().unwrap());
+        let foreign_server =
+            tokio::spawn(async move { axum::serve(listener, foreign).await.unwrap() });
+        let enrollment_hash = hash.clone();
+        let exchange_hash = hash.clone();
+        let exchange_count = exchanges.clone();
+        let sync_count = syncs.clone();
+        let redirect = foreign_url.clone();
+        let app = Router::new()
+            .route("/v1/identity/enroll", post(move |Json(body): Json<Value>| {
+                assert_eq!(body["code"], "one-use-fixture");
+                *enrollment_hash.lock().unwrap() = body["initialKeyHash"].as_str().unwrap().into();
+                async { Json(json!({"deploymentId":"deployment-one", "expiresAt":chrono::Utc::now()+chrono::Duration::hours(24)})) }
+            }))
+            .route("/v1/identity/exchange", post(move |Json(body): Json<Value>| {
+                assert_eq!(body["deploymentId"], "deployment-one");
+                assert_eq!(body["purpose"]["type"], "operatorSync");
+                let actual = format!("{:x}", Sha256::digest(body["proof"]["key"].as_str().unwrap().as_bytes()));
+                assert_eq!(actual, *exchange_hash.lock().unwrap());
+                let generation = exchange_count.fetch_add(1, Ordering::SeqCst) + 1;
+                async move { Json(json!({"token":format!("ax_cap_v1_fixture-{generation}"),"expiresAt":chrono::Utc::now()+chrono::Duration::minutes(5)})) }
+            }))
+            .route("/v1/sync", post(move |headers: HeaderMap, Json(body): Json<Value>| {
+                let attempt = sync_count.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(body["deploymentId"], "deployment-one");
+                assert_eq!(headers["authorization"], if attempt == 0 { "Bearer ax_cap_v1_fixture-1" } else { "Bearer ax_cap_v1_fixture-2" });
+                async move {
+                    if attempt == 0 { StatusCode::UNAUTHORIZED.into_response() }
+                    else { Json(json!({})).into_response() }
+                }
+            }))
+            .route("/redirect", get(move || async move { axum::response::Redirect::temporary(&redirect) }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let manager_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let db = Arc::new(
+            OperatorDb::new(directory.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        crate::daily_identity::DailyIdentity::new(db.clone())
+            .unwrap()
+            .enroll(crate::daily_identity::EnrollmentRequest {
+                manager_url: &manager_url,
+                audience: "manager-one",
+                code: "one-use-fixture",
+                deployment_id: Some("deployment-one"),
+                revision: 0,
+            })
+            .await
+            .unwrap();
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Local)
+                .data_dir(directory.path().to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .sync(SyncConfig {
+                    url: manager_url.parse().unwrap(),
+                    token: String::new(),
+                })
+                .build(),
+            db,
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let client = create_authenticated_client("").unwrap();
+        let error = sync_with_manager(&state, &client, &foreign_url, false, None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "CONFIGURATION_ERROR");
+        assert_eq!(
+            exchanges.load(Ordering::SeqCst),
+            0,
+            "refuse before acquiring authority"
+        );
+        assert_eq!(foreign_requests.load(Ordering::SeqCst), 0);
+        sync_with_manager(&state, &client, &manager_url, false, None)
+            .await
+            .unwrap();
+        assert_eq!(syncs.load(Ordering::SeqCst), 2);
+        assert_eq!(exchanges.load(Ordering::SeqCst), 2);
+        let response = crate::daily_identity::send_manager_request(
+            &state,
+            json!({"type":"operatorSync"}),
+            client.get(format!("{manager_url}/redirect")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(foreign_requests.load(Ordering::SeqCst), 0);
+        assert_eq!(exchanges.load(Ordering::SeqCst), 2);
+        server.abort();
+        foreign_server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+        assert!(foreign_server.await.unwrap_err().is_cancelled());
+    }
 
     /// Removing an Operator's last local plugin must clear what it reported:
     /// it sends an empty declaration (`{}` on the wire), which the platform

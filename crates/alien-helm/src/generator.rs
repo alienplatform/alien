@@ -46,12 +46,21 @@ pub struct HelmOptions<'a> {
     pub chart_name: String,
 }
 
+/// How the Operator authenticates to its manager.
+#[derive(Debug, Clone, Copy)]
+pub enum ManagementCredential<'a> {
+    /// A deployment token, kept in the release Secret.
+    Token(&'a str),
+    /// A one-use enrollment code. The Operator exchanges it for its own key.
+    EnrollmentCode { code: &'a str, audience: &'a str },
+}
+
 /// Inputs for rendering `values.yaml` from registered setup state.
 pub struct ManagerFetchHelmValuesOptions<'a> {
     pub deployment_id: &'a str,
     pub deployment_name: &'a str,
     pub manager_url: &'a str,
-    pub deployment_token: &'a str,
+    pub credential: ManagementCredential<'a>,
     pub runtime_encryption_key: &'a str,
     pub stack: &'a Stack,
     pub stack_state: &'a alien_core::StackState,
@@ -2235,10 +2244,16 @@ pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -
     let mut yaml = String::new();
 
     yaml.push_str("management:\n");
-    yaml.push_str(&format!(
-        "  token: {}\n",
-        yaml_string(options.deployment_token)
-    ));
+    match options.credential {
+        ManagementCredential::Token(token) => {
+            yaml.push_str(&format!("  token: {}\n", yaml_string(token)));
+        }
+        ManagementCredential::EnrollmentCode { code, audience } => {
+            yaml.push_str("  token: ''\n");
+            yaml.push_str(&format!("  enrollmentCode: {}\n", yaml_string(code)));
+            yaml.push_str(&format!("  audience: {}\n", yaml_string(audience)));
+        }
+    }
     yaml.push_str(&format!(
         "  name: {}\n",
         yaml_string(options.deployment_name)
@@ -4005,6 +4020,12 @@ fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Resu
   existingSecret:
     name: ""
     tokenKey: sync-token
+  # One-hour, one-use code that enrolls the Operator for a registered
+  # deployment, instead of token. The Operator then keeps its own key, which
+  # it replaces every day. Requires deploymentId, audience and persistence.
+  enrollmentCode: ""
+  # The manager audience returned with the enrollment code.
+  audience: ""
   name: ""
   # Resolved management endpoint captured when this package was built.
   defaultUrl: ""
@@ -4735,6 +4756,8 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
             "tokenKey": { "type": "string", "minLength": 1 }
           }
         },
+        "enrollmentCode": { "type": "string" },
+        "audience": { "type": "string" },
         "name": { "type": "string" },
         "url": { "type": "string" },
         "defaultUrl": { "type": "string" },
@@ -4743,6 +4766,19 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
         "updates": { "type": "string", "enum": ["auto", "approval-required"] },
         "telemetry": { "type": "string", "enum": ["auto", "approval-required", "off"] },
         "healthChecks": { "type": "string", "enum": ["on", "off"] }
+      },
+      "if": {
+        "required": ["enrollmentCode"],
+        "properties": { "enrollmentCode": { "minLength": 1 } }
+      },
+      "then": {
+        "required": ["audience", "deploymentId"],
+        "properties": {
+          "audience": { "minLength": 1 },
+          "deploymentId": { "type": "string", "minLength": 1 },
+          "token": { "enum": [""] },
+          "existingSecret": { "properties": { "name": { "enum": [""] } } }
+        }
       }
     },
     "runtime": {
@@ -5612,7 +5648,15 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{- define "deployment.managementSecretTokenKey" -}}
+{{- if .Values.management.enrollmentCode -}}
+enrollment-code
+{{- else -}}
 {{- default "sync-token" .Values.management.existingSecret.tokenKey -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "deployment.managementCredentialFile" -}}
+{{- ternary "enrollment-code" "sync-token" (not (empty .Values.management.enrollmentCode)) -}}
 {{- end -}}
 
 {{- define "deployment.encryptionSecretName" -}}
@@ -5880,7 +5924,11 @@ metadata:
 type: Opaque
 stringData:
   {{- if $createManagementSecret }}
+  {{- if .Values.management.enrollmentCode }}
+  enrollment-code: {{ .Values.management.enrollmentCode | quote }}
+  {{- else }}
   sync-token: {{ .Values.management.token | quote }}
+  {{- end }}
   {{- end }}
   {{- if $createEncryptionSecret }}
   encryption-key: {{ include "deployment.runtimeEncryptionKey" . | quote }}
@@ -6633,7 +6681,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
-        checksum/management-credential: {{ toJson (dict "token" .Values.management.token "existingSecret" .Values.management.existingSecret) | sha256sum | quote }}
+        checksum/management-credential: {{ toJson (dict "token" .Values.management.token "existingSecret" .Values.management.existingSecret "enrollmentCode" .Values.management.enrollmentCode) | sha256sum | quote }}
         checksum/pod-log-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}
         {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
         checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
@@ -6758,8 +6806,15 @@ spec:
             - name: DATA_DIR
               value: {{ .Values.runtime.data.mountPath | quote }}
             {{- if not (dig "enabled" false (default dict .Values.airgapped)) }}
+            {{- if .Values.management.enrollmentCode }}
+            - name: OPERATOR_ENROLLMENT_CODE_FILE
+              value: /etc/deployment/secrets/enrollment-code
+            - name: ALIEN_MANAGER_AUDIENCE
+              value: {{ .Values.management.audience | quote }}
+            {{- else }}
             - name: SYNC_TOKEN_FILE
               value: /etc/deployment/secrets/sync-token
+            {{- end }}
             {{- end }}
             - name: OPERATOR_ENCRYPTION_KEY_FILE
               value: /etc/deployment/secrets/encryption-key
@@ -6845,8 +6900,8 @@ spec:
               readOnly: true
             {{- end }}
             - name: management-token
-              mountPath: /etc/deployment/secrets/sync-token
-              subPath: sync-token
+              mountPath: /etc/deployment/secrets/{{ include "deployment.managementCredentialFile" . }}
+              subPath: {{ include "deployment.managementCredentialFile" . }}
               readOnly: true
             - name: encryption-key
               mountPath: /etc/deployment/secrets/encryption-key
@@ -6890,7 +6945,7 @@ spec:
             secretName: {{ include "deployment.managementSecretName" . }}
             items:
               - key: {{ include "deployment.managementSecretTokenKey" . }}
-                path: sync-token
+                path: {{ include "deployment.managementCredentialFile" . }}
             defaultMode: 384
         - name: encryption-key
           secret:
@@ -9585,6 +9640,118 @@ mod tests {
     }
 
     #[test]
+    fn enrollment_code_replaces_the_management_token() {
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &sample_stack(),
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "sample-stack".to_string(),
+            },
+        )
+        .expect("chart");
+        let stack_state =
+            alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
+        let enrolled = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
+            deployment_id: "dep_example",
+            deployment_name: "prod",
+            manager_url: "https://manager.example.test",
+            credential: ManagementCredential::EnrollmentCode {
+                code: "ax_enroll_example",
+                audience: "https://manager.example.test",
+            },
+            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
+            stack: &sample_stack(),
+            stack_state: &stack_state,
+            stack_settings: &StackSettings::default(),
+            base_platform: None,
+            region: None,
+            gcp_project_id: None,
+            azure_location: None,
+        })
+        .expect("enrolled values should render");
+        let enrolled = enrolled.as_str();
+        let rendered = crate::test_utils::helm_template(&chart.files, Some(enrolled));
+        rendered.assert_ok("enrolled chart");
+        let docs = parse_manifest_docs(&rendered.stdout);
+        let secret = docs_by_kind(&docs, "Secret")
+            .into_iter()
+            .find(|secret| secret["stringData"]["encryption-key"].is_string())
+            .expect("release Secret");
+        assert_eq!(
+            secret["stringData"]["enrollment-code"].as_str(),
+            Some("ax_enroll_example")
+        );
+        assert!(secret["stringData"]["sync-token"].is_null());
+        let operator = docs_by_kind(&docs, "Deployment")
+            .into_iter()
+            .find(|deployment| {
+                deployment["spec"]["template"]["spec"]["containers"][0]["name"].as_str()
+                    == Some("operator")
+            })
+            .expect("Operator Deployment");
+        let container = &operator["spec"]["template"]["spec"]["containers"][0];
+        let env: std::collections::HashMap<&str, &str> = container["env"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .filter_map(|variable| Some((variable["name"].as_str()?, variable["value"].as_str()?)))
+            .collect();
+        assert_eq!(
+            env.get("OPERATOR_ENROLLMENT_CODE_FILE"),
+            Some(&"/etc/deployment/secrets/enrollment-code")
+        );
+        assert_eq!(
+            env.get("ALIEN_MANAGER_AUDIENCE"),
+            Some(&"https://manager.example.test")
+        );
+        assert_eq!(env.get("DEPLOYMENT_ID"), Some(&"dep_example"));
+        assert!(!env.contains_key("SYNC_TOKEN_FILE"));
+        let mount = container["volumeMounts"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|mount| mount["name"].as_str() == Some("management-token"))
+            .unwrap();
+        assert_eq!(
+            mount["mountPath"].as_str(),
+            Some("/etc/deployment/secrets/enrollment-code")
+        );
+        let volume = operator["spec"]["template"]["spec"]["volumes"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|volume| volume["name"].as_str() == Some("management-token"))
+            .unwrap();
+        assert_eq!(
+            volume["secret"]["items"][0]["key"].as_str(),
+            Some("enrollment-code")
+        );
+        assert_eq!(
+            volume["secret"]["items"][0]["path"].as_str(),
+            Some("enrollment-code")
+        );
+
+        // A code needs its audience and deployment, never a token beside it,
+        // and persistent storage for the daily key it becomes.
+        for refused in [
+            enrolled.replace("  audience: 'https://manager.example.test'\n", ""),
+            enrolled.replace("deploymentId: 'dep_example'", "deploymentId: null"),
+            enrolled.replace("  token: ''", "  token: 'ax_deploy_example'"),
+            enrolled.replace(
+                "runtime:\n",
+                "runtime:\n  data:\n    persistence:\n      enabled: false\n",
+            ),
+        ] {
+            assert!(
+                !crate::test_utils::helm_template(&chart.files, Some(&refused)).is_ok(),
+                "accepted {refused}"
+            );
+        }
+    }
+
+    #[test]
     fn cleanup_hooks_pull_with_the_install_pull_secrets() {
         // A site whose registry needs a password installs with a pull Secret;
         // the uninstall and upgrade hooks pull the cleanup image from the same
@@ -12061,7 +12228,7 @@ logCollector:
             deployment_id: "dep_123",
             deployment_name: "deployment",
             manager_url: "https://management.example.com",
-            deployment_token: "token",
+            credential: ManagementCredential::Token("token"),
             runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &sample_stack(),
             stack_state: &stack_state,
@@ -12097,7 +12264,7 @@ logCollector:
             deployment_id: "dep_123",
             deployment_name: "deployment",
             manager_url: "https://management.example.com",
-            deployment_token: "token",
+            credential: ManagementCredential::Token("token"),
             runtime_encryption_key: "replace-me-with-a-stable-64-character-encryption-secret",
             stack: &sample_stack(),
             stack_state: &stack_state,
@@ -12141,7 +12308,7 @@ logCollector:
             deployment_id: "dep_123",
             deployment_name: "deployment",
             manager_url: "https://management.example.com",
-            deployment_token: "token",
+            credential: ManagementCredential::Token("token"),
             runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &stack,
             stack_state: &stack_state,
@@ -12192,7 +12359,7 @@ logCollector:
             deployment_id: "dep_123",
             deployment_name: "deployment",
             manager_url: "https://management.example.com",
-            deployment_token: "token",
+            credential: ManagementCredential::Token("token"),
             runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &sample_stack(),
             stack_state: &stack_state,
@@ -12261,7 +12428,7 @@ logCollector:
             deployment_id: "dep_123",
             deployment_name: "deployment",
             manager_url: "https://management.example.com",
-            deployment_token: "token",
+            credential: ManagementCredential::Token("token"),
             runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &sample_stack(),
             stack_state: &stack_state,

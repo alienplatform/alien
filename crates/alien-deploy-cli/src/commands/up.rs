@@ -3130,6 +3130,51 @@ platform = "aws"
         initialize.assert_async().await;
     }
 
+    /// The rendered install holds the one-use code, and no deployment token
+    /// reaches the release Secret, its values or the Operator.
+    #[test]
+    fn kubernetes_install_carries_an_enrollment_code_and_no_token() {
+        let stack = Stack::new("orders".to_string()).build();
+        let chart = render_kubernetes_helm_chart(&stack, &StackSettings::default(), "orders-eu")
+            .expect("chart renders");
+        let values = write_kubernetes_helm_values(
+            chart.path(),
+            "https://manager.example.test",
+            &OperatorEnrollment {
+                code: "ax_enroll_fixture",
+                audience: "https://manager.example.test",
+            },
+            "dep_fixture",
+            "orders-eu",
+            "korders",
+            &StackSettings::default(),
+            "ghcr.io/example/operator:1.0.0",
+            None,
+            None,
+        )
+        .expect("values are written");
+        let output = std::process::Command::new("helm")
+            .arg("template")
+            .arg("orders")
+            .arg(chart.path())
+            .arg("-f")
+            .arg(&values)
+            .output()
+            .expect("helm runs");
+        let rendered = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(rendered.contains("enrollment-code: \"ax_enroll_fixture\""));
+        assert!(rendered.contains("OPERATOR_ENROLLMENT_CODE_FILE"));
+        assert!(!rendered.contains("sync-token:"));
+        assert!(!rendered.contains("SYNC_TOKEN_FILE"));
+        let written = std::fs::read_to_string(&values).unwrap();
+        assert!(!written.contains("\"token\""));
+    }
+
     #[tokio::test]
     async fn kubernetes_initialize_reports_the_helm_release_it_installs() {
         for (flags, expected) in [
@@ -6912,7 +6957,6 @@ async fn run_pull_model(
                 client,
                 args,
                 manager_url,
-                token,
                 deployment_id,
                 deployment_name,
                 stack_settings,
@@ -7178,7 +7222,6 @@ async fn run_kubernetes_pull_model(
     client: &ServerClient,
     args: &UpArgs,
     manager_url: &str,
-    token: &str,
     deployment_id: &str,
     deployment_name: &str,
     stack_settings: &StackSettings,
@@ -7195,11 +7238,28 @@ async fn run_kubernetes_pull_model(
         .clone()
         .unwrap_or_else(|| "ghcr.io/alienplatform/alien-operator:latest".to_string());
 
+    // The Helm values carry a one-hour, one-use code, never a deployment
+    // token. The Operator trades it for its own key on first start.
+    let enrollment = client
+        .issue_enrollment_code()
+        .id(deployment_id)
+        .send()
+        .await
+        .into_sdk_error()
+        .await
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to get an Operator enrollment code from the manager".to_string(),
+        })?
+        .into_inner();
+
     let chart_dir = render_kubernetes_helm_chart(&stack, stack_settings, deployment_name)?;
     let values_file = write_kubernetes_helm_values(
         chart_dir.path(),
         manager_url,
-        token,
+        &OperatorEnrollment {
+            code: &enrollment.code,
+            audience: &enrollment.manager_audience,
+        },
         deployment_id,
         deployment_name,
         &resource_prefix,
@@ -7361,10 +7421,16 @@ fn render_kubernetes_helm_chart(
     Ok(chart_dir)
 }
 
+/// What the Operator needs to enroll with the manager.
+struct OperatorEnrollment<'a> {
+    code: &'a str,
+    audience: &'a str,
+}
+
 fn write_kubernetes_helm_values(
     chart_dir: &Path,
     manager_url: &str,
-    token: &str,
+    enrollment: &OperatorEnrollment<'_>,
     deployment_id: &str,
     deployment_name: &str,
     resource_prefix: &str,
@@ -7379,7 +7445,8 @@ fn write_kubernetes_helm_values(
     helm_settings.deployment_model = DeploymentModel::Pull;
     let values = serde_json::json!({
         "management": {
-            "token": token,
+            "enrollmentCode": enrollment.code,
+            "audience": enrollment.audience,
             "name": deployment_name,
             "url": manager_url,
             "deploymentId": deployment_id,

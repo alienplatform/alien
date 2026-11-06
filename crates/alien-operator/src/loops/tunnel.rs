@@ -22,7 +22,7 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 /// Parallel tunnel connections per operator.
 const CONNECTIONS: usize = 2;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 struct Connection {
     manager_url: Url,
     token: String,
@@ -62,7 +62,12 @@ pub async fn run_tunnel_loop(state: Arc<OperatorState>) {
                     }
                 }
             }
-            Err(e) => warn!(error = %e, "Failed to refresh tunnel configuration"),
+            Err(e) => {
+                if let Some((_, task)) = active.take() {
+                    task.abort();
+                }
+                warn!(error = %e, "Failed to refresh tunnel configuration");
+            }
         }
 
         tokio::select! {
@@ -95,9 +100,6 @@ async fn desired_connection(
     let Some(manager_url) = state.db.get_tunnel_url().await? else {
         return Ok(None);
     };
-    let Some(token) = state.db.get_sync_token().await? else {
-        return Ok(None);
-    };
     let manager_url = match Url::parse(&manager_url) {
         Ok(url) => url,
         Err(e) => {
@@ -105,6 +107,10 @@ async fn desired_connection(
             return Ok(None);
         }
     };
+    crate::daily_identity::validate_manager_endpoint(state, &manager_url)?;
+    let token =
+        crate::daily_identity::request_token(state, serde_json::json!({"type":"operatorTunnel"}))
+            .await?;
     Ok(Some(Connection { manager_url, token }))
 }
 

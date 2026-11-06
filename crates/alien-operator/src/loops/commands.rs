@@ -5,7 +5,7 @@
 //! use their native transport; Local/Kubernetes Workers use the authenticated
 //! runtime-owned HTTP push endpoint.
 
-use crate::OperatorState;
+use crate::{db::OperatorDb, OperatorState};
 use alien_commands::dispatchers::{
     CommandDispatcher, HttpCommandDispatcher, LambdaCommandDispatcher, PubSubCommandDispatcher,
     ServiceBusCommandDispatcher,
@@ -14,8 +14,11 @@ use alien_commands::{
     resolve_envelope_urls, CommandTarget, CommandTargetType, LeaseRequest, LeaseResponse,
 };
 use alien_core::{ClientConfig, Platform, ResourceStatus, StackState, WorkerOutputs};
+use alien_error::Context;
 use alien_infra::ClientConfigExt;
+use async_trait::async_trait;
 use reqwest::Client;
+use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -191,7 +194,16 @@ async fn poll_and_dispatch(
             dispatcher_cache,
             &target.resource_id,
             &target.push_target,
-            || async { create_dispatcher(platform, &push_target, config).await },
+            || async {
+                create_dispatcher(
+                    platform,
+                    &push_target,
+                    &target.resource_id,
+                    config,
+                    &state.db,
+                )
+                .await
+            },
         )
         .await
         {
@@ -210,6 +222,7 @@ async fn poll_and_dispatch(
         }
 
         match lease_and_dispatch_target(
+            state,
             client,
             &lease_url,
             &deployment_id,
@@ -235,6 +248,7 @@ async fn poll_and_dispatch(
 /// Acquire leases for a single target and dispatch each leased command via that
 /// target's cached dispatcher. Returns the number dispatched for this target.
 async fn lease_and_dispatch_target(
+    state: &OperatorState,
     client: &Client,
     lease_url: &str,
     deployment_id: &str,
@@ -253,12 +267,13 @@ async fn lease_and_dispatch_target(
     let commands_endpoint =
         reqwest::Url::parse(lease_url).map_err(|e| format!("Invalid commands lease URL: {e}"))?;
 
-    let response = client
-        .post(lease_url)
-        .json(&lease_request)
-        .send()
-        .await
-        .map_err(|e| format!("Lease request failed: {}", e))?;
+    let response = crate::daily_identity::send_manager_request(
+        state,
+        serde_json::json!({"type":"operationRelay", "target": lease_request.target}),
+        client.post(lease_url).json(&lease_request),
+    )
+    .await
+    .map_err(|_| "Cannot obtain or send command relay authority".to_string())?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -405,19 +420,73 @@ where
     }
 }
 
+struct PublishedWorkerDispatcher {
+    client: Client,
+    target_url: String,
+    resource_id: String,
+    db: Arc<OperatorDb>,
+}
+
+impl std::fmt::Debug for PublishedWorkerDispatcher {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PublishedWorkerDispatcher")
+            .field("resource_id", &self.resource_id)
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl CommandDispatcher for PublishedWorkerDispatcher {
+    async fn dispatch(&self, envelope: &alien_commands::Envelope) -> alien_commands::Result<()> {
+        let credential = crate::daily_identity::published_capability(&self.db,
+            &json!({"type":"receiveCommands", "target":{"resourceId":self.resource_id,"resourceType":"worker"}}),
+        ).await.context(alien_commands::ErrorData::TransportDispatchRejected {
+            message: "Worker runtime authority has not been published".into(),
+            transport_type: Some("http".into()),
+            target: Some(envelope.command_id.clone()),
+        })?;
+        HttpCommandDispatcher::new(
+            self.client.clone(),
+            self.target_url.clone(),
+            credential.token,
+        )
+        .dispatch(envelope)
+        .await
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 /// Create a platform-specific command dispatcher.
 async fn create_dispatcher(
     platform: Platform,
     push_target: &str,
+    resource_id: &str,
     config: &crate::config::OperatorConfig,
+    db: &Arc<OperatorDb>,
 ) -> Result<Box<dyn CommandDispatcher>, String> {
     let http_client = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(COMMANDS_CONNECT_TIMEOUT)
         .timeout(COMMANDS_REQUEST_TIMEOUT)
         .build()
         .map_err(|e| format!("Failed to build bounded command dispatch client: {e}"))?;
 
     if matches!(platform, Platform::Kubernetes | Platform::Local) {
+        if crate::daily_identity::has_runtime_identity(db)
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            return Ok(Box::new(PublishedWorkerDispatcher {
+                client: http_client,
+                target_url: push_target.to_owned(),
+                resource_id: resource_id.to_owned(),
+                db: db.clone(),
+            }));
+        }
         let token = config
             .sync
             .as_ref()
@@ -482,6 +551,7 @@ fn create_commands_client(token: &str) -> Result<Client, String> {
     headers.insert(USER_AGENT, HeaderValue::from_static("operator"));
 
     Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .default_headers(headers)
         .connect_timeout(COMMANDS_CONNECT_TIMEOUT)
         .timeout(COMMANDS_REQUEST_TIMEOUT)
