@@ -50,7 +50,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         start: chrono::DateTime::parse_from_rfc3339(&args[3])?.to_utc(),
         end: chrono::DateTime::parse_from_rfc3339(&args[4])?.to_utc(),
     };
-    let http = reqwest::Client::new();
+    let mut http = reqwest::Client::builder();
+    // Keep TLS verification enabled when an operator explicitly supplies a CA
+    // bundle, including test environments with an authenticated egress proxy.
+    if let Some(path) = std::env::var_os("SSL_CERT_FILE") {
+        let pem = std::fs::read(path)?;
+        let certificates = reqwest::Certificate::from_pem_bundle(&pem)?;
+        if certificates.is_empty() {
+            return Err("Configured CA bundle is empty".into());
+        }
+        for certificate in certificates {
+            http = http.add_root_certificate(certificate);
+        }
+    }
+    let http = http.build()?;
     let batch = match source {
         MetricsSource::Aws(sources) => {
             let config = config
