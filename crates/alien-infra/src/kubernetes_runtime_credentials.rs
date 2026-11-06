@@ -1,0 +1,444 @@
+//! Runtime credential Secrets are updated independently of workload revisions.
+
+use std::collections::BTreeMap;
+
+use alien_client_core::{runtime_credentials::RuntimeCapability, ErrorData as ClientError};
+use alien_core::{commands_types::CommandTargetType, ENV_ALIEN_DEPLOYMENT_ID};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use k8s_openapi::{
+    api::core::v1::{PodSpec, Secret, SecretVolumeSource, Volume, VolumeMount},
+    apimachinery::pkg::apis::meta::v1::ObjectMeta,
+    ByteString,
+};
+use serde_json::json;
+
+use crate::{
+    core::{kubernetes_cleanup_resource_labels, ResourceControllerContext},
+    error::{ErrorData, Result},
+};
+
+pub(crate) const DIRECTORY: &str = "/var/run/alien-runtime";
+const VOLUME: &str = "runtime-credentials";
+
+fn invalid(resource_id: &str, message: &str) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::ResourceConfigInvalid {
+        resource_id: Some(resource_id.to_owned()),
+        message: message.to_owned(),
+    })
+}
+
+pub(crate) fn deployment_id<'a>(
+    ctx: &'a ResourceControllerContext<'_>,
+    resource_id: &str,
+) -> Result<&'a str> {
+    let mut ids = ctx
+        .deployment_config
+        .environment_variables
+        .variables
+        .iter()
+        .filter(|variable| variable.name == ENV_ALIEN_DEPLOYMENT_ID);
+    let id = ids.next().ok_or_else(|| {
+        invalid(
+            resource_id,
+            "Runtime authority requires a deployment identity",
+        )
+    })?;
+    if ids.next().is_some()
+        || id.target_resources.is_some()
+        || id.value.is_empty()
+        || id.var_type != alien_core::EnvironmentVariableType::Plain
+    {
+        return Err(invalid(
+            resource_id,
+            "Runtime deployment identity must be unique, plain and untargeted",
+        ));
+    }
+    Ok(&id.value)
+}
+
+/// Acquire new leaves, write them, then publish the exact written command leaf
+/// to the dispatcher. Failed writes never replace its last successful generation.
+pub(crate) async fn reconcile(
+    ctx: &ResourceControllerContext<'_>,
+    namespace: &str,
+    workload_name: &str,
+    resource_id: &str,
+    target_type: CommandTargetType,
+) -> Result<()> {
+    if ctx.deployment_config.runtime_identity_audience.is_none() {
+        return Ok(());
+    }
+    let deployment_id = deployment_id(ctx, resource_id)?;
+    let purpose = json!({"type":"receiveCommands", "target":{"resourceId":resource_id,"resourceType":target_type}});
+    let commands_enabled = ctx
+        .desired_stack
+        .command_targets()
+        .iter()
+        .any(|target| target.resource_id == resource_id && target.resource_type == target_type);
+    let command = if commands_enabled {
+        Some(
+            ctx.service_provider
+                .runtime_credential(deployment_id, purpose.clone())
+                .await?,
+        )
+    } else {
+        None
+    };
+    let telemetry = ctx
+        .service_provider
+        .runtime_credential(deployment_id, json!({"type":"telemetry"}))
+        .await?;
+    for credential in command.iter().chain(std::iter::once(&telemetry)) {
+        validate_credential(credential, resource_id)?;
+    }
+    let mut data = BTreeMap::new();
+    for (name, credential) in command
+        .as_ref()
+        .map(|value| ("commands.json", value))
+        .into_iter()
+        .chain(std::iter::once(("telemetry.json", &telemetry)))
+    {
+        data.insert(
+            name.to_owned(),
+            ByteString(serde_json::to_vec(credential).into_alien_error().context(
+                ErrorData::ResourceConfigInvalid {
+                    message: "Cannot encode workload runtime authority".into(),
+                    resource_id: Some(resource_id.into()),
+                },
+            )?),
+        );
+    }
+    let secret_name = format!("{workload_name}-runtime");
+    let labels = kubernetes_cleanup_resource_labels(ctx, resource_id);
+    let mut desired = Secret {
+        metadata: ObjectMeta {
+            name: Some(secret_name.clone()),
+            namespace: Some(namespace.to_owned()),
+            labels: Some(labels.clone()),
+            ..Default::default()
+        },
+        type_: Some("Opaque".to_owned()),
+        data: Some(data),
+        ..Default::default()
+    };
+    let client = ctx
+        .service_provider
+        .get_kubernetes_secrets_client(ctx.get_kubernetes_config()?)
+        .await?;
+    match client.create_secret(namespace, &desired).await {
+        Ok(_) => {}
+        Err(error)
+            if matches!(
+                error.error,
+                Some(ClientError::RemoteResourceConflict { .. })
+            ) =>
+        {
+            let existing = client.get_secret(namespace, &secret_name).await.context(
+                ErrorData::CloudPlatformError {
+                    message: "Cannot inspect runtime credential Secret before refresh".into(),
+                    resource_id: Some(resource_id.into()),
+                },
+            )?;
+            if existing.type_.as_deref() != Some("Opaque")
+                || existing.metadata.labels.as_ref().is_none_or(|existing| {
+                    labels
+                        .iter()
+                        .any(|(key, value)| existing.get(key) != Some(value))
+                })
+            {
+                return Err(invalid(
+                    resource_id,
+                    "Runtime credential Secret belongs to another workload",
+                ));
+            }
+            // Refuse stale concurrent writers. A later renewal will converge on
+            // the live generation without regressing a file to older authority.
+            let data = existing
+                .data
+                .as_ref()
+                .ok_or_else(|| invalid(resource_id, "Runtime credential Secret has no data"))?;
+            for (name, credential) in command
+                .as_ref()
+                .map(|value| ("commands.json", value))
+                .into_iter()
+                .chain(std::iter::once(("telemetry.json", &telemetry)))
+            {
+                let Some(bytes) = data.get(name) else {
+                    // A workload may enable commands after its telemetry was installed.
+                    continue;
+                };
+                let previous: RuntimeCapability =
+                    serde_json::from_slice(&bytes.0).map_err(|_| {
+                        invalid(resource_id, "Runtime credential Secret has invalid data")
+                    })?;
+                if previous.expires_at > credential.expires_at {
+                    return Err(invalid(
+                        resource_id,
+                        "Refusing a stale runtime credential Secret refresh",
+                    ));
+                }
+            }
+            desired.metadata.resource_version =
+                Some(existing.metadata.resource_version.ok_or_else(|| {
+                    invalid(
+                        resource_id,
+                        "Runtime credential Secret has no resource version",
+                    )
+                })?);
+            client
+                .update_secret(namespace, &secret_name, &desired)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Cannot refresh runtime credential Secret".into(),
+                    resource_id: Some(resource_id.into()),
+                })?;
+        }
+        Err(error) => {
+            return Err(error.context(ErrorData::CloudPlatformError {
+                message: "Cannot create runtime credential Secret".into(),
+                resource_id: Some(resource_id.into()),
+            }))
+        }
+    }
+    if let Some(command) = command {
+        ctx.service_provider
+            .runtime_credential_published(deployment_id, purpose, command)
+            .await?;
+    }
+    Ok(())
+}
+
+fn validate_credential(credential: &RuntimeCapability, resource_id: &str) -> Result<()> {
+    let now = chrono::Utc::now();
+    if credential.token.is_empty()
+        || credential.expires_at <= now
+        || credential.expires_at > now + chrono::Duration::hours(1)
+    {
+        return Err(invalid(resource_id, "Runtime leaf has an invalid deadline"));
+    }
+    Ok(())
+}
+
+/// Mount the directory: individual subPath mounts would retain an old inode.
+pub(crate) fn mount(pod: &mut PodSpec, container_name: &str, workload_name: &str) -> Result<()> {
+    let container = pod
+        .containers
+        .iter_mut()
+        .find(|container| container.name == container_name)
+        .ok_or_else(|| invalid(workload_name, "Runtime credential container is missing"))?;
+    container
+        .volume_mounts
+        .get_or_insert_with(Vec::new)
+        .push(VolumeMount {
+            name: VOLUME.into(),
+            mount_path: DIRECTORY.into(),
+            read_only: Some(true),
+            ..Default::default()
+        });
+    pod.volumes.get_or_insert_with(Vec::new).push(Volume {
+        name: VOLUME.into(),
+        secret: Some(SecretVolumeSource {
+            secret_name: Some(format!("{workload_name}-runtime")),
+            default_mode: Some(0o440),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    pod.security_context
+        .get_or_insert_with(Default::default)
+        .fs_group
+        .get_or_insert(65532);
+    Ok(())
+}
+
+/// Remove only a Secret carrying this workload's complete ownership scope.
+pub(crate) async fn delete_environment_secret(
+    resource_kind: &str,
+    resource_id: &str,
+    workload_name: &str,
+    namespace: &str,
+    ctx: &ResourceControllerContext<'_>,
+    legacy_owner_proven: bool,
+) -> Result<()> {
+    if ctx.deployment_config.runtime_identity_audience.is_some() {
+        let name = format!("{workload_name}-runtime");
+        let client = ctx
+            .service_provider
+            .get_kubernetes_secrets_client(ctx.get_kubernetes_config()?)
+            .await?;
+        let existing = match client.get_secret(namespace, &name).await {
+            Ok(secret) => Some(secret),
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(ClientError::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                None
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: "Cannot inspect runtime credential Secret before deletion".into(),
+                    resource_id: Some(resource_id.into()),
+                }))
+            }
+        };
+        if let Some(existing) = existing {
+            let labels = kubernetes_cleanup_resource_labels(ctx, resource_id);
+            if existing.type_.as_deref() != Some("Opaque")
+                || existing.metadata.labels.as_ref().is_none_or(|existing| {
+                    labels
+                        .iter()
+                        .any(|(key, value)| existing.get(key) != Some(value))
+                })
+            {
+                return Err(invalid(
+                    resource_id,
+                    "Runtime credential Secret belongs to another workload",
+                ));
+            }
+            match client.delete_secret(namespace, &name).await {
+                Ok(()) => {}
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(ClientError::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: "Cannot delete runtime credential Secret".into(),
+                        resource_id: Some(resource_id.into()),
+                    }))
+                }
+            }
+        }
+    }
+    crate::core::delete_environment_secret(
+        resource_kind,
+        resource_id,
+        workload_name,
+        namespace,
+        ctx,
+        legacy_owner_proven,
+    )
+    .await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use alien_core::{EnvironmentVariable, EnvironmentVariableType, Resource, Vault};
+    use alien_k8s_clients::secrets::{MockSecretsApi, SecretsApi};
+    use chrono::{Duration, Utc};
+
+    use super::*;
+    use crate::core::{
+        kubernetes_manifest_test_support::KubernetesManifestTestHarness,
+        MockPlatformServiceProvider,
+    };
+
+    fn capability(token: &str, minutes: i64) -> RuntimeCapability {
+        RuntimeCapability {
+            token: token.into(),
+            expires_at: Utc::now() + Duration::minutes(minutes),
+        }
+    }
+
+    fn telemetry(secret: &Secret) -> RuntimeCapability {
+        serde_json::from_slice(&secret.data.as_ref().unwrap()["telemetry.json"].0).unwrap()
+    }
+
+    /// Every ready pass writes the provider's current leaf over the workload's
+    /// Secret, so the file is renewed while the previous leaf is still valid.
+    /// A writer holding an older leaf than the live Secret never regresses it.
+    #[tokio::test]
+    async fn each_pass_replaces_the_workload_leaf_and_never_regresses_it() {
+        let issued = Arc::new(Mutex::new(vec![
+            capability("ax_cap_v1_older", 20),
+            capability("ax_cap_v1_renewed", 60),
+            capability("ax_cap_v1_first", 30),
+        ]));
+        let mut provider = MockPlatformServiceProvider::new();
+        let queue = issued.clone();
+        provider
+            .expect_runtime_credential()
+            .withf(|deployment, purpose| {
+                deployment == "dep-1" && purpose == &json!({"type":"telemetry"})
+            })
+            .times(3)
+            .returning(move |_, _| Ok(queue.lock().unwrap().pop().unwrap()));
+
+        let live: Arc<Mutex<Option<Secret>>> = Arc::new(Mutex::new(None));
+        let mut secrets = MockSecretsApi::new();
+        let created = live.clone();
+        secrets.expect_create_secret().returning(move |_, secret| {
+            let mut live = created.lock().unwrap();
+            if live.is_some() {
+                return Err(AlienError::new(ClientError::RemoteResourceConflict {
+                    resource_type: "Secret".into(),
+                    resource_name: "agent-runtime".into(),
+                    message: "exists".into(),
+                }));
+            }
+            let mut stored = secret.clone();
+            stored.metadata.resource_version = Some("1".into());
+            *live = Some(stored.clone());
+            Ok(stored)
+        });
+        let read = live.clone();
+        secrets
+            .expect_get_secret()
+            .returning(move |_, _| Ok(read.lock().unwrap().clone().unwrap()));
+        let updated = live.clone();
+        secrets
+            .expect_update_secret()
+            .returning(move |_, _, secret| {
+                assert_eq!(secret.metadata.resource_version.as_deref(), Some("1"));
+                *updated.lock().unwrap() = Some(secret.clone());
+                Ok(secret.clone())
+            });
+        let secrets: Arc<dyn SecretsApi> = Arc::new(secrets);
+        provider
+            .expect_get_kubernetes_secrets_client()
+            .returning(move |_| Ok(secrets.clone()));
+
+        let mut harness = KubernetesManifestTestHarness::new(
+            Resource::new(Vault::new("agent".to_string()).build()),
+            vec![EnvironmentVariable {
+                name: ENV_ALIEN_DEPLOYMENT_ID.into(),
+                value: "dep-1".into(),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: None,
+            }],
+        )
+        .with_service_provider(Arc::new(provider));
+        harness.deployment_config_mut().runtime_identity_audience =
+            Some("https://manager.example".into());
+        let ctx = harness.ctx();
+        let pass = || {
+            reconcile(
+                &ctx,
+                "test-ns",
+                "agent",
+                "agent",
+                CommandTargetType::Container,
+            )
+        };
+
+        pass().await.unwrap();
+        let first = telemetry(live.lock().unwrap().as_ref().unwrap());
+        assert_eq!(first.token, "ax_cap_v1_first");
+
+        pass().await.unwrap();
+        let renewed = telemetry(live.lock().unwrap().as_ref().unwrap());
+        assert_eq!(renewed.token, "ax_cap_v1_renewed");
+        assert!(renewed.expires_at > first.expires_at);
+
+        assert!(pass().await.is_err());
+        assert_eq!(
+            telemetry(live.lock().unwrap().as_ref().unwrap()).token,
+            "ax_cap_v1_renewed"
+        );
+    }
+}

@@ -38,6 +38,9 @@ const MANAGED_POLICY_NAME: &str = "deployment-permissions";
 pub struct AwsServiceAccountController {
     /// The ARN of the created IAM role.
     pub role_arn: Option<String>,
+    /// Immutable IAM identity recorded at creation or the first successful refresh.
+    #[serde(default)]
+    pub role_id: Option<String>,
     /// The name of the created IAM role.
     pub(crate) role_name: Option<String>,
     /// Set only after this controller creates a role during automatic setup.
@@ -113,6 +116,7 @@ impl AwsServiceAccountController {
             resource_id: Some(config.id.clone()),
         })?;
 
+        let role_id = created_role.create_role_result.role.role_id;
         let role_arn = created_role.create_role_result.role.arn;
 
         info!(
@@ -126,6 +130,7 @@ impl AwsServiceAccountController {
         self.assume_role_policy = Some(assume_role_policy);
         self.role_name = Some(role_name);
         self.role_arn = Some(role_arn);
+        self.role_id = Some(role_id);
 
         Ok(HandlerAction::Continue {
             state: ApplyingStackPermissions,
@@ -195,6 +200,23 @@ impl AwsServiceAccountController {
                 }));
             }
         }
+
+        // Identity exchange matches a workload's proof against this immutable
+        // ID. Record it from the authenticated read on every refresh. A role
+        // recreated under the same name keeps refreshing, as it did before IDs
+        // were recorded, and only the live role's sessions match from then on.
+        let observed_role_id = &role.get_role_result.role.role_id;
+        if self
+            .role_id
+            .as_ref()
+            .is_some_and(|recorded| recorded != observed_role_id)
+        {
+            info!(
+                role_name = %role_name,
+                "IAM role was recreated; recording its new immutable ID"
+            );
+        }
+        self.role_id = Some(observed_role_id.clone());
 
         let attached_policies = client
             .list_attached_role_policies(role_name)
@@ -392,6 +414,7 @@ impl AwsServiceAccountController {
             {
                 self.role_name = None;
                 self.role_arn = None;
+                self.role_id = None;
                 self.stack_permissions_applied = false;
                 return Ok(HandlerAction::Continue {
                     state: Deleted,
@@ -632,6 +655,7 @@ impl AwsServiceAccountController {
 
         self.role_name = None;
         self.role_arn = None;
+        self.role_id = None;
         self.stack_permissions_applied = false;
 
         Ok(HandlerAction::Continue {
@@ -1329,6 +1353,7 @@ impl AwsServiceAccountController {
             state: AwsServiceAccountState::Ready,
             role_arn: Some(format!("arn:aws:iam::123456789012:role/{}", role_name)),
             role_name: Some(role_name.to_string()),
+            role_id: None,
             stack_permissions_applied: true,
             assume_role_policy: None,
             runtime_created: false,
@@ -2657,6 +2682,49 @@ mod tests {
             assert_eq!(controller.get_status(), ResourceStatus::Updating);
             controller.transition_to_failure();
             assert_eq!(controller.get_status(), ResourceStatus::UpdateFailed);
+        }
+    }
+    #[tokio::test]
+    async fn refresh_records_the_live_role_identity_and_follows_a_recreated_role() {
+        let mut iam = MockIamApi::new();
+        let count = std::sync::atomic::AtomicUsize::new(0);
+        iam.expect_get_role().times(2).returning(move |_| {
+            let mut observed = role();
+            observed["RoleId"] = serde_json::json!(if count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                == 0
+            {
+                "AROAORIGINAL"
+            } else {
+                "AROAREPLACEMENT"
+            });
+            Ok(
+                serde_json::from_value(serde_json::json!({"GetRoleResult": {"Role": observed}}))
+                    .unwrap(),
+            )
+        });
+        iam.expect_list_attached_role_policies()
+            .times(2)
+            .returning(|_| {
+                Ok(serde_json::from_value(
+                    serde_json::json!({"ListAttachedRolePoliciesResult": {"IsTruncated": false}}),
+                )
+                .unwrap())
+            });
+        iam.expect_list_role_policies().times(2).returning(|_| {
+            Ok(serde_json::from_value(
+                serde_json::json!({"ListRolePoliciesResult": {"IsTruncated": false}}),
+            )
+            .unwrap())
+        });
+        let mut executor = executor(iam, AwsServiceAccountState::Ready, false).await;
+        for expected in ["AROAORIGINAL", "AROAREPLACEMENT"] {
+            executor.step().await.unwrap();
+            let controller = executor
+                .internal_state::<AwsServiceAccountController>()
+                .unwrap();
+            assert_eq!(controller.role_id.as_deref(), Some(expected));
+            assert_eq!(controller.get_status(), ResourceStatus::Running);
         }
     }
 }
