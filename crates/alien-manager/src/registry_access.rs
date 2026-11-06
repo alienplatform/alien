@@ -417,14 +417,33 @@ pub async fn reconcile_registry_access_with_proxy(
         );
         images.sort();
         images.dedup();
-        for (repository, digest) in images {
-            artifact_registry
-                .ensure_regional_image(&repository, &digest, &environment.region)
-                .await
-                .context(ErrorData::RegistryReplicaPending {
-                    deployment_id: deployment_id.to_string(),
-                })?;
-        }
+        let region = environment.region.clone();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            reconcile_worker_image_identities(
+                artifact_registry.as_ref(),
+                state,
+                &images,
+                deployment_id,
+                project_id,
+                proxy_url,
+                &region,
+            ),
+        )
+        .await
+        .map_err(|_| {
+            AlienError::new(
+                alien_bindings::error::ErrorData::RegionalImageTransferFailed {
+                    operation: "check regional images within request budget".into(),
+                },
+            )
+        })
+        .context(ErrorData::RegistryReplicaPending {
+            deployment_id: deployment_id.into(),
+        })?
+        .context(ErrorData::RegistryReplicaPending {
+            deployment_id: deployment_id.into(),
+        })?;
     }
     if !needs_regrant(recorded.as_ref(), &needed, complete) {
         return Ok(());
@@ -1279,13 +1298,7 @@ fn collect_image_repositories(
                 continue;
             }
             if entry.config.downcast_ref::<Worker>().is_some() {
-                worker_images.push((
-                    repo_id.clone(),
-                    image
-                        .rsplit_once('@')
-                        .map_or("", |(_, digest)| digest)
-                        .to_string(),
-                ));
+                worker_images.push((repo_id.clone(), image.to_string()));
             }
             repo_ids.insert(repo_id);
         }
@@ -1303,6 +1316,155 @@ fn collect_image_repositories(
         }
     }
     refused
+}
+
+/// Persist immutable legacy source identities before starting regional writes. The normal
+/// deployment checkpoint/claim is the authority; this function does not own another scheduler.
+async fn reconcile_worker_image_identities(
+    registry: &dyn ArtifactRegistry,
+    state: &mut DeploymentState,
+    images: &[(String, String)],
+    deployment_id: &str,
+    project_id: &str,
+    manager_url: Option<&str>,
+    region: &str,
+) -> alien_bindings::error::Result<()> {
+    use alien_bindings::error::ErrorData as BindingError;
+    let invalid = |reason: &str| {
+        AlienError::new(BindingError::RegionalImageInvalid {
+            reason: reason.into(),
+        })
+    };
+    if images.len() > 128 {
+        return Err(invalid("deployment exceeds 128 worker image references"));
+    }
+    let identity = registry.image_resolution_identity();
+    let endpoint = registry.registry_endpoint();
+    let mut references = HashMap::<String, Vec<String>>::new();
+    let mut signed_sources = HashSet::new();
+    for release in [&state.current_release, &state.target_release]
+        .into_iter()
+        .flatten()
+    {
+        for (_, resource) in release.stack.resources() {
+            let Some(worker) = resource.config.downcast_ref::<Worker>() else {
+                continue;
+            };
+            let WorkerCode::Image { image } = &worker.code else {
+                continue;
+            };
+            if release.signed.is_some() {
+                signed_sources.insert(image.clone());
+            }
+            if let Some(release_id) = &release.release_id {
+                references
+                    .entry(image.clone())
+                    .or_default()
+                    .push(release_id.clone());
+            }
+        }
+    }
+    if let Some(metadata) = &state.runtime_metadata {
+        if let (Some(stack), Some(release_id)) = (
+            &metadata.prepared_stack,
+            &metadata.pending_prepared_release_id,
+        ) {
+            for (_, resource) in stack.resources() {
+                if let Some(Worker {
+                    code: WorkerCode::Image { image },
+                    ..
+                }) = resource.config.downcast_ref::<Worker>()
+                {
+                    references
+                        .entry(image.clone())
+                        .or_default()
+                        .push(release_id.clone());
+                }
+            }
+        }
+    }
+    let metadata = state.runtime_metadata.get_or_insert_default();
+    // Keep accepted historical source pins for rollback. Silently evicting one would
+    // later resolve a mutable tag again and deploy different bytes for the same release.
+    if metadata.worker_image_resolutions.len() > 128 {
+        return Err(invalid("accepted worker image history exceeds 128 identities; upgrade the manager's durable image history before accepting more releases"));
+    }
+    let mut pinned = Vec::new();
+    let mut changed = false;
+    for (repository, image) in images {
+        if let Some((_, digest)) = image.rsplit_once('@') {
+            pinned.push((repository.clone(), digest.to_string()));
+            continue;
+        }
+        if signed_sources.contains(image) {
+            return Err(invalid(
+                "signed worker images must retain an immutable root digest",
+            ));
+        }
+        let releases = references.get(image).ok_or_else(|| {
+            invalid("a legacy worker image requires an accepted release identity")
+        })?;
+        let tag = image
+            .rsplit('/')
+            .next()
+            .and_then(|last| last.rsplit_once(':').map(|(_, tag)| tag))
+            .unwrap_or("latest");
+        for release_id in releases {
+            if let Some(pin) = metadata
+                .worker_image_resolutions
+                .iter()
+                .find(|pin| pin.release_id == *release_id && pin.source == *image)
+            {
+                if pin.deployment_id != deployment_id
+                    || pin.project_id != project_id
+                    || pin.manager_url.as_deref() != manager_url
+                    || pin.registry_identity != identity
+                    || pin.registry_endpoint != endpoint
+                {
+                    return Err(invalid("accepted image source authority changed; revalidate its recorded immutable digest before resuming this deployment"));
+                }
+                pinned.push((repository.clone(), pin.digest.clone()));
+                continue;
+            }
+            if metadata.worker_image_resolutions.len() >= 128 {
+                return Err(invalid("accepted worker image history reached 128 identities; upgrade the manager's durable image history before accepting more releases"));
+            }
+            let digest = registry.resolve_image_digest(repository, tag).await?;
+            metadata
+                .worker_image_resolutions
+                .push(alien_core::WorkerImageResolution {
+                    deployment_id: deployment_id.into(),
+                    project_id: project_id.into(),
+                    release_id: release_id.clone(),
+                    manager_url: manager_url.map(str::to_string),
+                    registry_identity: identity.clone(),
+                    registry_endpoint: endpoint.clone(),
+                    source: image.clone(),
+                    digest,
+                });
+            changed = true;
+        }
+    }
+    if changed {
+        return Err(AlienError::new(BindingError::RegistryReplicaNotReady {
+            repository: images
+                .first()
+                .map(|(repository, _)| repository.clone())
+                .unwrap_or_default(),
+            region: region.into(),
+            details:
+                "immutable source identities must be checkpointed before regional materialization"
+                    .into(),
+        }));
+    }
+    pinned.sort();
+    pinned.dedup();
+    for (repository, digest) in pinned {
+        registry
+            .ensure_regional_image(&repository, &digest, region)
+            .await?;
+    }
+    Ok(())
 }
 
 /// Whether the deployment declares any image that could have earned a registry grant.
@@ -1652,6 +1814,8 @@ mod tests {
     struct RecordingAwsRegistry {
         images: Mutex<Vec<(String, String, String)>>,
         image_failure: std::sync::atomic::AtomicBool,
+        source_tag_digest: Mutex<Option<String>>,
+        resolved_tags: Mutex<Vec<(String, String)>>,
         grants: Mutex<Vec<String>>,
         /// The access each grant asked for, in order.
         accesses: Mutex<Vec<AwsCrossAccountAccess>>,
@@ -1666,6 +1830,22 @@ mod tests {
 
     #[async_trait]
     impl ArtifactRegistry for RecordingAwsRegistry {
+        async fn resolve_image_digest(&self, repository: &str, tag: &str) -> BindingResult<String> {
+            self.resolved_tags
+                .lock()
+                .unwrap()
+                .push((repository.into(), tag.into()));
+            self.source_tag_digest
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| {
+                    AlienError::new(BindingErrorData::RegionalImageInvalid {
+                        reason: "fixture has no source image tag".into(),
+                    })
+                })
+        }
+
         async fn ensure_regional_image(
             &self,
             repository: &str,
@@ -1813,6 +1993,85 @@ mod tests {
                 "Lambda pulls from its own region's replica"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn legacy_source_is_checkpointed_before_copy_and_survives_restart_update_and_rollback() {
+        let registry = Arc::new(RecordingAwsRegistry::default());
+        let source = "manager.example.com/alien-artifacts-prj_test:stable";
+        let first = format!("sha256:{}", "1".repeat(64));
+        let second = format!("sha256:{}", "2".repeat(64));
+        let mut state = worker_grant_state(source);
+        let providers = recording_provider(registry.clone());
+        let targets = HashMap::new();
+        for (release, published, expected) in [
+            ("rel_first", &first, &first),
+            ("rel_second", &second, &second),
+            ("rel_first", &second, &first),
+        ] {
+            *registry.source_tag_digest.lock().unwrap() = Some(published.clone());
+            state
+                .runtime_metadata
+                .as_mut()
+                .unwrap()
+                .pending_prepared_release_id = Some(release.into());
+            let result = reconcile_registry_access_with_proxy()
+                .bindings_provider(&providers)
+                .target_bindings_providers(&targets)
+                .deployment_id("deployment")
+                .project_id(PROJECT)
+                .state(&mut state)
+                .proxy_url("https://manager.example.com")
+                .call()
+                .await;
+            if release == "rel_second"
+                || registry.resolved_tags.lock().unwrap().len() == 1
+                    && registry.images.lock().unwrap().is_empty()
+            {
+                assert!(
+                    result.unwrap_err().retryable,
+                    "new source pin must stop before copying"
+                );
+                let before = registry.images.lock().unwrap().len();
+                let value = serde_json::to_value(&state).unwrap();
+                assert!(value["runtimeMetadata"]["workerImageResolutions"].is_array());
+                state = serde_json::from_value(value).unwrap();
+                // The source tag moves while the checkpointed operation is retried.
+                *registry.source_tag_digest.lock().unwrap() = Some(second.clone());
+                reconcile_registry_access_with_proxy()
+                    .bindings_provider(&providers)
+                    .target_bindings_providers(&targets)
+                    .deployment_id("deployment")
+                    .project_id(PROJECT)
+                    .state(&mut state)
+                    .proxy_url("https://manager.example.com")
+                    .call()
+                    .await
+                    .unwrap();
+                assert_eq!(registry.images.lock().unwrap().len(), before + 1);
+            } else {
+                result.unwrap();
+            }
+            assert_eq!(registry.images.lock().unwrap().last().unwrap().1, *expected);
+            state = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        }
+        assert_eq!(
+            registry.resolved_tags.lock().unwrap().as_slice(),
+            &[
+                ("alien-artifacts-prj_test".into(), "stable".into()),
+                ("alien-artifacts-prj_test".into(), "stable".into())
+            ]
+        );
+        assert_eq!(
+            registry
+                .images
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(_, digest, _)| digest.clone())
+                .collect::<Vec<_>>(),
+            vec![first.clone(), second, first]
+        );
     }
 
     #[tokio::test]

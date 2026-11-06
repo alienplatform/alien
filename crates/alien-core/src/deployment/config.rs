@@ -26,6 +26,12 @@ pub struct ReleaseStatements {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct DeploymentConfig {
+    /// Immutable image identities selected from accepted runtime metadata for this step.
+    /// A stored configuration or release cannot supply this runtime-only view.
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    #[builder(default)]
+    pub worker_image_resolutions: Vec<crate::WorkerImageResolution>,
     /// This invocation is an explicit setup run using the installer's credentials.
     /// Not serialized: a release or stored configuration cannot request an identity refresh.
     #[serde(skip)]

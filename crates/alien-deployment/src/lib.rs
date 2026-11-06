@@ -105,6 +105,42 @@ pub async fn step(
     service_provider: Option<std::sync::Arc<dyn alien_infra::PlatformServiceProvider>>,
 ) -> Result<DeploymentStepResult> {
     let mut current = current;
+    let mut config = config;
+    let release_id = if matches!(
+        current.status,
+        DeploymentStatus::Running | DeploymentStatus::RefreshFailed
+    ) {
+        current
+            .current_release
+            .as_ref()
+            .and_then(|release| release.release_id.as_deref())
+    } else {
+        current
+            .runtime_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.pending_prepared_release_id.as_deref())
+            .or_else(|| {
+                current
+                    .target_release
+                    .as_ref()
+                    .and_then(|release| release.release_id.as_deref())
+            })
+    };
+    config.worker_image_resolutions = current
+        .runtime_metadata
+        .as_ref()
+        .map(|metadata| {
+            metadata
+                .worker_image_resolutions
+                .iter()
+                .filter(|pin| {
+                    Some(pin.release_id.as_str()) == release_id
+                        && pin.manager_url == config.manager_url
+                })
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
 
     // Refuse an older control plane before project discovery or any cloud writes.
     let min_protocol =

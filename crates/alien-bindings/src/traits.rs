@@ -399,6 +399,26 @@ pub trait ArtifactRegistry: Binding {
     /// prefixing.
     async fn get_repository(&self, repo_id: &str) -> Result<RepositoryResponse>;
 
+    /// Non-secret identity of the registry authority, used to scope accepted source pins.
+    fn image_resolution_identity(&self) -> String {
+        format!(
+            "{}|{}",
+            self.registry_endpoint(),
+            self.upstream_repository_prefix()
+        )
+    }
+
+    /// Resolves an already-authorized legacy tag at its authenticated source registry.
+    /// The caller must durably retain this digest before materializing any regional copy.
+    async fn resolve_image_digest(&self, _repository: &str, _tag: &str) -> Result<String> {
+        Err(alien_error::AlienError::new(
+            crate::error::ErrorData::OperationNotSupported {
+                operation: "resolve legacy image tag".into(),
+                reason: "this registry does not resolve immutable worker image identities".into(),
+            },
+        ))
+    }
+
     /// Ensures an immutable image is available where its consumer runs.
     ///
     /// The caller must authorize the repository against the deployment's project first.

@@ -209,6 +209,7 @@ mod tests {
             stored_secret_input_ids: None,
             input_values: Default::default(),
             allow_frozen_changes: false,
+            worker_image_resolutions: Vec::new(),
             setup_run: false,
             setup_run_id: None,
             compute_backend: None,

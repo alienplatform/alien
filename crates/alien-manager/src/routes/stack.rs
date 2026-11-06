@@ -1588,6 +1588,7 @@ async fn prepare_import_stack(
             created_at: "1970-01-01T00:00:00Z".to_string(),
         },
         allow_frozen_changes: false,
+        worker_image_resolutions: Vec::new(),
         setup_run: false,
         setup_run_id: None,
         compute_backend: None,
@@ -2185,6 +2186,7 @@ mod setup_update_authorization_tests {
             environment_info: None,
             runtime_metadata: Some(RuntimeMetadata {
                 prepared_stack: Some(prepared_stack),
+                worker_image_resolutions: Vec::new(),
                 last_synced_env_vars_hash: Some("env-hash".to_string()),
                 registry_access_granted: true,
                 ..RuntimeMetadata::default()

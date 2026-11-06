@@ -50,8 +50,8 @@ use alien_core::{
     HeartbeatBackend, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason,
     HeartbeatIssueSeverity, Network, NetworkSettings, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceDefinition, ResourceHeartbeat, ResourceHeartbeatData,
-    ResourceOutputs, ResourceRef, ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs,
-    WorkloadHeartbeatStatus, AWS_LOG_RETENTION_DAYS,
+    ResourceOutputs, ResourceRef, ResourceStatus, Worker, WorkerCode, WorkerHeartbeatData,
+    WorkerOutputs, WorkloadHeartbeatStatus, AWS_LOG_RETENTION_DAYS,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -276,6 +276,59 @@ fn replace_lambda_notification_config(
 }
 
 impl AwsWorkerController {
+    fn worker_image_uri(
+        image: &str,
+        ctx: &ResourceControllerContext<'_>,
+        region: &str,
+    ) -> Result<(String, bool)> {
+        // Signed roots and every digest-pinned reference remain byte-for-byte identities.
+        // Only an accepted legacy tag is projected onto its immutable source resolution.
+        let pin = (!image.contains('@'))
+            .then(|| {
+                ctx.deployment_config
+                    .worker_image_resolutions
+                    .iter()
+                    .find(|pin| {
+                        pin.source == image
+                            && pin.manager_url == ctx.deployment_config.manager_url
+                            && ctx.deployment_config.native_image_host.as_deref()
+                                == Some(alien_core::image_rewrite::strip_url_scheme(
+                                    &pin.registry_endpoint,
+                                ))
+                    })
+            })
+            .flatten();
+        let image = if let Some(pin) = pin {
+            if !pin.digest.strip_prefix("sha256:").is_some_and(|hex| {
+                hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+            }) {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "Accepted worker image resolution has an invalid digest".into(),
+                    resource_id: Some(ctx.desired_config.id().into()),
+                }));
+            }
+            let repository = image
+                .rsplit('/')
+                .next()
+                .filter(|last| last.contains(':'))
+                .and_then(|_| image.rsplit_once(':').map(|(repository, _)| repository))
+                .unwrap_or(image);
+            format!("{repository}@{}", pin.digest)
+        } else {
+            image.to_string()
+        };
+        let image = ctx
+            .deployment_config
+            .native_image_host
+            .as_deref()
+            .and_then(|host| alien_core::image_rewrite::resolve_native_image_uri(&image, host))
+            .unwrap_or(image);
+        Ok((
+            Self::rewrite_ecr_region_if_needed(&image, region),
+            pin.is_some(),
+        ))
+    }
+
     /// Remove exactly this Worker's entry, preserving all other destinations and filters.
     /// Repeated calls after a lost response are harmless; failures retain ownership.
     async fn remove_storage_notification(
@@ -643,6 +696,9 @@ impl AwsWorkerController {
 
 #[controller]
 pub struct AwsWorkerController {
+    /// Exact URI last accepted by Lambda, separate from the unchanged release subject.
+    #[serde(default)]
+    pub(crate) applied_image_uri: Option<String>,
     pub(crate) arn: Option<String>,
     pub(crate) url: Option<String>,
     /// The logical AWS Lambda worker name (stack prefix + id). Stored to expose in outputs.
@@ -842,6 +898,16 @@ fn worker_wants_streaming(worker: &Worker) -> bool {
 
 #[controller]
 impl AwsWorkerController {
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let worker = ctx.desired_resource_config::<Worker>()?;
+        let WorkerCode::Image { image } = &worker.code else {
+            return Ok(false);
+        };
+        let aws = ctx.get_aws_config()?;
+        let (resolved, pinned) = Self::worker_image_uri(image, ctx, &aws.region)?;
+        Ok(pinned && self.applied_image_uri.as_deref() != Some(&resolved))
+    }
+
     // DeleteStart only routes. The API gateway step deletes the mapping, domain and API one
     // by one and records each removal, so a denial part-way through it is not mistaken for
     // nothing deleted.
@@ -916,22 +982,9 @@ impl AwsWorkerController {
             }
         };
 
-        // Resolve proxy URIs to native ECR URIs. Lambda can only pull from ECR.
-        // The release stores proxy URIs; native_image_host carries the ECR prefix.
-        let image_uri = if let Some(ref native_host) = ctx.deployment_config.native_image_host {
-            alien_core::image_rewrite::resolve_native_image_uri(&image_uri, native_host)
-                .unwrap_or(image_uri)
-        } else {
-            image_uri
-        };
+        let (image_uri, _) = Self::worker_image_uri(&image_uri, ctx, &aws_cfg.region)?;
 
-        // Lambda requires container images in the same region as the worker.
-        // If the image URI points to ECR in a different region (e.g., the management
-        // region), rewrite it to reference the local region where the replicated copy
-        // lives. ECR private image replication must be configured separately.
-        let image_uri = Self::rewrite_ecr_region_if_needed(&image_uri, &aws_cfg.region);
-
-        let code = FunctionCode::builder().image_uri(image_uri).build();
+        let code = FunctionCode::builder().image_uri(image_uri.clone()).build();
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &cfg.id);
         let mut function_tags = standard_resource_tags(ctx.resource_prefix, &cfg.id);
         function_tags.insert("Name".to_string(), aws_worker_name.clone());
@@ -1059,6 +1112,7 @@ impl AwsWorkerController {
             }
         };
 
+        self.applied_image_uri = Some(image_uri);
         self.arn = function_arn;
         self.worker_name = Some(aws_worker_name.clone());
         info!(name=%aws_worker_name, arn=%self.arn.as_deref().unwrap_or("unknown"), "Worker created, waiting for active state");
@@ -3071,6 +3125,7 @@ impl AwsWorkerController {
         // even though the executor had never planned an update for this worker.
         if self.certificate_arn.is_some()
             && self.certificate_issued_at.is_some()
+            && !self.needs_update(ctx)?
             && ctx
                 .state
                 .resources
@@ -3087,7 +3142,18 @@ impl AwsWorkerController {
         let previous_config = ctx.previous_resource_config::<Worker>()?;
         self.ensure_batch_queue_visibility(ctx, &current_config, false)
             .await?;
-        let code_changed = current_config.code != previous_config.code;
+        let desired_image = match &current_config.code {
+            WorkerCode::Image { image } => Some(Self::worker_image_uri(
+                image,
+                ctx,
+                &ctx.get_aws_config()?.region,
+            )?),
+            WorkerCode::Source { .. } => None,
+        };
+        let resolution_changed = desired_image.as_ref().is_some_and(|(image, pinned)| {
+            *pinned && self.applied_image_uri.as_deref() != Some(image)
+        });
+        let code_changed = current_config.code != previous_config.code || resolution_changed;
 
         // UpdateCodeStart only handles code updates if needed
         if code_changed {
@@ -3104,18 +3170,10 @@ impl AwsWorkerController {
                 }
             };
 
-            // Resolve proxy URIs to native ECR URIs.
-            let image_uri = if let Some(ref native_host) = ctx.deployment_config.native_image_host {
-                alien_core::image_rewrite::resolve_native_image_uri(&image_uri, native_host)
-                    .unwrap_or(image_uri)
-            } else {
-                image_uri
-            };
-
-            let image_uri = Self::rewrite_ecr_region_if_needed(&image_uri, &aws_cfg.region);
+            let (image_uri, _) = Self::worker_image_uri(&image_uri, ctx, &aws_cfg.region)?;
 
             let request = UpdateFunctionCodeRequest::builder()
-                .image_uri(image_uri)
+                .image_uri(image_uri.clone())
                 .publish(true)
                 .build();
 
@@ -3132,6 +3190,7 @@ impl AwsWorkerController {
                     resource_id: Some(current_config.id.clone()),
                 },
             )?;
+            self.applied_image_uri = Some(image_uri);
         }
 
         // Always transition to wait for code update (even if no code change) - linear flow
@@ -5929,6 +5988,7 @@ impl AwsWorkerController {
     pub fn mock_ready(worker_name: &str) -> Self {
         Self {
             state: AwsWorkerState::Ready,
+            applied_image_uri: None,
             arn: Some(format!(
                 "arn:aws:lambda:us-east-1:123456789012:function:{}",
                 worker_name
@@ -6077,6 +6137,122 @@ mod tests {
         AwsWorkerState,
     };
     use alien_core::standard_resource_tags;
+
+    #[tokio::test]
+    async fn accepted_same_tag_release_and_rollback_update_actual_lambda_digest() {
+        let source = "manager.example.com/alien-artifacts-prj_test:stable";
+        let endpoint = "123456789012.dkr.ecr.us-east-2.amazonaws.com";
+        let first = format!("sha256:{}", "1".repeat(64));
+        let second = format!("sha256:{}", "2".repeat(64));
+        let uri = |digest: &str| {
+            format!(
+                "123456789012.dkr.ecr.us-east-1.amazonaws.com/alien-artifacts-prj_test@{digest}"
+            )
+        };
+        let mut worker = basic_function();
+        worker.code = WorkerCode::Image {
+            image: source.into(),
+        };
+        let stack = Stack::new("same-tag".into())
+            .add(worker.clone(), ResourceLifecycle::Live)
+            .build();
+        let mut controller = AwsWorkerController::mock_ready(&worker.id);
+        controller.applied_image_uri = Some(uri(&first));
+        let mut state = StackState::with_resource_prefix(Platform::Aws, "test".into());
+        state.resources.insert(
+            worker.id.clone(),
+            StackResourceState::builder()
+                .resource_type(Worker::RESOURCE_TYPE.into())
+                .status(ResourceStatus::Running)
+                .config(Resource::new(worker.clone()))
+                .internal_state(serialize_controller(&controller).unwrap())
+                .lifecycle(ResourceLifecycle::Live)
+                .dependencies(vec![])
+                .build(),
+        );
+        for digest in [&second, &first] {
+            // Controller and resource state survive a process restart before every update.
+            state = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+            let expected = uri(digest);
+            let checked = expected.clone();
+            let mut lambda = MockLambdaApi::new();
+            lambda
+                .expect_update_function_code()
+                .times(1)
+                .returning(move |_, request| {
+                    assert_eq!(request.image_uri, checked);
+                    Ok(create_successful_function_response("basic-func"))
+                });
+            let lambda = std::sync::Arc::new(lambda);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_aws_lambda_client()
+                .returning(move |_| Ok(lambda.clone()));
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(ExternalBindings::default())
+                .allow_frozen_changes(false)
+                .manager_url("https://manager.example.com".into())
+                .native_image_host(endpoint.into())
+                .worker_image_resolutions(vec![alien_core::WorkerImageResolution {
+                    deployment_id: "deployment".into(),
+                    project_id: "prj_test".into(),
+                    release_id: digest.clone(),
+                    manager_url: Some("https://manager.example.com".into()),
+                    registry_identity: "test-authority".into(),
+                    registry_endpoint: format!("https://{endpoint}"),
+                    source: source.into(),
+                    digest: digest.clone(),
+                }])
+                .build();
+            let executor = StackExecutor::builder(
+                &stack,
+                ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            )
+            .deployment_config(&config)
+            .service_provider(std::sync::Arc::new(provider))
+            .build()
+            .unwrap();
+            assert!(
+                executor
+                    .plan(&state)
+                    .unwrap()
+                    .updates
+                    .contains_key(&worker.id),
+                "unchanged mutable tag must still plan its newly accepted digest"
+            );
+            let mut reached = false;
+            for _ in 0..4 {
+                state = executor.step(state).await.unwrap().next_state;
+                let resource = &state.resources[&worker.id];
+                assert!(resource.error.is_none(), "{:?}", resource.error);
+                let applied: AwsWorkerController =
+                    serde_json::from_value(resource.internal_state.clone().unwrap()).unwrap();
+                if applied.state == AwsWorkerState::UpdateCodeWaitForActive {
+                    assert_eq!(
+                        applied.applied_image_uri.as_deref(),
+                        Some(expected.as_str())
+                    );
+                    reached = true;
+                    break;
+                }
+            }
+            assert!(reached, "Lambda code update must execute");
+            // Finish only the modeled wait phase so the next iteration can plan rollback.
+            let resource = state.resources.get_mut(&worker.id).unwrap();
+            let mut applied: AwsWorkerController =
+                serde_json::from_value(resource.internal_state.clone().unwrap()).unwrap();
+            applied.state = AwsWorkerState::Ready;
+            resource.status = ResourceStatus::Running;
+            resource.previous_config = None;
+            resource.internal_state = Some(serialize_controller(&applied).unwrap());
+        }
+    }
 
     #[tokio::test]
     async fn queue_rollout_updates_private_runtime_environment_on_batch_only_changes() {

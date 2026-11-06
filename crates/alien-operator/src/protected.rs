@@ -773,6 +773,7 @@ fn protect_config(
     );
 
     Ok(DeploymentConfig {
+        worker_image_resolutions: Vec::new(),
         setup_run: manager.setup_run,
         setup_run_id: manager.setup_run_id.clone(),
         environment_variables: EnvironmentVariablesSnapshot {

@@ -79,6 +79,21 @@ pub struct AirgappedReportMetadata {
     pub received_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// A manager-authored immutable source identity for an accepted legacy worker image.
+/// Regional availability is checked separately against the provider on every reconciliation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkerImageResolution {
+    pub deployment_id: String,
+    pub project_id: String,
+    pub release_id: String,
+    pub manager_url: Option<String>,
+    pub registry_identity: String,
+    pub registry_endpoint: String,
+    pub source: String,
+    pub digest: String,
+}
+
 /// Runtime metadata for deployment
 ///
 /// Stores deployment state that needs to persist across step calls.
@@ -86,6 +101,11 @@ pub struct AirgappedReportMetadata {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeMetadata {
+    /// Internal manager-authored legacy source pins, not client-supplied authority.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub worker_image_resolutions: Vec<WorkerImageResolution>,
+
     /// User-authorized data disposition, persisted before deletion starts.
     #[serde(default)]
     pub deletion_policy: DeletionPolicy,

@@ -1689,6 +1689,7 @@ impl RunnerConfigSources<'_> {
                 management_config,
                 environment_variables,
                 allow_frozen_changes: false,
+                worker_image_resolutions: Vec::new(),
                 setup_run: false,
                 setup_run_id: None,
                 compute_backend: None,

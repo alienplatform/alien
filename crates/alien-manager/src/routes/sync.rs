@@ -2432,6 +2432,7 @@ mod tests {
                 created_at: String::new(),
             },
             allow_frozen_changes: false,
+            worker_image_resolutions: Vec::new(),
             setup_run: false,
             setup_run_id: None,
             compute_backend: None,
@@ -2628,6 +2629,58 @@ mod tests {
                 "LOG_LEVEL",
             ]
         );
+    }
+
+    #[test]
+    fn opaque_sync_restores_manager_image_pins_and_rejects_actor_replacements() {
+        let pin = alien_core::WorkerImageResolution {
+            deployment_id: "deployment".into(),
+            project_id: "project".into(),
+            release_id: "release".into(),
+            manager_url: Some("https://manager.example.com".into()),
+            registry_identity: "authority".into(),
+            registry_endpoint: "https://123456789012.dkr.ecr.us-east-1.amazonaws.com".into(),
+            source: "manager.example.com/artifacts-project:stable".into(),
+            digest: format!("sha256:{}", "1".repeat(64)),
+        };
+        let mut stored = deployment_record_with_state("running", None);
+        stored.runtime_metadata = Some(RuntimeMetadata {
+            automatic_setup: true,
+            worker_image_resolutions: vec![pin.clone()],
+            ..Default::default()
+        });
+        for omitted in [false, true] {
+            let mut incoming = uninitialized_state();
+            if !omitted {
+                let mut replacement = pin.clone();
+                replacement.digest = format!("sha256:{}", "2".repeat(64));
+                incoming.runtime_metadata = Some(RuntimeMetadata {
+                    worker_image_resolutions: vec![replacement],
+                    ..Default::default()
+                });
+            }
+            incoming = serde_json::from_value(serde_json::to_value(incoming).unwrap()).unwrap();
+            preserve_recorded_gate_answers(&mut incoming, &stored);
+            assert_eq!(
+                incoming
+                    .runtime_metadata
+                    .as_ref()
+                    .unwrap()
+                    .worker_image_resolutions,
+                vec![pin.clone()]
+            );
+            let mut unpinned = stored.clone();
+            unpinned.runtime_metadata = None;
+            preserve_recorded_gate_answers(&mut incoming, &unpinned);
+            assert!(
+                incoming
+                    .runtime_metadata
+                    .unwrap()
+                    .worker_image_resolutions
+                    .is_empty(),
+                "an actor cannot introduce the first pin"
+            );
+        }
     }
 
     #[test]
@@ -3669,6 +3722,14 @@ pub(crate) fn validate_kubernetes_base_platform(
 /// through these routes so an actor that predates the field, omits its
 /// metadata, or holds a stale copy cannot shrink or flip the record.
 fn preserve_recorded_gate_answers(incoming: &mut DeploymentState, stored: &DeploymentRecord) {
+    incoming
+        .runtime_metadata
+        .get_or_insert_default()
+        .worker_image_resolutions = stored
+        .runtime_metadata
+        .as_ref()
+        .map(|metadata| metadata.worker_image_resolutions.clone())
+        .unwrap_or_default();
     // An installed ongoing-management grant permits setup choices to change.
     // Only the stored grant counts: a runtime report cannot confer authority.
     if stored

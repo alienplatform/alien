@@ -396,6 +396,8 @@ async fn transfer(
     let mut visited = HashSet::new();
     let mut manifests = HashMap::<String, (Vec<u8>, String)>::new();
     let mut blobs = HashMap::new();
+    let mut requirements = HashMap::<String, (usize, String)>::new();
+    let mut verified = HashMap::<String, (usize, String)>::new();
     let mut manifest_bytes = 0_usize;
     let mut blob_bytes = 0_u64;
     let mut descriptors = 0_usize;
@@ -431,6 +433,16 @@ async fn transfer(
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| invalid("manifest mediaType is required"))?
             .to_string();
+        let actual = (raw.len(), media.clone());
+        if requirements
+            .get(&current)
+            .is_some_and(|required| required != &actual)
+        {
+            return Err(invalid(
+                "index descriptor differs from its referenced manifest",
+            ));
+        }
+        verified.insert(current.clone(), actual);
         if [OCI_IMAGE_INDEX_MEDIA_TYPE, IMAGE_MANIFEST_LIST_MEDIA_TYPE].contains(&media.as_str()) {
             let index: OciImageIndex = serde_json::from_value(document)
                 .into_alien_error()
@@ -452,6 +464,19 @@ async fn transfer(
                 {
                     return Err(invalid("invalid index descriptor"));
                 }
+                let required = (child.size as usize, child.media_type.clone());
+                if requirements
+                    .get(&child.digest)
+                    .is_some_and(|previous| previous != &required)
+                    || verified
+                        .get(&child.digest)
+                        .is_some_and(|actual| actual != &required)
+                {
+                    return Err(invalid(
+                        "conflicting index descriptors for the same manifest",
+                    ));
+                }
+                requirements.insert(child.digest.clone(), required);
                 if visited.contains(&child.digest) && manifests.contains_key(&child.digest) {
                     return Err(invalid("cyclic image index"));
                 }
@@ -533,6 +558,8 @@ mod tests {
     struct Registry {
         bytes: Arc<Mutex<HashMap<String, Vec<u8>>>>,
         published: Arc<Mutex<Vec<String>>>,
+        blob_uploads: Arc<std::sync::atomic::AtomicUsize>,
+        fail_manifest_once: Arc<std::sync::atomic::AtomicBool>,
     }
 
     async fn serve(State(registry): State<Registry>, request: Request) -> Response<Body> {
@@ -564,6 +591,15 @@ mod tests {
                 .to_vec();
             assert_eq!(digest(&bytes), named_digest);
             if path.contains("/manifests/") {
+                if registry
+                    .fail_manifest_once
+                    .swap(false, std::sync::atomic::Ordering::SeqCst)
+                {
+                    return Response::builder().status(503).body(Body::empty()).unwrap();
+                }
+                if registry.bytes.lock().unwrap().contains_key(&named_digest) {
+                    return Response::builder().status(400).body(Body::empty()).unwrap();
+                }
                 let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
                 if let Some(children) = value["manifests"].as_array() {
                     for child in children {
@@ -582,6 +618,11 @@ mod tests {
                     .lock()
                     .unwrap()
                     .push(named_digest.clone());
+            }
+            if !path.contains("/manifests/") {
+                registry
+                    .blob_uploads
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
             registry
                 .bytes
@@ -635,7 +676,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn copies_index_closure_exactly_and_refuses_corrupt_source() {
+    async fn resumes_partial_index_closure_exactly_and_refuses_corrupt_source() {
         let (source, source_host, source_task) = registry().await;
         let (target, target_host, target_task) = registry().await;
         let config = b"{\"architecture\":\"arm64\",\"os\":\"linux\"}".to_vec();
@@ -662,6 +703,27 @@ mod tests {
         let to: Reference = format!("{target_host}/images@{}", digest(&index))
             .parse()
             .unwrap();
+        target
+            .fail_manifest_once
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let interrupted = transfer(
+            &client,
+            from.clone(),
+            to.clone(),
+            RegistryAuth::Anonymous,
+            RegistryAuth::Anonymous,
+            "http",
+        )
+        .await
+        .unwrap_err();
+        assert!(interrupted.retryable);
+        assert!(target.published.lock().unwrap().is_empty());
+        assert_eq!(
+            target
+                .blob_uploads
+                .load(std::sync::atomic::Ordering::SeqCst),
+            2
+        );
         transfer(
             &client,
             from.clone(),
@@ -673,6 +735,30 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(*target.bytes.lock().unwrap(), *source.bytes.lock().unwrap());
+        assert_eq!(
+            target
+                .blob_uploads
+                .load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "retry must HEAD and reuse completed layers"
+        );
+        transfer(
+            &client,
+            from.clone(),
+            to.clone(),
+            RegistryAuth::Anonymous,
+            RegistryAuth::Anonymous,
+            "http",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            target
+                .blob_uploads
+                .load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "already-published manifests must read back exactly"
+        );
         assert_eq!(
             *target.published.lock().unwrap(),
             vec![digest(&manifest), digest(&index)]

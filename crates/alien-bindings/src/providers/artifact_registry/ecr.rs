@@ -855,6 +855,70 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         self.legacy_sandbox_repository_prefixes.clone()
     }
 
+    fn image_resolution_identity(&self) -> String {
+        format!(
+            "{}|{}|{:?}|{:?}",
+            self.registry_endpoint(),
+            self.repository_prefix,
+            self.push_role_arn,
+            self.pull_role_arn
+        )
+    }
+
+    async fn resolve_image_digest(&self, repository: &str, tag: &str) -> Result<String> {
+        let allowed = std::iter::once(&self.repository_prefix)
+            .chain(self.legacy_repository_prefixes.iter())
+            .any(|prefix| repository == prefix || repository.starts_with(&format!("{prefix}-")));
+        if !allowed
+            || tag.is_empty()
+            || tag.len() > 128
+            || !tag.bytes().enumerate().all(|(index, byte)| {
+                byte.is_ascii_alphanumeric()
+                    || byte == b'_'
+                    || (index > 0 && matches!(byte, b'.' | b'-'))
+            })
+        {
+            return Err(AlienError::new(ErrorData::RegionalImageInvalid {
+                reason: "an owned repository and valid image tag are required".into(),
+            }));
+        }
+        let source = self
+            .policy_management_client(self.credentials.region(), repository)
+            .await?;
+        let result = source
+            .batch_get_image(
+                alien_aws_clients::ecr::BatchGetImageRequest::builder()
+                    .repository_name(repository.to_string())
+                    .image_ids(vec![alien_aws_clients::ecr::ImageIdentifier {
+                        image_tag: Some(tag.into()),
+                        image_digest: None,
+                    }])
+                    .build(),
+            )
+            .await
+            .map_err(|error| {
+                map_cloud_client_error(
+                    error,
+                    "resolve source image tag".into(),
+                    Some(repository.into()),
+                )
+            })?;
+        let image = result.images.first().ok_or_else(|| {
+            AlienError::new(ErrorData::RegionalImageInvalid {
+                reason: "source image tag does not exist".into(),
+            })
+        })?;
+        let digest = super::regional_image::digest(image.image_manifest.as_bytes());
+        if image.image_id.image_digest.as_deref() != Some(&digest)
+            || image.image_id.image_tag.as_deref() != Some(tag)
+        {
+            return Err(AlienError::new(ErrorData::RegionalImageInvalid {
+                reason: "authenticated source tag response did not preserve its root digest".into(),
+            }));
+        }
+        Ok(digest)
+    }
+
     async fn ensure_regional_image(
         &self,
         repository: &str,
