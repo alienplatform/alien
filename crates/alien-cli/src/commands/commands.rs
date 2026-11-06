@@ -111,6 +111,24 @@ pub async fn commands_task(args: CommandsArgs, ctx: ExecutionMode) -> Result<()>
                     .await?
             };
 
+            if manager.manager_is_system == Some(false) {
+                let endpoint = url::Url::parse(&manager.manager_url)
+                    .into_alien_error()
+                    .context(ErrorData::NetworkError {
+                        message: "Invalid private command endpoint".into(),
+                    })?;
+                if endpoint.scheme() != "https"
+                    || !endpoint.username().is_empty()
+                    || endpoint.password().is_some()
+                    || endpoint.query().is_some()
+                    || endpoint.fragment().is_some()
+                {
+                    return Err(alien_error::AlienError::new(ErrorData::NetworkError {
+                        message: "Private command inputs require a clean HTTPS endpoint".into(),
+                    }));
+                }
+            }
+
             invoke_command(
                 &manager.client,
                 &manager.manager_url,
@@ -160,7 +178,7 @@ async fn invoke_command(
 
     // Use alien-commands-client for the invoke flow (handles polling, base64, storage download)
     let config = CommandsClientConfig {
-        allow_local_storage: true,
+        allow_local_storage: is_dev,
         ..Default::default()
     };
     let commands_url = format!("{}/v1", manager_url.trim_end_matches('/'));

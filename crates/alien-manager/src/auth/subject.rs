@@ -221,6 +221,7 @@ pub enum CommandCapability {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OperationInvocation {
+    pub idempotency_key: String,
     pub target_resource_id: String,
     pub result_contract: serde_json::Value,
     pub deadline: chrono::DateTime<chrono::Utc>,

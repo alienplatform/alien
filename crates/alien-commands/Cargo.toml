@@ -8,6 +8,7 @@ license-file.workspace = true
 [features]
 default = ["server", "runtime"]
 server = [
+    "futures",
     "alien-bindings",
     "alien-error/axum",
     "reqwest",

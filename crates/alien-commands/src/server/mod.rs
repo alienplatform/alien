@@ -4,7 +4,7 @@
 //! - CommandRegistry is the SOURCE OF TRUTH for all metadata (state, timestamps, etc.)
 //! - KV stores ONLY operational data (params/response blobs, indices, leases)
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use alien_bindings::presigned::PresignedRequest;
@@ -12,6 +12,7 @@ use alien_bindings::providers::kv::validate_key;
 use alien_bindings::traits::{Kv, PutCondition, PutOptions, Storage};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use chrono::{DateTime, Utc};
+use futures::TryStreamExt;
 use hex;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
@@ -338,6 +339,27 @@ impl CommandServer {
                     next: "poll".to_string(),
                 });
             }
+        }
+
+        // Keep the already-authorized dispatch snapshot beside the private payload.
+        // Write before the pending index/dispatch; a failed write leaves no executable
+        // payload. An idempotent replay above never changes the winning snapshot.
+        if let Some(contract) = &request.operation_result_contract {
+            let key = format!("cmd:{}:result-contract", command_id);
+            let value = serde_json::to_vec(contract).into_alien_error().context(
+                ErrorData::SerializationFailed {
+                    message: "Failed to encode result contract".to_string(),
+                    data_type: Some("result contract".to_string()),
+                },
+            )?;
+            self.kv
+                .put(&key, value, None)
+                .await
+                .context(ErrorData::KvOperationFailed {
+                    operation: "put".to_string(),
+                    key,
+                    message: "Failed to persist result contract".to_string(),
+                })?;
         }
 
         // 3. Store params in KV
@@ -1520,7 +1542,97 @@ impl CommandServer {
                     message: "Failed to deserialize response".to_string(),
                     data_type: Some("CommandResponseData".to_string()),
                 })?;
-            return Ok(Some(data.response));
+            let contract_key = format!("cmd:{}:result-contract", command_id);
+            let contract = self
+                .kv
+                .get(&contract_key)
+                .await
+                .context(ErrorData::KvOperationFailed {
+                    operation: "get".to_string(),
+                    key: contract_key,
+                    message: "Failed to read result contract".to_string(),
+                })?
+                .map(|value| serde_json::from_slice::<serde_json::Value>(&value.value))
+                .transpose()
+                .into_alien_error()
+                .context(ErrorData::SerializationFailed {
+                    message: "Invalid stored result contract".to_string(),
+                    data_type: Some("result contract".to_string()),
+                })?;
+            static RESULT_READ_SLOTS: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+            let _result_permit = if contract.is_some() {
+                Some(
+                    RESULT_READ_SLOTS
+                        .get_or_init(|| tokio::sync::Semaphore::new(4))
+                        .acquire()
+                        .await
+                        .map_err(|_| {
+                            AlienError::new(ErrorData::InvalidCommand {
+                                message: "Result validation unavailable".to_string(),
+                            })
+                        })?,
+                )
+            } else {
+                None
+            };
+            let mut response = data.response;
+            // Read only our exact command object, never a URL supplied by a worker.
+            // Validate the actual bounded bytes before returning either bytes or a
+            // storage capability. Returning these bytes also closes a mutable-object
+            // race between validation and the caller's subsequent download.
+            if contract.is_some()
+                && matches!(
+                    &response,
+                    CommandResponse::Success {
+                        response: BodySpec::Storage { .. }
+                    }
+                )
+            {
+                let path = StoragePath::from(format!("arc/commands/{}/response", command_id));
+                let read = async {
+                    let object = self.storage.get(&path).await.into_alien_error().context(
+                        ErrorData::StorageOperationFailed {
+                            message: "Failed to read operation result".to_string(),
+                            operation: Some("get".to_string()),
+                            path: Some(path.to_string()),
+                        },
+                    )?;
+                    const LIMIT: usize = 10 * 1024 * 1024;
+                    if object.meta.size > LIMIT as u64 {
+                        return Err(AlienError::new(ErrorData::InvalidCommand {
+                            message: "Operation result exceeds validation limit".to_string(),
+                        }));
+                    }
+                    let mut stream = object.into_stream();
+                    let mut bytes = Vec::new();
+                    while let Some(chunk) = stream.try_next().await.into_alien_error().context(
+                        ErrorData::StorageOperationFailed {
+                            message: "Failed to read operation result".to_string(),
+                            operation: Some("get".to_string()),
+                            path: Some(path.to_string()),
+                        },
+                    )? {
+                        if bytes.len().saturating_add(chunk.len()) > LIMIT {
+                            return Err(AlienError::new(ErrorData::InvalidCommand {
+                                message: "Operation result exceeds validation limit".to_string(),
+                            }));
+                        }
+                        bytes.extend_from_slice(&chunk);
+                    }
+                    Ok(CommandResponse::success(&bytes))
+                };
+                response = tokio::time::timeout(Duration::from_secs(30), read)
+                    .await
+                    .map_err(|_| {
+                        AlienError::new(ErrorData::InvalidCommand {
+                            message: "Operation result read timed out".to_string(),
+                        })
+                    })??;
+            }
+            self.command_registry
+                .validate_response(command_id, contract.as_ref(), &response)
+                .await?;
+            return Ok(Some(response));
         }
         Ok(None)
     }

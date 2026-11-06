@@ -70,7 +70,8 @@ pub fn operation_contract_matches(
     else {
         return true;
     };
-    request.target_resource_id.as_deref() == Some(binding.target_resource_id.as_str())
+    request.idempotency_key.as_deref() == Some(binding.idempotency_key.as_str())
+        && request.target_resource_id.as_deref() == Some(binding.target_resource_id.as_str())
         && request.operation_result_contract.as_ref() == Some(&binding.result_contract)
         && request.deadline == Some(binding.deadline)
 }
@@ -289,9 +290,9 @@ mod tests {
             serde_json::json!({"plugin":"demo", "sensitiveOutput":{"kind":"requireConfirmation"}});
         let mut subject = operations_subject("workspace", "project", "deployment", "demo@1/echo");
         if let Scope::Commands { capability, .. } = &mut subject.scope {
-            *capability = serde_json::from_value(serde_json::json!({"type":"operations", "command":"demo@1/echo", "invocation":{"targetResourceId":"operator", "resultContract":contract, "deadline":deadline}})).unwrap();
+            *capability = serde_json::from_value(serde_json::json!({"type":"operations", "command":"demo@1/echo", "invocation":{"idempotencyKey":"fixed-invocation", "targetResourceId":"operator", "resultContract":contract, "deadline":deadline}})).unwrap();
         }
-        let request: alien_core::commands_types::CreateCommandRequest = serde_json::from_value(serde_json::json!({"deploymentId":"deployment", "command":"demo@1/echo", "targetResourceId":"operator", "deadline":deadline, "params":{"mode":"inline", "inlineBase64":"e30="}, "operationResultContract":contract})).unwrap();
+        let request: alien_core::commands_types::CreateCommandRequest = serde_json::from_value(serde_json::json!({"deploymentId":"deployment", "command":"demo@1/echo", "targetResourceId":"operator", "idempotencyKey":"fixed-invocation", "deadline":deadline, "params":{"mode":"inline", "inlineBase64":"e30="}, "operationResultContract":contract})).unwrap();
         assert!(operation_contract_matches(&subject, &request));
         assert_eq!(
             create_request_decision(&subject, "deployment", "demo@1/echo", Some("operator")),
@@ -306,6 +307,9 @@ mod tests {
         assert!(!operation_contract_matches(&subject, &changed));
         changed = request.clone();
         changed.deadline = None;
+        assert!(!operation_contract_matches(&subject, &changed));
+        changed = request.clone();
+        changed.idempotency_key = Some("another-invocation".into());
         assert!(!operation_contract_matches(&subject, &changed));
         assert_eq!(
             create_request_decision(

@@ -443,7 +443,7 @@ export class CommandsClient {
         command,
         params: createBodySpec(input),
         deadline: this.operationConnection?.selected.deadline ?? options?.deadline?.toISOString(),
-        idempotencyKey: options?.idempotencyKey,
+        idempotencyKey: this.operationConnection?.selected.idempotencyKey ?? options?.idempotencyKey,
         targetResourceId:
           this.operationConnection?.selected.targetResourceId ?? options?.targetResourceId,
         operationResultContract: this.operationConnection?.selected.operationResultContract,
