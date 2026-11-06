@@ -18,4 +18,3 @@ const value: models.PackageOperationalDefaultsTargets = {
 ```typescript
 const value: string = "<value>";
 ```
-

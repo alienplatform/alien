@@ -19,4 +19,3 @@ const value: models.ResolvePendingChangeRequestRejected = {
   status: "rejected",
 };
 ```
-

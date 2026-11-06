@@ -47,4 +47,3 @@ const value: models.KubernetesExposureGeneratedCertificateNone = {
   mode: "none",
 };
 ```
-

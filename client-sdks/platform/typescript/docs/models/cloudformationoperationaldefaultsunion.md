@@ -18,4 +18,3 @@ const value: models.OperationalDefaultsCloudformation = {
 ```typescript
 const value: string = "<value>";
 ```
-

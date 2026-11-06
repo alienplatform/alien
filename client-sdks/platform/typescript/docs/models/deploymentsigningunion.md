@@ -17,4 +17,3 @@ const value: models.DeploymentSigning = {
 ```typescript
 const value: string = "<value>";
 ```
-

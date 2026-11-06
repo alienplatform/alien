@@ -18,4 +18,3 @@ const value: models.DeploymentPendingPreparedStackProfileConditionGcpResource =
 ```typescript
 const value: string = "<value>";
 ```
-

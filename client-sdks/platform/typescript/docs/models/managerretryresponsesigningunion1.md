@@ -17,4 +17,3 @@ const value: models.ManagerRetryResponseSigning1 = {
 ```typescript
 const value: string = "<value>";
 ```
-

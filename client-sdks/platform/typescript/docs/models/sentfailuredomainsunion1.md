@@ -16,4 +16,3 @@ const value: models.FailureDomainsSent1 = {
 ```typescript
 const value: string = "<value>";
 ```
-

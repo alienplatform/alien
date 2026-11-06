@@ -20,4 +20,3 @@ const value: models.GcpConfigClusters = {
 ```typescript
 const value: string = "<value>";
 ```
-

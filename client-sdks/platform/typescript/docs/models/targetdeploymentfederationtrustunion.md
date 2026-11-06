@@ -17,4 +17,3 @@ const value: models.TargetDeploymentFederationTrust = {
 ```typescript
 const value: string = "<value>";
 ```
-

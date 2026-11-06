@@ -19,4 +19,3 @@ const value: models.DeploymentCredentialRetry = {
 ```typescript
 const value: string = "<value>";
 ```
-

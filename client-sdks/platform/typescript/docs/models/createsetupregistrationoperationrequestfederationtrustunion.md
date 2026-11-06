@@ -17,4 +17,3 @@ const value: models.CreateSetupRegistrationOperationRequestFederationTrust = {
 ```typescript
 const value: string = "<value>";
 ```
-

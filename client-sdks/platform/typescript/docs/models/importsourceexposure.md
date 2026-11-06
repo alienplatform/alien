@@ -67,4 +67,3 @@ const value: models.KubernetesExposureCustomBaseDomain = {
 ```typescript
 const value: string = "<value>";
 ```
-

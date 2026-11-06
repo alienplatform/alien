@@ -17,4 +17,3 @@ const value: models.CurrentReleaseWhen = {
 ```typescript
 const value: string = "<value>";
 ```
-

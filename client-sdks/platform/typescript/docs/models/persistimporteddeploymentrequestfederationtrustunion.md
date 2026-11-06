@@ -17,4 +17,3 @@ const value: models.PersistImportedDeploymentRequestFederationTrust = {
 ```typescript
 const value: string = "<value>";
 ```
-

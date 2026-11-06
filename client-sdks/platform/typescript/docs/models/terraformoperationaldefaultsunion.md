@@ -18,4 +18,3 @@ const value: models.OperationalDefaultsTerraform = {
 ```typescript
 const value: string = "<value>";
 ```
-

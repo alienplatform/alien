@@ -14,4 +14,3 @@ const value: models.DeploymentConfigManaged = {};
 ```typescript
 const value: string = "<value>";
 ```
-

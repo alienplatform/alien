@@ -16,4 +16,3 @@ const value: models.PersistImportedDeploymentRequestAirgappedReport = {
 ```typescript
 const value: string = "<value>";
 ```
-

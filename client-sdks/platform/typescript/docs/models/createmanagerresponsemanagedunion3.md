@@ -14,4 +14,3 @@ const value: models.CreateManagerResponseManaged3 = {};
 ```typescript
 const value: string = "<value>";
 ```
-

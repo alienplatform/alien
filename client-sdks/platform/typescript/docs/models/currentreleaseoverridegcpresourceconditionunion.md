@@ -17,4 +17,3 @@ const value: models.CurrentReleaseOverrideConditionGcpResource = {
 ```typescript
 const value: string = "<value>";
 ```
-

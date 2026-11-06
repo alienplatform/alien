@@ -17,4 +17,3 @@ const value: models.SyncListResponseSigning = {
 ```typescript
 const value: string = "<value>";
 ```
-

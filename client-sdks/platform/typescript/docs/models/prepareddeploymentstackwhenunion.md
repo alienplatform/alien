@@ -17,4 +17,3 @@ const value: models.PreparedDeploymentStackWhen = {
 ```typescript
 const value: string = "<value>";
 ```
-

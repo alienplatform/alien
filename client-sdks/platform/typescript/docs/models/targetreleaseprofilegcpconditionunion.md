@@ -17,4 +17,3 @@ const value: models.TargetReleaseProfileConditionGcp = {
 ```typescript
 const value: string = "<value>";
 ```
-

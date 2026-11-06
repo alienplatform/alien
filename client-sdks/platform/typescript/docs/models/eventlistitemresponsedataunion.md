@@ -653,4 +653,3 @@ const value: models.DeploymentCredentialRotationEvent = {
   },
 };
 ```
-

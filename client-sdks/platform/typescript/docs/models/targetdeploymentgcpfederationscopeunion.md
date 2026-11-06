@@ -16,4 +16,3 @@ const value: models.TargetDeploymentGcpFederationScope = {
 ```typescript
 const value: string = "<value>";
 ```
-

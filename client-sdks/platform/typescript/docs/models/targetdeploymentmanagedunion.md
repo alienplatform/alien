@@ -14,4 +14,3 @@ const value: models.TargetDeploymentManaged = {};
 ```typescript
 const value: string = "<value>";
 ```
-

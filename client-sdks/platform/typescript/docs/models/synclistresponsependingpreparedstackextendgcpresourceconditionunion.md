@@ -18,4 +18,3 @@ const value:
 ```typescript
 const value: string = "<value>";
 ```
-

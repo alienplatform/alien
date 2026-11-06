@@ -17,4 +17,3 @@ const value: models.SyncListResponseFederationTrust = {
 ```typescript
 const value: string = "<value>";
 ```
-

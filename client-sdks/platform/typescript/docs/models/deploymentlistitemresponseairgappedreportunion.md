@@ -16,4 +16,3 @@ const value: models.DeploymentListItemResponseAirgappedReport = {
 ```typescript
 const value: string = "<value>";
 ```
-

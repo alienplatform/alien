@@ -17,4 +17,3 @@ const value: models.CreateSetupRegistrationOperationRequestSigning = {
 ```typescript
 const value: string = "<value>";
 ```
-
