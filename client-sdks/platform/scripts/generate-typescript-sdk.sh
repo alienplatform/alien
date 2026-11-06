@@ -57,6 +57,7 @@ done < <(git -C "$repo_root" ls-files -mo --exclude-standard -z -- "$sdk_dir")
 
 # Compile the complete SDK after restoring the published compatibility exports.
 node "$repo_root/client-sdks/platform/scripts/generate-compatibility-exports.mjs"
+node --test "$repo_root/client-sdks/platform/scripts/compatibility-producer.test.mjs"
 
 NODE_OPTIONS=--max-old-space-size=16384 pnpm -C "$sdk_dir" build
 pnpm -C "$repo_root" install --lockfile-only
