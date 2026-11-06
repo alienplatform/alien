@@ -2120,6 +2120,43 @@ fn aws_verifier_blocks(
             ],
         ),
     ];
+    let mut management_policy = signing_limits::aws_management_limits_with_custody(
+        prefix,
+        account,
+        region,
+        private_custody,
+    );
+    if private_custody {
+        blocks.push(Block {
+            identifier: Identifier::sanitized("variable"),
+            labels: vec![BlockLabel::String("private_certificate_domains".to_string())],
+            body: Body::from(vec![
+                attr("type", expr::raw("list(string)")),
+                attr("description", Expression::String("Administrator-approved exact DNS names for provider-held certificates. No default or wildcard authorization.".to_string())),
+                nested(block("validation", [
+                    attr("condition", expr::raw(r#"length(var.private_certificate_domains) > 0 && alltrue([for name in var.private_certificate_domains : can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?([.][a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", name))])"#)),
+                    attr("error_message", Expression::String("Supply at least one exact lowercase DNS name without wildcards.".to_string())),
+                ])),
+            ]),
+        });
+        // A template consisting solely of an interpolation preserves the list
+        // value in Terraform; jsonencode therefore emits an IAM string array.
+        let certificates = signing_limits::aws_private_managed_certificate_policy(
+            account,
+            region,
+            serde_json::json!("${var.private_certificate_domains}"),
+        );
+        management_policy["Statement"]
+            .as_array_mut()
+            .expect("generated statements")
+            .extend(
+                certificates["Statement"]
+                    .as_array()
+                    .expect("generated certificate statements")
+                    .iter()
+                    .cloned(),
+            );
+    }
     if let Some(management) = management_label {
         blocks.push(resource_block(
             "aws_iam_policy",
@@ -2138,7 +2175,7 @@ fn aws_verifier_blocks(
                 attr(
                     "policy",
                     crate::emitters::aws::helpers::jsonencode_policy_value(
-                        signing_limits::aws_management_limits_with_custody(prefix, account, region, private_custody),
+                        management_policy,
                     ),
                 ),
             ],

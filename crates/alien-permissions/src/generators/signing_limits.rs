@@ -445,6 +445,41 @@ pub fn aws_private_tls_management_limits(prefix: &str, account: &str, region: &s
     ]})
 }
 
+/// Public ACM issuance is limited by setup-owned exact DNS names. RequestCertificate
+/// has no resource-level ARN authorization; domain, export, method and region
+/// conditions are therefore mandatory, including explicit denies against other grants.
+pub fn aws_private_managed_certificate_policy(
+    account: &str,
+    region: &str,
+    domains: Value,
+) -> Value {
+    json!({"Version": "2012-10-17", "Statement": [
+        {"Sid": "RequestApprovedProviderCertificates", "Effect": "Allow",
+         "Action": "acm:RequestCertificate", "Resource": "*",
+         "Condition": {"ForAllValues:StringEquals": {"acm:DomainNames": domains},
+             "StringEquals": {"acm:Export": "DISABLED", "acm:ValidationMethod": "DNS", "aws:RequestedRegion": region},
+             "Null": {"acm:DomainNames": "false"}}},
+        {"Sid": "RefuseUnapprovedCertificateNames", "Effect": "Deny",
+         "Action": "acm:RequestCertificate", "Resource": "*",
+         "Condition": {"ForAnyValue:StringNotEquals": {"acm:DomainNames": domains}}},
+        {"Sid": "RequireCertificateNames", "Effect": "Deny",
+         "Action": "acm:RequestCertificate", "Resource": "*",
+         "Condition": {"Null": {"acm:DomainNames": "true"}}},
+        {"Sid": "RequireNonexportableCertificates", "Effect": "Deny",
+         "Action": "acm:RequestCertificate", "Resource": "*",
+         "Condition": {"StringNotEquals": {"acm:Export": "DISABLED"}}},
+        {"Sid": "RequireDnsCertificateValidation", "Effect": "Deny",
+         "Action": "acm:RequestCertificate", "Resource": "*",
+         "Condition": {"StringNotEquals": {"acm:ValidationMethod": "DNS"}}},
+        {"Sid": "RequireCertificateRegion", "Effect": "Deny",
+         "Action": "acm:RequestCertificate", "Resource": "*",
+         "Condition": {"StringNotEquals": {"aws:RequestedRegion": region}}},
+        {"Sid": "ReadPublicCertificateStatus", "Effect": "Allow",
+         "Action": "acm:DescribeCertificate",
+         "Resource": format!("arn:aws:acm:{region}:{account}:certificate/*")}
+    ]})
+}
+
 /// Merge the private-only denies into the existing protected management limit.
 pub fn aws_management_limits_with_custody(
     prefix: &str,

@@ -45,6 +45,17 @@ fn retry_any_retryable(error: &AlienError<ErrorData>) -> bool {
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait AcmApi: Send + Sync + std::fmt::Debug {
+    /// Requests a provider-held public certificate. The caller persists its token
+    /// before sending and must reconcile an uncertain result within ACM's one-hour window.
+    async fn request_managed_certificate(
+        &self,
+        request: ManagedCertificateRequest,
+    ) -> Result<ImportCertificateResponse>;
+    async fn describe_managed_certificate(
+        &self,
+        certificate_arn: &str,
+    ) -> Result<ManagedCertificateDescription>;
+
     async fn import_certificate(
         &self,
         request: ImportCertificateRequest,
@@ -315,6 +326,52 @@ impl AcmClient {
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl AcmApi for AcmClient {
+    async fn request_managed_certificate(
+        &self,
+        request: ManagedCertificateRequest,
+    ) -> Result<ImportCertificateResponse> {
+        let body = serde_json::to_string(&serde_json::json!({
+            "DomainName": request.domain_name,
+            "SubjectAlternativeNames": request.subject_alternative_names,
+            "IdempotencyToken": request.idempotency_token,
+            "ValidationMethod": "DNS",
+            "Options": {"Export": "DISABLED"}
+        }))
+        .into_alien_error()
+        .context(ErrorData::SerializationError {
+            message: "Failed to serialize managed certificate request".to_string(),
+        })?;
+        self.send_json(
+            "RequestCertificate",
+            body,
+            "RequestCertificate",
+            "certificate",
+            is_json_throttling,
+        )
+        .await
+    }
+
+    async fn describe_managed_certificate(
+        &self,
+        certificate_arn: &str,
+    ) -> Result<ManagedCertificateDescription> {
+        let body = serde_json::to_string(&DescribeCertificateRequest {
+            certificate_arn: certificate_arn.to_string(),
+        })
+        .into_alien_error()
+        .context(ErrorData::SerializationError {
+            message: "Failed to serialize managed certificate lookup".to_string(),
+        })?;
+        self.send_json(
+            "DescribeCertificate",
+            body,
+            "DescribeCertificate",
+            certificate_arn,
+            retry_any_retryable,
+        )
+        .await
+    }
+
     async fn import_certificate(
         &self,
         request: ImportCertificateRequest,
@@ -510,6 +567,60 @@ impl From<ReimportCertificateRequest> for ReimportCertificateWireRequest {
             tags: request.tags,
         }
     }
+}
+
+/// Public request metadata only: there is deliberately no key, import, export,
+/// or tagging option on this operation.
+#[derive(Debug, Clone)]
+pub struct ManagedCertificateRequest {
+    pub domain_name: String,
+    pub subject_alternative_names: Vec<String>,
+    pub idempotency_token: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ManagedCertificateDescription {
+    pub certificate: Option<ManagedCertificateDetail>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ManagedCertificateDetail {
+    pub certificate_arn: String,
+    pub domain_name: String,
+    pub subject_alternative_names: Vec<String>,
+    pub status: String,
+    #[serde(rename = "Type")]
+    pub certificate_type: String,
+    pub options: ManagedCertificateOptions,
+    #[serde(default)]
+    pub domain_validation_options: Vec<ManagedDomainValidation>,
+    pub not_after: Option<f64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ManagedCertificateOptions {
+    pub export: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ManagedDomainValidation {
+    pub domain_name: String,
+    pub validation_status: String,
+    pub validation_method: String,
+    pub resource_record: Option<ManagedValidationRecord>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ManagedValidationRecord {
+    pub name: String,
+    #[serde(rename = "Type")]
+    pub record_type: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -948,6 +1059,96 @@ mod tests {
             .expect_err("the server error is returned");
 
         import.assert_hits_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn managed_certificate_request_is_nonexportable_and_returns_public_dns_proof() {
+        let server = MockServer::start_async().await;
+        let request = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("x-amz-target", "CertificateManager.RequestCertificate")
+                    .header_exists("authorization")
+                    .json_body(json!({
+                        "DomainName": "app.example.com",
+                        "SubjectAlternativeNames": ["api.example.com"],
+                        "IdempotencyToken": "attempt1",
+                        "ValidationMethod": "DNS",
+                        "Options": {"Export": "DISABLED"}
+                    }));
+                then.status(200)
+                    .json_body(json!({"CertificateArn": AMAZON_ISSUED}));
+            })
+            .await;
+        let describe = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("x-amz-target", "CertificateManager.DescribeCertificate")
+                    .json_body(json!({"CertificateArn": AMAZON_ISSUED}));
+                then.status(200).json_body(json!({"Certificate": {
+                    "CertificateArn": AMAZON_ISSUED,
+                    "DomainName": "app.example.com",
+                    "SubjectAlternativeNames": ["app.example.com", "api.example.com"],
+                    "Status": "PENDING_VALIDATION", "Type": "AMAZON_ISSUED",
+                    "Options": {"Export": "DISABLED"},
+                    "DomainValidationOptions": [{
+                        "DomainName": "app.example.com", "ValidationStatus": "PENDING_VALIDATION",
+                        "ValidationMethod": "DNS", "ResourceRecord": {
+                            "Name": "_proof.app.example.com.", "Type": "CNAME",
+                            "Value": "_token.acm-validations.aws."
+                        }
+                    }]
+                }}));
+            })
+            .await;
+        let api = client(&server);
+        let issued = api
+            .request_managed_certificate(ManagedCertificateRequest {
+                domain_name: "app.example.com".to_string(),
+                subject_alternative_names: vec!["api.example.com".to_string()],
+                idempotency_token: "attempt1".to_string(),
+            })
+            .await
+            .expect("request accepted");
+        let detail = api
+            .describe_managed_certificate(&issued.certificate_arn)
+            .await
+            .expect("public certificate lookup")
+            .certificate
+            .expect("certificate");
+        assert_eq!(detail.options.export, "DISABLED");
+        assert_eq!(detail.certificate_type, "AMAZON_ISSUED");
+        let proof = detail.domain_validation_options[0]
+            .resource_record
+            .as_ref()
+            .expect("DNS proof");
+        assert_eq!(proof.record_type, "CNAME");
+        assert_eq!(proof.name, "_proof.app.example.com.");
+        assert_eq!(proof.value, "_token.acm-validations.aws.");
+        request.assert_hits_async(1).await;
+        describe.assert_hits_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn managed_certificate_uncertain_request_is_not_silently_resent() {
+        let server = MockServer::start_async().await;
+        let request = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("x-amz-target", "CertificateManager.RequestCertificate");
+                then.status(500)
+                    .json_body(json!({"__type": "InternalFailure", "Message": "uncertain"}));
+            })
+            .await;
+        client(&server)
+            .request_managed_certificate(ManagedCertificateRequest {
+                domain_name: "app.example.com".to_string(),
+                subject_alternative_names: vec![],
+                idempotency_token: "attempt1".to_string(),
+            })
+            .await
+            .expect_err("caller must reconcile persisted token");
+        request.assert_hits_async(1).await;
     }
 
     #[test]
