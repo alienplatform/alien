@@ -1396,6 +1396,3 @@ export type { DeploymentPortalAppearanceInput as UpdateProjectDeploymentPortalAp
 export type { DeploymentPortalAppearanceInput$Outbound as UpdateProjectDeploymentPortalAppearance$Outbound } from "./deploymentportalappearanceinput.js";
 export { DeploymentPortalAppearanceInput$outboundSchema as UpdateProjectDeploymentPortalAppearance$outboundSchema } from "./deploymentportalappearanceinput.js";
 export { deploymentPortalAppearanceInputToJSON as updateProjectDeploymentPortalAppearanceToJSON } from "./deploymentportalappearanceinput.js";
-
-// Published deep-import compatibility declarations.
-

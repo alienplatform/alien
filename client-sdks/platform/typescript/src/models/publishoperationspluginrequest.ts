@@ -1931,15 +1931,3 @@ export type Operation = PublishOperationsPluginRequestOperation;
 export type Operation$Outbound = PublishOperationsPluginRequestOperation$Outbound;
 export const Operation$outboundSchema = PublishOperationsPluginRequestOperation$outboundSchema;
 export const operationToJSON = publishOperationsPluginRequestOperationToJSON;
-
-// Published deep-import compatibility declarations.
-export type { KubernetesPermissions as KubernetesPermissions } from "./kubernetespermissions.js";
-export type { KubernetesPermissions$Outbound as KubernetesPermissions$Outbound } from "./kubernetespermissions.js";
-export type { Rule as Rule } from "./rule.js";
-export type { Rule$Outbound as Rule$Outbound } from "./rule.js";
-export { KubernetesPermissions$outboundSchema as KubernetesPermissions$outboundSchema } from "./kubernetespermissions.js";
-export { kubernetesPermissionsToJSON as kubernetesPermissionsToJSON } from "./kubernetespermissions.js";
-export { Rule$outboundSchema as Rule$outboundSchema } from "./rule.js";
-export { ruleToJSON as ruleToJSON } from "./rule.js";
-export { Verb as Verb } from "./verb.js";
-export { Verb$outboundSchema as Verb$outboundSchema } from "./verb.js";

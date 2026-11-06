@@ -2128,6 +2128,3 @@ export function packageFromJSON(
 export type PackageRule = PermissionsRule;
 export const PackageRule$inboundSchema = PermissionsRule$inboundSchema;
 export const packageRuleFromJSON = permissionsRuleFromJSON;
-
-// Published deep-import compatibility declarations.
-
