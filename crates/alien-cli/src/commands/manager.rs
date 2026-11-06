@@ -40,7 +40,7 @@ pub enum ManagersCmd {
     /// Create a new private instance and return its setup action
     Create {
         /// Instance display name
-        #[arg(long, default_value = "alien-private-manager")]
+        #[arg(long, default_value = "alien-private-instance")]
         name: String,
 
         /// Cloud where the instance will run
@@ -84,7 +84,7 @@ pub enum ManagersCmd {
         #[arg(long)]
         watch: bool,
     },
-    /// Return a fresh setup action for a pending or failed manager
+    /// Return a fresh setup action for a pending or failed instance
     Setup {
         /// Instance ID
         id: String,
@@ -485,10 +485,10 @@ pub async fn managers_task(args: ManagersArgs, ctx: ExecutionMode) -> Result<()>
             if matches!(mode, ConfirmationMode::Prompt)
                 && !prompt_confirm(
                     &format!(
-                        "Update manager {id} to {}?",
+                        "Update instance {id} to {}?",
                         release
                             .as_deref()
-                            .map_or("the latest manager release".to_string(), |release| format!(
+                            .map_or("the latest instance release".to_string(), |release| format!(
                                 "release {release}"
                             ))
                     ),
@@ -699,7 +699,7 @@ fn render_manager_action(output: &ManagerActionOutput, json: bool) -> Result<()>
     }
     println!("{}", output.message);
     println!(
-        "Follow it with: alien managers status {} --watch",
+        "Follow it with: alien instances status {} --watch",
         output.id
     );
     Ok(())

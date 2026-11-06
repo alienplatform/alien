@@ -42,6 +42,8 @@ fn instance_and_legacy_commands_share_the_api_and_json_output() {
                 "list",
                 "--json",
             ])
+            // macOS resolves the config directory from HOME, not XDG_CONFIG_HOME.
+            .env("HOME", directory.path())
             .env("XDG_CONFIG_HOME", directory.path())
             .env("ALIEN_API_KEY", "test-key")
             .env_remove("ALIEN_MANAGER_URL")
