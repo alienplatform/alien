@@ -488,6 +488,11 @@ pub fn is_reserved_runtime_environment_name(name: &str) -> bool {
                 | "ALIEN_DEPLOYMENT_SERVICE_ACCOUNT"
                 | ENV_ALIEN_DEPLOYMENT_TOKEN
                 | ENV_ALIEN_MANAGER_URL
+                | "ALIEN_IDENTITY_PROVIDER"
+                | "ALIEN_MANAGER_AUDIENCE"
+                | "ALIEN_SESSION_FILE"
+                | "ALIEN_COMMANDS_CAPABILITY_FILE"
+                | "ALIEN_TELEMETRY_CAPABILITY_FILE"
                 | ENV_ALIEN_RESOURCE_ID
                 | ENV_ALIEN_PUBLIC_ENDPOINTS_JSON
                 | ENV_ALIEN_RUNTIME_SECRETS

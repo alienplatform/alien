@@ -1,10 +1,11 @@
+use crate::kubernetes_runtime_credentials::delete_environment_secret;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::core::kubernetes_errors::is_remote_resource_conflict;
 use crate::core::{
-    delete_environment_secret, direct_monitoring_auth_headers, kubernetes_branded_resource_labels,
+    direct_monitoring_auth_headers, kubernetes_branded_resource_labels,
     kubernetes_cleanup_resource_labels, kubernetes_runtime_pod_labels, linked_bindings,
     pod_template_annotations, projected_env_vars,
     reconcile_environment_secret_with_additional_secrets, EnvSecretRotationTracker,
@@ -367,17 +368,21 @@ impl KubernetesContainerController {
         // Generate ServiceAccount name following Helm naming convention
         let service_account_name =
             kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
+        crate::kubernetes_runtime_credentials::reconcile(
+            ctx,
+            &namespace,
+            &container_name,
+            &config.id,
+            alien_core::commands_types::CommandTargetType::Container,
+        )
+        .await?;
         let image_pull_secret_name = if let Some(image) = image_needing_pull_secret(
             &config.code,
-            ctx.deployment_config.deployment_token.is_some(),
+            ctx.deployment_config.deployment_token.is_some()
+                || ctx.deployment_config.runtime_identity_audience.is_some(),
             ctx.deployment_config.manager_url.as_deref(),
         ) {
-            let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: config.id.clone(),
-                    message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),
-                })
-            })?;
+            let token = crate::kubernetes_registry::pull_credential(ctx, &config.id).await?;
             let secret_name = registry_secret_name.clone();
             let secrets_client = ctx
                 .service_provider
@@ -388,7 +393,7 @@ impl KubernetesContainerController {
                 &namespace,
                 &secret_name,
                 image,
-                token,
+                &token,
                 &config.id,
                 ctx,
                 legacy_registry_owner_proven,
@@ -829,6 +834,25 @@ impl KubernetesContainerController {
         {
             let workload_name = &workload_name;
             let namespace = &namespace;
+            crate::kubernetes_runtime_credentials::reconcile(
+                ctx,
+                namespace,
+                workload_name,
+                &config.id,
+                alien_core::commands_types::CommandTargetType::Container,
+            )
+            .await?;
+
+            if let ContainerCode::Image { image } = &config.code {
+                crate::kubernetes_registry::refresh_pull_secret(
+                    ctx,
+                    namespace,
+                    workload_name,
+                    &config.id,
+                    image,
+                )
+                .await?;
+            }
             // Gateway configuration is read from the vault, so its changes are detected
             // here rather than by the synchronous deployment-snapshot check.
             if config.id == alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID {
@@ -1317,17 +1341,21 @@ impl KubernetesContainerController {
 
         let service_account_name =
             kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
+        crate::kubernetes_runtime_credentials::reconcile(
+            ctx,
+            namespace,
+            workload_name,
+            &config.id,
+            alien_core::commands_types::CommandTargetType::Container,
+        )
+        .await?;
         let image_pull_secret_name = if let Some(image) = image_needing_pull_secret(
             &config.code,
-            ctx.deployment_config.deployment_token.is_some(),
+            ctx.deployment_config.deployment_token.is_some()
+                || ctx.deployment_config.runtime_identity_audience.is_some(),
             ctx.deployment_config.manager_url.as_deref(),
         ) {
-            let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: config.id.clone(),
-                    message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),
-                })
-            })?;
+            let token = crate::kubernetes_registry::pull_credential(ctx, &config.id).await?;
             let secret_name = registry_secret_name.clone();
             let secrets_client = ctx
                 .service_provider
@@ -1338,7 +1366,7 @@ impl KubernetesContainerController {
                 namespace,
                 &secret_name,
                 image,
-                token,
+                &token,
                 &config.id,
                 ctx,
                 legacy_registry_owner_proven,
@@ -2398,7 +2426,7 @@ impl KubernetesContainerController {
         let selector_labels = self.build_labels(container_name);
         let labels = self.workload_labels(ctx, &config.id, selector_labels.clone());
         let pod_labels = kubernetes_runtime_pod_labels(ctx, labels.clone());
-        let pod_spec = self
+        let mut pod_spec = self
             .build_pod_spec(
                 config,
                 namespace,
@@ -2408,6 +2436,14 @@ impl KubernetesContainerController {
                 ctx,
             )
             .await?;
+        if ctx.deployment_config.runtime_identity_audience.is_some() {
+            crate::kubernetes_runtime_credentials::mount(
+                &mut pod_spec,
+                &kubernetes_resource_name("", &config.id),
+                container_name,
+            )?;
+        }
+
         let pod_annotations = pod_template_annotations(env_secret_plan, &config.environment)?;
 
         let deployment = Deployment {
@@ -2453,7 +2489,7 @@ impl KubernetesContainerController {
         let selector_labels = self.build_labels(container_name);
         let labels = self.workload_labels(ctx, &config.id, selector_labels.clone());
         let pod_labels = kubernetes_runtime_pod_labels(ctx, labels.clone());
-        let pod_spec = self
+        let mut pod_spec = self
             .build_pod_spec(
                 config,
                 namespace,
@@ -2463,6 +2499,14 @@ impl KubernetesContainerController {
                 ctx,
             )
             .await?;
+        if ctx.deployment_config.runtime_identity_audience.is_some() {
+            crate::kubernetes_runtime_credentials::mount(
+                &mut pod_spec,
+                &kubernetes_resource_name("", &config.id),
+                container_name,
+            )?;
+        }
+
         let pod_annotations = pod_template_annotations(env_secret_plan, &config.environment)?;
 
         // Build volume claim templates for persistent storage

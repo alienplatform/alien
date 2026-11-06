@@ -62,6 +62,8 @@ mod kubernetes_public_endpoint;
 #[cfg(feature = "kubernetes")]
 mod kubernetes_registry;
 #[cfg(feature = "kubernetes")]
+mod kubernetes_runtime_credentials;
+#[cfg(feature = "kubernetes")]
 mod kubernetes_workload_heartbeat;
 
 mod container;
