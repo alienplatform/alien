@@ -856,6 +856,27 @@ fn configure_application_runtime_env(cmd: &mut Command, config: &RuntimeConfig) 
     for (key, value) in application_runtime_env(config) {
         cmd.env(key, value);
     }
+    // Every application process is a distinct cumulative-metric producer, even
+    // when multiple serverless instances share one deployment and service name.
+    let inherited = std::env::var("OTEL_RESOURCE_ATTRIBUTES").ok();
+    let configured = cmd
+        .as_std()
+        .get_envs()
+        .find(|(key, _)| *key == "OTEL_RESOURCE_ATTRIBUTES")
+        .map(|(_, value)| value.and_then(|value| value.to_str()).map(str::to_owned));
+    let attributes = configured.unwrap_or(inherited).unwrap_or_default();
+    let mut attributes: Vec<_> = attributes
+        .split(',')
+        .map(str::trim)
+        .filter(|attribute| {
+            !attribute.is_empty()
+                && attribute.split_once('=').map(|(key, _)| key.trim())
+                    != Some("service.instance.id")
+        })
+        .map(str::to_owned)
+        .collect();
+    attributes.push(format!("service.instance.id={}", uuid::Uuid::new_v4()));
+    cmd.env("OTEL_RESOURCE_ATTRIBUTES", attributes.join(","));
 }
 
 fn application_runtime_env(config: &RuntimeConfig) -> Vec<(&'static str, String)> {

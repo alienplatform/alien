@@ -17,8 +17,8 @@ use tokio_stream::StreamExt;
 use tonic::Request;
 
 use super::{
-    application_runtime_env, command_push_config, run_transport, runtime_only_env,
-    start_application, PrestartedTransport, RuntimeConfig, TransportType,
+    application_runtime_env, command_push_config, configure_application_runtime_env, run_transport,
+    runtime_only_env, start_application, PrestartedTransport, RuntimeConfig, TransportType,
     ENV_ALIEN_BINDINGS_GRPC_ADDRESS, ENV_ALIEN_BINDINGS_MODE,
 };
 
@@ -504,4 +504,39 @@ async fn parent_exit_stops_descendants_before_releasing_transport() {
     )
     .await;
     assert_eq!(result.expect_err("parent crashed").code, "PROCESS_FAILED");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn real_application_processes_receive_distinct_owned_metric_instance_ids() {
+    let config = RuntimeConfig::builder()
+        .transport(TransportType::Local)
+        .command(vec!["/bin/sh".into()])
+        .build();
+    let mut instances = Vec::new();
+    for _ in 0..2 {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "printf '%s' \"$OTEL_RESOURCE_ATTRIBUTES\""]);
+        command.env(
+            "OTEL_RESOURCE_ATTRIBUTES",
+            "service.name=app,service.instance.id=spoof,app.team=example",
+        );
+        configure_application_runtime_env(&mut command, &config);
+        let output = command
+            .output()
+            .await
+            .expect("start real application process");
+        assert!(output.status.success());
+        let output = String::from_utf8(output.stdout).unwrap();
+        let attributes: HashMap<_, _> = output
+            .split(',')
+            .map(|pair| pair.split_once('=').unwrap())
+            .collect();
+        assert_eq!(attributes.get("service.name"), Some(&"app"));
+        assert_eq!(attributes.get("app.team"), Some(&"example"));
+        let instance = *attributes.get("service.instance.id").unwrap();
+        assert!(uuid::Uuid::parse_str(instance).is_ok());
+        instances.push(instance.to_string());
+    }
+    assert_ne!(instances[0], instances[1]);
 }
