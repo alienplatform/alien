@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use alien_aws_clients::{
     cloudwatch::{Dimension, GetMetricDataRequest, Metric, MetricDataQuery, MetricStat},
     CloudWatchApi,

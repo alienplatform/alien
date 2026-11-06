@@ -100,6 +100,10 @@ impl ResourceEntry {
 #[serde(rename_all = "camelCase")]
 #[builder(start_fn = new)]
 pub struct Stack {
+    /// Released telemetry destination defaults; deployment settings may explicitly override them.
+    #[builder(field)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telemetry_destinations: Option<crate::TelemetryDestinations>,
     /// Unique identifier for the stack
     #[builder(start_fn)]
     pub id: String,
@@ -471,6 +475,12 @@ impl StackBuilder {
     /// Sets stack input definitions.
     pub fn inputs(mut self, inputs: Vec<StackInputDefinition>) -> Self {
         self.inputs = inputs;
+        self
+    }
+
+    /// Declares deployment-owned OTLP destination defaults.
+    pub fn telemetry_destinations(mut self, destinations: crate::TelemetryDestinations) -> Self {
+        self.telemetry_destinations = Some(destinations);
         self
     }
 

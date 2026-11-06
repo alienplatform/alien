@@ -452,6 +452,7 @@ mod tests {
 
     fn empty_stack() -> Stack {
         Stack {
+            telemetry_destinations: None,
             id: "stack_test".to_string(),
             resources: IndexMap::new(),
             inputs: vec![],

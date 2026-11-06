@@ -169,6 +169,12 @@ export class Stack {
     return this
   }
 
+  /** Routes automatic and application telemetry to an explicitly declared collector. */
+  public telemetryDestinations(destinations: NonNullable<StackConfig["telemetryDestinations"]>): this {
+    this._config.telemetryDestinations = destinations
+    return this
+  }
+
   /**
    * Gets the stack ID without building/validating the stack.
    * @returns The stack ID.

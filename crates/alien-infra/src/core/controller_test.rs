@@ -1348,6 +1348,7 @@ impl SingleControllerExecutorBuilder {
         permissions.extend(self.permission_profiles.clone());
 
         let mut stack = Stack {
+            telemetry_destinations: None,
             id: "test-stack".to_string(),
             resources: stack_resources,
             permissions: alien_core::permissions::PermissionsConfig {

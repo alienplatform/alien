@@ -1904,6 +1904,7 @@ mod tests {
             .permissions("api".to_string())
             .build();
         Stack {
+            telemetry_destinations: None,
             id: "test".to_string(),
             resources: [(
                 "api".to_string(),
@@ -2356,7 +2357,10 @@ mod tests {
             .expect("AWS selection should include a machine");
         let spec = instance_catalog::find_instance_type(Platform::Aws, machine)
             .expect("selected machine should exist in the catalog");
-        assert!(spec.is_nested_virt_capable(), "{machine} is not nested-capable");
+        assert!(
+            spec.is_nested_virt_capable(),
+            "{machine} is not nested-capable"
+        );
         assert_eq!(spec.architecture, Architecture::X86_64);
 
         // Every AWS machine is listed, in catalog order: category, series, then vCPU.
@@ -2690,6 +2694,7 @@ mod tests {
             })
             .build();
         let stack = Stack {
+            telemetry_destinations: None,
             id: "vm-runtime".to_string(),
             resources: [
                 (

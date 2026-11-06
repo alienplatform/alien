@@ -159,6 +159,7 @@ fn create_test_stack(stack_id: &str, function_id: &str) -> Stack {
     profiles.insert("default".to_string(), alien_core::PermissionProfile::new());
 
     Stack {
+        telemetry_destinations: None,
         id: stack_id.to_string(),
         resources,
         permissions: alien_core::PermissionsConfig {
@@ -213,6 +214,7 @@ fn create_test_stack_with_storage(stack_id: &str, storage_id: &str, function_id:
     profiles.insert("default".to_string(), alien_core::PermissionProfile::new());
 
     Stack {
+        telemetry_destinations: None,
         id: stack_id.to_string(),
         resources,
         permissions: alien_core::PermissionsConfig {
@@ -989,6 +991,7 @@ async fn persistent_worker_failure_surfaces_during_provisioning() {
     profiles.insert("default".to_string(), alien_core::PermissionProfile::new());
 
     let stack = Stack {
+        telemetry_destinations: None,
         id: "test-stack".to_string(),
         resources,
         permissions: alien_core::PermissionsConfig {
@@ -1831,6 +1834,7 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
     profiles.insert("default".to_string(), alien_core::PermissionProfile::new());
 
     let stack_v2 = Stack {
+        telemetry_destinations: None,
         id: "test-stack".to_string(),
         resources,
         permissions: alien_core::PermissionsConfig {
@@ -2387,6 +2391,7 @@ fn create_two_function_stack_one_fails(stack_id: &str) -> Stack {
     profiles.insert("default".to_string(), alien_core::PermissionProfile::new());
 
     Stack {
+        telemetry_destinations: None,
         id: stack_id.to_string(),
         resources,
         permissions: alien_core::PermissionsConfig {
@@ -2459,6 +2464,7 @@ fn create_two_function_stack_dependent_one_fails(stack_id: &str) -> Stack {
     profiles.insert("default".to_string(), alien_core::PermissionProfile::new());
 
     Stack {
+        telemetry_destinations: None,
         id: stack_id.to_string(),
         resources,
         permissions: alien_core::PermissionsConfig {

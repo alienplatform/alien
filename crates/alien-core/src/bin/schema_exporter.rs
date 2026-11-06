@@ -13,6 +13,10 @@ use utoipa::OpenApi;
 #[openapi(components(schemas(
     AwsConditionValue,
     CredentialRetry,
+    TelemetryDestinations,
+    OtlpSignalDestination,
+    OtlpDestinationEndpoint,
+    OtlpDestinationAuthentication,
     MetricsCollectionConfig,
     MetricsCollectionJob,
     MetricsCollectionCheckpoint,

@@ -98,6 +98,7 @@ mod tests {
             },
         );
         let stack = Stack {
+            telemetry_destinations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: Default::default(),
@@ -161,6 +162,7 @@ mod tests {
             },
         );
         let stack = Stack {
+            telemetry_destinations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: Default::default(),

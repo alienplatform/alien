@@ -106,6 +106,7 @@ impl KubernetesManifestTestHarness {
         let mut profiles = IndexMap::new();
         profiles.insert("default".to_string(), PermissionProfile::new());
         let stack = Stack {
+            telemetry_destinations: None,
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {

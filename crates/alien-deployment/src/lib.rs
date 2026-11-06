@@ -394,3 +394,5 @@ pub async fn step(
 }
 
 pub mod metrics;
+
+pub mod telemetry_destination;

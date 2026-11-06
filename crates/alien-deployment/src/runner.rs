@@ -354,6 +354,9 @@ async fn run_step_loop_body(
     on_progress: Option<&ProgressCallback>,
     allow_initial_running_step: bool,
 ) -> Result<RunnerResult> {
+    transport
+        .prepare_telemetry(deployment_id, state, config)
+        .await?;
     if config.stack_settings.metrics_collection.is_some()
         && (matches!(
             state.status,
@@ -1700,6 +1703,7 @@ mod tests {
         profiles.insert("default".to_string(), alien_core::PermissionProfile::new());
 
         Stack {
+            telemetry_destinations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::PermissionsConfig {

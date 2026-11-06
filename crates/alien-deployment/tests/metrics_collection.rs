@@ -147,7 +147,7 @@ async fn real_http_scrape_runs_in_scheduler_exports_otlp_and_restores_checkpoint
     )
     .await
     .unwrap();
-    source.assert_calls_async(1).await;
+    source.assert_hits_async(1).await;
     let exported = transport.exports.lock().unwrap();
     assert_eq!(exported.len(), 1);
     let resource = &exported[0].resource_metrics[0];
@@ -193,7 +193,7 @@ async fn real_http_scrape_runs_in_scheduler_exports_otlp_and_restores_checkpoint
         1,
         "fresh process must honor durable checkpoint"
     );
-    source.assert_calls_async(1).await;
+    source.assert_hits_async(1).await;
 }
 
 #[tokio::test]
@@ -332,7 +332,7 @@ async fn controller_descriptors_derive_jobs_coalesce_exports_and_survive_restart
     )
     .await
     .unwrap();
-    scrape.assert_calls_async(2).await;
+    scrape.assert_hits_async(2).await;
     let exports = transport.exports.lock().unwrap();
     assert_eq!(exports.len(), 1);
     assert_eq!(exports[0].resource_metrics.len(), 2);
@@ -358,5 +358,92 @@ async fn controller_descriptors_derive_jobs_coalesce_exports_and_survive_restart
     )
     .await
     .unwrap();
-    scrape.assert_calls_async(2).await;
+    scrape.assert_hits_async(2).await;
+}
+
+#[tokio::test]
+async fn authored_destination_receives_scraped_metrics_without_manager_fallback() {
+    let source = MockServer::start_async().await;
+    let scrape = source
+        .mock_async(|when, then| {
+            when.method(GET).path("/metrics");
+            then.status(200).body("# TYPE active gauge\nactive 3\n");
+        })
+        .await;
+    let destination = MockServer::start_async().await;
+    let append = destination
+        .mock_async(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/otlp/metrics")
+                .header("authorization", "Bearer deployment-owned-secret")
+                .header("content-type", "application/x-protobuf");
+            then.status(200)
+                .header("content-type", "application/x-protobuf");
+        })
+        .await;
+    let mut config = config(&source);
+    config.stack_settings.telemetry_destinations = Some(alien_core::TelemetryDestinations {
+        metrics: Some(alien_core::OtlpSignalDestination {
+            endpoint: alien_core::OtlpDestinationEndpoint::Url {
+                url: destination.url("/otlp/metrics"),
+            },
+            authentication: alien_core::OtlpDestinationAuthentication::Bearer {
+                token_environment_variable: "CUSTOM_TELEMETRY_TOKEN".into(),
+            },
+            allow_insecure_http: true,
+        }),
+        traces: None,
+        logs: None,
+    });
+    config
+        .environment_variables
+        .variables
+        .push(alien_core::EnvironmentVariable {
+            name: "CUSTOM_TELEMETRY_TOKEN".into(),
+            value: "deployment-owned-secret".into(),
+            var_type: alien_core::EnvironmentVariableType::Secret,
+            target_resources: Some(vec!["declared-store".into()]),
+        });
+    let directory = tempfile::tempdir().unwrap();
+    let transport = DurableTransport {
+        state_file: directory.path().join("state.json"),
+        exports: Mutex::new(Vec::new()),
+        reject_export: AtomicBool::new(true),
+        reject_checkpoint: AtomicBool::new(false),
+    };
+    let mut state = state();
+    collect_and_checkpoint(
+        &mut state,
+        &config,
+        &ClientConfig::Test,
+        "deployment",
+        &transport,
+    )
+    .await
+    .unwrap();
+    append.assert_hits_async(1).await;
+    scrape.assert_hits_async(1).await;
+    assert!(
+        transport.exports.lock().unwrap().is_empty(),
+        "explicit destination must never fall back to manager storage"
+    );
+    assert_eq!(
+        state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .metrics_checkpoints
+            .len(),
+        1
+    );
+    let persisted: DeploymentState =
+        serde_json::from_slice(&std::fs::read(&transport.state_file).unwrap()).unwrap();
+    assert_eq!(
+        persisted
+            .runtime_metadata
+            .unwrap()
+            .metrics_checkpoints
+            .len(),
+        1
+    );
 }

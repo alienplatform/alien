@@ -31,6 +31,17 @@ pub struct TelemetryCaller {
 /// Dev mode: `InMemoryTelemetryBackend` — parses and stores in a ring buffer.
 #[async_trait]
 pub trait TelemetryBackend: Send + Sync {
+    /// Register resolved deployment-owned routing during the existing reconcile lifecycle.
+    async fn prepare_deployment(
+        &self,
+        _id: &str,
+        _workspace_id: &str,
+        _state: &alien_core::DeploymentState,
+        _config: &alien_core::DeploymentConfig,
+    ) -> Result<(), AlienError> {
+        Ok(())
+    }
+
     /// Whether the backend actually retains/forwards metrics rather than discarding them.
     fn supports_metrics(&self) -> bool {
         true

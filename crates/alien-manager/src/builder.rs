@@ -984,6 +984,12 @@ async fn finalize(
         config.response_signing_key.clone(),
     ));
 
+    let telemetry_backend: Arc<dyn TelemetryBackend> = Arc::new(
+        crate::providers::deployment_telemetry::DeploymentTelemetryBackend::new(
+            telemetry_backend,
+            deployment_store.clone(),
+        ),
+    );
     // --- AppState ---
     let app_state = crate::routes::AppState {
         deployment_store: deployment_store.clone(),

@@ -72,6 +72,25 @@ impl ManagerTransport {
 
 #[async_trait]
 impl DeploymentLoopTransport for ManagerTransport {
+    async fn prepare_telemetry(
+        &self,
+        id: &str,
+        state: &DeploymentState,
+        config: &alien_core::DeploymentConfig,
+    ) -> Result<(), AlienError> {
+        if let Some(backend) = &self.telemetry_backend {
+            backend
+                .prepare_deployment(
+                    id,
+                    self.workspace_id.as_deref().unwrap_or("default"),
+                    state,
+                    config,
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
     async fn export_metrics(
         &self,
         deployment_id: &str,
@@ -126,6 +145,7 @@ impl DeploymentLoopTransport for ManagerTransport {
         heartbeats: Vec<ResourceHeartbeat>,
         observed_inventory_batches: Vec<ObservedInventoryBatch>,
     ) -> Result<StepReconcileResult, AlienError> {
+        self.prepare_telemetry(deployment_id, state, config).await?;
         // 1. Reconcile cross-account registry access (best-effort).
         //    This must happen before persisting so the `registry_access_granted`
         //    flag is included in the persisted state.

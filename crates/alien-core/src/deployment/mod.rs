@@ -27,3 +27,6 @@ pub use config::*;
 
 mod metrics;
 pub use metrics::*;
+
+mod telemetry;
+pub use telemetry::*;

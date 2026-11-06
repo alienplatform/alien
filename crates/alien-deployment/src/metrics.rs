@@ -52,6 +52,12 @@ pub async fn collect_and_checkpoint(
             message: "Metric jobs require distinct non-empty IDs".into(),
         }));
     }
+    let destination = crate::telemetry_destination::for_deployment(
+        state,
+        config,
+        crate::telemetry_destination::Signal::Metrics,
+        deployment_id,
+    );
     let mut candidate = state.clone();
     let metadata = candidate
         .runtime_metadata
@@ -175,6 +181,7 @@ pub async fn collect_and_checkpoint(
                         transport,
                         deployment_id,
                         config,
+                        &destination,
                     )
                     .await;
                 }
@@ -195,6 +202,7 @@ pub async fn collect_and_checkpoint(
         transport,
         deployment_id,
         config,
+        &destination,
     )
     .await;
     if changed {
@@ -222,13 +230,26 @@ async fn flush_export(
     transport: &dyn DeploymentLoopTransport,
     deployment_id: &str,
     config: &DeploymentConfig,
+    destination: &std::result::Result<
+        Option<crate::telemetry_destination::ResolvedDestination>,
+        alien_error::AlienError,
+    >,
 ) {
     if pending.is_empty() {
         return;
     }
-    let result = transport
-        .export_metrics(deployment_id, config, export.encode_to_vec())
-        .await;
+    let bytes = export.encode_to_vec();
+    let result = match destination {
+        Ok(Some(destination)) => {
+            destination
+                .export(crate::telemetry_destination::Signal::Metrics, bytes)
+                .await
+        }
+        Ok(None) => transport.export_metrics(deployment_id, config, bytes).await,
+        Err(error) => Err(alien_error::AlienError::new(alien_error::GenericError {
+            message: error.message.clone(),
+        })),
+    };
     for (id, source_hash, collected_through) in pending.drain(..) {
         match &result {
             Ok(()) => {

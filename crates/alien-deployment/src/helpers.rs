@@ -1859,6 +1859,7 @@ mod tests {
         profiles.insert("default".to_string(), alien_core::PermissionProfile::new());
 
         Stack {
+            telemetry_destinations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::PermissionsConfig {

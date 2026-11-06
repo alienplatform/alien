@@ -15,3 +15,5 @@ pub mod token_db_validator;
 pub use null_telemetry::NullTelemetryBackend;
 pub use oss_authz::OssAuthz;
 pub use single_workspace_projects::SingleWorkspaceProjects;
+
+pub mod deployment_telemetry;

@@ -42,6 +42,16 @@ pub struct StepReconcileResult {
 /// env var injection, etc.).
 #[async_trait]
 pub trait DeploymentLoopTransport: Send + Sync {
+    /// Refresh local routing from the configuration already resolved by the lease owner.
+    async fn prepare_telemetry(
+        &self,
+        _id: &str,
+        _state: &DeploymentState,
+        _config: &DeploymentConfig,
+    ) -> Result<(), AlienError> {
+        Ok(())
+    }
+
     /// Export an explicitly enabled metric batch. ACK is required before checkpointing.
     /// External drivers use the deployment's configured OTLP endpoint; managers may
     /// override this to invoke their TelemetryBackend without a network roundtrip.
