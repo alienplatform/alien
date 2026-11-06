@@ -642,7 +642,7 @@ for (const [previous, current] of [
     ["const", `${previous}$outboundSchema`, `${current}$outboundSchema`],
     ["const", `${previousSerializer}ToJSON`, `${currentSerializer}ToJSON`],
   ]) {
-    if (!stackConditionsSource.includes(`export ${kind} ${from}`)) {
+    if (!new RegExp(`export ${kind} ${from.replaceAll("$", "\\$")}(?![\\w$])`).test(stackConditionsSource)) {
       if (!new RegExp(`export (?:type|const|function) ${to.replaceAll("$", "\\$")}(?![\\w$])`).test(stackConditionsSource)) throw new Error(`Missing stack-condition compatibility source: ${to}`);
       stackConditionAliases.push(`export ${kind} ${from} = ${to};`);
     }
@@ -653,6 +653,7 @@ await writeFile(stackConditionsUrl, `${stackConditionsSource}${stackConditionsMa
 // Published owners identify preserved whole modules when the current generator
 // emits another copy of a formerly shared inline declaration.
 const publishedOwners = JSON.parse(await readFile(new URL("./published-export-owners.json", import.meta.url), "utf8"));
+const publishedAliases = JSON.parse(await readFile(new URL("./published-export-aliases.json", import.meta.url), "utf8"));
 const exportDeclarations = new Map();
 for (const filename of await readdir(models)) {
   if (!filename.endsWith(".ts") || filename === "index.ts") continue;
@@ -673,6 +674,12 @@ function resolvePublishedExport(module, name) {
   const declarations = exportDeclarations.get(name) ?? [];
   const direct = declarations.find(declaration => declaration.module === module);
   if (direct) return direct;
+  const alias = publishedAliases[name];
+  if (alias) {
+    const target = exportDeclarations.get(alias.name)?.find(declaration => declaration.module === alias.module);
+    if (!target) throw new Error(`Missing reviewed compatibility target ${alias.name} in ${alias.module}.ts`);
+    return { ...target, name: alias.name };
+  }
   const published = declarations.find(declaration => declaration.module === publishedOwners[name]);
   if (published) return published;
   if (declarations.length === 1) return declarations[0];
@@ -692,7 +699,8 @@ async function generateModule(previous) {
   for (const [module, names] of Object.entries(additionalExports[previous] ?? {})) {
     for (const name of names) {
       const owner = resolvePublishedExport(module, name);
-      reexports.push(`export ${owner.value ? "" : "type "}{ ${name} } from "./${owner.module}.js";`);
+      const exportedName = owner.name ? `${owner.name} as ${name}` : name;
+      reexports.push(`export ${owner.value ? "" : "type "}{ ${exportedName} } from "./${owner.module}.js";`);
     }
   }
   await writeFile(
@@ -740,6 +748,8 @@ const externalBindingUrl = new URL("externalbindingunion.ts", models);
 const externalBindingMarker = "\n// Published external-binding endpoint compatibility exports.\n";
 const externalBindingSource = (await readFile(externalBindingUrl, "utf8")).split(externalBindingMarker)[0];
 const externalBindingAliases = ["EndpointSecretRef", "ExternalBindingEndpoint"].flatMap(name => {
+  if (new RegExp(`export type ${name}(?![\\w$])`).test(externalBindingSource)) return [];
+  if (!new RegExp(`export type ${name}1(?![\\w$])`).test(externalBindingSource)) throw new Error(`Missing external-binding compatibility source ${name}1`);
   const serializer = name[0].toLowerCase() + name.slice(1);
   return [
     `export type { ${name}1 as ${name} };`,
@@ -826,4 +836,35 @@ const resourceExport = 'export * from "./deploymentresource.js";';
 if (!modelIndex.includes(resourceExport)) {
   await readFile(new URL("deploymentresource.ts", models));
   await writeFile(modelIndexUrl, `${modelIndex.trimEnd()}\n${resourceExport}\n`);
+}
+
+// Preserve root imports as well as historical deep paths for shared providers.
+const providerAliasesMarker = "\n// Published shared-provider compatibility exports.\n";
+const currentModelIndex = (await readFile(modelIndexUrl, "utf8")).split(providerAliasesMarker)[0];
+const providerAliasExports = Object.entries(publishedAliases).map(([previous, target]) => {
+  const declaration = exportDeclarations.get(target.name)?.find(owner => owner.module === target.module);
+  if (!declaration) throw new Error(`Missing published provider alias target ${target.name}`);
+  return `export ${declaration.value ? "" : "type "}{ ${target.name} as ${previous} } from "./${target.module}.js";`;
+});
+await writeFile(modelIndexUrl, `${currentModelIndex}${providerAliasesMarker}${providerAliasExports.join("\n")}\n`);
+
+// These aliases were previously present only in generated output. Recreate
+// them from reviewed declarations so a clean regeneration preserves deep imports.
+const deepAliases = JSON.parse(await readFile(new URL("./published-deep-export-aliases.json", import.meta.url), "utf8"));
+const deepAliasMarker = "\n// Published deep-import compatibility declarations.\n";
+for (const [module, aliases] of Object.entries(deepAliases)) {
+  const url = new URL(`${module}.ts`, models);
+  const source = (await readFile(url, "utf8")).split(deepAliasMarker)[0];
+  const exports = [];
+  for (const alias of aliases) {
+    const declarationPattern = name => new RegExp(`export (?:type|const|function) ${name.replaceAll("$", "\\$")}(?![\\w$])`);
+    if (declarationPattern(alias.name).test(source)) continue;
+    const targetModule = alias.module ?? module;
+    const targetSource = targetModule === module ? source : await readFile(new URL(`${targetModule}.ts`, models), "utf8");
+    if (!declarationPattern(alias.target).test(targetSource)) throw new Error(`Missing published deep-import source ${alias.target} in ${targetModule}.ts`);
+    exports.push(alias.module
+      ? `export ${alias.kind === "type" ? "type " : ""}{ ${alias.target} as ${alias.name} } from "./${alias.module}.js";`
+      : `export ${alias.kind} ${alias.name} = ${alias.target};`);
+  }
+  await writeFile(url, `${source}${deepAliasMarker}${exports.join("\n")}\n`);
 }
