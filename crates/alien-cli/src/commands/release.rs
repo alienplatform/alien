@@ -928,7 +928,7 @@ async fn release_task_core(
         // Push images if needed (the test platform skips pushing). --prebuilt skips the build,
         // not the push: it reuses already-pushed artifacts via the cache and pushes any local ones.
         // Local platform pushes to a cloud registry — the alien-operator pulls from it.
-        let pushed_stack = if platform != Platform::Test {
+        let mut pushed_stack = if platform != Platform::Test {
             if args.prebuilt {
                 rebase_prebuilt_stack_image_paths(&mut built_stack, &output_dir)?;
             }
@@ -950,6 +950,14 @@ async fn release_task_core(
         } else {
             built_stack
         };
+
+        if signing.private_machine_api_url.is_some() {
+            alien_core::release_statement::add_private_tls_inputs(&mut pushed_stack)
+                .into_alien_error()
+                .context(ErrorData::SigningFailed {
+                    message: "Cannot bind private managed TLS files".to_string(),
+                })?;
+        }
 
         // Convert to JSON for the API
         let stack_json = serde_json::to_value(&pushed_stack)

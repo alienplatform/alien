@@ -117,6 +117,11 @@ pub fn aws_verifier_name(prefix: &str) -> String {
     format!("{prefix}-verifier")
 }
 
+/// Setup-owned role used only by the private certificate producer.
+pub fn aws_private_tls_writer_name(prefix: &str) -> String {
+    format!("{prefix}-tls-writer")
+}
+
 /// The `<prefix>-management-limits` policy document.
 pub fn aws_management_limits(prefix: &str, account: &str, region: &str) -> Value {
     let verifier = aws_verifier_name(prefix);
@@ -170,7 +175,10 @@ pub fn aws_management_limits(prefix: &str, account: &str, region: &str) -> Value
                 "Sid": "OnlySetupChangesTheVerifier",
                 "Effect": "Deny",
                 "Action": ROLE_WRITES,
-                "Resource": format!("arn:aws:iam::{account}:role/{verifier}")
+                "Resource": [
+                    format!("arn:aws:iam::{account}:role/{verifier}"),
+                    format!("arn:aws:iam::{account}:role/{}", aws_private_tls_writer_name(prefix))
+                ]
             },
             {
                 "Sid": "OnlySetupChangesTheseLimits",
@@ -282,7 +290,8 @@ pub fn aws_verifier_policy(prefix: &str, account: &str, region: &str, publisher:
                 "Action": "iam:PassRole",
                 "Resource": [
                     format!("arn:aws:iam::{account}:role/{verifier}"),
-                    format!("arn:aws:iam::{account}:role/{prefix}-management")
+                    format!("arn:aws:iam::{account}:role/{prefix}-management"),
+                    format!("arn:aws:iam::{account}:role/{}", aws_private_tls_writer_name(prefix))
                 ]
             },
             {

@@ -695,6 +695,7 @@ pub fn generate_cloudformation_template_with_profile(
     apply_network_iam_dependencies(stack, &emitted_resource_ids, &mut template);
     add_sandbox_gateway_replica_secret(&mut template, stack, options.target);
     add_signing_settings(&mut template, &stack_settings_value, options.target)?;
+    add_private_tls_writer(&mut template, stack, &stack_settings_value)?;
     consolidate_role_inline_policies(&mut template)?;
     // After consolidation, so the count of managed policies on the management role is final.
     let verifier_machine_network = if stack_settings_value.signing.is_some() {
@@ -2018,6 +2019,97 @@ fn add_signing_settings(
             .insert("Value".to_string(), CfExpression::sub(value));
         insert_resource(template, parameter)?;
     }
+    Ok(())
+}
+
+/// Customer setup alone grants the private instance permission to publish the
+/// exact TLS selectors carried in the signed stack. No hosted credential or
+/// general deployment-management role is trusted here.
+fn add_private_tls_writer(
+    template: &mut CfTemplate,
+    stack: &Stack,
+    settings: &StackSettings,
+) -> Result<()> {
+    if !settings
+        .signing
+        .as_ref()
+        .is_some_and(|signing| signing.private_machine_api_url.is_some())
+    {
+        return Ok(());
+    }
+    let mut names = Vec::new();
+    for (id, entry) in stack.resources() {
+        let public = entry.config.downcast_ref::<alien_core::Container>().is_some_and(|value| !value.public_endpoints.is_empty())
+            || entry.config.downcast_ref::<alien_core::Daemon>().is_some_and(|value| !value.public_endpoints.is_empty());
+        if public {
+            names.extend(alien_core::release_statement::private_tls_input_names(id));
+        }
+    }
+    if names.is_empty() {
+        return Ok(());
+    }
+    const PRINCIPAL: &str = "PrivateTlsWriterPrincipalArn";
+    template.parameters.insert(PRINCIPAL.to_string(), CfParameter {
+        parameter_type: "String".to_string(),
+        description: Some("Exact workload role ARN of your private instance. Use its dedicated ambient runtime identity, never the hosted deployment-management role.".to_string()),
+        default: None, allowed_values: None,
+        allowed_pattern: Some("^arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$".to_string()),
+        constraint_description: Some("An exact private instance IAM role ARN is required.".to_string()),
+        min_length: None, max_length: Some(2048), min_value: None, max_value: None, no_echo: None,
+    });
+    let prefix = "${AWS::StackName}";
+    let role_name =
+        alien_permissions::generators::signing_limits::aws_private_tls_writer_name(prefix);
+    let external_id = "private-tls:${AWS::AccountId}:${AWS::StackName}";
+    let mut role = CfResource::new(
+        "PrivateTlsWriterRole".to_string(),
+        "AWS::IAM::Role".to_string(),
+    );
+    role.properties
+        .insert("RoleName".to_string(), CfExpression::sub(&role_name));
+    role.properties.insert(
+        "AssumeRolePolicyDocument".to_string(),
+        sub_json(json!({
+            "Version": "2012-10-17",
+            "Statement": [{ "Effect": "Allow", "Action": "sts:AssumeRole",
+                "Principal": { "AWS": "${PrivateTlsWriterPrincipalArn}" },
+                "Condition": { "StringEquals": { "sts:ExternalId": external_id } }
+            }]
+        })),
+    );
+    let resources: Vec<String> = names.iter().map(|name| format!("arn:aws:ssm:${{AWS::Region}}:${{AWS::AccountId}}:parameter/signed/{prefix}/inputs/{name}")).collect();
+    role.properties.insert(
+        "Policies".to_string(),
+        CfExpression::list([CfExpression::object([
+            (
+                "PolicyName",
+                CfExpression::from("private-certificate-inputs"),
+            ),
+            (
+                "PolicyDocument",
+                sub_json(json!({ "Version": "2012-10-17", "Statement": [{
+                    "Effect": "Allow", "Action": "ssm:PutParameter", "Resource": resources
+                }]})),
+            ),
+        ])]),
+    );
+    role.properties
+        .insert("Tags".to_string(), setup_tags(&role_name));
+    insert_resource(template, role)?;
+    template.outputs.insert(
+        "PrivateTlsWriterRoleArn".to_string(),
+        output(
+            "Setup-owned private certificate writer role.",
+            CfExpression::sub(format!("arn:aws:iam::${{AWS::AccountId}}:role/{role_name}")),
+        ),
+    );
+    template.outputs.insert(
+        "PrivateTlsWriterExternalId".to_string(),
+        output(
+            "Install-scoped external ID required by the private certificate writer.",
+            CfExpression::sub(external_id),
+        ),
+    );
     Ok(())
 }
 
