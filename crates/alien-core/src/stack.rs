@@ -100,13 +100,13 @@ impl ResourceEntry {
 #[serde(rename_all = "camelCase")]
 #[builder(start_fn = new)]
 pub struct Stack {
+    /// Unique identifier for the stack
+    #[builder(start_fn)]
+    pub id: String,
     /// Released telemetry destination defaults; deployment settings may explicitly override them.
     #[builder(field)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telemetry_destinations: Option<crate::TelemetryDestinations>,
-    /// Unique identifier for the stack
-    #[builder(start_fn)]
-    pub id: String,
     /// Map of resource IDs to their configurations and lifecycle settings
     #[builder(field)]
     pub resources: IndexMap<String, ResourceEntry>,

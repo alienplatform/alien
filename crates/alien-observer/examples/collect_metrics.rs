@@ -88,6 +88,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             Some(Data::Gauge(gauge)) => gauge.data_points.len(),
             Some(Data::Sum(sum)) => sum.data_points.len(),
             Some(Data::Histogram(histogram)) => histogram.data_points.len(),
+            Some(Data::Summary(summary)) => summary.data_points.len(),
             _ => 0,
         })
         .sum();
