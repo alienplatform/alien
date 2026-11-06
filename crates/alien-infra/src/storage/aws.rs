@@ -2028,6 +2028,37 @@ mod tests {
         assert_eq!(executor.last_heartbeats()[0].resource_id, storage.id);
     }
 
+    #[tokio::test]
+    async fn the_binding_is_what_the_enforcers_derive() {
+        let storage = basic_storage();
+        let id = storage.id.clone();
+        let mock_provider =
+            setup_mock_service_provider(Arc::new(fake_s3(account_with(None), Fault::None)));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage)
+            .controller(AwsStorageController::default())
+            .platform(Platform::Aws)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let engine = crate::core::ResourceController::get_binding_params(
+            executor.internal_state::<AwsStorageController>().unwrap(),
+        )
+        .unwrap()
+        .expect("a running bucket has a binding");
+        crate::core::binding_equivalence::assert_enforcers_derive(
+            Platform::Aws,
+            "storage",
+            &id,
+            engine,
+        );
+    }
+
     #[rstest]
     #[case::basic(basic_storage())]
     #[case::versioning(storage_with_versioning())]

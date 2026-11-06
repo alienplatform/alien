@@ -1,0 +1,13 @@
+{
+  "description": "a different release with the sequence the install accepted",
+  "expect": "SIGNING_SEQUENCE_REPLAYED",
+  "statement": {
+    "payload": "eyJ0eXBlIjoicmVsZWFzZS92MiIsInByb2plY3QiOiJwcmpfdGVzdCIsInNlcXVlbmNlIjoxMCwibm90QWZ0ZXIiOm51bGwsInNpZ25lckxpc3RWZXJzaW9uIjoxLCJib2R5Ijp7InBsYXRmb3JtIjoiYXdzIiwiY2hhbm5lbCI6InByb2R1Y3Rpb24iLCJ3b3JrbG9hZHMiOlt7Im5hbWUiOiJ3ZWIiLCJraW5kIjoiY29udGFpbmVyIiwiaW1hZ2UiOiJyZWdpc3RyeS5leGFtcGxlLmNvbS9hcHBAc2hhMjU2OjExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJjb21tYW5kIjpbIi9hcHAvc2VydmVyIiwiLS1wb3J0IiwiODA4MCJdLCJlbnYiOnsiTE9HX0xFVkVMIjoiZGVidWcifSwicHJvdmlkZWRFbnYiOlsiUE9SVCJdLCJiaW5kaW5ncyI6eyJ1cGxvYWRzIjoic3RvcmFnZSJ9LCJjb25maWd1cmFibGVFbnYiOlsiRkVBVFVSRV9GTEFHUyJdLCJkZXBsb3llckVudiI6eyJEQVRBQkFTRV9VUkwiOiJkYXRhYmFzZVVybCJ9LCJzZWNyZXRzIjpbeyJuYW1lIjoiZGItcGFzc3dvcmQiLCJlbnZOYW1lIjoiREJfUEFTU1dPUkQifV0sInJ1bnRpbWUiOnt9LCJpZGVudGl0eSI6ImV4ZWN1dGlvbiIsImJvdW5kcyI6eyJtYXhDcHUiOiIyIiwibWF4TWVtb3J5IjoiMUdpIiwibWF4UmVwbGljYXMiOjR9fV0sImNvbmZpZ3VyYWJsZSI6eyJlbnYiOlsiRkVBVFVSRV9GTEFHUyJdLCJpbnB1dHMiOlsicmVnaW9uLWxhYmVsIl19fX0=",
+    "signatures": [
+      {
+        "signer": "ci",
+        "sig": "MEUCIBi9cDt7z17qNeJMpZMgm0HKDau17AmPeKH2kEgqH8sdAiEAyyq7NowNrUnMDwfw5YPamR0pcZ/7EjmXhNBkpf9NImM="
+      }
+    ]
+  }
+}

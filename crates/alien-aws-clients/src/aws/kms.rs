@@ -18,6 +18,9 @@ pub trait KmsApi: Send + Sync + std::fmt::Debug {
     async fn encrypt(&self, request: EncryptRequest) -> Result<EncryptResponse>;
     async fn decrypt(&self, request: DecryptRequest) -> Result<DecryptResponse>;
     async fn describe_key(&self, key_id: &str) -> Result<DescribeKeyResponse>;
+    async fn create_key(&self, request: CreateKeyRequest) -> Result<CreateKeyResponse>;
+    async fn get_public_key(&self, key_id: &str) -> Result<GetPublicKeyResponse>;
+    async fn sign(&self, request: SignRequest) -> Result<SignResponse>;
 }
 
 #[derive(Debug, Clone)]
@@ -103,6 +106,103 @@ impl KmsApi for KmsClient {
             })?;
         self.send("DescribeKey", body, key_id).await
     }
+
+    async fn create_key(&self, request: CreateKeyRequest) -> Result<CreateKeyResponse> {
+        let body = serde_json::to_string(&request).into_alien_error().context(
+            alien_client_core::ErrorData::SerializationError {
+                message: "Failed to serialize AWS KMS CreateKey request".to_string(),
+            },
+        )?;
+        self.send("CreateKey", body, "new key").await
+    }
+
+    async fn get_public_key(&self, key_id: &str) -> Result<GetPublicKeyResponse> {
+        let body = serde_json::to_string(&DescribeKeyRequest { key_id })
+            .into_alien_error()
+            .context(alien_client_core::ErrorData::SerializationError {
+                message: "Failed to serialize AWS KMS GetPublicKey request".to_string(),
+            })?;
+        self.send("GetPublicKey", body, key_id).await
+    }
+
+    async fn sign(&self, request: SignRequest) -> Result<SignResponse> {
+        let key_id = request.key_id.clone();
+        let body = serde_json::to_string(&request).into_alien_error().context(
+            alien_client_core::ErrorData::SerializationError {
+                message: "Failed to serialize AWS KMS Sign request".to_string(),
+            },
+        )?;
+        self.send("Sign", body, &key_id).await
+    }
+}
+
+/// `CreateKey` for an asymmetric key. Only the fields signing keys need.
+#[derive(Debug, Clone, Serialize, Builder)]
+#[serde(rename_all = "PascalCase")]
+pub struct CreateKeyRequest {
+    /// For example `ECC_NIST_P256`.
+    #[builder(start_fn)]
+    pub key_spec: String,
+    /// For example `SIGN_VERIFY`.
+    #[builder(start_fn)]
+    pub key_usage: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[builder(default)]
+    pub tags: Vec<KmsTag>,
+}
+
+/// A KMS resource tag.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct KmsTag {
+    pub tag_key: String,
+    pub tag_value: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct CreateKeyResponse {
+    pub key_metadata: KeyMetadata,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct GetPublicKeyResponse {
+    pub key_id: String,
+    /// Base64 DER SubjectPublicKeyInfo.
+    pub public_key: String,
+    pub key_spec: String,
+    pub key_usage: String,
+}
+
+/// `Sign` over a message or a precomputed digest.
+#[derive(Debug, Clone, Serialize, Builder)]
+#[serde(rename_all = "PascalCase")]
+pub struct SignRequest {
+    #[builder(start_fn)]
+    pub key_id: String,
+    /// Base64 of the message, or of its digest when `message_type` is `DIGEST`.
+    #[builder(start_fn)]
+    pub message: String,
+    /// `RAW` or `DIGEST`.
+    #[builder(start_fn)]
+    pub message_type: String,
+    /// For example `ECDSA_SHA_256`.
+    #[builder(start_fn)]
+    pub signing_algorithm: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct SignResponse {
+    pub key_id: String,
+    /// Base64 DER ECDSA signature.
+    pub signature: String,
+    pub signing_algorithm: String,
 }
 
 #[derive(Serialize)]

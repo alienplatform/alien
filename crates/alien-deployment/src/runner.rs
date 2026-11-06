@@ -1698,6 +1698,8 @@ mod tests {
                 version: None,
                 description: None,
                 stack: test_stack(),
+                signed: None,
+                signer_lists: Vec::new(),
             }),
             stack_state: None,
             error: None,
@@ -2103,6 +2105,8 @@ mod tests {
                 version: None,
                 description: None,
                 stack,
+                signed: None,
+                signer_lists: Vec::new(),
             }),
             stack_state: None,
             error: None,
@@ -2143,6 +2147,7 @@ mod tests {
             native_image_host: None,
             volume_restores: Vec::new(),
             deletion_policy: Default::default(),
+            release_statements: None,
         }
     }
 

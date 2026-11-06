@@ -814,6 +814,8 @@ impl DeploymentLoop {
                 version: None,
                 description: None,
                 stack,
+                signed: None,
+                signer_lists: Vec::new(),
             }),
             (Some(id), None) if Some(id.as_str()) == target_release_id => {
                 deployment_stack.as_ref().map(|stack| ReleaseInfo {
@@ -821,6 +823,8 @@ impl DeploymentLoop {
                     version: None,
                     description: None,
                     stack: stack.clone(),
+                    signed: None,
+                    signer_lists: Vec::new(),
                 })
             }
             (Some(id), None) => self
@@ -831,6 +835,8 @@ impl DeploymentLoop {
                     version: None,
                     description: None,
                     stack,
+                    signed: None,
+                    signer_lists: Vec::new(),
                 }),
         };
 
@@ -1392,6 +1398,8 @@ impl DeploymentLoop {
                 version: None,
                 description: None,
                 stack,
+                signed: None,
+                signer_lists: Vec::new(),
             });
             if is_current {
                 state.current_release = release;
@@ -1696,6 +1704,7 @@ impl RunnerConfigSources<'_> {
                 native_image_host,
                 volume_restores: Vec::new(),
                 deletion_policy: Default::default(),
+                release_statements: None,
             }
         };
         Ok(config)
@@ -1978,6 +1987,8 @@ fn state_from_record(
                     version: None,
                     description: None,
                     stack: stack.clone(),
+                    signed: None,
+                    signer_lists: Vec::new(),
                 })
         }),
         target_release: deployment_stack.map(|stack| ReleaseInfo {
@@ -1985,6 +1996,8 @@ fn state_from_record(
             version: None,
             description: None,
             stack: stack.clone(),
+            signed: None,
+            signer_lists: Vec::new(),
         }),
         stack_state: deployment.stack_state.clone(),
         error: None,
@@ -2288,6 +2301,8 @@ mod tests {
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
+                    signed_stacks: Default::default(),
+                    setup_templates: Default::default(),
                 },
             )
             .await
@@ -2433,6 +2448,8 @@ mod tests {
                         git_commit_sha: None,
                         git_commit_ref: None,
                         git_commit_message: None,
+                        signed_stacks: Default::default(),
+                        setup_templates: Default::default(),
                     },
                 )
                 .await
@@ -2908,6 +2925,8 @@ mod tests {
                             git_commit_sha: None,
                             git_commit_ref: None,
                             git_commit_message: None,
+                            signed_stacks: Default::default(),
+                            setup_templates: Default::default(),
                         },
                     )
                     .await
@@ -4904,6 +4923,8 @@ mod tests {
                             git_commit_sha: None,
                             git_commit_ref: None,
                             git_commit_message: None,
+                            signed_stacks: Default::default(),
+                            setup_templates: Default::default(),
                         },
                     )
                     .await

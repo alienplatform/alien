@@ -2983,6 +2983,8 @@ fn write_terraform_lifecycle_module(
         &stack,
         TerraformTarget::Eks,
         TerraformOptions {
+            setup_identity: None,
+            pins: alien_core::SetupPins::compiled_in(),
             display_name: None,
             registry: &registry,
             stack_settings: StackSettings::default(),

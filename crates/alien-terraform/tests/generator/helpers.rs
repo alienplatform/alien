@@ -123,6 +123,20 @@ pub fn assert_ungated_registration_list_is_a_plain_array(main: &str) {
     );
 }
 
+/// What a released CLI build pins, so protected setups render in tests.
+pub fn test_pins() -> alien_core::SetupPins {
+    alien_core::SetupPins {
+        aws_publisher: Some("111122223333".to_string()),
+        aws_verifier_image: Some(format!("verifier@sha256:{}", "ab".repeat(32))),
+        gcp_verifier_image: Some(format!("gcr.example/verifier@sha256:{}", "6e".repeat(32))),
+        azure_verifier_image: Some(format!(
+            "registry.example/verifier@sha256:{}",
+            "7f".repeat(32)
+        )),
+        operator_digest: Some(format!("sha256:{}", "cd".repeat(32))),
+    }
+}
+
 /// Render `stack` for `target` against the built-in registry with the given
 /// settings. Panics on render failure so test bodies stay short.
 pub fn render(stack: &Stack, target: TerraformTarget, settings: StackSettings) -> ModuleFiles {
@@ -149,6 +163,15 @@ pub fn render_with_registry(
         stack,
         target,
         TerraformOptions {
+            // Protected modules report which setup they are; the value doesn't matter here.
+            setup_identity: settings.signing.as_ref().map(|_| {
+                alien_terraform::TerraformSetupIdentity {
+                    setup_target: target.cloud_platform().as_str().to_string(),
+                    setup_fingerprint: "test-fingerprint".to_string(),
+                    setup_fingerprint_version: 1,
+                }
+            }),
+            pins: test_pins(),
             display_name: None,
             registry,
             stack_settings: settings,

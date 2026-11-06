@@ -44,6 +44,8 @@ impl ReleaseStore for StubReleaseStore {
             git_commit_ref: params.git_commit_ref,
             git_commit_message: params.git_commit_message,
             created_at: Utc::now(),
+            signed_stacks: Default::default(),
+            setup_templates: Default::default(),
         })
     }
 
@@ -188,6 +190,8 @@ fn release(id: &str, platform: Platform, stack: Stack) -> ReleaseRecord {
         git_commit_ref: None,
         git_commit_message: None,
         created_at: Utc::now(),
+        signed_stacks: Default::default(),
+        setup_templates: Default::default(),
     }
 }
 

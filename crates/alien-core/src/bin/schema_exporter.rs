@@ -87,6 +87,7 @@ use utoipa::OpenApi;
     EndpointAccess,
     NetworkSettings,
     ComputeSettings,
+    StackSigning,
     FailureDomainSelection,
     ComputePoolSelection,
     DomainSettings,

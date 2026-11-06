@@ -8,6 +8,7 @@
 use crate::{
     emitter::{HelmFragment, InfrastructureValue},
     registry::HelmRegistry,
+    signing::SignedChartPins,
 };
 use alien_core::{
     access_request_crd::AccessRequestCrdNames,
@@ -206,9 +207,20 @@ pub struct OperatorLogCollectorOptions<'a> {
     pub pod_label_value: Option<&'a str>,
 }
 
-/// Generate a Helm chart for `stack`.
+/// Generate a Helm chart for `stack`. A stack whose settings pin release signing needs
+/// [`generate_signed_helm_chart`].
 pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<HelmChart> {
-    generate_helm_chart_internal(stack, options, None)
+    generate_helm_chart_internal(stack, options, None, None)
+}
+
+/// Generate the Helm chart of a stack whose settings pin release signing. The chart runs the
+/// Operator build `pins` names, which must be the one the signed release lists.
+pub fn generate_signed_helm_chart(
+    stack: &Stack,
+    options: HelmOptions<'_>,
+    pins: &SignedChartPins,
+) -> Result<HelmChart> {
+    generate_helm_chart_internal(stack, options, None, Some(pins))
 }
 
 /// Generate a product Helm chart with the Remote Operator in the same release.
@@ -217,7 +229,7 @@ pub fn generate_product_helm_chart(
     options: HelmOptions<'_>,
     remote_operator: ProductOperatorManifestOptions<'_>,
 ) -> Result<HelmChart> {
-    generate_helm_chart_internal(stack, options, Some((remote_operator, None)))
+    generate_helm_chart_internal(stack, options, Some((remote_operator, None)), None)
 }
 
 /// Generate a product Helm chart carrying an exact Remote Operator image receipt.
@@ -231,6 +243,7 @@ pub fn generate_product_helm_chart_with_image_identity(
         stack,
         options,
         Some((remote_operator, Some(image_identity))),
+        None,
     )
 }
 
@@ -241,6 +254,7 @@ fn generate_helm_chart_internal(
         ProductOperatorManifestOptions<'_>,
         Option<OperatorImageIdentityOptions<'_>>,
     )>,
+    signing_pins: Option<&SignedChartPins>,
 ) -> Result<HelmChart> {
     let mut platform_stack = stack.clone();
     alien_core::remove_off_platform_gated_resources(
@@ -284,7 +298,10 @@ fn generate_helm_chart_internal(
         "templates/serviceaccount.yaml".to_string(),
         serviceaccount_tpl(),
     );
-    files.insert("templates/role.yaml".to_string(), role_tpl());
+    files.insert(
+        "templates/role.yaml".to_string(),
+        role_tpl(options.stack_settings.signing.is_some()),
+    );
     files.insert("templates/rolebinding.yaml".to_string(), rolebinding_tpl());
     files.insert("templates/clusterrole.yaml".to_string(), clusterrole_tpl());
     files.insert(
@@ -353,6 +370,7 @@ fn generate_helm_chart_internal(
     let has_remote_operator = remote_operator.is_some();
 
     if let Some((remote_operator, image_identity)) = remote_operator {
+        crate::signing::refuse_remote_operator(&options.stack_settings)?;
         add_remote_operator_files(&mut files, remote_operator, image_identity)?;
     }
 
@@ -423,6 +441,7 @@ fn generate_helm_chart_internal(
         "files/stack-settings.json".to_string(),
         ensure_trailing_newline(stack_settings_json),
     );
+    crate::signing::add_signing(&mut files, &options.stack_settings, signing_pins)?;
 
     Ok(HelmChart {
         name: chart_name,
@@ -1972,6 +1991,16 @@ fn generate_operator_manifest_inner(
     image_identity: Option<OperatorImageIdentityOptions<'_>>,
     dynamic_containers: bool,
 ) -> Result<String> {
+    if options
+        .stack_settings
+        .is_some_and(|settings| settings.signing.is_some())
+    {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: "An Operator manifest has no signing settings ConfigMaps or locked RBAC; \
+                      install a stack with release signing from its signed Helm chart"
+                .to_string(),
+        }));
+    }
     if options.format == OperatorOutputFormat::RawManifest && credentials_secret_name.is_none() {
         validate_runtime_encryption_key(options.encryption_key)?;
     }
@@ -5676,18 +5705,31 @@ imagePullSecrets:
     .to_string()
 }
 
-fn role_tpl() -> String {
-    r#"apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: {{ include "deployment.fullname" . }}
-  labels:
-    {{- include "deployment.labels" . | nindent 4 }}
-rules:
-  - apiGroups: [""]
+/// The Operator's Role in the release namespace. With release signing the Operator reads
+/// ConfigMaps and writes only the install's ledger, so it can't rewrite the signing settings
+/// it checks itself against.
+fn role_tpl(signing: bool) -> String {
+    let core_rules = if signing {
+        crate::signing::OPERATOR_CORE_RULES
+    } else {
+        r#"  - apiGroups: [""]
     resources: ["configmaps", "secrets", "services", "pods", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "podApi") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+"#
+    };
+    format!(
+        r#"apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{{{ include "deployment.fullname" . }}}}
+  labels:
+    {{{{- include "deployment.labels" . | nindent 4 }}}}
+rules:
+{core_rules}{ROLE_RULES}"#
+    )
+}
+
+const ROLE_RULES: &str = r#"  {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "podApi") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
@@ -5722,9 +5764,7 @@ rules:
   - apiGroups: ["alb.networking.azure.io"]
     resources: ["healthcheckpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-"#
-    .to_string()
-}
+"#;
 
 fn rolebinding_tpl() -> String {
     r#"apiVersion: rbac.authorization.k8s.io/v1

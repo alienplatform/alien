@@ -7,7 +7,9 @@ use alien_core::embedded_config::DeployCliConfig;
 use alien_core::instance_catalog::{parse_cpu, Architecture};
 use alien_core::MachineProfile;
 use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
+use alien_signing::{InstallId, Ledger, SignedStatement, SigningSettings, Trust};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use chrono::Utc;
 use clap::Args;
 use flate2::read::GzDecoder;
 use reqwest::Url;
@@ -71,6 +73,9 @@ const MEMORY_TOLERANCE_PERCENT: u64 = 90;
 /// (xfs) 99%. Accept a filesystem of at least this share of the pool's size.
 const STORAGE_TOLERANCE_PERCENT: u64 = 85;
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+/// Where the machine agent reads its signing settings. Fixed here and in the agent, never
+/// taken from the bundle, so a bundle can't send them where the agent doesn't look.
+const SIGNING_SETTINGS_FILE: &str = "etc/machine-agent/signing.toml";
 
 #[derive(Args, Debug)]
 pub struct JoinArgs {
@@ -114,6 +119,19 @@ pub struct JoinArgs {
     /// Cluster ID the host should join.
     #[arg(long)]
     pub cluster_id: Option<String>,
+
+    /// Run only releases signed with these keys: the `SHA256:...` fingerprint
+    /// of the vendor's signer list, from the vendor's security page.
+    #[arg(long, requires_all = ["signing_prefix", "signing_channel"])]
+    pub signing_fingerprint: Option<String>,
+
+    /// The install prefix the vendor signs configuration for.
+    #[arg(long, requires = "signing_fingerprint")]
+    pub signing_prefix: Option<String>,
+
+    /// The release channel this machine follows, such as `production`.
+    #[arg(long, requires = "signing_fingerprint")]
+    pub signing_channel: Option<String>,
 
     /// Print the resolved join plan without installing anything.
     #[arg(long)]
@@ -206,6 +224,9 @@ struct JoinRequest {
     capacity_group_admission: Option<CapacityGroupAdmission>,
     plan: JoinPlan,
     install_root: PathBuf,
+    /// Signing settings from join's own flags. Set, the machine runs only
+    /// what the vendor signed.
+    signing: Option<SigningSettings>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -253,6 +274,18 @@ struct MachineBundleManifest {
     artifacts: Vec<MachineBundleArtifact>,
     #[serde(default)]
     registration: Option<MachineBundleRegistration>,
+    /// The signed release the bundle's machine agent build comes from, and
+    /// the signer lists from the fingerprint to the one that signed it. The
+    /// bundle only carries them; a protected join verifies them itself.
+    #[serde(default)]
+    signing: Option<MachineBundleSigning>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MachineBundleSigning {
+    signer_lists: Vec<SignedStatement>,
+    release: SignedStatement,
 }
 
 #[derive(Debug, Deserialize)]
@@ -671,8 +704,10 @@ fn build_join_request(
         || args.wireguard_endpoint.is_some()
         || network_interface.is_some()
         || wireguard_endpoint.is_some();
+    let signing = resolve_signing(args)?;
 
     Ok(JoinRequest {
+        signing,
         capacity_group_admission,
         token: wrapped_token
             .map(|wrapped| wrapped.join_token)
@@ -1388,6 +1423,7 @@ fn wireguard_available() -> bool {
 async fn print_join_plan(request: &JoinRequest) -> Result<()> {
     let paths = install_paths(&request.install_root);
     let manifest = download_manifest(&request.plan.bundle_url).await?;
+    reject_signing_entries(&manifest)?;
     reject_different_cluster(&paths, request)?;
     validate_public_ip_bundle_support(request, &manifest)?;
     let action = classify_join_action(&paths, request, &manifest).await?;
@@ -1456,6 +1492,13 @@ fn join_configuration_changed(
     {
         return Ok(true);
     }
+    if let Some(settings) = &request.signing {
+        if read_signing_settings(&request.install_root)?
+            .is_none_or(|(written, _)| &written != settings)
+        {
+            return Ok(true);
+        }
+    }
     let join_token_path = rooted_manifest_path(
         &request.install_root,
         "bundle.config.joinTokenFile",
@@ -1493,6 +1536,7 @@ async fn install_join(request: JoinRequest) -> Result<()> {
 
     output::step(1, 6, "Resolving machine bundle");
     let manifest = download_manifest(&request.plan.bundle_url).await?;
+    reject_signing_entries(&manifest)?;
     reject_different_cluster(&paths, &request)?;
     validate_public_ip_bundle_support(&request, &manifest)?;
     let action = classify_join_action(&paths, &request, &manifest).await?;
@@ -1593,6 +1637,17 @@ async fn install_join(request: JoinRequest) -> Result<()> {
             })?;
     }
 
+    if let Some(settings) = &request.signing {
+        let install = signing_install_id(&request.install_root, settings)?;
+        verify_machine_agent(
+            settings,
+            &install,
+            &manifest,
+            request.plan.arch,
+            &executable_path,
+        )?;
+        write_signing_settings(&request.install_root, settings, &install)?;
+    }
     let config_path = write_machine_config(&paths, &request, &manifest, &extracted_dir)?;
     configure_ip_forwarding(&request.install_root)?;
     let join_token_path = rooted_manifest_path(
@@ -1685,6 +1740,17 @@ async fn reconcile_existing_join(
         &state.executable_path,
         Path::new(&manifest.service.executable),
     )?;
+    if let Some(settings) = &request.signing {
+        let install = signing_install_id(&request.install_root, settings)?;
+        verify_machine_agent(
+            settings,
+            &install,
+            manifest,
+            request.plan.arch,
+            &state.executable_path,
+        )?;
+        write_signing_settings(&request.install_root, settings, &install)?;
+    }
     let config_path = write_machine_config(paths, request, manifest, &bundle_root)?;
     configure_ip_forwarding(&request.install_root)?;
     state.config_path = config_path.clone();
@@ -3148,6 +3214,278 @@ fn install_state_path(paths: &InstallPaths) -> PathBuf {
     paths.state_dir.join("install-state.json")
 }
 
+/// `signing.toml`, as the machine agent reads it.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SigningSettingsFile {
+    fingerprint: String,
+    prefix: String,
+    channel: String,
+    install_id: String,
+}
+
+/// The signing settings join's flags name. A machine that already has
+/// settings stays protected: joining it again without the same flags is
+/// refused (protection is sticky).
+fn resolve_signing(args: &JoinArgs) -> Result<Option<SigningSettings>> {
+    let written = read_signing_settings(&args.install_root)?;
+    let settings = match (
+        &args.signing_fingerprint,
+        &args.signing_prefix,
+        &args.signing_channel,
+    ) {
+        (Some(fingerprint), Some(prefix), Some(channel)) => {
+            let settings = SigningSettings {
+                fingerprint: fingerprint.clone(),
+                prefix: prefix.clone(),
+                channel: channel.clone(),
+            };
+            settings.validate().context(ErrorData::ValidationError {
+                field: "signing-fingerprint".to_string(),
+                message: "the signing flags are not valid signing settings".to_string(),
+            })?;
+            Some(settings)
+        }
+        _ => None,
+    };
+    match (&written, &settings) {
+        (Some((written, _)), None) => Err(AlienError::new(ErrorData::ValidationError {
+            field: "signing-fingerprint".to_string(),
+            message: format!(
+                "this machine runs only releases signed for {} ({}); join it again with --signing-fingerprint {} --signing-prefix {} --signing-channel {}",
+                written.fingerprint,
+                signing_settings_path(&args.install_root).display(),
+                written.fingerprint,
+                written.prefix,
+                written.channel
+            ),
+        })),
+        (Some((written, _)), Some(settings)) if written != settings => {
+            Err(AlienError::new(ErrorData::ValidationError {
+                field: "signing-fingerprint".to_string(),
+                message: format!(
+                    "this machine already runs only releases signed for {} under prefix {} on channel {}; changing its signing settings is a new install: the machine's operator resets it first",
+                    written.fingerprint, written.prefix, written.channel
+                ),
+            }))
+        }
+        _ => Ok(settings),
+    }
+}
+
+fn signing_settings_path(install_root: &Path) -> PathBuf {
+    rooted_path(install_root, SIGNING_SETTINGS_FILE)
+}
+
+/// The settings and install id join wrote earlier, if any.
+fn read_signing_settings(install_root: &Path) -> Result<Option<(SigningSettings, InstallId)>> {
+    let path = signing_settings_path(install_root);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .into_alien_error()
+                .context(ErrorData::FileOperationFailed {
+                    operation: "read".to_string(),
+                    file_path: path.display().to_string(),
+                    reason: "Failed to read the machine's signing settings".to_string(),
+                })
+        }
+    };
+    let unreadable = || ErrorData::FileOperationFailed {
+        operation: "parse".to_string(),
+        file_path: path.display().to_string(),
+        reason: "The machine's signing settings are not valid".to_string(),
+    };
+    let file: SigningSettingsFile = toml::from_str(&text)
+        .into_alien_error()
+        .context(unreadable())?;
+    let settings = SigningSettings {
+        fingerprint: file.fingerprint,
+        prefix: file.prefix,
+        channel: file.channel,
+    };
+    settings.validate().context(unreadable())?;
+    let install = InstallId::parse(&file.install_id).context(unreadable())?;
+    if !matches!(install, InstallId::Machine { .. }) {
+        return Err(AlienError::new(unreadable()));
+    }
+    Ok(Some((settings, install)))
+}
+
+/// The machine's install id: the one join wrote with the same settings, or a
+/// new one generated here, on the machine. Nothing the control plane sends
+/// can name it.
+fn signing_install_id(install_root: &Path, settings: &SigningSettings) -> Result<InstallId> {
+    match read_signing_settings(install_root)? {
+        Some((written, install)) if &written == settings => Ok(install),
+        Some(_) => Err(AlienError::new(ErrorData::ValidationError {
+            field: "signing-fingerprint".to_string(),
+            message: "this machine already has other signing settings".to_string(),
+        })),
+        None => Ok(InstallId::Machine {
+            id: uuid::Uuid::new_v4().to_string(),
+        }),
+    }
+}
+
+/// Write the machine agent's signing settings, root-owned and world-readable.
+fn write_signing_settings(
+    install_root: &Path,
+    settings: &SigningSettings,
+    install: &InstallId,
+) -> Result<()> {
+    if read_signing_settings(install_root)?.as_ref() == Some(&(settings.clone(), install.clone())) {
+        return Ok(());
+    }
+    let path = signing_settings_path(install_root);
+    let failed = |operation: &str, reason: &str| ErrorData::FileOperationFailed {
+        operation: operation.to_string(),
+        file_path: path.display().to_string(),
+        reason: reason.to_string(),
+    };
+    let text = toml::to_string(&SigningSettingsFile {
+        fingerprint: settings.fingerprint.clone(),
+        prefix: settings.prefix.clone(),
+        channel: settings.channel.clone(),
+        install_id: install.to_string(),
+    })
+    .into_alien_error()
+    .context(failed("serialize", "Failed to encode the signing settings"))?;
+    let parent = path.parent().ok_or_else(|| {
+        AlienError::new(failed("resolve", "No directory for the signing settings"))
+    })?;
+    std::fs::create_dir_all(parent)
+        .into_alien_error()
+        .context(failed(
+            "create",
+            "Failed to create the signing settings directory",
+        ))?;
+    let temporary = path.with_extension("toml.tmp");
+    std::fs::write(&temporary, text)
+        .into_alien_error()
+        .context(failed("write", "Failed to write the signing settings"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o644))
+            .into_alien_error()
+            .context(failed(
+                "chmod",
+                "Failed to make the signing settings world-readable",
+            ))?;
+    }
+    std::fs::rename(&temporary, &path)
+        .into_alien_error()
+        .context(failed("rename", "Failed to install the signing settings"))?;
+    Ok(())
+}
+
+/// A bundle may not configure where or what the machine agent's signing
+/// settings are: join writes them from its own flags.
+fn reject_signing_entries(manifest: &MachineBundleManifest) -> Result<()> {
+    let names_signing = |name: &str| {
+        let name = name.to_ascii_lowercase();
+        name.contains("signing") || name.contains("trustanchor") || name.contains("trust_anchor")
+    };
+    let entries = manifest
+        .config
+        .entries
+        .iter()
+        .map(|entry| ("bundle.config.entries", entry.key.as_str()));
+    let environment = manifest
+        .service
+        .environment
+        .keys()
+        .map(|key| ("bundle.service.environment", key.as_str()));
+    for (field, name) in entries.chain(environment) {
+        if names_signing(name) {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: field.to_string(),
+                message: format!(
+                    "the bundle sets '{name}', which names signing settings; join writes those only from its own flags"
+                ),
+            }));
+        }
+    }
+    Ok(())
+}
+
+/// The release component naming the machine agent build for `arch`.
+fn machine_agent_component(arch: MachineArch) -> &'static str {
+    match arch {
+        MachineArch::X64 => "machine-agent/linux-x86_64",
+        MachineArch::Arm64 => "machine-agent/linux-aarch64",
+    }
+}
+
+/// Check the bundle's machine agent is the build the vendor's signed release
+/// names, before it is installed.
+fn verify_machine_agent(
+    settings: &SigningSettings,
+    install: &InstallId,
+    manifest: &MachineBundleManifest,
+    arch: MachineArch,
+    executable: &Path,
+) -> Result<()> {
+    let refused = |message: String| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "bundle.signing".to_string(),
+            message,
+        })
+    };
+    let signing = manifest.signing.as_ref().ok_or_else(|| {
+        refused(
+            "the bundle carries no signed release, so its machine agent can't be checked against what the vendor signed"
+                .to_string(),
+        )
+    })?;
+    let now = Utc::now();
+    let release_refused = |what: &str| ErrorData::ValidationError {
+        field: "bundle.signing".to_string(),
+        message: format!(
+            "the bundle's {what} doesn't verify for fingerprint {} on channel {}",
+            settings.fingerprint, settings.channel
+        ),
+    };
+    // Join checks the agent build only; the agent keeps the install's floors.
+    let trust = Trust::new(
+        settings.clone(),
+        install.clone(),
+        &signing.signer_lists,
+        &Ledger::new(&settings.prefix),
+        now,
+    )
+    .context(release_refused("signer list chain"))?;
+    let release = trust
+        .verify_release(&signing.release, now)
+        .context(release_refused("release"))?;
+    let component = machine_agent_component(arch);
+    let pinned = release.body.components.get(component).ok_or_else(|| {
+        refused(format!(
+            "signed release {} names no {component} build",
+            release.sequence
+        ))
+    })?;
+    let bytes =
+        std::fs::read(executable)
+            .into_alien_error()
+            .context(ErrorData::FileOperationFailed {
+                operation: "read".to_string(),
+                file_path: executable.display().to_string(),
+                reason: "Failed to read the bundle's machine agent".to_string(),
+            })?;
+    let actual = format!("sha256:{}", hex::encode(Sha256::digest(&bytes)));
+    if &actual != pinned {
+        return Err(refused(format!(
+            "the bundle's machine agent is {actual}, but signed release {} names {pinned} for {component}; nothing was installed",
+            release.sequence
+        )));
+    }
+    Ok(())
+}
+
 fn install_paths(root: &Path) -> InstallPaths {
     InstallPaths {
         bundle_dir: rooted_path(root, "opt/alien/machine-bundle"),
@@ -3267,6 +3605,9 @@ mod tests {
             bundle_url: Some("https://packages.example.com/manifest.json".to_string()),
             control_plane_url: Some("https://control.example.com".to_string()),
             cluster_id: Some("cluster-123".to_string()),
+            signing_fingerprint: None,
+            signing_prefix: None,
+            signing_channel: None,
             dry_run: false,
             install_root: PathBuf::from("/__alien_deploy_cli_test_no_state__"),
         }
@@ -3697,6 +4038,7 @@ mod tests {
             },
             artifacts: vec![],
             registration: None,
+            signing: None,
         }
     }
 
@@ -5612,5 +5954,337 @@ mod tests {
         field[..encoded.len()].copy_from_slice(encoded.as_bytes());
         field[6] = 0;
         field[7] = b' ';
+    }
+    mod signing {
+        use super::*;
+        use alien_signing::envelope::Envelope;
+        use alien_signing::release::Configurable;
+        use alien_signing::{
+            fingerprint, ReleaseBody, Role, SecretKey, Signer, SignerKind, SignerListBody,
+        };
+
+        const AGENT: &[u8] = b"machine agent build 1";
+
+        fn key(seed: u8) -> SecretKey {
+            let mut secret = [seed; 32];
+            secret[0] = 1;
+            SecretKey::from_secret_bytes(&secret).unwrap()
+        }
+
+        fn envelope<B: serde::Serialize>(
+            kind: &str,
+            sequence: u64,
+            not_after: Option<chrono::DateTime<Utc>>,
+            body: B,
+        ) -> SignedStatement {
+            let envelope = Envelope {
+                kind: kind.to_string(),
+                project: "prj_test".to_string(),
+                install: None,
+                sequence,
+                not_after,
+                signer_list_version: 1,
+                body,
+            };
+            SignedStatement::new(&envelope.to_payload().unwrap())
+        }
+
+        /// Signer list version 1 trusting `admin`, and its fingerprint.
+        fn genesis() -> (SignedStatement, String) {
+            let admin = key(2);
+            let list = envelope(
+                "signer-list/v1",
+                1,
+                Some(Utc::now() + chrono::Duration::days(60)),
+                SignerListBody {
+                    previous: None,
+                    admin_threshold: 1,
+                    signers: vec![Signer {
+                        id: "admin".to_string(),
+                        key: admin.public_key().as_str().to_string(),
+                        kind: SignerKind::Device,
+                        roles: vec![Role::Release, Role::Admin],
+                        label: None,
+                    }],
+                    deny: Vec::new(),
+                    recovered: false,
+                },
+            )
+            .sign_with("admin", &admin)
+            .unwrap();
+            let digest = list.open().unwrap().digest;
+            (list, fingerprint(&digest))
+        }
+
+        fn release(channel: &str, agent: &[u8], signer: &SecretKey) -> SignedStatement {
+            envelope(
+                "release/v2",
+                7,
+                None,
+                ReleaseBody {
+                    platform: "machines".to_string(),
+                    channel: channel.to_string(),
+                    workloads: Vec::new(),
+                    configurable: Configurable::default(),
+                    components: BTreeMap::from([(
+                        "machine-agent/linux-x86_64".to_string(),
+                        format!("sha256:{}", hex::encode(Sha256::digest(agent))),
+                    )]),
+                    setup: BTreeMap::new(),
+                    stack: None,
+                },
+            )
+            .sign_with("admin", signer)
+            .unwrap()
+        }
+
+        fn signing_settings(fingerprint: &str) -> SigningSettings {
+            SigningSettings {
+                fingerprint: fingerprint.to_string(),
+                prefix: "acme-edge".to_string(),
+                channel: "production".to_string(),
+            }
+        }
+
+        fn signed_manifest(
+            release: SignedStatement,
+            list: SignedStatement,
+        ) -> MachineBundleManifest {
+            MachineBundleManifest {
+                signing: Some(MachineBundleSigning {
+                    signer_lists: vec![list],
+                    release,
+                }),
+                ..test_manifest()
+            }
+        }
+
+        fn machine() -> InstallId {
+            InstallId::Machine {
+                id: uuid::Uuid::new_v4().to_string(),
+            }
+        }
+
+        fn agent_file(dir: &Path, bytes: &[u8]) -> PathBuf {
+            let path = dir.join("agent");
+            std::fs::write(&path, bytes).unwrap();
+            path
+        }
+
+        #[test]
+        fn join_installs_only_the_machine_agent_the_signed_release_names() {
+            let dir = tempfile::tempdir().unwrap();
+            let (list, fingerprint) = genesis();
+            let settings = signing_settings(&fingerprint);
+            let manifest = signed_manifest(release("production", AGENT, &key(2)), list.clone());
+
+            verify_machine_agent(
+                &settings,
+                &machine(),
+                &manifest,
+                MachineArch::X64,
+                &agent_file(dir.path(), AGENT),
+            )
+            .expect("the signed build is accepted");
+
+            // A build the release doesn't name.
+            let error = verify_machine_agent(
+                &settings,
+                &machine(),
+                &manifest,
+                MachineArch::X64,
+                &agent_file(dir.path(), b"unsigned build"),
+            )
+            .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("but signed release 7 names sha256:"),
+                "{error}"
+            );
+            // An architecture the release names no build for.
+            let error = verify_machine_agent(
+                &settings,
+                &machine(),
+                &manifest,
+                MachineArch::Arm64,
+                &agent_file(dir.path(), AGENT),
+            )
+            .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("names no machine-agent/linux-aarch64 build"),
+                "{error}"
+            );
+            // No signed release in the bundle.
+            let error = verify_machine_agent(
+                &settings,
+                &machine(),
+                &test_manifest(),
+                MachineArch::X64,
+                &agent_file(dir.path(), AGENT),
+            )
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("carries no signed release"),
+                "{error}"
+            );
+            // A release signed by a key outside the vendor's list, or for another channel.
+            for manifest in [
+                signed_manifest(release("production", AGENT, &key(8)), list.clone()),
+                signed_manifest(release("dev", AGENT, &key(2)), list.clone()),
+            ] {
+                let error = verify_machine_agent(
+                    &settings,
+                    &machine(),
+                    &manifest,
+                    MachineArch::X64,
+                    &agent_file(dir.path(), AGENT),
+                )
+                .unwrap_err();
+                assert!(
+                    error
+                        .to_string()
+                        .contains("release doesn't verify for fingerprint"),
+                    "{error}"
+                );
+            }
+            // A chain that doesn't start at the machine's fingerprint.
+            let other = signing_settings(&format!("SHA256:{}", "1".repeat(64)));
+            let error = verify_machine_agent(
+                &other,
+                &machine(),
+                &manifest,
+                MachineArch::X64,
+                &agent_file(dir.path(), AGENT),
+            )
+            .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("signer list chain doesn't verify"),
+                "{error}"
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn join_writes_signing_settings_from_its_own_flags_and_keeps_them() {
+            let root = tempfile::tempdir().unwrap();
+            let (_, fingerprint) = genesis();
+            let settings = signing_settings(&fingerprint);
+
+            let install = signing_install_id(root.path(), &settings).unwrap();
+            let InstallId::Machine { id } = &install else {
+                panic!("{install} is not a machine id");
+            };
+            assert_eq!(uuid::Uuid::parse_str(id).unwrap().get_version_num(), 4);
+            write_signing_settings(root.path(), &settings, &install).unwrap();
+
+            let path = root.path().join("etc/machine-agent/signing.toml");
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o644);
+            let file: toml::Table =
+                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(
+                file,
+                toml::Table::from_iter([
+                    ("fingerprint".to_string(), fingerprint.clone().into()),
+                    ("prefix".to_string(), "acme-edge".into()),
+                    ("channel".to_string(), "production".into()),
+                    ("install_id".to_string(), install.to_string().into()),
+                ])
+            );
+            // Joining again with the same flags keeps the install id.
+            assert_eq!(signing_install_id(root.path(), &settings).unwrap(), install);
+
+            // Other settings, or no flags at all, are refused: protection is sticky.
+            let args = |fingerprint: Option<&str>| JoinArgs {
+                signing_fingerprint: fingerprint.map(str::to_string),
+                signing_prefix: fingerprint.map(|_| "acme-edge".to_string()),
+                signing_channel: fingerprint.map(|_| "production".to_string()),
+                install_root: root.path().to_path_buf(),
+                ..test_join_args()
+            };
+            let other = format!("SHA256:{}", "1".repeat(64));
+            let error =
+                build_join_request(&args(Some(&other)), None, linux_host(root.path())).unwrap_err();
+            assert!(
+                error.to_string().contains("changing its signing settings"),
+                "{error}"
+            );
+            let error = build_join_request(&args(None), None, linux_host(root.path())).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("runs only releases signed for {fingerprint}")),
+                "{error}"
+            );
+            let request =
+                build_join_request(&args(Some(&fingerprint)), None, linux_host(root.path()))
+                    .unwrap();
+            assert_eq!(request.signing, Some(settings.clone()));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), {
+                let mut text = String::new();
+                for (key, value) in [
+                    ("fingerprint", fingerprint.as_str()),
+                    ("prefix", "acme-edge"),
+                    ("channel", "production"),
+                    ("install_id", install.to_string().as_str()),
+                ] {
+                    text.push_str(&format!("{key} = \"{value}\"\n"));
+                }
+                text
+            });
+        }
+
+        #[test]
+        fn join_refuses_signing_flags_that_are_not_settings() {
+            let root = tempfile::tempdir().unwrap();
+            let args = JoinArgs {
+                signing_fingerprint: Some("SHA256:short".to_string()),
+                signing_prefix: Some("acme-edge".to_string()),
+                signing_channel: Some("production".to_string()),
+                install_root: root.path().to_path_buf(),
+                ..test_join_args()
+            };
+            let error = build_join_request(&args, None, linux_host(root.path())).unwrap_err();
+            assert!(
+                error.to_string().contains("not valid signing settings"),
+                "{error}"
+            );
+        }
+
+        #[test]
+        fn bundles_may_not_name_signing_settings() {
+            reject_signing_entries(&test_manifest()).expect("an ordinary bundle is accepted");
+            for key in [
+                "signingSettings",
+                "releaseTrustAnchor",
+                "agent.signing.path",
+            ] {
+                let mut manifest = test_manifest();
+                manifest.config.entries.push(MachineBundleConfigEntry {
+                    key: key.to_string(),
+                    source: MachineBundleConfigSource::Literal(
+                        "/tmp/settings.toml".to_string().into(),
+                    ),
+                    optional: false,
+                });
+                let error = reject_signing_entries(&manifest).unwrap_err();
+                assert!(
+                    error.to_string().contains(&format!("sets '{key}'")),
+                    "{error}"
+                );
+            }
+            let mut manifest = test_manifest();
+            manifest.service.environment.insert(
+                "AGENT_SIGNING_FILE".to_string(),
+                "/tmp/settings.toml".to_string(),
+            );
+            let error = reject_signing_entries(&manifest).unwrap_err();
+            assert!(error.to_string().contains("AGENT_SIGNING_FILE"), "{error}");
+        }
     }
 }

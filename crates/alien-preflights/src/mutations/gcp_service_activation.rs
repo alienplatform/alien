@@ -57,7 +57,7 @@ impl StackMutation for GcpServiceActivationMutation {
         }
 
         // Check what resource types exist in the stack that need service activation
-        let required_services = self.get_required_services(stack, stack_state);
+        let required_services = self.required_services(stack, stack_state, config);
 
         if required_services.is_empty() {
             return false;
@@ -86,11 +86,11 @@ impl StackMutation for GcpServiceActivationMutation {
         &self,
         mut stack: Stack,
         stack_state: &StackState,
-        _config: &DeploymentConfig,
+        config: &DeploymentConfig,
     ) -> Result<Stack> {
         info!("Adding GCP ServiceActivation resources");
 
-        let required_services = self.get_required_services(&stack, stack_state);
+        let required_services = self.required_services(&stack, stack_state, config);
 
         for (service_id, service_name) in required_services {
             // Check if this service activation already exists
@@ -159,6 +159,28 @@ fn kms_used_without_activation(stack_state: &StackState) -> bool {
 }
 
 impl GcpServiceActivationMutation {
+    /// The services the stack's resources need, plus what setup needs on a protected install:
+    /// Parameter Manager for the signing settings and Cloud Run for the verifier.
+    fn required_services(
+        &self,
+        stack: &Stack,
+        stack_state: &StackState,
+        config: &DeploymentConfig,
+    ) -> BTreeMap<String, String> {
+        let mut services = self.get_required_services(stack, stack_state);
+        if config.stack_settings.signing.is_some() {
+            services.insert(
+                "enable-parameter-manager".to_string(),
+                "parametermanager.googleapis.com".to_string(),
+            );
+            services.insert(
+                "enable-cloud-run".to_string(),
+                "run.googleapis.com".to_string(),
+            );
+        }
+        services
+    }
+
     /// Get the mapping of service activation ID to API name based on resources in the stack.
     /// Ordered, because `mutate` inserts in this order and setup renders the stack in it.
     fn get_required_services(

@@ -1355,9 +1355,17 @@ mod tests {
                 cluster
             };
             for (case, old, new) in [
-                ("another size", chosen(Some(40), 4096), chosen(Some(60), 4096)),
+                (
+                    "another size",
+                    chosen(Some(40), 4096),
+                    chosen(Some(60), 4096),
+                ),
                 ("no data disk", chosen(Some(60), 4096), chosen(None, 4096)),
-                ("a wider range", chosen(Some(40), 1024), chosen(Some(40), 4096)),
+                (
+                    "a wider range",
+                    chosen(Some(40), 1024),
+                    chosen(Some(40), 4096),
+                ),
                 (
                     "a range replacing a fixed size",
                     disk_cluster(platform, machine, 20, Some(40)),

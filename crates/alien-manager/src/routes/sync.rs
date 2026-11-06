@@ -242,6 +242,10 @@ pub struct AgentSyncResponse {
     /// charts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_operator_image: Option<String>,
+    /// The deployment's newest signed config, on every sync, so a protected
+    /// Operator applies new developer values without a new release.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signed_config: Option<alien_core::SignedStatement>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -1061,6 +1065,8 @@ mod tests {
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
+                    signed_stacks: Default::default(),
+                    setup_templates: Default::default(),
                 },
             )
             .await
@@ -1187,6 +1193,7 @@ mod tests {
             tunnels: None,
             charts: None,
             release_channels: None,
+            signing: None,
             bundle_signing_key: None,
             bundle_sources: None,
             log_buffer: Arc::new(crate::dev::LogBuffer::new()),
@@ -1281,6 +1288,8 @@ mod tests {
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
+                    signed_stacks: Default::default(),
+                    setup_templates: Default::default(),
                 },
             )
             .await
@@ -2266,6 +2275,8 @@ mod tests {
             version: None,
             description: None,
             stack: Stack::new("test".to_string()).build(),
+            signed: None,
+            signer_lists: Vec::new(),
         });
         assert!(!agent_report_completes_claim(&deployment, &state));
 
@@ -2437,6 +2448,7 @@ mod tests {
             native_image_host: None,
             volume_restores: Vec::new(),
             deletion_policy: Default::default(),
+            release_statements: None,
         }
     }
 
@@ -2721,7 +2733,16 @@ async fn acknowledge_completed_claim(
         target_dynamic_containers: None,
         tunnel_url,
         target_operator_image: None,
+        signed_config: None,
     }))
+}
+
+/// Whether the deployment's setup pinned a signing fingerprint.
+fn is_protected(deployment: &DeploymentRecord) -> bool {
+    deployment
+        .stack_settings
+        .as_ref()
+        .is_some_and(|settings| settings.signing.is_some())
 }
 
 /// `POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync
@@ -2739,7 +2760,6 @@ async fn acknowledge_completed_claim(
         ("bearer" = [])
     )
 ))]
-
 async fn agent_sync(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3253,6 +3273,17 @@ async fn agent_sync(
         None
     };
 
+    // A protected deployment's newest signed config travels with every
+    // sync. Unprotected deployments don't touch the signing store at all.
+    let signed_config = match &state.signing {
+        Some(signing) if is_protected(&deployment) => {
+            match signing.latest_config_statement(&deployment.id).await {
+                Ok(config) => config,
+                Err(error) => return error.into_response(),
+            }
+        }
+        _ => None,
+    };
     Json(AgentSyncResponse {
         execution_claim,
         current_state,
@@ -3272,6 +3303,7 @@ async fn agent_sync(
             .charts
             .as_ref()
             .map(|charts| charts.deployed_operator_image(&state.config.base_url())),
+        signed_config,
     })
     .into_response()
 }
@@ -3496,8 +3528,34 @@ pub(crate) async fn build_pull_target(
         config.monitoring = default_monitoring(&state.config, &deployment);
     }
 
+    // A signed release travels with the project's signer list chain, which
+    // the deployment verifies from the fingerprint its setup pinned.
+    let signed = r.signed_stacks.get(&release_stack_platform).cloned();
+    let signer_lists = match (&signed, &state.signing) {
+        (Some(_), Some(signing)) => signing
+            .signer_lists(&r.project_id)
+            .await
+            .map_err(|error| error.into_response())?
+            .into_iter()
+            .map(|record| record.statement)
+            .collect(),
+        _ => Vec::new(),
+    };
+    // The deployment's newest signed config: a protected deployment takes
+    // developer inputs and configurable env only from it. Unprotected
+    // deployments don't touch the signing store.
+    let signed_config = match (&signed, &state.signing) {
+        (Some(_), Some(signing)) if is_protected(deployment) => signing
+            .latest_config_statement(&deployment.id)
+            .await
+            .map_err(|error| error.into_response())?,
+        _ => None,
+    };
     Ok(TargetDeployment {
+        signed_config,
         release_info: ReleaseInfo {
+            signed,
+            signer_lists,
             release_id: Some(r.id),
             version: None,
             description: None,
@@ -3868,6 +3926,8 @@ fn release_info_from_record(
         version: None,
         description: None,
         stack: release.stacks.get(&release_stack_platform)?.clone(),
+        signed: release.signed_stacks.get(&release_stack_platform).cloned(),
+        signer_lists: Vec::new(),
     })
 }
 

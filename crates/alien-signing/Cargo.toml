@@ -1,0 +1,26 @@
+[package]
+name = "alien-signing"
+version.workspace = true
+edition = "2021"
+description = "Signed statements, signer lists, signing settings and the install ledger for installs that run only what the vendor signed"
+license-file.workspace = true
+
+[features]
+default = []
+# OpenAPI schemas for the types carriers store and forward.
+openapi = ["dep:utoipa"]
+
+[dependencies]
+alien-error = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+p256 = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+sha1 = { workspace = true }
+hex = { workspace = true }
+hmac = { workspace = true }
+snow = { workspace = true }
+getrandom = { workspace = true }
+utoipa = { workspace = true, optional = true }

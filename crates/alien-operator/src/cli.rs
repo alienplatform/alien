@@ -490,6 +490,13 @@ async fn run_operator_cli(
     let operator_scope = args.operator_scope.or_else(|| args.namespace.clone());
     let operator_permission = args.operator_permission;
     let operator_setup_method = args.operator_setup_method;
+    let release_signing = release_signing(
+        args.platform,
+        args.namespace.as_deref(),
+        args.operator_helm_release.as_deref(),
+        &db,
+    )
+    .await?;
     let helm_release = args
         .operator_helm_release
         .zip(args.namespace.clone())
@@ -750,6 +757,8 @@ async fn run_operator_cli(
         .maybe_airgap_target_secret(args.airgap_target_secret)
         .maybe_airgap_status_secret(args.airgap_status_secret)
         .maybe_local_debug_shell_command(args.local_debug_shell_command)
+        .maybe_release_signing(release_signing)
+        .stack_input_values(stack_input_values.clone())
         .build();
 
     let cancel = CancellationToken::new();
@@ -870,6 +879,64 @@ fn observe_only_initial_state(
             base_platform,
         ),
     }
+}
+
+/// Protected mode is on when the chart wrote signing settings to the kept
+/// ConfigMap `<release>-signing` in the Operator's namespace; the Operator
+/// reads it and the cluster's identity itself. An Operator whose ledger holds
+/// a trust root refuses to start without those settings.
+async fn release_signing(
+    platform: Platform,
+    namespace: Option<&str>,
+    release: Option<&str>,
+    db: &crate::db::OperatorDb,
+) -> Result<Option<crate::protected::ReleaseSigning>> {
+    let stored = db.get_signing_trust().await?;
+    let (Platform::Kubernetes, Some(namespace), Some(release)) = (platform, namespace, release)
+    else {
+        if let Some(stored) = stored.filter(|stored| stored.ledger.is_sticky()) {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: format!(
+                    "this install accepted signed state under fingerprint {}, but the Operator has no Kubernetes namespace and Helm release to find its signing settings",
+                    stored.ledger.fingerprint.unwrap_or_default()
+                ),
+            }));
+        }
+        return Ok(None);
+    };
+    let client = alien_k8s_clients::KubernetesClient::new(
+        <alien_k8s_clients::KubernetesClientConfig as alien_k8s_clients::KubernetesClientConfigExt>::try_incluster()
+            .await
+            .context(ErrorData::ConfigurationError {
+                message: "loading in-cluster credentials to read the signing settings".to_string(),
+            })?,
+    )
+    .await
+    .context(ErrorData::ConfigurationError {
+        message: "creating the Kubernetes client to read the signing settings".to_string(),
+    })?;
+    let client = std::sync::Arc::new(client);
+    let ledger = std::sync::Arc::new(crate::protected::ConfigMapLedger {
+        client: client.clone(),
+        namespace: namespace.to_string(),
+        name: crate::protected::ledger_config_map(release),
+    });
+    let Some((signing, kept)) = crate::protected::find_signing(
+        &crate::protected::KubernetesReads(client.as_ref()),
+        ledger,
+        namespace,
+        release,
+        stored.as_ref(),
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    // The install's ledger rises to what the database held, and the
+    // database to what the install's ledger held.
+    signing.ledger.store(&kept.ledger).await?;
+    db.set_signing_trust(&kept).await?;
+    Ok(Some(signing))
 }
 
 #[cfg(unix)]

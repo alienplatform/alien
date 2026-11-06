@@ -6,6 +6,7 @@ pub mod project_store;
 pub mod release_channel_store;
 pub mod release_store;
 pub mod server_bindings;
+pub mod signing_store;
 pub mod telemetry_backend;
 pub mod token_store;
 
@@ -39,7 +40,12 @@ pub use project_store::{ProjectRecord, ProjectStore};
 pub use release_channel_store::{
     DeploymentRouting, ReleaseChannelRecord, ReleaseChannelStore, DEFAULT_CHANNEL,
 };
-pub use release_store::{CreateReleaseParams, ReleaseRecord, ReleaseStore};
+pub use release_store::{
+    CreateReleaseParams, ProtectedSetupQuery, ReleaseRecord, ReleaseStore, SetupTemplateBytes,
+};
 pub use server_bindings::ServerBindings;
+pub use signing_store::{
+    PendingChangeRecord, PendingChangeStatus, SignerListRecord, SignerListWrite, SigningStore,
+};
 pub use telemetry_backend::{TelemetryBackend, TelemetryCaller, TelemetrySignal};
 pub use token_store::{CreateTokenParams, TokenRecord, TokenStore};

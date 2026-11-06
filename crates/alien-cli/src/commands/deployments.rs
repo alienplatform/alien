@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
@@ -1359,9 +1360,14 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             clear,
             yes,
             json,
+            ..
         } => {
-            let variables =
-                build_environment_variables(env, secret, env_targeted, secret_targeted)?;
+            let variables = build_environment_variables(
+                env.clone(),
+                secret.clone(),
+                env_targeted.clone(),
+                secret_targeted.clone(),
+            )?;
             if variables.is_empty() && !clear {
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "env".to_string(),
@@ -1374,6 +1380,19 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             )?;
             let target =
                 resolve_platform_target(&ctx, &id, json, "Environment variable changes").await?;
+            if let Some(install) = protected_install(&ctx, &target).await? {
+                if !secret.is_empty() || !env_targeted.is_empty() || !secret_targeted.is_empty() {
+                    return Err(AlienError::new(ErrorData::ValidationError {
+                        field: "env".to_string(),
+                        message: "This deployment is protected: it takes only plain --env values, signed by you. Deployer secrets are set by the customer with `inputs set`.".to_string(),
+                    }));
+                }
+                // Replaces the whole env set, as without protection; the
+                // signed inputs stay as they are.
+                let env: BTreeMap<String, String> =
+                    parse_pairs(&env, "env", "KEY=VALUE")?.into_iter().collect();
+                return sign_config(&ctx, &target, &install, json, |body| body.env = env).await;
+            }
             deployment_actions::set_environment_variables_task(
                 &target.client,
                 &target.workspace,
@@ -1401,11 +1420,35 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             secret_input_files,
             clear,
             json,
+            ..
         } => {
             // Read files first, so a wrong path fails before any API call.
             let secret_input_files =
                 deployment_actions::read_secret_input_files(&secret_input_files)?;
             let target = resolve_platform_target(&ctx, &id, json, "Stack input changes").await?;
+            if let Some(install) = protected_install(&ctx, &target).await? {
+                if !secret_inputs.is_empty() || !clear.is_empty() {
+                    return Err(AlienError::new(ErrorData::ValidationError {
+                        field: "input".to_string(),
+                        message: "This deployment is protected: it takes only --input values, signed by you. Deployer secrets are set by the customer with `inputs set`.".to_string(),
+                    }));
+                }
+                // Sets the given inputs over the signed ones; the signed env
+                // stays as it is.
+                let inputs: Vec<(String, serde_json::Value)> =
+                    parse_pairs(&inputs, "input", "ID=VALUE")?
+                        .into_iter()
+                        .map(|(key, value)| {
+                            let value = serde_json::from_str(&value)
+                                .unwrap_or(serde_json::Value::String(value));
+                            (key, value)
+                        })
+                        .collect();
+                return sign_config(&ctx, &target, &install, json, |body| {
+                    body.inputs.extend(inputs)
+                })
+                .await;
+            }
             deployment_actions::set_inputs_task(
                 &target.client,
                 &target.workspace,
@@ -1505,6 +1548,83 @@ struct PlatformTarget {
     workspace: String,
     client: alien_platform_api::Client,
     deployment: DeploymentDetailResponse,
+}
+
+/// `KEY=VALUE` pairs.
+fn parse_pairs(pairs: &[String], field: &str, form: &str) -> Result<Vec<(String, String)>> {
+    pairs
+        .iter()
+        .map(|pair| {
+            parse_env_var(pair).ok_or_else(|| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: field.to_string(),
+                    message: format!("'{pair}' is not {form}"),
+                })
+            })
+        })
+        .collect()
+}
+
+/// The install id of a protected deployment, or `None` when it isn't
+/// protected. The id is derived from what the deployment reports about its
+/// cloud; it is not trusted: an install that derives another id from its
+/// own identity refuses the statement.
+async fn protected_install(
+    ctx: &ExecutionMode,
+    target: &PlatformTarget,
+) -> Result<Option<alien_signing::InstallId>> {
+    let query = vec![("workspace".to_string(), target.workspace.clone())];
+    let deployment = crate::signing::api::get_json(
+        ctx,
+        &format!("/v1/deployments/{}", target.deployment.id.as_str()),
+        &query,
+    )
+    .await?;
+    if deployment["protected"].as_bool() != Some(true) {
+        return Ok(None);
+    }
+    crate::signing::install_id(&deployment).map(Some)
+}
+
+/// Sign the deployment's next `config/v1` statement: its latest signed
+/// config, checked here, with `change` applied. The signer list is verified
+/// from the fingerprint in `.alien/signing.json` first. The statement
+/// replaces the deployment's previous signed config.
+async fn sign_config(
+    ctx: &ExecutionMode,
+    target: &PlatformTarget,
+    install: &alien_signing::InstallId,
+    json: bool,
+    change: impl FnOnce(&mut alien_signing::ConfigBody),
+) -> Result<()> {
+    let deployment = target.deployment.id.to_string();
+    let api = crate::signing::api::SigningApi::from_context(ctx).await?;
+    let (chain, signer) =
+        crate::signing::project_signer(&api, alien_signing::Role::Release).await?;
+    let stored = api.config_statements(&deployment).await?;
+    let mut body = crate::signing::latest_config(&chain, install, &stored, chrono::Utc::now())?
+        .unwrap_or_default();
+    change(&mut body);
+    let envelope =
+        crate::signing::envelope(alien_signing::Kind::Config, &chain, Some(install), body);
+    if let Some(gesture) = signer.gesture() {
+        eprintln!("  {gesture} to sign the config for {install} ▸");
+    }
+    let statement = crate::signing::sign_envelope(&envelope, &signer)?;
+    api.publish_config(&deployment, &statement).await?;
+    if json {
+        return crate::output::print_json(&serde_json::json!({
+            "deploymentId": deployment,
+            "install": install.to_string(),
+            "sequence": envelope.sequence,
+            "signer": signer.id(),
+        }));
+    }
+    println!(
+        "✓ Config signed by {} for {install} · delivered to deployment {deployment}",
+        signer.id()
+    );
+    Ok(())
 }
 
 async fn resolve_platform_target(

@@ -246,7 +246,9 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
     let mut statements = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
     let boundary_arn = "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${AWS::StackName}-deployment-management-boundary";
-    let context = permission_context().with_aws_permissions_boundary_arn(boundary_arn);
+    let context = permission_context()
+        .with_aws_permissions_boundary_arn(boundary_arn)
+        .with_signing(ctx.stack_settings);
 
     if let Some(profile) = ctx.stack.management().profile() {
         for permission_set_ref in global_permission_refs(ctx, profile) {

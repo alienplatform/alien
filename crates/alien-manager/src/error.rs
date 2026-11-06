@@ -341,6 +341,71 @@ pub enum ErrorData {
     )]
     ServerInitFailed { reason: String },
 
+    /// A protected setup registered without a release id, and no release signed for its
+    /// platform and channel installs that setup.
+    #[error(
+        code = "PROTECTED_SETUP_RELEASE_NOT_FOUND",
+        message = "No release signed for {platform} on channel '{channel}' installs this setup (setup fingerprint {setup_fingerprint}, version {setup_fingerprint_version})",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    ProtectedSetupReleaseNotFound {
+        /// Platform the setup installs.
+        platform: Platform,
+        /// Channel the setup pins.
+        channel: String,
+        /// Setup fingerprint the setup reported.
+        setup_fingerprint: String,
+        /// Version of the fingerprint scheme.
+        setup_fingerprint_version: u32,
+    },
+
+    /// A signed statement conflicts with one already stored.
+    #[error(
+        code = "SIGNED_STATEMENT_CONFLICT",
+        message = "{reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SignedStatementConflict { reason: String },
+
+    /// Signing was already turned on for the project: a different signer
+    /// list version 1 is stored.
+    #[error(
+        code = "SIGNING_ALREADY_ON",
+        message = "Signing was already turned on for project '{project}' by {enabled_by}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SigningAlreadyOn {
+        project: String,
+        enabled_by: String,
+        enabled_at: String,
+    },
+
+    /// A signer list version skips one, or differs from the stored version.
+    #[error(
+        code = "SIGNER_LIST_CONFLICT",
+        message = "{reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SignerListConflict { reason: String },
+
+    /// No pending change has this id.
+    #[error(
+        code = "PENDING_CHANGE_NOT_FOUND",
+        message = "Pending change '{id}' not found",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 404
+    )]
+    PendingChangeNotFound { id: String },
+
     /// Internal server error
     #[error(
         code = "INTERNAL_ERROR",

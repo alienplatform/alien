@@ -1,0 +1,4 @@
+# Occurrences of the vendor name in AWS setup artifacts that predate the
+# white-label check. This list may only shrink: see white_label_tests.rs.
+# artifact	location	text
+permission-set:worker/dispatch-command	description	Allows dispatching Alien command messages to workers

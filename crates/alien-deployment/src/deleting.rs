@@ -2263,6 +2263,8 @@ mod tests {
                             version: None,
                             description: None,
                             stack: alien_core::Stack::new("test".into()).build(),
+                            signed: None,
+                            signer_lists: Vec::new(),
                         }),
                         ..state.clone()
                     }),

@@ -60,6 +60,8 @@ pub struct AlienManagerBuilder {
     charts: Option<Arc<crate::routes::charts::ChartSettings>>,
     /// Release channels; `None` sends every release to every deployment.
     release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
+    /// Signer lists, pending changes and signed config.
+    signing: Option<Arc<dyn crate::traits::SigningStore>>,
     /// Signs air-gapped bundles.
     bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
     /// Where bundles' charts and Operator images come from.
@@ -91,6 +93,7 @@ impl AlienManagerBuilder {
             tunnels: None,
             charts: None,
             release_channels: None,
+            signing: None,
             bundle_signing_key: None,
             bundle_sources: None,
         }
@@ -114,6 +117,12 @@ impl AlienManagerBuilder {
         resolver: Arc<dyn crate::traits::BundleSourceResolver>,
     ) -> Self {
         self.bundle_sources = Some(resolver);
+        self
+    }
+
+    /// Store signer lists and signed config (see [`crate::traits::SigningStore`]).
+    pub fn signing(mut self, store: Arc<dyn crate::traits::SigningStore>) -> Self {
+        self.signing = Some(store);
         self
     }
 
@@ -309,6 +318,11 @@ impl AlienManagerBuilder {
             self.release_channels = Some(Arc::new(
                 crate::stores::sqlite::SqliteReleaseChannelStore::new(db.clone()),
             ));
+        }
+        if self.signing.is_none() {
+            self.signing = Some(Arc::new(crate::stores::sqlite::SqliteSigningStore::new(
+                db.clone(),
+            )));
         }
         if self.deployment_store.is_none() {
             self.deployment_store = Some(Arc::new(
@@ -793,6 +807,7 @@ impl AlienManagerBuilder {
             self.tunnels,
             self.charts,
             self.release_channels,
+            self.signing,
             self.bundle_signing_key,
             self.bundle_sources,
         )
@@ -969,6 +984,7 @@ async fn finalize(
     tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
     charts: Option<Arc<crate::routes::charts::ChartSettings>>,
     release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
+    signing: Option<Arc<dyn crate::traits::SigningStore>>,
     bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
     bundle_sources: Option<Arc<dyn crate::traits::BundleSourceResolver>>,
 ) -> crate::error::Result<AlienManager> {
@@ -1014,6 +1030,7 @@ async fn finalize(
         tunnels,
         charts,
         release_channels,
+        signing,
         bundle_signing_key,
         bundle_sources,
         log_buffer: log_buffer.clone(),

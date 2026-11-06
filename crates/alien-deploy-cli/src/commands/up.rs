@@ -1422,20 +1422,32 @@ mod tests {
             .await;
         let client = create_manager_client("setup-token", &server.base_url()).unwrap();
 
-        let (result, ()) = tokio::join!(
-            push_deletion(
-                &client,
-                "dep_demo",
-                Platform::Machines,
-                ClientConfig::Machines
-            ),
-            async {
-                while failed_commit.hits_async().await == 0 {
-                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-                }
-                failed_commit.delete_async().await;
-            }
+        // Once the failing commit is answered, the record is gone. The
+        // watcher stops with the deletion, so a deletion that fails before
+        // the commit ends the test instead of hanging it.
+        let deletion = push_deletion(
+            &client,
+            "dep_demo",
+            Platform::Machines,
+            ClientConfig::Machines,
         );
+        let result = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            tokio::pin!(deletion);
+            let mut removed = false;
+            loop {
+                tokio::select! {
+                    result = &mut deletion => break result,
+                    () = tokio::time::sleep(std::time::Duration::from_millis(5)), if !removed => {
+                        if failed_commit.hits_async().await > 0 {
+                            failed_commit.delete_async().await;
+                            removed = true;
+                        }
+                    }
+                }
+            }
+        })
+        .await
+        .expect("the deletion finishes within a minute");
 
         result.expect("a finished teardown whose record is gone must succeed");
         deployment.assert_hits_async(2).await;
@@ -6536,6 +6548,8 @@ async fn fetch_setup_release(
         version: None,
         description: None,
         stack,
+        signed: None,
+        signer_lists: Vec::new(),
     })
 }
 
@@ -8373,6 +8387,8 @@ pub async fn push_deletion(
                         version: None,
                         description: None,
                         stack,
+                        signed: None,
+                        signer_lists: Vec::new(),
                     })
             }
             Err(_) => None,

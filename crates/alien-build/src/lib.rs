@@ -7,6 +7,7 @@ mod lambda_image;
 #[cfg(test)]
 mod lambda_tests;
 pub mod merge;
+pub mod pinned_base_images;
 pub mod plan;
 pub mod registry;
 pub mod sandbox_bundle;
@@ -3508,12 +3509,18 @@ async fn build_target_to_file(
             // Container/Daemon images must remain on their plain bases even
             // when a mixed stack builds Workers from a feature-versioned
             // alien-base image.
-            let base_images_to_try = base_images_for_workload(
+            let mut base_images_to_try = base_images_for_workload(
                 base_images,
                 settings.override_base_image.as_deref(),
                 workload,
                 toolchain_config,
             );
+            base_images_to_try = base_images_to_try
+                .iter()
+                .map(|image| {
+                    pinned_base_images::resolve(image, settings.require_pinned_base_images)
+                })
+                .collect::<Result<_>>()?;
 
             if base_images_to_try.is_empty() {
                 return Err(AlienError::new(ErrorData::BuildConfigInvalid {
@@ -4717,6 +4724,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
         let handler = Arc::new(RejectWarnings(std::sync::atomic::AtomicUsize::new(0)));
         let bus = alien_core::EventBus::with_handlers(vec![handler.clone()]);
@@ -4751,6 +4759,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         let error = build_stack(stack, &settings)
@@ -4792,6 +4801,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
         let built = build_stack(stack, &settings)
             .await
@@ -4822,6 +4832,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         let error = build_stack(stack, &settings)
@@ -4967,6 +4978,7 @@ mod tests {
                 debug_mode: false,
                 rebuild: false,
                 pull_base_images: false,
+                require_pinned_base_images: false,
             };
             let x86 = BuildSettings {
                 targets: Some(vec![BinaryTarget::LinuxX64]),
@@ -5450,6 +5462,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         // Pull alpine:latest (small, always available)
@@ -5554,6 +5567,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
         let mut reversed = settings.clone();
         reversed.targets.as_mut().unwrap().reverse();
@@ -5637,6 +5651,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         // Try to pull non-existent image
@@ -5679,6 +5694,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         // Pull alpine image
@@ -5738,6 +5754,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
         let azure = BuildSettings {
             platform: PlatformBuildSettings::Azure {},
@@ -5826,6 +5843,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
         let mut previous = None;
         for index in 0..17 {
@@ -5885,6 +5903,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
         let azure = BuildSettings {
             platform: PlatformBuildSettings::Azure {},
@@ -6057,6 +6076,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         let first = compute_source_artifact_cache_key(
@@ -6121,6 +6141,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         let first = compute_source_artifact_cache_key(
@@ -6188,6 +6209,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         let first_key = compute_source_artifact_cache_key(
@@ -6254,6 +6276,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         let key = |dir: &Path| {
@@ -6339,6 +6362,7 @@ mod tests {
                     debug_mode: false,
                     rebuild: false,
                     pull_base_images: false,
+                    require_pinned_base_images: false,
                 };
                 compute_source_artifact_cache_key(
                     &dir,
@@ -6389,6 +6413,7 @@ mod tests {
                 debug_mode: false,
                 rebuild: false,
                 pull_base_images: false,
+                require_pinned_base_images: false,
             };
         let x64 = vec![BinaryTarget::LinuxX64];
         let arm64 = vec![BinaryTarget::LinuxArm64];
@@ -7001,6 +7026,7 @@ mod sandbox_build_tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         }
     }
 

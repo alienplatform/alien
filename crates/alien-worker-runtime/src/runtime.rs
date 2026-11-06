@@ -13,8 +13,7 @@ use std::{collections::HashMap, process::Stdio, sync::Arc};
 use alien_bindings::BindingsProvider;
 use alien_core::{
     ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME, ENV_ALIEN_DEPLOYMENT_ID,
-    ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, ENV_ALIEN_TRANSPORT,
-    ENV_ALIEN_WORKER_GRPC_ADDRESS,
+    ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_TRANSPORT, ENV_ALIEN_WORKER_GRPC_ADDRESS,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_worker_protocol::{run_grpc_server, ControlGrpcServer, WaitUntilGrpcServer};
@@ -202,17 +201,21 @@ pub async fn run(
     };
 
     let application_startup: Result<(Child, Option<CommandPushConfig>)> = async {
-        // 2. Load user secrets from vault if ALIEN_SECRETS is present.
+        // 2. Load user secrets from vault if a secrets list is present.
         let secrets = if let Some(ref provider) = bindings_provider {
-            if let Some(alien_secrets_json) = config.env_vars.get(ENV_ALIEN_SECRETS) {
-                info!("Loading secrets from vault before starting application");
-                crate::secrets::load_secrets_from_vault(&**provider, alien_secrets_json).await?
-            } else if let Ok(alien_secrets_json) = std::env::var(ENV_ALIEN_SECRETS) {
-                info!("Loading secrets from vault before starting application (from process env)");
-                crate::secrets::load_secrets_from_vault(&**provider, &alien_secrets_json).await?
-            } else {
-                debug!("No ALIEN_SECRETS found in config or process env");
-                std::collections::HashMap::new()
+            let process_env = std::env::vars().collect::<HashMap<_, _>>();
+            match crate::secrets::secrets_list(&config.env_vars, &process_env)? {
+                Some((name, list)) => {
+                    info!(
+                        env = name,
+                        "Loading secrets from vault before starting application"
+                    );
+                    crate::secrets::load_secrets_from_vault(&**provider, &list, name).await?
+                }
+                None => {
+                    debug!("No secrets list found in config or process env");
+                    std::collections::HashMap::new()
+                }
             }
         } else {
             std::collections::HashMap::new()

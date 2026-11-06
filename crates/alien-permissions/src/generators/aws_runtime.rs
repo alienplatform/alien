@@ -118,7 +118,7 @@ impl AwsRuntimePermissionsGenerator {
                 permission_set,
                 platform_permission.label.as_deref(),
                 context,
-            ) {
+            )? {
                 continue;
             }
             let actions = platform_permission.grant.actions.as_ref().ok_or_else(|| {
@@ -153,6 +153,15 @@ impl AwsRuntimePermissionsGenerator {
 
             let (binding_spec, actions) =
                 super::aws_boundary::role_write_binding(binding_spec, actions, context);
+            let actions = super::aws_boundary::protected_management_actions(
+                platform_permission.effect.is_allow(),
+                &binding_spec,
+                actions,
+                context,
+            );
+            if actions.is_empty() {
+                continue;
+            }
 
             let resources = binding_spec
                 .resources

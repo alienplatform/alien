@@ -66,6 +66,37 @@ pub enum ErrorData {
         permission_set_id: String,
     },
 
+    /// A protected install would receive the grants kept for setups without a boundary.
+    #[error(
+        code = "PROTECTED_DEPLOYMENT_WITHOUT_BOUNDARY",
+        message = "Permission set '{permission_set_id}' grants '{label}' only to setups that recorded no permissions boundary, and a protected install never receives it. Rerun setup so it records the boundary.",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    ProtectedDeploymentWithoutBoundary {
+        /// Permission set holding the legacy grant
+        permission_set_id: String,
+        /// Label of the legacy grant
+        label: String,
+    },
+
+    /// A protected install's management identity would receive a predefined role that holds
+    /// what only the verifier may do.
+    #[error(
+        code = "PROTECTED_MANAGEMENT_ROLE_REFUSED",
+        message = "Permission set '{permission_set_id}' grants '{role}', which holds what only the verifier may do on a protected install",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    ProtectedManagementRoleRefused {
+        /// Permission set holding the role
+        permission_set_id: String,
+        /// The refused predefined role
+        role: String,
+    },
+
     /// Required variable not found in permission context.
     #[error(
         code = "VARIABLE_NOT_FOUND",

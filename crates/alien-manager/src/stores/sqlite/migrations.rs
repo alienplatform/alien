@@ -56,6 +56,9 @@ pub(crate) enum Releases {
     /// JSON-encoded `HashMap<Platform, Stack>`. A release targets one or
     /// more platforms; the JSON keys are the platform discriminators.
     Stack,
+    /// JSON-encoded `HashMap<Platform, SignedStatement>`, stored as received.
+    SignedStacks,
+    SetupTemplates,
     GitCommitSha,
     GitCommitRef,
     GitCommitMessage,
@@ -197,6 +200,8 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
             .if_not_exists()
             .col(ColumnDef::new(Releases::Id).text().primary_key())
             .col(ColumnDef::new(Releases::Stack).text().not_null())
+            .col(ColumnDef::new(Releases::SignedStacks).text())
+            .col(ColumnDef::new(Releases::SetupTemplates).text())
             .col(ColumnDef::new(Releases::GitCommitSha).text())
             .col(ColumnDef::new(Releases::GitCommitRef).text())
             .col(ColumnDef::new(Releases::GitCommitMessage).text())
@@ -348,6 +353,8 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         "ALTER TABLE deployments ADD COLUMN deployment_protocol_version INTEGER NOT NULL DEFAULT 1",
         "ALTER TABLE releases ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE releases ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
+        "ALTER TABLE releases ADD COLUMN signed_stacks TEXT",
+        "ALTER TABLE releases ADD COLUMN setup_templates TEXT",
         "ALTER TABLE deployment_groups ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE deployment_groups ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
         // Command target columns. Nullable — legacy rows written
@@ -421,6 +428,37 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
             .await
             .into_alien_error()
             .map_err(|e| db_error(&format!("Release channel tables failed: {}", e.message)))?;
+    }
+
+    // Signed statements the manager stores and forwards unchanged.
+    let signing_statements: &[&str] = &[
+        "CREATE TABLE IF NOT EXISTS signer_lists (
+            project_id TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            statement TEXT NOT NULL,
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (project_id, version)
+        )",
+        "CREATE TABLE IF NOT EXISTS pending_changes (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            record TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )",
+        "CREATE TABLE IF NOT EXISTS config_statements (
+            deployment_id TEXT NOT NULL,
+            sequence INTEGER NOT NULL,
+            statement TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (deployment_id, sequence)
+        )",
+    ];
+    for sql in signing_statements {
+        conn.execute(sql, ())
+            .await
+            .into_alien_error()
+            .map_err(|e| db_error(&format!("Signing tables failed: {}", e.message)))?;
     }
 
     let post_index_statements: &[&str] = &[

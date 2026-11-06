@@ -29,6 +29,7 @@ pub mod whoami;
 pub mod airgap;
 pub mod auth;
 pub mod channels;
+pub mod signing;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -94,6 +95,9 @@ pub struct AppState {
     pub charts: Option<Arc<charts::ChartSettings>>,
     /// Release channels; `None` sends every release to every deployment.
     pub release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
+    /// Signer lists, pending changes and signed config; `None` turns the
+    /// signing routes off.
+    pub signing: Option<Arc<dyn crate::traits::SigningStore>>,
     /// Signs air-gapped bundles. `None` when this manager doesn't sign them.
     pub bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
     /// Where bundles' charts and Operator images come from, for managers
@@ -189,6 +193,7 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
         .merge(logs::router())
         .merge(airgap::router())
         .merge(channels::router())
+        .merge(signing::router())
         // Deployments
         .merge(deployments::router())
         // Releases

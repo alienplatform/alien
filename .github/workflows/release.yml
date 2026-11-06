@@ -53,6 +53,8 @@ permissions:
   contents: write
   packages: write
   id-token: write
+  # Build provenance for the verifier image (actions/attest-build-provenance).
+  attestations: write
 
 env:
   # Fall back to local compilation when the shared sccache backend returns a
@@ -1683,6 +1685,16 @@ jobs:
           path: .ci-tool-versions
           persist-credentials: false
 
+      # The verifier (alien-verifier) compiles in the machine images protected
+      # installs may boot; without them it refuses every protected roll.
+      - name: Write machine-image pins
+        env:
+          MACHINE_IMAGE_PUBLISHER_AWS_ACCOUNT: ${{ vars.MACHINE_IMAGE_PUBLISHER_AWS_ACCOUNT }}
+          MACHINE_IMAGE_PUBLISHER_GCP_PROJECT: ${{ vars.MACHINE_IMAGE_PUBLISHER_GCP_PROJECT }}
+          MACHINE_IMAGE_PUBLISHER_AZURE_GALLERY: ${{ vars.MACHINE_IMAGE_PUBLISHER_AZURE_GALLERY }}
+          MACHINE_IMAGE_MINIMUM_CREATED: ${{ vars.MACHINE_IMAGE_MINIMUM_CREATED }}
+        run: scripts/write-machine-image-pins.sh
+
       - name: Restore binaries from cache
         id: binary-cache
         uses: actions/cache@v6
@@ -1694,8 +1706,9 @@ jobs:
             target/x86_64-unknown-linux-musl/release/alien-manager
             target/x86_64-unknown-linux-musl/release/alien-sandbox-agent
             target/x86_64-unknown-linux-musl/release/alien-egress-gateway
+            target/x86_64-unknown-linux-musl/release/alien-verifier
           # Bump the -bN suffix whenever the set of cached binaries changes.
-          key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b3-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
+          key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b4-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml', 'crates/alien-core/machine-image-*.txt') }}
 
       - uses: ./.ci-tool-versions/.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -1712,13 +1725,14 @@ jobs:
         run: |
           depot cargo build --release \
             -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager -p alien-sandbox-agent -p alien-egress-gateway \
+            -p alien-verifier \
             --features alien-egress-gateway/cloud,alien-egress-gateway/local \
             --target x86_64-unknown-linux-musl
 
       - name: Stage binaries for upload
         run: |
           mkdir -p staged/x86_64-unknown-linux-musl
-          for binary in alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent alien-egress-gateway; do
+          for binary in alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent alien-egress-gateway alien-verifier; do
             cp "target/x86_64-unknown-linux-musl/release/${binary}" "staged/x86_64-unknown-linux-musl/${binary}"
           done
 
@@ -2076,6 +2090,9 @@ jobs:
               chmod +x "target/${target}/release/${binary}"
             done
           done
+          # The verifier runs on x86_64 only (Lambda's default, Cloud Run, Container Apps).
+          cp ./linux-bins/binaries-x86_64-unknown-linux-musl/alien-verifier target/x86_64-unknown-linux-musl/release/alien-verifier
+          chmod +x target/x86_64-unknown-linux-musl/release/alien-verifier
 
       - name: Download Linux AI gateway binaries
         uses: actions/download-artifact@v8
@@ -2222,6 +2239,38 @@ jobs:
           provenance: true
           sbom: true
 
+      - name: Metadata (alien-verifier)
+        id: meta_verifier
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/alienplatform/alien-verifier
+          tags: |
+            type=raw,value=qualification-${{ inputs.source_ref }}
+
+      # One linux/amd64 manifest, not an index: Lambda takes image manifests,
+      # and the same digest runs on Cloud Run and Container Apps. Provenance
+      # is attached by the attestation below instead of inside the image.
+      - name: Publish alien-verifier
+        id: publish_verifier
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: .
+          file: docker/Dockerfile.alien-verifier
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta_verifier.outputs.tags }}
+          labels: ${{ steps.meta_verifier.outputs.labels }}
+          provenance: false
+          sbom: false
+
+      - name: Attest alien-verifier build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/alienplatform/alien-verifier
+          subject-digest: ${{ steps.publish_verifier.outputs.digest }}
+          push-to-registry: true
+
       - name: Metadata (alien-manager)
         id: meta_manager
         uses: docker/metadata-action@v5
@@ -2327,7 +2376,7 @@ jobs:
           RELEASE_COMMIT: ${{ inputs.source_ref }}
         run: |
           DIGESTS='{}'
-          for name in alien-base alien-worker-typescript alien-builder alien-operator alien-manager alien-sandbox-agent alien-egress-gateway; do
+          for name in alien-base alien-worker-typescript alien-builder alien-operator alien-verifier alien-manager alien-sandbox-agent alien-egress-gateway; do
             qualified="ghcr.io/alienplatform/${name}:qualification-${RELEASE_COMMIT}"
             digest=$(docker buildx imagetools inspect "$qualified" |
               sed -n 's/^Digest:[[:space:]]*//p' | head -n1)
@@ -2356,7 +2405,8 @@ jobs:
     needs: prepare
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
     runs-on: depot-ubuntu-24.04-arm
-    timeout-minutes: 10
+    # Includes waiting up to 10 minutes for ECR to replicate the verifier image.
+    timeout-minutes: 25
     steps:
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -2407,9 +2457,70 @@ jobs:
                 "${image}@${source_digest}"
             done
 
+      # The enforcer digests a signed release pins (crates/alien-cli/
+      # enforcer-digests.json). One verifier image serves every cloud. The
+      # official CLI distribution adds the machine agent digests and writes
+      # the file before it builds `alien`; a source build keeps the empty
+      # table and pins none.
+      - name: Record enforcer digests
+        run: |
+          jq '{operator: .images["alien-operator"],
+               "verifier/aws": .images["alien-verifier"],
+               "verifier/gcp": .images["alien-verifier"],
+               "verifier/azure": .images["alien-verifier"]}' \
+            qualification/qualified-image-digests.json > enforcer-digests.json
+          jq -e 'to_entries | all(.value | test("^sha256:[0-9a-f]{64}$"))' \
+            enforcer-digests.json >/dev/null || {
+            echo "::error::Enforcer digests are not all sha256 digests"; cat enforcer-digests.json; exit 1
+          }
+          cat enforcer-digests.json
+
+      - name: Upload enforcer digests
+        uses: actions/upload-artifact@v7
+        with:
+          name: enforcer-digests
+          path: enforcer-digests.json
+          if-no-files-found: error
+
+      # The checkout below cleans the workspace, so keep the verifier digest for
+      # the copy that runs after it.
+      - name: Read the verifier digest
+        id: verifier_digest
+        run: echo "digest=$(jq -r '.images["alien-verifier"]' qualification/qualified-image-digests.json)" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.qualification_head_sha }}
+
+      # Protected installs run the verifier from the machine-image publisher's
+      # registries, named by digest: Lambda pulls only from ECR in its own
+      # region and Cloud Run only from Artifact Registry. Container Apps pull
+      # the ghcr.io image above.
+      - uses: imjasonh/setup-crane@v0.4
+
+      - name: Configure AWS credentials (verifier publisher)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.MACHINE_IMAGE_PUBLISHER_AWS_ACCOUNT }}:role/alien-verifier-publisher
+          aws-region: us-east-1
+
+      - name: Authenticate to Google Cloud (verifier publisher)
+        id: gcp_verifier
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.VERIFIER_IMAGE_GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.VERIFIER_IMAGE_GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Copy the verifier image to ECR and Artifact Registry
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          VERIFIER_IMAGE_AWS_ACCOUNT: ${{ vars.MACHINE_IMAGE_PUBLISHER_AWS_ACCOUNT }}
+          VERIFIER_IMAGE_AWS_REPOSITORY: ${{ vars.VERIFIER_IMAGE_AWS_REPOSITORY }}
+          VERIFIER_IMAGE_GCP_REPOSITORY: ${{ vars.VERIFIER_IMAGE_GCP_REPOSITORY }}
+          GCP_ACCESS_TOKEN: ${{ steps.gcp_verifier.outputs.access_token }}
+        run: |
+          scripts/publish-verifier-image.sh "${{ steps.verifier_digest.outputs.digest }}" "$VERSION"
 
       - uses: azure/setup-helm@v5
 

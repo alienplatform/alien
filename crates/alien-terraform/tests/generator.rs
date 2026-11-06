@@ -9,6 +9,7 @@
 mod generator {
     pub mod helpers;
     pub mod network_inputs_tests;
+    pub mod protected_registration_tests;
     pub mod remote_kv_tests;
     pub mod remote_queue_tests;
 
@@ -47,4 +48,5 @@ mod generator {
     pub mod setup_management_tests;
     pub mod stack_input_tests;
     pub mod storage_notifications_tests;
+    pub mod white_label_tests;
 }

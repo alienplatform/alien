@@ -722,27 +722,64 @@ fn minified_size(value: &Value) -> usize {
         .count()
 }
 
-/// Select legacy or bounded role grants using the installed setup boundary.
+/// Label prefix of catalog statements rendered only for a protected install's management
+/// identity.
+pub const SIGNING_LABEL_PREFIX: &str = "signing-";
+
+/// Select legacy or bounded role grants using the installed setup boundary, and the statements
+/// only a protected install renders.
+///
+/// A protected install never receives a legacy grant: rendering one is an error.
 pub(super) fn include_role_statement(
     permission_set: &PermissionSet,
     label: Option<&str>,
     context: &PermissionContext,
-) -> bool {
+) -> Result<bool> {
     if let Some(label) = label {
         if label.starts_with("bounded-role-") {
-            return context.aws_permissions_boundary_arn.is_some();
+            return Ok(context.aws_permissions_boundary_arn.is_some());
         }
         if label.starts_with("legacy-role-") {
-            return context.aws_permissions_boundary_arn.is_none();
+            if context.aws_permissions_boundary_arn.is_some() {
+                return Ok(false);
+            }
+            if context.signing_protected {
+                return Err(AlienError::new(
+                    ErrorData::ProtectedDeploymentWithoutBoundary {
+                        permission_set_id: permission_set.id.clone(),
+                        label: label.to_string(),
+                    },
+                ));
+            }
+            return Ok(true);
+        }
+        if label.starts_with(SIGNING_LABEL_PREFIX) {
+            return Ok(context.signing_protected);
         }
     }
     if permission_set.id != "container/provision" {
-        return true;
+        return Ok(true);
     }
-    match label {
+    Ok(match label {
         Some("deny-volume-backup-role-changes") => context.aws_permissions_boundary_arn.is_none(),
         _ => true,
+    })
+}
+
+/// The actions an Allow statement grants the rendered identity: on a protected install's
+/// management identity, all but what only the verifier may do. Denies are kept whole.
+pub(super) fn protected_management_actions<'a>(
+    allow: bool,
+    binding: &AwsBindingSpec,
+    actions: Cow<'a, [String]>,
+    context: &PermissionContext,
+) -> Cow<'a, [String]> {
+    if !allow || !context.signing_protected {
+        return actions;
     }
+    Cow::Owned(super::verifier_owned::aws_management_actions(
+        &actions, binding,
+    ))
 }
 
 /// Older setups have no boundary policy or adoption grant. Only omit the catalog's

@@ -66,6 +66,9 @@ async fn write_json<T: Serialize>(conn: &Connection, key: &str, value: &T) -> Re
     Ok(())
 }
 
+/// State key of a protected Operator's ledger.
+const SIGNING_LEDGER_KEY: &str = "signing_ledger";
+
 pub const MIN_SUPPORTED_OPERATOR_SCHEMA_VERSION: u32 = 1;
 pub const CURRENT_OPERATOR_SCHEMA_VERSION: u32 = 1;
 const MAX_QUEUED_POD_LOG_BYTES: i64 = 64 * 1024 * 1024;
@@ -2089,6 +2092,34 @@ impl OperatorDb {
         Ok(())
     }
 
+    /// What this protected Operator accepted: the install's ledger and the
+    /// signer chain. `None` before it accepted anything.
+    pub async fn get_signing_trust(&self) -> Result<Option<crate::protected::OperatorTrust>> {
+        let conn = self.conn.lock().await;
+        read_json(&conn, SIGNING_LEDGER_KEY).await
+    }
+
+    /// Store `accepted`. The stored ledger only rises: each entry keeps the
+    /// higher of what was stored and `accepted`, and a fork is an error.
+    pub async fn set_signing_trust(
+        &self,
+        accepted: &crate::protected::OperatorTrust,
+    ) -> Result<()> {
+        let conn = self.conn.lock().await;
+        let mut merged = accepted.clone();
+        let stored: Option<crate::protected::OperatorTrust> =
+            read_json(&conn, SIGNING_LEDGER_KEY).await?;
+        if let Some(stored) = stored {
+            merged.ledger.merge(&stored.ledger).context(database_error(
+                "the stored ledger forks from the one being written",
+            ))?;
+            if stored.signer_lists.len() > merged.signer_lists.len() {
+                merged.signer_lists = stored.signer_lists;
+            }
+        }
+        write_json(&conn, SIGNING_LEDGER_KEY, &merged).await
+    }
+
     /// Manager URL to open tunnel connections to, from the last sync.
     /// `None` when the manager does not accept tunnels.
     pub async fn get_tunnel_url(&self) -> Result<Option<String>> {
@@ -2310,6 +2341,8 @@ mod tests {
             version: None,
             description: None,
             stack: alien_core::Stack::new("finish".to_string()).build(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         alien_core::DeploymentState {
             platform: alien_core::Platform::Test,

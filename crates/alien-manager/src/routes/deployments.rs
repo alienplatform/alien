@@ -100,6 +100,16 @@ pub struct DeploymentResponse {
     pub workspace_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stack_settings: Option<serde_json::Value>,
+    /// Whether the deployment's setup pins a signing fingerprint, so it runs
+    /// only signed releases. Only the install's own verification proves it.
+    /// Absent from older managers, which have no protected deployments;
+    /// a protected install refuses unsigned releases whatever this says, so
+    /// reading it as false can't skip a signature.
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(default = false))]
+    pub protected: bool,
+    /// The fingerprint the deployment's setup pins.
+    pub signing_fingerprint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stack_state: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -325,6 +335,13 @@ pub fn router() -> Router<AppState> {
 
 // --- Helpers ---
 
+fn signing_fingerprint(r: &DeploymentRecord) -> Option<String> {
+    r.stack_settings
+        .as_ref()
+        .and_then(|settings| settings.signing.as_ref())
+        .map(|signing| signing.fingerprint.clone())
+}
+
 fn record_to_response(
     r: &DeploymentRecord,
     deployment_group: Option<DeploymentGroupMinimal>,
@@ -353,6 +370,8 @@ fn record_to_response(
             .stack_settings
             .as_ref()
             .map(|s| serde_json::to_value(s).unwrap_or_default()),
+        protected: signing_fingerprint(r).is_some(),
+        signing_fingerprint: signing_fingerprint(r),
         stack_state: r
             .stack_state
             .as_ref()
@@ -1798,6 +1817,7 @@ mod tests {
             tunnels: None,
             charts: None,
             release_channels: None,
+            signing: None,
             bundle_signing_key: None,
             bundle_sources: None,
             log_buffer: std::sync::Arc::new(crate::dev::LogBuffer::new()),
