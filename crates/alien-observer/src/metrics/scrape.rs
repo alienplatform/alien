@@ -8,7 +8,8 @@ use alien_client_core::ErrorData;
 use alien_error::{Context, IntoAlienError};
 use nom_openmetrics::{MetricDescriptor, MetricType};
 use opentelemetry_proto::tonic::metrics::v1::{
-    metric::Data, AggregationTemporality, Histogram, HistogramDataPoint, Metric,
+    metric::Data, summary_data_point::ValueAtQuantile, AggregationTemporality, Histogram,
+    HistogramDataPoint, Metric, Summary, SummaryDataPoint,
 };
 
 use super::{attributes, invalid, point, scalar, MetricBatch, ScalarKind};
@@ -246,11 +247,81 @@ pub fn parse(
                 })),
                 ..Default::default()
             });
+        } else if let Some((name, MetricType::Summary | MetricType::Unknown("summary"))) =
+            descriptor
+        {
+            let mut groups: BTreeMap<BTreeMap<String, String>, SummaryParts> = BTreeMap::new();
+            for sample in family.samples {
+                let mut labels = labels(sample.labels(), replica_id)?;
+                let quantile = labels.remove("quantile");
+                let parts = groups.entry(labels).or_default();
+                if sample.name() == name {
+                    let quantile = quantile
+                        .ok_or_else(|| invalid("Summary sample missing quantile"))?
+                        .parse::<f64>()
+                        .map_err(|_| invalid("Invalid summary quantile"))?;
+                    if !quantile.is_finite()
+                        || !(0.0..=1.0).contains(&quantile)
+                        || sample.number() < 0.0
+                    {
+                        return Err(invalid("Summary quantile is outside OTLP limits"));
+                    }
+                    parts.quantiles.push((quantile, sample.number()));
+                } else if sample.name() == format!("{name}_sum") && quantile.is_none() {
+                    if parts.sum.replace(sample.number()).is_some() {
+                        return Err(invalid("Duplicate summary sum"));
+                    }
+                } else if sample.name() == format!("{name}_count") && quantile.is_none() {
+                    if parts.count.replace(integer(sample.number())?).is_some() {
+                        return Err(invalid("Duplicate summary count"));
+                    }
+                } else {
+                    return Err(invalid("Unsupported summary sample"));
+                }
+            }
+            let mut points = Vec::new();
+            for (labels, mut parts) in groups {
+                let count = parts
+                    .count
+                    .ok_or_else(|| invalid("Summary missing count"))?;
+                let sum = parts.sum.ok_or_else(|| invalid("Summary missing sum"))?;
+                if !sum.is_finite() || sum < 0.0 || (count == 0 && sum != 0.0) {
+                    return Err(invalid("Summary sum/count are outside OTLP limits"));
+                }
+                parts.quantiles.sort_by(|a, b| a.0.total_cmp(&b.0));
+                if parts
+                    .quantiles
+                    .windows(2)
+                    .any(|pair| pair[0].0 == pair[1].0)
+                {
+                    return Err(invalid("Duplicate summary quantile"));
+                }
+                points.push(SummaryDataPoint {
+                    attributes: attributes(&labels),
+                    time_unix_nano: now,
+                    count,
+                    sum,
+                    quantile_values: parts
+                        .quantiles
+                        .into_iter()
+                        .map(|(quantile, value)| ValueAtQuantile { quantile, value })
+                        .collect(),
+                    ..Default::default()
+                });
+            }
+            batch.metrics.push(Metric {
+                name: name.into(),
+                unit,
+                data: Some(Data::Summary(Summary {
+                    data_points: points,
+                })),
+                ..Default::default()
+            });
         } else {
             let kind = match descriptor.map(|(_, kind)| kind) {
                 Some(MetricType::Counter) => ScalarKind::CumulativeSum,
                 Some(MetricType::Histogram | MetricType::Gaugehistogram | MetricType::Summary) => {
-                    return Err(invalid("Unsupported summary or gauge histogram exposition"))
+                    return Err(invalid("Unsupported gauge histogram exposition"))
                 }
                 _ => ScalarKind::Gauge,
             };
@@ -302,6 +373,13 @@ fn integer(value: f64) -> Result<u64> {
 #[derive(Default)]
 struct HistogramParts {
     buckets: Vec<(f64, u64)>,
+    count: Option<u64>,
+    sum: Option<f64>,
+}
+
+#[derive(Default)]
+struct SummaryParts {
+    quantiles: Vec<(f64, f64)>,
     count: Option<u64>,
     sum: Option<f64>,
 }
@@ -373,6 +451,45 @@ mod tests {
     fn rejects_inconsistent_histogram_instead_of_emitting_wrong_counts() {
         let text = "# TYPE h histogram\nh_bucket{le=\"1\"} 3\nh_bucket{le=\"+Inf\"} 2\nh_sum 2\nh_count 2\n";
         assert!(parse(text, false, "replica", 100, 10).is_err());
+    }
+
+    #[test]
+    fn preserves_go_client_summary_quantiles_count_and_sum_without_inventing_buckets() {
+        let text = "# HELP go_gc_duration_seconds A summary of wall-time pause in garbage collection cycles.\n# TYPE go_gc_duration_seconds summary\ngo_gc_duration_seconds{quantile=\"0\"} 0.0001\ngo_gc_duration_seconds{quantile=\"0.5\"} 0.0002\ngo_gc_duration_seconds{quantile=\"1\"} 0.0003\ngo_gc_duration_seconds_sum 0.0006\ngo_gc_duration_seconds_count 3\n";
+        let batch = parse(text, false, "replica", 123, 100).unwrap();
+        assert_eq!(batch.metrics.len(), 1);
+        let Some(Data::Summary(summary)) = &batch.metrics[0].data else {
+            panic!("summary semantics lost");
+        };
+        let point = &summary.data_points[0];
+        assert_eq!(point.count, 3);
+        assert_eq!(point.sum, 0.0006);
+        assert_eq!(
+            point
+                .quantile_values
+                .iter()
+                .map(|value| value.quantile)
+                .collect::<Vec<_>>(),
+            vec![0.0, 0.5, 1.0]
+        );
+        assert_eq!(point.time_unix_nano, 123);
+        assert!(!point.attributes.iter().any(|label| label.key == "quantile"));
+        assert!(parse(
+            "# TYPE s summary\ns{quantile=\"2\"} 1\ns_sum 1\ns_count 1\n",
+            false,
+            "replica",
+            123,
+            100
+        )
+        .is_err());
+        assert!(parse(
+            "# TYPE s summary\ns_sum 1\ns_sum 2\ns_count 1\n",
+            false,
+            "replica",
+            123,
+            100
+        )
+        .is_err());
     }
 
     #[test]
