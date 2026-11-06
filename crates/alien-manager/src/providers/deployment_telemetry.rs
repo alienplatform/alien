@@ -178,3 +178,127 @@ fn failure(message: &str) -> AlienError {
         message: message.into(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::traits::deployment_store::MockDeploymentStore;
+    use alien_core::{
+        DeploymentStatus, EnvironmentVariable, EnvironmentVariableType,
+        EnvironmentVariablesSnapshot, OtlpDestinationAuthentication, OtlpDestinationEndpoint,
+        OtlpSignalDestination, Platform, StackSettings, TelemetryDestinations,
+        DEPLOYMENT_PROTOCOL_VERSION,
+    };
+
+    struct RejectFallback;
+    #[async_trait]
+    impl TelemetryBackend for RejectFallback {
+        async fn ingest(
+            &self,
+            _: TelemetrySignal,
+            _: &TelemetryCaller,
+            _: bytes::Bytes,
+        ) -> Result<(), AlienError> {
+            panic!("Authored destinations must not fall back to manager storage")
+        }
+    }
+
+    #[tokio::test]
+    async fn reconciled_routes_forward_every_signal_offline_and_fail_closed_after_secret_removal() {
+        let server = httpmock::MockServer::start_async().await;
+        let mut mocks = Vec::new();
+        for path in ["/metrics", "/traces", "/logs"] {
+            mocks.push(
+                server
+                    .mock_async(|when, then| {
+                        when.method(httpmock::Method::POST)
+                            .path(path)
+                            .header("authorization", "Bearer scoped-destination-secret");
+                        then.status(200)
+                            .header("content-type", "application/x-protobuf");
+                    })
+                    .await,
+            );
+        }
+        let destination = |path| OtlpSignalDestination {
+            endpoint: OtlpDestinationEndpoint::Url {
+                url: server.url(path),
+            },
+            authentication: OtlpDestinationAuthentication::Bearer {
+                token_environment_variable: "DESTINATION_TOKEN".into(),
+            },
+            allow_insecure_http: true,
+        };
+        let mut config = DeploymentConfig::builder()
+            .stack_settings(StackSettings {
+                telemetry_destinations: Some(TelemetryDestinations {
+                    metrics: Some(destination("/metrics")),
+                    traces: Some(destination("/traces")),
+                    logs: Some(destination("/logs")),
+                }),
+                ..Default::default()
+            })
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![EnvironmentVariable {
+                    name: "DESTINATION_TOKEN".into(),
+                    value: "scoped-destination-secret".into(),
+                    var_type: EnvironmentVariableType::Secret,
+                    target_resources: Some(vec!["store".into()]),
+                }],
+                hash: "test".into(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+            })
+            .external_bindings(Default::default())
+            .allow_frozen_changes(false)
+            .build();
+        let state = DeploymentState::builder()
+            .status(DeploymentStatus::Running)
+            .platform(Platform::Test)
+            .retry_requested(false)
+            .protocol_version(DEPLOYMENT_PROTOCOL_VERSION)
+            .build();
+        // No store calls are expected. Any cold control-plane lookup panics in the mock.
+        let backend = DeploymentTelemetryBackend::new(
+            Arc::new(RejectFallback),
+            Arc::new(MockDeploymentStore::new()),
+        );
+        backend
+            .prepare_deployment("deployment", "workspace", &state, &config)
+            .await
+            .unwrap();
+        let mut caller = TelemetryCaller {
+            deployment_id: Some("deployment".into()),
+            workspace_id: Some("workspace".into()),
+            project_id: Some("project".into()),
+            gateway_log_source: None,
+        };
+        for signal in [
+            TelemetrySignal::Metrics,
+            TelemetrySignal::Traces,
+            TelemetrySignal::Logs,
+        ] {
+            backend
+                .ingest(signal, &caller, bytes::Bytes::new())
+                .await
+                .unwrap();
+        }
+        caller.workspace_id = Some("foreign-workspace".into());
+        assert!(backend
+            .ingest(TelemetrySignal::Metrics, &caller, bytes::Bytes::new())
+            .await
+            .is_err());
+        caller.workspace_id = Some("workspace".into());
+        config.environment_variables.variables.clear();
+        backend
+            .prepare_deployment("deployment", "workspace", &state, &config)
+            .await
+            .unwrap();
+        assert!(backend
+            .ingest(TelemetrySignal::Metrics, &caller, bytes::Bytes::new())
+            .await
+            .is_err());
+        for mock in mocks {
+            mock.assert_hits_async(1).await;
+        }
+    }
+}
