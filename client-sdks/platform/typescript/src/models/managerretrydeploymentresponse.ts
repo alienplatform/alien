@@ -18,7 +18,7 @@ export type ManagerRetryDeploymentResponseMode = ClosedEnum<
 export type ManagerRetryDeploymentResponse = {
   mode: ManagerRetryDeploymentResponseMode;
   /**
-   * Unique identifier for a manager.
+   * Unique identifier for an instance.
    */
   managerId: string;
   setupStatus: "provisioning";

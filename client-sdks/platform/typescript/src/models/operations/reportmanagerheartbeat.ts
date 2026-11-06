@@ -15,7 +15,7 @@ export type ReportManagerHeartbeatGlobals = {
 
 export type ReportManagerHeartbeatRequest = {
   /**
-   * Unique identifier for a manager.
+   * Unique identifier for an instance.
    */
   id: string;
   managerHeartbeatRequest?: models.ManagerHeartbeatRequest | undefined;

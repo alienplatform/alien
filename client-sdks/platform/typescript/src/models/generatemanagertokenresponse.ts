@@ -17,7 +17,7 @@ export type GenerateManagerTokenResponseTokenType = ClosedEnum<
 
 export type GenerateManagerTokenResponse = {
   /**
-   * Platform JWT for authenticating with the manager
+   * Platform JWT for authenticating with the instance
    */
   accessToken: string;
   /**
@@ -26,7 +26,7 @@ export type GenerateManagerTokenResponse = {
   expiresIn: number | null;
   tokenType: GenerateManagerTokenResponseTokenType;
   /**
-   * Manager URL for direct access
+   * Instance URL for direct access
    */
   managerUrl: string;
   /**

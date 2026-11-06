@@ -14,14 +14,14 @@ import {
 } from "./privatemanagersetupmethod.js";
 
 /**
- * Optional network mode for the private-manager setup. Defaults to create for production isolation; default uses the provider default network for faster dev/test setup.
+ * Optional network mode for the private instance setup. Defaults to create for production isolation; default uses the provider default network for faster dev/test setup.
  */
 export const NetworkEnum = {
   Create: "create",
   Default: "default",
 } as const;
 /**
- * Optional network mode for the private-manager setup. Defaults to create for production isolation; default uses the provider default network for faster dev/test setup.
+ * Optional network mode for the private instance setup. Defaults to create for production isolation; default uses the provider default network for faster dev/test setup.
  */
 export type NetworkEnum = ClosedEnum<typeof NetworkEnum>;
 
@@ -42,11 +42,11 @@ export type OtlpConfig = {
 export type NewManagerRequest = {
   name: string;
   /**
-   * Cloud where the private manager will be deployed.
+   * Cloud where the private instance will be deployed.
    */
   cloud: PrivateManagerCloud;
   /**
-   * Cloud region for the manager.
+   * Cloud region for the instance.
    */
   region: string;
   /**
@@ -54,7 +54,7 @@ export type NewManagerRequest = {
    */
   setupMethod?: PrivateManagerSetupMethod | undefined;
   /**
-   * Optional network mode for the private-manager setup. Defaults to create for production isolation; default uses the provider default network for faster dev/test setup.
+   * Optional network mode for the private instance setup. Defaults to create for production isolation; default uses the provider default network for faster dev/test setup.
    */
   network?: NetworkEnum | undefined;
   /**

@@ -36,7 +36,7 @@ export type GetManagerManagementConfigQueryParamPlatform = ClosedEnum<
 
 export type GetManagerManagementConfigRequest = {
   /**
-   * Unique identifier for a manager.
+   * Unique identifier for an instance.
    */
   id: string;
   /**

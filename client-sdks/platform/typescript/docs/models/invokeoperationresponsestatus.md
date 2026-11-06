@@ -7,11 +7,11 @@ dispatched: auto-approved and running. pending-approval: needs customer sign-off
 ```typescript
 import { InvokeOperationResponseStatus } from "@alienplatform/platform-api/models";
 
-let value: InvokeOperationResponseStatus = "pending-approval";
+let value: InvokeOperationResponseStatus = "prepared";
 ```
 
 ## Values
 
 ```typescript
-"dispatched" | "pending-approval"
+"dispatched" | "pending-approval" | "prepared"
 ```

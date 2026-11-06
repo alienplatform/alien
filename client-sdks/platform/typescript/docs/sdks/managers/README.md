@@ -4,28 +4,28 @@
 
 ### Available Operations
 
-* [create](#create) - Create a new manager.
-* [list](#list) - Retrieve all managers.
-* [retrySetup](#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
-* [retry](#retry) - Retry private-manager setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
-* [cancelSetup](#cancelsetup) - Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
-* [get](#get) - Retrieve a manager by ID.
-* [delete](#delete) - Delete a manager by ID.
-* [getDomainBinding](#getdomainbinding) - Get the custom domain binding for a private manager.
-* [updateDomainBinding](#updatedomainbinding) - Create, update, or remove the custom domain binding for a private manager.
-* [getManagementConfig](#getmanagementconfig) - Get the management configuration for a manager.
-* [provision](#provision) - Enqueue provisioning for a manager by ID.
-* [update](#update) - Update a manager to a specific release ID or active release.
-* [listEvents](#listevents) - Retrieve all events of a manager.
-* [generateManagerToken](#generatemanagertoken) - Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
-* [generateManagerBindingToken](#generatemanagerbindingtoken) - Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned manager.
-* [resolveGcpOAuthProvider](#resolvegcpoauthprovider) - Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
-* [reportHeartbeat](#reportheartbeat) - Report Manager health status and metrics.
-* [getDeployment](#getdeployment) - Get deployment details for a private manager (internal deployment platform, status, resources).
+* [create](#create) - Create a new instance.
+* [list](#list) - Retrieve all instances.
+* [retrySetup](#retrysetup) - Revoke previous private instance setup tokens and issue a fresh setup token/config.
+* [retry](#retry) - Retry private instance setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
+* [cancelSetup](#cancelsetup) - Cancel pending private instance setup, revoke setup/runtime tokens, and remove the undeployed instance record.
+* [get](#get) - Retrieve an instance by ID.
+* [delete](#delete) - Delete an instance by ID.
+* [getDomainBinding](#getdomainbinding) - Get the custom domain binding for a private instance.
+* [updateDomainBinding](#updatedomainbinding) - Create, update, or remove the custom domain binding for a private instance.
+* [getManagementConfig](#getmanagementconfig) - Get the management configuration for an instance.
+* [provision](#provision) - Enqueue provisioning for an instance by ID.
+* [update](#update) - Update an instance to a specific release ID or active release.
+* [listEvents](#listevents) - Retrieve all events of an instance.
+* [generateManagerToken](#generatemanagertoken) - Generate a short-lived JWT for direct browser → instance communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
+* [generateManagerBindingToken](#generatemanagerbindingtoken) - Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned instance.
+* [resolveGcpOAuthProvider](#resolvegcpoauthprovider) - Resolve decrypted project-level Google Cloud OAuth provider settings for an instance-side deployment bootstrap.
+* [reportHeartbeat](#reportheartbeat) - Report instance health status and metrics.
+* [getDeployment](#getdeployment) - Get deployment details for a private instance (internal deployment platform, status, resources).
 
 ## create
 
-Create a new manager.
+Create a new instance.
 
 ### Example Usage
 
@@ -115,7 +115,7 @@ import {
 
 ## list
 
-Retrieve all managers.
+Retrieve all instances.
 
 ### Example Usage
 
@@ -215,7 +215,7 @@ import {
 
 ## retrySetup
 
-Revoke previous private-manager setup tokens and issue a fresh setup token/config.
+Revoke previous private instance setup tokens and issue a fresh setup token/config.
 
 ### Example Usage
 
@@ -309,7 +309,7 @@ import {
 
 ## retry
 
-Retry private-manager setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
+Retry private instance setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
 
 ### Example Usage
 
@@ -403,7 +403,7 @@ import {
 
 ## cancelSetup
 
-Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
+Cancel pending private instance setup, revoke setup/runtime tokens, and remove the undeployed instance record.
 
 ### Example Usage
 
@@ -497,7 +497,7 @@ import {
 
 ## get
 
-Retrieve a manager by ID.
+Retrieve an instance by ID.
 
 ### Example Usage
 
@@ -602,7 +602,7 @@ import {
 
 ## delete
 
-Delete a manager by ID.
+Delete an instance by ID.
 
 ### Example Usage
 
@@ -696,7 +696,7 @@ import {
 
 ## getDomainBinding
 
-Get the custom domain binding for a private manager.
+Get the custom domain binding for a private instance.
 
 ### Example Usage
 
@@ -801,7 +801,7 @@ import {
 
 ## updateDomainBinding
 
-Create, update, or remove the custom domain binding for a private manager.
+Create, update, or remove the custom domain binding for a private instance.
 
 ### Example Usage
 
@@ -876,7 +876,7 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for a manager.                                                                                                                                               | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                                                                                                                                               |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for an instance.                                                                                                                                             | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                                                                                                                                               |
 | `updateManagerDomainBinding`                                                                                                                                                   | [models.UpdateManagerDomainBinding](../../models/updatemanagerdomainbinding.md)                                                                                                | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
@@ -896,7 +896,7 @@ import {
 
 ## getManagementConfig
 
-Get the management configuration for a manager.
+Get the management configuration for an instance.
 
 ### Example Usage
 
@@ -1003,7 +1003,7 @@ import {
 
 ## provision
 
-Enqueue provisioning for a manager by ID.
+Enqueue provisioning for an instance by ID.
 
 ### Example Usage
 
@@ -1097,7 +1097,7 @@ import {
 
 ## update
 
-Update a manager to a specific release ID or active release.
+Update an instance to a specific release ID or active release.
 
 ### Example Usage
 
@@ -1172,7 +1172,7 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for a manager.                                                                                                                                               | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                                                                                                                                               |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for an instance.                                                                                                                                             | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                                                                                                                                               |
 | `updateManagerRequest`                                                                                                                                                         | [models.UpdateManagerRequest](../../models/updatemanagerrequest.md)                                                                                                            | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
@@ -1192,7 +1192,7 @@ import {
 
 ## listEvents
 
-Retrieve all events of a manager.
+Retrieve all events of an instance.
 
 ### Example Usage
 
@@ -1297,7 +1297,7 @@ import {
 
 ## generateManagerToken
 
-Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
+Generate a short-lived JWT for direct browser → instance communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
 
 ### Example Usage
 
@@ -1368,7 +1368,7 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for a manager.                                                                                                                                               | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                                                                                                                                               |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for an instance.                                                                                                                                             | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                                                                                                                                               |
 | `generateManagerTokenRequest`                                                                                                                                                  | [models.GenerateManagerTokenRequest](../../models/generatemanagertokenrequest.md)                                                                                              | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
@@ -1388,7 +1388,7 @@ import {
 
 ## generateManagerBindingToken
 
-Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned manager.
+Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned instance.
 
 ### Example Usage
 
@@ -1463,7 +1463,7 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for a manager.                                                                                                                                               | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                                                                                                                                               |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for an instance.                                                                                                                                             | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                                                                                                                                               |
 | `generateManagerBindingTokenRequest`                                                                                                                                           | [models.GenerateManagerBindingTokenRequest](../../models/generatemanagerbindingtokenrequest.md)                                                                                | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
@@ -1483,7 +1483,7 @@ import {
 
 ## resolveGcpOAuthProvider
 
-Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
+Resolve decrypted project-level Google Cloud OAuth provider settings for an instance-side deployment bootstrap.
 
 ### Example Usage
 
@@ -1554,7 +1554,7 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for a manager.                                                                                                                                               | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                                                                                                                                               |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for an instance.                                                                                                                                             | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                                                                                                                                               |
 | `resolveManagerGcpOAuthProviderRequest`                                                                                                                                        | [models.ResolveManagerGcpOAuthProviderRequest](../../models/resolvemanagergcpoauthproviderrequest.md)                                                                          | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
@@ -1574,7 +1574,7 @@ import {
 
 ## reportHeartbeat
 
-Report Manager health status and metrics.
+Report instance health status and metrics.
 
 ### Example Usage
 
@@ -1645,7 +1645,7 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for a manager.                                                                                                                                               | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                                                                                                                                               |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for an instance.                                                                                                                                             | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                                                                                                                                               |
 | `managerHeartbeatRequest`                                                                                                                                                      | [models.ManagerHeartbeatRequest](../../models/managerheartbeatrequest.md)                                                                                                      | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
@@ -1665,7 +1665,7 @@ import {
 
 ## getDeployment
 
-Get deployment details for a private manager (internal deployment platform, status, resources).
+Get deployment details for a private instance (internal deployment platform, status, resources).
 
 ### Example Usage
 

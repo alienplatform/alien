@@ -28,7 +28,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Get deployment details for a private manager (internal deployment platform, status, resources).
+ * Get deployment details for a private instance (internal deployment platform, status, resources).
  */
 export function managersGetDeployment(
   client: AlienCore,

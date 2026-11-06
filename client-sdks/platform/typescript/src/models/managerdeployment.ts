@@ -71,11 +71,11 @@ export type ManagerDeployment = {
    */
   deploymentId: string;
   /**
-   * Currently deployed private manager release
+   * Currently deployed private instance release
    */
   currentReleaseId?: string | null | undefined;
   /**
-   * Target private manager release for an in-progress update
+   * Target private instance release for an in-progress update
    */
   desiredReleaseId?: string | null | undefined;
   /**
@@ -87,7 +87,7 @@ export type ManagerDeployment = {
    */
   resources: { [k: string]: ManagerDeploymentResources };
   /**
-   * Manager environment info
+   * Instance environment info
    */
   environmentInfo?: any | null | undefined;
 };

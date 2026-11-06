@@ -3,6 +3,19 @@
  */
 
 import * as z from "zod/v4";
+import { ClosedEnum } from "../types/enums.js";
+
+/**
+ * Use direct for metadata-only authorization before sending inputs to the selected instance.
+ */
+export const Delivery = {
+  Hosted: "hosted",
+  Direct: "direct",
+} as const;
+/**
+ * Use direct for metadata-only authorization before sending inputs to the selected instance.
+ */
+export type Delivery = ClosedEnum<typeof Delivery>;
 
 export type InvokeOperationRequest = {
   /**
@@ -17,6 +30,10 @@ export type InvokeOperationRequest = {
    * Operation name exposed by the plugin.
    */
   operation: string;
+  /**
+   * Use direct for metadata-only authorization before sending inputs to the selected instance.
+   */
+  delivery?: Delivery | undefined;
   /**
    * JSON params passed to the operation.
    */
@@ -36,10 +53,16 @@ export type InvokeOperationRequest = {
 };
 
 /** @internal */
+export const Delivery$outboundSchema: z.ZodEnum<typeof Delivery> = z.enum(
+  Delivery,
+);
+
+/** @internal */
 export type InvokeOperationRequest$Outbound = {
   deploymentId: string;
   plugin: string;
   operation: string;
+  delivery?: string | undefined;
   params?: any | null | undefined;
   idempotencyKey?: string | undefined;
   remediationPlanId?: string | undefined;
@@ -54,6 +77,7 @@ export const InvokeOperationRequest$outboundSchema: z.ZodType<
   deploymentId: z.string(),
   plugin: z.string(),
   operation: z.string(),
+  delivery: Delivery$outboundSchema.optional(),
   params: z.nullable(z.any()).optional(),
   idempotencyKey: z.string().optional(),
   remediationPlanId: z.string().optional(),

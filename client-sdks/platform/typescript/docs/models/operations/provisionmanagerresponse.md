@@ -1,6 +1,6 @@
 # ProvisionManagerResponse
 
-Manager provisioning enqueued successfully.
+Instance provisioning enqueued successfully.
 
 ## Example Usage
 

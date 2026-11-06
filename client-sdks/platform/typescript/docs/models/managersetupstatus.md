@@ -1,6 +1,6 @@
 # ManagerSetupStatus
 
-Private manager setup lifecycle status
+Private Alien Instance setup lifecycle status
 
 ## Example Usage
 

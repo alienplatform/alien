@@ -46,7 +46,7 @@ export type ManagersProvisionMutationError =
   | SDKValidationError;
 
 /**
- * Enqueue provisioning for a manager by ID.
+ * Enqueue provisioning for an instance by ID.
  */
 export function useManagersProvisionMutation(
   options?: MutationHookOptions<

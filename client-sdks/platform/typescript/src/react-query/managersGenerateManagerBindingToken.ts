@@ -48,7 +48,7 @@ export type ManagersGenerateManagerBindingTokenMutationError =
   | SDKValidationError;
 
 /**
- * Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned manager.
+ * Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned instance.
  */
 export function useManagersGenerateManagerBindingTokenMutation(
   options?: MutationHookOptions<

@@ -28,7 +28,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Retrieve a manager by ID.
+ * Retrieve an instance by ID.
  */
 export function managersGet(
   client: AlienCore,

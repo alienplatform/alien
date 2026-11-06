@@ -1,6 +1,6 @@
 # NetworkEnum
 
-Optional network mode for the private-manager setup. Defaults to create for production isolation; default uses the provider default network for faster dev/test setup.
+Optional network mode for the private instance setup. Defaults to create for production isolation; default uses the provider default network for faster dev/test setup.
 
 ## Example Usage
 

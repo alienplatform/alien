@@ -28,7 +28,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned manager.
+ * Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned instance.
  */
 export function managersGenerateManagerBindingToken(
   client: AlienCore,

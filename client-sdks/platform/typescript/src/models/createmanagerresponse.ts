@@ -805,6 +805,10 @@ export type CreateManagerResponseSigning3 = {
    */
   fingerprint: string;
   /**
+   * Resolve private inputs locally even when machine coordination remains hosted.
+   */
+  privateInputCustody?: boolean | undefined;
+  /**
    * Customer setup pins this private instance machine endpoint and enables
    *
    * @remarks
@@ -1533,6 +1537,10 @@ export type CreateManagerResponseSigning2 = {
    */
   fingerprint: string;
   /**
+   * Resolve private inputs locally even when machine coordination remains hosted.
+   */
+  privateInputCustody?: boolean | undefined;
+  /**
    * Customer setup pins this private instance machine endpoint and enables
    *
    * @remarks
@@ -2256,6 +2264,10 @@ export type CreateManagerResponseSigning1 = {
    */
   fingerprint: string;
   /**
+   * Resolve private inputs locally even when machine coordination remains hosted.
+   */
+  privateInputCustody?: boolean | undefined;
+  /**
    * Customer setup pins this private instance machine endpoint and enables
    *
    * @remarks
@@ -2404,7 +2416,7 @@ export type CreateManagerResponseSetupUnion =
 
 export type CreateManagerResponse = {
   /**
-   * Unique identifier for a manager.
+   * Unique identifier for an instance.
    */
   managerId: string;
   setupStatus: CreateManagerResponseSetupStatus;
@@ -3735,6 +3747,7 @@ export const CreateManagerResponseSigning3$inboundSchema: z.ZodType<
 > = z.object({
   channel: z.string(),
   fingerprint: z.string(),
+  privateInputCustody: z.boolean().optional(),
   privateMachineApiUrl: z.nullable(z.string()).optional(),
 });
 
@@ -4929,6 +4942,7 @@ export const CreateManagerResponseSigning2$inboundSchema: z.ZodType<
 > = z.object({
   channel: z.string(),
   fingerprint: z.string(),
+  privateInputCustody: z.boolean().optional(),
   privateMachineApiUrl: z.nullable(z.string()).optional(),
 });
 
@@ -6118,6 +6132,7 @@ export const CreateManagerResponseSigning1$inboundSchema: z.ZodType<
 > = z.object({
   channel: z.string(),
   fingerprint: z.string(),
+  privateInputCustody: z.boolean().optional(),
   privateMachineApiUrl: z.nullable(z.string()).optional(),
 });
 

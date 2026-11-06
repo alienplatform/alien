@@ -53,7 +53,7 @@ export type ManagersListQueryError =
   | SDKValidationError;
 
 /**
- * Retrieve all managers.
+ * Retrieve all instances.
  */
 export function useManagersList(
   request?: operations.ListManagersRequest | undefined,
@@ -71,7 +71,7 @@ export function useManagersList(
 }
 
 /**
- * Retrieve all managers.
+ * Retrieve all instances.
  */
 export function useManagersListSuspense(
   request?: operations.ListManagersRequest | undefined,

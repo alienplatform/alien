@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
+ * Cancel pending private instance setup, revoke setup/runtime tokens, and remove the undeployed instance record.
  */
 export function managersCancelSetup(
   client: AlienCore,

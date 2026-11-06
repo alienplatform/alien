@@ -316,27 +316,27 @@ export type ProjectPackagesConfig = {
  */
 export type ProjectDefaultManagers = {
   /**
-   * Unique identifier for a default private manager.
+   * Unique identifier for a default private instance.
    */
   aws?: string | null | undefined;
   /**
-   * Unique identifier for a default private manager.
+   * Unique identifier for a default private instance.
    */
   gcp?: string | null | undefined;
   /**
-   * Unique identifier for a default private manager.
+   * Unique identifier for a default private instance.
    */
   azure?: string | null | undefined;
   /**
-   * Unique identifier for a default private manager.
+   * Unique identifier for a default private instance.
    */
   kubernetes?: string | null | undefined;
   /**
-   * Unique identifier for a default private manager.
+   * Unique identifier for a default private instance.
    */
   machines?: string | null | undefined;
   /**
-   * Unique identifier for a default private manager.
+   * Unique identifier for a default private instance.
    */
   local?: string | null | undefined;
 };

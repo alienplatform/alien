@@ -28,7 +28,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Report Manager health status and metrics.
+ * Report instance health status and metrics.
  */
 export function managersReportHeartbeat(
   client: AlienCore,

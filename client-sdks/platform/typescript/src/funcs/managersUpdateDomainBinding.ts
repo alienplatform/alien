@@ -28,7 +28,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Create, update, or remove the custom domain binding for a private manager.
+ * Create, update, or remove the custom domain binding for a private instance.
  */
 export function managersUpdateDomainBinding(
   client: AlienCore,

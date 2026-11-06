@@ -13,11 +13,11 @@ export type ListManagersGlobals = {
 
 export type ListManagersRequest = {
   /**
-   * Search managers by name
+   * Search instances by name
    */
   search?: string | undefined;
   /**
-   * Maximum number of managers to return
+   * Maximum number of instances to return
    */
   limit?: number | undefined;
 };

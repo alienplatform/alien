@@ -5,7 +5,7 @@
 import * as z from "zod/v4";
 
 /**
- * Request schema for updating a manager to a new release
+ * Request schema for updating an instance to a new release
  */
 export type UpdateManagerRequest = {
   /**

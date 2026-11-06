@@ -53,7 +53,7 @@ export type ManagersGetDeploymentQueryError =
   | SDKValidationError;
 
 /**
- * Get deployment details for a private manager (internal deployment platform, status, resources).
+ * Get deployment details for a private instance (internal deployment platform, status, resources).
  */
 export function useManagersGetDeployment(
   request: operations.GetManagerDeploymentRequest,
@@ -77,7 +77,7 @@ export function useManagersGetDeployment(
 }
 
 /**
- * Get deployment details for a private manager (internal deployment platform, status, resources).
+ * Get deployment details for a private instance (internal deployment platform, status, resources).
  */
 export function useManagersGetDeploymentSuspense(
   request: operations.GetManagerDeploymentRequest,

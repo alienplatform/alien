@@ -1280,7 +1280,7 @@ export type PersistImportedDeploymentRequest = {
    */
   deploymentGroupId: string;
   /**
-   * Unique identifier for a manager.
+   * Unique identifier for an instance.
    */
   managerId: string;
   /**

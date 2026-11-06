@@ -16,13 +16,13 @@ export type CancelManagerSetupGlobals = {
 
 export type CancelManagerSetupRequest = {
   /**
-   * Unique identifier for a manager.
+   * Unique identifier for an instance.
    */
   id: string;
 };
 
 /**
- * Manager setup canceled successfully.
+ * Instance setup canceled successfully.
  */
 export type CancelManagerSetupResponse = {
   message: string;

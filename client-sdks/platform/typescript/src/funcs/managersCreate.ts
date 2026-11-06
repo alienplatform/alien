@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Create a new manager.
+ * Create a new instance.
  */
 export function managersCreate(
   client: AlienCore,

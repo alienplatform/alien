@@ -47,7 +47,7 @@ export type ManagersCancelSetupMutationError =
   | SDKValidationError;
 
 /**
- * Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
+ * Cancel pending private instance setup, revoke setup/runtime tokens, and remove the undeployed instance record.
  */
 export function useManagersCancelSetupMutation(
   options?: MutationHookOptions<

@@ -53,7 +53,7 @@ export type ManagersGetQueryError =
   | SDKValidationError;
 
 /**
- * Retrieve a manager by ID.
+ * Retrieve an instance by ID.
  */
 export function useManagersGet(
   request: operations.GetManagerRequest,
@@ -71,7 +71,7 @@ export function useManagersGet(
 }
 
 /**
- * Retrieve a manager by ID.
+ * Retrieve an instance by ID.
  */
 export function useManagersGetSuspense(
   request: operations.GetManagerRequest,

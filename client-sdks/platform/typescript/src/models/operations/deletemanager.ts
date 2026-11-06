@@ -16,13 +16,13 @@ export type DeleteManagerGlobals = {
 
 export type DeleteManagerRequest = {
   /**
-   * Unique identifier for a manager.
+   * Unique identifier for an instance.
    */
   id: string;
 };
 
 /**
- * Manager deletion enqueued successfully.
+ * Instance deletion enqueued successfully.
  */
 export type DeleteManagerResponse = {
   message: string;

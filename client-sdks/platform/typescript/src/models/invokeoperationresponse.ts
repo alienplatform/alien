@@ -43,6 +43,7 @@ export type InvokeOperationResponseDecision = ClosedEnum<
 export const InvokeOperationResponseStatus = {
   Dispatched: "dispatched",
   PendingApproval: "pending-approval",
+  Prepared: "prepared",
 } as const;
 /**
  * dispatched: auto-approved and running. pending-approval: needs customer sign-off.
@@ -50,6 +51,16 @@ export const InvokeOperationResponseStatus = {
 export type InvokeOperationResponseStatus = ClosedEnum<
   typeof InvokeOperationResponseStatus
 >;
+
+export type Connection = {
+  managerUrl: string;
+  token: string;
+  command: string;
+  targetResourceId: string;
+  idempotencyKey: string;
+  deadline: Date;
+  operationResultContract?: any | null | undefined;
+};
 
 export type InvokeOperationResponse = {
   plugin: string;
@@ -66,6 +77,7 @@ export type InvokeOperationResponse = {
    * dispatched: auto-approved and running. pending-approval: needs customer sign-off.
    */
   status: InvokeOperationResponseStatus;
+  connection?: Connection | undefined;
   /**
    * The created operation-command id when dispatched (absent when pending).
    */
@@ -88,6 +100,28 @@ export const InvokeOperationResponseStatus$inboundSchema: z.ZodEnum<
 > = z.enum(InvokeOperationResponseStatus);
 
 /** @internal */
+export const Connection$inboundSchema: z.ZodType<Connection, unknown> = z
+  .object({
+    managerUrl: z.string(),
+    token: z.string(),
+    command: z.string(),
+    targetResourceId: z.string(),
+    idempotencyKey: z.string(),
+    deadline: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+    operationResultContract: z.nullable(z.any()).optional(),
+  });
+
+export function connectionFromJSON(
+  jsonString: string,
+): SafeParseResult<Connection, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Connection$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Connection' from JSON`,
+  );
+}
+
+/** @internal */
 export const InvokeOperationResponse$inboundSchema: z.ZodType<
   InvokeOperationResponse,
   unknown
@@ -97,6 +131,7 @@ export const InvokeOperationResponse$inboundSchema: z.ZodType<
   tier: InvokeOperationResponseTier$inboundSchema,
   decision: InvokeOperationResponseDecision$inboundSchema,
   status: InvokeOperationResponseStatus$inboundSchema,
+  connection: z.lazy(() => Connection$inboundSchema).optional(),
   commandId: z.string().optional(),
 });
 

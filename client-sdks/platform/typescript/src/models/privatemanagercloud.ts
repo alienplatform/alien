@@ -6,7 +6,7 @@ import * as z from "zod/v4";
 import { ClosedEnum } from "../types/enums.js";
 
 /**
- * Cloud where the private manager will be deployed.
+ * Cloud where the private instance will be deployed.
  */
 export const PrivateManagerCloud = {
   Aws: "aws",
@@ -14,7 +14,7 @@ export const PrivateManagerCloud = {
   Azure: "azure",
 } as const;
 /**
- * Cloud where the private manager will be deployed.
+ * Cloud where the private instance will be deployed.
  */
 export type PrivateManagerCloud = ClosedEnum<typeof PrivateManagerCloud>;
 

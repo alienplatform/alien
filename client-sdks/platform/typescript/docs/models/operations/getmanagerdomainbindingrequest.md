@@ -12,6 +12,6 @@ let value: GetManagerDomainBindingRequest = {
 
 ## Fields
 
-| Field                            | Type                             | Required                         | Description                      | Example                          |
-| -------------------------------- | -------------------------------- | -------------------------------- | -------------------------------- | -------------------------------- |
-| `id`                             | *string*                         | :heavy_check_mark:               | Unique identifier for a manager. | mgr_enxscjrqiiu2lrc672hwwuc5tv5y |
+| Field                              | Type                               | Required                           | Description                        | Example                            |
+| ---------------------------------- | ---------------------------------- | ---------------------------------- | ---------------------------------- | ---------------------------------- |
+| `id`                               | *string*                           | :heavy_check_mark:                 | Unique identifier for an instance. | mgr_enxscjrqiiu2lrc672hwwuc5tv5y   |

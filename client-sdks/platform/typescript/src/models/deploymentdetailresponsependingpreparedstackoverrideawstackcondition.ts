@@ -832,6 +832,10 @@ export type DeploymentDetailResponseSigning = {
    */
   fingerprint: string;
   /**
+   * Resolve private inputs locally even when machine coordination remains hosted.
+   */
+  privateInputCustody?: boolean | undefined;
+  /**
    * Customer setup pins this private instance machine endpoint and enables
    *
    * @remarks
@@ -3461,6 +3465,7 @@ export const DeploymentDetailResponseSigning$inboundSchema: z.ZodType<
 > = z.object({
   channel: z.string(),
   fingerprint: z.string(),
+  privateInputCustody: z.boolean().optional(),
   privateMachineApiUrl: z.nullable(z.string()).optional(),
 });
 

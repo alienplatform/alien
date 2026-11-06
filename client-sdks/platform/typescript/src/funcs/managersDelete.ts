@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Delete a manager by ID.
+ * Delete an instance by ID.
  */
 export function managersDelete(
   client: AlienCore,

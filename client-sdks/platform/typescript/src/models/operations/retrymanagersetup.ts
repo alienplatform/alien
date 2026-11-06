@@ -13,7 +13,7 @@ export type RetryManagerSetupGlobals = {
 
 export type RetryManagerSetupRequest = {
   /**
-   * Unique identifier for a manager.
+   * Unique identifier for an instance.
    */
   id: string;
 };

@@ -48,7 +48,7 @@ export type ManagersUpdateDomainBindingMutationError =
   | SDKValidationError;
 
 /**
- * Create, update, or remove the custom domain binding for a private manager.
+ * Create, update, or remove the custom domain binding for a private instance.
  */
 export function useManagersUpdateDomainBindingMutation(
   options?: MutationHookOptions<

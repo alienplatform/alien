@@ -1,6 +1,6 @@
 # UpdateManagerRequest
 
-Request schema for updating a manager to a new release
+Request schema for updating an instance to a new release
 
 ## Example Usage
 

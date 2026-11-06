@@ -243,6 +243,7 @@ run();
 * [dispatch](docs/sdks/commands/README.md#dispatch) - Atomically mark a command DISPATCHED unless it is already terminal. Returns whether the transition was applied.
 * [complete](docs/sdks/commands/README.md#complete) - Atomically transition a command to a terminal state (SUCCEEDED, FAILED, or EXPIRED) unless it is already terminal. Returns whether the transition was applied.
 * [incrementAttempt](docs/sdks/commands/README.md#incrementattempt) - Atomically increment the command's attempt counter and return the new value.
+* [resolveResultConnection](docs/sdks/commands/README.md#resolveresultconnection) - Authorize direct result retrieval without sending result bytes through the hosted API.
 
 ### [ContainerRegistry](docs/sdks/containerregistry/README.md)
 
@@ -370,24 +371,24 @@ run();
 
 ### [Managers](docs/sdks/managers/README.md)
 
-* [create](docs/sdks/managers/README.md#create) - Create a new manager.
-* [list](docs/sdks/managers/README.md#list) - Retrieve all managers.
-* [retrySetup](docs/sdks/managers/README.md#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
-* [retry](docs/sdks/managers/README.md#retry) - Retry private-manager setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
-* [cancelSetup](docs/sdks/managers/README.md#cancelsetup) - Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
-* [get](docs/sdks/managers/README.md#get) - Retrieve a manager by ID.
-* [delete](docs/sdks/managers/README.md#delete) - Delete a manager by ID.
-* [getDomainBinding](docs/sdks/managers/README.md#getdomainbinding) - Get the custom domain binding for a private manager.
-* [updateDomainBinding](docs/sdks/managers/README.md#updatedomainbinding) - Create, update, or remove the custom domain binding for a private manager.
-* [getManagementConfig](docs/sdks/managers/README.md#getmanagementconfig) - Get the management configuration for a manager.
-* [provision](docs/sdks/managers/README.md#provision) - Enqueue provisioning for a manager by ID.
-* [update](docs/sdks/managers/README.md#update) - Update a manager to a specific release ID or active release.
-* [listEvents](docs/sdks/managers/README.md#listevents) - Retrieve all events of a manager.
-* [generateManagerToken](docs/sdks/managers/README.md#generatemanagertoken) - Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
-* [generateManagerBindingToken](docs/sdks/managers/README.md#generatemanagerbindingtoken) - Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned manager.
-* [resolveGcpOAuthProvider](docs/sdks/managers/README.md#resolvegcpoauthprovider) - Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
-* [reportHeartbeat](docs/sdks/managers/README.md#reportheartbeat) - Report Manager health status and metrics.
-* [getDeployment](docs/sdks/managers/README.md#getdeployment) - Get deployment details for a private manager (internal deployment platform, status, resources).
+* [create](docs/sdks/managers/README.md#create) - Create a new instance.
+* [list](docs/sdks/managers/README.md#list) - Retrieve all instances.
+* [retrySetup](docs/sdks/managers/README.md#retrysetup) - Revoke previous private instance setup tokens and issue a fresh setup token/config.
+* [retry](docs/sdks/managers/README.md#retry) - Retry private instance setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
+* [cancelSetup](docs/sdks/managers/README.md#cancelsetup) - Cancel pending private instance setup, revoke setup/runtime tokens, and remove the undeployed instance record.
+* [get](docs/sdks/managers/README.md#get) - Retrieve an instance by ID.
+* [delete](docs/sdks/managers/README.md#delete) - Delete an instance by ID.
+* [getDomainBinding](docs/sdks/managers/README.md#getdomainbinding) - Get the custom domain binding for a private instance.
+* [updateDomainBinding](docs/sdks/managers/README.md#updatedomainbinding) - Create, update, or remove the custom domain binding for a private instance.
+* [getManagementConfig](docs/sdks/managers/README.md#getmanagementconfig) - Get the management configuration for an instance.
+* [provision](docs/sdks/managers/README.md#provision) - Enqueue provisioning for an instance by ID.
+* [update](docs/sdks/managers/README.md#update) - Update an instance to a specific release ID or active release.
+* [listEvents](docs/sdks/managers/README.md#listevents) - Retrieve all events of an instance.
+* [generateManagerToken](docs/sdks/managers/README.md#generatemanagertoken) - Generate a short-lived JWT for direct browser → instance communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
+* [generateManagerBindingToken](docs/sdks/managers/README.md#generatemanagerbindingtoken) - Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned instance.
+* [resolveGcpOAuthProvider](docs/sdks/managers/README.md#resolvegcpoauthprovider) - Resolve decrypted project-level Google Cloud OAuth provider settings for an instance-side deployment bootstrap.
+* [reportHeartbeat](docs/sdks/managers/README.md#reportheartbeat) - Report instance health status and metrics.
+* [getDeployment](docs/sdks/managers/README.md#getdeployment) - Get deployment details for a private instance (internal deployment platform, status, resources).
 
 ### [Operations](docs/sdks/operations/README.md)
 
@@ -608,6 +609,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`commandsList`](docs/sdks/commands/README.md#list) - Retrieve commands. Use for dashboard analytics and command history.
 - [`commandsListDeployments`](docs/sdks/commands/README.md#listdeployments) - List distinct deployments that have commands, including deployment group info. Use for filter dropdowns in the dashboard.
 - [`commandsListNames`](docs/sdks/commands/README.md#listnames) - List distinct command names. Use for filter dropdowns in the dashboard.
+- [`commandsResolveResultConnection`](docs/sdks/commands/README.md#resolveresultconnection) - Authorize direct result retrieval without sending result bytes through the hosted API.
 - [`commandsResolveTarget`](docs/sdks/commands/README.md#resolvetarget) - Resolve which resource a command for this deployment would be addressed to, and how it would be delivered. Fails when the deployment has no command-capable resources, or more than one and no explicit target was named.
 - [`commandsUpdate`](docs/sdks/commands/README.md#update) - Update command state. Called by manager when command is dispatched or completes.
 - [`completeAwsXksStoreRetirement`](docs/sdks/alien/README.md#completeawsxksstoreretirement)
@@ -723,24 +725,24 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`machinesRemoveMachine`](docs/sdks/machines/README.md#removemachine)
 - [`machinesRevokeJoinToken`](docs/sdks/machines/README.md#revokejointoken)
 - [`machinesRotateJoinToken`](docs/sdks/machines/README.md#rotatejointoken)
-- [`managersCancelSetup`](docs/sdks/managers/README.md#cancelsetup) - Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
-- [`managersCreate`](docs/sdks/managers/README.md#create) - Create a new manager.
-- [`managersDelete`](docs/sdks/managers/README.md#delete) - Delete a manager by ID.
-- [`managersGenerateManagerBindingToken`](docs/sdks/managers/README.md#generatemanagerbindingtoken) - Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned manager.
-- [`managersGenerateManagerToken`](docs/sdks/managers/README.md#generatemanagertoken) - Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
-- [`managersGet`](docs/sdks/managers/README.md#get) - Retrieve a manager by ID.
-- [`managersGetDeployment`](docs/sdks/managers/README.md#getdeployment) - Get deployment details for a private manager (internal deployment platform, status, resources).
-- [`managersGetDomainBinding`](docs/sdks/managers/README.md#getdomainbinding) - Get the custom domain binding for a private manager.
-- [`managersGetManagementConfig`](docs/sdks/managers/README.md#getmanagementconfig) - Get the management configuration for a manager.
-- [`managersList`](docs/sdks/managers/README.md#list) - Retrieve all managers.
-- [`managersListEvents`](docs/sdks/managers/README.md#listevents) - Retrieve all events of a manager.
-- [`managersProvision`](docs/sdks/managers/README.md#provision) - Enqueue provisioning for a manager by ID.
-- [`managersReportHeartbeat`](docs/sdks/managers/README.md#reportheartbeat) - Report Manager health status and metrics.
-- [`managersResolveGcpOAuthProvider`](docs/sdks/managers/README.md#resolvegcpoauthprovider) - Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
-- [`managersRetry`](docs/sdks/managers/README.md#retry) - Retry private-manager setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
-- [`managersRetrySetup`](docs/sdks/managers/README.md#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
-- [`managersUpdate`](docs/sdks/managers/README.md#update) - Update a manager to a specific release ID or active release.
-- [`managersUpdateDomainBinding`](docs/sdks/managers/README.md#updatedomainbinding) - Create, update, or remove the custom domain binding for a private manager.
+- [`managersCancelSetup`](docs/sdks/managers/README.md#cancelsetup) - Cancel pending private instance setup, revoke setup/runtime tokens, and remove the undeployed instance record.
+- [`managersCreate`](docs/sdks/managers/README.md#create) - Create a new instance.
+- [`managersDelete`](docs/sdks/managers/README.md#delete) - Delete an instance by ID.
+- [`managersGenerateManagerBindingToken`](docs/sdks/managers/README.md#generatemanagerbindingtoken) - Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned instance.
+- [`managersGenerateManagerToken`](docs/sdks/managers/README.md#generatemanagertoken) - Generate a short-lived JWT for direct browser → instance communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
+- [`managersGet`](docs/sdks/managers/README.md#get) - Retrieve an instance by ID.
+- [`managersGetDeployment`](docs/sdks/managers/README.md#getdeployment) - Get deployment details for a private instance (internal deployment platform, status, resources).
+- [`managersGetDomainBinding`](docs/sdks/managers/README.md#getdomainbinding) - Get the custom domain binding for a private instance.
+- [`managersGetManagementConfig`](docs/sdks/managers/README.md#getmanagementconfig) - Get the management configuration for an instance.
+- [`managersList`](docs/sdks/managers/README.md#list) - Retrieve all instances.
+- [`managersListEvents`](docs/sdks/managers/README.md#listevents) - Retrieve all events of an instance.
+- [`managersProvision`](docs/sdks/managers/README.md#provision) - Enqueue provisioning for an instance by ID.
+- [`managersReportHeartbeat`](docs/sdks/managers/README.md#reportheartbeat) - Report instance health status and metrics.
+- [`managersResolveGcpOAuthProvider`](docs/sdks/managers/README.md#resolvegcpoauthprovider) - Resolve decrypted project-level Google Cloud OAuth provider settings for an instance-side deployment bootstrap.
+- [`managersRetry`](docs/sdks/managers/README.md#retry) - Retry private instance setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
+- [`managersRetrySetup`](docs/sdks/managers/README.md#retrysetup) - Revoke previous private instance setup tokens and issue a fresh setup token/config.
+- [`managersUpdate`](docs/sdks/managers/README.md#update) - Update an instance to a specific release ID or active release.
+- [`managersUpdateDomainBinding`](docs/sdks/managers/README.md#updatedomainbinding) - Create, update, or remove the custom domain binding for a private instance.
 - [`operationsApproveAccessRequest`](docs/sdks/operations/README.md#approveaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may approve a queued access request. Actor identity comes from authentication; method/source are audit context only.
 - [`operationsCreateAccessRequest`](docs/sdks/operations/README.md#createaccessrequest) - Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
 - [`operationsCreateBundleUploadUrl`](docs/sdks/operations/README.md#createbundleuploadurl) - Get a presigned S3 URL to upload a custom operations plugin bundle ZIP. Upload the ZIP with a PUT to the returned url (sending the given Content-Type), then call POST /plugins to register it.
@@ -933,6 +935,7 @@ To learn about this feature and how to get started, check
 - [`useCommandsList`](docs/sdks/commands/README.md#list) - Retrieve commands. Use for dashboard analytics and command history.
 - [`useCommandsListDeployments`](docs/sdks/commands/README.md#listdeployments) - List distinct deployments that have commands, including deployment group info. Use for filter dropdowns in the dashboard.
 - [`useCommandsListNames`](docs/sdks/commands/README.md#listnames) - List distinct command names. Use for filter dropdowns in the dashboard.
+- [`useCommandsResolveResultConnectionMutation`](docs/sdks/commands/README.md#resolveresultconnection) - Authorize direct result retrieval without sending result bytes through the hosted API.
 - [`useCommandsResolveTarget`](docs/sdks/commands/README.md#resolvetarget) - Resolve which resource a command for this deployment would be addressed to, and how it would be delivered. Fails when the deployment has no command-capable resources, or more than one and no explicit target was named.
 - [`useCommandsUpdateMutation`](docs/sdks/commands/README.md#update) - Update command state. Called by manager when command is dispatched or completes.
 - [`useCompleteAwsXksStoreRetirementMutation`](docs/sdks/alien/README.md#completeawsxksstoreretirement)
@@ -1048,24 +1051,24 @@ To learn about this feature and how to get started, check
 - [`useMachinesRemoveMachineMutation`](docs/sdks/machines/README.md#removemachine)
 - [`useMachinesRevokeJoinTokenMutation`](docs/sdks/machines/README.md#revokejointoken)
 - [`useMachinesRotateJoinTokenMutation`](docs/sdks/machines/README.md#rotatejointoken)
-- [`useManagersCancelSetupMutation`](docs/sdks/managers/README.md#cancelsetup) - Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
-- [`useManagersCreateMutation`](docs/sdks/managers/README.md#create) - Create a new manager.
-- [`useManagersDeleteMutation`](docs/sdks/managers/README.md#delete) - Delete a manager by ID.
-- [`useManagersGenerateManagerBindingTokenMutation`](docs/sdks/managers/README.md#generatemanagerbindingtoken) - Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned manager.
-- [`useManagersGenerateManagerTokenMutation`](docs/sdks/managers/README.md#generatemanagertoken) - Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
-- [`useManagersGet`](docs/sdks/managers/README.md#get) - Retrieve a manager by ID.
-- [`useManagersGetDeployment`](docs/sdks/managers/README.md#getdeployment) - Get deployment details for a private manager (internal deployment platform, status, resources).
-- [`useManagersGetDomainBinding`](docs/sdks/managers/README.md#getdomainbinding) - Get the custom domain binding for a private manager.
-- [`useManagersGetManagementConfig`](docs/sdks/managers/README.md#getmanagementconfig) - Get the management configuration for a manager.
-- [`useManagersList`](docs/sdks/managers/README.md#list) - Retrieve all managers.
-- [`useManagersListEvents`](docs/sdks/managers/README.md#listevents) - Retrieve all events of a manager.
-- [`useManagersProvisionMutation`](docs/sdks/managers/README.md#provision) - Enqueue provisioning for a manager by ID.
-- [`useManagersReportHeartbeatMutation`](docs/sdks/managers/README.md#reportheartbeat) - Report Manager health status and metrics.
-- [`useManagersResolveGcpOAuthProviderMutation`](docs/sdks/managers/README.md#resolvegcpoauthprovider) - Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
-- [`useManagersRetryMutation`](docs/sdks/managers/README.md#retry) - Retry private-manager setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
-- [`useManagersRetrySetupMutation`](docs/sdks/managers/README.md#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
-- [`useManagersUpdateDomainBindingMutation`](docs/sdks/managers/README.md#updatedomainbinding) - Create, update, or remove the custom domain binding for a private manager.
-- [`useManagersUpdateMutation`](docs/sdks/managers/README.md#update) - Update a manager to a specific release ID or active release.
+- [`useManagersCancelSetupMutation`](docs/sdks/managers/README.md#cancelsetup) - Cancel pending private instance setup, revoke setup/runtime tokens, and remove the undeployed instance record.
+- [`useManagersCreateMutation`](docs/sdks/managers/README.md#create) - Create a new instance.
+- [`useManagersDeleteMutation`](docs/sdks/managers/README.md#delete) - Delete an instance by ID.
+- [`useManagersGenerateManagerBindingTokenMutation`](docs/sdks/managers/README.md#generatemanagerbindingtoken) - Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned instance.
+- [`useManagersGenerateManagerTokenMutation`](docs/sdks/managers/README.md#generatemanagertoken) - Generate a short-lived JWT for direct browser → instance communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
+- [`useManagersGet`](docs/sdks/managers/README.md#get) - Retrieve an instance by ID.
+- [`useManagersGetDeployment`](docs/sdks/managers/README.md#getdeployment) - Get deployment details for a private instance (internal deployment platform, status, resources).
+- [`useManagersGetDomainBinding`](docs/sdks/managers/README.md#getdomainbinding) - Get the custom domain binding for a private instance.
+- [`useManagersGetManagementConfig`](docs/sdks/managers/README.md#getmanagementconfig) - Get the management configuration for an instance.
+- [`useManagersList`](docs/sdks/managers/README.md#list) - Retrieve all instances.
+- [`useManagersListEvents`](docs/sdks/managers/README.md#listevents) - Retrieve all events of an instance.
+- [`useManagersProvisionMutation`](docs/sdks/managers/README.md#provision) - Enqueue provisioning for an instance by ID.
+- [`useManagersReportHeartbeatMutation`](docs/sdks/managers/README.md#reportheartbeat) - Report instance health status and metrics.
+- [`useManagersResolveGcpOAuthProviderMutation`](docs/sdks/managers/README.md#resolvegcpoauthprovider) - Resolve decrypted project-level Google Cloud OAuth provider settings for an instance-side deployment bootstrap.
+- [`useManagersRetryMutation`](docs/sdks/managers/README.md#retry) - Retry private instance setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
+- [`useManagersRetrySetupMutation`](docs/sdks/managers/README.md#retrysetup) - Revoke previous private instance setup tokens and issue a fresh setup token/config.
+- [`useManagersUpdateDomainBindingMutation`](docs/sdks/managers/README.md#updatedomainbinding) - Create, update, or remove the custom domain binding for a private instance.
+- [`useManagersUpdateMutation`](docs/sdks/managers/README.md#update) - Update an instance to a specific release ID or active release.
 - [`useOperationsApproveAccessRequestMutation`](docs/sdks/operations/README.md#approveaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may approve a queued access request. Actor identity comes from authentication; method/source are audit context only.
 - [`useOperationsCreateAccessRequestMutation`](docs/sdks/operations/README.md#createaccessrequest) - Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
 - [`useOperationsCreateBundleUploadUrlMutation`](docs/sdks/operations/README.md#createbundleuploadurl) - Get a presigned S3 URL to upload a custom operations plugin bundle ZIP. Upload the ZIP with a PUT to the returned url (sending the given Content-Type), then call POST /plugins to register it.

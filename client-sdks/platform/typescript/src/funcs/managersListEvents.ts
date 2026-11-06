@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Retrieve all events of a manager.
+ * Retrieve all events of an instance.
  */
 export function managersListEvents(
   client: AlienCore,

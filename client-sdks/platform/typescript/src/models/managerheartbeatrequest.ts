@@ -41,11 +41,11 @@ export type ManagerHeartbeatRequest = {
    */
   status: ManagerHeartbeatRequestStatus;
   /**
-   * Manager version
+   * Instance version
    */
   version?: string | undefined;
   /**
-   * Manager public URL (for accessing log ingestion endpoints)
+   * Instance public URL (for accessing log ingestion endpoints)
    */
   url: string;
   managementConfigs: ManagerManagementConfigs;

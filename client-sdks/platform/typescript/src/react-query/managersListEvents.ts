@@ -53,7 +53,7 @@ export type ManagersListEventsQueryError =
   | SDKValidationError;
 
 /**
- * Retrieve all events of a manager.
+ * Retrieve all events of an instance.
  */
 export function useManagersListEvents(
   request: operations.ListManagerEventsRequest,
@@ -74,7 +74,7 @@ export function useManagersListEvents(
 }
 
 /**
- * Retrieve all events of a manager.
+ * Retrieve all events of an instance.
  */
 export function useManagersListEventsSuspense(
   request: operations.ListManagerEventsRequest,

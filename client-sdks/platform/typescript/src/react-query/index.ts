@@ -33,6 +33,7 @@ export * from "./commandsIncrementAttempt.js";
 export * from "./commandsList.js";
 export * from "./commandsListDeployments.js";
 export * from "./commandsListNames.js";
+export * from "./commandsResolveResultConnection.js";
 export * from "./commandsResolveTarget.js";
 export * from "./commandsUpdate.js";
 export * from "./completeAwsXksStoreRetirement.js";

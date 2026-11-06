@@ -28,7 +28,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Retry private-manager setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
+ * Retry private instance setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
  */
 export function managersRetry(
   client: AlienCore,

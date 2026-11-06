@@ -6,7 +6,7 @@ import * as z from "zod/v4";
 
 export type SyncConfigStatementRequest = {
   /**
-   * Unique identifier for a manager.
+   * Unique identifier for an instance.
    */
   managerId?: string | undefined;
   /**

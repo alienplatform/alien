@@ -48,7 +48,7 @@ export type ManagersReportHeartbeatMutationError =
   | SDKValidationError;
 
 /**
- * Report Manager health status and metrics.
+ * Report instance health status and metrics.
  */
 export function useManagersReportHeartbeatMutation(
   options?: MutationHookOptions<

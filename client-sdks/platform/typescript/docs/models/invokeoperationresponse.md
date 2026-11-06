@@ -10,7 +10,7 @@ let value: InvokeOperationResponse = {
   operation: "<value>",
   tier: "read-only",
   decision: "manual",
-  status: "pending-approval",
+  status: "prepared",
 };
 ```
 
@@ -23,4 +23,5 @@ let value: InvokeOperationResponse = {
 | `tier`                                                                                 | [models.InvokeOperationResponseTier](../models/invokeoperationresponsetier.md)         | :heavy_check_mark:                                                                     | The operation's declared risk tier (informational).                                    |
 | `decision`                                                                             | [models.InvokeOperationResponseDecision](../models/invokeoperationresponsedecision.md) | :heavy_check_mark:                                                                     | The decision the approval rules resolved to.                                           |
 | `status`                                                                               | [models.InvokeOperationResponseStatus](../models/invokeoperationresponsestatus.md)     | :heavy_check_mark:                                                                     | dispatched: auto-approved and running. pending-approval: needs customer sign-off.      |
+| `connection`                                                                           | [models.Connection](../models/connection.md)                                           | :heavy_minus_sign:                                                                     | N/A                                                                                    |
 | `commandId`                                                                            | *string*                                                                               | :heavy_minus_sign:                                                                     | The created operation-command id when dispatched (absent when pending).                |

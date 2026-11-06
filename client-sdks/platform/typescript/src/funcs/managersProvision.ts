@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Enqueue provisioning for a manager by ID.
+ * Enqueue provisioning for an instance by ID.
  */
 export function managersProvision(
   client: AlienCore,

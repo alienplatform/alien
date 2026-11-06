@@ -53,7 +53,7 @@ export type ManagersGetDomainBindingQueryError =
   | SDKValidationError;
 
 /**
- * Get the custom domain binding for a private manager.
+ * Get the custom domain binding for a private instance.
  */
 export function useManagersGetDomainBinding(
   request: operations.GetManagerDomainBindingRequest,
@@ -77,7 +77,7 @@ export function useManagersGetDomainBinding(
 }
 
 /**
- * Get the custom domain binding for a private manager.
+ * Get the custom domain binding for a private instance.
  */
 export function useManagersGetDomainBindingSuspense(
   request: operations.GetManagerDomainBindingRequest,

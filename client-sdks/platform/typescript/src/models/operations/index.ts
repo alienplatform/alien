@@ -241,6 +241,7 @@ export * from "./reportmanagerheartbeat.js";
 export * from "./requestdeploymentcheck.js";
 export * from "./resendworkspaceinvitation.js";
 export * from "./resolve.js";
+export * from "./resolvecommandresultconnection.js";
 export * from "./resolvecommandtarget.js";
 export * from "./resolvemanagergcpoauthprovider.js";
 export * from "./resolvependingchange.js";

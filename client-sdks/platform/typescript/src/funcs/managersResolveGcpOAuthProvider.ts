@@ -28,7 +28,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
+ * Resolve decrypted project-level Google Cloud OAuth provider settings for an instance-side deployment bootstrap.
  */
 export function managersResolveGcpOAuthProvider(
   client: AlienCore,

@@ -47,7 +47,7 @@ export type ManagersRetrySetupMutationError =
   | SDKValidationError;
 
 /**
- * Revoke previous private-manager setup tokens and issue a fresh setup token/config.
+ * Revoke previous private instance setup tokens and issue a fresh setup token/config.
  */
 export function useManagersRetrySetupMutation(
   options?: MutationHookOptions<

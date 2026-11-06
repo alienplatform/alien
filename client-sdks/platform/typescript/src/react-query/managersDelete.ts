@@ -46,7 +46,7 @@ export type ManagersDeleteMutationError =
   | SDKValidationError;
 
 /**
- * Delete a manager by ID.
+ * Delete an instance by ID.
  */
 export function useManagersDeleteMutation(
   options?: MutationHookOptions<

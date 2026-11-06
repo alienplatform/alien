@@ -10,7 +10,7 @@ let value: ListManagersRequest = {};
 
 ## Fields
 
-| Field                                | Type                                 | Required                             | Description                          |
-| ------------------------------------ | ------------------------------------ | ------------------------------------ | ------------------------------------ |
-| `search`                             | *string*                             | :heavy_minus_sign:                   | Search managers by name              |
-| `limit`                              | *number*                             | :heavy_minus_sign:                   | Maximum number of managers to return |
+| Field                                 | Type                                  | Required                              | Description                           |
+| ------------------------------------- | ------------------------------------- | ------------------------------------- | ------------------------------------- |
+| `search`                              | *string*                              | :heavy_minus_sign:                    | Search instances by name              |
+| `limit`                               | *number*                              | :heavy_minus_sign:                    | Maximum number of instances to return |

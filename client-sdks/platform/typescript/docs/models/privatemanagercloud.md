@@ -1,6 +1,6 @@
 # PrivateManagerCloud
 
-Cloud where the private manager will be deployed.
+Cloud where the private instance will be deployed.
 
 ## Example Usage
 

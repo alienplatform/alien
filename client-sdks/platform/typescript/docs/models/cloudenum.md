@@ -1,6 +1,6 @@
 # CloudEnum
 
-Cloud where this private manager is deployed
+Cloud where this private instance is deployed
 
 ## Example Usage
 

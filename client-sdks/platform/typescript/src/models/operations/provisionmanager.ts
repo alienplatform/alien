@@ -16,13 +16,13 @@ export type ProvisionManagerGlobals = {
 
 export type ProvisionManagerRequest = {
   /**
-   * Unique identifier for a manager.
+   * Unique identifier for an instance.
    */
   id: string;
 };
 
 /**
- * Manager provisioning enqueued successfully.
+ * Instance provisioning enqueued successfully.
  */
 export type ProvisionManagerResponse = {
   message: string;

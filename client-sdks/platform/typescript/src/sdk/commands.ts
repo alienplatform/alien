@@ -11,6 +11,7 @@ import { commandsIncrementAttempt } from "../funcs/commandsIncrementAttempt.js";
 import { commandsList } from "../funcs/commandsList.js";
 import { commandsListDeployments } from "../funcs/commandsListDeployments.js";
 import { commandsListNames } from "../funcs/commandsListNames.js";
+import { commandsResolveResultConnection } from "../funcs/commandsResolveResultConnection.js";
 import { commandsResolveTarget } from "../funcs/commandsResolveTarget.js";
 import { commandsUpdate } from "../funcs/commandsUpdate.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
@@ -175,6 +176,22 @@ export class Commands extends ClientSDK {
     return unwrapAsync(commandsIncrementAttempt(
       this,
       request,
+      options,
+    ));
+  }
+
+  /**
+   * Authorize direct result retrieval without sending result bytes through the hosted API.
+   */
+  async resolveResultConnection(
+    id: string,
+    requestBody: operations.ResolveCommandResultConnectionRequestBody,
+    options?: RequestOptions,
+  ): Promise<operations.ResolveCommandResultConnectionResponse> {
+    return unwrapAsync(commandsResolveResultConnection(
+      this,
+      id,
+      requestBody,
       options,
     ));
   }

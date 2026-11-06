@@ -46,7 +46,7 @@ export type ManagersCreateMutationError =
   | SDKValidationError;
 
 /**
- * Create a new manager.
+ * Create a new instance.
  */
 export function useManagersCreateMutation(
   options?: MutationHookOptions<

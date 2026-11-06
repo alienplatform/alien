@@ -13,7 +13,7 @@ export type GetManagerDomainBindingGlobals = {
 
 export type GetManagerDomainBindingRequest = {
   /**
-   * Unique identifier for a manager.
+   * Unique identifier for an instance.
    */
   id: string;
 };

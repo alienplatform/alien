@@ -13,7 +13,7 @@ export type GetManagerGlobals = {
 
 export type GetManagerRequest = {
   /**
-   * Unique identifier for a manager.
+   * Unique identifier for an instance.
    */
   id: string;
 };

@@ -1,6 +1,6 @@
 # UpdateManagerResponse
 
-Manager update enqueued successfully.
+Instance update enqueued successfully.
 
 ## Example Usage
 

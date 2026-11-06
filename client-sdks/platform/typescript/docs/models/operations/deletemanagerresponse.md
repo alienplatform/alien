@@ -1,6 +1,6 @@
 # DeleteManagerResponse
 
-Manager deletion enqueued successfully.
+Instance deletion enqueued successfully.
 
 ## Example Usage
 

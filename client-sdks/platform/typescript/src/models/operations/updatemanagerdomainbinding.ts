@@ -15,7 +15,7 @@ export type UpdateManagerDomainBindingGlobals = {
 
 export type UpdateManagerDomainBindingRequest = {
   /**
-   * Unique identifier for a manager.
+   * Unique identifier for an instance.
    */
   id: string;
   updateManagerDomainBinding?: models.UpdateManagerDomainBinding | undefined;

@@ -1,6 +1,6 @@
 # CancelManagerSetupResponse
 
-Manager setup canceled successfully.
+Instance setup canceled successfully.
 
 ## Example Usage
 

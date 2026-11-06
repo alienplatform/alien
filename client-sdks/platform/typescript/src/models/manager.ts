@@ -31,7 +31,7 @@ export const ManagerTarget = {
 export type ManagerTarget = ClosedEnum<typeof ManagerTarget>;
 
 /**
- * Cloud where this private manager is deployed
+ * Cloud where this private instance is deployed
  */
 export const CloudEnum = {
   Aws: "aws",
@@ -43,12 +43,12 @@ export const CloudEnum = {
   Test: "test",
 } as const;
 /**
- * Cloud where this private manager is deployed
+ * Cloud where this private instance is deployed
  */
 export type CloudEnum = ClosedEnum<typeof CloudEnum>;
 
 /**
- * Private manager setup lifecycle status
+ * Private Alien Instance setup lifecycle status
  */
 export const ManagerSetupStatus = {
   Pending: "pending",
@@ -59,7 +59,7 @@ export const ManagerSetupStatus = {
   Deleted: "deleted",
 } as const;
 /**
- * Private manager setup lifecycle status
+ * Private Alien Instance setup lifecycle status
  */
 export type ManagerSetupStatus = ClosedEnum<typeof ManagerSetupStatus>;
 
@@ -86,32 +86,32 @@ export type ManagerMetrics = {
 };
 
 /**
- * Manager schema
+ * Instance schema
  */
 export type Manager = {
   id: string;
   /**
-   * Display name of the manager
+   * Display name of the instance
    */
   name: string;
   /**
-   * Platforms this manager can handle
+   * Platforms this instance can handle
    */
   targets: Array<ManagerTarget>;
   /**
-   * Cloud where this private manager is deployed
+   * Cloud where this private instance is deployed
    */
   cloud?: CloudEnum | null | undefined;
   /**
-   * Cloud region selected for this private manager
+   * Cloud region selected for this private instance
    */
   region?: string | null | undefined;
   /**
-   * Private manager setup lifecycle status
+   * Private Alien Instance setup lifecycle status
    */
   setupStatus?: ManagerSetupStatus | null | undefined;
   /**
-   * Manager URL (self-reported via heartbeat). Log ingestion endpoints are exposed through this URL (e.g., {url}/v1/logs)
+   * Instance URL (self-reported via heartbeat). Log ingestion endpoints are exposed through this URL (e.g., {url}/v1/logs)
    */
   url?: string | null | undefined;
   /**
@@ -119,11 +119,11 @@ export type Manager = {
    */
   managementConfigs: ManagerManagementConfigs;
   /**
-   * Whether this is a system manager (Alien-hosted)
+   * Whether this is a hosted Alien Cloud instance
    */
   isSystem: boolean;
   /**
-   * The workspace ID (for system managers, this is ALIEN_WORKSPACE_ID)
+   * The workspace ID (for hosted Alien Cloud instances, this is ALIEN_WORKSPACE_ID)
    */
   workspaceId: string;
   /**
@@ -131,7 +131,7 @@ export type Manager = {
    */
   status: ManagerStatus;
   /**
-   * Manager version (self-reported via heartbeat)
+   * Instance version (self-reported via heartbeat)
    */
   version?: string | null | undefined;
   /**
@@ -139,23 +139,23 @@ export type Manager = {
    */
   metrics?: ManagerMetrics | null | undefined;
   /**
-   * Timestamp of the last received heartbeat from the manager
+   * Timestamp of the last received heartbeat from the instance
    */
   lastHeartbeatAt?: Date | null | undefined;
   /**
-   * ID of the logs database associated with this manager
+   * ID of the logs database associated with this instance
    */
   logsDatabaseId?: string | null | undefined;
   /**
-   * Number of deployments currently being managed by this manager
+   * Number of deployments currently being managed by this instance
    */
   managedDeploymentCount: number;
   /**
-   * Number of projects that select this manager as a default manager
+   * Number of projects that select this instance as a default instance
    */
   defaultProjectCount: number;
   /**
-   * Timestamp when the manager was created
+   * Timestamp when the instance was created
    */
   createdAt: Date;
 };

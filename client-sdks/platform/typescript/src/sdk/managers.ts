@@ -27,7 +27,7 @@ import { unwrapAsync } from "../types/fp.js";
 
 export class Managers extends ClientSDK {
   /**
-   * Create a new manager.
+   * Create a new instance.
    */
   async create(
     request?: models.NewManagerRequest | undefined,
@@ -41,7 +41,7 @@ export class Managers extends ClientSDK {
   }
 
   /**
-   * Retrieve all managers.
+   * Retrieve all instances.
    */
   async list(
     request?: operations.ListManagersRequest | undefined,
@@ -55,7 +55,7 @@ export class Managers extends ClientSDK {
   }
 
   /**
-   * Revoke previous private-manager setup tokens and issue a fresh setup token/config.
+   * Revoke previous private instance setup tokens and issue a fresh setup token/config.
    */
   async retrySetup(
     request: operations.RetryManagerSetupRequest,
@@ -69,7 +69,7 @@ export class Managers extends ClientSDK {
   }
 
   /**
-   * Retry private-manager setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
+   * Retry private instance setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
    */
   async retry(
     request: operations.RetryManagerRequest,
@@ -83,7 +83,7 @@ export class Managers extends ClientSDK {
   }
 
   /**
-   * Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
+   * Cancel pending private instance setup, revoke setup/runtime tokens, and remove the undeployed instance record.
    */
   async cancelSetup(
     request: operations.CancelManagerSetupRequest,
@@ -97,7 +97,7 @@ export class Managers extends ClientSDK {
   }
 
   /**
-   * Retrieve a manager by ID.
+   * Retrieve an instance by ID.
    */
   async get(
     request: operations.GetManagerRequest,
@@ -111,7 +111,7 @@ export class Managers extends ClientSDK {
   }
 
   /**
-   * Delete a manager by ID.
+   * Delete an instance by ID.
    */
   async delete(
     request: operations.DeleteManagerRequest,
@@ -125,7 +125,7 @@ export class Managers extends ClientSDK {
   }
 
   /**
-   * Get the custom domain binding for a private manager.
+   * Get the custom domain binding for a private instance.
    */
   async getDomainBinding(
     request: operations.GetManagerDomainBindingRequest,
@@ -139,7 +139,7 @@ export class Managers extends ClientSDK {
   }
 
   /**
-   * Create, update, or remove the custom domain binding for a private manager.
+   * Create, update, or remove the custom domain binding for a private instance.
    */
   async updateDomainBinding(
     id: string,
@@ -155,7 +155,7 @@ export class Managers extends ClientSDK {
   }
 
   /**
-   * Get the management configuration for a manager.
+   * Get the management configuration for an instance.
    */
   async getManagementConfig(
     request: operations.GetManagerManagementConfigRequest,
@@ -169,7 +169,7 @@ export class Managers extends ClientSDK {
   }
 
   /**
-   * Enqueue provisioning for a manager by ID.
+   * Enqueue provisioning for an instance by ID.
    */
   async provision(
     request: operations.ProvisionManagerRequest,
@@ -183,7 +183,7 @@ export class Managers extends ClientSDK {
   }
 
   /**
-   * Update a manager to a specific release ID or active release.
+   * Update an instance to a specific release ID or active release.
    */
   async update(
     id: string,
@@ -199,7 +199,7 @@ export class Managers extends ClientSDK {
   }
 
   /**
-   * Retrieve all events of a manager.
+   * Retrieve all events of an instance.
    */
   async listEvents(
     request: operations.ListManagerEventsRequest,
@@ -213,7 +213,7 @@ export class Managers extends ClientSDK {
   }
 
   /**
-   * Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
+   * Generate a short-lived JWT for direct browser → instance communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
    */
   async generateManagerToken(
     id: string,
@@ -231,7 +231,7 @@ export class Managers extends ClientSDK {
   }
 
   /**
-   * Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned manager.
+   * Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned instance.
    */
   async generateManagerBindingToken(
     id: string,
@@ -248,7 +248,7 @@ export class Managers extends ClientSDK {
   }
 
   /**
-   * Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
+   * Resolve decrypted project-level Google Cloud OAuth provider settings for an instance-side deployment bootstrap.
    */
   async resolveGcpOAuthProvider(
     id: string,
@@ -266,7 +266,7 @@ export class Managers extends ClientSDK {
   }
 
   /**
-   * Report Manager health status and metrics.
+   * Report instance health status and metrics.
    */
   async reportHeartbeat(
     id: string,
@@ -282,7 +282,7 @@ export class Managers extends ClientSDK {
   }
 
   /**
-   * Get deployment details for a private manager (internal deployment platform, status, resources).
+   * Get deployment details for a private instance (internal deployment platform, status, resources).
    */
   async getDeployment(
     request: operations.GetManagerDeploymentRequest,

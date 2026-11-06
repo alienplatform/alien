@@ -50,7 +50,7 @@ export type ManagersResolveGcpOAuthProviderMutationError =
   | SDKValidationError;
 
 /**
- * Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
+ * Resolve decrypted project-level Google Cloud OAuth provider settings for an instance-side deployment bootstrap.
  */
 export function useManagersResolveGcpOAuthProviderMutation(
   options?: MutationHookOptions<

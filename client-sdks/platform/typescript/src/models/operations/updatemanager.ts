@@ -18,14 +18,14 @@ export type UpdateManagerGlobals = {
 
 export type UpdateManagerRequest = {
   /**
-   * Unique identifier for a manager.
+   * Unique identifier for an instance.
    */
   id: string;
   updateManagerRequest?: models.UpdateManagerRequest | undefined;
 };
 
 /**
- * Manager update enqueued successfully.
+ * Instance update enqueued successfully.
  */
 export type UpdateManagerResponse = {
   message: string;

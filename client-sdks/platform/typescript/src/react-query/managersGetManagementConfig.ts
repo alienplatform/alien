@@ -53,7 +53,7 @@ export type ManagersGetManagementConfigQueryError =
   | SDKValidationError;
 
 /**
- * Get the management configuration for a manager.
+ * Get the management configuration for an instance.
  */
 export function useManagersGetManagementConfig(
   request: operations.GetManagerManagementConfigRequest,
@@ -77,7 +77,7 @@ export function useManagersGetManagementConfig(
 }
 
 /**
- * Get the management configuration for a manager.
+ * Get the management configuration for an instance.
  */
 export function useManagersGetManagementConfigSuspense(
   request: operations.GetManagerManagementConfigRequest,

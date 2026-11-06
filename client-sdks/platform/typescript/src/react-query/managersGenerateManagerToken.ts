@@ -48,7 +48,7 @@ export type ManagersGenerateManagerTokenMutationError =
   | SDKValidationError;
 
 /**
- * Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
+ * Generate a short-lived JWT for direct browser → instance communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
  */
 export function useManagersGenerateManagerTokenMutation(
   options?: MutationHookOptions<

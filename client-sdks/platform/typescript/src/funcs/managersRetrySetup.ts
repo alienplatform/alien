@@ -28,7 +28,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Revoke previous private-manager setup tokens and issue a fresh setup token/config.
+ * Revoke previous private instance setup tokens and issue a fresh setup token/config.
  */
 export function managersRetrySetup(
   client: AlienCore,

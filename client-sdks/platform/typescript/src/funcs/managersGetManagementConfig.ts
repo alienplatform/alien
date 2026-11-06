@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Get the management configuration for a manager.
+ * Get the management configuration for an instance.
  */
 export function managersGetManagementConfig(
   client: AlienCore,

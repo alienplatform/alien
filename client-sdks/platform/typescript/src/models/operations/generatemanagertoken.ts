@@ -15,7 +15,7 @@ export type GenerateManagerTokenGlobals = {
 
 export type GenerateManagerTokenRequest = {
   /**
-   * Unique identifier for a manager.
+   * Unique identifier for an instance.
    */
   id: string;
   generateManagerTokenRequest?: models.GenerateManagerTokenRequest | undefined;

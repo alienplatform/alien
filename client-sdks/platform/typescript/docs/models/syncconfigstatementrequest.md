@@ -15,5 +15,5 @@ let value: SyncConfigStatementRequest = {
 
 | Field                                 | Type                                  | Required                              | Description                           | Example                               |
 | ------------------------------------- | ------------------------------------- | ------------------------------------- | ------------------------------------- | ------------------------------------- |
-| `managerId`                           | *string*                              | :heavy_minus_sign:                    | Unique identifier for a manager.      | mgr_enxscjrqiiu2lrc672hwwuc5tv5y      |
+| `managerId`                           | *string*                              | :heavy_minus_sign:                    | Unique identifier for an instance.    | mgr_enxscjrqiiu2lrc672hwwuc5tv5y      |
 | `deploymentId`                        | *string*                              | :heavy_check_mark:                    | Unique identifier for the deployment. | dep_0c29fq4a2yjb7kx3smwdgxlcxd7f      |

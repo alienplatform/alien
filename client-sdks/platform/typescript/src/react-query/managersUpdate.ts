@@ -48,7 +48,7 @@ export type ManagersUpdateMutationError =
   | SDKValidationError;
 
 /**
- * Update a manager to a specific release ID or active release.
+ * Update an instance to a specific release ID or active release.
  */
 export function useManagersUpdateMutation(
   options?: MutationHookOptions<
