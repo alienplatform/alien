@@ -32,8 +32,14 @@ pub async fn collect(
     let mut request = ListMetricsRequest::new(&source.resource_uri);
     request.timespan = Some(format!(
         "{}/{}",
-        window.start.to_rfc3339(),
-        window.end.to_rfc3339()
+        // The metrics endpoint decodes '+' offsets as spaces; UTC Z is
+        // accepted consistently by the native API, including encoded queries.
+        window
+            .start
+            .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
+        window
+            .end
+            .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
     ));
     request.interval = Some(format!("PT{}S", source.interval_seconds));
     request.metric_names = source.metric_names.clone();
