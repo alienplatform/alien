@@ -30,7 +30,7 @@ use crate::{
     Result,
 };
 use alien_core::{ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, StackState};
-use alien_error::{AlienError, ContextError as _};
+use alien_error::{AlienError, Context as _, ContextError as _};
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -356,7 +356,10 @@ async fn run_step_loop_body(
 ) -> Result<RunnerResult> {
     transport
         .prepare_telemetry(deployment_id, state, config)
-        .await?;
+        .await
+        .context(crate::ErrorData::DeploymentError {
+            message: "Could not prepare telemetry routing".into(),
+        })?;
     if config.stack_settings.metrics_collection.is_some()
         && (matches!(
             state.status,
