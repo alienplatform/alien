@@ -1925,6 +1925,54 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn private_exec_uses_header_capability_and_refuses_unsigned_session_downgrade() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_hdr_async(stream,
+                |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                 response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                    assert!(request.uri().query().is_none());
+                    assert_eq!(request.headers()["x-alien-exec-session"], "fixture-private-token");
+                    Ok(response)
+                }).await.unwrap();
+            // An unsigned exit used to select the legacy plaintext path. The
+            // private path must refuse it before sending queued stdin.
+            socket
+                .send(Message::Text(
+                    serde_json::json!({"type":"exit", "exitCode":0})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+            let received = tokio::time::timeout(std::time::Duration::from_secs(5), socket.next())
+                .await
+                .unwrap();
+            assert!(matches!(received, None | Some(Ok(Message::Close(_)))
+                | Some(Err(tokio_tungstenite::tungstenite::Error::ConnectionClosed))
+                | Some(Err(tokio_tungstenite::tungstenite::Error::Protocol(
+                    tokio_tungstenite::tungstenite::error::ProtocolError::ResetWithoutClosingHandshake)))));
+        });
+        let mut session = remote_exec_session(&format!("http://{address}/v1/debug/private-exec/sessions/dbg_1234567890123456789012345678/client"), "fixture-private-token");
+        session.tty = false;
+        let signing = crate::commands::signed_session::SessionSigning {
+            ctx: ExecutionMode::Dev { port: 0 },
+            machine: Some("node-1".into()),
+            workload: None,
+            argv: Some(vec!["private-command-canary".into()]),
+            tty: false,
+            reason: "fixture".into(),
+        };
+        let error = run_remote_exec_attach(session, Some(5), false, Some(signing))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("valid signed-session challenge"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn private_exec_create_omits_argv_and_refuses_hosted_or_legacy_attach() {
         for outcome in ["private", "hosted", "legacy", "unavailable"] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
