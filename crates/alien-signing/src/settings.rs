@@ -1,15 +1,16 @@
 //! What setup pins for a protected install, how an enforcer finds it, and
 //! the install id every enforcer derives from its own identity.
 //!
-//! Setup writes three values: the signer list fingerprint, the install's
+//! Setup pins the trust and release selection: the signer list fingerprint, the install's
 //! prefix and the release channel it follows. The project is the one signer
-//! list version 1 names. Nothing else comes from setup, and nothing at all
-//! from the control plane.
+//! list version 1 names. Private installs also pin their machine API URL here.
+//! None of these settings come from the control plane.
 
 use std::fmt;
 
 use alien_error::AlienError;
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::error::{ErrorData, Result};
 use crate::signer_list::is_fingerprint;
@@ -18,6 +19,13 @@ use crate::signer_list::is_fingerprint;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SigningSettings {
+    /// Setup-owned private machine API. When present, file values come only
+    /// from this install's input store and machine traffic uses this endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_machine_api_url: Option<String>,
+    /// Resolve private inputs locally even when machine coordination remains hosted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private_input_custody: bool,
     /// `SHA256:<hex>` fingerprint of the project's signer list version 1.
     pub fingerprint: String,
     /// The install's resource prefix. It must equal the place the settings
@@ -45,6 +53,9 @@ impl SigningSettings {
 
     /// Check each field.
     pub fn validate(&self) -> Result<()> {
+        if let Some(endpoint) = &self.private_machine_api_url {
+            validate_private_machine_api_url(endpoint)?;
+        }
         if !is_fingerprint(&self.fingerprint) {
             return Err(invalid(format!(
                 "fingerprint '{}' is not SHA256:<64 lowercase hex>",
@@ -70,6 +81,30 @@ impl SigningSettings {
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).expect("settings always serialize")
     }
+}
+
+/// Validate a setup-owned private machine endpoint without accepting a hosted
+/// redirect, credentials, query parameters or arbitrary proxy path.
+pub fn validate_private_machine_api_url(value: &str) -> Result<()> {
+    let invalid_endpoint = || {
+        invalid("private machine API must be an HTTPS origin followed by /v1/horizon".to_string())
+    };
+    if value.len() > 2048 {
+        return Err(invalid_endpoint());
+    }
+    let url = Url::parse(value).map_err(|_| invalid_endpoint())?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path() != "/v1/horizon"
+        || url.as_str() != value
+    {
+        return Err(invalid_endpoint());
+    }
+    Ok(())
 }
 
 /// The install id. Enforcers derive it from their own identity and never
@@ -406,5 +441,56 @@ pub mod names {
     fn sha1_hex(text: &str) -> String {
         use sha1::{Digest, Sha1};
         hex::encode(Sha1::digest(text.as_bytes()))
+    }
+}
+
+#[cfg(test)]
+mod private_endpoint_tests {
+    use super::*;
+
+    #[test]
+    fn setup_private_endpoint_roundtrips_and_legacy_settings_stay_compatible() {
+        let legacy = serde_json::json!({"fingerprint": format!("SHA256:{}", "ab".repeat(32)), "prefix": "owned-install", "channel": "production"});
+        let mut settings =
+            SigningSettings::parse(&serde_json::to_vec(&legacy).unwrap(), "owned-install").unwrap();
+        assert_eq!(settings.private_machine_api_url, None);
+        assert!(!settings.private_input_custody);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&settings.to_json()).unwrap(),
+            legacy
+        );
+        settings.private_input_custody = true;
+        let private =
+            SigningSettings::parse(settings.to_json().as_bytes(), "owned-install").unwrap();
+        assert!(private.private_input_custody);
+        assert_eq!(
+            private.private_machine_api_url, None,
+            "custody must not redirect bootstrap coordination"
+        );
+        settings.private_machine_api_url = Some("https://instance.example/v1/horizon".to_string());
+        assert_eq!(
+            SigningSettings::parse(settings.to_json().as_bytes(), "owned-install").unwrap(),
+            settings
+        );
+        assert!(SigningSettings::parse(settings.to_json().as_bytes(), "neighbor-install").is_err());
+    }
+
+    #[test]
+    fn setup_private_endpoint_refuses_credentials_redirects_and_noncanonical_paths() {
+        for endpoint in [
+            "http://instance.example/v1/horizon",
+            "https://user:secret@instance.example/v1/horizon",
+            "https://instance.example/v1/horizon?redirect=https://other.example",
+            "https://instance.example/v1/horizon#fragment",
+            "https://instance.example/",
+            "https://instance.example/v1/../v1/horizon",
+            "https://instance.example/v1/horizon/",
+        ] {
+            assert!(
+                validate_private_machine_api_url(endpoint).is_err(),
+                "{endpoint}"
+            );
+        }
+        validate_private_machine_api_url("https://instance.example:8443/v1/horizon").unwrap();
     }
 }

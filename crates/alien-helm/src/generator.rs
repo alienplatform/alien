@@ -247,26 +247,6 @@ pub fn generate_product_helm_chart_with_image_identity(
     )
 }
 
-/// Generate the product Helm chart of a stack whose settings pin release signing, with the
-/// Remote Operator in the same release: the protected counterpart of
-/// [`generate_product_helm_chart_with_image_identity`]. The chart pins what
-/// [`generate_signed_helm_chart`] pins, and the Remote Operator runs the signed Operator build
-/// with no dynamic containers, which would run images no signed release names.
-pub fn generate_signed_product_helm_chart(
-    stack: &Stack,
-    options: HelmOptions<'_>,
-    remote_operator: ProductOperatorManifestOptions<'_>,
-    image_identity: OperatorImageIdentityOptions<'_>,
-    pins: &SignedChartPins,
-) -> Result<HelmChart> {
-    generate_helm_chart_internal(
-        stack,
-        options,
-        Some((remote_operator, Some(image_identity))),
-        Some(pins),
-    )
-}
-
 fn generate_helm_chart_internal(
     stack: &Stack,
     mut options: HelmOptions<'_>,
@@ -388,13 +368,10 @@ fn generate_helm_chart_internal(
         networkpolicy_tpl(),
     );
     let has_remote_operator = remote_operator.is_some();
-    let signed = options.stack_settings.signing.is_some();
 
     if let Some((remote_operator, image_identity)) = remote_operator {
-        if signed {
-            crate::signing::check_remote_operator(stack, &remote_operator, signing_pins)?;
-        }
-        add_remote_operator_files(&mut files, remote_operator, image_identity, !signed)?;
+        crate::signing::refuse_remote_operator(&options.stack_settings)?;
+        add_remote_operator_files(&mut files, remote_operator, image_identity)?;
     }
 
     if let Some(notes) = deployer_secret_notes_tpl(stack) {
@@ -476,7 +453,6 @@ fn add_remote_operator_files(
     files: &mut IndexMap<String, String>,
     mut options: ProductOperatorManifestOptions<'_>,
     image_identity: Option<OperatorImageIdentityOptions<'_>>,
-    dynamic_containers: bool,
 ) -> Result<()> {
     if options.manifest.format != OperatorOutputFormat::HelmTemplate {
         return Err(AlienError::new(ErrorData::GenericError {
@@ -578,7 +554,7 @@ fn add_remote_operator_files(
         Some("{{ include \"deployment.remoteOperatorIdentityInitializedName\" . }}"),
         Some("{{ include \"deployment.remoteOperatorLogCollectorName\" . }}"),
         image_identity,
-        dynamic_containers,
+        true,
     )?;
     let mut crd = None;
     let mut templates = Vec::new();
@@ -1985,9 +1961,7 @@ pub fn generate_product_operator_manifest_with_image_identity(
 /// `dynamic_containers` binds the dynamic container Role. Only a product chart
 /// passes `true`: it must still reconcile saved workloads after a release
 /// withdraws image approvals. A standalone Remote Operator has no installed
-/// release that could approve an image, so it never receives this access, and
-/// neither does a protected product chart: the Role could rewrite the Operator's
-/// own Deployment.
+/// release that could approve an image, so it never receives this access.
 fn generate_product_operator_manifest_with_identity_marker(
     options: ProductOperatorManifestOptions<'_>,
     identity_initialized_config_map: Option<&str>,
@@ -10035,6 +10009,7 @@ infrastructureExistingSecret: customer-bindings
     fn helm_rejects_unknown_or_wrongly_typed_deployer_inputs() {
         let stack = Stack::new("input-stack".to_string())
             .inputs(vec![alien_core::StackInputDefinition {
+                files: Vec::new(),
                 id: "ingestUrl".to_string(),
                 kind: alien_core::StackInputKind::String,
                 when: None,
@@ -10121,6 +10096,7 @@ infrastructureExistingSecret: customer-bindings
     #[test]
     fn deployer_secrets_are_kubernetes_secrets_not_helm_values() {
         let secret = |id: &str, label: &str, required: bool| alien_core::StackInputDefinition {
+            files: Vec::new(),
             id: id.to_string(),
             kind: alien_core::StackInputKind::Secret,
             when: None,

@@ -512,6 +512,7 @@ mod tests {
 
     fn string_input(id: &str) -> StackInputDefinition {
         StackInputDefinition {
+            files: Vec::new(),
             id: id.to_string(),
             kind: StackInputKind::String,
             when: None,
@@ -622,6 +623,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_deployer_secrets_that_share_a_vault_slot() {
         let secret = |id: &str| StackInputDefinition {
+            files: Vec::new(),
             kind: StackInputKind::Secret,
             validation: None,
             ..string_input(id)
@@ -675,6 +677,7 @@ mod tests {
 
     fn generated_secret(length: u32) -> StackInputDefinition {
         StackInputDefinition {
+            files: Vec::new(),
             id: "databasePassword".to_string(),
             kind: StackInputKind::Secret,
             when: None,

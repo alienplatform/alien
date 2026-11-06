@@ -99,6 +99,15 @@ pub struct ReleaseArgs {
     #[arg(long, default_value = "production")]
     pub channel: String,
 
+    /// Pin the private instance machine API in this signed release's setup.
+    /// Must be an HTTPS origin followed by /v1/horizon; requires a signing key.
+    #[arg(long, conflicts_with = "no_stack")]
+    pub private_machine_api_url: Option<String>,
+
+    /// Keep input values in the setup-owned store without changing the machine API.
+    #[arg(long, conflicts_with = "no_stack")]
+    pub private_input_custody: bool,
+
     /// Create the release without advancing a channel or scheduling deployment updates (platform mode).
     #[arg(long, conflicts_with = "channel")]
     pub no_promote: bool,
@@ -359,6 +368,8 @@ struct SigningState {
     /// release, so with any of them a release that can't be signed fails.
     protected: u64,
     channel: String,
+    private_machine_api_url: Option<String>,
+    private_input_custody: bool,
     /// Whether the release goes to the channel now. With `--no-promote` it is
     /// signed for the channel but no deployment runs it until it's promoted.
     promoted: bool,
@@ -388,6 +399,13 @@ impl SigningState {
             SigningPlan::Sign(_) => return Ok(()),
             SigningPlan::Unsigned(reason) | SigningPlan::Requested(reason) => reason,
         };
+        if self.private_input_custody || self.private_machine_api_url.is_some() {
+            return Err(AlienError::new(ErrorData::ReleaseFailed {
+                message: format!(
+                    "Private machine setup cannot fall back to an unsigned release: {reason}"
+                ),
+            }));
+        }
         if self.protected == 0 || !self.promoted {
             return Ok(());
         }
@@ -682,8 +700,22 @@ async fn plan_signing(
     interactive: bool,
 ) -> Result<SigningState> {
     let channel = args.channel.clone();
+    if let Some(endpoint) = &args.private_machine_api_url {
+        alien_signing::settings::validate_private_machine_api_url(endpoint).context(
+            ErrorData::SigningFailed {
+                message: "Invalid private machine setup endpoint".to_string(),
+            },
+        )?;
+        if ctx.is_dev() {
+            return Err(AlienError::new(ErrorData::SigningFailed {
+                message: "Private machine setup requires a signed release".to_string(),
+            }));
+        }
+    }
     if ctx.is_dev() {
         return Ok(SigningState {
+            private_input_custody: false,
+            private_machine_api_url: None,
             plan: SigningPlan::Unsigned("local development is unsigned".to_string()),
             protected: 0,
             channel,
@@ -695,7 +727,16 @@ async fn plan_signing(
     let api = SigningApi::from_context(ctx).await?;
     let protected = protected_following(ctx, project_id, &channel).await?;
     let plan = signing::release::plan(&api, dir, project_id, interactive).await?;
+    if (args.private_input_custody || args.private_machine_api_url.is_some())
+        && !matches!(&plan, SigningPlan::Sign(_))
+    {
+        return Err(AlienError::new(ErrorData::SigningFailed {
+            message: "Private machine setup requires a usable signing key".to_string(),
+        }));
+    }
     Ok(SigningState {
+        private_input_custody: args.private_input_custody,
+        private_machine_api_url: args.private_machine_api_url.clone(),
         plan,
         protected,
         channel,
@@ -1035,6 +1076,17 @@ async fn sign_release(
     signing: &mut SigningState,
     pushed: Vec<(Platform, Stack)>,
 ) -> Result<Vec<(Platform, alien_core::SignedStatement, SetupUpload)>> {
+    if pushed
+        .iter()
+        .any(|(_, stack)| stack.inputs.iter().any(|input| !input.files.is_empty()))
+        && (signing.signing().is_none()
+            || (!signing.private_input_custody && signing.private_machine_api_url.is_none()))
+    {
+        return Err(AlienError::new(ErrorData::SigningFailed {
+            message: "Private file inputs require a signed release with --private-input-custody or --private-machine-api-url"
+                .to_string(),
+        }));
+    }
     let mut bodies = Vec::new();
     let mut uploads: HashMap<Platform, SetupUpload> = HashMap::new();
     if let Some(signer) = signing.signing() {
@@ -1048,6 +1100,8 @@ async fn sign_release(
                 })
             })?;
         let settings = alien_core::StackSigning {
+            private_input_custody: signing.private_input_custody,
+            private_machine_api_url: signing.private_machine_api_url.clone(),
             fingerprint,
             channel: signing.channel.clone(),
         };
@@ -3378,6 +3432,27 @@ mod tests {
     }
 
     #[test]
+    fn private_setup_cannot_publish_unsigned_even_without_existing_deployments() {
+        let mut state = SigningState {
+            plan: SigningPlan::Unsigned("setup renderer unavailable".to_string()),
+            protected: 0,
+            channel: "production".to_string(),
+            private_input_custody: false,
+            private_machine_api_url: Some("https://instance.example/v1/horizon".to_string()),
+            promoted: false,
+            json: false,
+            quiet: false,
+        };
+        assert!(state.refuse_unsigned().is_err());
+        assert!(state.cannot_sign("signing device disconnected").is_err());
+        state.private_machine_api_url = None;
+        state.private_input_custody = true;
+        assert!(state.refuse_unsigned().is_err());
+        state.private_input_custody = false;
+        state.refuse_unsigned().unwrap();
+    }
+
+    #[test]
     fn no_promote_accepts_the_default_channel_but_rejects_an_explicit_channel() {
         let args = ReleaseArgs::try_parse_from(["release", "--no-promote", "--prebuilt", "--json"])
             .expect("create-only works without changing any defaults");
@@ -3486,6 +3561,8 @@ mod tests {
             platforms: vec!["test".to_string()],
             onboarding_inputs: vec![],
             signing: SigningState {
+                private_input_custody: false,
+                private_machine_api_url: None,
                 plan: SigningPlan::Unsigned("not under test".to_string()),
                 protected: 0,
                 channel: "production".to_string(),

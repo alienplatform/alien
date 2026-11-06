@@ -3692,6 +3692,7 @@ machine = "m8i.xlarge"
 
     fn stack_input(id: &str, kind: StackInputKind, required: bool) -> StackInputDefinition {
         StackInputDefinition {
+            files: Vec::new(),
             id: id.to_string(),
             kind,
             when: None,

@@ -21,7 +21,10 @@ fn pins() -> SetupPins {
         aws_publisher: Some(PUBLISHER.to_string()),
         aws_verifier_image: Some(VERIFIER.to_string()),
         gcp_verifier_image: Some(format!("gcr.example/verifier@sha256:{}", "6e".repeat(32))),
-        azure_verifier_image: Some(format!("registry.example/verifier@sha256:{}", "7f".repeat(32))),
+        azure_verifier_image: Some(format!(
+            "registry.example/verifier@sha256:{}",
+            "7f".repeat(32)
+        )),
         operator_digest: Some(format!("sha256:{}", "ef".repeat(32))),
     }
 }
@@ -54,6 +57,8 @@ async fn render(
     fingerprint: &str,
 ) -> std::collections::BTreeMap<String, alien_cli_common::setup_templates::RenderedSetupTemplate> {
     let signing = StackSigning {
+        private_input_custody: false,
+        private_machine_api_url: None,
         fingerprint: fingerprint.to_string(),
         channel: "production".to_string(),
     };
@@ -194,6 +199,8 @@ async fn cloudformation_runs_the_pinned_verifier_and_limits_management() {
 #[tokio::test]
 async fn a_build_without_pins_refuses_to_render_protected_aws_setup() {
     let signing = StackSigning {
+        private_input_custody: false,
+        private_machine_api_url: None,
         fingerprint: FINGERPRINT.to_string(),
         channel: "production".to_string(),
     };
@@ -222,6 +229,8 @@ async fn a_build_without_pins_refuses_to_render_protected_aws_setup() {
 #[tokio::test]
 async fn a_build_without_the_azure_verifier_image_refuses_protected_azure_setup() {
     let signing = StackSigning {
+        private_input_custody: false,
+        private_machine_api_url: None,
         fingerprint: FINGERPRINT.to_string(),
         channel: "production".to_string(),
     };
@@ -247,7 +256,10 @@ async fn a_build_without_the_azure_verifier_image_refuses_protected_azure_setup(
         .await
         .expect_err("no Azure verifier image, no protected Azure setup");
     let text = format!("{error:?}");
-    assert!(text.contains("no Azure verifier image pinned by digest"), "{text}");
+    assert!(
+        text.contains("no Azure verifier image pinned by digest"),
+        "{text}"
+    );
     render_setup_template("terraform-aws", &stack(), &settings, &options)
         .await
         .expect("protected AWS setup needs no Azure pin");
@@ -321,6 +333,8 @@ async fn hosting_options_cannot_weaken_the_protected_locks() {
         let hosting: SetupHostingOptions =
             serde_json::from_value(options.clone()).expect("hosting options parse");
         let signing = StackSigning {
+            private_input_custody: false,
+            private_machine_api_url: None,
             fingerprint: FINGERPRINT.to_string(),
             channel: "production".to_string(),
         };

@@ -478,6 +478,7 @@ export type { StackInputDefaultValue } from "./stack-input-default-value-schema.
 export type { StackInputDefinition } from "./stack-input-definition-schema.js";
 export type { StackInputEnvironmentMapping } from "./stack-input-environment-mapping-schema.js";
 export type { StackInputEnvironmentVariableType } from "./stack-input-environment-variable-type-schema.js";
+export type { StackInputFileMapping } from "./stack-input-file-mapping-schema.js";
 export type { StackInputGenerate } from "./stack-input-generate-schema.js";
 export type { StackInputKind } from "./stack-input-kind-schema.js";
 export type { StackInputProvider } from "./stack-input-provider-schema.js";
@@ -1009,6 +1010,7 @@ export { StackInputDefaultValueSchema } from "./stack-input-default-value-schema
 export { StackInputDefinitionSchema } from "./stack-input-definition-schema.js";
 export { StackInputEnvironmentMappingSchema } from "./stack-input-environment-mapping-schema.js";
 export { StackInputEnvironmentVariableTypeSchema } from "./stack-input-environment-variable-type-schema.js";
+export { StackInputFileMappingSchema } from "./stack-input-file-mapping-schema.js";
 export { StackInputGenerateSchema } from "./stack-input-generate-schema.js";
 export { StackInputKindSchema } from "./stack-input-kind-schema.js";
 export { StackInputProviderSchema } from "./stack-input-provider-schema.js";

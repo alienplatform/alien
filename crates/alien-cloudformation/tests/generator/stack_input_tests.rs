@@ -14,6 +14,7 @@ use alien_core::{
 fn stack_with_inputs() -> Stack {
     Stack::new("inputs".to_string())
         .inputs(vec![StackInputDefinition {
+            files: Vec::new(),
             id: "apiBaseUrl".to_string(),
             kind: StackInputKind::String,
             when: None,
@@ -104,6 +105,7 @@ fn cloudformation_emits_stack_inputs_as_parameters_and_registration_values() {
 
 fn deployer_secret_input(provided_by: Vec<StackInputProvider>) -> StackInputDefinition {
     StackInputDefinition {
+        files: Vec::new(),
         id: "tailScaleAuthKey".to_string(),
         kind: StackInputKind::Secret,
         when: None,

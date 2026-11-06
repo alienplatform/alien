@@ -82,6 +82,8 @@ fn stack() -> Stack {
 
 fn signing() -> StackSigning {
     StackSigning {
+        private_input_custody: false,
+        private_machine_api_url: None,
         fingerprint: FINGERPRINT.to_string(),
         channel: "production".to_string(),
     }

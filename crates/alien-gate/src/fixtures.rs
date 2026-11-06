@@ -106,6 +106,8 @@ pub fn signer_list() -> SignedStatement {
 
 pub fn settings_for(list: &SignedStatement, prefix: &str, channel: &str) -> SigningSettings {
     SigningSettings {
+        private_input_custody: false,
+        private_machine_api_url: None,
         fingerprint: fingerprint(&list.open().expect("the list opens").digest),
         prefix: prefix.to_string(),
         channel: channel.to_string(),

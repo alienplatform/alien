@@ -10,7 +10,8 @@ import * as z from "zod";
  */
 export const StackSigningSchema = z.object({
     "channel": z.string().describe("Release channel the install follows, such as `production`."),
-"fingerprint": z.string().describe("`SHA256:<64 hex>` fingerprint of the vendor's signer list version 1.")
+"fingerprint": z.string().describe("`SHA256:<64 hex>` fingerprint of the vendor's signer list version 1."),
+"privateMachineApiUrl": z.string().describe("Customer setup pins this private instance machine endpoint and enables\ninstall-local input custody. It cannot be changed by the runtime role.").nullish()
     }).describe("What setup pins for a protected install.\n\nTake the values from the vendor's install guide or signed release, not from the\ncontrol plane.")
 
 export type StackSigning = z.infer<typeof StackSigningSchema>

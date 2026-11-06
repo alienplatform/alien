@@ -922,6 +922,8 @@ pub(crate) fn test_signer_list_without_ci(project: &str) -> SignedStatement {
 pub(crate) fn test_signing(project: &str) -> ReleaseSigning {
     ReleaseSigning {
         settings: SigningSettings {
+            private_input_custody: false,
+            private_machine_api_url: None,
             fingerprint: alien_signing::fingerprint(
                 &test_signer_list(project).open().unwrap().digest,
             ),

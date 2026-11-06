@@ -457,6 +457,8 @@ async fn newest_release(manager: &Manager, fingerprint: &str) -> Option<String> 
     let prefix = "acme-prod";
     let trust = Trust::new(
         SigningSettings {
+            private_input_custody: false,
+            private_machine_api_url: None,
             fingerprint: fingerprint.to_string(),
             prefix: prefix.to_string(),
             channel: "production".to_string(),
@@ -901,6 +903,8 @@ async fn setup_templates_are_stored_as_signed() {
     let manager = start_manager().await;
     let stack = storage_stack();
     let signing = alien_core::StackSigning {
+        private_input_custody: false,
+        private_machine_api_url: None,
         fingerprint: format!("SHA256:{}", "9f".repeat(32)),
         channel: "production".to_string(),
     };
@@ -916,8 +920,14 @@ async fn setup_templates_are_stored_as_signed() {
     let pins = alien_core::SetupPins {
         aws_publisher: Some("111122223333".to_string()),
         aws_verifier_image: Some(format!("verifier@sha256:{}", "5d".repeat(32))),
-        gcp_verifier_image: Some(format!("us-docker.pkg.dev/publisher/verifier/verifier@sha256:{}", "5d".repeat(32))),
-        azure_verifier_image: Some(format!("publisher.azurecr.io/verifier@sha256:{}", "5d".repeat(32))),
+        gcp_verifier_image: Some(format!(
+            "us-docker.pkg.dev/publisher/verifier/verifier@sha256:{}",
+            "5d".repeat(32)
+        )),
+        azure_verifier_image: Some(format!(
+            "publisher.azurecr.io/verifier@sha256:{}",
+            "5d".repeat(32)
+        )),
         operator_digest: None,
     };
     let rendered = alien_cli::signing::release::setup_templates(

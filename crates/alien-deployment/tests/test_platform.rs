@@ -3433,6 +3433,7 @@ async fn an_update_introducing_a_gated_frozen_resource_refuses_instead_of_droppi
 
 fn database_password_input() -> alien_core::StackInputDefinition {
     alien_core::StackInputDefinition {
+        files: Vec::new(),
         id: "databasePassword".to_string(),
         kind: alien_core::StackInputKind::Secret,
         when: None,

@@ -32,6 +32,8 @@ fn stack() -> Stack {
 
 async fn module(cloud: ModuleCloud) -> RenderedSetupTemplate {
     let signing = StackSigning {
+        private_input_custody: false,
+        private_machine_api_url: None,
         fingerprint: fingerprint(),
         channel: "production".to_string(),
     };
@@ -55,8 +57,14 @@ async fn module(cloud: ModuleCloud) -> RenderedSetupTemplate {
         .pins(SetupPins {
             aws_publisher: Some("111122223333".to_string()),
             aws_verifier_image: Some(format!("verifier@sha256:{}", "5d".repeat(32))),
-            gcp_verifier_image: Some(format!("us-docker.pkg.dev/publisher/verifier/verifier@sha256:{}", "5d".repeat(32))),
-            azure_verifier_image: Some(format!("publisher.azurecr.io/verifier@sha256:{}", "5d".repeat(32))),
+            gcp_verifier_image: Some(format!(
+                "us-docker.pkg.dev/publisher/verifier/verifier@sha256:{}",
+                "5d".repeat(32)
+            )),
+            azure_verifier_image: Some(format!(
+                "publisher.azurecr.io/verifier@sha256:{}",
+                "5d".repeat(32)
+            )),
             operator_digest: Some(format!("sha256:{}", "ef".repeat(32))),
         })
         .build();

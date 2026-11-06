@@ -17,18 +17,11 @@
 //! `quote`, with the digest written into the template, and the schema holds repositories to the
 //! image reference grammar. Registries stay choosable, for mirrors; a digest names the same
 //! bytes in any registry.
-//!
-//! A product chart's Remote Operator runs the same signed Operator build, observes only, and
-//! gets no dynamic containers: their Role could rewrite the Operator's own Deployment, and
-//! they run images no signed release names.
 
-use alien_core::{ErrorData, Result, Stack, StackSettings};
+use alien_core::{ErrorData, Result, StackSettings};
 use alien_error::{AlienError, Context, IntoAlienError};
 use indexmap::IndexMap;
-use regex::Regex;
 use serde_json::{json, Value};
-
-use crate::ProductOperatorManifestOptions;
 
 /// Key of the `<release>-signing` ConfigMap entry that holds the signing settings JSON.
 pub const SETTINGS_KEY: &str = "settings";
@@ -81,19 +74,6 @@ const OPERATOR_IMAGE_TEMPLATE: &str =
 const LOG_COLLECTOR_IMAGE_TEMPLATE: &str =
     r#"image: "{{ .Values.logCollector.image.repository }}:{{ .Values.logCollector.image.tag }}""#;
 const CLEANUP_IMAGE_TEMPLATE: &str = r#"image: "{{ dig "image" "repository" "alpine/k8s" $cleanup }}:{{ dig "image" "tag" "1.32.0" $cleanup }}""#;
-/// The cleanup image in the Remote Operator's hooks, which read the same values.
-const REMOTE_OPERATOR_HOOK_IMAGE_TEMPLATE: &str = r#"image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}""#;
-/// The Remote Operator's Pod log collector image a protected product chart takes: the chart's
-/// own `logCollector.image`, whose digest the chart pins. The renderer single-quotes it.
-const REMOTE_OPERATOR_LOG_COLLECTOR_IMAGE: &str =
-    r#"{{ printf "%s:%s" .Values.logCollector.image.repository .Values.logCollector.image.tag }}"#;
-/// Templates of a product chart's Remote Operator hooks that run the cleanup image.
-const REMOTE_OPERATOR_HOOKS: [&str; 4] = [
-    "templates/remote-operator-history-backend-check.yaml",
-    "templates/remote-operator-rollback-guard.yaml",
-    "templates/remote-operator-identity-gate.yaml",
-    "templates/remote-operator-cleanup-job.yaml",
-];
 
 /// A registry host (with an optional port) and repository path, as image references allow
 /// them: no tag, digest, quote, comment or whitespace.
@@ -102,61 +82,16 @@ const REPOSITORY_PATTERN: &str = r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?
 /// An image tag.
 const TAG_PATTERN: &str = "[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}";
 
-/// Refuse a Remote Operator a protected product chart can't pin: it must run the Operator
-/// build the signed release names, collect Pod logs with the chart's pinned collector, and the
-/// stack may not approve dynamic container images, which no signed release names.
-pub(crate) fn check_remote_operator(
-    stack: &Stack,
-    remote_operator: &ProductOperatorManifestOptions<'_>,
-    pins: Option<&SignedChartPins>,
-) -> Result<()> {
-    let manifest = &remote_operator.manifest;
-    if manifest
-        .stack_settings
-        .is_some_and(|settings| settings.signing.is_some())
-    {
+/// Refuse a product chart, with the Remote Operator in the same release, for a stack whose
+/// settings pin release signing. A protected install uses the chart signed with the release,
+/// which [`crate::generate_signed_helm_chart`] renders.
+pub(crate) fn refuse_remote_operator(settings: &StackSettings) -> Result<()> {
+    if settings.signing.is_some() {
         return Err(refused(
-            "the Remote Operator only observes; the chart's own stack settings carry release \
-             signing, so pass the Remote Operator settings without it",
+            "the stack settings pin release signing, so it has no product chart with the Remote \
+             Operator; a protected install uses the chart signed with the release, rendered by \
+             generate_signed_helm_chart",
         ));
-    }
-    if !stack.dynamic_container_repositories.is_empty() {
-        return Err(refused(format!(
-            "the stack approves dynamic container repositories ({}); a protected chart runs \
-             only images a signed release names, so it can't run dynamic containers",
-            stack.dynamic_container_repositories.join(", ")
-        )));
-    }
-    let pins = pins.ok_or_else(|| {
-        refused(
-            "a protected product chart runs the Operator build the signed release names; \
-             render it with generate_signed_product_helm_chart and the release's Operator digest",
-        )
-    })?;
-    let repository = Regex::new(&format!("^{REPOSITORY_PATTERN}$"))
-        .into_alien_error()
-        .context(ErrorData::GenericError {
-            message: "the image repository pattern doesn't compile".to_string(),
-        })?;
-    let pinned = manifest
-        .image
-        .rsplit_once('@')
-        .is_some_and(|(name, digest)| digest == pins.operator_digest && repository.is_match(name));
-    if !pinned {
-        return Err(refused(format!(
-            "Remote Operator image '{}' is not <repository>@{}, the Operator build the signed \
-             release names",
-            manifest.image, pins.operator_digest
-        )));
-    }
-    if let Some(collector) = &manifest.log_collector {
-        if collector.image != REMOTE_OPERATOR_LOG_COLLECTOR_IMAGE {
-            return Err(refused(format!(
-                "Remote Operator log collector image '{}' is not the chart's pinned \
-                 logCollector.image ({REMOTE_OPERATOR_LOG_COLLECTOR_IMAGE})",
-                collector.image
-            )));
-        }
     }
     Ok(())
 }
@@ -307,32 +242,6 @@ fn pin_templates(
         ),
     ] {
         replace_once(file(files, path)?, template, &replacement)?;
-    }
-    if files.contains_key("templates/remote-operator.yaml") {
-        let hook_image = pinned(
-            r#"(dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime))"#,
-            cleanup_digest,
-        );
-        for path in REMOTE_OPERATOR_HOOKS {
-            replace_once(
-                file(files, path)?,
-                REMOTE_OPERATOR_HOOK_IMAGE_TEMPLATE,
-                &hook_image,
-            )?;
-        }
-        // Rendered only when the Remote Operator collects Pod logs.
-        let remote_operator = file(files, "templates/remote-operator.yaml")?;
-        let collector_image = format!("image: '{REMOTE_OPERATOR_LOG_COLLECTOR_IMAGE}'");
-        if remote_operator.contains(&collector_image) {
-            replace_once(
-                remote_operator,
-                &collector_image,
-                &pinned(
-                    ".Values.logCollector.image.repository",
-                    log_collector_digest,
-                ),
-            )?;
-        }
     }
     for (path, contents) in files.iter() {
         if !path.starts_with("templates/") {
@@ -654,11 +563,10 @@ fn missing(file: &str) -> AlienError<ErrorData> {
 mod tests {
     use super::*;
     use crate::{
-        apply_package_defaults, generate_helm_chart,
-        generate_product_helm_chart_with_image_identity, generate_signed_helm_chart,
-        generate_signed_product_helm_chart, HelmOptions, HelmRegistry, OperatorImageDefault,
-        OperatorImageIdentityOptions, OperatorLogCollectorOptions, OperatorManifestOptions,
-        OperatorOutputFormat, OperatorPermission, OperatorScope, PackageDefaults,
+        apply_package_defaults, generate_helm_chart, generate_product_helm_chart,
+        generate_signed_helm_chart, HelmOptions, HelmRegistry, OperatorImageDefault,
+        OperatorManifestOptions, OperatorOutputFormat, OperatorPermission, OperatorScope,
+        PackageDefaults, ProductOperatorManifestOptions,
     };
     use alien_core::{Stack, StackSigning};
 
@@ -669,6 +577,8 @@ mod tests {
     fn protected() -> StackSettings {
         StackSettings {
             signing: Some(StackSigning {
+                private_input_custody: false,
+                private_machine_api_url: None,
                 fingerprint: FINGERPRINT.to_string(),
                 channel: "production".to_string(),
             }),
@@ -808,24 +718,23 @@ mod tests {
         assert!(error.to_string().contains("pins Operator image"), "{error}");
     }
 
-    fn remote_operator<'a>(
-        image: &'a str,
-        collector_image: &'a str,
-        settings: Option<&'a StackSettings>,
-    ) -> ProductOperatorManifestOptions<'a> {
-        ProductOperatorManifestOptions {
+    #[test]
+    fn the_product_chart_refuses_a_protected_stack() {
+        let stack = Stack::new("signing-test".to_string()).build();
+        let registry = HelmRegistry::built_in();
+        let options = HelmOptions {
+            registry: &registry,
+            stack_settings: protected(),
+            chart_name: "signing-test".to_string(),
+        };
+        let remote_operator = ProductOperatorManifestOptions {
             manifest: OperatorManifestOptions {
                 manager_url: r#"{{ include "deployment.managementUrl" . }}"#,
                 group_token: "",
                 encryption_key: "",
-                image,
-                log_collector: Some(OperatorLogCollectorOptions {
-                    image: collector_image,
-                    token: "",
-                    pod_label_key: None,
-                    pod_label_value: None,
-                }),
-                stack_settings: settings,
+                image: "registry.example.com/deployment/operator:latest",
+                log_collector: None,
+                stack_settings: None,
                 project_name: "signing-test",
                 environment_name: None,
                 install_namespace: None,
@@ -840,120 +749,12 @@ mod tests {
             credentials_encryption_key_sha256:
                 "{{ .Values.remoteOperator.existingSecret.encryptionKeySha256 }}",
             resource_name: None,
-        }
-    }
-
-    fn render_product(
-        stack: &Stack,
-        settings: StackSettings,
-        remote_operator: ProductOperatorManifestOptions<'_>,
-        pins: Option<&SignedChartPins>,
-    ) -> Result<crate::HelmChart> {
-        let registry = HelmRegistry::built_in();
-        let options = HelmOptions {
-            registry: &registry,
-            stack_settings: settings,
-            chart_name: "signing-test".to_string(),
         };
-        let identity = OperatorImageIdentityOptions::Configured;
-        match pins {
-            Some(pins) => {
-                generate_signed_product_helm_chart(stack, options, remote_operator, identity, pins)
-            }
-            None => generate_product_helm_chart_with_image_identity(
-                stack,
-                options,
-                remote_operator,
-                identity,
-            ),
-        }
-    }
-
-    #[test]
-    fn a_protected_product_chart_refuses_what_it_cant_pin() {
-        let stack = Stack::new("signing-test".to_string()).build();
-        let pins = SignedChartPins {
-            operator_digest: DIGEST.to_string(),
-        };
-        let signed_image = format!("mirror.example.com/operator@{DIGEST}");
-        let collector = REMOTE_OPERATOR_LOG_COLLECTOR_IMAGE;
-        render_product(
-            &stack,
-            protected(),
-            remote_operator(&signed_image, collector, None),
-            Some(&pins),
-        )
-        .expect("a pinned Remote Operator renders");
-
-        let error = render_product(
-            &stack,
-            protected(),
-            remote_operator(&signed_image, collector, None),
-            None,
-        )
-        .unwrap_err();
+        let error = generate_product_helm_chart(&stack, options, remote_operator).unwrap_err();
         assert!(
             error
                 .to_string()
-                .contains("generate_signed_product_helm_chart"),
-            "{error}"
-        );
-
-        let other_digest = format!("mirror.example.com/operator@sha256:{}", "b".repeat(64));
-        let tagged = "mirror.example.com/operator:latest".to_string();
-        // Ends the single-quoted image string before the signed digest.
-        let evil = format!("evil.example/operator:unsigned' #@{DIGEST}");
-        for image in [&other_digest, &tagged, &evil] {
-            let error = render_product(
-                &stack,
-                protected(),
-                remote_operator(image, collector, None),
-                Some(&pins),
-            )
-            .unwrap_err();
-            assert!(
-                error
-                    .to_string()
-                    .contains(&format!("Remote Operator image '{image}'")),
-                "{error}"
-            );
-        }
-
-        let error = render_product(
-            &stack,
-            protected(),
-            remote_operator(&signed_image, "registry.example.com/collector:3.2", None),
-            Some(&pins),
-        )
-        .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("Remote Operator log collector image"),
-            "{error}"
-        );
-
-        let settings = protected();
-        let error = render_product(
-            &stack,
-            protected(),
-            remote_operator(&signed_image, collector, Some(&settings)),
-            Some(&pins),
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("only observes"), "{error}");
-
-        let mut dynamic = stack.clone();
-        dynamic.dynamic_container_repositories = vec!["registry.example.com/dynamic".to_string()];
-        let error = render_product(
-            &dynamic,
-            protected(),
-            remote_operator(&signed_image, collector, None),
-            Some(&pins),
-        )
-        .unwrap_err();
-        assert!(
-            error.to_string().contains("can't run dynamic containers"),
+                .contains("a protected install uses the chart signed with the release"),
             "{error}"
         );
     }

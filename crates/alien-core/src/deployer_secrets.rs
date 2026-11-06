@@ -726,6 +726,7 @@ mod tests {
 
     fn secret(id: &str, provided_by: Vec<StackInputProvider>) -> StackInputDefinition {
         StackInputDefinition {
+            files: Vec::new(),
             id: id.to_string(),
             kind: StackInputKind::Secret,
             when: None,

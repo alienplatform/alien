@@ -29,6 +29,8 @@ async fn render() -> BTreeMap<String, RenderedSetupTemplate> {
     }))
     .expect("fixture stack parses");
     let signing = StackSigning {
+        private_input_custody: false,
+        private_machine_api_url: None,
         fingerprint: format!("SHA256:{}", "ab".repeat(32)),
         channel: "production".to_string(),
     };
@@ -52,8 +54,14 @@ async fn render() -> BTreeMap<String, RenderedSetupTemplate> {
             .pins(SetupPins {
                 aws_publisher: Some("111122223333".to_string()),
                 aws_verifier_image: Some(format!("verifier@sha256:{}", "cd".repeat(32))),
-                gcp_verifier_image: Some(format!("gcr.example/verifier@sha256:{}", "6e".repeat(32))),
-                azure_verifier_image: Some(format!("registry.example/verifier@sha256:{}", "7f".repeat(32))),
+                gcp_verifier_image: Some(format!(
+                    "gcr.example/verifier@sha256:{}",
+                    "6e".repeat(32)
+                )),
+                azure_verifier_image: Some(format!(
+                    "registry.example/verifier@sha256:{}",
+                    "7f".repeat(32)
+                )),
                 operator_digest: Some(format!("sha256:{}", "ef".repeat(32))),
             })
             .build(),

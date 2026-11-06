@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 
 use alien_error::AlienError;
 use alien_signing::release::{
-    Bounds, Configurable, FunctionSettings, Mount, Runtime, Security, WorkloadKind,
+    Bounds, Configurable, FunctionSettings, Mount, Runtime, SecretBinding, Security, WorkloadKind,
 };
 use alien_signing::{ReleaseBody, SetupTemplate, Workload};
 
@@ -105,6 +105,41 @@ pub struct ReleaseOptions {
     pub setup: BTreeMap<String, SetupTemplate>,
 }
 
+/// Stable install-local selectors for a workload's managed TLS pair. These
+/// names contain no certificate material and do not change during renewal.
+pub fn private_tls_input_names(resource: &str) -> [String; 2] {
+    use sha2::{Digest, Sha256};
+    let id = format!("{:x}", Sha256::digest(resource.as_bytes()));
+    [format!("tls-{id}-cert"), format!("tls-{id}-key")]
+}
+
+/// Public HTTP resources whose certificates terminate at the cloud listener.
+/// Derive this list only from the verified signed stack, never a hosted request.
+pub fn private_tls_resource_ids(stack: &Stack) -> Vec<String> {
+    stack
+        .resources()
+        .filter_map(|(id, entry)| {
+            let endpoints = entry
+                .config
+                .downcast_ref::<Container>()
+                .map(|value| &value.public_endpoints)
+                .or_else(|| {
+                    entry
+                        .config
+                        .downcast_ref::<Daemon>()
+                        .map(|value| &value.public_endpoints)
+                });
+            endpoints
+                .is_some_and(|values| {
+                    values
+                        .iter()
+                        .any(|endpoint| matches!(endpoint.protocol, crate::ExposeProtocol::Http))
+                })
+                .then(|| id.clone())
+        })
+        .collect()
+}
+
 /// The `release/v2` body for `stack` on `platform`. Every image must be
 /// pinned by digest and built before the release, so source code, unpinned
 /// images and resource types nothing can check are refused here, where the
@@ -117,7 +152,7 @@ pub fn release_body(
     let mut workloads = Vec::new();
     for (id, entry) in stack.resources() {
         if let Some(mut workload) = workload(id, &entry.config, options)? {
-            add_input_env(&mut workload, stack, platform);
+            add_input_env(&mut workload, stack, platform)?;
             workloads.push(workload);
         }
     }
@@ -201,12 +236,59 @@ pub fn signed_stack(body: &ReleaseBody, platform: Platform) -> Result<Stack> {
 /// from the customer's store. (Developer inputs become configurable names,
 /// set by signed config. Secret inputs keep their own path: the value is
 /// never signed, and the stack binds the name.)
-fn add_input_env(workload: &mut Workload, stack: &Stack, platform: Platform) {
+fn add_input_env(workload: &mut Workload, stack: &Stack, platform: Platform) -> Result<()> {
     for input in stack
         .inputs
         .iter()
         .filter(|input| input.applies_to(platform))
     {
+        if !input.files.is_empty() {
+            if input.kind != crate::StackInputKind::Secret
+                || input.provided_by != [crate::StackInputProvider::Deployer]
+                || input.when.is_some()
+                || input.generate.is_some()
+                || input.default.is_some()
+            {
+                return Err(statement_invalid("private files require unconditional deployer-only secret inputs without defaults or generation"));
+            }
+            for mapping in &input.files {
+                if !crate::targets_resource(&mapping.target_resources, &workload.name) {
+                    continue;
+                }
+                if !matches!(
+                    workload.kind,
+                    WorkloadKind::Container | WorkloadKind::Daemon
+                ) {
+                    return Err(statement_invalid("private input files currently require a container or daemon on protected machines"));
+                }
+                if workload
+                    .secrets
+                    .iter()
+                    .any(|binding| binding.name == input.id)
+                {
+                    return Err(statement_invalid(
+                        "one private input may project only one file per workload",
+                    ));
+                }
+                if !mapping.path.starts_with('/')
+                    || mapping.path.ends_with('/')
+                    || mapping.path.contains('\0')
+                    || mapping
+                        .path
+                        .split('/')
+                        .any(|part| matches!(part, "." | ".."))
+                {
+                    return Err(statement_invalid(
+                        "private file destination must be an absolute file path without traversal",
+                    ));
+                }
+                workload.secrets.push(SecretBinding {
+                    name: input.id.clone(),
+                    env_name: mapping.env_name.clone(),
+                    file_path: Some(mapping.path.clone()),
+                });
+            }
+        }
         for mapping in input
             .env
             .iter()
@@ -222,6 +304,7 @@ fn add_input_env(workload: &mut Workload, stack: &Stack, platform: Platform) {
             }
         }
     }
+    Ok(())
 }
 
 fn developer_input(input: &crate::StackInputDefinition, platform: Platform) -> bool {
@@ -592,6 +675,37 @@ mod tests {
         assert!(api.configurable_env.contains(&"LOG_LEVEL".to_string()));
         assert_eq!(body.configurable.inputs, vec!["logLevel".to_string()]);
         assert_eq!(signed_stack(&body, Platform::Aws).unwrap(), stack);
+    }
+
+    #[test]
+    fn private_file_inputs_produce_signed_references_and_preserve_stack_verification() {
+        let mut stack = stack(&pinned());
+        stack.inputs = serde_json::from_value(serde_json::json!([
+            {"id":"tlsKey", "kind":"secret", "providedBy":["deployer"], "required":true,
+             "label":"TLS key", "description":"Written into the install store by its administrator",
+             "files":[{"path":"/var/run/alien/tls/key.pem", "envName":"TLS_KEY_FILE", "targetResources":["api"]}]}
+        ])).unwrap();
+        let body = release_body(Platform::Aws, &stack, &production()).unwrap();
+        assert_eq!(
+            body.workloads[0].secrets,
+            vec![SecretBinding {
+                name: "tlsKey".to_string(),
+                env_name: Some("TLS_KEY_FILE".to_string()),
+                file_path: Some("/var/run/alien/tls/key.pem".to_string()),
+            }]
+        );
+        assert!(body.configurable.inputs.is_empty());
+        assert_eq!(signed_stack(&body, Platform::Aws).unwrap(), stack);
+        let mut substituted = body.clone();
+        substituted.workloads[0].secrets[0].file_path = Some("/etc/other.pem".to_string());
+        assert!(signed_stack(&substituted, Platform::Aws).is_err());
+        stack.inputs[0]
+            .provided_by
+            .push(crate::StackInputProvider::Developer);
+        assert!(release_body(Platform::Aws, &stack, &production()).is_err());
+        stack.inputs[0].provided_by = vec![crate::StackInputProvider::Deployer];
+        stack.inputs[0].files[0].path = "/var/run/../etc/key.pem".to_string();
+        assert!(release_body(Platform::Aws, &stack, &production()).is_err());
     }
 
     fn alien_core_resource(container: Container) -> Resource {

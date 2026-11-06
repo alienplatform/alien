@@ -2109,9 +2109,10 @@ fn add_verifier_and_limits(
         VERIFIER_FUNCTION_ID.to_string(),
         "AWS::Lambda::Function".to_string(),
     );
-    function
-        .properties
-        .insert("FunctionName".to_string(), CfExpression::sub(&verifier_name));
+    function.properties.insert(
+        "FunctionName".to_string(),
+        CfExpression::sub(&verifier_name),
+    );
     function.properties.insert(
         "Description".to_string(),
         CfExpression::from(
@@ -2182,7 +2183,9 @@ fn add_verifier_and_limits(
     );
     limits.properties.insert(
         "ManagedPolicyName".to_string(),
-        CfExpression::sub(alien_permissions::generators::signing_limits::aws_management_limits_name(prefix)),
+        CfExpression::sub(
+            alien_permissions::generators::signing_limits::aws_management_limits_name(prefix),
+        ),
     );
     limits.properties.insert(
         "Description".to_string(),
@@ -2190,12 +2193,50 @@ fn add_verifier_and_limits(
             "Limits that hold even if another policy grants more: only this stack changes what the install trusts; only {verifier_name} changes what runs; machines boot only the publisher's images."
         )),
     );
-    limits.properties.insert(
-        "PolicyDocument".to_string(),
-        sub_json(alien_permissions::generators::signing_limits::aws_management_limits(
-            prefix, account, region,
-        )),
-    );
+    let private_custody = settings.signing.as_ref().is_some_and(|signing| {
+        signing.private_input_custody || signing.private_machine_api_url.is_some()
+    });
+    let mut policy =
+        alien_permissions::generators::signing_limits::aws_management_limits_with_custody(
+            prefix,
+            account,
+            region,
+            private_custody,
+        );
+    if private_custody {
+        let mut domains = comma_list_parameter(
+            "Exact DNS names this install may request certificates for. Review every name; no wildcard authorization or default is supplied.",
+            vec![],
+        );
+        domains.default = None;
+        domains.allowed_pattern = Some(
+            "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$".to_string(),
+        );
+        domains.constraint_description =
+            Some("each entry must be an exact lowercase DNS name, without wildcards".to_string());
+        template
+            .parameters
+            .insert("PrivateCertificateDomains".to_string(), domains);
+        let certificates =
+            alien_permissions::generators::signing_limits::aws_private_managed_certificate_policy(
+                account,
+                region,
+                serde_json::json!({"Ref": "PrivateCertificateDomains"}),
+            );
+        policy["Statement"]
+            .as_array_mut()
+            .expect("generated statements")
+            .extend(
+                certificates["Statement"]
+                    .as_array()
+                    .expect("generated certificate statements")
+                    .iter()
+                    .cloned(),
+            );
+    }
+    limits
+        .properties
+        .insert("PolicyDocument".to_string(), sub_json(policy));
     limits.properties.insert(
         "Roles".to_string(),
         CfExpression::list([CfExpression::ref_(management_role)]),
@@ -2242,7 +2283,9 @@ fn refuse_unverifiable_code(template: &CfTemplate) -> Result<()> {
                 _ => None,
             };
             if !text.is_some_and(|text| text.contains("@sha256:")) {
-                return refuse(format!("resource '{id}' runs an image not pinned by digest"));
+                return refuse(format!(
+                    "resource '{id}' runs an image not pinned by digest"
+                ));
             }
         }
     }
@@ -2293,11 +2336,17 @@ fn verifier_machine_network(
         [
             (
                 "Subnets",
-                CfExpression::join("\",\"", crate::emitters::aws::helpers::private_subnet_ids_expr(&ctx)),
+                CfExpression::join(
+                    "\",\"",
+                    crate::emitters::aws::helpers::private_subnet_ids_expr(&ctx),
+                ),
             ),
             (
                 "Groups",
-                CfExpression::join("\",\"", crate::emitters::aws::helpers::security_group_ids_expr(&ctx)),
+                CfExpression::join(
+                    "\",\"",
+                    crate::emitters::aws::helpers::security_group_ids_expr(&ctx),
+                ),
             ),
         ],
     )))
@@ -4925,7 +4974,10 @@ mod unverifiable_code_tests {
         template.transform.clear();
         template.resources.insert(
             "Nested".to_string(),
-            CfResource::new("Nested".to_string(), "AWS::CloudFormation::Stack".to_string()),
+            CfResource::new(
+                "Nested".to_string(),
+                "AWS::CloudFormation::Stack".to_string(),
+            ),
         );
         assert!(reason(&template).contains("AWS::CloudFormation::Stack"));
     }
