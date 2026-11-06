@@ -280,17 +280,23 @@ async fn checkpoint_failure_leaves_caller_state_unchanged_after_backend_ack() {
 
 #[tokio::test]
 async fn controller_descriptors_derive_jobs_coalesce_exports_and_survive_restart() {
-    let server = MockServer::start();
-    let scrape = server.mock(|when, then| {
-        when.method(GET).path("/metrics");
-        then.status(200)
-            .header("content-type", "text/plain; version=0.0.4")
-            .body("# TYPE pending gauge\npending 7\n");
-    });
+    let server = MockServer::start_async().await;
+    let scrape = server
+        .mock_async(|when, then| {
+            when.method(GET).path("/metrics");
+            then.status(200)
+                .header("content-type", "text/plain; version=0.0.4")
+                .body("# TYPE pending gauge\npending 7\n");
+        })
+        .await;
     let mut config = config(&server);
     let collection = config.stack_settings.metrics_collection.as_mut().unwrap();
     let source = collection.jobs.remove(0).source;
     collection.built_in_resources = true;
+    let mut second = source.clone();
+    if let MetricsSource::Scrape(endpoint) = &mut second {
+        endpoint.replica_id = "replica-2".into();
+    }
     let mut current = state();
     let mut stack = alien_core::StackState::new(Platform::Test);
     let mut resource = alien_core::StackResourceState::new_pending(
@@ -304,7 +310,7 @@ async fn controller_descriptors_derive_jobs_coalesce_exports_and_survive_restart
         alien_core::ResourceOutputs::new(alien_core::StorageOutputs {
             bucket_name: "physical".into(),
         })
-        .with_builtin_metric_sources(vec![source.clone(), source]),
+        .with_builtin_metric_sources(vec![source, second]),
     );
     stack.resources.insert("bucket".into(), resource);
     current.stack_state = Some(stack);
@@ -326,7 +332,7 @@ async fn controller_descriptors_derive_jobs_coalesce_exports_and_survive_restart
     )
     .await
     .unwrap();
-    scrape.assert_calls(2);
+    scrape.assert_calls_async(2).await;
     let exports = transport.exports.lock().unwrap();
     assert_eq!(exports.len(), 1);
     assert_eq!(exports[0].resource_metrics.len(), 2);
@@ -352,5 +358,5 @@ async fn controller_descriptors_derive_jobs_coalesce_exports_and_survive_restart
     )
     .await
     .unwrap();
-    scrape.assert_calls(2);
+    scrape.assert_calls_async(2).await;
 }
