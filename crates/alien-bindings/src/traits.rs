@@ -399,6 +399,19 @@ pub trait ArtifactRegistry: Binding {
     /// prefixing.
     async fn get_repository(&self, repo_id: &str) -> Result<RepositoryResponse>;
 
+    /// Ensures an immutable image is available where its consumer runs.
+    ///
+    /// The caller must authorize the repository against the deployment's project first.
+    /// Providers without regional image placement requirements need no additional work.
+    async fn ensure_regional_image(
+        &self,
+        _repository: &str,
+        _digest: &str,
+        _region: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Adds cross-account access permissions for a repository.
     /// This adds the specified permissions to any existing cross-account permissions.
     ///

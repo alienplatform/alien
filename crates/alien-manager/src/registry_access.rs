@@ -389,10 +389,6 @@ pub async fn reconcile_registry_access_with_proxy(
         .runtime_metadata
         .as_ref()
         .is_some_and(|metadata| metadata.registry_access_granted);
-    if !needs_regrant(recorded.as_ref(), &needed, complete) {
-        return Ok(());
-    }
-
     if let Some(error) = unsupported_region(environment_info, supported_aws_regions) {
         warn!(
             deployment_id = %deployment_id,
@@ -402,6 +398,35 @@ pub async fn reconcile_registry_access_with_proxy(
         state.status = failed_status_for_deployment_error(state.status);
         state.error = Some(error.into_generic());
         state.retry_requested = false;
+        return Ok(());
+    }
+
+    // A grant records principals, not image bytes. Check every desired/current digest before
+    // taking the unchanged-grant shortcut, including updates and rollback to an earlier release.
+    if let EnvironmentInfo::Aws(environment) = environment_info {
+        let mut images = Vec::new();
+        collect_image_repositories(
+            state,
+            &RepositoryPrefixes::of(artifact_registry.as_ref()),
+            &artifact_registry.registry_endpoint(),
+            project_id,
+            proxy_url,
+            SandboxImageSource::None,
+            &mut HashSet::new(),
+            &mut images,
+        );
+        images.sort();
+        images.dedup();
+        for (repository, digest) in images {
+            artifact_registry
+                .ensure_regional_image(&repository, &digest, &environment.region)
+                .await
+                .context(ErrorData::RegistryReplicaPending {
+                    deployment_id: deployment_id.to_string(),
+                })?;
+        }
+    }
+    if !needs_regrant(recorded.as_ref(), &needed, complete) {
         return Ok(());
     }
 
@@ -948,6 +973,7 @@ fn repository_access_with_proxy(
             proxy_url,
             sandbox_source,
             &mut repo_ids,
+            &mut Vec::new(),
         );
         let mut repo_ids: Vec<_> = repo_ids.into_iter().collect();
         repo_ids.sort();
@@ -1195,6 +1221,7 @@ fn collect_image_repositories(
     proxy_url: Option<&str>,
     sandbox_source: SandboxImageSource,
     repo_ids: &mut HashSet<String>,
+    worker_images: &mut Vec<(String, String)>,
 ) -> Vec<RefusedImage> {
     let mut refused = Vec::new();
     // Every project shares the prefix, so matching the prefix alone would open a repository
@@ -1250,6 +1277,15 @@ fn collect_image_repositories(
                     repository: repo_id,
                 });
                 continue;
+            }
+            if entry.config.downcast_ref::<Worker>().is_some() {
+                worker_images.push((
+                    repo_id.clone(),
+                    image
+                        .rsplit_once('@')
+                        .map_or("", |(_, digest)| digest)
+                        .to_string(),
+                ));
             }
             repo_ids.insert(repo_id);
         }
@@ -1614,6 +1650,8 @@ mod tests {
 
     #[derive(Debug, Default)]
     struct RecordingAwsRegistry {
+        images: Mutex<Vec<(String, String, String)>>,
+        image_failure: std::sync::atomic::AtomicBool,
         grants: Mutex<Vec<String>>,
         /// The access each grant asked for, in order.
         accesses: Mutex<Vec<AwsCrossAccountAccess>>,
@@ -1628,6 +1666,27 @@ mod tests {
 
     #[async_trait]
     impl ArtifactRegistry for RecordingAwsRegistry {
+        async fn ensure_regional_image(
+            &self,
+            repository: &str,
+            digest: &str,
+            region: &str,
+        ) -> BindingResult<()> {
+            self.images.lock().expect("images lock").push((
+                repository.into(),
+                digest.into(),
+                region.into(),
+            ));
+            if self.image_failure.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(AlienError::new(BindingErrorData::RegistryReplicaNotReady {
+                    repository: repository.into(),
+                    region: region.into(),
+                    details: "image bytes unavailable".into(),
+                }));
+            }
+            Ok(())
+        }
+
         fn registry_endpoint(&self) -> String {
             TestArtifactRegistry {
                 prefix: String::new(),
@@ -1754,6 +1813,85 @@ mod tests {
                 "Lambda pulls from its own region's replica"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn image_updates_and_rollback_are_checked_even_when_grants_are_unchanged() {
+        let registry = Arc::new(RecordingAwsRegistry::default());
+        let first = format!("sha256:{}", "1".repeat(64));
+        let second = format!("sha256:{}", "2".repeat(64));
+        let image = |digest: &str| format!("manager.example.com/alien-artifacts-prj_test@{digest}");
+        let mut state = worker_grant_state(&image(&first));
+        for (digest, fails) in [
+            (&first, false),
+            (&second, true),
+            (&second, false),
+            (&first, false),
+        ] {
+            state
+                .runtime_metadata
+                .as_mut()
+                .expect("metadata")
+                .prepared_stack = Some(worker_stack(&image(digest)));
+            registry
+                .image_failure
+                .store(fails, std::sync::atomic::Ordering::SeqCst);
+            let result = reconcile_registry_access_with_proxy()
+                .bindings_provider(&recording_provider(registry.clone()))
+                .target_bindings_providers(&HashMap::new())
+                .deployment_id("deployment")
+                .project_id(PROJECT)
+                .state(&mut state)
+                .proxy_url("https://manager.example.com")
+                .call()
+                .await;
+            if fails {
+                assert_eq!(
+                    result
+                        .expect_err("missing digest blocks unchanged grant")
+                        .code,
+                    "REGISTRY_REPLICA_PENDING"
+                );
+            } else {
+                result.expect("available immutable image proceeds");
+            }
+        }
+        assert_eq!(
+            *registry.grants.lock().expect("grants"),
+            vec!["alien-artifacts-prj_test"]
+        );
+        assert_eq!(
+            registry
+                .images
+                .lock()
+                .expect("images")
+                .iter()
+                .map(|(_, digest, _)| digest.clone())
+                .collect::<Vec<_>>(),
+            vec![first.clone(), second.clone(), second, first]
+        );
+        state
+            .runtime_metadata
+            .as_mut()
+            .expect("metadata")
+            .prepared_stack = Some(worker_stack(
+            "manager.example.com/alien-artifacts-prj_other@sha256:123",
+        ));
+        reconcile_registry_access_with_proxy()
+            .bindings_provider(&recording_provider(registry.clone()))
+            .target_bindings_providers(&HashMap::new())
+            .deployment_id("deployment")
+            .project_id(PROJECT)
+            .state(&mut state)
+            .proxy_url("https://manager.example.com")
+            .call()
+            .await
+            .expect("foreign image is refused");
+        assert_eq!(
+            registry.images.lock().expect("images").len(),
+            4,
+            "no foreign-project materialization"
+        );
     }
 
     /// A deployment in a region the registry has no copy in fails at once, with the reason, and

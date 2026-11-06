@@ -4,6 +4,8 @@
 pub mod acr;
 #[cfg(feature = "aws")]
 pub mod ecr;
+#[cfg(feature = "aws")]
+mod regional_image;
 #[cfg(feature = "gcp")]
 pub mod gar;
 #[cfg(feature = "local-artifact-registry")]

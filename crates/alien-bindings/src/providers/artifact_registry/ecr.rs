@@ -706,6 +706,142 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         self.legacy_sandbox_repository_prefixes.clone()
     }
 
+    async fn ensure_regional_image(
+        &self,
+        repository: &str,
+        digest: &str,
+        region: &str,
+    ) -> Result<()> {
+        if region == self.credentials.region() {
+            return Ok(());
+        }
+        let allowed = std::iter::once(&self.repository_prefix)
+            .chain(self.legacy_repository_prefixes.iter())
+            .any(|prefix| repository == prefix || repository.starts_with(&format!("{prefix}-")));
+        if !allowed
+            || !digest.strip_prefix("sha256:").is_some_and(|hex| {
+                hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+        {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "regional image materialization".into(),
+                reason: "an owned repository and immutable sha256 image digest are required".into(),
+            }));
+        }
+        let target = self.policy_management_client(region, repository).await?;
+        let lookup = target
+            .batch_get_image(
+                alien_aws_clients::ecr::BatchGetImageRequest::builder()
+                    .repository_name(repository.to_string())
+                    .image_ids(vec![alien_aws_clients::ecr::ImageIdentifier {
+                        image_tag: None,
+                        image_digest: Some(digest.to_string()),
+                    }])
+                    .build(),
+            )
+            .await;
+        match lookup {
+            Ok(response) => {
+                if let Some(image) = response.images.first() {
+                    if image.image_id.image_digest.as_deref() != Some(digest)
+                        || super::regional_image::digest(image.image_manifest.as_bytes()) != digest
+                    {
+                        return Err(AlienError::new(ErrorData::RegistryReplicaNotReady {
+                            repository: repository.into(),
+                            region: region.into(),
+                            details: "regional image digest mismatch".into(),
+                        }));
+                    }
+                    return Ok(());
+                }
+                if response
+                    .failures
+                    .iter()
+                    .any(|failure| failure.failure_code != "ImageNotFound")
+                {
+                    return Err(AlienError::new(ErrorData::RegistryReplicaNotReady {
+                        repository: repository.into(),
+                        region: region.into(),
+                        details: "regional image lookup refused".into(),
+                    }));
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) => {}
+            Err(error) => {
+                return Err(map_cloud_client_error(
+                    error,
+                    "Read regional image".into(),
+                    Some(repository.into()),
+                ))
+            }
+        }
+        match target
+            .create_repository(
+                CreateRepositoryRequest::builder()
+                    .repository_name(repository.to_string())
+                    .build(),
+            )
+            .await
+        {
+            Ok(_) => {}
+            Err(error) => {
+                let error = map_cloud_client_error(
+                    error,
+                    "Create owned regional repository".into(),
+                    Some(repository.into()),
+                );
+                if error.http_status_code != Some(409) {
+                    return Err(error);
+                }
+            }
+        }
+        let source = self
+            .policy_management_client(self.credentials.region(), repository)
+            .await?;
+        let source_auth = regional_auth(&source, repository).await?;
+        let target_auth = regional_auth(&target, repository).await?;
+        let source_reference = format!(
+            "{}/{repository}@{digest}",
+            self.registry_endpoint().trim_start_matches("https://")
+        );
+        let target_reference = source_reference.replacen(
+            &format!(".ecr.{}.", self.credentials.region()),
+            &format!(".ecr.{region}."),
+            1,
+        );
+        let pending = |details: String| {
+            AlienError::new(ErrorData::RegistryReplicaNotReady {
+                repository: repository.into(),
+                region: region.into(),
+                details,
+            })
+        };
+        let source_reference = source_reference
+            .parse()
+            .map_err(|_| pending("invalid source image reference".into()))?;
+        let target_reference = target_reference
+            .parse()
+            .map_err(|_| pending("invalid regional image reference".into()))?;
+        tokio::time::timeout(
+            Duration::from_secs(120),
+            super::regional_image::copy_closure(
+                source_reference,
+                target_reference,
+                source_auth,
+                target_auth,
+            ),
+        )
+        .await
+        .map_err(|_| {
+            pending("regional image copy exceeded 120 seconds; retry the deployment".into())
+        })?
+        .map_err(pending)
+    }
+
     async fn create_repository(&self, repo_name: &str) -> Result<RepositoryResponse> {
         self.create_named_repository(self.make_full_repo_name(repo_name))
             .await
@@ -1985,4 +2121,39 @@ mod tests {
         );
         assert_eq!(replica_set.hits_async().await, 0);
     }
+}
+
+/// Obtain credentials only from the binding-selected regional ECR client.
+async fn regional_auth(
+    client: &EcrClient,
+    repository: &str,
+) -> Result<oci_client::secrets::RegistryAuth> {
+    let response = client
+        .get_authorization_token(
+            alien_aws_clients::ecr::GetAuthorizationTokenRequest::builder().build(),
+        )
+        .await
+        .map_err(|error| {
+            map_cloud_client_error(
+                error,
+                "Authorize regional image copy".into(),
+                Some(repository.into()),
+            )
+        })?;
+    let invalid = || {
+        AlienError::new(ErrorData::OperationNotSupported {
+            operation: "regional image authorization".into(),
+            reason: "ECR returned no valid authorization token".into(),
+        })
+    };
+    let token = response.authorization_data.first().ok_or_else(invalid)?;
+    let bytes = BASE64
+        .decode(&token.authorization_token)
+        .map_err(|_| invalid())?;
+    let text = String::from_utf8(bytes).map_err(|_| invalid())?;
+    let (username, password) = text.split_once(':').ok_or_else(invalid)?;
+    Ok(oci_client::secrets::RegistryAuth::Basic(
+        username.into(),
+        password.into(),
+    ))
 }

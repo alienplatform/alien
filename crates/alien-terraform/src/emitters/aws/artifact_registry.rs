@@ -210,7 +210,7 @@ fn ecr_role_policy(repo_label: &str, role_label: &str, push: bool) -> hcl::struc
         ]),
     ];
     if push {
-        // Keep image access in the source region; policy management also covers replicas.
+        // The push role materializes exact image bytes in owned regional repositories.
         let regional_arn = format!(
             "replace(aws_ecr_repository.{repo_label}.arn, format(\":%s:\", data.aws_region.current.region), \":*:\")"
         );
@@ -228,6 +228,14 @@ fn ecr_role_policy(repo_label: &str, role_label: &str, push: bool) -> hcl::struc
                         "ecr:DeleteRepositoryPolicy",
                         "ecr:SetRepositoryPolicy",
                         "ecr:DescribeRepositories",
+                        "ecr:CreateRepository",
+                        "ecr:BatchGetImage",
+                        "ecr:BatchCheckLayerAvailability",
+                        "ecr:GetDownloadUrlForLayer",
+                        "ecr:InitiateLayerUpload",
+                        "ecr:UploadLayerPart",
+                        "ecr:CompleteLayerUpload",
+                        "ecr:PutImage",
                     ]
                     .into_iter()
                     .map(|action| Expression::String(action.to_string()))
