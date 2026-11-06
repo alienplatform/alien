@@ -65,6 +65,35 @@ pub fn has_sandbox_gateway(stack: &Stack) -> bool {
         .is_some_and(|entry| entry.config.downcast_ref::<crate::Container>().is_some())
 }
 
+/// The stack's first Sandbox with internet egress, if any. Such a sandbox reserves
+/// [`SANDBOX_EGRESS_GATEWAY_ID`] for the gateway Alien manages.
+fn first_internet_sandbox(stack: &Stack) -> Option<&String> {
+    stack
+        .resources()
+        .find(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Sandbox>()
+                .is_some_and(|sandbox| matches!(sandbox.egress, SandboxEgress::Internet))
+        })
+        .map(|(id, _)| id)
+}
+
+/// Whether the stack has a Sandbox with internet egress.
+pub fn has_internet_sandbox(stack: &Stack) -> bool {
+    first_internet_sandbox(stack).is_some()
+}
+
+/// Whether `resource_id` is the egress gateway Alien manages for this stack, not an
+/// application resource.
+///
+/// The id alone doesn't decide it: an application without an internet sandbox may name its
+/// own resource `sandbox-egress-gateway`. With one, the id is reserved for the gateway
+/// preparation installs, and an application resource that uses it is refused.
+pub fn is_managed_gateway(stack: &Stack, resource_id: &str) -> bool {
+    resource_id == SANDBOX_EGRESS_GATEWAY_ID && has_internet_sandbox(stack)
+}
+
 /// An AWS internet sandbox's connector routes through the gateway, so a setup surface that
 /// creates the connector must also create the gateway's subnets and inputs. Refuses a stack whose
 /// internet sandbox has no gateway rather than rendering references to undeclared ones.
@@ -72,13 +101,8 @@ pub fn require_internet_sandbox_gateway(stack: &Stack) -> crate::Result<()> {
     if has_sandbox_gateway(stack) {
         return Ok(());
     }
-    match stack.resources().find(|(_, entry)| {
-        entry
-            .config
-            .downcast_ref::<Sandbox>()
-            .is_some_and(|sandbox| matches!(sandbox.egress, SandboxEgress::Internet))
-    }) {
-        Some((id, _)) => Err(alien_error::AlienError::new(
+    match first_internet_sandbox(stack) {
+        Some(id) => Err(alien_error::AlienError::new(
             crate::ErrorData::SandboxInternetGatewayMissing {
                 sandbox_id: id.clone(),
             },
