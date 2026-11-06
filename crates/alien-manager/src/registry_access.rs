@@ -1318,6 +1318,20 @@ fn collect_image_repositories(
     refused
 }
 
+/// A runtime actor reports execution progress, never source-resolution authority. Restore
+/// persisted pins before resolving new ones; a pending checkpoint response carries no state.
+pub(crate) fn restore_worker_image_pins(
+    incoming: &mut DeploymentState,
+    stored: Option<&RuntimeMetadata>,
+) {
+    incoming
+        .runtime_metadata
+        .get_or_insert_default()
+        .worker_image_resolutions = stored
+        .map(|metadata| metadata.worker_image_resolutions.clone())
+        .unwrap_or_default();
+}
+
 /// Persist immutable legacy source identities before starting regional writes. The normal
 /// deployment checkpoint/claim is the authority; this function does not own another scheduler.
 async fn reconcile_worker_image_identities(
@@ -1993,6 +2007,176 @@ mod tests {
                 "Lambda pulls from its own region's replica"
             );
         }
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn manager_transport_reloads_durable_pin_after_a_pending_response_and_restart() {
+        use crate::{
+            stores::sqlite::{SqliteDatabase, SqliteDeploymentStore},
+            traits::deployment_store::{
+                CreateDeploymentGroupParams, CreateDeploymentParams, DeploymentFilter,
+            },
+            transports::ManagerTransport,
+        };
+        use alien_core::{DeploymentConfig, EnvironmentVariablesSnapshot, StackSettings};
+        use alien_deployment::transport::DeploymentLoopTransport;
+        let directory = tempfile::tempdir().unwrap();
+        let database = Arc::new(
+            SqliteDatabase::new(directory.path().join("manager.db").to_str().unwrap())
+                .await
+                .unwrap(),
+        );
+        let store = Arc::new(SqliteDeploymentStore::new(database));
+        let caller = Subject::system();
+        let group = store
+            .create_deployment_group(
+                &caller,
+                CreateDeploymentGroupParams {
+                    name: "source-checkpoint".into(),
+                    max_deployments: 1,
+                    setup: Default::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let deployment = store
+            .create_deployment(
+                &caller,
+                CreateDeploymentParams {
+                    name: "worker".into(),
+                    deployment_group_id: group.id,
+                    platform: Platform::Aws,
+                    deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    base_platform: None,
+                    stack_settings: Default::default(),
+                    stack_state: None,
+                    environment_variables: None,
+                    public_subdomain: None,
+                    input_values: Default::default(),
+                    setup_item: None,
+                    deployment_token: None,
+                },
+            )
+            .await
+            .unwrap();
+        let acquisition = store
+            .acquire(
+                &caller,
+                "source-owner",
+                &DeploymentFilter {
+                    deployment_ids: Some(vec![deployment.id.clone()]),
+                    ..Default::default()
+                },
+                1,
+            )
+            .await
+            .unwrap();
+        assert_eq!(acquisition.len(), 1);
+        let registry = Arc::new(RecordingAwsRegistry::default());
+        let first = format!("sha256:{}", "1".repeat(64));
+        *registry.source_tag_digest.lock().unwrap() = Some(first.clone());
+        let mut stale_state = worker_grant_state("manager.example.com/alien-artifacts:stable");
+        stale_state.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
+        stale_state
+            .runtime_metadata
+            .as_mut()
+            .unwrap()
+            .pending_prepared_release_id = Some("rel_first".into());
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(Default::default())
+            .allow_frozen_changes(false)
+            .manager_url("https://manager.example.com".to_string())
+            .build();
+        let transport = || {
+            ManagerTransport::new(
+                store.clone(),
+                recording_provider(registry.clone()),
+                HashMap::new(),
+                "default".into(),
+                "source-owner".into(),
+                acquisition[0].execution_claim.clone(),
+                vec![],
+            )
+        };
+        let pending = transport()
+            .reconcile_step(
+                &deployment.id,
+                &stale_state,
+                &config,
+                false,
+                None,
+                vec![],
+                vec![],
+            )
+            .await
+            .unwrap_err();
+        assert!(pending.retryable);
+        assert!(
+            registry.images.lock().unwrap().is_empty(),
+            "no copy before the source pin is durable"
+        );
+        let recorded = store
+            .get_deployment(&caller, &deployment.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            recorded.runtime_metadata.unwrap().worker_image_resolutions[0].digest,
+            first
+        );
+        *registry.source_tag_digest.lock().unwrap() = Some(format!("sha256:{}", "2".repeat(64)));
+        // The lost pending response leaves the runner's old opaque state without any pin.
+        stale_state = serde_json::from_value(serde_json::to_value(stale_state).unwrap()).unwrap();
+        assert!(stale_state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .worker_image_resolutions
+            .is_empty());
+        let resumed = transport()
+            .reconcile_step(
+                &deployment.id,
+                &stale_state,
+                &config,
+                false,
+                None,
+                vec![],
+                vec![],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resumed
+                .state
+                .unwrap()
+                .runtime_metadata
+                .unwrap()
+                .worker_image_resolutions[0]
+                .digest,
+            first
+        );
+        assert_eq!(
+            registry.resolved_tags.lock().unwrap().len(),
+            1,
+            "a restarted transport must not resolve the moved tag again"
+        );
+        assert_eq!(registry.images.lock().unwrap().last().unwrap().1, first);
+        store
+            .release(
+                &caller,
+                &deployment.id,
+                "source-owner",
+                acquisition[0].execution_claim.clone(),
+            )
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

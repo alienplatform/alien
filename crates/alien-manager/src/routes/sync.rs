@@ -3722,14 +3722,7 @@ pub(crate) fn validate_kubernetes_base_platform(
 /// through these routes so an actor that predates the field, omits its
 /// metadata, or holds a stale copy cannot shrink or flip the record.
 fn preserve_recorded_gate_answers(incoming: &mut DeploymentState, stored: &DeploymentRecord) {
-    incoming
-        .runtime_metadata
-        .get_or_insert_default()
-        .worker_image_resolutions = stored
-        .runtime_metadata
-        .as_ref()
-        .map(|metadata| metadata.worker_image_resolutions.clone())
-        .unwrap_or_default();
+    crate::registry_access::restore_worker_image_pins(incoming, stored.runtime_metadata.as_ref());
     // An installed ongoing-management grant permits setup choices to change.
     // Only the stored grant counts: a runtime report cannot confer authority.
     if stored

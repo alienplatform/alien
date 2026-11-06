@@ -84,6 +84,18 @@ impl DeploymentLoopTransport for ManagerTransport {
         //    A pending replica is persisted too, then returned as a retryable error so the runner
         //    holds the step until the replica exists.
         let mut granted_state = state.clone();
+        let caller = Subject::system();
+        let stored = self
+            .deployment_store
+            .get_deployment(&caller, deployment_id)
+            .await?
+            .ok_or_else(|| {
+                crate::error::ErrorData::not_found_deployment(deployment_id).into_generic()
+            })?;
+        crate::registry_access::restore_worker_image_pins(
+            &mut granted_state,
+            stored.runtime_metadata.as_ref(),
+        );
         let replica_pending = crate::registry_access::reconcile_registry_access_with_proxy()
             .bindings_provider(&self.bindings_provider)
             .target_bindings_providers(&self.target_bindings_providers)
