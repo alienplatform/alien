@@ -100,6 +100,7 @@ pub struct CommandServer {
     inline_max_bytes: usize,
     base_url: String,
     response_signing_key: Vec<u8>,
+    clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
 }
 
 impl CommandServer {
@@ -126,6 +127,7 @@ impl CommandServer {
             inline_max_bytes: INLINE_MAX_BYTES,
             base_url,
             response_signing_key,
+            clock: Arc::new(Utc::now),
         }
     }
 
@@ -147,7 +149,39 @@ impl CommandServer {
             inline_max_bytes,
             base_url,
             response_signing_key,
+            clock: Arc::new(Utc::now),
         }
+    }
+
+    /// Set the trusted server clock used for credential and lease deadlines.
+    pub fn with_clock(mut self, clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    fn now(&self) -> DateTime<Utc> {
+        (self.clock)()
+    }
+
+    fn remaining_authority(&self, deadline: DateTime<Utc>) -> Result<Duration> {
+        // Storage signers accept relative whole-second lifetimes. Reserve a
+        // second for signing work, then check the returned absolute expiry too.
+        let seconds = (deadline - self.now()).num_seconds() - 1;
+        if seconds <= 0 {
+            return Err(AlienError::new(ErrorData::CommandAuthorityExpired));
+        }
+        Ok(Duration::from_secs(seconds as u64))
+    }
+
+    fn check_storage_deadline(
+        &self,
+        request: &PresignedRequest,
+        deadline: DateTime<Utc>,
+    ) -> Result<()> {
+        if request.expiration > deadline || self.now() >= deadline {
+            return Err(AlienError::new(ErrorData::CommandAuthorityExpired));
+        }
+        Ok(())
     }
 
     /// Maximum allowed response token lifetime (2 hours).
@@ -161,8 +195,8 @@ impl CommandServer {
     ///
     /// Returns `(hmac_hex, expires_epoch)`. The HMAC is computed over
     /// `"arc.v1:{command_id}:{expires}"` using the server's signing key.
-    fn sign_response_url(&self, command_id: &str) -> (String, i64) {
-        let expires = Utc::now().timestamp() + Self::RESPONSE_CREDENTIAL_LIFETIME_SECS as i64;
+    fn sign_response_url(&self, command_id: &str, deadline: DateTime<Utc>) -> (String, i64) {
+        let expires = deadline.timestamp();
         let message = format!("commands.v1:{}:{}", command_id, expires);
 
         type HmacSha256 = Hmac<Sha256>;
@@ -199,8 +233,8 @@ impl CommandServer {
         let hmac_valid = mac.verify_slice(&token_bytes).is_ok();
 
         // Check expiration and max lifetime AFTER HMAC to avoid timing leaks.
-        let now = Utc::now().timestamp();
-        let not_expired = now <= expires;
+        let now = self.now().timestamp();
+        let not_expired = now < expires;
         let within_max_lifetime = expires <= now + Self::MAX_RESPONSE_TOKEN_LIFETIME_SECS;
 
         hmac_valid && not_expired && within_max_lifetime
@@ -316,7 +350,7 @@ impl CommandServer {
                     .complete_command(
                         &command_id,
                         CommandState::Failed,
-                        Utc::now(),
+                        self.now(),
                         None,
                         Some(serde_json::json!({
                             "code": "IDEMPOTENT_DUPLICATE",
@@ -499,14 +533,14 @@ impl CommandServer {
 
         // 2. Check deadline expiry inline
         if let Some(deadline) = status.deadline {
-            if Utc::now() > deadline && !status.state.is_terminal() {
+            if self.now() > deadline && !status.state.is_terminal() {
                 // Expire the command — CONDITIONALLY: a submit can land
                 // between the status read above and this write, and an
                 // unconditional write would stomp its terminal state (the
                 // torn-record class the conditional transition exists for).
                 let won = self
                     .command_registry
-                    .complete_command(command_id, CommandState::Expired, Utc::now(), None, None)
+                    .complete_command(command_id, CommandState::Expired, self.now(), None, None)
                     .await?;
                 if won {
                     // Clean up pending index
@@ -671,7 +705,7 @@ impl CommandServer {
         // winner's entire transition+re-store, a pathological schedule.
         let won = self
             .command_registry
-            .complete_command(command_id, new_state, Utc::now(), response_size, error)
+            .complete_command(command_id, new_state, self.now(), response_size, error)
             .await?;
         if !won {
             debug!(
@@ -726,6 +760,21 @@ impl CommandServer {
         deployment_id: &str,
         lease_request: &LeaseRequest,
     ) -> Result<LeaseResponse> {
+        self.acquire_lease_with_deadline(deployment_id, lease_request, None)
+            .await
+    }
+
+    /// Lease commands without delegating response or storage authority beyond
+    /// the authenticated receiver's absolute deadline. None retains legacy policy.
+    pub async fn acquire_lease_with_deadline(
+        &self,
+        deployment_id: &str,
+        lease_request: &LeaseRequest,
+        authority_deadline: Option<DateTime<Utc>>,
+    ) -> Result<LeaseResponse> {
+        if let Some(deadline) = authority_deadline {
+            self.remaining_authority(deadline)?;
+        }
         let mut leases = Vec::new();
 
         // 1. Scan KV pending index — ONLY the requesting target's prefix.
@@ -924,7 +973,9 @@ impl CommandServer {
             // absolute URLs: push transports have no configured base, and
             // reaching the manager's public address is inherent to push
             // delivery.
-            let mut envelope = self.build_envelope(&command_id, &metadata, params).await?;
+            let mut envelope = self
+                .build_envelope(&command_id, &metadata, params, authority_deadline)
+                .await?;
             Self::relativize_manager_urls(&mut envelope, &self.base_url);
 
             leases.push(LeaseInfo {
@@ -1161,7 +1212,7 @@ impl CommandServer {
         }
 
         if let Some(deadline) = request.deadline {
-            if deadline <= Utc::now() {
+            if deadline <= self.now() {
                 return Err(AlienError::new(ErrorData::InvalidCommand {
                     message: "Deadline must be in the future".to_string(),
                 }));
@@ -1540,7 +1591,7 @@ impl CommandServer {
             !target_resource_id.contains(':'),
             "target_resource_id must be ':'-free in the pending index: {target_resource_id}"
         );
-        let timestamp = Utc::now().timestamp_nanos_opt().unwrap_or(0);
+        let timestamp = self.now().timestamp_nanos_opt().unwrap_or(0);
         let key = format!(
             "target:{}:{}:pending:{}:{}",
             deployment_id, target_resource_id, timestamp, command_id
@@ -1606,7 +1657,7 @@ impl CommandServer {
     /// submit is safe: whoever wins, the record stays consistent. Returns
     /// the number of commands expired.
     pub async fn reap_expired_commands(&self) -> Result<u32> {
-        let now = Utc::now();
+        let now = self.now();
         let mut expired = 0u32;
         let mut cursor: Option<String> = None;
         // Paginate the whole index (bounded page count as a runaway guard):
@@ -1714,7 +1765,7 @@ impl CommandServer {
         // is only self-cleaning for processes that never run a reaper.
         const DEADLINE_INDEX_GRACE: chrono::Duration = chrono::Duration::days(7);
         let ttl = deadline
-            .signed_duration_since(Utc::now())
+            .signed_duration_since(self.now())
             .checked_add(&DEADLINE_INDEX_GRACE)
             .unwrap_or(DEADLINE_INDEX_GRACE);
         let options = (ttl.num_seconds() > 0).then(|| PutOptions {
@@ -1759,7 +1810,9 @@ impl CommandServer {
         })?;
 
         // Build envelope
-        let envelope = self.build_envelope(command_id, &metadata, params).await?;
+        let envelope = self
+            .build_envelope(command_id, &metadata, params, None)
+            .await?;
 
         // Mark Dispatched BEFORE invoking the transport: a fast worker can
         // execute and submit before this function resumes, and submit
@@ -1768,7 +1821,7 @@ impl CommandServer {
         // terminal state back to Dispatched.
         if !self
             .command_registry
-            .mark_dispatched_if_not_terminal(command_id, Utc::now())
+            .mark_dispatched_if_not_terminal(command_id, self.now())
             .await?
         {
             return Ok(self
@@ -1826,8 +1879,11 @@ impl CommandServer {
         command_id: &str,
         metadata: &CommandEnvelopeData,
         mut params: BodySpec,
+        authority_deadline: Option<DateTime<Utc>>,
     ) -> Result<Envelope> {
-        let response_handling = self.create_response_handling(command_id).await?;
+        let response_handling = self
+            .create_response_handling(command_id, authority_deadline)
+            .await?;
 
         // Re-inline: if params are in blob but fit in transport limit, read and embed inline.
         // This avoids unnecessary storage downloads for medium-sized params (18KB–150KB).
@@ -1871,7 +1927,9 @@ impl CommandServer {
             storage_put_used,
         } = &params
         {
-            let get_request = self.generate_storage_get_request(command_id).await?;
+            let get_request = self
+                .generate_storage_get_request_with_deadline(command_id, authority_deadline)
+                .await?;
             params = BodySpec::Storage {
                 size: *size,
                 storage_get_request: Some(get_request),
@@ -1891,9 +1949,91 @@ impl CommandServer {
         ))
     }
 
-    async fn create_response_handling(&self, command_id: &str) -> Result<ResponseHandling> {
+    /// Refresh response credentials after the caller has authorized the exact
+    /// command target. A running command may outlast its original credential.
+    pub async fn refresh_response_handling(
+        &self,
+        command_id: &str,
+        lease_id: &str,
+        authority_deadline: Option<DateTime<Utc>>,
+    ) -> Result<ResponseHandling> {
+        let command = self
+            .command_registry
+            .get_command_metadata(command_id)
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::CommandNotFound {
+                    command_id: command_id.into(),
+                })
+            })?;
+        if command.state != CommandState::Dispatched {
+            return Err(AlienError::new(ErrorData::InvalidCommand {
+                message: "Response credentials require a dispatched command".into(),
+            }));
+        }
+        let key = format!("cmd:{command_id}:lease");
+        let entry = self
+            .kv
+            .get(&key)
+            .await
+            .context(ErrorData::KvOperationFailed {
+                operation: "get".into(),
+                key: key.clone(),
+                message: "Failed to read response lease".into(),
+            })?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::LeaseNotFound {
+                    lease_id: lease_id.into(),
+                })
+            })?;
+        let lease: LeaseData = serde_json::from_slice(&entry.value)
+            .into_alien_error()
+            .context(ErrorData::SerializationFailed {
+                message: "Failed to decode response lease".into(),
+                data_type: Some("LeaseData".into()),
+            })?;
+        if lease.lease_id != lease_id
+            || lease.owner != command.deployment_id
+            || lease.expires_at <= self.now()
+        {
+            return Err(AlienError::new(ErrorData::LeaseNotFound {
+                lease_id: lease_id.into(),
+            }));
+        }
+        let deadline =
+            authority_deadline.map_or(lease.expires_at, |deadline| deadline.min(lease.expires_at));
+        let handling = self
+            .create_response_handling(command_id, Some(deadline))
+            .await?;
+        let current = self
+            .kv
+            .get(&key)
+            .await
+            .context(ErrorData::KvOperationFailed {
+                operation: "get".into(),
+                key,
+                message: "Failed to recheck response lease".into(),
+            })?;
+        if self.now() >= deadline || current.is_none_or(|current| current.version != entry.version)
+        {
+            return Err(AlienError::new(ErrorData::LeaseNotFound {
+                lease_id: lease_id.into(),
+            }));
+        }
+        Ok(handling)
+    }
+
+    async fn create_response_handling(
+        &self,
+        command_id: &str,
+        authority_deadline: Option<DateTime<Utc>>,
+    ) -> Result<ResponseHandling> {
         let upload_path = StoragePath::from(format!("arc/commands/{}/response", command_id));
-        let expires_in = Duration::from_secs(Self::RESPONSE_CREDENTIAL_LIFETIME_SECS);
+        let default_deadline =
+            self.now() + chrono::Duration::seconds(Self::RESPONSE_CREDENTIAL_LIFETIME_SECS as i64);
+        let deadline =
+            authority_deadline.map_or(default_deadline, |deadline| deadline.min(default_deadline));
+        let expires_in = self.remaining_authority(deadline)?;
         let presigned = self
             .storage
             .presigned_put(&upload_path, expires_in)
@@ -1904,7 +2044,8 @@ impl CommandServer {
                 path: Some(upload_path.to_string()),
             })?;
 
-        let (response_token, expires) = self.sign_response_url(command_id);
+        self.check_storage_deadline(&presigned, deadline)?;
+        let (response_token, expires) = self.sign_response_url(command_id, deadline);
 
         Ok(ResponseHandling {
             max_inline_bytes: self.inline_max_bytes as u64,
@@ -1940,15 +2081,31 @@ impl CommandServer {
     }
 
     async fn generate_storage_get_request(&self, command_id: &str) -> Result<PresignedRequest> {
+        self.generate_storage_get_request_with_deadline(command_id, None)
+            .await
+    }
+
+    async fn generate_storage_get_request_with_deadline(
+        &self,
+        command_id: &str,
+        authority_deadline: Option<DateTime<Utc>>,
+    ) -> Result<PresignedRequest> {
         let path = StoragePath::from(format!("arc/commands/{}/params", command_id));
-        let expires_in = Duration::from_secs(3600);
-        self.storage.presigned_get(&path, expires_in).await.context(
-            ErrorData::StorageOperationFailed {
+        let default_deadline = self.now() + chrono::Duration::hours(1);
+        let deadline =
+            authority_deadline.map_or(default_deadline, |deadline| deadline.min(default_deadline));
+        let expires_in = self.remaining_authority(deadline)?;
+        let request = self
+            .storage
+            .presigned_get(&path, expires_in)
+            .await
+            .context(ErrorData::StorageOperationFailed {
                 message: "Failed to create storage get request".to_string(),
                 operation: Some("presigned_get".to_string()),
                 path: Some(path.to_string()),
-            },
-        )
+            })?;
+        self.check_storage_deadline(&request, deadline)?;
+        Ok(request)
     }
 
     async fn generate_response_storage_get_request(

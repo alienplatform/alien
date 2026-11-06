@@ -190,6 +190,10 @@ passthrough; single-tenant impls ignore it. See the trait doc on
 
 * [health](docs/sdks/health/README.md#health)
 
+### [Identity](docs/sdks/identity/README.md)
+
+* [exchangeRuntimeIdentity](docs/sdks/identity/README.md#exchangeruntimeidentity) - Exchange a verified component proof for one bounded runtime purpose.
+
 ### [Leases](docs/sdks/leases/README.md)
 
 * [acquireLeases](docs/sdks/leases/README.md#acquireleases) - Acquire leases for polling deployments
@@ -303,6 +307,7 @@ passthrough; single-tenant impls ignore it. See the trait doc on
 - [`deploymentsSetQuotaWarningOverrides`](docs/sdks/deployments/README.md#setquotawarningoverrides) - Save settings only; retrying a failed deployment remains an explicit operation.
 - [`deploymentsSignDeploymentBundle`](docs/sdks/deployments/README.md#signdeploymentbundle)
 - [`healthHealth`](docs/sdks/health/README.md#health)
+- [`identityExchangeRuntimeIdentity`](docs/sdks/identity/README.md#exchangeruntimeidentity) - Exchange a verified component proof for one bounded runtime purpose.
 - [`leasesAcquireLeases`](docs/sdks/leases/README.md#acquireleases) - Acquire leases for polling deployments
 - [`leasesReleaseLease`](docs/sdks/leases/README.md#releaselease) - Release a lease
 - [`managerManagerInfo`](docs/sdks/manager/README.md#managerinfo)
@@ -481,8 +486,8 @@ run();
 
 
 **Inherit from [`AlienManagerError`](./src/models/errors/alienmanagererror.ts)**:
-* [`ErrorResponse`](./src/models/errors/errorresponse.ts): Error response wrapper for API endpoints. Applicable to 8 of 53 methods.*
-* [`AlienError`](./src/models/errors/alienerror.ts): Canonical error container that provides a structured way to represent errors with rich metadata including error codes, human-readable messages, context, and chaining capabilities for error propagation.  This struct is designed to be both machine-readable and user-friendly, supporting serialization for API responses and detailed error reporting in distributed systems. Applicable to 2 of 53 methods.*
+* [`ErrorResponse`](./src/models/errors/errorresponse.ts): Error response wrapper for API endpoints. Applicable to 8 of 54 methods.*
+* [`AlienError`](./src/models/errors/alienerror.ts): Canonical error container that provides a structured way to represent errors with rich metadata including error codes, human-readable messages, context, and chaining capabilities for error propagation.  This struct is designed to be both machine-readable and user-friendly, supporting serialization for API responses and detailed error reporting in distributed systems. Applicable to 2 of 54 methods.*
 * [`ResponseValidationError`](./src/models/errors/responsevalidationerror.ts): Type mismatch between the data returned from the server and the structure expected by the SDK. See `error.rawValue` for the raw value and `error.pretty()` for a nicely formatted multi-line string.
 
 </details>

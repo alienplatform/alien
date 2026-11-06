@@ -271,6 +271,10 @@ pub fn router() -> Router<AppState> {
         )
         .route("/v1/commands/{command_id}/response", put(submit_response))
         .route(
+            "/v1/commands/{command_id}/response-context",
+            get(response_context),
+        )
+        .route(
             "/v1/commands/{command_id}/payload",
             get(get_command_payload).put(store_command_payload),
         )
@@ -485,6 +489,52 @@ async fn submit_response(
     }
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ResponseContextQuery {
+    lease_id: String,
+}
+
+/// Issue fresh response credentials to the authorized receiver of a running
+/// command. The operational lease can outlast its original bearer credential.
+async fn response_context(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(command_id): Path<String>,
+    Query(query): Query<ResponseContextQuery>,
+) -> Response {
+    let subject = match require_command_auth(&state, &headers).await {
+        Ok(subject) => subject,
+        Err(response) => return response,
+    };
+    let command = match state
+        .command_server
+        .get_command_access_context(&command_id)
+        .await
+    {
+        Ok(Some(command)) => command,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => return error.into_response(),
+    };
+    if let Err(response) = require_command_execution_context(&state, &subject, &command).await {
+        return response;
+    }
+    let deadline = match state.auth_validator.authority_deadline(&subject) {
+        Ok(deadline) => deadline,
+        Err(error) => return error.into_response(),
+    };
+    match state
+        .command_server
+        .refresh_response_handling(&command_id, &query.lease_id, deadline)
+        .await
+    {
+        Ok(handling) => {
+            ([(http::header::CACHE_CONTROL, "no-store")], Json(handling)).into_response()
+        }
+        Err(error) => error.into_response(),
+    }
+}
+
 /// Get command payload (params and response) from KV.
 ///
 /// Auth: Admin, DG (group), or own Deployment token.
@@ -621,9 +671,13 @@ async fn acquire_leases(
         return response;
     }
 
+    let deadline = match state.auth_validator.authority_deadline(&subject) {
+        Ok(deadline) => deadline,
+        Err(error) => return error.into_response(),
+    };
     match state
         .command_server
-        .acquire_lease(&lease_request.deployment_id, &lease_request)
+        .acquire_lease_with_deadline(&lease_request.deployment_id, &lease_request, deadline)
         .await
     {
         Ok(response) => Json(response).into_response(),

@@ -1,5 +1,9 @@
 pub mod error;
 pub mod request_utils;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod runtime_credentials;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod runtime_proofs;
 
 // Re-export commonly used types for convenience
 pub use error::{Error, ErrorData, Result};

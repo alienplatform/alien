@@ -21,6 +21,8 @@ use crate::traits::*;
 /// A fully-configured alien-manager instance.
 pub struct AlienManager {
     pub(crate) config: Arc<ManagerConfig>,
+    pub(crate) runtime_credentials:
+        Option<Arc<crate::auth::runtime_capability::RuntimeCredentials>>,
     pub(crate) router: axum::Router,
     pub(crate) deployment_store: Arc<dyn DeploymentStore>,
     pub(crate) release_store: Arc<dyn ReleaseStore>,
@@ -102,14 +104,17 @@ impl AlienManager {
                 })?;
         let deployment_loop =
             if !self.config.disable_deployment_loop || !self.config.disable_heartbeat_loop {
-                Some(Arc::new(DeploymentLoop::new(
-                    self.config.clone(),
-                    self.deployment_store.clone(),
-                    self.release_store.clone(),
-                    self.credential_resolver.clone(),
-                    self.server_bindings.clone(),
-                    self.dev_status_tx,
-                )))
+                Some(Arc::new(
+                    DeploymentLoop::new(
+                        self.config.clone(),
+                        self.deployment_store.clone(),
+                        self.release_store.clone(),
+                        self.credential_resolver.clone(),
+                        self.server_bindings.clone(),
+                        self.dev_status_tx,
+                    )
+                    .with_runtime_credentials(self.runtime_credentials.clone()),
+                ))
             } else {
                 None
             };

@@ -5,17 +5,75 @@ use alien_core::ENV_ALIEN_RUNTIME_SECRETS;
 use alien_error::{AlienError, Context, IntoAlienError};
 use std::{
     collections::HashMap,
-    sync::{LazyLock, Mutex},
+    sync::{Arc, LazyLock, Mutex},
 };
 use tracing::{error, info};
 
+use alien_client_core::runtime_credentials::RuntimeCredentials;
 use opentelemetry::KeyValue;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
+use opentelemetry_otlp::WithHttpConfig;
 use opentelemetry_otlp::{ExportConfig, LogExporter, Protocol, WithExportConfig};
 use opentelemetry_sdk::{
     logs::{BatchLogProcessor, SdkLoggerProvider},
     Resource,
 };
+
+#[derive(Debug)]
+struct IdentityHttpClient {
+    client: reqwest::Client,
+    credentials: Arc<RuntimeCredentials>,
+    runtime: tokio::runtime::Handle,
+}
+
+#[async_trait::async_trait]
+impl opentelemetry_http::HttpClient for IdentityHttpClient {
+    async fn send_bytes(
+        &self,
+        mut request: http::Request<bytes::Bytes>,
+    ) -> std::result::Result<http::Response<bytes::Bytes>, opentelemetry_http::HttpError> {
+        let credentials = self.credentials.clone();
+        let client = self.client.clone();
+        // The batch processor exports from its own thread, outside Tokio.
+        self.runtime
+            .spawn(async move {
+                let trusted = credentials.allows_endpoint(&request.uri().to_string());
+                let token = if trusted {
+                    Some(credentials.token().await?)
+                } else {
+                    None
+                };
+                if let Some(token) = &token {
+                    request.headers_mut().insert(
+                        http::header::AUTHORIZATION,
+                        format!("Bearer {token}").parse()?,
+                    );
+                }
+                let mut response = client.execute(request.clone().try_into()?).await?;
+                if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+                    if let Some(token) = &token {
+                        let replacement = credentials.token_after_rejection(token).await?;
+                        request.headers_mut().insert(
+                            http::header::AUTHORIZATION,
+                            format!("Bearer {replacement}").parse()?,
+                        );
+                        response = client.execute(request.try_into()?).await?;
+                        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+                            credentials.reject(&replacement).await;
+                        }
+                    }
+                }
+                let mut response = response.error_for_status()?;
+                let headers = std::mem::take(response.headers_mut());
+                let mut result = http::Response::builder()
+                    .status(response.status())
+                    .body(response.bytes().await?)?;
+                *result.headers_mut() = headers;
+                Ok::<_, opentelemetry_http::HttpError>(result)
+            })
+            .await?
+    }
+}
 
 /// Global OTLP logger provider for captured application logs.
 static OTLP_PROVIDER: LazyLock<Mutex<Option<SdkLoggerProvider>>> =
@@ -131,6 +189,7 @@ pub fn init_otlp_logging(
 
 fn runtime_otlp_credentials_are_vault_backed() -> bool {
     std::env::var_os(ENV_ALIEN_RUNTIME_SECRETS).is_some()
+        || std::env::var_os("ALIEN_IDENTITY_PROVIDER").is_some()
 }
 
 /// Initialize the app-log OTLP provider from already-resolved runtime config.
@@ -143,6 +202,16 @@ pub fn init_otlp_logging_from_config(config: OtlpConfig) -> Result<()> {
         "Initializing app log OTLP exporter"
     );
     let provider = build_otlp_provider(&config)?;
+    store_otlp_provider(provider);
+    Ok(())
+}
+
+/// Install a log exporter that refreshes its bounded authorization per export.
+pub fn init_otlp_logging_with_identity(
+    config: OtlpConfig,
+    credentials: Arc<RuntimeCredentials>,
+) -> Result<()> {
+    let provider = build_otlp_provider_with_identity(&config, Some(credentials))?;
     store_otlp_provider(provider);
     Ok(())
 }
@@ -208,6 +277,13 @@ impl OwnedOtlpLogger {
 
 #[cfg(feature = "otlp")]
 fn build_otlp_provider(config: &OtlpConfig) -> Result<SdkLoggerProvider> {
+    build_otlp_provider_with_identity(config, None)
+}
+
+fn build_otlp_provider_with_identity(
+    config: &OtlpConfig,
+    credentials: Option<Arc<RuntimeCredentials>>,
+) -> Result<SdkLoggerProvider> {
     // Build OTLP Log exporter over HTTP with protobuf.
     // When endpoint is set programmatically via ExportConfig, the SDK uses it
     // verbatim (no path appended). This matches OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
@@ -221,6 +297,26 @@ fn build_otlp_provider(config: &OtlpConfig) -> Result<SdkLoggerProvider> {
     let mut exporter_builder = LogExporter::builder()
         .with_http()
         .with_export_config(export_config);
+
+    if let Some(credentials) = credentials {
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .into_alien_error()
+            .context(ErrorData::Other {
+                message: "Cannot initialize telemetry transport".into(),
+            })?;
+        exporter_builder = exporter_builder.with_http_client(IdentityHttpClient {
+            client,
+            credentials,
+            runtime: tokio::runtime::Handle::try_current()
+                .into_alien_error()
+                .context(ErrorData::Other {
+                    message: "Runtime identity telemetry requires an async runtime".into(),
+                })?,
+        });
+    }
 
     // Configure headers if any
     if !config.headers.is_empty() {
@@ -707,3 +803,462 @@ mod tests {
 
 #[cfg(test)]
 mod normalization_tests;
+
+#[cfg(test)]
+mod identity_export_tests {
+    use super::*;
+    use alien_client_core::runtime_credentials::{RuntimeCredentialConfig, RuntimeProofProvider};
+    use async_trait::async_trait;
+    use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+    use serde_json::{json, Value};
+    use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+
+    struct Proof;
+    #[async_trait]
+    impl RuntimeProofProvider for Proof {
+        async fn proof(&self, audience: &str) -> alien_client_core::Result<Value> {
+            assert_eq!(audience, "test-manager");
+            Ok(json!({"type":"session", "token":"test-parent"}))
+        }
+    }
+    #[derive(Clone)]
+    struct Fixture {
+        clock: Arc<AtomicI64>,
+        exchanges: Arc<AtomicUsize>,
+        deliveries: Arc<Mutex<Vec<String>>>,
+    }
+
+    async fn exchange(State(state): State<Fixture>, Json(request): Json<Value>) -> Json<Value> {
+        assert_eq!(request["purpose"], json!({"type":"telemetry"}));
+        let revision = state.exchanges.fetch_add(1, Ordering::SeqCst);
+        Json(
+            json!({"token":format!("bounded-{revision}"), "expiresAt":chrono::DateTime::from_timestamp(state.clock.load(Ordering::SeqCst) + 100, 0).unwrap()}),
+        )
+    }
+    async fn logs(
+        State(state): State<Fixture>,
+        headers: http::HeaderMap,
+        body: bytes::Bytes,
+    ) -> StatusCode {
+        assert!(
+            !body.is_empty(),
+            "export must carry a real protobuf log batch"
+        );
+        state.deliveries.lock().unwrap().push(
+            headers[http::header::AUTHORIZATION]
+                .to_str()
+                .unwrap()
+                .into(),
+        );
+        StatusCode::OK
+    }
+
+    #[tokio::test]
+    async fn persistent_rejection_retries_once_and_discards_each_rejected_token() {
+        use opentelemetry_http::HttpClient;
+        let state = Fixture {
+            clock: Arc::new(AtomicI64::new(1_800_000_000)),
+            exchanges: Arc::new(AtomicUsize::new(0)),
+            deliveries: Arc::new(Mutex::new(Vec::new())),
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/v1/identity/exchange", post(exchange))
+            .route(
+                "/v1/logs",
+                post(
+                    |State(state): State<Fixture>, headers: http::HeaderMap| async move {
+                        state.deliveries.lock().unwrap().push(
+                            headers[http::header::AUTHORIZATION]
+                                .to_str()
+                                .unwrap()
+                                .into(),
+                        );
+                        StatusCode::UNAUTHORIZED
+                    },
+                ),
+            )
+            .with_state(state.clone());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let clock = state.clock.clone();
+        let credentials = RuntimeCredentials::new(
+            RuntimeCredentialConfig {
+                manager_url: format!("http://{address}"),
+                audience: "test-manager".into(),
+                deployment_id: "deployment-one".into(),
+                purpose: json!({"type":"telemetry"}),
+            },
+            Arc::new(Proof),
+        )
+        .unwrap()
+        .with_clock(Arc::new(move || {
+            chrono::DateTime::from_timestamp(clock.load(Ordering::SeqCst), 0).unwrap()
+        }));
+        let transport = IdentityHttpClient {
+            client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
+            credentials: Arc::new(credentials),
+            runtime: tokio::runtime::Handle::current(),
+        };
+        for _ in 0..2 {
+            let request = http::Request::post(format!("http://{address}/v1/logs"))
+                .body(bytes::Bytes::from_static(b"fixture"))
+                .unwrap();
+            assert!(transport.send_bytes(request).await.is_err());
+        }
+        assert_eq!(state.exchanges.load(Ordering::SeqCst), 4);
+        assert_eq!(
+            *state.deliveries.lock().unwrap(),
+            [
+                "Bearer bounded-0",
+                "Bearer bounded-1",
+                "Bearer bounded-2",
+                "Bearer bounded-3"
+            ]
+        );
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn external_rejection_never_exchanges_or_retries_with_manager_authority() {
+        use opentelemetry_http::HttpClient;
+        let state = Fixture {
+            clock: Arc::new(AtomicI64::new(1_800_000_000)),
+            exchanges: Arc::new(AtomicUsize::new(0)),
+            deliveries: Arc::new(Mutex::new(Vec::new())),
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/v1/identity/exchange", post(exchange))
+            .route(
+                "/v1/logs",
+                post(
+                    |State(state): State<Fixture>, headers: http::HeaderMap| async move {
+                        state.deliveries.lock().unwrap().push(
+                            headers[http::header::AUTHORIZATION]
+                                .to_str()
+                                .unwrap()
+                                .into(),
+                        );
+                        StatusCode::UNAUTHORIZED
+                    },
+                ),
+            )
+            .with_state(state.clone());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let clock = state.clock.clone();
+        let credentials = RuntimeCredentials::new(
+            RuntimeCredentialConfig {
+                manager_url: "https://manager.example".into(),
+                audience: "test-manager".into(),
+                deployment_id: "deployment-one".into(),
+                purpose: json!({"type":"telemetry"}),
+            },
+            Arc::new(Proof),
+        )
+        .unwrap()
+        .with_clock(Arc::new(move || {
+            chrono::DateTime::from_timestamp(clock.load(Ordering::SeqCst), 0).unwrap()
+        }));
+        let transport = IdentityHttpClient {
+            client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
+            credentials: Arc::new(credentials),
+            runtime: tokio::runtime::Handle::current(),
+        };
+        for _ in 0..2 {
+            let request = http::Request::post(format!("http://{address}/v1/logs"))
+                .header(http::header::AUTHORIZATION, "Bearer external-fixture")
+                .body(bytes::Bytes::from_static(b"fixture"))
+                .unwrap();
+            assert!(transport.send_bytes(request).await.is_err());
+        }
+        assert_eq!(state.exchanges.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            *state.deliveries.lock().unwrap(),
+            ["Bearer external-fixture", "Bearer external-fixture"]
+        );
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn concurrent_stale_rejections_share_one_replacement() {
+        use opentelemetry_http::HttpClient;
+        let state = Fixture {
+            clock: Arc::new(AtomicI64::new(1_800_000_000)),
+            exchanges: Arc::new(AtomicUsize::new(0)),
+            deliveries: Arc::new(Mutex::new(Vec::new())),
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let app = Router::new()
+            .route("/v1/identity/exchange", post(exchange))
+            .route(
+                "/v1/logs",
+                post(
+                    move |State(state): State<Fixture>, headers: http::HeaderMap| {
+                        let barrier = barrier.clone();
+                        async move {
+                            let token = headers[http::header::AUTHORIZATION]
+                                .to_str()
+                                .unwrap()
+                                .to_owned();
+                            state.deliveries.lock().unwrap().push(token.clone());
+                            if token == "Bearer bounded-0" {
+                                barrier.wait().await;
+                                StatusCode::UNAUTHORIZED
+                            } else {
+                                StatusCode::OK
+                            }
+                        }
+                    },
+                ),
+            )
+            .with_state(state.clone());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let clock = state.clock.clone();
+        let credentials = RuntimeCredentials::new(
+            RuntimeCredentialConfig {
+                manager_url: format!("http://{address}"),
+                audience: "test-manager".into(),
+                deployment_id: "deployment-one".into(),
+                purpose: json!({"type":"telemetry"}),
+            },
+            Arc::new(Proof),
+        )
+        .unwrap()
+        .with_clock(Arc::new(move || {
+            chrono::DateTime::from_timestamp(clock.load(Ordering::SeqCst), 0).unwrap()
+        }));
+        let transport = IdentityHttpClient {
+            client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
+            credentials: Arc::new(credentials),
+            runtime: tokio::runtime::Handle::current(),
+        };
+        let request = || {
+            http::Request::post(format!("http://{address}/v1/logs"))
+                .body(bytes::Bytes::from_static(b"fixture"))
+                .unwrap()
+        };
+        let (one, two) = tokio::join!(
+            transport.send_bytes(request()),
+            transport.send_bytes(request())
+        );
+        assert_eq!(one.unwrap().status(), StatusCode::OK);
+        assert_eq!(two.unwrap().status(), StatusCode::OK);
+        assert_eq!(state.exchanges.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            *state.deliveries.lock().unwrap(),
+            [
+                "Bearer bounded-0",
+                "Bearer bounded-0",
+                "Bearer bounded-1",
+                "Bearer bounded-1"
+            ]
+        );
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn external_export_retains_its_auth_without_receiving_manager_credential() {
+        let state = Fixture {
+            clock: Arc::new(AtomicI64::new(1_800_000_000)),
+            exchanges: Arc::new(AtomicUsize::new(0)),
+            deliveries: Arc::new(Mutex::new(Vec::new())),
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/v1/logs", post(logs))
+            .with_state(state.clone());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let credentials = RuntimeCredentials::new(
+            RuntimeCredentialConfig {
+                manager_url: "https://manager.example".into(),
+                audience: "test-manager".into(),
+                deployment_id: "deployment-one".into(),
+                purpose: json!({"type":"telemetry"}),
+            },
+            Arc::new(Proof),
+        )
+        .unwrap();
+        let config = OtlpConfig {
+            endpoint: format!("http://{address}/v1/logs"),
+            headers: HashMap::from([("authorization".into(), "Bearer external-service".into())]),
+            service_name: "test-worker".into(),
+            service_version: "1".into(),
+        };
+        let provider =
+            build_otlp_provider_with_identity(&config, Some(Arc::new(credentials))).unwrap();
+        emit_to_provider(&provider, "stdout", "external log", 0, false);
+        force_flush_provider(provider.clone()).await.unwrap();
+        assert_eq!(
+            *state.deliveries.lock().unwrap(),
+            ["Bearer external-service"]
+        );
+        tokio::task::spawn_blocking(move || provider.shutdown().unwrap())
+            .await
+            .unwrap();
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn actual_log_exports_refresh_authorization_without_restarting_provider() {
+        let state = Fixture {
+            clock: Arc::new(AtomicI64::new(1_800_000_000)),
+            exchanges: Arc::new(AtomicUsize::new(0)),
+            deliveries: Arc::new(Mutex::new(Vec::new())),
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/v1/identity/exchange", post(exchange))
+            .route("/v1/logs", post(logs))
+            .with_state(state.clone());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let clock = state.clock.clone();
+        let credentials = RuntimeCredentials::new(
+            RuntimeCredentialConfig {
+                manager_url: format!("http://{address}"),
+                audience: "test-manager".into(),
+                deployment_id: "deployment-one".into(),
+                purpose: json!({"type":"telemetry"}),
+            },
+            Arc::new(Proof),
+        )
+        .unwrap()
+        .with_clock(Arc::new(move || {
+            chrono::DateTime::from_timestamp(clock.load(Ordering::SeqCst), 0).unwrap()
+        }));
+        let config = OtlpConfig {
+            endpoint: format!("http://{address}/v1/logs"),
+            headers: HashMap::from([(
+                "authorization".into(),
+                "Bearer legacy-must-not-be-used".into(),
+            )]),
+            service_name: "test-worker".into(),
+            service_version: "1".into(),
+        };
+        let provider =
+            build_otlp_provider_with_identity(&config, Some(Arc::new(credentials))).unwrap();
+        emit_to_provider(&provider, "stdout", "first log", 0, false);
+        force_flush_provider(provider.clone()).await.unwrap();
+        state.clock.store(1_800_000_100, Ordering::SeqCst);
+        emit_to_provider(&provider, "stdout", "second log", 0, false);
+        force_flush_provider(provider.clone()).await.unwrap();
+        assert_eq!(state.exchanges.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            *state.deliveries.lock().unwrap(),
+            ["Bearer bounded-0", "Bearer bounded-1"]
+        );
+        tokio::task::spawn_blocking(move || provider.shutdown().unwrap())
+            .await
+            .unwrap();
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
+    #[tokio::test]
+    async fn actual_protobuf_export_recovers_immediately_after_rejection() {
+        let state = Fixture {
+            clock: Arc::new(AtomicI64::new(1_800_000_000)),
+            exchanges: Arc::new(AtomicUsize::new(0)),
+            deliveries: Arc::new(Mutex::new(Vec::new())),
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app =
+            Router::new()
+                .route("/v1/identity/exchange", post(exchange))
+                .route(
+                    "/v1/logs",
+                    post(
+                        |State(state): State<Fixture>,
+                         headers: http::HeaderMap,
+                         body: bytes::Bytes| async move {
+                            assert!(!body.is_empty());
+                            assert_eq!(
+                                headers[http::header::CONTENT_TYPE],
+                                "application/x-protobuf"
+                            );
+                            let token = headers[http::header::AUTHORIZATION]
+                                .to_str()
+                                .unwrap()
+                                .to_owned();
+                            state.deliveries.lock().unwrap().push(token.clone());
+                            if token == "Bearer bounded-0" {
+                                StatusCode::UNAUTHORIZED
+                            } else {
+                                StatusCode::OK
+                            }
+                        },
+                    ),
+                )
+                .with_state(state.clone());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let clock = state.clock.clone();
+        let credentials = RuntimeCredentials::new(
+            RuntimeCredentialConfig {
+                manager_url: format!("http://{address}"),
+                audience: "test-manager".into(),
+                deployment_id: "deployment-one".into(),
+                purpose: json!({"type":"telemetry"}),
+            },
+            Arc::new(Proof),
+        )
+        .unwrap()
+        .with_clock(Arc::new(move || {
+            chrono::DateTime::from_timestamp(clock.load(Ordering::SeqCst), 0).unwrap()
+        }));
+        let config = OtlpConfig {
+            endpoint: format!("http://{address}/v1/logs"),
+            headers: HashMap::from([(
+                "authorization".into(),
+                "Bearer legacy-must-not-be-used".into(),
+            )]),
+            service_name: "test-worker".into(),
+            service_version: "1".into(),
+        };
+        let provider =
+            build_otlp_provider_with_identity(&config, Some(Arc::new(credentials))).unwrap();
+        emit_to_provider(&provider, "stdout", "first log", 0, false);
+        force_flush_provider(provider.clone()).await.unwrap();
+        emit_to_provider(&provider, "stdout", "second log", 0, false);
+        force_flush_provider(provider.clone()).await.unwrap();
+        assert_eq!(state.exchanges.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            *state.deliveries.lock().unwrap(),
+            ["Bearer bounded-0", "Bearer bounded-1", "Bearer bounded-1"]
+        );
+        tokio::task::spawn_blocking(move || provider.shutdown().unwrap())
+            .await
+            .unwrap();
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
+}

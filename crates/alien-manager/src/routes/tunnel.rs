@@ -93,7 +93,10 @@ async fn connect(State(state): State<AppState>, mut request: Request) -> Respons
         Ok(None) => return ErrorData::not_found_deployment(&deployment_id).into_response(),
         Err(e) => return e.into_response(),
     };
-    if !state.authz.can_sync_deployment(&subject, &deployment) {
+    if !state
+        .authz
+        .can_connect_operator_tunnel(&subject, &deployment)
+    {
         return ErrorData::forbidden("Only the deployment's Operator can open its tunnel")
             .into_response();
     }
@@ -129,22 +132,37 @@ async fn connect(State(state): State<AppState>, mut request: Request) -> Respons
     };
     let accept = derive_accept_key(key.as_bytes());
 
+    let deadline = match state.auth_validator.authority_deadline(&subject) {
+        Ok(deadline) => deadline,
+        Err(error) => return error.into_response(),
+    };
     let on_upgrade = hyper::upgrade::on(&mut request);
     let registry = registry(&state).clone();
     tokio::spawn(async move {
-        let upgraded = match on_upgrade.await {
-            Ok(upgraded) => upgraded,
-            Err(e) => {
-                warn!(deployment_id = %deployment_id, error = %e, "Tunnel upgrade failed");
-                return;
+        let connection = async {
+            let upgraded = match on_upgrade.await {
+                Ok(upgraded) => upgraded,
+                Err(e) => {
+                    warn!(deployment_id = %deployment_id, error = %e, "Tunnel upgrade failed");
+                    return;
+                }
+            };
+            let ws =
+                WebSocketStream::from_raw_socket(TokioIo::new(upgraded), Role::Server, None).await;
+            if let Err(e) = registry
+                .serve(deployment_id.clone(), websocket_io(ws))
+                .await
+            {
+                debug!(deployment_id = %deployment_id, error = %e, "Tunnel connection ended");
             }
         };
-        let ws = WebSocketStream::from_raw_socket(TokioIo::new(upgraded), Role::Server, None).await;
-        if let Err(e) = registry
-            .serve(deployment_id.clone(), websocket_io(ws))
-            .await
-        {
-            debug!(deployment_id = %deployment_id, error = %e, "Tunnel connection ended");
+        if let Some(deadline) = deadline {
+            // Includes upgrade and handshake time. Dropping serve closes the
+            // transport and removes its registration, including active streams.
+            let remaining = (deadline - chrono::Utc::now()).to_std().unwrap_or_default();
+            let _ = tokio::time::timeout(remaining, connection).await;
+        } else {
+            connection.await;
         }
     });
 
