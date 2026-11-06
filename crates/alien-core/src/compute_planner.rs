@@ -2840,36 +2840,96 @@ mod tests {
             max_http_p95_latency_ms: None,
         });
 
+        // Three replicas at most, one machine each, plus one for a rolling update.
         let plan = plan_compute(&stack, Platform::Aws, None).expect("plan should build");
         let pool = &plan.pools[0];
         assert_eq!(
             pool.scale,
             CapacityGroupScalePolicy::Autoscale {
                 min: range(1, 100, 1),
-                max: range(1, 100, 3),
+                max: range(1, 100, 4),
             }
         );
         assert_eq!(
             (pool.recommended.min_size(), pool.recommended.max_size()),
-            (1, 3)
+            (1, 4)
         );
+        assert!(pool.errors.is_empty());
+    }
 
-        // Workloads that never scale get a fixed recommendation, but either mode stays
-        // allowed: replica counts change between releases while the saved choice stays.
+    /// A one-replica container fills its one machine, so a release has nowhere to start the
+    /// new replica before stopping the old one. The default pool autoscales 1-2 so it can, on
+    /// the same machine type: the extra machine is only there during a release.
+    #[test]
+    fn generated_pool_has_room_to_start_a_new_replica_before_stopping_the_old_one() {
         let plan =
             plan_compute(&stack_with_container(), Platform::Aws, None).expect("plan should build");
+        let pool = &plan.pools[0];
         assert_eq!(
-            plan.pools[0].scale,
+            pool.scale,
             CapacityGroupScalePolicy::Autoscale {
                 min: range(1, 100, 1),
-                max: range(1, 100, 1),
+                max: range(1, 100, 2),
             }
         );
+        assert_eq!(
+            (pool.recommended.min_size(), pool.recommended.max_size()),
+            (1, 2)
+        );
         assert!(matches!(
-            plan.pools[0].recommended,
+            pool.recommended,
+            ComputePoolSelection::Autoscale { .. }
+        ));
+        assert!(pool.errors.is_empty());
+
+        // A stateful container replaces in place, so its pool gets no extra machine.
+        let mut stateful = stack_with_container();
+        stateful
+            .resources
+            .get_mut("api")
+            .and_then(|entry| entry.config.downcast_mut::<Container>())
+            .expect("test stack should contain a container")
+            .stateful = true;
+        let stateful_plan =
+            plan_compute(&stateful, Platform::Aws, None).expect("plan should build");
+        let stateful_pool = &stateful_plan.pools[0];
+        assert!(matches!(
+            stateful_pool.recommended,
             ComputePoolSelection::Fixed { machines: 1, .. }
         ));
-        assert!(plan.pools[0].errors.is_empty());
+
+        // The extra machine doesn't change the machine type: both pools fit one replica per
+        // machine on the same type.
+        assert!(pool.recommended.machine().is_some());
+        assert_eq!(
+            pool.recommended.machine(),
+            stateful_pool.recommended.machine()
+        );
+
+        // A saved choice is the installer's cost bound and stays as chosen.
+        let saved = ComputeSettings {
+            containers: Default::default(),
+            pools: [(
+                "general".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 1,
+                    machine: pool.recommended.machine().map(str::to_string),
+                    failure_domains: None,
+                    data_disk_gib: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let saved_plan = plan_compute(&stack_with_container(), Platform::Aws, Some(&saved))
+            .expect("plan should build");
+        assert_eq!(
+            (
+                saved_plan.pools[0].selected.min_size(),
+                saved_plan.pools[0].selected.max_size()
+            ),
+            (1, 1)
+        );
     }
 
     #[test]
