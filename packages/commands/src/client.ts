@@ -360,7 +360,7 @@ export class CommandsClient {
         async connection => {
           const url = this.buildManagerUrl(connection.managerUrl, path)
           const headers: Record<string, string> = { Authorization: `Bearer ${connection.token}` }
-          const init: RequestInit = { method, headers }
+          const init: RequestInit = { method, headers, redirect: "error" }
           if (options.body !== undefined) {
             headers["Content-Type"] = "application/json"
             init.body = JSON.stringify(options.body)

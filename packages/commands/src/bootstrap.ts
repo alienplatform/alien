@@ -162,6 +162,13 @@ export class HostedCommandConnectionProvider implements CommandConnectionProvide
     this.refreshInFlight = refresh
     try {
       const connection = await refresh
+      const endpoint = managerCommandsUrl(connection.managerUrl)
+      if (this.current && endpoint !== managerCommandsUrl(this.current.managerUrl)) {
+        throw invalidConfig(
+          "managerUrl",
+          "The selected command instance changed. Create a new connection after confirming the deployment target; pending inputs will not be retried at another destination.",
+        )
+      }
       this.current = connection
       return connection
     } finally {
@@ -186,6 +193,7 @@ export class HostedCommandConnectionProvider implements CommandConnectionProvide
     try {
       response = await this.fetchImpl(url, {
         method: "POST",
+        redirect: "error",
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
           "Content-Type": "application/json",
@@ -266,6 +274,12 @@ export function managerCommandsUrl(managerUrl: string): string {
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw invalidConfig("managerUrl", "managerUrl must use HTTP or HTTPS")
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw invalidConfig("managerUrl", "managerUrl must not contain credentials, query, or fragment")
+  }
+  if (url.protocol === "http:" && !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) {
+    throw invalidConfig("managerUrl", "Non-local command instances require HTTPS")
   }
   const basePath = url.pathname.replace(/\/+$/, "")
   url.pathname = `${basePath}/v1`
