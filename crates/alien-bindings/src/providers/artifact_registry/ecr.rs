@@ -310,16 +310,29 @@ impl EcrArtifactRegistry {
                     }
                     return Ok(true);
                 }
-                if response
-                    .failures
-                    .iter()
-                    .any(|failure| failure.failure_code != "ImageNotFound")
-                {
-                    return Err(AlienError::new(ErrorData::RegistryReplicaNotReady {
-                        repository: repository.into(),
-                        region: region.into(),
-                        details: "regional image lookup refused".into(),
-                    }));
+                for failure in response.failures {
+                    match failure.failure_code.as_str() {
+                        "ImageNotFound" => {}
+                        "UpstreamTooManyRequests" | "UpstreamUnavailable" => {
+                            return Err(AlienError::new(ErrorData::RegistryReplicaNotReady {
+                                repository: repository.into(),
+                                region: region.into(),
+                                details: "regional image provider is temporarily unavailable"
+                                    .into(),
+                            }))
+                        }
+                        "UpstreamAccessDenied" | "KmsError" => {
+                            return Err(AlienError::new(ErrorData::RegionalImageAccessDenied {
+                                operation: "read regional image and its encryption key".into(),
+                            }))
+                        }
+                        _ => {
+                            return Err(AlienError::new(ErrorData::RegionalImageInvalid {
+                                reason: "registry refused the immutable regional image identity"
+                                    .into(),
+                            }))
+                        }
+                    }
                 }
             }
             Err(error)

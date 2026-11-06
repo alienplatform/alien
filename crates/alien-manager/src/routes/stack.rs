@@ -2186,7 +2186,6 @@ mod setup_update_authorization_tests {
             environment_info: None,
             runtime_metadata: Some(RuntimeMetadata {
                 prepared_stack: Some(prepared_stack),
-                worker_image_resolutions: Vec::new(),
                 last_synced_env_vars_hash: Some("env-hash".to_string()),
                 registry_access_granted: true,
                 ..RuntimeMetadata::default()
