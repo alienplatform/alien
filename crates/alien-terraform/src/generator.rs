@@ -1899,7 +1899,12 @@ fn signing_blocks(
     match target {
         TerraformTarget::Aws => Ok([
             vec![fingerprint_variable],
-            aws_verifier_blocks(pins, management_label, verifier_machine_network)?,
+            aws_verifier_blocks(
+                pins,
+                management_label,
+                verifier_machine_network,
+                signing.private_input_custody || signing.private_machine_api_url.is_some(),
+            )?,
             vec![
                 resource_block(
                     "aws_ssm_parameter",
@@ -1994,6 +1999,7 @@ fn aws_verifier_blocks(
     pins: &alien_core::SetupPins,
     management_label: Option<&str>,
     machine_network: Option<Expression>,
+    private_custody: bool,
 ) -> Result<Vec<Block>> {
     let missing = |what: &str| {
         AlienError::new(ErrorData::OperationNotSupported {
@@ -2132,7 +2138,7 @@ fn aws_verifier_blocks(
                 attr(
                     "policy",
                     crate::emitters::aws::helpers::jsonencode_policy_value(
-                        signing_limits::aws_management_limits(prefix, account, region),
+                        signing_limits::aws_management_limits_with_custody(prefix, account, region, private_custody),
                     ),
                 ),
             ],

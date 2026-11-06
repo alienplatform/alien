@@ -695,7 +695,6 @@ pub fn generate_cloudformation_template_with_profile(
     apply_network_iam_dependencies(stack, &emitted_resource_ids, &mut template);
     add_sandbox_gateway_replica_secret(&mut template, stack, options.target);
     add_signing_settings(&mut template, &stack_settings_value, options.target)?;
-    add_private_tls_writer(&mut template, stack, &stack_settings_value)?;
     consolidate_role_inline_policies(&mut template)?;
     // After consolidation, so the count of managed policies on the management role is final.
     let verifier_machine_network = if stack_settings_value.signing.is_some() {
@@ -2022,97 +2021,6 @@ fn add_signing_settings(
     Ok(())
 }
 
-/// Customer setup alone grants the private instance permission to publish the
-/// exact TLS selectors carried in the signed stack. No hosted credential or
-/// general deployment-management role is trusted here.
-fn add_private_tls_writer(
-    template: &mut CfTemplate,
-    stack: &Stack,
-    settings: &StackSettings,
-) -> Result<()> {
-    if !settings
-        .signing
-        .as_ref()
-        .is_some_and(|signing| signing.private_machine_api_url.is_some())
-    {
-        return Ok(());
-    }
-    let mut names = Vec::new();
-    for (id, entry) in stack.resources() {
-        let public = entry.config.downcast_ref::<alien_core::Container>().is_some_and(|value| !value.public_endpoints.is_empty())
-            || entry.config.downcast_ref::<alien_core::Daemon>().is_some_and(|value| !value.public_endpoints.is_empty());
-        if public {
-            names.extend(alien_core::release_statement::private_tls_input_names(id));
-        }
-    }
-    if names.is_empty() {
-        return Ok(());
-    }
-    const PRINCIPAL: &str = "PrivateTlsWriterPrincipalArn";
-    template.parameters.insert(PRINCIPAL.to_string(), CfParameter {
-        parameter_type: "String".to_string(),
-        description: Some("Exact workload role ARN of your private instance. Use its dedicated ambient runtime identity, never the hosted deployment-management role.".to_string()),
-        default: None, allowed_values: None,
-        allowed_pattern: Some("^arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$".to_string()),
-        constraint_description: Some("An exact private instance IAM role ARN is required.".to_string()),
-        min_length: None, max_length: Some(2048), min_value: None, max_value: None, no_echo: None,
-    });
-    let prefix = "${AWS::StackName}";
-    let role_name =
-        alien_permissions::generators::signing_limits::aws_private_tls_writer_name(prefix);
-    let external_id = "private-tls:${AWS::AccountId}:${AWS::StackName}";
-    let mut role = CfResource::new(
-        "PrivateTlsWriterRole".to_string(),
-        "AWS::IAM::Role".to_string(),
-    );
-    role.properties
-        .insert("RoleName".to_string(), CfExpression::sub(&role_name));
-    role.properties.insert(
-        "AssumeRolePolicyDocument".to_string(),
-        sub_json(json!({
-            "Version": "2012-10-17",
-            "Statement": [{ "Effect": "Allow", "Action": "sts:AssumeRole",
-                "Principal": { "AWS": "${PrivateTlsWriterPrincipalArn}" },
-                "Condition": { "StringEquals": { "sts:ExternalId": external_id } }
-            }]
-        })),
-    );
-    let resources: Vec<String> = names.iter().map(|name| format!("arn:aws:ssm:${{AWS::Region}}:${{AWS::AccountId}}:parameter/signed/{prefix}/inputs/{name}")).collect();
-    role.properties.insert(
-        "Policies".to_string(),
-        CfExpression::list([CfExpression::object([
-            (
-                "PolicyName",
-                CfExpression::from("private-certificate-inputs"),
-            ),
-            (
-                "PolicyDocument",
-                sub_json(json!({ "Version": "2012-10-17", "Statement": [{
-                    "Effect": "Allow", "Action": "ssm:PutParameter", "Resource": resources
-                }]})),
-            ),
-        ])]),
-    );
-    role.properties
-        .insert("Tags".to_string(), setup_tags(&role_name));
-    insert_resource(template, role)?;
-    template.outputs.insert(
-        "PrivateTlsWriterRoleArn".to_string(),
-        output(
-            "Setup-owned private certificate writer role.",
-            CfExpression::sub(format!("arn:aws:iam::${{AWS::AccountId}}:role/{role_name}")),
-        ),
-    );
-    template.outputs.insert(
-        "PrivateTlsWriterExternalId".to_string(),
-        output(
-            "Install-scoped external ID required by the private certificate writer.",
-            CfExpression::sub(external_id),
-        ),
-    );
-    Ok(())
-}
-
 /// Logical IDs of the verifier and the management limits on a protected install.
 const VERIFIER_FUNCTION_ID: &str = "SigningVerifier";
 const VERIFIER_ROLE_ID: &str = "SigningVerifierRole";
@@ -2201,9 +2109,10 @@ fn add_verifier_and_limits(
         VERIFIER_FUNCTION_ID.to_string(),
         "AWS::Lambda::Function".to_string(),
     );
-    function
-        .properties
-        .insert("FunctionName".to_string(), CfExpression::sub(&verifier_name));
+    function.properties.insert(
+        "FunctionName".to_string(),
+        CfExpression::sub(&verifier_name),
+    );
     function.properties.insert(
         "Description".to_string(),
         CfExpression::from(
@@ -2274,7 +2183,9 @@ fn add_verifier_and_limits(
     );
     limits.properties.insert(
         "ManagedPolicyName".to_string(),
-        CfExpression::sub(alien_permissions::generators::signing_limits::aws_management_limits_name(prefix)),
+        CfExpression::sub(
+            alien_permissions::generators::signing_limits::aws_management_limits_name(prefix),
+        ),
     );
     limits.properties.insert(
         "Description".to_string(),
@@ -2284,9 +2195,16 @@ fn add_verifier_and_limits(
     );
     limits.properties.insert(
         "PolicyDocument".to_string(),
-        sub_json(alien_permissions::generators::signing_limits::aws_management_limits(
-            prefix, account, region,
-        )),
+        sub_json(
+            alien_permissions::generators::signing_limits::aws_management_limits_with_custody(
+                prefix,
+                account,
+                region,
+                settings.signing.as_ref().is_some_and(|signing| {
+                    signing.private_input_custody || signing.private_machine_api_url.is_some()
+                }),
+            ),
+        ),
     );
     limits.properties.insert(
         "Roles".to_string(),
@@ -2334,7 +2252,9 @@ fn refuse_unverifiable_code(template: &CfTemplate) -> Result<()> {
                 _ => None,
             };
             if !text.is_some_and(|text| text.contains("@sha256:")) {
-                return refuse(format!("resource '{id}' runs an image not pinned by digest"));
+                return refuse(format!(
+                    "resource '{id}' runs an image not pinned by digest"
+                ));
             }
         }
     }
@@ -2385,11 +2305,17 @@ fn verifier_machine_network(
         [
             (
                 "Subnets",
-                CfExpression::join("\",\"", crate::emitters::aws::helpers::private_subnet_ids_expr(&ctx)),
+                CfExpression::join(
+                    "\",\"",
+                    crate::emitters::aws::helpers::private_subnet_ids_expr(&ctx),
+                ),
             ),
             (
                 "Groups",
-                CfExpression::join("\",\"", crate::emitters::aws::helpers::security_group_ids_expr(&ctx)),
+                CfExpression::join(
+                    "\",\"",
+                    crate::emitters::aws::helpers::security_group_ids_expr(&ctx),
+                ),
             ),
         ],
     )))
@@ -5017,7 +4943,10 @@ mod unverifiable_code_tests {
         template.transform.clear();
         template.resources.insert(
             "Nested".to_string(),
-            CfResource::new("Nested".to_string(), "AWS::CloudFormation::Stack".to_string()),
+            CfResource::new(
+                "Nested".to_string(),
+                "AWS::CloudFormation::Stack".to_string(),
+            ),
         );
         assert!(reason(&template).contains("AWS::CloudFormation::Stack"));
     }

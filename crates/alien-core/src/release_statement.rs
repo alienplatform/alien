@@ -113,44 +113,31 @@ pub fn private_tls_input_names(resource: &str) -> [String; 2] {
     [format!("tls-{id}-cert"), format!("tls-{id}-key")]
 }
 
-/// Add signed file bindings only for an explicitly private release. The
-/// private certificate writer supplies the values; they are not release inputs
-/// uploaded to a control plane. An existing authored selector cannot shadow one.
-pub fn add_private_tls_inputs(stack: &mut Stack) -> Result<()> {
-    let resources: Vec<String> = stack
+/// Public HTTP resources whose certificates terminate at the cloud listener.
+/// Derive this list only from the verified signed stack, never a hosted request.
+pub fn private_tls_resource_ids(stack: &Stack) -> Vec<String> {
+    stack
         .resources()
         .filter_map(|(id, entry)| {
-            let public = entry
+            let endpoints = entry
                 .config
                 .downcast_ref::<Container>()
-                .is_some_and(|value| !value.public_endpoints.is_empty())
-                || entry
-                    .config
-                    .downcast_ref::<Daemon>()
-                    .is_some_and(|value| !value.public_endpoints.is_empty());
-            public.then(|| id.to_owned())
+                .map(|value| &value.public_endpoints)
+                .or_else(|| {
+                    entry
+                        .config
+                        .downcast_ref::<Daemon>()
+                        .map(|value| &value.public_endpoints)
+                });
+            endpoints
+                .is_some_and(|values| {
+                    values
+                        .iter()
+                        .any(|endpoint| matches!(endpoint.protocol, crate::ExposeProtocol::Http))
+                })
+                .then(|| id.clone())
         })
-        .collect();
-    for resource in resources {
-        let names = private_tls_input_names(&resource);
-        for (name, file, env) in [
-            (&names[0], "tls.crt", "ALIEN_MANAGED_TLS_CERT_FILE"),
-            (&names[1], "tls.key", "ALIEN_MANAGED_TLS_KEY_FILE"),
-        ] {
-            if stack.inputs.iter().any(|input| &input.id == name) {
-                return Err(statement_invalid(
-                    "a managed TLS input selector conflicts with an authored input",
-                ));
-            }
-            let input = serde_json::from_value(serde_json::json!({
-                "id": name, "kind": "secret", "providedBy": ["deployer"], "required": false,
-                "label": "Private managed TLS", "description": "Published by the setup-authorized private certificate writer",
-                "files": [{ "path": format!("/var/run/alien/managed-tls/{file}"), "targetResources": [resource], "envName": env }]
-            })).map_err(|_| statement_invalid("managed TLS input definition is invalid"))?;
-            stack.inputs.push(input);
-        }
-    }
-    Ok(())
+        .collect()
 }
 
 /// The `release/v2` body for `stack` on `platform`. Every image must be
@@ -688,44 +675,6 @@ mod tests {
         assert!(api.configurable_env.contains(&"LOG_LEVEL".to_string()));
         assert_eq!(body.configurable.inputs, vec!["logLevel".to_string()]);
         assert_eq!(signed_stack(&body, Platform::Aws).unwrap(), stack);
-    }
-
-    #[test]
-    fn private_tls_bindings_are_explicit_and_survive_signed_stack_verification() {
-        let mut stack = stack(&pinned());
-        assert!(release_body(Platform::Aws, &stack, &production())
-            .unwrap()
-            .workloads[0]
-            .secrets
-            .is_empty());
-        let mut container = container(&pinned());
-        container.public_endpoints.push(crate::PublicEndpoint {
-            name: "public".into(),
-            port: 8080,
-            protocol: crate::ExposeProtocol::Http,
-            host_label: None,
-            wildcard_subdomains: false,
-        });
-        stack.resources.get_mut("api").unwrap().config = Resource::new(container);
-        add_private_tls_inputs(&mut stack).unwrap();
-        let body = release_body(Platform::Aws, &stack, &production()).unwrap();
-        assert_eq!(body.workloads[0].secrets.len(), 2);
-        assert_eq!(
-            body.workloads[0].secrets[1].name,
-            private_tls_input_names("api")[1]
-        );
-        assert_eq!(
-            body.workloads[0].secrets[1].file_path.as_deref(),
-            Some("/var/run/alien/managed-tls/tls.key")
-        );
-        assert_eq!(signed_stack(&body, Platform::Aws).unwrap(), stack);
-        assert!(
-            add_private_tls_inputs(&mut stack).is_err(),
-            "authored selectors cannot shadow automatic TLS"
-        );
-        let mut changed = body;
-        changed.workloads[0].secrets[1].name = private_tls_input_names("other")[1].clone();
-        assert!(signed_stack(&changed, Platform::Aws).is_err());
     }
 
     #[test]

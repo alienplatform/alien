@@ -427,3 +427,94 @@ pub fn aws_machine_signing_policy(prefix: &str, account: &str, region: &str) -> 
         ],
     }
 }
+
+/// Setup-owned node access for private HTTP certificate custody. The resource
+/// list comes from the signed stack; no arbitrary input selector is accepted.
+/// ACM import authorization uses the documented request/resource tag keys:
+/// https://docs.aws.amazon.com/service-authorization/latest/reference/list_acm.html
+pub fn aws_private_tls_node_policy(
+    prefix: &str,
+    account: &str,
+    region: &str,
+    resources: &[String],
+) -> Value {
+    let parameters = |index: usize| -> Vec<String> {
+        resources
+            .iter().map(String::as_str)
+            .chain((!resources.is_empty()).then_some("__deployment__"))
+            .map(|resource| {
+                let names = alien_core::release_statement::private_tls_input_names(resource);
+                format!(
+                    "arn:aws:ssm:{region}:{account}:parameter/signed/{prefix}/inputs/{}",
+                    names[index]
+                )
+            })
+            .collect()
+    };
+    let certificates = format!("arn:aws:acm:{region}:{account}:certificate/*");
+    json!({"Version": "2012-10-17", "Statement": [
+        {"Sid": "CreatePrivateCertificateKeysOnce", "Effect": "Allow",
+         "Action": "ssm:PutParameter", "Resource": parameters(1),
+         "Condition": {"StringEquals": {"ssm:Overwrite": "false"}}},
+        {"Sid": "PublishPrivateCertificateState", "Effect": "Allow",
+         "Action": ["ssm:GetParameter", "ssm:PutParameter"], "Resource": resources.iter().map(|resource| {
+             let name = alien_core::release_statement::private_tls_input_names(resource)[0].clone();
+             format!("arn:aws:ssm:{region}:{account}:parameter/signed/{prefix}/certificates/{name}")
+         }).collect::<Vec<_>>()},
+        {"Sid": "ImportPrivateCertificates", "Effect": "Allow",
+         "Action": ["acm:ImportCertificate", "acm:AddTagsToCertificate"], "Resource": certificates,
+         "Condition": {"StringEquals": {"aws:RequestTag/deployment": prefix,
+            "aws:RequestTag/resource": resources, "aws:RequestTag/private-custody": "true"}}},
+        {"Sid": "DiscoverPrivateCertificateImports", "Effect": "Allow",
+         "Action": "acm:ListCertificates", "Resource": "*",
+         "Condition": {"StringEquals": {"aws:RequestedRegion": region}}},
+        {"Sid": "MaintainOwnPrivateCertificates", "Effect": "Allow",
+         "Action": ["acm:ImportCertificate", "acm:DescribeCertificate", "acm:GetCertificate", "acm:ListTagsForCertificate", "acm:DeleteCertificate"],
+         "Resource": certificates,
+         "Condition": {"StringEquals": {"aws:ResourceTag/deployment": prefix,
+            "aws:ResourceTag/resource": resources, "aws:ResourceTag/private-custody": "true"}}}
+    ]})
+}
+
+/// Private setup keeps certificate key ingress and input reads out of the
+/// hosted management identity even if another attached policy allows them.
+pub fn aws_private_tls_management_limits(prefix: &str, account: &str, region: &str) -> Value {
+    json!({"Version": "2012-10-17", "Statement": [
+        {"Sid": "PrivateCertificateKeysStayOnNodes", "Effect": "Deny",
+         "Action": ["acm:ImportCertificate", "acm:ExportCertificate", "acm:AddTagsToCertificate", "acm:RemoveTagsFromCertificate"],
+         "Resource": format!("arn:aws:acm:{region}:{account}:certificate/*")},
+        {"Sid": "ReadPrivateCertificatePublication", "Effect": "Allow",
+         "Action": "ssm:GetParameter",
+         "Resource": format!("arn:aws:ssm:{region}:{account}:parameter/signed/{prefix}/certificates/*")},
+        {"Sid": "OnlyNodesPublishPrivateCertificates", "Effect": "Deny",
+         "Action": ["ssm:PutParameter", "ssm:DeleteParameter", "ssm:DeleteParameters"],
+         "Resource": format!("arn:aws:ssm:{region}:{account}:parameter/signed/{prefix}/certificates/*")},
+        {"Sid": "NoPrivateInputAccess", "Effect": "Deny",
+         "Action": ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory", "ssm:PutParameter", "ssm:DeleteParameter", "ssm:DeleteParameters"],
+         "Resource": [format!("arn:aws:ssm:{region}:{account}:parameter/signed/{prefix}/inputs"), format!("arn:aws:ssm:{region}:{account}:parameter/signed/{prefix}/inputs/*")]}
+    ]})
+}
+
+/// Merge the private-only denies into the existing protected management limit.
+pub fn aws_management_limits_with_custody(
+    prefix: &str,
+    account: &str,
+    region: &str,
+    private: bool,
+) -> Value {
+    let mut limits = aws_management_limits(prefix, account, region);
+    if private {
+        let extra = aws_private_tls_management_limits(prefix, account, region);
+        limits["Statement"]
+            .as_array_mut()
+            .expect("generated management statements")
+            .extend(
+                extra["Statement"]
+                    .as_array()
+                    .expect("generated private statements")
+                    .iter()
+                    .cloned(),
+            );
+    }
+    limits
+}
