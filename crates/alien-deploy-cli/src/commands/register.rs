@@ -1,12 +1,13 @@
 //! Register an externally-provisioned stack with a manager.
 //!
 //! Reads CloudFormation Stack Outputs via `DescribeStacks` from the
-//! deployer's local AWS credentials. Hosted registration goes through the
-//! Platform import boundary; an explicit manager URL selects standalone mode.
+//! deployer's local AWS credentials, or a Terraform module's outputs via
+//! `terraform output -json`. Hosted registration goes through the Platform
+//! import boundary; an explicit manager URL selects standalone mode.
 //!
-//! Future flows (Terraform `alien_deployment` provider, Helm boot path)
-//! land alongside under the same subcommand surface keyed on
-//! `--import <kind>`.
+//! A protected Terraform module carries no registration provider (that code
+//! would run with the customer's credentials during `terraform apply`), so it
+//! is registered this way after apply.
 
 use std::collections::HashMap;
 
@@ -36,7 +37,13 @@ use super::up::resolve_base_url_option;
         --base-url https://api.alien.dev \\
         --token dg_... \\
         --input region=us-east-1 \\
-        --input-json replicas=3"
+        --input-json replicas=3
+
+    # Register a Terraform module after `terraform apply` in ./setup
+    alien-deploy register \\
+        --import terraform \\
+        --dir ./setup \\
+        --token dg_..."
 )]
 pub struct RegisterArgs {
     /// Source the resolved import payload comes from.
@@ -48,9 +55,19 @@ pub struct RegisterArgs {
     #[arg(long)]
     pub stack_name: Option<String>,
 
+    /// Directory `terraform apply` ran in, whose outputs are the module's
+    /// (required when --import terraform).
+    #[arg(long)]
+    pub dir: Option<std::path::PathBuf>,
+
+    /// Terraform command that reads the outputs (`terraform` or `tofu`).
+    #[arg(long, default_value = "terraform")]
+    pub terraform_command: String,
+
     /// Deployment name. Must be unique within the deployment group; the
     /// manager returns 409 on collision. Defaults to the source-specific
-    /// natural name (CloudFormation: `--stack-name`).
+    /// natural name (CloudFormation: `--stack-name`; Terraform: the
+    /// `deployment_name` output, which this must match when both are set).
     #[arg(long)]
     pub name: Option<String>,
 
@@ -92,6 +109,7 @@ pub struct RegisterArgs {
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportKind {
     Cloudformation,
+    Terraform,
 }
 
 pub async fn register_command(
@@ -100,6 +118,7 @@ pub async fn register_command(
 ) -> Result<()> {
     match args.import {
         ImportKind::Cloudformation => register_cloudformation(args, embedded_config).await,
+        ImportKind::Terraform => register_terraform(args, embedded_config).await,
     }
 }
 
@@ -127,10 +146,84 @@ async fn register_cloudformation(
     )?;
 
     let outputs = fetch_cloudformation_outputs(&args.region, &stack_name).await?;
-    let request = build_import_request(&outputs, &deployment_name, &stack_name, input_values)?;
+    let request = build_import_request(
+        &outputs,
+        ImportSourceKind::CloudFormation,
+        &deployment_name,
+        &stack_name,
+        input_values,
+    )?;
+    send_registration(&args, &target, &request, &format!("stack '{stack_name}'")).await
+}
 
+async fn register_terraform(
+    args: RegisterArgs,
+    embedded_config: Option<&DeployCliConfig>,
+) -> Result<()> {
+    let dir = args.dir.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "--dir is required for --import terraform".to_string(),
+        })
+    })?;
+    // The module's outputs carry the deployer's input answers, as its registration resource
+    // sent them; a second source could disagree with what the module was applied with.
+    if !args.input_values.is_empty() || !args.json_input_values.is_empty() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "--input and --input-json don't apply to --import terraform: the module's deployment_input_values output carries the inputs it was applied with".to_string(),
+        }));
+    }
+    collect_registration_inputs(&[], &[], &args.secret_input_files)?;
+    let target = resolve_registration_target(
+        args.manager_url.as_deref(),
+        args.base_url.as_ref(),
+        embedded_config,
+    )?;
+
+    let outputs = read_terraform_outputs(&args.terraform_command, &dir)?;
+    let deployment_name = match (&args.name, &outputs.deployment_name) {
+        (Some(flag), Some(output)) if flag != output => {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: format!(
+                    "--name '{flag}' differs from the module's deployment_name output '{output}'"
+                ),
+            }));
+        }
+        (Some(name), _) | (None, Some(name)) => name.clone(),
+        (None, None) => {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: "the module has no deployment_name output; pass --name".to_string(),
+            }));
+        }
+    };
+    let input_values = match &outputs.input_values {
+        None => HashMap::new(),
+        Some(JsonValue::Object(values)) => values.clone().into_iter().collect(),
+        Some(_) => {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: "deployment_input_values output is not a JSON object".to_string(),
+            }));
+        }
+    };
+    let source = format!("module in {}", dir.display());
+    let request = build_import_request(
+        &outputs,
+        ImportSourceKind::Terraform,
+        &deployment_name,
+        &source,
+        input_values,
+    )?;
+    send_registration(&args, &target, &request, &source).await
+}
+
+/// Print the request (`--dry-run`) or send it where the deployment registers.
+async fn send_registration(
+    args: &RegisterArgs,
+    target: &RegistrationTarget,
+    request: &StackImportRequest,
+    source: &str,
+) -> Result<()> {
     if args.dry_run {
-        let body = serialize_registration_request(&target, &request)?;
+        let body = serialize_registration_request(target, request)?;
         let json = serde_json::to_string_pretty(&body)
             .into_alien_error()
             .context(ErrorData::JsonError {
@@ -141,8 +234,8 @@ async fn register_cloudformation(
         return Ok(());
     }
 
-    let request_body = serialize_registration_request(&target, &request)?;
-    let (url, operation, destination) = match &target {
+    let request_body = serialize_registration_request(target, request)?;
+    let (url, operation, destination) = match target {
         RegistrationTarget::Platform(base_url) => (
             format!("{base_url}/v1/deployments/import"),
             "POST /v1/deployments/import",
@@ -187,7 +280,7 @@ async fn register_cloudformation(
         }));
     }
 
-    println!("Registered stack '{stack_name}' through {destination} at {url}");
+    println!("Registered {source} through {destination} at {url}");
     println!("{body}");
     Ok(())
 }
@@ -365,12 +458,13 @@ fn insert_registration_input(
     Ok(())
 }
 
-/// Resolved CloudFormation Stack Outputs needed to assemble a
-/// `StackImportRequest`. Mirrors the keys emitted by
-/// `alien-cloudformation`'s `RegistrationMode::OutputsFallback` /
-/// `Both`.
+/// Resolved setup outputs needed to assemble a `StackImportRequest`. Mirrors
+/// the CloudFormation Stack Outputs `alien-cloudformation` emits for
+/// `RegistrationMode::OutputsFallback` / `Both`, and the Terraform module
+/// outputs of the same names in snake case (`DeploymentPlatform` is
+/// `deployment_platform`).
 #[derive(Debug, Default)]
-struct CfnOutputs {
+struct SetupOutputs {
     source_kind: Option<String>,
     platform: Option<String>,
     base_platform: Option<String>,
@@ -386,9 +480,13 @@ struct CfnOutputs {
     /// when chunking kicks in, or a single `DeploymentResources` output when
     /// the payload fits.
     resources_chunks: Vec<JsonValue>,
+    /// Terraform only: the deployment name the module was applied with.
+    deployment_name: Option<String>,
+    /// Terraform only: the deployer's input answers the module was applied with.
+    input_values: Option<JsonValue>,
 }
 
-async fn fetch_cloudformation_outputs(region: &str, stack_name: &str) -> Result<CfnOutputs> {
+async fn fetch_cloudformation_outputs(region: &str, stack_name: &str) -> Result<SetupOutputs> {
     let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .region(aws_config::Region::new(region.to_string()))
         .load()
@@ -419,69 +517,172 @@ async fn fetch_cloudformation_outputs(region: &str, stack_name: &str) -> Result<
             })
         })?;
 
-    let mut outputs = CfnOutputs::default();
-    let mut chunked: Vec<(usize, JsonValue)> = Vec::new();
+    let pairs = stack
+        .outputs
+        .iter()
+        .flatten()
+        .filter_map(|output| Some((output.output_key()?, output.output_value()?)));
+    collect_outputs(pairs)
+}
 
-    if let Some(stack_outputs) = &stack.outputs {
-        for output in stack_outputs {
-            let Some(key) = output.output_key() else {
-                continue;
-            };
-            let Some(value) = output.output_value() else {
-                continue;
-            };
-            match key {
-                "DeploymentSourceKind" => outputs.source_kind = Some(value.to_string()),
-                "DeploymentResourcePrefix" => {
-                    outputs.resource_prefix = Some(value.to_string());
-                }
-                "DeploymentPlatform" => outputs.platform = Some(value.to_string()),
-                "DeploymentBasePlatform" => outputs.base_platform = Some(value.to_string()),
-                "DeploymentRegion" => outputs.region = Some(value.to_string()),
-                "DeploymentSetupTarget" => outputs.setup_target = Some(value.to_string()),
-                "DeploymentSetupImportFormatVersion" => {
-                    let version = value.parse().map_err(|reason| {
-                        AlienError::new(ErrorData::ConfigurationError {
-                            message: format!(
-                                "DeploymentSetupImportFormatVersion output '{value}' is invalid: {reason}"
-                            ),
-                        })
-                    })?;
-                    outputs.setup_import_format_version = Some(version);
-                }
-                "DeploymentSetupFingerprint" => outputs.setup_fingerprint = Some(value.to_string()),
-                "DeploymentSetupFingerprintVersion" => {
-                    let version = value.parse().map_err(|reason| {
-                        AlienError::new(ErrorData::ConfigurationError {
-                            message: format!(
-                                "DeploymentSetupFingerprintVersion output '{value}' is invalid: {reason}"
-                            ),
-                        })
-                    })?;
-                    outputs.setup_fingerprint_version = Some(version);
-                }
-                "DeploymentManagementConfig" => {
-                    outputs.management_config = Some(parse_json_output(key, value)?);
-                }
-                "DeploymentStackSettings" => {
-                    outputs.stack_settings = Some(parse_json_output(key, value)?);
-                }
-                "DeploymentResources" => {
-                    chunked.push((0, parse_json_output(key, value)?));
-                }
-                other if other.starts_with("DeploymentResources") => {
-                    let suffix = &other["DeploymentResources".len()..];
-                    let index: usize = suffix.parse().unwrap_or(usize::MAX);
-                    chunked.push((index, parse_json_output(other, value)?));
-                }
-                _ => {}
+/// Collect outputs keyed by their CloudFormation names.
+fn collect_outputs<'a>(
+    pairs: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Result<SetupOutputs> {
+    let mut outputs = SetupOutputs::default();
+    let mut chunked: Vec<(usize, JsonValue)> = Vec::new();
+    for (key, value) in pairs {
+        match key {
+            "DeploymentSourceKind" => outputs.source_kind = Some(value.to_string()),
+            "DeploymentResourcePrefix" => {
+                outputs.resource_prefix = Some(value.to_string());
             }
+            "DeploymentPlatform" => outputs.platform = Some(value.to_string()),
+            "DeploymentBasePlatform" => outputs.base_platform = Some(value.to_string()),
+            "DeploymentRegion" => outputs.region = Some(value.to_string()),
+            "DeploymentSetupTarget" => outputs.setup_target = Some(value.to_string()),
+            "DeploymentSetupImportFormatVersion" => {
+                let version = value.parse().map_err(|reason| {
+                    AlienError::new(ErrorData::ConfigurationError {
+                        message: format!(
+                        "DeploymentSetupImportFormatVersion output '{value}' is invalid: {reason}"
+                    ),
+                    })
+                })?;
+                outputs.setup_import_format_version = Some(version);
+            }
+            "DeploymentSetupFingerprint" => outputs.setup_fingerprint = Some(value.to_string()),
+            "DeploymentSetupFingerprintVersion" => {
+                let version = value.parse().map_err(|reason| {
+                    AlienError::new(ErrorData::ConfigurationError {
+                        message: format!(
+                        "DeploymentSetupFingerprintVersion output '{value}' is invalid: {reason}"
+                    ),
+                    })
+                })?;
+                outputs.setup_fingerprint_version = Some(version);
+            }
+            "DeploymentManagementConfig" => {
+                outputs.management_config = Some(parse_json_output(key, value)?);
+            }
+            "DeploymentStackSettings" => {
+                outputs.stack_settings = Some(parse_json_output(key, value)?);
+            }
+            "DeploymentResources" => {
+                chunked.push((0, parse_json_output(key, value)?));
+            }
+            other if other.starts_with("DeploymentResources") => {
+                let suffix = &other["DeploymentResources".len()..];
+                let index: usize = suffix.parse().unwrap_or(usize::MAX);
+                chunked.push((index, parse_json_output(other, value)?));
+            }
+            "DeploymentName" => outputs.deployment_name = Some(value.to_string()),
+            "DeploymentInputValues" => {
+                outputs.input_values = Some(parse_json_output(key, value)?);
+            }
+            _ => {}
         }
     }
 
     chunked.sort_by_key(|(index, _value)| *index);
     outputs.resources_chunks = chunked.into_iter().map(|(_index, value)| value).collect();
     Ok(outputs)
+}
+
+/// Read the outputs of the Terraform root module in `dir` with `terraform output -json`.
+fn read_terraform_outputs(command: &str, dir: &std::path::Path) -> Result<SetupOutputs> {
+    let output = std::process::Command::new(command)
+        .arg(format!("-chdir={}", dir.display()))
+        .args(["output", "-json"])
+        .output()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!(
+                "could not run `{command} output -json` in {}",
+                dir.display()
+            ),
+        })?;
+    if !output.status.success() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "`{command} output -json` in {} failed ({}): {}",
+                dir.display(),
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        }));
+    }
+    terraform_outputs(&output.stdout)
+}
+
+/// Parse `terraform output -json` (`{"name": {"value": ..., "type": ..., "sensitive": ...}}`).
+/// Outputs keep their CloudFormation names in snake case, so both sources share one reader.
+fn terraform_outputs(json: &[u8]) -> Result<SetupOutputs> {
+    #[derive(serde::Deserialize)]
+    struct TerraformOutput {
+        value: JsonValue,
+    }
+    let outputs: std::collections::BTreeMap<String, TerraformOutput> = serde_json::from_slice(json)
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "parse terraform output -json".to_string(),
+            reason: "terraform output -json printed something other than its JSON map".to_string(),
+        })?;
+    if !outputs.contains_key("deployment_resource_prefix") {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "the Terraform outputs have no deployment_resource_prefix; run this in the directory `terraform apply` ran in, with the setup module as the root module".to_string(),
+        }));
+    }
+    let pairs = outputs
+        .into_iter()
+        .filter(|(name, _)| name.starts_with("deployment_"))
+        .map(|(name, output)| {
+            let value = match output.value {
+                JsonValue::String(text) => text,
+                other => other.to_string(),
+            };
+            (cloudformation_output_name(&name), value)
+        })
+        .collect::<Vec<_>>();
+    collect_outputs(
+        pairs
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    )
+}
+
+/// `deployment_setup_target` -> `DeploymentSetupTarget`.
+fn cloudformation_output_name(terraform_name: &str) -> String {
+    terraform_name
+        .split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            chars
+                .next()
+                .map(|first| first.to_ascii_uppercase().to_string() + chars.as_str())
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// The name an output has in `source`: `DeploymentPlatform` in CloudFormation,
+/// `deployment_platform` in Terraform.
+fn output_name(source: ImportSourceKind, cloudformation_name: &str) -> String {
+    match source {
+        ImportSourceKind::Terraform => {
+            let mut name = String::new();
+            for (index, ch) in cloudformation_name.chars().enumerate() {
+                if ch.is_ascii_uppercase() && index > 0 {
+                    name.push('_');
+                }
+                name.push(ch.to_ascii_lowercase());
+            }
+            name
+        }
+        ImportSourceKind::CloudFormation | ImportSourceKind::Helm => {
+            cloudformation_name.to_string()
+        }
+    }
 }
 
 fn parse_json_output(key: &str, value: &str) -> Result<JsonValue> {
@@ -493,33 +694,48 @@ fn parse_json_output(key: &str, value: &str) -> Result<JsonValue> {
         })
 }
 
+/// The import request a setup's outputs describe. `source` names the setup in errors.
 fn build_import_request(
-    outputs: &CfnOutputs,
+    outputs: &SetupOutputs,
+    source_kind: ImportSourceKind,
     deployment_name: &str,
-    stack_name: &str,
+    source: &str,
     input_values: HashMap<String, JsonValue>,
 ) -> Result<StackImportRequest> {
-    let source_kind: ImportSourceKind = match outputs.source_kind.as_deref() {
-        Some("cloudformation") => ImportSourceKind::CloudFormation,
-        Some(other) => {
-            return Err(AlienError::new(ErrorData::ConfigurationError {
-                message: format!("DeploymentSourceKind output '{other}' is not 'cloudformation'"),
-            }));
-        }
-        None => ImportSourceKind::CloudFormation,
+    let name = |cloudformation_name: &str| output_name(source_kind, cloudformation_name);
+    let missing = |cloudformation_name: &str| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!("output {} not found in {source}", name(cloudformation_name)),
+        })
     };
+    let expected_kind = match source_kind {
+        ImportSourceKind::CloudFormation => "cloudformation",
+        ImportSourceKind::Terraform => "terraform",
+        ImportSourceKind::Helm => "helm",
+    };
+    if let Some(other) = outputs
+        .source_kind
+        .as_deref()
+        .filter(|kind| *kind != expected_kind)
+    {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "{} output '{other}' is not '{expected_kind}'",
+                name("DeploymentSourceKind")
+            ),
+        }));
+    }
 
     let platform: Platform = match outputs.platform.as_deref() {
         Some(p) => p.parse().map_err(|reason| {
             AlienError::new(ErrorData::ConfigurationError {
-                message: format!("DeploymentPlatform output '{p}' is invalid: {reason}"),
+                message: format!(
+                    "{} output '{p}' is invalid: {reason}",
+                    name("DeploymentPlatform")
+                ),
             })
         })?,
-        None => {
-            return Err(AlienError::new(ErrorData::ConfigurationError {
-                message: "DeploymentPlatform output not found in stack".to_string(),
-            }));
-        }
+        None => return Err(missing("DeploymentPlatform")),
     };
     let base_platform = outputs
         .base_platform
@@ -527,43 +743,39 @@ fn build_import_request(
         .map(|p| {
             p.parse().map_err(|reason| {
                 AlienError::new(ErrorData::ConfigurationError {
-                    message: format!("DeploymentBasePlatform output '{p}' is invalid: {reason}"),
+                    message: format!(
+                        "{} output '{p}' is invalid: {reason}",
+                        name("DeploymentBasePlatform")
+                    ),
                 })
             })
         })
         .transpose()?;
 
-    let region = outputs.region.clone().ok_or_else(|| {
-        AlienError::new(ErrorData::ConfigurationError {
-            message: "DeploymentRegion output not found in stack".to_string(),
-        })
-    })?;
-    let resource_prefix = outputs.resource_prefix.clone().ok_or_else(|| {
-        AlienError::new(ErrorData::ConfigurationError {
-            message: format!("DeploymentResourcePrefix output not found in stack '{stack_name}'"),
-        })
-    })?;
-    let setup_target = outputs.setup_target.clone().ok_or_else(|| {
-        AlienError::new(ErrorData::ConfigurationError {
-            message: "DeploymentSetupTarget output not found in stack".to_string(),
-        })
-    })?;
-    let setup_fingerprint = outputs.setup_fingerprint.clone().ok_or_else(|| {
-        AlienError::new(ErrorData::ConfigurationError {
-            message: "DeploymentSetupFingerprint output not found in stack".to_string(),
-        })
-    })?;
-    let setup_fingerprint_version = outputs.setup_fingerprint_version.ok_or_else(|| {
-        AlienError::new(ErrorData::ConfigurationError {
-            message: "DeploymentSetupFingerprintVersion output not found in stack".to_string(),
-        })
-    })?;
+    let region = outputs
+        .region
+        .clone()
+        .ok_or_else(|| missing("DeploymentRegion"))?;
+    let resource_prefix = outputs
+        .resource_prefix
+        .clone()
+        .ok_or_else(|| missing("DeploymentResourcePrefix"))?;
+    let setup_target = outputs
+        .setup_target
+        .clone()
+        .ok_or_else(|| missing("DeploymentSetupTarget"))?;
+    let setup_fingerprint = outputs
+        .setup_fingerprint
+        .clone()
+        .ok_or_else(|| missing("DeploymentSetupFingerprint"))?;
+    let setup_fingerprint_version = outputs
+        .setup_fingerprint_version
+        .ok_or_else(|| missing("DeploymentSetupFingerprintVersion"))?;
 
-    let management_config_value = outputs.management_config.clone().ok_or_else(|| {
-        AlienError::new(ErrorData::ConfigurationError {
-            message: "DeploymentManagementConfig output not found in stack".to_string(),
-        })
-    })?;
+    let management_config_value = outputs
+        .management_config
+        .clone()
+        .ok_or_else(|| missing("DeploymentManagementConfig"))?;
     let management_config: ManagementConfig = serde_json::from_value(management_config_value)
         .into_alien_error()
         .context(ErrorData::JsonError {
@@ -571,12 +783,13 @@ fn build_import_request(
             reason: "DeploymentManagementConfig has unexpected shape".to_string(),
         })?;
 
-    let mut stack_settings_value = outputs.stack_settings.clone().ok_or_else(|| {
-        AlienError::new(ErrorData::ConfigurationError {
-            message: "DeploymentStackSettings output not found in stack".to_string(),
-        })
-    })?;
-    normalize_cloudformation_stack_settings(&mut stack_settings_value)?;
+    let mut stack_settings_value = outputs
+        .stack_settings
+        .clone()
+        .ok_or_else(|| missing("DeploymentStackSettings"))?;
+    if source_kind == ImportSourceKind::CloudFormation {
+        normalize_cloudformation_stack_settings(&mut stack_settings_value)?;
+    }
     let stack_settings: StackSettings = serde_json::from_value(stack_settings_value)
         .into_alien_error()
         .context(ErrorData::JsonError {
@@ -598,10 +811,12 @@ fn build_import_request(
                     operation: "deserialize ImportedResource".to_string(),
                     reason: "DeploymentResources item has unexpected shape".to_string(),
                 })?;
-            normalize_cloudformation_import_data(
-                &imported.resource_type,
-                &mut imported.import_data,
-            )?;
+            if source_kind == ImportSourceKind::CloudFormation {
+                normalize_cloudformation_import_data(
+                    &imported.resource_type,
+                    &mut imported.import_data,
+                )?;
+            }
             resources.push(ImportedResource {
                 id: imported.id,
                 resource_type: ResourceType::from(imported.resource_type),
@@ -610,12 +825,20 @@ fn build_import_request(
         }
     }
 
-    let setup_import_format_version = outputs.setup_import_format_version.ok_or_else(|| {
-        AlienError::new(ErrorData::ConfigurationError {
-            message: "CloudFormation output DeploymentSetupImportFormatVersion is required"
-                .to_string(),
-        })
-    })?;
+    let setup_import_format_version = outputs
+        .setup_import_format_version
+        .ok_or_else(|| missing("DeploymentSetupImportFormatVersion"))?;
+    // A module reports its setup only when it was rendered for registration; the import
+    // can't name a release without them.
+    if source_kind == ImportSourceKind::Terraform
+        && (setup_target.is_empty() || setup_fingerprint.is_empty())
+    {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "{source} reports no setup target or fingerprint; only modules rendered for registration can be registered"
+            ),
+        }));
+    }
 
     Ok(StackImportRequest {
         setup_import_format_version,
@@ -727,8 +950,8 @@ mod tests {
     use super::*;
     use alien_core::AwsManagementConfig;
 
-    fn base_outputs() -> CfnOutputs {
-        CfnOutputs {
+    fn base_outputs() -> SetupOutputs {
+        SetupOutputs {
             source_kind: Some("cloudformation".to_string()),
             platform: Some("kubernetes".to_string()),
             base_platform: Some("aws".to_string()),
@@ -748,13 +971,21 @@ mod tests {
                 serde_json::to_value(StackSettings::default()).expect("stack settings"),
             ),
             resources_chunks: vec![JsonValue::Array(Vec::new())],
+            deployment_name: None,
+            input_values: None,
         }
     }
 
     #[test]
     fn cloudformation_import_request_preserves_base_platform() {
-        let request =
-            build_import_request(&base_outputs(), "app", "stack", HashMap::new()).expect("request");
+        let request = build_import_request(
+            &base_outputs(),
+            ImportSourceKind::CloudFormation,
+            "app",
+            "stack",
+            HashMap::new(),
+        )
+        .expect("request");
 
         assert_eq!(request.platform, Platform::Kubernetes);
         assert_eq!(request.base_platform, Some(Platform::Aws));
@@ -768,8 +999,8 @@ mod tests {
     /// stack name were normalized after capture.
     const DECLINED_RESOURCE_PAYLOAD: &str = r#"[{"id":"jobs","type":"queue","importData":{"queueName":"example-gate-Jobs-Xy2Abc3dEfGh","queueUrl":"https://sqs.us-east-1.amazonaws.com/123456789012/example-gate-Jobs-Xy2Abc3dEfGh","queueArn":"arn:aws:sqs:us-east-1:123456789012:example-gate-Jobs-Xy2Abc3dEfGh"}}]"#;
 
-    fn outputs_with_resources(payload: &str) -> CfnOutputs {
-        CfnOutputs {
+    fn outputs_with_resources(payload: &str) -> SetupOutputs {
+        SetupOutputs {
             resources_chunks: vec![
                 parse_json_output("DeploymentResources", payload).expect("payload is JSON")
             ],
@@ -781,6 +1012,7 @@ mod tests {
     fn a_declined_resource_is_absent_from_the_import_request() {
         let request = build_import_request(
             &outputs_with_resources(DECLINED_RESOURCE_PAYLOAD),
+            ImportSourceKind::CloudFormation,
             "app",
             "stack",
             HashMap::new(),
@@ -803,6 +1035,7 @@ mod tests {
     fn a_null_entry_fails_the_import_rather_than_being_skipped() {
         let error = build_import_request(
             &outputs_with_resources(r#"[null,{"id":"jobs","type":"queue","importData":{}}]"#),
+            ImportSourceKind::CloudFormation,
             "app",
             "stack",
             HashMap::new(),
@@ -872,8 +1105,14 @@ mod tests {
             ("region".to_string(), serde_json::json!("us-east-1")),
             ("apiKey".to_string(), serde_json::json!(secret)),
         ]);
-        let request =
-            build_import_request(&base_outputs(), "app", "stack", inputs).expect("request");
+        let request = build_import_request(
+            &base_outputs(),
+            ImportSourceKind::CloudFormation,
+            "app",
+            "stack",
+            inputs,
+        )
+        .expect("request");
 
         let body = serialize_registration_request(
             &RegistrationTarget::Platform("https://api.example.test".to_string()),
@@ -970,8 +1209,14 @@ mod tests {
             }
         }])];
 
-        let request = build_import_request(&outputs, "app", "stack", HashMap::new())
-            .expect("resolved CloudFormation outputs should satisfy the typed import contract");
+        let request = build_import_request(
+            &outputs,
+            ImportSourceKind::CloudFormation,
+            "app",
+            "stack",
+            HashMap::new(),
+        )
+        .expect("resolved CloudFormation outputs should satisfy the typed import contract");
         let settings = serde_json::to_value(&request.stack_settings).expect("stack settings");
         assert_eq!(settings["network"]["availability_zones"], 2);
         assert_eq!(settings["compute"]["pools"]["general"]["min"], 1);
@@ -998,8 +1243,14 @@ mod tests {
             "network": {"type": "create", "availability_zones": "two"}
         }));
 
-        let error = build_import_request(&outputs, "app", "stack", HashMap::new())
-            .expect_err("non-numeric text must not be coerced");
+        let error = build_import_request(
+            &outputs,
+            ImportSourceKind::CloudFormation,
+            "app",
+            "stack",
+            HashMap::new(),
+        )
+        .expect_err("non-numeric text must not be coerced");
         assert!(
             format!("{error:?}").contains("network/availability_zones"),
             "the error should identify the malformed field: {error:?}"
@@ -1018,8 +1269,14 @@ mod tests {
             }
         }])];
 
-        let error = build_import_request(&outputs, "app", "stack", HashMap::new())
-            .expect_err("an interior null is not a declined trailing AZ");
+        let error = build_import_request(
+            &outputs,
+            ImportSourceKind::CloudFormation,
+            "app",
+            "stack",
+            HashMap::new(),
+        )
+        .expect_err("an interior null is not a declined trailing AZ");
         assert!(
             format!("{error:?}").contains("non-trailing null"),
             "the malformed array should fail explicitly: {error:?}"

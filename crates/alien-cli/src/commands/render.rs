@@ -426,6 +426,7 @@ fn render_terraform(
         stack,
         terraform_target(target),
         alien_terraform::TerraformOptions {
+            setup_identity: None,
             pins: alien_core::SetupPins::compiled_in(),
             display_name: None,
             registry: &registry,
@@ -732,6 +733,7 @@ mod tests {
             &stack,
             alien_terraform::TerraformTarget::Gcp,
             alien_terraform::TerraformOptions {
+                setup_identity: None,
                 pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,

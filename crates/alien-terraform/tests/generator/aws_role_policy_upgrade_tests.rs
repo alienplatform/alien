@@ -574,6 +574,7 @@ fn render(stack: &Stack, registry: &TfRegistry) -> alien_terraform::ModuleFiles 
         stack,
         TerraformTarget::Aws,
         TerraformOptions {
+            setup_identity: None,
             pins: alien_core::SetupPins::compiled_in(),
             display_name: None,
             registry,

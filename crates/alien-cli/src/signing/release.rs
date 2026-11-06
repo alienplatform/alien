@@ -501,12 +501,15 @@ pub fn setup_upload(
 /// One line saying what setup is rendered with, for the signing summary.
 pub fn hosting_summary(hosting: &SetupHostingOptions) -> String {
     let registration = match &hosting.registration {
-        RegistrationMode::CustomResource { .. }
-        | RegistrationMode::RegionalCustomResource { .. } => "custom resource",
-        RegistrationMode::OutputsFallback => "stack outputs",
-        RegistrationMode::Both { .. } | RegistrationMode::RegionalBoth { .. } => {
+        Some(
+            RegistrationMode::CustomResource { .. }
+            | RegistrationMode::RegionalCustomResource { .. },
+        ) => "custom resource",
+        Some(RegistrationMode::OutputsFallback) => "stack outputs",
+        Some(RegistrationMode::Both { .. } | RegistrationMode::RegionalBoth { .. }) => {
             "custom resource and stack outputs"
         }
+        None => "`register --import terraform` (no CloudFormation setup)",
     };
     let management = if hosting
         .management_trust

@@ -103,8 +103,13 @@ pub struct TerraformOptions<'a> {
     pub stack_settings: StackSettings,
     /// Optional self-registration settings. When present, the generated module
     /// requires the configured provider and creates its registration resource
-    /// after raw infrastructure is resolved.
+    /// after raw infrastructure is resolved. Protected modules take none: they
+    /// carry no provider of the service that hosts them.
     pub registration: Option<TerraformRegistration>,
+    /// The setup a module registered outside Terraform reports in its outputs
+    /// (`register --import terraform` reads them). Required on protected
+    /// modules; set this or `registration`, not both.
+    pub setup_identity: Option<TerraformSetupIdentity>,
     /// Optional Helm chart install settings. Only Kubernetes targets with
     /// self-registration can install the chart because the chart needs the
     /// manager deployment id and deployment token.
@@ -139,6 +144,23 @@ impl TerraformRegistration {
     fn provider_resource_type(&self) -> String {
         format!("{}_{}", self.provider_name, self.resource_type)
     }
+
+    fn setup_identity(&self) -> TerraformSetupIdentity {
+        TerraformSetupIdentity {
+            setup_target: self.setup_target.clone(),
+            setup_fingerprint: self.setup_fingerprint.clone(),
+            setup_fingerprint_version: self.setup_fingerprint_version,
+        }
+    }
+}
+
+/// Which setup a module is, as its import request names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerraformSetupIdentity {
+    /// `aws`, `gcp` or `azure`.
+    pub setup_target: String,
+    pub setup_fingerprint: String,
+    pub setup_fingerprint_version: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -277,6 +299,31 @@ fn generate_terraform_module_internal(
     Ok(module)
 }
 
+/// The setup the module reports in its outputs. A protected module never runs the provider of
+/// the service that hosts it (that code would run with the customer's credentials during
+/// `terraform apply`), so it reports through its outputs and must say which setup it is.
+fn module_setup_identity(options: &TerraformOptions<'_>) -> Result<Option<TerraformSetupIdentity>> {
+    let refuse = |reason: &str| {
+        Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "render the Terraform module".to_string(),
+            reason: reason.to_string(),
+        }))
+    };
+    match (&options.registration, &options.setup_identity) {
+        (Some(_), Some(_)) => refuse(
+            "a module that registers through its provider reports that registration's setup; pass a setup identity only without registration",
+        ),
+        (Some(_), None) if options.stack_settings.signing.is_some() => refuse(
+            "a protected module registers through `register --import terraform`, not a provider of the service that hosts it",
+        ),
+        (None, None) if options.stack_settings.signing.is_some() => refuse(
+            "a protected module needs its setup target and fingerprint for `register --import terraform`",
+        ),
+        (Some(registration), None) => Ok(Some(registration.setup_identity())),
+        (None, identity) => Ok(identity.clone()),
+    }
+}
+
 /// Render the module without checking it against IAM quotas.
 pub(crate) fn render_terraform_module(
     stack: &Stack,
@@ -293,6 +340,7 @@ pub(crate) fn render_terraform_module(
     } else {
         profile
     };
+    let setup_identity = module_setup_identity(&options)?;
     if target == TerraformTarget::Eks
         && matches!(
             options
@@ -813,6 +861,7 @@ pub(crate) fn render_terraform_module(
             setup_import_format_version,
             stack_settings.setup_management,
             options.registration.as_ref(),
+            setup_identity.as_ref(),
             &import_depends_on,
             terraform_input_values_expression(&stack_inputs),
         ))?,
@@ -838,6 +887,8 @@ pub(crate) fn render_terraform_module(
             target,
             setup_import_format_version,
             options.registration.as_ref(),
+            setup_identity.as_ref(),
+            protected_outputs(target, &stack_settings, management_label.as_deref()),
             &stack_inputs,
             deployer_secret_outputs(stack, target, deployer_secrets_vault_binding.as_ref())?,
         ))?,
@@ -5171,6 +5222,7 @@ fn registration_body(
     setup_import_format_version: u32,
     setup_management: alien_core::SetupManagement,
     registration: Option<&TerraformRegistration>,
+    setup_identity: Option<&TerraformSetupIdentity>,
     depends_on: &[Expression],
     input_values: Expression,
 ) -> Body {
@@ -5250,8 +5302,8 @@ fn registration_body(
                 (
                     "setup_target",
                     Expression::String(
-                        registration
-                            .map(|r| r.setup_target.clone())
+                        setup_identity
+                            .map(|identity| identity.setup_target.clone())
                             .unwrap_or_default(),
                     ),
                 ),
@@ -5262,16 +5314,16 @@ fn registration_body(
                 (
                     "setup_fingerprint",
                     Expression::String(
-                        registration
-                            .map(|r| r.setup_fingerprint.clone())
+                        setup_identity
+                            .map(|identity| identity.setup_fingerprint.clone())
                             .unwrap_or_default(),
                     ),
                 ),
                 (
                     "setup_fingerprint_version",
                     Expression::Number(hcl::Number::from(i64::from(
-                        registration
-                            .map(|r| r.setup_fingerprint_version)
+                        setup_identity
+                            .map(|identity| identity.setup_fingerprint_version)
                             .unwrap_or_default(),
                     ))),
                 ),
@@ -5771,6 +5823,8 @@ fn outputs_body(
     target: TerraformTarget,
     setup_import_format_version: u32,
     registration: Option<&TerraformRegistration>,
+    setup_identity: Option<&TerraformSetupIdentity>,
+    protected_outputs: Vec<(&'static str, Expression, &'static str)>,
     stack_inputs: &[StackInputDefinition],
     deployer_secret_outputs: Vec<(String, Expression, String)>,
 ) -> Body {
@@ -5798,8 +5852,8 @@ fn outputs_body(
         (
             "deployment_setup_target",
             Expression::String(
-                registration
-                    .map(|registration| registration.setup_target.clone())
+                setup_identity
+                    .map(|identity| identity.setup_target.clone())
                     .unwrap_or_default(),
             ),
             "Setup target.",
@@ -5812,8 +5866,8 @@ fn outputs_body(
         (
             "deployment_setup_fingerprint",
             Expression::String(
-                registration
-                    .map(|registration| registration.setup_fingerprint.clone())
+                setup_identity
+                    .map(|identity| identity.setup_fingerprint.clone())
                     .unwrap_or_default(),
             ),
             "Setup compatibility fingerprint.",
@@ -5821,8 +5875,8 @@ fn outputs_body(
         (
             "deployment_setup_fingerprint_version",
             Expression::Number(hcl::Number::from(i64::from(
-                registration
-                    .map(|registration| registration.setup_fingerprint_version)
+                setup_identity
+                    .map(|identity| identity.setup_fingerprint_version)
                     .unwrap_or_default(),
             ))),
             "Setup fingerprint algorithm version.",
@@ -5854,6 +5908,7 @@ fn outputs_body(
             "Deployer input values JSON for registration flows managed outside Terraform.",
         ));
     }
+    outputs.extend(protected_outputs);
     if let Some(registration) = registration {
         outputs.push((
             "deployment_id",
@@ -5930,6 +5985,36 @@ fn outputs_body(
         .collect();
 
     Body::from(blocks)
+}
+
+/// What only a protected module outputs: the rest of what `register --import terraform` sends
+/// (the deployment name; the registration resource took it from `var.name`) and, on Azure, the
+/// signing vault `verify` reads the ledger from.
+fn protected_outputs(
+    target: TerraformTarget,
+    settings: &StackSettings,
+    management_label: Option<&str>,
+) -> Vec<(&'static str, Expression, &'static str)> {
+    if settings.signing.is_none() {
+        return Vec::new();
+    }
+    let mut outputs = vec![(
+        "deployment_name",
+        expr::raw("local.deployment_name"),
+        "Deployment name for registration.",
+    )];
+    if let (TerraformTarget::Azure, Some(management)) = (target, management_label) {
+        outputs.push((
+            "deployment_signing_vault",
+            expr::traversal([
+                "azurerm_key_vault",
+                &format!("{management}_signing"),
+                "name",
+            ]),
+            "Key Vault holding the install's signing ledger.",
+        ));
+    }
+    outputs
 }
 
 fn resource_inventory(stack: &Stack, fragments: &IndexMap<String, TfFragment>) -> String {
@@ -6504,6 +6589,7 @@ mod tests {
             &Stack::new("app".into()).build(),
             TerraformTarget::Eks,
             TerraformOptions {
+                setup_identity: None,
                 pins: alien_core::SetupPins::compiled_in(),
                 registry: &registry,
                 display_name: None,
@@ -6593,6 +6679,7 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
             &Stack::new("product-terraform-test".to_string()).build(),
             TerraformTarget::Eks,
             TerraformOptions {
+                setup_identity: None,
                 pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
@@ -6661,6 +6748,7 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
                     &stack,
                     TerraformTarget::Aws,
                     TerraformOptions {
+                        setup_identity: None,
                         pins: alien_core::SetupPins::compiled_in(),
                         display_name: None,
                         registry: &registry,
@@ -6764,6 +6852,7 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
             1,
             alien_core::SetupManagement::Manual,
             Some(&registration),
+            Some(&registration.setup_identity()),
             &[],
             Expression::Object(Default::default()),
         ))
@@ -6779,6 +6868,8 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
             TerraformTarget::Aws,
             1,
             Some(&registration),
+            Some(&registration.setup_identity()),
+            Vec::new(),
             &[],
             Vec::new(),
         ))

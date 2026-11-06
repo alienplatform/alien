@@ -166,6 +166,7 @@ async fn render(source: &Stack, settings: &StackSettings, format: &str) -> Resul
                 &stack,
                 target.expect("terraform target"),
                 alien_terraform::TerraformOptions {
+                    setup_identity: None,
                     display_name: None,
                     registry: &registry,
                     stack_settings: settings.clone(),

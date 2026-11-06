@@ -122,11 +122,10 @@ async fn main() -> ExitCode {
         .terraform_registry(&terraform)
         .helm_registry(&helm)
         .hosting(SetupHostingOptions {
-            registration: RegistrationMode::OutputsFallback,
+            registration: Some(RegistrationMode::OutputsFallback),
             description: None,
             management_trust: ManagementTrustOptions::default(),
             supported_aws_regions: Vec::new(),
-            terraform_registration: None,
         })
         .pins(pins)
         .build();

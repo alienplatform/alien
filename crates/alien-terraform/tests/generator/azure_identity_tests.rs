@@ -658,6 +658,7 @@ fn azure_setup_with_a_live_worker_validates_for_both_management_modes() {
                 &stack,
                 TerraformTarget::Azure,
                 TerraformOptions {
+                    setup_identity: None,
                     pins: alien_core::SetupPins::compiled_in(),
                     display_name: None,
                     registry: &registry,
@@ -718,6 +719,7 @@ fn azure_automatic_setup_registers_declared_identities() {
                 &stack,
                 TerraformTarget::Azure,
                 alien_terraform::TerraformOptions {
+                    setup_identity: None,
                     pins: alien_core::SetupPins::compiled_in(),
                     registry: &registry,
                     display_name: None,
@@ -806,6 +808,7 @@ fn azure_automatic_setup_owns_stack_wide_roles_and_names_the_identity() {
                 &stack,
                 target,
                 TerraformOptions {
+                    setup_identity: None,
                     pins: alien_core::SetupPins::compiled_in(),
                     display_name: None,
                     registry: &registry,
@@ -905,6 +908,7 @@ fn azure_setup_role_definitions_wait_for_the_resource_group() {
             &stack,
             TerraformTarget::Azure,
             TerraformOptions {
+                setup_identity: None,
                 pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
@@ -1006,6 +1010,7 @@ fn azure_automatic_setup_assigns_application_roles_on_its_vaults() {
         &stack,
         TerraformTarget::Azure,
         TerraformOptions {
+            setup_identity: None,
             pins: alien_core::SetupPins::compiled_in(),
             display_name: None,
             registry: &registry,

@@ -2150,6 +2150,7 @@ async fn apply_terraform_and_import(
         &terraform_stack,
         target,
         alien_terraform::TerraformOptions {
+            setup_identity: None,
             pins: alien_core::SetupPins::compiled_in(),
             display_name: None,
             registry: &registry,
@@ -4350,6 +4351,7 @@ mod tests {
                 &stack,
                 target,
                 alien_terraform::TerraformOptions {
+                    setup_identity: None,
                     pins: alien_core::SetupPins::compiled_in(),
                     display_name: None,
                     registry: &registry,
@@ -5041,6 +5043,7 @@ resource "terraform_data" "gate_keeper" {}
             &rendered_stack,
             alien_terraform::TerraformTarget::Eks,
             alien_terraform::TerraformOptions {
+                setup_identity: None,
                 pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
@@ -5141,6 +5144,7 @@ resource "terraform_data" "gate_keeper" {}
             &rendered_stack,
             alien_terraform::TerraformTarget::Eks,
             alien_terraform::TerraformOptions {
+                setup_identity: None,
                 pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
@@ -5205,6 +5209,7 @@ resource "terraform_data" "gate_keeper" {}
             &rendered_stack,
             alien_terraform::TerraformTarget::Gcp,
             alien_terraform::TerraformOptions {
+                setup_identity: None,
                 pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
@@ -5247,6 +5252,7 @@ resource "terraform_data" "gate_keeper" {}
             &rendered_stack,
             alien_terraform::TerraformTarget::Gcp,
             alien_terraform::TerraformOptions {
+                setup_identity: None,
                 pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
@@ -5396,6 +5402,7 @@ resource "terraform_data" "gate_keeper" {}
             &rendered_stack,
             alien_terraform::TerraformTarget::Azure,
             alien_terraform::TerraformOptions {
+                setup_identity: None,
                 pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,

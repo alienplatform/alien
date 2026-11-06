@@ -21,7 +21,10 @@ fn pins() -> SetupPins {
         aws_publisher: Some(PUBLISHER.to_string()),
         aws_verifier_image: Some(VERIFIER.to_string()),
         gcp_verifier_image: Some(format!("gcr.example/verifier@sha256:{}", "6e".repeat(32))),
-        azure_verifier_image: Some(format!("registry.example/verifier@sha256:{}", "7f".repeat(32))),
+        azure_verifier_image: Some(format!(
+            "registry.example/verifier@sha256:{}",
+            "7f".repeat(32)
+        )),
         operator_digest: Some(format!("sha256:{}", "ef".repeat(32))),
     }
 }
@@ -247,7 +250,10 @@ async fn a_build_without_the_azure_verifier_image_refuses_protected_azure_setup(
         .await
         .expect_err("no Azure verifier image, no protected Azure setup");
     let text = format!("{error:?}");
-    assert!(text.contains("no Azure verifier image pinned by digest"), "{text}");
+    assert!(
+        text.contains("no Azure verifier image pinned by digest"),
+        "{text}"
+    );
     render_setup_template("terraform-aws", &stack(), &settings, &options)
         .await
         .expect("protected AWS setup needs no Azure pin");
