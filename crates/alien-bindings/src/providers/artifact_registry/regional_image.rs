@@ -1,17 +1,25 @@
 //! Digest-preserving OCI closure transfer between an owned registry's regional endpoints.
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    io::SeekFrom,
+    time::Duration,
+};
 
-use futures::TryStreamExt;
+use alien_error::{AlienError, Context, IntoAlienError};
+use futures::{stream, TryStreamExt};
 use oci_client::{
-    client::ClientConfig,
     manifest::{
         OciImageIndex, OciImageManifest, IMAGE_MANIFEST_LIST_MEDIA_TYPE, IMAGE_MANIFEST_MEDIA_TYPE,
         OCI_IMAGE_INDEX_MEDIA_TYPE, OCI_IMAGE_MEDIA_TYPE,
     },
     secrets::RegistryAuth,
-    Client, Reference,
+    Reference,
 };
+use reqwest::{header, Client, RequestBuilder, Response, StatusCode, Url};
 use sha2::{Digest, Sha256};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+
+use crate::error::{ErrorData, Result};
 
 const TYPES: [&str; 4] = [
     OCI_IMAGE_INDEX_MEDIA_TYPE,
@@ -20,27 +28,354 @@ const TYPES: [&str; 4] = [
     IMAGE_MANIFEST_MEDIA_TYPE,
 ];
 const MAX_MANIFESTS: usize = 128;
-const MAX_BLOB_BYTES: usize = 512 * 1024 * 1024;
+const MAX_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
+const MAX_MANIFEST_TOTAL_BYTES: usize = 16 * 1024 * 1024;
+const MAX_DESCRIPTORS: usize = 4096;
+const MAX_DEPTH: usize = 16;
+const MAX_BLOB_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+const MAX_TOTAL_BLOB_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+const IO_BUFFER_BYTES: usize = 64 * 1024;
 
 pub(super) fn digest(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
-/// The post-order traversal publishes children before their index, preserving every raw byte.
-/// No tag is resolved and no external descriptor URL is followed.
+fn invalid(reason: impl Into<String>) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::RegionalImageInvalid {
+        reason: reason.into(),
+    })
+}
+
+fn transfer_error(operation: &str) -> ErrorData {
+    ErrorData::RegionalImageTransferFailed {
+        operation: operation.into(),
+    }
+}
+
+fn authenticate(request: RequestBuilder, auth: &RegistryAuth) -> RequestBuilder {
+    match auth {
+        RegistryAuth::Basic(user, password) => request.basic_auth(user, Some(password)),
+        RegistryAuth::Anonymous => request,
+        RegistryAuth::Bearer(token) => request.bearer_auth(token),
+    }
+}
+
+async fn send(request: RequestBuilder, operation: &str) -> Result<Response> {
+    request
+        .send()
+        .await
+        .into_alien_error()
+        .context(transfer_error(operation))
+}
+
+fn successful(response: Response, operation: &str) -> Result<Response> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+    if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
+        return Err(AlienError::new(ErrorData::RegionalImageAccessDenied {
+            operation: operation.into(),
+        }));
+    }
+    if status.is_server_error()
+        || matches!(
+            status,
+            StatusCode::TOO_MANY_REQUESTS | StatusCode::REQUEST_TIMEOUT
+        )
+    {
+        return Err(AlienError::new(transfer_error(operation)));
+    }
+    Err(invalid(format!(
+        "{operation} returned HTTP {}",
+        status.as_u16()
+    )))
+}
+
+fn valid_digest(value: &str) -> bool {
+    value
+        .strip_prefix("sha256:")
+        .is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+fn endpoint(reference: &Reference, scheme: &str, kind: &str, identity: &str) -> Result<Url> {
+    Url::parse(&format!(
+        "{scheme}://{}/v2/{}/{kind}/{identity}",
+        reference.registry(),
+        reference.repository()
+    ))
+    .into_alien_error()
+    .context(ErrorData::RegionalImageInvalid {
+        reason: "invalid registry endpoint".into(),
+    })
+}
+
+async fn manifest(
+    client: &Client,
+    reference: &Reference,
+    auth: &RegistryAuth,
+    scheme: &str,
+    identity: &str,
+) -> Result<Vec<u8>> {
+    let response = successful(
+        send(
+            authenticate(
+                client.get(endpoint(reference, scheme, "manifests", identity)?),
+                auth,
+            )
+            .header(header::ACCEPT, TYPES.join(", ")),
+            "download manifest",
+        )
+        .await?,
+        "download manifest",
+    )?;
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_MANIFEST_BYTES as u64)
+    {
+        return Err(invalid("manifest exceeds 4 MiB"));
+    }
+    let mut body = response.bytes_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = body
+        .try_next()
+        .await
+        .into_alien_error()
+        .context(transfer_error("read manifest"))?
+    {
+        if bytes.len().saturating_add(chunk.len()) > MAX_MANIFEST_BYTES {
+            return Err(invalid("manifest exceeds 4 MiB"));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if digest(&bytes) != identity {
+        return Err(invalid("manifest digest mismatch"));
+    }
+    Ok(bytes)
+}
+
+async fn blob_exists(
+    client: &Client,
+    reference: &Reference,
+    auth: &RegistryAuth,
+    scheme: &str,
+    identity: &str,
+    size: u64,
+) -> Result<bool> {
+    let response = send(
+        authenticate(
+            client.head(endpoint(reference, scheme, "blobs", identity)?),
+            auth,
+        ),
+        "check regional blob",
+    )
+    .await?;
+    if response.status() == StatusCode::NOT_FOUND {
+        return Ok(false);
+    }
+    let response = successful(response, "check regional blob")?;
+    let actual = response
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
+    if actual != Some(size) {
+        return Err(invalid("regional blob size differs from its descriptor"));
+    }
+    // The authenticated registry addresses the blob by the immutable digest in the HEAD URL.
+    if response
+        .headers()
+        .get("Docker-Content-Digest")
+        .is_some_and(|v| v.as_bytes() != identity.as_bytes())
+    {
+        return Err(invalid("regional blob digest differs from its descriptor"));
+    }
+    Ok(true)
+}
+
+async fn copy_blob(
+    client: &Client,
+    source: &Reference,
+    target: &Reference,
+    source_auth: &RegistryAuth,
+    target_auth: &RegistryAuth,
+    scheme: &str,
+    identity: &str,
+    size: u64,
+) -> Result<()> {
+    if blob_exists(client, target, target_auth, scheme, identity, size).await? {
+        return Ok(());
+    }
+    // Verify before publishing any bytes. Only one layer is spooled at a time, and the
+    // anonymous temporary file is removed on cancellation, failure, and process exit.
+    let file = tempfile::tempfile()
+        .into_alien_error()
+        .context(transfer_error("create image spool"))?;
+    let mut file = tokio::fs::File::from_std(file);
+    let download_client = Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .read_timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::limited(3))
+        .build()
+        .into_alien_error()
+        .context(transfer_error("create download client"))?;
+    let response = successful(
+        send(
+            authenticate(
+                download_client.get(endpoint(source, scheme, "blobs", identity)?),
+                source_auth,
+            ),
+            "download image blob",
+        )
+        .await?,
+        "download image blob",
+    )?;
+    if response
+        .content_length()
+        .is_some_and(|length| length != size)
+    {
+        return Err(invalid("source blob size differs from its descriptor"));
+    }
+    let mut body = response.bytes_stream();
+    let mut downloaded = 0_u64;
+    let mut hash = Sha256::new();
+    while let Some(chunk) = body
+        .try_next()
+        .await
+        .into_alien_error()
+        .context(transfer_error("read image blob"))?
+    {
+        downloaded = downloaded
+            .checked_add(chunk.len() as u64)
+            .ok_or_else(|| invalid("image blob size overflow"))?;
+        if downloaded > size {
+            return Err(invalid("image blob exceeds its declared size"));
+        }
+        hash.update(&chunk);
+        file.write_all(&chunk)
+            .await
+            .into_alien_error()
+            .context(transfer_error("write image spool"))?;
+    }
+    if downloaded != size || format!("sha256:{:x}", hash.finalize()) != identity {
+        return Err(invalid("source image blob size or digest mismatch"));
+    }
+    file.seek(SeekFrom::Start(0))
+        .await
+        .into_alien_error()
+        .context(transfer_error("rewind image spool"))?;
+    let start = endpoint(target, scheme, "blobs", "uploads/")?;
+    let response = successful(
+        send(
+            authenticate(client.post(start.clone()), target_auth).header(header::CONTENT_LENGTH, 0),
+            "start blob upload",
+        )
+        .await?,
+        "start blob upload",
+    )?;
+    let location = response
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| invalid("registry omitted upload location"))?;
+    let mut upload =
+        start
+            .join(location)
+            .into_alien_error()
+            .context(ErrorData::RegionalImageInvalid {
+                reason: "invalid upload location".into(),
+            })?;
+    // Never send registry credentials or image bytes to a provider-supplied foreign URL.
+    if upload.origin() != start.origin()
+        || !upload
+            .path()
+            .starts_with(&format!("/v2/{}/blobs/uploads/", target.repository()))
+    {
+        return Err(invalid(
+            "registry upload location escaped the selected repository",
+        ));
+    }
+    upload.query_pairs_mut().append_pair("digest", identity);
+    let body = stream::try_unfold(file, |mut file| async move {
+        let mut chunk = vec![0_u8; IO_BUFFER_BYTES];
+        let size = file.read(&mut chunk).await?;
+        if size == 0 {
+            return Ok::<_, std::io::Error>(None);
+        }
+        chunk.truncate(size);
+        Ok(Some((chunk, file)))
+    });
+    let response = send(
+        authenticate(client.put(upload), target_auth)
+            .header(header::CONTENT_TYPE, "application/octet-stream")
+            .header(header::CONTENT_LENGTH, size)
+            .body(reqwest::Body::wrap_stream(body)),
+        "upload image blob",
+    )
+    .await?;
+    // An interrupted response or concurrent writer may leave a completed blob. Only a
+    // provider HEAD proving the expected immutable object makes a failed PUT successful.
+    if !response.status().is_success() {
+        let failure = successful(response, "upload image blob");
+        if blob_exists(client, target, target_auth, scheme, identity, size).await? {
+            return Ok(());
+        }
+        failure?;
+    }
+    if !blob_exists(client, target, target_auth, scheme, identity, size).await? {
+        return Err(AlienError::new(transfer_error(
+            "verify uploaded image blob",
+        )));
+    }
+    Ok(())
+}
+
+async fn publish(
+    client: &Client,
+    target: &Reference,
+    auth: &RegistryAuth,
+    scheme: &str,
+    identity: &str,
+    raw: Vec<u8>,
+    media_type: &str,
+) -> Result<()> {
+    let result = send(
+        authenticate(
+            client.put(endpoint(target, scheme, "manifests", identity)?),
+            auth,
+        )
+        .header(header::CONTENT_TYPE, media_type)
+        .body(raw),
+        "publish manifest",
+    )
+    .await
+    .and_then(|response| successful(response, "publish manifest"));
+    // ECR can report ImageAlreadyExists after an earlier attempt committed the same digest.
+    // Readback proves that exact content instead of treating every conflict as success.
+    let readback = manifest(client, target, auth, scheme, identity).await;
+    match readback {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            result?;
+            Err(error)
+        }
+    }
+}
+
 pub(super) async fn copy_closure(
     source: Reference,
     target: Reference,
     source_auth: RegistryAuth,
     target_auth: RegistryAuth,
-) -> Result<(), String> {
-    let client = Client::new(ClientConfig {
-        connect_timeout: Some(Duration::from_secs(10)),
-        read_timeout: Some(Duration::from_secs(30)),
-        use_monolithic_push: true,
-        ..Default::default()
-    });
-    transfer(&client, source, target, source_auth, target_auth).await
+) -> Result<()> {
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .read_timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .into_alien_error()
+        .context(transfer_error("create registry client"))?;
+    transfer(&client, source, target, source_auth, target_auth, "https").await
 }
 
 async fn transfer(
@@ -49,139 +384,135 @@ async fn transfer(
     target: Reference,
     source_auth: RegistryAuth,
     target_auth: RegistryAuth,
-) -> Result<(), String> {
+    scheme: &str,
+) -> Result<()> {
     let expected = source
         .digest()
-        .ok_or("regional images must be digest pinned")?;
-    if target.digest() != Some(expected) {
-        return Err("source and target digests must match".into());
+        .ok_or_else(|| invalid("regional images must be digest pinned"))?;
+    if !valid_digest(expected) || target.digest() != Some(expected) {
+        return Err(invalid("source and target sha256 digests must match"));
     }
-    client
-        .store_auth_if_needed(source.resolve_registry(), &source_auth)
-        .await;
-    client
-        .store_auth_if_needed(target.resolve_registry(), &target_auth)
-        .await;
-    let mut pending = vec![(expected.to_string(), false)];
+    let mut pending = vec![(expected.to_string(), false, 0_usize)];
     let mut visited = HashSet::new();
-    let mut manifests = std::collections::HashMap::new();
-    while let Some((current, publish)) = pending.pop() {
-        let from = source.clone_with_digest(current.clone());
-        let to = target.clone_with_digest(current.clone());
-        if publish {
-            let (raw, media_type): (Vec<u8>, String) = manifests
+    let mut manifests = HashMap::<String, (Vec<u8>, String)>::new();
+    let mut blobs = HashMap::new();
+    let mut manifest_bytes = 0_usize;
+    let mut blob_bytes = 0_u64;
+    let mut descriptors = 0_usize;
+    while let Some((current, publication, depth)) = pending.pop() {
+        if publication {
+            let (raw, media) = manifests
                 .remove(&current)
-                .ok_or("missing index publication state")?;
-            client
-                .push_manifest_raw(
-                    &to,
-                    raw,
-                    media_type.parse().map_err(|_| "invalid media type")?,
-                )
-                .await
-                .map_err(|_| "regional index upload failed")?;
-        } else {
-            if !visited.insert(current.clone()) {
-                continue;
+                .ok_or_else(|| invalid("missing index publication state"))?;
+            publish(client, &target, &target_auth, scheme, &current, raw, &media).await?;
+            continue;
+        }
+        if !valid_digest(&current) || depth > MAX_DEPTH {
+            return Err(invalid("invalid digest or image index nesting exceeds 16"));
+        }
+        if !visited.insert(current.clone()) {
+            continue;
+        }
+        if visited.len() > MAX_MANIFESTS {
+            return Err(invalid("image manifest closure exceeds 128 entries"));
+        }
+        let raw = manifest(client, &source, &source_auth, scheme, &current).await?;
+        manifest_bytes = manifest_bytes.saturating_add(raw.len());
+        if manifest_bytes > MAX_MANIFEST_TOTAL_BYTES {
+            return Err(invalid("image manifest closure exceeds 16 MiB"));
+        }
+        let document: serde_json::Value = serde_json::from_slice(&raw).into_alien_error().context(
+            ErrorData::RegionalImageInvalid {
+                reason: "invalid image manifest".into(),
+            },
+        )?;
+        let media = document
+            .get("mediaType")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| invalid("manifest mediaType is required"))?
+            .to_string();
+        if [OCI_IMAGE_INDEX_MEDIA_TYPE, IMAGE_MANIFEST_LIST_MEDIA_TYPE].contains(&media.as_str()) {
+            let index: OciImageIndex = serde_json::from_value(document)
+                .into_alien_error()
+                .context(ErrorData::RegionalImageInvalid {
+                    reason: "invalid image index".into(),
+                })?;
+            if index.manifests.is_empty() {
+                return Err(invalid("empty image index"));
             }
-            if visited.len() > MAX_MANIFESTS {
-                return Err("image manifest closure exceeds 128 entries".into());
+            descriptors = descriptors.saturating_add(index.manifests.len());
+            if descriptors > MAX_DESCRIPTORS {
+                return Err(invalid("image closure exceeds 4096 descriptors"));
             }
-            let (raw, _) = client
-                .pull_manifest_raw(&from, &source_auth, &TYPES)
-                .await
-                .map_err(|_| "source manifest download failed")?;
-            if digest(&raw) != current {
-                return Err("source manifest digest mismatch".into());
+            pending.push((current.clone(), true, depth));
+            for child in index.manifests.iter().rev() {
+                if !valid_digest(&child.digest)
+                    || child.size < 0
+                    || child.size as u64 > MAX_MANIFEST_BYTES as u64
+                {
+                    return Err(invalid("invalid index descriptor"));
+                }
+                if visited.contains(&child.digest) && manifests.contains_key(&child.digest) {
+                    return Err(invalid("cyclic image index"));
+                }
+                pending.push((child.digest.clone(), false, depth + 1));
             }
-            let document: serde_json::Value =
-                serde_json::from_slice(&raw).map_err(|_| "invalid image manifest")?;
-            let media_type = document
-                .get("mediaType")
-                .and_then(serde_json::Value::as_str)
-                .ok_or("manifest mediaType is required")?
-                .to_string();
-            if [OCI_IMAGE_INDEX_MEDIA_TYPE, IMAGE_MANIFEST_LIST_MEDIA_TYPE]
-                .contains(&media_type.as_str())
+            manifests.insert(current, (raw, media));
+            continue;
+        }
+        if ![OCI_IMAGE_MEDIA_TYPE, IMAGE_MANIFEST_MEDIA_TYPE].contains(&media.as_str()) {
+            return Err(invalid("unsupported image manifest media type"));
+        }
+        let image: OciImageManifest = serde_json::from_value(document)
+            .into_alien_error()
+            .context(ErrorData::RegionalImageInvalid {
+                reason: "invalid image manifest".into(),
+            })?;
+        descriptors = descriptors.saturating_add(1 + image.layers.len());
+        if descriptors > MAX_DESCRIPTORS {
+            return Err(invalid("image closure exceeds 4096 descriptors"));
+        }
+        for descriptor in std::iter::once(&image.config).chain(image.layers.iter()) {
+            if descriptor
+                .urls
+                .as_ref()
+                .is_some_and(|urls| !urls.is_empty())
             {
-                let index: OciImageIndex =
-                    serde_json::from_slice(&raw).map_err(|_| "invalid image index")?;
-                if index.manifests.is_empty() {
-                    return Err("empty image index".into());
+                return Err(invalid(
+                    "external image blob URLs are unsupported for regional copies",
+                ));
+            }
+            let size =
+                u64::try_from(descriptor.size).map_err(|_| invalid("invalid image blob size"))?;
+            if !valid_digest(&descriptor.digest) || size > MAX_BLOB_BYTES {
+                return Err(invalid("invalid image digest or blob exceeds 10 GiB"));
+            }
+            if let Some(previous) = blobs.insert(descriptor.digest.clone(), size) {
+                if previous != size {
+                    return Err(invalid("conflicting sizes for the same image blob"));
                 }
-                pending.push((current.clone(), true));
-                for child in index.manifests.iter().rev() {
-                    if visited.contains(&child.digest) && manifests.contains_key(&child.digest) {
-                        return Err("cyclic image index".into());
-                    }
-                    pending.push((child.digest.clone(), false));
-                }
-                manifests.insert(current, (raw, media_type));
                 continue;
             }
-            if ![OCI_IMAGE_MEDIA_TYPE, IMAGE_MANIFEST_MEDIA_TYPE].contains(&media_type.as_str()) {
-                return Err("unsupported image manifest media type".into());
+            blob_bytes = blob_bytes.saturating_add(size);
+            if blob_bytes > MAX_TOTAL_BLOB_BYTES {
+                return Err(invalid("image closure exceeds 64 GiB of blobs"));
             }
-            let image: OciImageManifest =
-                serde_json::from_slice(&raw).map_err(|_| "invalid image manifest")?;
-            for descriptor in std::iter::once(&image.config).chain(image.layers.iter()) {
-                if descriptor
-                    .urls
-                    .as_ref()
-                    .is_some_and(|urls| !urls.is_empty())
-                {
-                    return Err(
-                        "external image blob URLs are unsupported for regional copies".into(),
-                    );
-                }
-                let size =
-                    usize::try_from(descriptor.size).map_err(|_| "invalid image blob size")?;
-                if size > MAX_BLOB_BYTES {
-                    return Err("regional image blob exceeds 512 MiB".into());
-                }
-                let mut stream = client
-                    .pull_blob_stream(&from, descriptor)
-                    .await
-                    .map_err(|_| "source image blob download failed")?;
-                let mut bytes = Vec::new();
-                while let Some(chunk) = stream
-                    .try_next()
-                    .await
-                    .map_err(|_| "source image blob stream failed")?
-                {
-                    if bytes.len().saturating_add(chunk.len()) > size {
-                        return Err("image blob exceeds declared size".into());
-                    }
-                    bytes.extend_from_slice(&chunk);
-                }
-                if bytes.len() != size || digest(&bytes) != descriptor.digest {
-                    return Err("source image blob size or digest mismatch".into());
-                }
-                client
-                    .push_blob(&to, &bytes, &descriptor.digest)
-                    .await
-                    .map_err(|_| "regional image blob upload failed")?;
-            }
-            client
-                .push_manifest_raw(
-                    &to,
-                    raw,
-                    media_type.parse().map_err(|_| "invalid media type")?,
-                )
-                .await
-                .map_err(|_| "regional manifest upload failed")?;
+            copy_blob(
+                client,
+                &source,
+                &target,
+                &source_auth,
+                &target_auth,
+                scheme,
+                &descriptor.digest,
+                size,
+            )
+            .await?;
         }
-        let (readback, _) = client
-            .pull_manifest_raw(&to, &target_auth, &TYPES)
-            .await
-            .map_err(|_| "regional manifest readback failed")?;
-        if digest(&readback) != current {
-            return Err("regional manifest digest mismatch".into());
-        }
+        publish(client, &target, &target_auth, scheme, &current, raw, &media).await?;
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,7 +523,6 @@ mod tests {
         routing::any,
         Router,
     };
-    use oci_client::client::ClientProtocol;
     use serde_json::json;
     use std::{
         collections::HashMap,
@@ -276,7 +606,12 @@ mod tests {
                 Response::builder()
                     .header("Content-Type", media)
                     .header("Docker-Content-Digest", named_digest)
-                    .body(Body::from(bytes))
+                    .header("Content-Length", bytes.len())
+                    .body(if method == "HEAD" {
+                        Body::empty()
+                    } else {
+                        Body::from(bytes)
+                    })
                     .unwrap()
             }
             None => Response::builder()
@@ -317,11 +652,10 @@ mod tests {
                 .unwrap()
                 .insert(digest(bytes), bytes.clone());
         }
-        let client = Client::new(ClientConfig {
-            protocol: ClientProtocol::Http,
-            use_monolithic_push: true,
-            ..Default::default()
-        });
+        let client = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
         let from: Reference = format!("{source_host}/images@{}", digest(&index))
             .parse()
             .unwrap();
@@ -334,6 +668,7 @@ mod tests {
             to.clone(),
             RegistryAuth::Anonymous,
             RegistryAuth::Anonymous,
+            "http",
         )
         .await
         .unwrap();
@@ -354,7 +689,8 @@ mod tests {
             from,
             to,
             RegistryAuth::Anonymous,
-            RegistryAuth::Anonymous
+            RegistryAuth::Anonymous,
+            "http",
         )
         .await
         .is_err());

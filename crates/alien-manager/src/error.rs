@@ -236,10 +236,10 @@ pub enum ErrorData {
     /// The deployment's images have no replica in its region yet, so its step is not accepted.
     #[error(
         code = "REGISTRY_REPLICA_PENDING",
-        message = "Deployment '{deployment_id}' waits for its images to replicate to its region; the step is retried until they have.",
-        retryable = "true",
+        message = "Deployment '{deployment_id}' cannot use its regional images; inspect the registry error before retrying.",
+        retryable = "inherit",
         internal = "false",
-        http_status_code = 503
+        http_status_code = "inherit"
     )]
     RegistryReplicaPending { deployment_id: String },
 

@@ -20,7 +20,12 @@ use async_trait::async_trait;
 use base64::engine::{general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::DateTime;
 use serde_json::{json, Value};
-use tokio::time::{sleep, Duration};
+use std::sync::Arc;
+use tokio::{
+    sync::{Mutex, Semaphore},
+    task::JoinHandle,
+    time::{sleep, Duration},
+};
 use tracing::{info, warn};
 
 /// How long a grant waits for ECR to create a replicated repository in a target region.
@@ -33,7 +38,7 @@ const REPLICA_WAIT: Duration = Duration::from_secs(20);
 const REPLICA_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 /// AWS ECR implementation of the ArtifactRegistry binding.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EcrArtifactRegistry {
     credentials: AwsCredentialProvider,
     ecr_client: EcrClient,
@@ -44,6 +49,22 @@ pub struct EcrArtifactRegistry {
     legacy_sandbox_repository_prefixes: Vec<String>,
     pull_role_arn: Option<String>,
     push_role_arn: Option<String>,
+    regional_copy: Arc<Mutex<Option<RegionalCopy>>>,
+}
+
+// A binding cache miss must not create an unbounded queue or duplicate memory/disk budgets.
+static REGIONAL_COPY_CAPACITY: Semaphore = Semaphore::const_new(1);
+
+#[derive(Debug)]
+struct RegionalCopy {
+    key: (String, String, String),
+    task: JoinHandle<Result<()>>,
+}
+
+impl Drop for RegionalCopy {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
 }
 
 /// Builds the ECR repository policy document granting a customer account cross-account pull.
@@ -259,6 +280,133 @@ fn valid_sandbox_namespace(prefix: &str, replicated_prefix: &str) -> bool {
 }
 
 impl EcrArtifactRegistry {
+    async fn regional_image_available(
+        &self,
+        repository: &str,
+        digest: &str,
+        region: &str,
+    ) -> Result<bool> {
+        let target = self.policy_management_client(region, repository).await?;
+        let lookup = target
+            .batch_get_image(
+                alien_aws_clients::ecr::BatchGetImageRequest::builder()
+                    .repository_name(repository.to_string())
+                    .image_ids(vec![alien_aws_clients::ecr::ImageIdentifier {
+                        image_tag: None,
+                        image_digest: Some(digest.to_string()),
+                    }])
+                    .build(),
+            )
+            .await;
+        match lookup {
+            Ok(response) => {
+                if let Some(image) = response.images.first() {
+                    if image.image_id.image_digest.as_deref() != Some(digest)
+                        || super::regional_image::digest(image.image_manifest.as_bytes()) != digest
+                    {
+                        return Err(AlienError::new(ErrorData::RegionalImageInvalid {
+                            reason: "regional image digest mismatch".into(),
+                        }));
+                    }
+                    return Ok(true);
+                }
+                if response
+                    .failures
+                    .iter()
+                    .any(|failure| failure.failure_code != "ImageNotFound")
+                {
+                    return Err(AlienError::new(ErrorData::RegistryReplicaNotReady {
+                        repository: repository.into(),
+                        region: region.into(),
+                        details: "regional image lookup refused".into(),
+                    }));
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) => {}
+            Err(error) => {
+                return Err(map_cloud_client_error(
+                    error,
+                    "Read regional image".into(),
+                    Some(repository.into()),
+                ))
+            }
+        }
+        Ok(false)
+    }
+
+    async fn materialize_regional_image(
+        &self,
+        repository: &str,
+        digest: &str,
+        region: &str,
+    ) -> Result<()> {
+        if self
+            .regional_image_available(repository, digest, region)
+            .await?
+        {
+            return Ok(());
+        }
+        let target = self.policy_management_client(region, repository).await?;
+        match target
+            .create_repository(
+                CreateRepositoryRequest::builder()
+                    .repository_name(repository.to_string())
+                    .build(),
+            )
+            .await
+        {
+            Ok(_) => {}
+            Err(error) => {
+                let error = map_cloud_client_error(
+                    error,
+                    "Create owned regional repository".into(),
+                    Some(repository.into()),
+                );
+                if error.http_status_code != Some(409) {
+                    return Err(error);
+                }
+            }
+        }
+        let source = self
+            .policy_management_client(self.credentials.region(), repository)
+            .await?;
+        let source_auth = regional_auth(&source, repository).await?;
+        let target_auth = regional_auth(&target, repository).await?;
+        let source_reference = format!(
+            "{}/{repository}@{digest}",
+            self.registry_endpoint().trim_start_matches("https://")
+        );
+        let target_reference = source_reference.replacen(
+            &format!(".ecr.{}.", self.credentials.region()),
+            &format!(".ecr.{region}."),
+            1,
+        );
+        let pending = |details: String| {
+            AlienError::new(ErrorData::RegistryReplicaNotReady {
+                repository: repository.into(),
+                region: region.into(),
+                details,
+            })
+        };
+        let source_reference = source_reference
+            .parse()
+            .map_err(|_| pending("invalid source image reference".into()))?;
+        let target_reference = target_reference
+            .parse()
+            .map_err(|_| pending("invalid regional image reference".into()))?;
+        super::regional_image::copy_closure(
+            source_reference,
+            target_reference,
+            source_auth,
+            target_auth,
+        )
+        .await
+    }
+
     /// Creates a new AWS ECR artifact registry binding from binding parameters.
     pub async fn new(
         binding_name: String,
@@ -354,6 +502,7 @@ impl EcrArtifactRegistry {
             legacy_sandbox_repository_prefixes,
             pull_role_arn,
             push_role_arn,
+            regional_copy: Arc::default(),
         })
     }
 
@@ -712,134 +861,87 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         digest: &str,
         region: &str,
     ) -> Result<()> {
-        if region == self.credentials.region() {
-            return Ok(());
-        }
+        // Authorization is repeated before task admission, including the same-region no-op.
         let allowed = std::iter::once(&self.repository_prefix)
             .chain(self.legacy_repository_prefixes.iter())
             .any(|prefix| repository == prefix || repository.starts_with(&format!("{prefix}-")));
         if !allowed
-            || !digest.strip_prefix("sha256:").is_some_and(|hex| {
-                hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
-            })
+            || !digest
+                .strip_prefix("sha256:")
+                .is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
         {
             return Err(AlienError::new(ErrorData::OperationNotSupported {
                 operation: "regional image materialization".into(),
                 reason: "an owned repository and immutable sha256 image digest are required".into(),
             }));
         }
-        let target = self.policy_management_client(region, repository).await?;
-        let lookup = target
-            .batch_get_image(
-                alien_aws_clients::ecr::BatchGetImageRequest::builder()
-                    .repository_name(repository.to_string())
-                    .image_ids(vec![alien_aws_clients::ecr::ImageIdentifier {
-                        image_tag: None,
-                        image_digest: Some(digest.to_string()),
-                    }])
-                    .build(),
-            )
-            .await;
-        match lookup {
-            Ok(response) => {
-                if let Some(image) = response.images.first() {
-                    if image.image_id.image_digest.as_deref() != Some(digest)
-                        || super::regional_image::digest(image.image_manifest.as_bytes()) != digest
-                    {
-                        return Err(AlienError::new(ErrorData::RegistryReplicaNotReady {
-                            repository: repository.into(),
-                            region: region.into(),
-                            details: "regional image digest mismatch".into(),
-                        }));
-                    }
-                    return Ok(());
-                }
-                if response
-                    .failures
-                    .iter()
-                    .any(|failure| failure.failure_code != "ImageNotFound")
-                {
-                    return Err(AlienError::new(ErrorData::RegistryReplicaNotReady {
-                        repository: repository.into(),
-                        region: region.into(),
-                        details: "regional image lookup refused".into(),
-                    }));
-                }
-            }
-            Err(error)
-                if matches!(
-                    error.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) => {}
-            Err(error) => {
-                return Err(map_cloud_client_error(
-                    error,
-                    "Read regional image".into(),
-                    Some(repository.into()),
-                ))
-            }
+        if region == self.credentials.region() {
+            return Ok(());
         }
-        match target
-            .create_repository(
-                CreateRepositoryRequest::builder()
-                    .repository_name(repository.to_string())
-                    .build(),
-            )
-            .await
-        {
-            Ok(_) => {}
-            Err(error) => {
-                let error = map_cloud_client_error(
-                    error,
-                    "Create owned regional repository".into(),
-                    Some(repository.into()),
-                );
-                if error.http_status_code != Some(409) {
-                    return Err(error);
-                }
-            }
-        }
-        let source = self
-            .policy_management_client(self.credentials.region(), repository)
-            .await?;
-        let source_auth = regional_auth(&source, repository).await?;
-        let target_auth = regional_auth(&target, repository).await?;
-        let source_reference = format!(
-            "{}/{repository}@{digest}",
-            self.registry_endpoint().trim_start_matches("https://")
+        let key = (
+            repository.to_string(),
+            digest.to_string(),
+            region.to_string(),
         );
-        let target_reference = source_reference.replacen(
-            &format!(".ecr.{}.", self.credentials.region()),
-            &format!(".ecr.{region}."),
-            1,
-        );
-        let pending = |details: String| {
+        let pending = || {
             AlienError::new(ErrorData::RegistryReplicaNotReady {
                 repository: repository.into(),
                 region: region.into(),
-                details,
+                details: "owned image materialization is in progress; retry this deployment step"
+                    .into(),
             })
         };
-        let source_reference = source_reference
-            .parse()
-            .map_err(|_| pending("invalid source image reference".into()))?;
-        let target_reference = target_reference
-            .parse()
-            .map_err(|_| pending("invalid regional image reference".into()))?;
-        tokio::time::timeout(
-            Duration::from_secs(120),
-            super::regional_image::copy_closure(
-                source_reference,
-                target_reference,
-                source_auth,
-                target_auth,
-            ),
+        if tokio::time::timeout(
+            Duration::from_secs(10),
+            self.regional_image_available(repository, digest, region),
         )
         .await
-        .map_err(|_| {
-            pending("regional image copy exceeded 120 seconds; retry the deployment".into())
-        })?
-        .map_err(pending)
+        .into_alien_error()
+        .context(ErrorData::RegionalImageTransferFailed {
+            operation: "check regional image within request budget".into(),
+        })?? {
+            return Ok(());
+        }
+        let mut slot = self.regional_copy.lock().await;
+        if let Some(copy) = slot.as_mut() {
+            if !copy.task.is_finished() {
+                return Err(pending());
+            }
+            if copy.key == key {
+                let result = (&mut copy.task).await;
+                slot.take();
+                let result =
+                    result
+                        .into_alien_error()
+                        .context(ErrorData::RegionalImageTransferFailed {
+                            operation: "complete regional image task".into(),
+                        })?;
+                // Success comes from the provider's verified manifest, never an in-memory done flag.
+                return result;
+            }
+            slot.take();
+        }
+        let permit = REGIONAL_COPY_CAPACITY
+            .try_acquire()
+            .map_err(|_| pending())?;
+        let mut registry = self.clone();
+        // The task must not retain its owner's slot: dropping the binding aborts its copy.
+        registry.regional_copy = Arc::default();
+        let (repository, digest, region) = key.clone();
+        let task = tokio::spawn(async move {
+            let _permit = permit;
+            tokio::time::timeout(
+                Duration::from_secs(30 * 60),
+                registry.materialize_regional_image(&repository, &digest, &region),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::RegionalImageTransferFailed {
+                operation: "materialize image within 30 minutes".into(),
+            })?
+        });
+        *slot = Some(RegionalCopy { key, task });
+        Err(pending())
     }
 
     async fn create_repository(&self, repo_name: &str) -> Result<RepositoryResponse> {

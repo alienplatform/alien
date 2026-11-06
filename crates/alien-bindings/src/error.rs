@@ -729,6 +729,36 @@ pub enum ErrorData {
         details: String,
     },
 
+    /// Image content cannot be safely materialized in another region.
+    #[error(
+        code = "REGIONAL_IMAGE_INVALID",
+        message = "Regional image is invalid: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    RegionalImageInvalid { reason: String },
+
+    /// The registry identity cannot read or write the selected regional image.
+    #[error(
+        code = "REGIONAL_IMAGE_ACCESS_DENIED",
+        message = "Registry denied {operation}; update the registry role permissions before retrying",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 403
+    )]
+    RegionalImageAccessDenied { operation: String },
+
+    /// A transient registry or transport failure interrupted a regional transfer.
+    #[error(
+        code = "REGIONAL_IMAGE_TRANSFER_FAILED",
+        message = "Regional image transfer failed during {operation}",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 503
+    )]
+    RegionalImageTransferFailed { operation: String },
+
     /// A replicated registry repository has no copy in a region yet.
     #[error(
         code = "REGISTRY_REPLICA_NOT_READY",
