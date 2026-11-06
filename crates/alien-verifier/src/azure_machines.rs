@@ -88,14 +88,19 @@ pub fn image_facts(image: &str, definition: &Value, version: &Value) -> Result<I
         Some(other) => other,
         None => return Err(missing("architecture")),
     };
-    let created = version["properties"]["publishingProfile"]["publishedDate"]
+    let created = version["properties"]["publishedDate"]
         .as_str()
         .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
         .ok_or_else(|| missing("published date"))?;
+    let root_disk_gib = version["properties"]["storageProfile"]["osDiskImage"]["diskSizeGB"]
+        .as_u64()
+        .and_then(|size| u32::try_from(size).ok())
+        .ok_or_else(|| missing("OS disk size"))?;
     Ok(ImageFacts {
         owner: gallery.to_string(),
         architecture: architecture.to_string(),
         created: created.with_timezone(&Utc),
+        root_disk_gib,
     })
 }
 
@@ -175,7 +180,7 @@ pub fn scale_set_body(
             "createOption": "FromImage",
             "caching": "ReadWrite",
             "managedDisk": {"storageAccountType": "StandardSSD_LRS"},
-            "diskSizeGB": basics.group.aws_root_volume_size_gib(),
+            "diskSizeGB": basics.root_disk_gib,
         },
     });
     if let Some(size) = basics.group.data_disk_size_gib() {
@@ -534,9 +539,17 @@ mod tests {
                     set
                 })
             } else if path.contains("/versions/") {
-                Some(
-                    json!({"properties": {"publishingProfile": {"publishedDate": self.published}}}),
-                )
+                // As a real community gallery version read returned it.
+                Some(json!({
+                    "properties": {
+                        "publishedDate": self.published,
+                        "excludeFromLatest": false,
+                        "storageProfile": {"osDiskImage": {"diskSizeGB": 30, "hostCaching": "ReadWrite"}},
+                        "imageState": "Active"
+                    },
+                    "location": "westeurope",
+                    "name": "1.0.0"
+                }))
             } else if path.contains("/communityGalleries/") {
                 Some(json!({"properties": {"architecture": "x64", "osType": "Linux"}}))
             } else {
@@ -604,6 +617,9 @@ mod tests {
             profile["storageProfile"]["imageReference"],
             json!({"communityGalleryImageId": image()})
         );
+        // The image's 30 GB, not the signed group's smaller root disk:
+        // Azure refuses an OS disk smaller than its image.
+        assert_eq!(profile["storageProfile"]["osDisk"]["diskSizeGB"], 30);
         assert_eq!(
             profile["networkProfile"]["networkInterfaceConfigurations"][0]["properties"]
                 ["ipConfigurations"][0]["properties"]["subnet"]["id"],

@@ -91,10 +91,15 @@ pub fn image_facts(path: &str, image: &Value) -> Result<ImageFacts> {
     if image["status"].as_str() != Some("READY") {
         return Err(refused(format!("image {path} is not READY")));
     }
+    let root_disk_gib = image["diskSizeGb"]
+        .as_str()
+        .and_then(|size| size.parse().ok())
+        .ok_or_else(|| missing("disk size"))?;
     Ok(ImageFacts {
         owner,
         architecture: architecture.to_string(),
         created: created.with_timezone(&Utc),
+        root_disk_gib,
     })
 }
 
@@ -156,7 +161,7 @@ pub fn template_body(
         "autoDelete": true,
         "initializeParams": {
             "sourceImage": image,
-            "diskSizeGb": basics.group.aws_root_volume_size_gib().to_string(),
+            "diskSizeGb": basics.root_disk_gib.to_string(),
             "diskType": "pd-balanced",
         },
     })];
@@ -429,7 +434,7 @@ mod tests {
     /// An image as images.get returns it (fields the verifier reads).
     fn image(created: &str) -> Value {
         json!({"name": "machine-x86-20261101", "status": "READY", "architecture": "X86_64",
-               "creationTimestamp": created})
+               "creationTimestamp": created, "diskSizeGb": "40"})
     }
 
     /// Records each call the way Compute Engine receives it.
@@ -516,6 +521,11 @@ mod tests {
         assert_eq!(
             properties["disks"][0]["initializeParams"]["sourceImage"],
             IMAGE
+        );
+        // The image's 40 GB, not the signed group's smaller root disk.
+        assert_eq!(
+            properties["disks"][0]["initializeParams"]["diskSizeGb"],
+            "40"
         );
         assert_eq!(
             properties["networkInterfaces"],
