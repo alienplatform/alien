@@ -5923,6 +5923,3 @@ export function externalBindingUnionFromJSON(
     `Failed to parse 'ExternalBindingUnion' from JSON`,
   );
 }
-
-// Published external-binding endpoint compatibility exports.
-
