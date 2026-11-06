@@ -37,7 +37,8 @@ cp -R "$sdk_dir/docs/models" "$published_models/model-docs"
     --target platform-typescript \
     --skip-upload-spec \
     --skip-compile \
-    --skip-versioning
+    --skip-versioning \
+    "$@"
 )
 
 # Copy only missing files; current generated models always win over old output.

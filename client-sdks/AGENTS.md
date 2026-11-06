@@ -28,6 +28,19 @@ pnpm run generate:manager-api      # Regenerate manager TypeScript SDK
 pnpm run generate:platform-api     # Regenerate platform TypeScript SDK from checked-in spec
 ```
 
+The Platform generator forwards additional arguments to Speakeasy `run`. To
+generate from the local schema and overlays without registry snapshots or prior
+revision downloads, use the official pinned CLI:
+
+```bash
+SPEAKEASY_BIN=/path/to/speakeasy-1.799.0 \
+  pnpm run generate:platform-api --minimal --auto-yes --output console
+```
+
+Speakeasy still requires an authenticated account with generation access.
+`--minimal` skips workflow tests; this script still builds the complete SDK and
+runs the compatibility and behavior tests afterward.
+
 ### Platform TypeScript SDK drift
 
 The supported Platform API generation pipeline copies the same contract to
