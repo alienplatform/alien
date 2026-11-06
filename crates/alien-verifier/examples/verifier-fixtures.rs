@@ -1,10 +1,10 @@
 //! Signed statements for the verifier's end-to-end test.
 //!
-//! `gate-fixtures <out-dir> <prefix> <install-id> <image-a> <image-b>`
+//! `verifier-fixtures <out-dir> <prefix> <install-id> <image-a> <image-b>`
 //! writes, under fresh keys: signer list version 1, the signing settings and
 //! the empty ledger setup writes for `prefix`, releases of one function
 //! workload `api`, and config statements for `install-id`. See
-//! `scripts/gate-e2e/aws.py`.
+//! `scripts/verifier-e2e/aws.py`.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -89,7 +89,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let [_, out, prefix, install, image_a, image_b] = args.as_slice() else {
         return Err(
-            "usage: gate-fixtures <out-dir> <prefix> <install-id> <image-a> <image-b>".into(),
+            "usage: verifier-fixtures <out-dir> <prefix> <install-id> <image-a> <image-b>".into(),
         );
     };
     let out = PathBuf::from(out);

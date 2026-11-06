@@ -31,10 +31,10 @@ Registration with a control plane is not part of this test: it needs the
 publisher's hardened image and the machine control plane.
 
 Usage (credentials for a test account in the environment):
-    scripts/gate-e2e/machines.py \\
-        --verifier <alien-gate built with crates/alien-core/machine-image-publisher-aws.txt = 137112412989
+    scripts/verifier-e2e/machines.py \\
+        --verifier <alien-verifier built with crates/alien-core/machine-image-publisher-aws.txt = 137112412989
                     and machine-image-minimum-created.txt = 2024-06-01T00:00:00Z> \\
-        --fixtures target/debug/examples/gate-fixtures \\
+        --fixtures target/debug/examples/verifier-fixtures \\
         --evidence /tmp/machines-e2e   # resources named $TEST_RESOURCE_PREFIX-<random>
 """
 

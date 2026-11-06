@@ -12,17 +12,17 @@
 //! GCP takes its access token from the file in `VERIFIER_GCP_TOKEN_FILE`;
 //! Azure from `IDENTITY_ENDPOINT`/`IDENTITY_HEADER`, as on Container Apps.
 //! Prints the answer, or the refusal and exits 1. See
-//! `scripts/gate-e2e/cloud_machines.py`.
+//! `scripts/verifier-e2e/gcp_machines.py`.
 
 use std::io::Read as _;
 use std::sync::Arc;
 
-use alien_gate::azure::{Azure, AzureBackend, AzureInstall};
-use alien_gate::gcp::{Gcp, GcpBackend, GcpInstall, TokenSource};
-use alien_gate::machines::ImagePins;
-use alien_gate::plan::SetupNetwork;
-use alien_gate::{describe, Verifier};
 use alien_signing::InstallId;
+use alien_verifier::azure::{Azure, AzureBackend, AzureInstall};
+use alien_verifier::gcp::{Gcp, GcpBackend, GcpInstall, TokenSource};
+use alien_verifier::machines::ImagePins;
+use alien_verifier::plan::SetupNetwork;
+use alien_verifier::{describe, Verifier};
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
