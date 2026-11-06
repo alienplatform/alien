@@ -2958,7 +2958,7 @@ mod tests {
             .get_mut("api")
             .and_then(|entry| entry.config.downcast_mut::<Container>())
             .expect("test stack should contain a container")
-            .replicas = Some(200);
+            .replicas = Some(400);
 
         let plan = plan_compute(&stack, Platform::Aws, None).expect("plan should build");
         let pool = &plan.pools[0];
