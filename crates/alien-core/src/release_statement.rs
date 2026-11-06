@@ -105,41 +105,6 @@ pub struct ReleaseOptions {
     pub setup: BTreeMap<String, SetupTemplate>,
 }
 
-/// Stable install-local selectors for a workload's managed TLS pair. These
-/// names contain no certificate material and do not change during renewal.
-pub fn private_tls_input_names(resource: &str) -> [String; 2] {
-    use sha2::{Digest, Sha256};
-    let id = format!("{:x}", Sha256::digest(resource.as_bytes()));
-    [format!("tls-{id}-cert"), format!("tls-{id}-key")]
-}
-
-/// Public HTTP resources whose certificates terminate at the cloud listener.
-/// Derive this list only from the verified signed stack, never a hosted request.
-pub fn private_tls_resource_ids(stack: &Stack) -> Vec<String> {
-    stack
-        .resources()
-        .filter_map(|(id, entry)| {
-            let endpoints = entry
-                .config
-                .downcast_ref::<Container>()
-                .map(|value| &value.public_endpoints)
-                .or_else(|| {
-                    entry
-                        .config
-                        .downcast_ref::<Daemon>()
-                        .map(|value| &value.public_endpoints)
-                });
-            endpoints
-                .is_some_and(|values| {
-                    values
-                        .iter()
-                        .any(|endpoint| matches!(endpoint.protocol, crate::ExposeProtocol::Http))
-                })
-                .then(|| id.clone())
-        })
-        .collect()
-}
-
 /// The `release/v2` body for `stack` on `platform`. Every image must be
 /// pinned by digest and built before the release, so source code, unpinned
 /// images and resource types nothing can check are refused here, where the
