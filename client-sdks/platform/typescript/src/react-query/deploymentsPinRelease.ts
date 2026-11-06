@@ -70,7 +70,7 @@ export function useDeploymentsPinReleaseMutation(
 }
 
 export function mutationKeyDeploymentsPinRelease(): MutationKey {
-  return ["@alienplatform/platform-api", "deployments", "pinRelease"];
+  return ["@alienplatform/platform-api", "Deployments", "pinRelease"];
 }
 
 export function buildDeploymentsPinReleaseMutation(

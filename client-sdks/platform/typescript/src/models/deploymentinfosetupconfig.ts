@@ -243,6 +243,27 @@ export type DeploymentInfoSetupConfigEnv = {
 };
 
 /**
+ * A file delivered from the install-owned input store after a signed release
+ *
+ * @remarks
+ * authorizes its exact destination. Values are never part of the release.
+ */
+export type DeploymentInfoSetupConfigFile = {
+  /**
+   * Optional environment variable containing the destination path.
+   */
+  envName?: string | null | undefined;
+  /**
+   * Absolute destination inside the workload.
+   */
+  path: string;
+  /**
+   * Resource IDs or prefix patterns; absent selects all workloads.
+   */
+  targetResources?: Array<string> | null | undefined;
+};
+
+/**
  * Asks Alien to generate a secret input's value.
  *
  * @remarks
@@ -362,6 +383,24 @@ export type DeploymentInfoSetupConfigValidationUnion =
   | string;
 
 /**
+ * A boolean input condition controlling whether another input applies.
+ */
+export type DeploymentInfoSetupConfigWhen = {
+  /**
+   * Boolean value for which this input applies.
+   */
+  equals: boolean;
+  /**
+   * ID of an unconditional boolean input in the same stack.
+   */
+  input: string;
+};
+
+export type DeploymentInfoSetupConfigWhenUnion =
+  | DeploymentInfoSetupConfigWhen
+  | string;
+
+/**
  * Stack input definition serialized into a release stack.
  */
 export type DeploymentInfoSetupConfigInput = {
@@ -381,6 +420,13 @@ export type DeploymentInfoSetupConfigInput = {
    * Runtime env-var mappings for v1 input resolution.
    */
   env?: Array<DeploymentInfoSetupConfigEnv> | undefined;
+  /**
+   * Private file projections. Supported only for unconditional, deployer-only
+   *
+   * @remarks
+   * secret inputs in a protected private installation.
+   */
+  files?: Array<DeploymentInfoSetupConfigFile> | undefined;
   generate?: DeploymentInfoSetupConfigGenerate | string | null | undefined;
   /**
    * Stable input ID used by CLI/API calls.
@@ -411,6 +457,7 @@ export type DeploymentInfoSetupConfigInput = {
    */
   required: boolean;
   validation?: DeploymentInfoSetupConfigValidation | string | null | undefined;
+  when?: DeploymentInfoSetupConfigWhen | string | null | undefined;
 };
 
 export type DeploymentInfoSetupConfig = {
@@ -802,6 +849,26 @@ export function deploymentInfoSetupConfigEnvFromJSON(
 }
 
 /** @internal */
+export const DeploymentInfoSetupConfigFile$inboundSchema: z.ZodType<
+  DeploymentInfoSetupConfigFile,
+  unknown
+> = z.object({
+  envName: z.nullable(z.string()).optional(),
+  path: z.string(),
+  targetResources: z.nullable(z.array(z.string())).optional(),
+});
+
+export function deploymentInfoSetupConfigFileFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoSetupConfigFile, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInfoSetupConfigFile$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoSetupConfigFile' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentInfoSetupConfigGenerate$inboundSchema: z.ZodType<
   DeploymentInfoSetupConfigGenerate,
   unknown
@@ -907,6 +974,45 @@ export function deploymentInfoSetupConfigValidationUnionFromJSON(
 }
 
 /** @internal */
+export const DeploymentInfoSetupConfigWhen$inboundSchema: z.ZodType<
+  DeploymentInfoSetupConfigWhen,
+  unknown
+> = z.object({
+  equals: z.boolean(),
+  input: z.string(),
+});
+
+export function deploymentInfoSetupConfigWhenFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoSetupConfigWhen, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInfoSetupConfigWhen$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoSetupConfigWhen' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoSetupConfigWhenUnion$inboundSchema: z.ZodType<
+  DeploymentInfoSetupConfigWhenUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentInfoSetupConfigWhen$inboundSchema),
+  z.string(),
+]);
+
+export function deploymentInfoSetupConfigWhenUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoSetupConfigWhenUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentInfoSetupConfigWhenUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoSetupConfigWhenUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentInfoSetupConfigInput$inboundSchema: z.ZodType<
   DeploymentInfoSetupConfigInput,
   unknown
@@ -922,6 +1028,8 @@ export const DeploymentInfoSetupConfigInput$inboundSchema: z.ZodType<
   ).optional(),
   description: z.string(),
   env: z.array(z.lazy(() => DeploymentInfoSetupConfigEnv$inboundSchema))
+    .optional(),
+  files: z.array(z.lazy(() => DeploymentInfoSetupConfigFile$inboundSchema))
     .optional(),
   generate: z.nullable(
     z.union([
@@ -941,6 +1049,12 @@ export const DeploymentInfoSetupConfigInput$inboundSchema: z.ZodType<
   validation: z.nullable(
     z.union([
       z.lazy(() => DeploymentInfoSetupConfigValidation$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  when: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentInfoSetupConfigWhen$inboundSchema),
       z.string(),
     ]),
   ).optional(),

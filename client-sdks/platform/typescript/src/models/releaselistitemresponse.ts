@@ -3,7 +3,9 @@
  */
 
 import * as z from "zod/v4";
+import { remap as remap$ } from "../lib/primitives.js";
 import { safeParse } from "../lib/schemas.js";
+import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import { GitMetadata, GitMetadata$inboundSchema } from "./gitmetadata.js";
@@ -11,6 +13,10 @@ import {
   SetupFingerprintInfo,
   SetupFingerprintInfo$inboundSchema,
 } from "./setupfingerprintinfo.js";
+import {
+  SignedStatement,
+  SignedStatement$inboundSchema,
+} from "./signedstatement.js";
 
 export type ReleaseListItemResponseStack = {
   aws?: any | null | undefined;
@@ -20,6 +26,49 @@ export type ReleaseListItemResponseStack = {
   machines?: any | null | undefined;
   local?: any | null | undefined;
   test?: any | null | undefined;
+};
+
+export type ReleaseListItemResponseSignedStacks = {
+  aws?: SignedStatement | undefined;
+  gcp?: SignedStatement | undefined;
+  azure?: SignedStatement | undefined;
+  kubernetes?: SignedStatement | undefined;
+  machines?: SignedStatement | undefined;
+  local?: SignedStatement | undefined;
+  test?: SignedStatement | undefined;
+};
+
+export const ReleaseListItemResponseKind = {
+  Device: "device",
+  Ci: "ci",
+  Recovery: "recovery",
+  Unknown: "unknown",
+} as const;
+export type ReleaseListItemResponseKind = ClosedEnum<
+  typeof ReleaseListItemResponseKind
+>;
+
+export type ReleaseListItemResponseSigner = {
+  id: string;
+  /**
+   * Label from the trusted-device list, such as `alice-mbp`
+   */
+  label: string;
+  kind: ReleaseListItemResponseKind;
+};
+
+/**
+ * Who signed the release and for which channel; null when unsigned
+ */
+export type ReleaseListItemResponseSigning = {
+  /**
+   * Channel the release was signed for
+   */
+  channel: string;
+  /**
+   * Who signed it
+   */
+  signers: Array<ReleaseListItemResponseSigner>;
 };
 
 /**
@@ -34,6 +83,21 @@ export type ReleaseListItemResponseProject = {
    * Project name
    */
   name: string;
+};
+
+/**
+ * Deployments per rollout state relative to this release, counted like the release's deployments list
+ */
+export type StateCounts = {
+  updated: number;
+  updating: number;
+  failed: number;
+  pending: number;
+  waitingOnOwner: number;
+  waitingOnInputs: number;
+  pinnedOther: number;
+  superseded: number;
+  onOther: number;
 };
 
 /**
@@ -52,6 +116,10 @@ export type Rollout = {
    * Average time from release creation until a deployment finished updating, in milliseconds
    */
   avgDurationMs: number | null;
+  /**
+   * Deployments per rollout state relative to this release, counted like the release's deployments list
+   */
+  stateCounts: StateCounts;
 };
 
 /**
@@ -90,6 +158,11 @@ export type ReleaseListItemResponse = {
   gitMetadata?: GitMetadata | null | undefined;
   createdAt: Date;
   stack?: ReleaseListItemResponseStack | null | undefined;
+  signedStacks?: ReleaseListItemResponseSignedStacks | null | undefined;
+  /**
+   * Who signed the release and for which channel; null when unsigned
+   */
+  signing?: ReleaseListItemResponseSigning | null | undefined;
   /**
    * Per-target setup compatibility fingerprints for this release
    */
@@ -147,6 +220,75 @@ export function releaseListItemResponseStackFromJSON(
 }
 
 /** @internal */
+export const ReleaseListItemResponseSignedStacks$inboundSchema: z.ZodType<
+  ReleaseListItemResponseSignedStacks,
+  unknown
+> = z.object({
+  aws: SignedStatement$inboundSchema.optional(),
+  gcp: SignedStatement$inboundSchema.optional(),
+  azure: SignedStatement$inboundSchema.optional(),
+  kubernetes: SignedStatement$inboundSchema.optional(),
+  machines: SignedStatement$inboundSchema.optional(),
+  local: SignedStatement$inboundSchema.optional(),
+  test: SignedStatement$inboundSchema.optional(),
+});
+
+export function releaseListItemResponseSignedStacksFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseListItemResponseSignedStacks, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ReleaseListItemResponseSignedStacks$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseListItemResponseSignedStacks' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseListItemResponseKind$inboundSchema: z.ZodEnum<
+  typeof ReleaseListItemResponseKind
+> = z.enum(ReleaseListItemResponseKind);
+
+/** @internal */
+export const ReleaseListItemResponseSigner$inboundSchema: z.ZodType<
+  ReleaseListItemResponseSigner,
+  unknown
+> = z.object({
+  id: z.string(),
+  label: z.string(),
+  kind: ReleaseListItemResponseKind$inboundSchema,
+});
+
+export function releaseListItemResponseSignerFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseListItemResponseSigner, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseListItemResponseSigner$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseListItemResponseSigner' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseListItemResponseSigning$inboundSchema: z.ZodType<
+  ReleaseListItemResponseSigning,
+  unknown
+> = z.object({
+  channel: z.string(),
+  signers: z.array(z.lazy(() => ReleaseListItemResponseSigner$inboundSchema)),
+});
+
+export function releaseListItemResponseSigningFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseListItemResponseSigning, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseListItemResponseSigning$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseListItemResponseSigning' from JSON`,
+  );
+}
+
+/** @internal */
 export const ReleaseListItemResponseProject$inboundSchema: z.ZodType<
   ReleaseListItemResponseProject,
   unknown
@@ -166,10 +308,42 @@ export function releaseListItemResponseProjectFromJSON(
 }
 
 /** @internal */
+export const StateCounts$inboundSchema: z.ZodType<StateCounts, unknown> = z
+  .object({
+    updated: z.int(),
+    updating: z.int(),
+    failed: z.int(),
+    pending: z.int(),
+    "waiting-on-owner": z.int(),
+    "waiting-on-inputs": z.int(),
+    "pinned-other": z.int(),
+    superseded: z.int(),
+    "on-other": z.int(),
+  }).transform((v) => {
+    return remap$(v, {
+      "waiting-on-owner": "waitingOnOwner",
+      "waiting-on-inputs": "waitingOnInputs",
+      "pinned-other": "pinnedOther",
+      "on-other": "onOther",
+    });
+  });
+
+export function stateCountsFromJSON(
+  jsonString: string,
+): SafeParseResult<StateCounts, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => StateCounts$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'StateCounts' from JSON`,
+  );
+}
+
+/** @internal */
 export const Rollout$inboundSchema: z.ZodType<Rollout, unknown> = z.object({
   updatedCount: z.int(),
   pendingCount: z.int(),
   avgDurationMs: z.nullable(z.number()),
+  stateCounts: z.lazy(() => StateCounts$inboundSchema),
 });
 
 export function rolloutFromJSON(
@@ -216,6 +390,12 @@ export const ReleaseListItemResponse$inboundSchema: z.ZodType<
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   stack: z.nullable(z.lazy(() => ReleaseListItemResponseStack$inboundSchema))
     .optional(),
+  signedStacks: z.nullable(
+    z.lazy(() => ReleaseListItemResponseSignedStacks$inboundSchema),
+  ).optional(),
+  signing: z.nullable(
+    z.lazy(() => ReleaseListItemResponseSigning$inboundSchema),
+  ).optional(),
   setupFingerprints: z.record(z.string(), SetupFingerprintInfo$inboundSchema),
   rootDirectory: z.nullable(z.string()).optional(),
   createdByUserId: z.nullable(z.string()).optional(),

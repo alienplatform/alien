@@ -6,7 +6,7 @@
 import { UpdateWorkspaceRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: UpdateWorkspaceRequest = {
-  id: "ws_It13CUaGEhLLAB87simX0",
+  id: "ws_It13CUaGEhLLAB87simX07Xb",
 };
 ```
 
@@ -14,5 +14,5 @@ let value: UpdateWorkspaceRequest = {
 
 | Field                                                                                          | Type                                                                                           | Required                                                                                       | Description                                                                                    | Example                                                                                        |
 | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `id`                                                                                           | *string*                                                                                       | :heavy_check_mark:                                                                             | Unique identifier for the workspace.                                                           | ws_It13CUaGEhLLAB87simX0                                                                       |
+| `id`                                                                                           | *string*                                                                                       | :heavy_check_mark:                                                                             | Unique identifier for the workspace.                                                           | ws_It13CUaGEhLLAB87simX07Xb                                                                    |
 | `requestBody`                                                                                  | [operations.UpdateWorkspaceRequestBody](../../models/operations/updateworkspacerequestbody.md) | :heavy_minus_sign:                                                                             | N/A                                                                                            |                                                                                                |

@@ -15,6 +15,22 @@ export type ListDeploymentGroupsGlobals = {
   workspace?: string | undefined;
 };
 
+export const PendingInvites = {
+  True: "true",
+} as const;
+export type PendingInvites = ClosedEnum<typeof PendingInvites>;
+
+/**
+ * Only groups without deployments
+ */
+export const Empty = {
+  True: "true",
+} as const;
+/**
+ * Only groups without deployments
+ */
+export type Empty = ClosedEnum<typeof Empty>;
+
 export const ListDeploymentGroupsInclude = {
   Project: "project",
 } as const;
@@ -27,6 +43,11 @@ export type ListDeploymentGroupsRequest = {
    * Filter by project ID or name.
    */
   project?: string | undefined;
+  pendingInvites?: PendingInvites | undefined;
+  /**
+   * Only groups without deployments
+   */
+  empty?: Empty | undefined;
   /**
    * Search deployment groups by name
    */
@@ -84,6 +105,10 @@ export type ListDeploymentGroupsItem = {
    * Maximum number of deployments allowed in this deployment group
    */
   maxDeployments: number;
+  /**
+   * Whether new deployments from this group are protected once the project's signing is ready. On by default; the vendor may turn it off.
+   */
+  protectNewDeployments: boolean;
   createdAt: Date;
   /**
    * Project info, included when ?include=project is used
@@ -92,7 +117,7 @@ export type ListDeploymentGroupsItem = {
 };
 
 /**
- * Paginated response
+ * List of deployment groups
  */
 export type ListDeploymentGroupsResponse = {
   /**
@@ -103,7 +128,18 @@ export type ListDeploymentGroupsResponse = {
    * Cursor for the next page, null if last page
    */
   nextCursor: string | null;
+  /**
+   * Total matching empty or invited deployment groups; returned to workspace users and administrators.
+   */
+  total?: number | undefined;
 };
+
+/** @internal */
+export const PendingInvites$outboundSchema: z.ZodEnum<typeof PendingInvites> = z
+  .enum(PendingInvites);
+
+/** @internal */
+export const Empty$outboundSchema: z.ZodEnum<typeof Empty> = z.enum(Empty);
 
 /** @internal */
 export const ListDeploymentGroupsInclude$outboundSchema: z.ZodEnum<
@@ -113,6 +149,8 @@ export const ListDeploymentGroupsInclude$outboundSchema: z.ZodEnum<
 /** @internal */
 export type ListDeploymentGroupsRequest$Outbound = {
   project?: string | undefined;
+  pendingInvites?: string | undefined;
+  empty?: string | undefined;
   search?: string | undefined;
   include?: Array<string> | undefined;
   limit: number;
@@ -125,6 +163,8 @@ export const ListDeploymentGroupsRequest$outboundSchema: z.ZodType<
   ListDeploymentGroupsRequest
 > = z.object({
   project: z.string().optional(),
+  pendingInvites: PendingInvites$outboundSchema.optional(),
+  empty: Empty$outboundSchema.optional(),
   search: z.string().optional(),
   include: z.array(ListDeploymentGroupsInclude$outboundSchema).optional(),
   limit: z.int().default(20),
@@ -171,6 +211,7 @@ export const ListDeploymentGroupsItem$inboundSchema: z.ZodType<
   projectId: z.string(),
   workspaceId: z.string(),
   maxDeployments: z.int().default(100),
+  protectNewDeployments: z.boolean().default(true),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   project: z.nullable(z.lazy(() => ListDeploymentGroupsProject$inboundSchema))
     .optional(),
@@ -193,6 +234,7 @@ export const ListDeploymentGroupsResponse$inboundSchema: z.ZodType<
 > = z.object({
   items: z.array(z.lazy(() => ListDeploymentGroupsItem$inboundSchema)),
   nextCursor: z.nullable(z.string()),
+  total: z.int().optional(),
 });
 
 export function listDeploymentGroupsResponseFromJSON(

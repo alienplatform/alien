@@ -14,7 +14,7 @@ let value: PreparedDeploymentStackProfileGcpResource = {
 
 ## Fields
 
-| Field                                                         | Type                                                          | Required                                                      | Description                                                   |
-| ------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------- |
-| `condition`                                                   | *models.PreparedDeploymentStackProfileResourceConditionUnion* | :heavy_minus_sign:                                            | N/A                                                           |
-| `scope`                                                       | *string*                                                      | :heavy_check_mark:                                            | Scope (project/resource level)                                |
+| Field                                                            | Type                                                             | Required                                                         | Description                                                      |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `condition`                                                      | *models.PreparedDeploymentStackProfileGcpResourceConditionUnion* | :heavy_minus_sign:                                               | N/A                                                              |
+| `scope`                                                          | *string*                                                         | :heavy_check_mark:                                               | Scope (project/resource level)                                   |

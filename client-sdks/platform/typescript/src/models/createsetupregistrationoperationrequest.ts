@@ -24,6 +24,26 @@ import {
   KubernetesBasePlatform$outboundSchema,
 } from "./kubernetesbaseplatform.js";
 import {
+  KubernetesExposureCustom,
+  KubernetesExposureCustom$Outbound,
+  KubernetesExposureCustom$outboundSchema,
+} from "./kubernetesexposurecustom.js";
+import {
+  KubernetesExposureCustomBaseDomain,
+  KubernetesExposureCustomBaseDomain$Outbound,
+  KubernetesExposureCustomBaseDomain$outboundSchema,
+} from "./kubernetesexposurecustombasedomain.js";
+import {
+  KubernetesExposureDisabled,
+  KubernetesExposureDisabled$Outbound,
+  KubernetesExposureDisabled$outboundSchema,
+} from "./kubernetesexposuredisabled.js";
+import {
+  KubernetesExposureGenerated,
+  KubernetesExposureGenerated$Outbound,
+  KubernetesExposureGenerated$outboundSchema,
+} from "./kubernetesexposuregenerated.js";
+import {
   SetupRegistrationAction,
   SetupRegistrationAction$outboundSchema,
 } from "./setupregistrationaction.js";
@@ -100,6 +120,13 @@ export type CreateSetupRegistrationOperationRequestFailureDomainsUnion2 =
   | string;
 
 export type CreateSetupRegistrationOperationRequestPoolsAutoscale = {
+  /**
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
+   */
+  dataDiskGib?: number | null | undefined;
   failureDomains?:
     | CreateSetupRegistrationOperationRequestFailureDomains2
     | string
@@ -142,6 +169,13 @@ export type CreateSetupRegistrationOperationRequestFailureDomainsUnion1 =
   | string;
 
 export type CreateSetupRegistrationOperationRequestPoolsFixed = {
+  /**
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
+   */
+  dataDiskGib?: number | null | undefined;
   failureDomains?:
     | CreateSetupRegistrationOperationRequestFailureDomains1
     | string
@@ -260,9 +294,18 @@ export type CreateSetupRegistrationOperationRequestDomainsKubernetesUnion =
   | string;
 
 /**
+ * Managed certificate issuance settings.
+ */
+export type CreateSetupRegistrationOperationRequestManaged = {};
+
+export type CreateSetupRegistrationOperationRequestManagedUnion =
+  | CreateSetupRegistrationOperationRequestManaged
+  | string;
+
+/**
  * Platform-specific certificate references for custom domains.
  */
-export type CreateSetupRegistrationOperationRequestDomainsCertificate = {
+export type CreateSetupRegistrationOperationRequestCertificate = {
   aws?: CreateSetupRegistrationOperationRequestAws | string | null | undefined;
   azure?:
     | CreateSetupRegistrationOperationRequestAzure
@@ -275,6 +318,11 @@ export type CreateSetupRegistrationOperationRequestDomainsCertificate = {
     | string
     | null
     | undefined;
+  managed?:
+    | CreateSetupRegistrationOperationRequestManaged
+    | string
+    | null
+    | undefined;
 };
 
 /**
@@ -284,11 +332,15 @@ export type CreateSetupRegistrationOperationRequestCustomDomains = {
   /**
    * Platform-specific certificate references for custom domains.
    */
-  certificate: CreateSetupRegistrationOperationRequestDomainsCertificate;
+  certificate: CreateSetupRegistrationOperationRequestCertificate;
   /**
-   * Fully qualified domain name to use.
+   * Fully qualified domain name for a supplied certificate.
    */
-  domain: string;
+  domain?: string | undefined;
+  /**
+   * Hostnames keyed by endpoint name for a managed certificate.
+   */
+  endpoints?: { [k: string]: string } | undefined;
 };
 
 export const CreateSetupRegistrationOperationRequestModeLoadBalancer = {
@@ -330,7 +382,7 @@ export type CreateSetupRegistrationOperationRequestPublicEndpointTargetUnion =
  * @remarks
  *
  * When `custom_domains` is set, the specified resources use customer-provided
- * domains and certificates. Otherwise, Alien auto-generates domains.
+ * domains with supplied or managed certificates. Otherwise, Alien auto-generates domains.
  */
 export type CreateSetupRegistrationOperationRequestDomains = {
   /**
@@ -435,641 +487,11 @@ export type CreateSetupRegistrationOperationRequestClusterUnion =
   | CreateSetupRegistrationOperationRequestCluster
   | string;
 
-export type CreateSetupRegistrationOperationRequestCertificateNone2 = {
-  mode: "none";
-};
-
-export type CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret2 =
-  {
-    mode: "managedTlsSecret";
-    /**
-     * Secret name template. Runtime may substitute resource/deployment tokens.
-     */
-    secretNameTemplate: string;
-  };
-
-export type CreateSetupRegistrationOperationRequestCertificateAwsAcmArn2 = {
-  /**
-   * Existing ACM certificate ARN.
-   */
-  certificateArn: string;
-  mode: "awsAcmArn";
-};
-
-export type CreateSetupRegistrationOperationRequestCertificateManagedAcmImport2 =
-  {
-    mode: "managedAcmImport";
-    /**
-     * ACM region. Defaults to the deployment region when omitted.
-     */
-    region?: string | null | undefined;
-    /**
-     * Tags applied to runtime-imported ACM certificates.
-     */
-    tags?: { [k: string]: string } | undefined;
-  };
-
-/**
- * Namespace-scoped Kubernetes TLS Secret reference.
- */
-export type CreateSetupRegistrationOperationRequestCertificateTLSSecretRef2 = {
-  /**
-   * Secret namespace. Defaults to the release namespace when omitted.
-   */
-  namespace?: string | null | undefined;
-  /**
-   * Secret name.
-   */
-  secretName: string;
-  mode: "tlsSecretRef";
-};
-
-/**
- * Certificate publication or reference mode for Kubernetes public endpoints.
- */
-export type CreateSetupRegistrationOperationRequestCertificateUnion2 =
-  | CreateSetupRegistrationOperationRequestCertificateTLSSecretRef2
-  | CreateSetupRegistrationOperationRequestCertificateManagedAcmImport2
-  | CreateSetupRegistrationOperationRequestCertificateAwsAcmArn2
-  | CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret2
-  | CreateSetupRegistrationOperationRequestCertificateNone2;
-
-export const CreateSetupRegistrationOperationRequestModeCustom = {
-  Custom: "custom",
-} as const;
-export type CreateSetupRegistrationOperationRequestModeCustom = ClosedEnum<
-  typeof CreateSetupRegistrationOperationRequestModeCustom
->;
-
-export const CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum4 =
-  {
-    AzureApplicationGatewayForContainers:
-      "azureApplicationGatewayForContainers",
-  } as const;
-export type CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum4 =
-  ClosedEnum<
-    typeof CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum4
-  >;
-
-export type CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers4 =
-  {
-    /**
-     * Optional ALB name when using BYO Application Gateway resources.
-     */
-    albName?: string | null | undefined;
-    /**
-     * Optional ALB namespace when using BYO Application Gateway resources.
-     */
-    albNamespace?: string | null | undefined;
-    /**
-     * Public or internal frontend exposure.
-     */
-    frontend: string;
-    provider:
-      CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum4;
-  };
-
-export const CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum4 = {
-  GkeGateway: "gkeGateway",
-} as const;
-export type CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum4 =
-  ClosedEnum<
-    typeof CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum4
-  >;
-
-export type CreateSetupRegistrationOperationRequestProviderGkeGateway4 = {
-  provider: CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum4;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const CreateSetupRegistrationOperationRequestProviderAwsAlbEnum4 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type CreateSetupRegistrationOperationRequestProviderAwsAlbEnum4 =
-  ClosedEnum<typeof CreateSetupRegistrationOperationRequestProviderAwsAlbEnum4>;
-
-export type CreateSetupRegistrationOperationRequestProviderAwsAlb4 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: CreateSetupRegistrationOperationRequestProviderAwsAlbEnum4;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type CreateSetupRegistrationOperationRequestProviderUnion4 =
-  | CreateSetupRegistrationOperationRequestProviderAwsAlb4
-  | CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers4
-  | CreateSetupRegistrationOperationRequestProviderGkeGateway4
-  | string;
-
-/**
- * Shared Gateway API route profile values.
- */
-export type CreateSetupRegistrationOperationRequestRouteGateway2 = {
-  /**
-   * Annotations applied to route objects.
-   */
-  annotations?: { [k: string]: string } | undefined;
-  /**
-   * Route controller identifier, for example a cloud Gateway controller.
-   */
-  controller?: string | null | undefined;
-  /**
-   * GatewayClass selected for generated Gateways.
-   */
-  gatewayClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  /**
-   * Listener port, usually 443.
-   */
-  listenerPort: number;
-  provider?:
-    | CreateSetupRegistrationOperationRequestProviderAwsAlb4
-    | CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers4
-    | CreateSetupRegistrationOperationRequestProviderGkeGateway4
-    | string
-    | null
-    | undefined;
-  routeApi: "gateway";
-};
-
-export const CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum3 =
-  {
-    AzureApplicationGatewayForContainers:
-      "azureApplicationGatewayForContainers",
-  } as const;
-export type CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum3 =
-  ClosedEnum<
-    typeof CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum3
-  >;
-
-export type CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers3 =
-  {
-    /**
-     * Optional ALB name when using BYO Application Gateway resources.
-     */
-    albName?: string | null | undefined;
-    /**
-     * Optional ALB namespace when using BYO Application Gateway resources.
-     */
-    albNamespace?: string | null | undefined;
-    /**
-     * Public or internal frontend exposure.
-     */
-    frontend: string;
-    provider:
-      CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum3;
-  };
-
-export const CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum3 = {
-  GkeGateway: "gkeGateway",
-} as const;
-export type CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum3 =
-  ClosedEnum<
-    typeof CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum3
-  >;
-
-export type CreateSetupRegistrationOperationRequestProviderGkeGateway3 = {
-  provider: CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum3;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const CreateSetupRegistrationOperationRequestProviderAwsAlbEnum3 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type CreateSetupRegistrationOperationRequestProviderAwsAlbEnum3 =
-  ClosedEnum<typeof CreateSetupRegistrationOperationRequestProviderAwsAlbEnum3>;
-
-export type CreateSetupRegistrationOperationRequestProviderAwsAlb3 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: CreateSetupRegistrationOperationRequestProviderAwsAlbEnum3;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type CreateSetupRegistrationOperationRequestProviderUnion3 =
-  | CreateSetupRegistrationOperationRequestProviderAwsAlb3
-  | CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers3
-  | CreateSetupRegistrationOperationRequestProviderGkeGateway3
-  | string;
-
-/**
- * Shared Ingress route profile values.
- */
-export type CreateSetupRegistrationOperationRequestRouteIngress2 = {
-  /**
-   * Annotations applied to route objects.
-   */
-  annotations?: { [k: string]: string } | undefined;
-  /**
-   * Route controller identifier, for example `eks.amazonaws.com/alb`.
-   */
-  controller?: string | null | undefined;
-  /**
-   * `spec.ingressClassName` for generated Ingresses.
-   */
-  ingressClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  provider?:
-    | CreateSetupRegistrationOperationRequestProviderAwsAlb3
-    | CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers3
-    | CreateSetupRegistrationOperationRequestProviderGkeGateway3
-    | string
-    | null
-    | undefined;
-  routeApi: "ingress";
-};
-
-/**
- * Kubernetes route API selected for public endpoints.
- */
-export type CreateSetupRegistrationOperationRequestRouteUnion2 =
-  | CreateSetupRegistrationOperationRequestRouteIngress2
-  | CreateSetupRegistrationOperationRequestRouteGateway2;
-
-export type CreateSetupRegistrationOperationRequestExposureCustom = {
-  /**
-   * Certificate publication or reference mode for Kubernetes public endpoints.
-   */
-  certificate:
-    | CreateSetupRegistrationOperationRequestCertificateTLSSecretRef2
-    | CreateSetupRegistrationOperationRequestCertificateManagedAcmImport2
-    | CreateSetupRegistrationOperationRequestCertificateAwsAcmArn2
-    | CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret2
-    | CreateSetupRegistrationOperationRequestCertificateNone2;
-  /**
-   * Hostname routed by the Kubernetes public endpoint.
-   */
-  domain: string;
-  mode: CreateSetupRegistrationOperationRequestModeCustom;
-  /**
-   * Kubernetes route API selected for public endpoints.
-   */
-  route:
-    | CreateSetupRegistrationOperationRequestRouteIngress2
-    | CreateSetupRegistrationOperationRequestRouteGateway2;
-};
-
-export type CreateSetupRegistrationOperationRequestCertificateNone1 = {
-  mode: "none";
-};
-
-export type CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret1 =
-  {
-    mode: "managedTlsSecret";
-    /**
-     * Secret name template. Runtime may substitute resource/deployment tokens.
-     */
-    secretNameTemplate: string;
-  };
-
-export type CreateSetupRegistrationOperationRequestCertificateAwsAcmArn1 = {
-  /**
-   * Existing ACM certificate ARN.
-   */
-  certificateArn: string;
-  mode: "awsAcmArn";
-};
-
-export type CreateSetupRegistrationOperationRequestCertificateManagedAcmImport1 =
-  {
-    mode: "managedAcmImport";
-    /**
-     * ACM region. Defaults to the deployment region when omitted.
-     */
-    region?: string | null | undefined;
-    /**
-     * Tags applied to runtime-imported ACM certificates.
-     */
-    tags?: { [k: string]: string } | undefined;
-  };
-
-/**
- * Namespace-scoped Kubernetes TLS Secret reference.
- */
-export type CreateSetupRegistrationOperationRequestCertificateTLSSecretRef1 = {
-  /**
-   * Secret namespace. Defaults to the release namespace when omitted.
-   */
-  namespace?: string | null | undefined;
-  /**
-   * Secret name.
-   */
-  secretName: string;
-  mode: "tlsSecretRef";
-};
-
-/**
- * Certificate publication or reference mode for Kubernetes public endpoints.
- */
-export type CreateSetupRegistrationOperationRequestCertificateUnion1 =
-  | CreateSetupRegistrationOperationRequestCertificateTLSSecretRef1
-  | CreateSetupRegistrationOperationRequestCertificateManagedAcmImport1
-  | CreateSetupRegistrationOperationRequestCertificateAwsAcmArn1
-  | CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret1
-  | CreateSetupRegistrationOperationRequestCertificateNone1;
-
-export const CreateSetupRegistrationOperationRequestModeGenerated = {
-  Generated: "generated",
-} as const;
-export type CreateSetupRegistrationOperationRequestModeGenerated = ClosedEnum<
-  typeof CreateSetupRegistrationOperationRequestModeGenerated
->;
-
-export const CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum2 =
-  {
-    AzureApplicationGatewayForContainers:
-      "azureApplicationGatewayForContainers",
-  } as const;
-export type CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum2 =
-  ClosedEnum<
-    typeof CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum2
-  >;
-
-export type CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers2 =
-  {
-    /**
-     * Optional ALB name when using BYO Application Gateway resources.
-     */
-    albName?: string | null | undefined;
-    /**
-     * Optional ALB namespace when using BYO Application Gateway resources.
-     */
-    albNamespace?: string | null | undefined;
-    /**
-     * Public or internal frontend exposure.
-     */
-    frontend: string;
-    provider:
-      CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum2;
-  };
-
-export const CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum2 = {
-  GkeGateway: "gkeGateway",
-} as const;
-export type CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum2 =
-  ClosedEnum<
-    typeof CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum2
-  >;
-
-export type CreateSetupRegistrationOperationRequestProviderGkeGateway2 = {
-  provider: CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum2;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const CreateSetupRegistrationOperationRequestProviderAwsAlbEnum2 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type CreateSetupRegistrationOperationRequestProviderAwsAlbEnum2 =
-  ClosedEnum<typeof CreateSetupRegistrationOperationRequestProviderAwsAlbEnum2>;
-
-export type CreateSetupRegistrationOperationRequestProviderAwsAlb2 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: CreateSetupRegistrationOperationRequestProviderAwsAlbEnum2;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type CreateSetupRegistrationOperationRequestProviderUnion2 =
-  | CreateSetupRegistrationOperationRequestProviderAwsAlb2
-  | CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers2
-  | CreateSetupRegistrationOperationRequestProviderGkeGateway2
-  | string;
-
-/**
- * Shared Gateway API route profile values.
- */
-export type CreateSetupRegistrationOperationRequestRouteGateway1 = {
-  /**
-   * Annotations applied to route objects.
-   */
-  annotations?: { [k: string]: string } | undefined;
-  /**
-   * Route controller identifier, for example a cloud Gateway controller.
-   */
-  controller?: string | null | undefined;
-  /**
-   * GatewayClass selected for generated Gateways.
-   */
-  gatewayClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  /**
-   * Listener port, usually 443.
-   */
-  listenerPort: number;
-  provider?:
-    | CreateSetupRegistrationOperationRequestProviderAwsAlb2
-    | CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers2
-    | CreateSetupRegistrationOperationRequestProviderGkeGateway2
-    | string
-    | null
-    | undefined;
-  routeApi: "gateway";
-};
-
-export const CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum1 =
-  {
-    AzureApplicationGatewayForContainers:
-      "azureApplicationGatewayForContainers",
-  } as const;
-export type CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum1 =
-  ClosedEnum<
-    typeof CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum1
-  >;
-
-export type CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers1 =
-  {
-    /**
-     * Optional ALB name when using BYO Application Gateway resources.
-     */
-    albName?: string | null | undefined;
-    /**
-     * Optional ALB namespace when using BYO Application Gateway resources.
-     */
-    albNamespace?: string | null | undefined;
-    /**
-     * Public or internal frontend exposure.
-     */
-    frontend: string;
-    provider:
-      CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum1;
-  };
-
-export const CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum1 = {
-  GkeGateway: "gkeGateway",
-} as const;
-export type CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum1 =
-  ClosedEnum<
-    typeof CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum1
-  >;
-
-export type CreateSetupRegistrationOperationRequestProviderGkeGateway1 = {
-  provider: CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum1;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const CreateSetupRegistrationOperationRequestProviderAwsAlbEnum1 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type CreateSetupRegistrationOperationRequestProviderAwsAlbEnum1 =
-  ClosedEnum<typeof CreateSetupRegistrationOperationRequestProviderAwsAlbEnum1>;
-
-export type CreateSetupRegistrationOperationRequestProviderAwsAlb1 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: CreateSetupRegistrationOperationRequestProviderAwsAlbEnum1;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type CreateSetupRegistrationOperationRequestProviderUnion1 =
-  | CreateSetupRegistrationOperationRequestProviderAwsAlb1
-  | CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers1
-  | CreateSetupRegistrationOperationRequestProviderGkeGateway1
-  | string;
-
-/**
- * Shared Ingress route profile values.
- */
-export type CreateSetupRegistrationOperationRequestRouteIngress1 = {
-  /**
-   * Annotations applied to route objects.
-   */
-  annotations?: { [k: string]: string } | undefined;
-  /**
-   * Route controller identifier, for example `eks.amazonaws.com/alb`.
-   */
-  controller?: string | null | undefined;
-  /**
-   * `spec.ingressClassName` for generated Ingresses.
-   */
-  ingressClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  provider?:
-    | CreateSetupRegistrationOperationRequestProviderAwsAlb1
-    | CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers1
-    | CreateSetupRegistrationOperationRequestProviderGkeGateway1
-    | string
-    | null
-    | undefined;
-  routeApi: "ingress";
-};
-
-/**
- * Kubernetes route API selected for public endpoints.
- */
-export type CreateSetupRegistrationOperationRequestRouteUnion1 =
-  | CreateSetupRegistrationOperationRequestRouteIngress1
-  | CreateSetupRegistrationOperationRequestRouteGateway1;
-
-export type CreateSetupRegistrationOperationRequestExposureGenerated = {
-  /**
-   * Certificate publication or reference mode for Kubernetes public endpoints.
-   */
-  certificate:
-    | CreateSetupRegistrationOperationRequestCertificateTLSSecretRef1
-    | CreateSetupRegistrationOperationRequestCertificateManagedAcmImport1
-    | CreateSetupRegistrationOperationRequestCertificateAwsAcmArn1
-    | CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret1
-    | CreateSetupRegistrationOperationRequestCertificateNone1;
-  mode: CreateSetupRegistrationOperationRequestModeGenerated;
-  /**
-   * Kubernetes route API selected for public endpoints.
-   */
-  route:
-    | CreateSetupRegistrationOperationRequestRouteIngress1
-    | CreateSetupRegistrationOperationRequestRouteGateway1;
-};
-
-export const CreateSetupRegistrationOperationRequestModeDisabled = {
-  Disabled: "disabled",
-} as const;
-export type CreateSetupRegistrationOperationRequestModeDisabled = ClosedEnum<
-  typeof CreateSetupRegistrationOperationRequestModeDisabled
->;
-
-export type CreateSetupRegistrationOperationRequestExposureDisabled = {
-  mode: CreateSetupRegistrationOperationRequestModeDisabled;
-};
-
-export type CreateSetupRegistrationOperationRequestExposureUnion =
-  | CreateSetupRegistrationOperationRequestExposureCustom
-  | CreateSetupRegistrationOperationRequestExposureGenerated
-  | CreateSetupRegistrationOperationRequestExposureDisabled
+export type CreateSetupRegistrationOperationRequestExposure =
+  | KubernetesExposureCustom
+  | KubernetesExposureCustomBaseDomain
+  | KubernetesExposureGenerated
+  | KubernetesExposureDisabled
   | string;
 
 /**
@@ -1089,9 +511,10 @@ export type CreateSetupRegistrationOperationRequestKubernetes = {
     | null
     | undefined;
   exposure?:
-    | CreateSetupRegistrationOperationRequestExposureCustom
-    | CreateSetupRegistrationOperationRequestExposureGenerated
-    | CreateSetupRegistrationOperationRequestExposureDisabled
+    | KubernetesExposureCustom
+    | KubernetesExposureCustomBaseDomain
+    | KubernetesExposureGenerated
+    | KubernetesExposureDisabled
     | string
     | null
     | undefined;
@@ -1243,6 +666,36 @@ export type CreateSetupRegistrationOperationRequestSetupManagement = ClosedEnum<
 >;
 
 /**
+ * What setup pins for a protected install.
+ *
+ * @remarks
+ *
+ * Take the values from the vendor's install guide or signed release, not from the
+ * control plane.
+ */
+export type CreateSetupRegistrationOperationRequestSigning = {
+  /**
+   * Release channel the install follows, such as `production`.
+   */
+  channel: string;
+  /**
+   * `SHA256:<64 hex>` fingerprint of the vendor's signer list version 1.
+   */
+  fingerprint: string;
+  /**
+   * Customer setup pins this private instance machine endpoint and enables
+   *
+   * @remarks
+   * install-local input custody. It cannot be changed by the runtime role.
+   */
+  privateMachineApiUrl?: string | null | undefined;
+};
+
+export type CreateSetupRegistrationOperationRequestSigningUnion =
+  | CreateSetupRegistrationOperationRequestSigning
+  | string;
+
+/**
  * How telemetry (logs, metrics, traces) is handled.
  */
 export const CreateSetupRegistrationOperationRequestTelemetry = {
@@ -1284,6 +737,13 @@ export type CreateSetupRegistrationOperationRequestUpdates = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type CreateSetupRegistrationOperationRequestStackSettings = {
+  /**
+   * Deliver Kubernetes updates and reports as carried bundles instead of a live connection.
+   *
+   * @remarks
+   * The Operator still executes deployments with the pull model.
+   */
+  airgapped?: boolean | undefined;
   compute?:
     | CreateSetupRegistrationOperationRequestCompute
     | string
@@ -1348,6 +808,11 @@ export type CreateSetupRegistrationOperationRequestStackSettings = {
    */
   setupManagement?:
     | CreateSetupRegistrationOperationRequestSetupManagement
+    | undefined;
+  signing?:
+    | CreateSetupRegistrationOperationRequestSigning
+    | string
+    | null
     | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
@@ -1647,6 +1112,7 @@ export function createSetupRegistrationOperationRequestFailureDomainsUnion2ToJSO
 
 /** @internal */
 export type CreateSetupRegistrationOperationRequestPoolsAutoscale$Outbound = {
+  dataDiskGib?: number | null | undefined;
   failure_domains?:
     | CreateSetupRegistrationOperationRequestFailureDomains2$Outbound
     | string
@@ -1664,6 +1130,7 @@ export const CreateSetupRegistrationOperationRequestPoolsAutoscale$outboundSchem
     CreateSetupRegistrationOperationRequestPoolsAutoscale$Outbound,
     CreateSetupRegistrationOperationRequestPoolsAutoscale
   > = z.object({
+    dataDiskGib: z.nullable(z.int()).optional(),
     failureDomains: z.nullable(
       z.union([
         z.lazy(() =>
@@ -1749,6 +1216,7 @@ export function createSetupRegistrationOperationRequestFailureDomainsUnion1ToJSO
 
 /** @internal */
 export type CreateSetupRegistrationOperationRequestPoolsFixed$Outbound = {
+  dataDiskGib?: number | null | undefined;
   failure_domains?:
     | CreateSetupRegistrationOperationRequestFailureDomains1$Outbound
     | string
@@ -1765,6 +1233,7 @@ export const CreateSetupRegistrationOperationRequestPoolsFixed$outboundSchema:
     CreateSetupRegistrationOperationRequestPoolsFixed$Outbound,
     CreateSetupRegistrationOperationRequestPoolsFixed
   > = z.object({
+    dataDiskGib: z.nullable(z.int()).optional(),
     failureDomains: z.nullable(
       z.union([
         z.lazy(() =>
@@ -2139,35 +1608,86 @@ export function createSetupRegistrationOperationRequestDomainsKubernetesUnionToJ
 }
 
 /** @internal */
-export type CreateSetupRegistrationOperationRequestDomainsCertificate$Outbound =
-  {
-    aws?:
-      | CreateSetupRegistrationOperationRequestAws$Outbound
-      | string
-      | null
-      | undefined;
-    azure?:
-      | CreateSetupRegistrationOperationRequestAzure$Outbound
-      | string
-      | null
-      | undefined;
-    gcp?:
-      | CreateSetupRegistrationOperationRequestGcp$Outbound
-      | string
-      | null
-      | undefined;
-    kubernetes?:
-      | CreateSetupRegistrationOperationRequestDomainsKubernetes$Outbound
-      | string
-      | null
-      | undefined;
-  };
+export type CreateSetupRegistrationOperationRequestManaged$Outbound = {};
 
 /** @internal */
-export const CreateSetupRegistrationOperationRequestDomainsCertificate$outboundSchema:
+export const CreateSetupRegistrationOperationRequestManaged$outboundSchema:
   z.ZodType<
-    CreateSetupRegistrationOperationRequestDomainsCertificate$Outbound,
-    CreateSetupRegistrationOperationRequestDomainsCertificate
+    CreateSetupRegistrationOperationRequestManaged$Outbound,
+    CreateSetupRegistrationOperationRequestManaged
+  > = z.object({});
+
+export function createSetupRegistrationOperationRequestManagedToJSON(
+  createSetupRegistrationOperationRequestManaged:
+    CreateSetupRegistrationOperationRequestManaged,
+): string {
+  return JSON.stringify(
+    CreateSetupRegistrationOperationRequestManaged$outboundSchema.parse(
+      createSetupRegistrationOperationRequestManaged,
+    ),
+  );
+}
+
+/** @internal */
+export type CreateSetupRegistrationOperationRequestManagedUnion$Outbound =
+  | CreateSetupRegistrationOperationRequestManaged$Outbound
+  | string;
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestManagedUnion$outboundSchema:
+  z.ZodType<
+    CreateSetupRegistrationOperationRequestManagedUnion$Outbound,
+    CreateSetupRegistrationOperationRequestManagedUnion
+  > = z.union([
+    z.lazy(() => CreateSetupRegistrationOperationRequestManaged$outboundSchema),
+    z.string(),
+  ]);
+
+export function createSetupRegistrationOperationRequestManagedUnionToJSON(
+  createSetupRegistrationOperationRequestManagedUnion:
+    CreateSetupRegistrationOperationRequestManagedUnion,
+): string {
+  return JSON.stringify(
+    CreateSetupRegistrationOperationRequestManagedUnion$outboundSchema.parse(
+      createSetupRegistrationOperationRequestManagedUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type CreateSetupRegistrationOperationRequestCertificate$Outbound = {
+  aws?:
+    | CreateSetupRegistrationOperationRequestAws$Outbound
+    | string
+    | null
+    | undefined;
+  azure?:
+    | CreateSetupRegistrationOperationRequestAzure$Outbound
+    | string
+    | null
+    | undefined;
+  gcp?:
+    | CreateSetupRegistrationOperationRequestGcp$Outbound
+    | string
+    | null
+    | undefined;
+  kubernetes?:
+    | CreateSetupRegistrationOperationRequestDomainsKubernetes$Outbound
+    | string
+    | null
+    | undefined;
+  managed?:
+    | CreateSetupRegistrationOperationRequestManaged$Outbound
+    | string
+    | null
+    | undefined;
+};
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestCertificate$outboundSchema:
+  z.ZodType<
+    CreateSetupRegistrationOperationRequestCertificate$Outbound,
+    CreateSetupRegistrationOperationRequestCertificate
   > = z.object({
     aws: z.nullable(
       z.union([
@@ -2197,23 +1717,32 @@ export const CreateSetupRegistrationOperationRequestDomainsCertificate$outboundS
         z.string(),
       ]),
     ).optional(),
+    managed: z.nullable(
+      z.union([
+        z.lazy(() =>
+          CreateSetupRegistrationOperationRequestManaged$outboundSchema
+        ),
+        z.string(),
+      ]),
+    ).optional(),
   });
 
-export function createSetupRegistrationOperationRequestDomainsCertificateToJSON(
-  createSetupRegistrationOperationRequestDomainsCertificate:
-    CreateSetupRegistrationOperationRequestDomainsCertificate,
+export function createSetupRegistrationOperationRequestCertificateToJSON(
+  createSetupRegistrationOperationRequestCertificate:
+    CreateSetupRegistrationOperationRequestCertificate,
 ): string {
   return JSON.stringify(
-    CreateSetupRegistrationOperationRequestDomainsCertificate$outboundSchema
-      .parse(createSetupRegistrationOperationRequestDomainsCertificate),
+    CreateSetupRegistrationOperationRequestCertificate$outboundSchema.parse(
+      createSetupRegistrationOperationRequestCertificate,
+    ),
   );
 }
 
 /** @internal */
 export type CreateSetupRegistrationOperationRequestCustomDomains$Outbound = {
-  certificate:
-    CreateSetupRegistrationOperationRequestDomainsCertificate$Outbound;
-  domain: string;
+  certificate: CreateSetupRegistrationOperationRequestCertificate$Outbound;
+  domain?: string | undefined;
+  endpoints?: { [k: string]: string } | undefined;
 };
 
 /** @internal */
@@ -2223,9 +1752,10 @@ export const CreateSetupRegistrationOperationRequestCustomDomains$outboundSchema
     CreateSetupRegistrationOperationRequestCustomDomains
   > = z.object({
     certificate: z.lazy(() =>
-      CreateSetupRegistrationOperationRequestDomainsCertificate$outboundSchema
+      CreateSetupRegistrationOperationRequestCertificate$outboundSchema
     ),
-    domain: z.string(),
+    domain: z.string().optional(),
+    endpoints: z.record(z.string(), z.string()).optional(),
   });
 
 export function createSetupRegistrationOperationRequestCustomDomainsToJSON(
@@ -2567,1443 +2097,33 @@ export function createSetupRegistrationOperationRequestClusterUnionToJSON(
 }
 
 /** @internal */
-export type CreateSetupRegistrationOperationRequestCertificateNone2$Outbound = {
-  mode: "none";
-};
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestCertificateNone2$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestCertificateNone2$Outbound,
-    CreateSetupRegistrationOperationRequestCertificateNone2
-  > = z.object({
-    mode: z.literal("none"),
-  });
-
-export function createSetupRegistrationOperationRequestCertificateNone2ToJSON(
-  createSetupRegistrationOperationRequestCertificateNone2:
-    CreateSetupRegistrationOperationRequestCertificateNone2,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestCertificateNone2$outboundSchema
-      .parse(createSetupRegistrationOperationRequestCertificateNone2),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret2$Outbound =
-  {
-    mode: "managedTlsSecret";
-    secretNameTemplate: string;
-  };
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret2$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret2$Outbound,
-    CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret2
-  > = z.object({
-    mode: z.literal("managedTlsSecret"),
-    secretNameTemplate: z.string(),
-  });
-
-export function createSetupRegistrationOperationRequestCertificateManagedTLSSecret2ToJSON(
-  createSetupRegistrationOperationRequestCertificateManagedTLSSecret2:
-    CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret2,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret2$outboundSchema
-      .parse(
-        createSetupRegistrationOperationRequestCertificateManagedTLSSecret2,
-      ),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestCertificateAwsAcmArn2$Outbound =
-  {
-    certificateArn: string;
-    mode: "awsAcmArn";
-  };
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestCertificateAwsAcmArn2$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestCertificateAwsAcmArn2$Outbound,
-    CreateSetupRegistrationOperationRequestCertificateAwsAcmArn2
-  > = z.object({
-    certificateArn: z.string(),
-    mode: z.literal("awsAcmArn"),
-  });
-
-export function createSetupRegistrationOperationRequestCertificateAwsAcmArn2ToJSON(
-  createSetupRegistrationOperationRequestCertificateAwsAcmArn2:
-    CreateSetupRegistrationOperationRequestCertificateAwsAcmArn2,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestCertificateAwsAcmArn2$outboundSchema
-      .parse(createSetupRegistrationOperationRequestCertificateAwsAcmArn2),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestCertificateManagedAcmImport2$Outbound =
-  {
-    mode: "managedAcmImport";
-    region?: string | null | undefined;
-    tags?: { [k: string]: string } | undefined;
-  };
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestCertificateManagedAcmImport2$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestCertificateManagedAcmImport2$Outbound,
-    CreateSetupRegistrationOperationRequestCertificateManagedAcmImport2
-  > = z.object({
-    mode: z.literal("managedAcmImport"),
-    region: z.nullable(z.string()).optional(),
-    tags: z.record(z.string(), z.string()).optional(),
-  });
-
-export function createSetupRegistrationOperationRequestCertificateManagedAcmImport2ToJSON(
-  createSetupRegistrationOperationRequestCertificateManagedAcmImport2:
-    CreateSetupRegistrationOperationRequestCertificateManagedAcmImport2,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestCertificateManagedAcmImport2$outboundSchema
-      .parse(
-        createSetupRegistrationOperationRequestCertificateManagedAcmImport2,
-      ),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestCertificateTLSSecretRef2$Outbound =
-  {
-    namespace?: string | null | undefined;
-    secretName: string;
-    mode: "tlsSecretRef";
-  };
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestCertificateTLSSecretRef2$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestCertificateTLSSecretRef2$Outbound,
-    CreateSetupRegistrationOperationRequestCertificateTLSSecretRef2
-  > = z.object({
-    namespace: z.nullable(z.string()).optional(),
-    secretName: z.string(),
-    mode: z.literal("tlsSecretRef"),
-  });
-
-export function createSetupRegistrationOperationRequestCertificateTLSSecretRef2ToJSON(
-  createSetupRegistrationOperationRequestCertificateTLSSecretRef2:
-    CreateSetupRegistrationOperationRequestCertificateTLSSecretRef2,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestCertificateTLSSecretRef2$outboundSchema
-      .parse(createSetupRegistrationOperationRequestCertificateTLSSecretRef2),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestCertificateUnion2$Outbound =
-  | CreateSetupRegistrationOperationRequestCertificateTLSSecretRef2$Outbound
-  | CreateSetupRegistrationOperationRequestCertificateManagedAcmImport2$Outbound
-  | CreateSetupRegistrationOperationRequestCertificateAwsAcmArn2$Outbound
-  | CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret2$Outbound
-  | CreateSetupRegistrationOperationRequestCertificateNone2$Outbound;
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestCertificateUnion2$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestCertificateUnion2$Outbound,
-    CreateSetupRegistrationOperationRequestCertificateUnion2
-  > = z.union([
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestCertificateTLSSecretRef2$outboundSchema
-    ),
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestCertificateManagedAcmImport2$outboundSchema
-    ),
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestCertificateAwsAcmArn2$outboundSchema
-    ),
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret2$outboundSchema
-    ),
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestCertificateNone2$outboundSchema
-    ),
-  ]);
-
-export function createSetupRegistrationOperationRequestCertificateUnion2ToJSON(
-  createSetupRegistrationOperationRequestCertificateUnion2:
-    CreateSetupRegistrationOperationRequestCertificateUnion2,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestCertificateUnion2$outboundSchema
-      .parse(createSetupRegistrationOperationRequestCertificateUnion2),
-  );
-}
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestModeCustom$outboundSchema:
-  z.ZodEnum<typeof CreateSetupRegistrationOperationRequestModeCustom> = z.enum(
-    CreateSetupRegistrationOperationRequestModeCustom,
-  );
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum4$outboundSchema:
-  z.ZodEnum<
-    typeof CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum4
-  > = z.enum(
-    CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum4,
-  );
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers4$Outbound =
-  {
-    albName?: string | null | undefined;
-    albNamespace?: string | null | undefined;
-    frontend: string;
-    provider: string;
-  };
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers4$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers4$Outbound,
-    CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers4
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum4$outboundSchema,
-  });
-
-export function createSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers4ToJSON(
-  createSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers4:
-    CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers4,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers4$outboundSchema
-      .parse(
-        createSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers4,
-      ),
-  );
-}
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum4$outboundSchema:
-  z.ZodEnum<
-    typeof CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum4
-  > = z.enum(CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum4);
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestProviderGkeGateway4$Outbound =
-  {
-    provider: string;
-    staticAddressName?: string | null | undefined;
-  };
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderGkeGateway4$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestProviderGkeGateway4$Outbound,
-    CreateSetupRegistrationOperationRequestProviderGkeGateway4
-  > = z.object({
-    provider:
-      CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum4$outboundSchema,
-    staticAddressName: z.nullable(z.string()).optional(),
-  });
-
-export function createSetupRegistrationOperationRequestProviderGkeGateway4ToJSON(
-  createSetupRegistrationOperationRequestProviderGkeGateway4:
-    CreateSetupRegistrationOperationRequestProviderGkeGateway4,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestProviderGkeGateway4$outboundSchema
-      .parse(createSetupRegistrationOperationRequestProviderGkeGateway4),
-  );
-}
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderAwsAlbEnum4$outboundSchema:
-  z.ZodEnum<typeof CreateSetupRegistrationOperationRequestProviderAwsAlbEnum4> =
-    z.enum(CreateSetupRegistrationOperationRequestProviderAwsAlbEnum4);
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestProviderAwsAlb4$Outbound = {
-  ipAddressType?: string | null | undefined;
-  provider: string;
-  scheme: string;
-  subnetIds?: Array<string> | undefined;
-  targetType: string;
-};
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderAwsAlb4$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestProviderAwsAlb4$Outbound,
-    CreateSetupRegistrationOperationRequestProviderAwsAlb4
-  > = z.object({
-    ipAddressType: z.nullable(z.string()).optional(),
-    provider:
-      CreateSetupRegistrationOperationRequestProviderAwsAlbEnum4$outboundSchema,
-    scheme: z.string(),
-    subnetIds: z.array(z.string()).optional(),
-    targetType: z.string(),
-  });
-
-export function createSetupRegistrationOperationRequestProviderAwsAlb4ToJSON(
-  createSetupRegistrationOperationRequestProviderAwsAlb4:
-    CreateSetupRegistrationOperationRequestProviderAwsAlb4,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestProviderAwsAlb4$outboundSchema.parse(
-      createSetupRegistrationOperationRequestProviderAwsAlb4,
-    ),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestProviderUnion4$Outbound =
-  | CreateSetupRegistrationOperationRequestProviderAwsAlb4$Outbound
-  | CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers4$Outbound
-  | CreateSetupRegistrationOperationRequestProviderGkeGateway4$Outbound
+export type CreateSetupRegistrationOperationRequestExposure$Outbound =
+  | KubernetesExposureCustom$Outbound
+  | KubernetesExposureCustomBaseDomain$Outbound
+  | KubernetesExposureGenerated$Outbound
+  | KubernetesExposureDisabled$Outbound
   | string;
 
 /** @internal */
-export const CreateSetupRegistrationOperationRequestProviderUnion4$outboundSchema:
+export const CreateSetupRegistrationOperationRequestExposure$outboundSchema:
   z.ZodType<
-    CreateSetupRegistrationOperationRequestProviderUnion4$Outbound,
-    CreateSetupRegistrationOperationRequestProviderUnion4
+    CreateSetupRegistrationOperationRequestExposure$Outbound,
+    CreateSetupRegistrationOperationRequestExposure
   > = z.union([
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestProviderAwsAlb4$outboundSchema
-    ),
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers4$outboundSchema
-    ),
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestProviderGkeGateway4$outboundSchema
-    ),
+    KubernetesExposureCustom$outboundSchema,
+    KubernetesExposureCustomBaseDomain$outboundSchema,
+    KubernetesExposureGenerated$outboundSchema,
+    KubernetesExposureDisabled$outboundSchema,
     z.string(),
   ]);
 
-export function createSetupRegistrationOperationRequestProviderUnion4ToJSON(
-  createSetupRegistrationOperationRequestProviderUnion4:
-    CreateSetupRegistrationOperationRequestProviderUnion4,
+export function createSetupRegistrationOperationRequestExposureToJSON(
+  createSetupRegistrationOperationRequestExposure:
+    CreateSetupRegistrationOperationRequestExposure,
 ): string {
   return JSON.stringify(
-    CreateSetupRegistrationOperationRequestProviderUnion4$outboundSchema.parse(
-      createSetupRegistrationOperationRequestProviderUnion4,
-    ),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestRouteGateway2$Outbound = {
-  annotations?: { [k: string]: string } | undefined;
-  controller?: string | null | undefined;
-  gatewayClassName: string;
-  labels?: { [k: string]: string } | undefined;
-  listenerPort: number;
-  provider?:
-    | CreateSetupRegistrationOperationRequestProviderAwsAlb4$Outbound
-    | CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers4$Outbound
-    | CreateSetupRegistrationOperationRequestProviderGkeGateway4$Outbound
-    | string
-    | null
-    | undefined;
-  routeApi: "gateway";
-};
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestRouteGateway2$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestRouteGateway2$Outbound,
-    CreateSetupRegistrationOperationRequestRouteGateway2
-  > = z.object({
-    annotations: z.record(z.string(), z.string()).optional(),
-    controller: z.nullable(z.string()).optional(),
-    gatewayClassName: z.string(),
-    labels: z.record(z.string(), z.string()).optional(),
-    listenerPort: z.int(),
-    provider: z.nullable(
-      z.union([
-        z.lazy(() =>
-          CreateSetupRegistrationOperationRequestProviderAwsAlb4$outboundSchema
-        ),
-        z.lazy(() =>
-          CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers4$outboundSchema
-        ),
-        z.lazy(() =>
-          CreateSetupRegistrationOperationRequestProviderGkeGateway4$outboundSchema
-        ),
-        z.string(),
-      ]),
-    ).optional(),
-    routeApi: z.literal("gateway"),
-  });
-
-export function createSetupRegistrationOperationRequestRouteGateway2ToJSON(
-  createSetupRegistrationOperationRequestRouteGateway2:
-    CreateSetupRegistrationOperationRequestRouteGateway2,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestRouteGateway2$outboundSchema.parse(
-      createSetupRegistrationOperationRequestRouteGateway2,
-    ),
-  );
-}
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum3$outboundSchema:
-  z.ZodEnum<
-    typeof CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum3
-  > = z.enum(
-    CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum3,
-  );
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers3$Outbound =
-  {
-    albName?: string | null | undefined;
-    albNamespace?: string | null | undefined;
-    frontend: string;
-    provider: string;
-  };
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers3$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers3$Outbound,
-    CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers3
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum3$outboundSchema,
-  });
-
-export function createSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers3ToJSON(
-  createSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers3:
-    CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers3,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers3$outboundSchema
-      .parse(
-        createSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers3,
-      ),
-  );
-}
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum3$outboundSchema:
-  z.ZodEnum<
-    typeof CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum3
-  > = z.enum(CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum3);
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestProviderGkeGateway3$Outbound =
-  {
-    provider: string;
-    staticAddressName?: string | null | undefined;
-  };
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderGkeGateway3$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestProviderGkeGateway3$Outbound,
-    CreateSetupRegistrationOperationRequestProviderGkeGateway3
-  > = z.object({
-    provider:
-      CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum3$outboundSchema,
-    staticAddressName: z.nullable(z.string()).optional(),
-  });
-
-export function createSetupRegistrationOperationRequestProviderGkeGateway3ToJSON(
-  createSetupRegistrationOperationRequestProviderGkeGateway3:
-    CreateSetupRegistrationOperationRequestProviderGkeGateway3,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestProviderGkeGateway3$outboundSchema
-      .parse(createSetupRegistrationOperationRequestProviderGkeGateway3),
-  );
-}
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderAwsAlbEnum3$outboundSchema:
-  z.ZodEnum<typeof CreateSetupRegistrationOperationRequestProviderAwsAlbEnum3> =
-    z.enum(CreateSetupRegistrationOperationRequestProviderAwsAlbEnum3);
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestProviderAwsAlb3$Outbound = {
-  ipAddressType?: string | null | undefined;
-  provider: string;
-  scheme: string;
-  subnetIds?: Array<string> | undefined;
-  targetType: string;
-};
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderAwsAlb3$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestProviderAwsAlb3$Outbound,
-    CreateSetupRegistrationOperationRequestProviderAwsAlb3
-  > = z.object({
-    ipAddressType: z.nullable(z.string()).optional(),
-    provider:
-      CreateSetupRegistrationOperationRequestProviderAwsAlbEnum3$outboundSchema,
-    scheme: z.string(),
-    subnetIds: z.array(z.string()).optional(),
-    targetType: z.string(),
-  });
-
-export function createSetupRegistrationOperationRequestProviderAwsAlb3ToJSON(
-  createSetupRegistrationOperationRequestProviderAwsAlb3:
-    CreateSetupRegistrationOperationRequestProviderAwsAlb3,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestProviderAwsAlb3$outboundSchema.parse(
-      createSetupRegistrationOperationRequestProviderAwsAlb3,
-    ),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestProviderUnion3$Outbound =
-  | CreateSetupRegistrationOperationRequestProviderAwsAlb3$Outbound
-  | CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers3$Outbound
-  | CreateSetupRegistrationOperationRequestProviderGkeGateway3$Outbound
-  | string;
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderUnion3$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestProviderUnion3$Outbound,
-    CreateSetupRegistrationOperationRequestProviderUnion3
-  > = z.union([
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestProviderAwsAlb3$outboundSchema
-    ),
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers3$outboundSchema
-    ),
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestProviderGkeGateway3$outboundSchema
-    ),
-    z.string(),
-  ]);
-
-export function createSetupRegistrationOperationRequestProviderUnion3ToJSON(
-  createSetupRegistrationOperationRequestProviderUnion3:
-    CreateSetupRegistrationOperationRequestProviderUnion3,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestProviderUnion3$outboundSchema.parse(
-      createSetupRegistrationOperationRequestProviderUnion3,
-    ),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestRouteIngress2$Outbound = {
-  annotations?: { [k: string]: string } | undefined;
-  controller?: string | null | undefined;
-  ingressClassName: string;
-  labels?: { [k: string]: string } | undefined;
-  provider?:
-    | CreateSetupRegistrationOperationRequestProviderAwsAlb3$Outbound
-    | CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers3$Outbound
-    | CreateSetupRegistrationOperationRequestProviderGkeGateway3$Outbound
-    | string
-    | null
-    | undefined;
-  routeApi: "ingress";
-};
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestRouteIngress2$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestRouteIngress2$Outbound,
-    CreateSetupRegistrationOperationRequestRouteIngress2
-  > = z.object({
-    annotations: z.record(z.string(), z.string()).optional(),
-    controller: z.nullable(z.string()).optional(),
-    ingressClassName: z.string(),
-    labels: z.record(z.string(), z.string()).optional(),
-    provider: z.nullable(
-      z.union([
-        z.lazy(() =>
-          CreateSetupRegistrationOperationRequestProviderAwsAlb3$outboundSchema
-        ),
-        z.lazy(() =>
-          CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers3$outboundSchema
-        ),
-        z.lazy(() =>
-          CreateSetupRegistrationOperationRequestProviderGkeGateway3$outboundSchema
-        ),
-        z.string(),
-      ]),
-    ).optional(),
-    routeApi: z.literal("ingress"),
-  });
-
-export function createSetupRegistrationOperationRequestRouteIngress2ToJSON(
-  createSetupRegistrationOperationRequestRouteIngress2:
-    CreateSetupRegistrationOperationRequestRouteIngress2,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestRouteIngress2$outboundSchema.parse(
-      createSetupRegistrationOperationRequestRouteIngress2,
-    ),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestRouteUnion2$Outbound =
-  | CreateSetupRegistrationOperationRequestRouteIngress2$Outbound
-  | CreateSetupRegistrationOperationRequestRouteGateway2$Outbound;
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestRouteUnion2$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestRouteUnion2$Outbound,
-    CreateSetupRegistrationOperationRequestRouteUnion2
-  > = z.union([
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestRouteIngress2$outboundSchema
-    ),
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestRouteGateway2$outboundSchema
-    ),
-  ]);
-
-export function createSetupRegistrationOperationRequestRouteUnion2ToJSON(
-  createSetupRegistrationOperationRequestRouteUnion2:
-    CreateSetupRegistrationOperationRequestRouteUnion2,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestRouteUnion2$outboundSchema.parse(
-      createSetupRegistrationOperationRequestRouteUnion2,
-    ),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestExposureCustom$Outbound = {
-  certificate:
-    | CreateSetupRegistrationOperationRequestCertificateTLSSecretRef2$Outbound
-    | CreateSetupRegistrationOperationRequestCertificateManagedAcmImport2$Outbound
-    | CreateSetupRegistrationOperationRequestCertificateAwsAcmArn2$Outbound
-    | CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret2$Outbound
-    | CreateSetupRegistrationOperationRequestCertificateNone2$Outbound;
-  domain: string;
-  mode: string;
-  route:
-    | CreateSetupRegistrationOperationRequestRouteIngress2$Outbound
-    | CreateSetupRegistrationOperationRequestRouteGateway2$Outbound;
-};
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestExposureCustom$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestExposureCustom$Outbound,
-    CreateSetupRegistrationOperationRequestExposureCustom
-  > = z.object({
-    certificate: z.union([
-      z.lazy(() =>
-        CreateSetupRegistrationOperationRequestCertificateTLSSecretRef2$outboundSchema
-      ),
-      z.lazy(() =>
-        CreateSetupRegistrationOperationRequestCertificateManagedAcmImport2$outboundSchema
-      ),
-      z.lazy(() =>
-        CreateSetupRegistrationOperationRequestCertificateAwsAcmArn2$outboundSchema
-      ),
-      z.lazy(() =>
-        CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret2$outboundSchema
-      ),
-      z.lazy(() =>
-        CreateSetupRegistrationOperationRequestCertificateNone2$outboundSchema
-      ),
-    ]),
-    domain: z.string(),
-    mode: CreateSetupRegistrationOperationRequestModeCustom$outboundSchema,
-    route: z.union([
-      z.lazy(() =>
-        CreateSetupRegistrationOperationRequestRouteIngress2$outboundSchema
-      ),
-      z.lazy(() =>
-        CreateSetupRegistrationOperationRequestRouteGateway2$outboundSchema
-      ),
-    ]),
-  });
-
-export function createSetupRegistrationOperationRequestExposureCustomToJSON(
-  createSetupRegistrationOperationRequestExposureCustom:
-    CreateSetupRegistrationOperationRequestExposureCustom,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestExposureCustom$outboundSchema.parse(
-      createSetupRegistrationOperationRequestExposureCustom,
-    ),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestCertificateNone1$Outbound = {
-  mode: "none";
-};
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestCertificateNone1$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestCertificateNone1$Outbound,
-    CreateSetupRegistrationOperationRequestCertificateNone1
-  > = z.object({
-    mode: z.literal("none"),
-  });
-
-export function createSetupRegistrationOperationRequestCertificateNone1ToJSON(
-  createSetupRegistrationOperationRequestCertificateNone1:
-    CreateSetupRegistrationOperationRequestCertificateNone1,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestCertificateNone1$outboundSchema
-      .parse(createSetupRegistrationOperationRequestCertificateNone1),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret1$Outbound =
-  {
-    mode: "managedTlsSecret";
-    secretNameTemplate: string;
-  };
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret1$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret1$Outbound,
-    CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret1
-  > = z.object({
-    mode: z.literal("managedTlsSecret"),
-    secretNameTemplate: z.string(),
-  });
-
-export function createSetupRegistrationOperationRequestCertificateManagedTLSSecret1ToJSON(
-  createSetupRegistrationOperationRequestCertificateManagedTLSSecret1:
-    CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret1,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret1$outboundSchema
-      .parse(
-        createSetupRegistrationOperationRequestCertificateManagedTLSSecret1,
-      ),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestCertificateAwsAcmArn1$Outbound =
-  {
-    certificateArn: string;
-    mode: "awsAcmArn";
-  };
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestCertificateAwsAcmArn1$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestCertificateAwsAcmArn1$Outbound,
-    CreateSetupRegistrationOperationRequestCertificateAwsAcmArn1
-  > = z.object({
-    certificateArn: z.string(),
-    mode: z.literal("awsAcmArn"),
-  });
-
-export function createSetupRegistrationOperationRequestCertificateAwsAcmArn1ToJSON(
-  createSetupRegistrationOperationRequestCertificateAwsAcmArn1:
-    CreateSetupRegistrationOperationRequestCertificateAwsAcmArn1,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestCertificateAwsAcmArn1$outboundSchema
-      .parse(createSetupRegistrationOperationRequestCertificateAwsAcmArn1),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestCertificateManagedAcmImport1$Outbound =
-  {
-    mode: "managedAcmImport";
-    region?: string | null | undefined;
-    tags?: { [k: string]: string } | undefined;
-  };
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestCertificateManagedAcmImport1$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestCertificateManagedAcmImport1$Outbound,
-    CreateSetupRegistrationOperationRequestCertificateManagedAcmImport1
-  > = z.object({
-    mode: z.literal("managedAcmImport"),
-    region: z.nullable(z.string()).optional(),
-    tags: z.record(z.string(), z.string()).optional(),
-  });
-
-export function createSetupRegistrationOperationRequestCertificateManagedAcmImport1ToJSON(
-  createSetupRegistrationOperationRequestCertificateManagedAcmImport1:
-    CreateSetupRegistrationOperationRequestCertificateManagedAcmImport1,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestCertificateManagedAcmImport1$outboundSchema
-      .parse(
-        createSetupRegistrationOperationRequestCertificateManagedAcmImport1,
-      ),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestCertificateTLSSecretRef1$Outbound =
-  {
-    namespace?: string | null | undefined;
-    secretName: string;
-    mode: "tlsSecretRef";
-  };
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestCertificateTLSSecretRef1$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestCertificateTLSSecretRef1$Outbound,
-    CreateSetupRegistrationOperationRequestCertificateTLSSecretRef1
-  > = z.object({
-    namespace: z.nullable(z.string()).optional(),
-    secretName: z.string(),
-    mode: z.literal("tlsSecretRef"),
-  });
-
-export function createSetupRegistrationOperationRequestCertificateTLSSecretRef1ToJSON(
-  createSetupRegistrationOperationRequestCertificateTLSSecretRef1:
-    CreateSetupRegistrationOperationRequestCertificateTLSSecretRef1,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestCertificateTLSSecretRef1$outboundSchema
-      .parse(createSetupRegistrationOperationRequestCertificateTLSSecretRef1),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestCertificateUnion1$Outbound =
-  | CreateSetupRegistrationOperationRequestCertificateTLSSecretRef1$Outbound
-  | CreateSetupRegistrationOperationRequestCertificateManagedAcmImport1$Outbound
-  | CreateSetupRegistrationOperationRequestCertificateAwsAcmArn1$Outbound
-  | CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret1$Outbound
-  | CreateSetupRegistrationOperationRequestCertificateNone1$Outbound;
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestCertificateUnion1$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestCertificateUnion1$Outbound,
-    CreateSetupRegistrationOperationRequestCertificateUnion1
-  > = z.union([
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestCertificateTLSSecretRef1$outboundSchema
-    ),
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestCertificateManagedAcmImport1$outboundSchema
-    ),
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestCertificateAwsAcmArn1$outboundSchema
-    ),
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret1$outboundSchema
-    ),
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestCertificateNone1$outboundSchema
-    ),
-  ]);
-
-export function createSetupRegistrationOperationRequestCertificateUnion1ToJSON(
-  createSetupRegistrationOperationRequestCertificateUnion1:
-    CreateSetupRegistrationOperationRequestCertificateUnion1,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestCertificateUnion1$outboundSchema
-      .parse(createSetupRegistrationOperationRequestCertificateUnion1),
-  );
-}
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestModeGenerated$outboundSchema:
-  z.ZodEnum<typeof CreateSetupRegistrationOperationRequestModeGenerated> = z
-    .enum(CreateSetupRegistrationOperationRequestModeGenerated);
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum2$outboundSchema:
-  z.ZodEnum<
-    typeof CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum2
-  > = z.enum(
-    CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum2,
-  );
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers2$Outbound =
-  {
-    albName?: string | null | undefined;
-    albNamespace?: string | null | undefined;
-    frontend: string;
-    provider: string;
-  };
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers2$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers2$Outbound,
-    CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers2
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum2$outboundSchema,
-  });
-
-export function createSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers2ToJSON(
-  createSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers2:
-    CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers2,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers2$outboundSchema
-      .parse(
-        createSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers2,
-      ),
-  );
-}
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum2$outboundSchema:
-  z.ZodEnum<
-    typeof CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum2
-  > = z.enum(CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum2);
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestProviderGkeGateway2$Outbound =
-  {
-    provider: string;
-    staticAddressName?: string | null | undefined;
-  };
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderGkeGateway2$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestProviderGkeGateway2$Outbound,
-    CreateSetupRegistrationOperationRequestProviderGkeGateway2
-  > = z.object({
-    provider:
-      CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum2$outboundSchema,
-    staticAddressName: z.nullable(z.string()).optional(),
-  });
-
-export function createSetupRegistrationOperationRequestProviderGkeGateway2ToJSON(
-  createSetupRegistrationOperationRequestProviderGkeGateway2:
-    CreateSetupRegistrationOperationRequestProviderGkeGateway2,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestProviderGkeGateway2$outboundSchema
-      .parse(createSetupRegistrationOperationRequestProviderGkeGateway2),
-  );
-}
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderAwsAlbEnum2$outboundSchema:
-  z.ZodEnum<typeof CreateSetupRegistrationOperationRequestProviderAwsAlbEnum2> =
-    z.enum(CreateSetupRegistrationOperationRequestProviderAwsAlbEnum2);
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestProviderAwsAlb2$Outbound = {
-  ipAddressType?: string | null | undefined;
-  provider: string;
-  scheme: string;
-  subnetIds?: Array<string> | undefined;
-  targetType: string;
-};
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderAwsAlb2$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestProviderAwsAlb2$Outbound,
-    CreateSetupRegistrationOperationRequestProviderAwsAlb2
-  > = z.object({
-    ipAddressType: z.nullable(z.string()).optional(),
-    provider:
-      CreateSetupRegistrationOperationRequestProviderAwsAlbEnum2$outboundSchema,
-    scheme: z.string(),
-    subnetIds: z.array(z.string()).optional(),
-    targetType: z.string(),
-  });
-
-export function createSetupRegistrationOperationRequestProviderAwsAlb2ToJSON(
-  createSetupRegistrationOperationRequestProviderAwsAlb2:
-    CreateSetupRegistrationOperationRequestProviderAwsAlb2,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestProviderAwsAlb2$outboundSchema.parse(
-      createSetupRegistrationOperationRequestProviderAwsAlb2,
-    ),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestProviderUnion2$Outbound =
-  | CreateSetupRegistrationOperationRequestProviderAwsAlb2$Outbound
-  | CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers2$Outbound
-  | CreateSetupRegistrationOperationRequestProviderGkeGateway2$Outbound
-  | string;
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderUnion2$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestProviderUnion2$Outbound,
-    CreateSetupRegistrationOperationRequestProviderUnion2
-  > = z.union([
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestProviderAwsAlb2$outboundSchema
-    ),
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers2$outboundSchema
-    ),
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestProviderGkeGateway2$outboundSchema
-    ),
-    z.string(),
-  ]);
-
-export function createSetupRegistrationOperationRequestProviderUnion2ToJSON(
-  createSetupRegistrationOperationRequestProviderUnion2:
-    CreateSetupRegistrationOperationRequestProviderUnion2,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestProviderUnion2$outboundSchema.parse(
-      createSetupRegistrationOperationRequestProviderUnion2,
-    ),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestRouteGateway1$Outbound = {
-  annotations?: { [k: string]: string } | undefined;
-  controller?: string | null | undefined;
-  gatewayClassName: string;
-  labels?: { [k: string]: string } | undefined;
-  listenerPort: number;
-  provider?:
-    | CreateSetupRegistrationOperationRequestProviderAwsAlb2$Outbound
-    | CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers2$Outbound
-    | CreateSetupRegistrationOperationRequestProviderGkeGateway2$Outbound
-    | string
-    | null
-    | undefined;
-  routeApi: "gateway";
-};
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestRouteGateway1$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestRouteGateway1$Outbound,
-    CreateSetupRegistrationOperationRequestRouteGateway1
-  > = z.object({
-    annotations: z.record(z.string(), z.string()).optional(),
-    controller: z.nullable(z.string()).optional(),
-    gatewayClassName: z.string(),
-    labels: z.record(z.string(), z.string()).optional(),
-    listenerPort: z.int(),
-    provider: z.nullable(
-      z.union([
-        z.lazy(() =>
-          CreateSetupRegistrationOperationRequestProviderAwsAlb2$outboundSchema
-        ),
-        z.lazy(() =>
-          CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers2$outboundSchema
-        ),
-        z.lazy(() =>
-          CreateSetupRegistrationOperationRequestProviderGkeGateway2$outboundSchema
-        ),
-        z.string(),
-      ]),
-    ).optional(),
-    routeApi: z.literal("gateway"),
-  });
-
-export function createSetupRegistrationOperationRequestRouteGateway1ToJSON(
-  createSetupRegistrationOperationRequestRouteGateway1:
-    CreateSetupRegistrationOperationRequestRouteGateway1,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestRouteGateway1$outboundSchema.parse(
-      createSetupRegistrationOperationRequestRouteGateway1,
-    ),
-  );
-}
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum1$outboundSchema:
-  z.ZodEnum<
-    typeof CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum1
-  > = z.enum(
-    CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum1,
-  );
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers1$Outbound =
-  {
-    albName?: string | null | undefined;
-    albNamespace?: string | null | undefined;
-    frontend: string;
-    provider: string;
-  };
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers1$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers1$Outbound,
-    CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers1
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainersEnum1$outboundSchema,
-  });
-
-export function createSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers1ToJSON(
-  createSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers1:
-    CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers1,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers1$outboundSchema
-      .parse(
-        createSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers1,
-      ),
-  );
-}
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum1$outboundSchema:
-  z.ZodEnum<
-    typeof CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum1
-  > = z.enum(CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum1);
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestProviderGkeGateway1$Outbound =
-  {
-    provider: string;
-    staticAddressName?: string | null | undefined;
-  };
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderGkeGateway1$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestProviderGkeGateway1$Outbound,
-    CreateSetupRegistrationOperationRequestProviderGkeGateway1
-  > = z.object({
-    provider:
-      CreateSetupRegistrationOperationRequestProviderGkeGatewayEnum1$outboundSchema,
-    staticAddressName: z.nullable(z.string()).optional(),
-  });
-
-export function createSetupRegistrationOperationRequestProviderGkeGateway1ToJSON(
-  createSetupRegistrationOperationRequestProviderGkeGateway1:
-    CreateSetupRegistrationOperationRequestProviderGkeGateway1,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestProviderGkeGateway1$outboundSchema
-      .parse(createSetupRegistrationOperationRequestProviderGkeGateway1),
-  );
-}
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderAwsAlbEnum1$outboundSchema:
-  z.ZodEnum<typeof CreateSetupRegistrationOperationRequestProviderAwsAlbEnum1> =
-    z.enum(CreateSetupRegistrationOperationRequestProviderAwsAlbEnum1);
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestProviderAwsAlb1$Outbound = {
-  ipAddressType?: string | null | undefined;
-  provider: string;
-  scheme: string;
-  subnetIds?: Array<string> | undefined;
-  targetType: string;
-};
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderAwsAlb1$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestProviderAwsAlb1$Outbound,
-    CreateSetupRegistrationOperationRequestProviderAwsAlb1
-  > = z.object({
-    ipAddressType: z.nullable(z.string()).optional(),
-    provider:
-      CreateSetupRegistrationOperationRequestProviderAwsAlbEnum1$outboundSchema,
-    scheme: z.string(),
-    subnetIds: z.array(z.string()).optional(),
-    targetType: z.string(),
-  });
-
-export function createSetupRegistrationOperationRequestProviderAwsAlb1ToJSON(
-  createSetupRegistrationOperationRequestProviderAwsAlb1:
-    CreateSetupRegistrationOperationRequestProviderAwsAlb1,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestProviderAwsAlb1$outboundSchema.parse(
-      createSetupRegistrationOperationRequestProviderAwsAlb1,
-    ),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestProviderUnion1$Outbound =
-  | CreateSetupRegistrationOperationRequestProviderAwsAlb1$Outbound
-  | CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers1$Outbound
-  | CreateSetupRegistrationOperationRequestProviderGkeGateway1$Outbound
-  | string;
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestProviderUnion1$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestProviderUnion1$Outbound,
-    CreateSetupRegistrationOperationRequestProviderUnion1
-  > = z.union([
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestProviderAwsAlb1$outboundSchema
-    ),
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers1$outboundSchema
-    ),
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestProviderGkeGateway1$outboundSchema
-    ),
-    z.string(),
-  ]);
-
-export function createSetupRegistrationOperationRequestProviderUnion1ToJSON(
-  createSetupRegistrationOperationRequestProviderUnion1:
-    CreateSetupRegistrationOperationRequestProviderUnion1,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestProviderUnion1$outboundSchema.parse(
-      createSetupRegistrationOperationRequestProviderUnion1,
-    ),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestRouteIngress1$Outbound = {
-  annotations?: { [k: string]: string } | undefined;
-  controller?: string | null | undefined;
-  ingressClassName: string;
-  labels?: { [k: string]: string } | undefined;
-  provider?:
-    | CreateSetupRegistrationOperationRequestProviderAwsAlb1$Outbound
-    | CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers1$Outbound
-    | CreateSetupRegistrationOperationRequestProviderGkeGateway1$Outbound
-    | string
-    | null
-    | undefined;
-  routeApi: "ingress";
-};
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestRouteIngress1$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestRouteIngress1$Outbound,
-    CreateSetupRegistrationOperationRequestRouteIngress1
-  > = z.object({
-    annotations: z.record(z.string(), z.string()).optional(),
-    controller: z.nullable(z.string()).optional(),
-    ingressClassName: z.string(),
-    labels: z.record(z.string(), z.string()).optional(),
-    provider: z.nullable(
-      z.union([
-        z.lazy(() =>
-          CreateSetupRegistrationOperationRequestProviderAwsAlb1$outboundSchema
-        ),
-        z.lazy(() =>
-          CreateSetupRegistrationOperationRequestProviderAzureApplicationGatewayForContainers1$outboundSchema
-        ),
-        z.lazy(() =>
-          CreateSetupRegistrationOperationRequestProviderGkeGateway1$outboundSchema
-        ),
-        z.string(),
-      ]),
-    ).optional(),
-    routeApi: z.literal("ingress"),
-  });
-
-export function createSetupRegistrationOperationRequestRouteIngress1ToJSON(
-  createSetupRegistrationOperationRequestRouteIngress1:
-    CreateSetupRegistrationOperationRequestRouteIngress1,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestRouteIngress1$outboundSchema.parse(
-      createSetupRegistrationOperationRequestRouteIngress1,
-    ),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestRouteUnion1$Outbound =
-  | CreateSetupRegistrationOperationRequestRouteIngress1$Outbound
-  | CreateSetupRegistrationOperationRequestRouteGateway1$Outbound;
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestRouteUnion1$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestRouteUnion1$Outbound,
-    CreateSetupRegistrationOperationRequestRouteUnion1
-  > = z.union([
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestRouteIngress1$outboundSchema
-    ),
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestRouteGateway1$outboundSchema
-    ),
-  ]);
-
-export function createSetupRegistrationOperationRequestRouteUnion1ToJSON(
-  createSetupRegistrationOperationRequestRouteUnion1:
-    CreateSetupRegistrationOperationRequestRouteUnion1,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestRouteUnion1$outboundSchema.parse(
-      createSetupRegistrationOperationRequestRouteUnion1,
-    ),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestExposureGenerated$Outbound =
-  {
-    certificate:
-      | CreateSetupRegistrationOperationRequestCertificateTLSSecretRef1$Outbound
-      | CreateSetupRegistrationOperationRequestCertificateManagedAcmImport1$Outbound
-      | CreateSetupRegistrationOperationRequestCertificateAwsAcmArn1$Outbound
-      | CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret1$Outbound
-      | CreateSetupRegistrationOperationRequestCertificateNone1$Outbound;
-    mode: string;
-    route:
-      | CreateSetupRegistrationOperationRequestRouteIngress1$Outbound
-      | CreateSetupRegistrationOperationRequestRouteGateway1$Outbound;
-  };
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestExposureGenerated$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestExposureGenerated$Outbound,
-    CreateSetupRegistrationOperationRequestExposureGenerated
-  > = z.object({
-    certificate: z.union([
-      z.lazy(() =>
-        CreateSetupRegistrationOperationRequestCertificateTLSSecretRef1$outboundSchema
-      ),
-      z.lazy(() =>
-        CreateSetupRegistrationOperationRequestCertificateManagedAcmImport1$outboundSchema
-      ),
-      z.lazy(() =>
-        CreateSetupRegistrationOperationRequestCertificateAwsAcmArn1$outboundSchema
-      ),
-      z.lazy(() =>
-        CreateSetupRegistrationOperationRequestCertificateManagedTLSSecret1$outboundSchema
-      ),
-      z.lazy(() =>
-        CreateSetupRegistrationOperationRequestCertificateNone1$outboundSchema
-      ),
-    ]),
-    mode: CreateSetupRegistrationOperationRequestModeGenerated$outboundSchema,
-    route: z.union([
-      z.lazy(() =>
-        CreateSetupRegistrationOperationRequestRouteIngress1$outboundSchema
-      ),
-      z.lazy(() =>
-        CreateSetupRegistrationOperationRequestRouteGateway1$outboundSchema
-      ),
-    ]),
-  });
-
-export function createSetupRegistrationOperationRequestExposureGeneratedToJSON(
-  createSetupRegistrationOperationRequestExposureGenerated:
-    CreateSetupRegistrationOperationRequestExposureGenerated,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestExposureGenerated$outboundSchema
-      .parse(createSetupRegistrationOperationRequestExposureGenerated),
-  );
-}
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestModeDisabled$outboundSchema:
-  z.ZodEnum<typeof CreateSetupRegistrationOperationRequestModeDisabled> = z
-    .enum(CreateSetupRegistrationOperationRequestModeDisabled);
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestExposureDisabled$Outbound = {
-  mode: string;
-};
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestExposureDisabled$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestExposureDisabled$Outbound,
-    CreateSetupRegistrationOperationRequestExposureDisabled
-  > = z.object({
-    mode: CreateSetupRegistrationOperationRequestModeDisabled$outboundSchema,
-  });
-
-export function createSetupRegistrationOperationRequestExposureDisabledToJSON(
-  createSetupRegistrationOperationRequestExposureDisabled:
-    CreateSetupRegistrationOperationRequestExposureDisabled,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestExposureDisabled$outboundSchema
-      .parse(createSetupRegistrationOperationRequestExposureDisabled),
-  );
-}
-
-/** @internal */
-export type CreateSetupRegistrationOperationRequestExposureUnion$Outbound =
-  | CreateSetupRegistrationOperationRequestExposureCustom$Outbound
-  | CreateSetupRegistrationOperationRequestExposureGenerated$Outbound
-  | CreateSetupRegistrationOperationRequestExposureDisabled$Outbound
-  | string;
-
-/** @internal */
-export const CreateSetupRegistrationOperationRequestExposureUnion$outboundSchema:
-  z.ZodType<
-    CreateSetupRegistrationOperationRequestExposureUnion$Outbound,
-    CreateSetupRegistrationOperationRequestExposureUnion
-  > = z.union([
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestExposureCustom$outboundSchema
-    ),
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestExposureGenerated$outboundSchema
-    ),
-    z.lazy(() =>
-      CreateSetupRegistrationOperationRequestExposureDisabled$outboundSchema
-    ),
-    z.string(),
-  ]);
-
-export function createSetupRegistrationOperationRequestExposureUnionToJSON(
-  createSetupRegistrationOperationRequestExposureUnion:
-    CreateSetupRegistrationOperationRequestExposureUnion,
-): string {
-  return JSON.stringify(
-    CreateSetupRegistrationOperationRequestExposureUnion$outboundSchema.parse(
-      createSetupRegistrationOperationRequestExposureUnion,
+    CreateSetupRegistrationOperationRequestExposure$outboundSchema.parse(
+      createSetupRegistrationOperationRequestExposure,
     ),
   );
 }
@@ -4016,9 +2136,10 @@ export type CreateSetupRegistrationOperationRequestKubernetes$Outbound = {
     | null
     | undefined;
   exposure?:
-    | CreateSetupRegistrationOperationRequestExposureCustom$Outbound
-    | CreateSetupRegistrationOperationRequestExposureGenerated$Outbound
-    | CreateSetupRegistrationOperationRequestExposureDisabled$Outbound
+    | KubernetesExposureCustom$Outbound
+    | KubernetesExposureCustomBaseDomain$Outbound
+    | KubernetesExposureGenerated$Outbound
+    | KubernetesExposureDisabled$Outbound
     | string
     | null
     | undefined;
@@ -4040,15 +2161,10 @@ export const CreateSetupRegistrationOperationRequestKubernetes$outboundSchema:
     ).optional(),
     exposure: z.nullable(
       z.union([
-        z.lazy(() =>
-          CreateSetupRegistrationOperationRequestExposureCustom$outboundSchema
-        ),
-        z.lazy(() =>
-          CreateSetupRegistrationOperationRequestExposureGenerated$outboundSchema
-        ),
-        z.lazy(() =>
-          CreateSetupRegistrationOperationRequestExposureDisabled$outboundSchema
-        ),
+        KubernetesExposureCustom$outboundSchema,
+        KubernetesExposureCustomBaseDomain$outboundSchema,
+        KubernetesExposureGenerated$outboundSchema,
+        KubernetesExposureDisabled$outboundSchema,
         z.string(),
       ]),
     ).optional(),
@@ -4345,6 +2461,61 @@ export const CreateSetupRegistrationOperationRequestSetupManagement$outboundSche
     .enum(CreateSetupRegistrationOperationRequestSetupManagement);
 
 /** @internal */
+export type CreateSetupRegistrationOperationRequestSigning$Outbound = {
+  channel: string;
+  fingerprint: string;
+  privateMachineApiUrl?: string | null | undefined;
+};
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestSigning$outboundSchema:
+  z.ZodType<
+    CreateSetupRegistrationOperationRequestSigning$Outbound,
+    CreateSetupRegistrationOperationRequestSigning
+  > = z.object({
+    channel: z.string(),
+    fingerprint: z.string(),
+    privateMachineApiUrl: z.nullable(z.string()).optional(),
+  });
+
+export function createSetupRegistrationOperationRequestSigningToJSON(
+  createSetupRegistrationOperationRequestSigning:
+    CreateSetupRegistrationOperationRequestSigning,
+): string {
+  return JSON.stringify(
+    CreateSetupRegistrationOperationRequestSigning$outboundSchema.parse(
+      createSetupRegistrationOperationRequestSigning,
+    ),
+  );
+}
+
+/** @internal */
+export type CreateSetupRegistrationOperationRequestSigningUnion$Outbound =
+  | CreateSetupRegistrationOperationRequestSigning$Outbound
+  | string;
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestSigningUnion$outboundSchema:
+  z.ZodType<
+    CreateSetupRegistrationOperationRequestSigningUnion$Outbound,
+    CreateSetupRegistrationOperationRequestSigningUnion
+  > = z.union([
+    z.lazy(() => CreateSetupRegistrationOperationRequestSigning$outboundSchema),
+    z.string(),
+  ]);
+
+export function createSetupRegistrationOperationRequestSigningUnionToJSON(
+  createSetupRegistrationOperationRequestSigningUnion:
+    CreateSetupRegistrationOperationRequestSigningUnion,
+): string {
+  return JSON.stringify(
+    CreateSetupRegistrationOperationRequestSigningUnion$outboundSchema.parse(
+      createSetupRegistrationOperationRequestSigningUnion,
+    ),
+  );
+}
+
+/** @internal */
 export const CreateSetupRegistrationOperationRequestTelemetry$outboundSchema:
   z.ZodEnum<typeof CreateSetupRegistrationOperationRequestTelemetry> = z.enum(
     CreateSetupRegistrationOperationRequestTelemetry,
@@ -4358,6 +2529,7 @@ export const CreateSetupRegistrationOperationRequestUpdates$outboundSchema:
 
 /** @internal */
 export type CreateSetupRegistrationOperationRequestStackSettings$Outbound = {
+  airgapped?: boolean | undefined;
   compute?:
     | CreateSetupRegistrationOperationRequestCompute$Outbound
     | string
@@ -4392,6 +2564,11 @@ export type CreateSetupRegistrationOperationRequestStackSettings$Outbound = {
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   quotaWarningOverrides?: Array<string> | undefined;
   setupManagement?: string | undefined;
+  signing?:
+    | CreateSetupRegistrationOperationRequestSigning$Outbound
+    | string
+    | null
+    | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -4402,6 +2579,7 @@ export const CreateSetupRegistrationOperationRequestStackSettings$outboundSchema
     CreateSetupRegistrationOperationRequestStackSettings$Outbound,
     CreateSetupRegistrationOperationRequestStackSettings
   > = z.object({
+    airgapped: z.boolean().optional(),
     compute: z.nullable(
       z.union([
         z.lazy(() =>
@@ -4464,6 +2642,14 @@ export const CreateSetupRegistrationOperationRequestStackSettings$outboundSchema
     setupManagement:
       CreateSetupRegistrationOperationRequestSetupManagement$outboundSchema
         .optional(),
+    signing: z.nullable(
+      z.union([
+        z.lazy(() =>
+          CreateSetupRegistrationOperationRequestSigning$outboundSchema
+        ),
+        z.string(),
+      ]),
+    ).optional(),
     telemetry: CreateSetupRegistrationOperationRequestTelemetry$outboundSchema
       .optional(),
     updates: CreateSetupRegistrationOperationRequestUpdates$outboundSchema

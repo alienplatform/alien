@@ -93,6 +93,7 @@ async function $do(
     "cursor": payload?.cursor,
     "limit": payload?.limit,
     "project": payload?.project,
+    "setupLinksForGroup": payload?.setupLinksForGroup,
     "workspace": client._options.workspace,
   });
 

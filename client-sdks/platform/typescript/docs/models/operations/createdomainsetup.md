@@ -6,7 +6,7 @@
 import { CreateDomainSetup } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateDomainSetup = {
-  deploymentUrlProjectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  deploymentUrlProjectId: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
 };
 ```
 
@@ -16,5 +16,5 @@ let value: CreateDomainSetup = {
 | ---------------------------------- | ---------------------------------- | ---------------------------------- | ---------------------------------- | ---------------------------------- |
 | `deploymentPortal`                 | *boolean*                          | :heavy_minus_sign:                 | N/A                                |                                    |
 | `packages`                         | *boolean*                          | :heavy_minus_sign:                 | N/A                                |                                    |
-| `deploymentUrlProjectId`           | *string*                           | :heavy_minus_sign:                 | Unique identifier for the project. | prj_mcytp6z3j91f7tn5ryqsfwtr       |
+| `deploymentUrlProjectId`           | *string*                           | :heavy_minus_sign:                 | Unique identifier for the project. | prj_mcytp6z3j91f7tn5ryqsfwtrdqkv   |
 | `managerIds`                       | *string*[]                         | :heavy_minus_sign:                 | N/A                                |                                    |

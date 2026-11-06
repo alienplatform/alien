@@ -26,7 +26,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.agentSessions.list({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -52,7 +52,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await agentSessionsList(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;

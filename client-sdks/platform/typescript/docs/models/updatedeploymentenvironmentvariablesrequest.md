@@ -11,7 +11,6 @@ let value: UpdateDeploymentEnvironmentVariablesRequest = {
   variables: [
     {
       name: "<value>",
-      value: "<value>",
       type: "plain",
     },
   ],

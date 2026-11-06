@@ -1,6 +1,6 @@
 # DeploymentConfigHorizonMachineImageAws
 
-AWS Horizon machine image catalog.
+AWS machine image catalog.
 
 ## Example Usage
 

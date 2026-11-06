@@ -378,7 +378,7 @@ export type Pod3 = {
   waitingReason?: string | null | undefined;
 };
 
-export type Replicas4 = {
+export type SyncReconcileRequestReplicas4 = {
   available?: number | null | undefined;
   current?: number | null | undefined;
   desired?: number | null | undefined;
@@ -476,7 +476,7 @@ export type DataKubernetes3 = {
   name: string;
   namespace: string;
   pods: Array<Pod3>;
-  replicas: Replicas4;
+  replicas: SyncReconcileRequestReplicas4;
   restarts?: number | null | undefined;
   status: ResourceHeartbeatStatus17;
   workload?: Workload3 | string | null | undefined;
@@ -2214,7 +2214,7 @@ export function pod3ToJSON(pod3: Pod3): string {
 }
 
 /** @internal */
-export type Replicas4$Outbound = {
+export type SyncReconcileRequestReplicas4$Outbound = {
   available?: number | null | undefined;
   current?: number | null | undefined;
   desired?: number | null | undefined;
@@ -2224,9 +2224,9 @@ export type Replicas4$Outbound = {
 };
 
 /** @internal */
-export const Replicas4$outboundSchema: z.ZodType<
-  Replicas4$Outbound,
-  Replicas4
+export const SyncReconcileRequestReplicas4$outboundSchema: z.ZodType<
+  SyncReconcileRequestReplicas4$Outbound,
+  SyncReconcileRequestReplicas4
 > = z.object({
   available: z.nullable(z.int()).optional(),
   current: z.nullable(z.int()).optional(),
@@ -2236,8 +2236,14 @@ export const Replicas4$outboundSchema: z.ZodType<
   updated: z.nullable(z.int()).optional(),
 });
 
-export function replicas4ToJSON(replicas4: Replicas4): string {
-  return JSON.stringify(Replicas4$outboundSchema.parse(replicas4));
+export function syncReconcileRequestReplicas4ToJSON(
+  syncReconcileRequestReplicas4: SyncReconcileRequestReplicas4,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestReplicas4$outboundSchema.parse(
+      syncReconcileRequestReplicas4,
+    ),
+  );
 }
 
 /** @internal */
@@ -2405,7 +2411,7 @@ export type DataKubernetes3$Outbound = {
   name: string;
   namespace: string;
   pods: Array<Pod3$Outbound>;
-  replicas: Replicas4$Outbound;
+  replicas: SyncReconcileRequestReplicas4$Outbound;
   restarts?: number | null | undefined;
   status: ResourceHeartbeatStatus17$Outbound;
   workload?: Workload3$Outbound | string | null | undefined;
@@ -2434,7 +2440,7 @@ export const DataKubernetes3$outboundSchema: z.ZodType<
   name: z.string(),
   namespace: z.string(),
   pods: z.array(z.lazy(() => Pod3$outboundSchema)),
-  replicas: z.lazy(() => Replicas4$outboundSchema),
+  replicas: z.lazy(() => SyncReconcileRequestReplicas4$outboundSchema),
   restarts: z.nullable(z.int()).optional(),
   status: z.lazy(() => ResourceHeartbeatStatus17$outboundSchema),
   workload: z.nullable(

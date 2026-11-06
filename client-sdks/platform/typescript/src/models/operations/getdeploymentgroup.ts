@@ -7,6 +7,7 @@ import { safeParse } from "../../lib/schemas.js";
 import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
+import * as models from "../index.js";
 
 export type GetDeploymentGroupGlobals = {
   /**
@@ -75,6 +76,10 @@ export type GetDeploymentGroupResponse = {
    * Maximum number of deployments allowed in this deployment group
    */
   maxDeployments: number;
+  /**
+   * Whether new deployments from this group are protected once the project's signing is ready. On by default; the vendor may turn it off.
+   */
+  protectNewDeployments: boolean;
   createdAt: Date;
   /**
    * Project info, included when ?include=project is used
@@ -84,6 +89,10 @@ export type GetDeploymentGroupResponse = {
    * Current number of deployments in this deployment group
    */
   deploymentCount: number;
+  /**
+   * Whether new deployments that follow the default release channel start protected
+   */
+  protection: models.DeploymentGroupProtection;
 };
 
 /** @internal */
@@ -144,10 +153,12 @@ export const GetDeploymentGroupResponse$inboundSchema: z.ZodType<
   projectId: z.string(),
   workspaceId: z.string(),
   maxDeployments: z.int().default(100),
+  protectNewDeployments: z.boolean().default(true),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   project: z.nullable(z.lazy(() => GetDeploymentGroupProject$inboundSchema))
     .optional(),
   deploymentCount: z.int(),
+  protection: models.DeploymentGroupProtection$inboundSchema,
 });
 
 export function getDeploymentGroupResponseFromJSON(

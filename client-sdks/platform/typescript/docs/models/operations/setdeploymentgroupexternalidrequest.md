@@ -6,7 +6,7 @@
 import { SetDeploymentGroupExternalIdRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: SetDeploymentGroupExternalIdRequest = {
-  id: "dg_r27ict8c7vcgsumpj90ackf7b",
+  id: "dg_r27ict8c7vcgsumpj90ackf7bnwt",
   setDeploymentGroupExternalIdRequest: {
     externalId: "ext_example_01",
   },
@@ -17,5 +17,5 @@ let value: SetDeploymentGroupExternalIdRequest = {
 
 | Field                                                                                             | Type                                                                                              | Required                                                                                          | Description                                                                                       | Example                                                                                           |
 | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `id`                                                                                              | *string*                                                                                          | :heavy_check_mark:                                                                                | Unique identifier for the deployment group.                                                       | dg_r27ict8c7vcgsumpj90ackf7b                                                                      |
+| `id`                                                                                              | *string*                                                                                          | :heavy_check_mark:                                                                                | Unique identifier for the deployment group.                                                       | dg_r27ict8c7vcgsumpj90ackf7bnwt                                                                   |
 | `setDeploymentGroupExternalIdRequest`                                                             | [models.SetDeploymentGroupExternalIdRequest](../../models/setdeploymentgroupexternalidrequest.md) | :heavy_check_mark:                                                                                | N/A                                                                                               |                                                                                                   |

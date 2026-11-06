@@ -17,6 +17,32 @@ export type ListDeploymentsGlobals = {
 };
 
 /**
+ * Filter by whether the deployment needs action or has been inactive for over a week
+ */
+export const ListDeploymentsListState = {
+  Active: "active",
+  Attention: "attention",
+  Inactive: "inactive",
+} as const;
+/**
+ * Filter by whether the deployment needs action or has been inactive for over a week
+ */
+export type ListDeploymentsListState = ClosedEnum<
+  typeof ListDeploymentsListState
+>;
+
+/**
+ * Keep deployment groups together, with groups needing attention first
+ */
+export const Order = {
+  Group: "group",
+} as const;
+/**
+ * Keep deployment groups together, with groups needing attention first
+ */
+export type Order = ClosedEnum<typeof Order>;
+
+/**
  * Deployment status in the deployment lifecycle.
  *
  * @remarks
@@ -92,6 +118,10 @@ export type ListDeploymentsRequest = {
    */
   project?: string | undefined;
   /**
+   * Filter deployments by subaccount ID
+   */
+  cloudAccountId?: string | undefined;
+  /**
    * Filter by deployment group ID or name
    */
   deploymentGroup?: string | undefined;
@@ -99,6 +129,14 @@ export type ListDeploymentsRequest = {
    * Filter by exact deployment name. Must be used with deploymentGroup.
    */
   name?: string | undefined;
+  /**
+   * Filter by whether the deployment needs action or has been inactive for over a week
+   */
+  listState?: ListDeploymentsListState | undefined;
+  /**
+   * Keep deployment groups together, with groups needing attention first
+   */
+  order?: Order | undefined;
   /**
    * Filter by manager ID
    */
@@ -148,6 +186,14 @@ export type ListDeploymentsResponse = {
 };
 
 /** @internal */
+export const ListDeploymentsListState$outboundSchema: z.ZodEnum<
+  typeof ListDeploymentsListState
+> = z.enum(ListDeploymentsListState);
+
+/** @internal */
+export const Order$outboundSchema: z.ZodEnum<typeof Order> = z.enum(Order);
+
+/** @internal */
 export const ListDeploymentsStatus$outboundSchema: z.ZodEnum<
   typeof ListDeploymentsStatus
 > = z.enum(ListDeploymentsStatus);
@@ -165,8 +211,11 @@ export const ListDeploymentsInclude$outboundSchema: z.ZodEnum<
 /** @internal */
 export type ListDeploymentsRequest$Outbound = {
   project?: string | undefined;
+  cloudAccountId?: string | undefined;
   deploymentGroup?: string | undefined;
   name?: string | undefined;
+  listState?: string | undefined;
+  order?: string | undefined;
   managerId?: string | undefined;
   purpose?: string | undefined;
   search?: string | undefined;
@@ -183,8 +232,11 @@ export const ListDeploymentsRequest$outboundSchema: z.ZodType<
   ListDeploymentsRequest
 > = z.object({
   project: z.string().optional(),
+  cloudAccountId: z.string().optional(),
   deploymentGroup: z.string().optional(),
   name: z.string().optional(),
+  listState: ListDeploymentsListState$outboundSchema.optional(),
+  order: Order$outboundSchema.optional(),
   managerId: z.string().optional(),
   purpose: models.DeploymentPurpose$outboundSchema.optional(),
   search: z.string().optional(),

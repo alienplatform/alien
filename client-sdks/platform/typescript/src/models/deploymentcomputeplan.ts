@@ -10,6 +10,10 @@ import {
   ComputePoolSelection,
   ComputePoolSelection$inboundSchema,
 } from "./computepoolselection.js";
+import {
+  DeploymentComputePoolDataDiskPlan,
+  DeploymentComputePoolDataDiskPlan$inboundSchema,
+} from "./deploymentcomputepooldatadiskplan.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export const RequirementsArchitecture = {
@@ -85,7 +89,35 @@ export type DeploymentComputePlanProfile = {
 
 export type DeploymentComputePlanMachine = {
   machine: string;
+  /**
+   * Provider series, such as `m8i` or `n2-standard`.
+   */
+  series?: string | undefined;
+  /**
+   * Category the machine's series belongs to, such as `generalPurpose` or `gpuCompute`.
+   */
+  category?: string | undefined;
+  /**
+   * How the series is shown to people choosing a machine.
+   */
+  label?: string | undefined;
   profile: DeploymentComputePlanProfile;
+  /**
+   * Whether the machine exposes nested virtualization to guest VMs.
+   */
+  nestedVirtualization?: boolean | undefined;
+  /**
+   * Fixed local instance storage in bytes. Absent when storage is a disk sized at deployment time.
+   */
+  localStorage?: number | undefined;
+  /**
+   * Whether the machine can run this pool. Absent from older managers, which list only machines that can.
+   */
+  available?: boolean | undefined;
+  /**
+   * The pool requirements the machine does not meet, such as `architecture`, `cpu` or `memory`. Empty when `available` is true.
+   */
+  unavailableReasons?: Array<string> | undefined;
   recommended: boolean;
 };
 
@@ -103,6 +135,7 @@ export type Pool = {
    */
   recommended: ComputePoolSelection;
   machines: Array<DeploymentComputePlanMachine>;
+  dataDisk?: DeploymentComputePoolDataDiskPlan | null | undefined;
   errors?: Array<string> | undefined;
 };
 
@@ -378,7 +411,14 @@ export const DeploymentComputePlanMachine$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   machine: z.string(),
+  series: z.string().optional(),
+  category: z.string().optional(),
+  label: z.string().optional(),
   profile: z.lazy(() => DeploymentComputePlanProfile$inboundSchema),
+  nestedVirtualization: z.boolean().optional(),
+  localStorage: z.int().optional(),
+  available: z.boolean().optional(),
+  unavailableReasons: z.array(z.string()).optional(),
   recommended: z.boolean(),
 });
 
@@ -404,6 +444,8 @@ export const Pool$inboundSchema: z.ZodType<Pool, unknown> = z.object({
   selected: ComputePoolSelection$inboundSchema,
   recommended: ComputePoolSelection$inboundSchema,
   machines: z.array(z.lazy(() => DeploymentComputePlanMachine$inboundSchema)),
+  dataDisk: z.nullable(DeploymentComputePoolDataDiskPlan$inboundSchema)
+    .optional(),
   errors: z.array(z.string()).optional(),
 });
 

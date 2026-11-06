@@ -11,7 +11,7 @@ let value: APIKeyDeploymentSetupConfigItem = {
     type: "built-in",
     definitionId: "customer-storage",
     version: "<value>",
-    sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
   },
   required: false,
 };

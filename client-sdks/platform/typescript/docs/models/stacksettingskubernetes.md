@@ -17,7 +17,7 @@ let value: StackSettingsKubernetes = {};
 
 ## Fields
 
-| Field                               | Type                                | Required                            | Description                         |
-| ----------------------------------- | ----------------------------------- | ----------------------------------- | ----------------------------------- |
-| `cluster`                           | *models.StackSettingsClusterUnion*  | :heavy_minus_sign:                  | N/A                                 |
-| `exposure`                          | *models.StackSettingsExposureUnion* | :heavy_minus_sign:                  | N/A                                 |
+| Field                              | Type                               | Required                           | Description                        |
+| ---------------------------------- | ---------------------------------- | ---------------------------------- | ---------------------------------- |
+| `cluster`                          | *models.StackSettingsClusterUnion* | :heavy_minus_sign:                 | N/A                                |
+| `exposure`                         | *models.StackSettingsExposure*     | :heavy_minus_sign:                 | N/A                                |

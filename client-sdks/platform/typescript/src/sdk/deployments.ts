@@ -8,8 +8,13 @@ import { deploymentsCreateSetupRegistrationOperation } from "../funcs/deployment
 import { deploymentsCreateToken } from "../funcs/deploymentsCreateToken.js";
 import { deploymentsDelete } from "../funcs/deploymentsDelete.js";
 import { deploymentsGet } from "../funcs/deploymentsGet.js";
+import { deploymentsGetComputePlan } from "../funcs/deploymentsGetComputePlan.js";
+import { deploymentsGetDeploymentLogs } from "../funcs/deploymentsGetDeploymentLogs.js";
+import { deploymentsGetEnvironmentVariables } from "../funcs/deploymentsGetEnvironmentVariables.js";
 import { deploymentsGetInfo } from "../funcs/deploymentsGetInfo.js";
 import { deploymentsGetInputs } from "../funcs/deploymentsGetInputs.js";
+import { deploymentsGetMap } from "../funcs/deploymentsGetMap.js";
+import { deploymentsGetPulse } from "../funcs/deploymentsGetPulse.js";
 import { deploymentsGetSetupRegistrationOperation } from "../funcs/deploymentsGetSetupRegistrationOperation.js";
 import { deploymentsGetStats } from "../funcs/deploymentsGetStats.js";
 import { deploymentsGetUpdateOperation } from "../funcs/deploymentsGetUpdateOperation.js";
@@ -28,6 +33,7 @@ import { deploymentsRetry } from "../funcs/deploymentsRetry.js";
 import { deploymentsSetFirstPartyDeploymentInputs } from "../funcs/deploymentsSetFirstPartyDeploymentInputs.js";
 import { deploymentsSetReleaseChannel } from "../funcs/deploymentsSetReleaseChannel.js";
 import { deploymentsUpdateCompute } from "../funcs/deploymentsUpdateCompute.js";
+import { deploymentsUpdateDomains } from "../funcs/deploymentsUpdateDomains.js";
 import { deploymentsUpdateEnvironmentVariables } from "../funcs/deploymentsUpdateEnvironmentVariables.js";
 import { deploymentsUpdateInputs } from "../funcs/deploymentsUpdateInputs.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
@@ -36,6 +42,20 @@ import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 
 export class Deployments extends ClientSDK {
+  /**
+   * Read recent logs for one deployment
+   */
+  async getDeploymentLogs(
+    request: operations.GetDeploymentLogsRequest,
+    options?: RequestOptions,
+  ): Promise<operations.GetDeploymentLogsResponse> {
+    return unwrapAsync(deploymentsGetDeploymentLogs(
+      this,
+      request,
+      options,
+    ));
+  }
+
   /**
    * Reassign a deployment to another group within its project
    */
@@ -88,6 +108,34 @@ export class Deployments extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.DeploymentStats> {
     return unwrapAsync(deploymentsGetStats(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * List every deployment of a project, the application's and each feature's, with its group, purpose and a one-word state, for the project overview. Capped at 5000 rows; `total` counts all of them.
+   */
+  async getMap(
+    request: operations.GetDeploymentMapRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentMap> {
+    return unwrapAsync(deploymentsGetMap(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * How many of a project's application deployments report heartbeats now, and per 5-minute bucket over 24 hours how many reported and the request and 5xx rates summed over those that measured requests. Sums never include deployments that did not report.
+   */
+  async getPulse(
+    request: operations.GetDeploymentPulseRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentPulse> {
+    return unwrapAsync(deploymentsGetPulse(
       this,
       request,
       options,
@@ -342,6 +390,36 @@ export class Deployments extends ClientSDK {
   }
 
   /**
+   * Set managed custom endpoint hostnames for a resource. An empty endpoints map restores generated hostnames.
+   */
+  async updateDomains(
+    id: string,
+    requestBody?: operations.UpdateDeploymentDomainsRequestBody | undefined,
+    options?: RequestOptions,
+  ): Promise<operations.UpdateDeploymentDomainsResponse> {
+    return unwrapAsync(deploymentsUpdateDomains(
+      this,
+      id,
+      requestBody,
+      options,
+    ));
+  }
+
+  /**
+   * Plan the deployment's current compute on its target release in its manager: each pool's machine choices (same CPU architecture as its current machine), scale ranges and container choices. Requires the same permission as updating compute.
+   */
+  async getComputePlan(
+    request: operations.GetDeploymentComputePlanRequest,
+    options?: RequestOptions,
+  ): Promise<operations.GetDeploymentComputePlanResponse> {
+    return unwrapAsync(deploymentsGetComputePlan(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
    * Update deployment-time compute selections or quota warning overrides and request reconciliation by the hosted manager.
    */
   async updateCompute(
@@ -355,6 +433,20 @@ export class Deployments extends ClientSDK {
       this,
       id,
       updateDeploymentComputeRequest,
+      options,
+    ));
+  }
+
+  /**
+   * Read editable environment override names and types. Stored values are never returned.
+   */
+  async getEnvironmentVariables(
+    request: operations.GetDeploymentEnvironmentVariablesRequest,
+    options?: RequestOptions,
+  ): Promise<operations.GetDeploymentEnvironmentVariablesResponse> {
+    return unwrapAsync(deploymentsGetEnvironmentVariables(
+      this,
+      request,
       options,
     ));
   }

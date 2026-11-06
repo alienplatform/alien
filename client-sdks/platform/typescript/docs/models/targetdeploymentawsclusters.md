@@ -1,0 +1,19 @@
+# TargetDeploymentAwsClusters
+
+AWS machine image catalog.
+
+## Example Usage
+
+```typescript
+import { TargetDeploymentAwsClusters } from "@alienplatform/platform-api/models";
+
+let value: TargetDeploymentAwsClusters = {
+  amis: {},
+};
+```
+
+## Fields
+
+| Field                                     | Type                                      | Required                                  | Description                               |
+| ----------------------------------------- | ----------------------------------------- | ----------------------------------------- | ----------------------------------------- |
+| `amis`                                    | Record<string, Record<string, *string*>>  | :heavy_check_mark:                        | AMI IDs by architecture, then AWS region. |

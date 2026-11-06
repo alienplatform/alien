@@ -1,0 +1,21 @@
+# DeploymentStatePendingPreparedStackProfileConditionGcpStack
+
+GCP IAM condition
+
+## Example Usage
+
+```typescript
+import { DeploymentStatePendingPreparedStackProfileConditionGcpStack } from "@alienplatform/platform-api/models";
+
+let value: DeploymentStatePendingPreparedStackProfileConditionGcpStack = {
+  expression: "<value>",
+  title: "<value>",
+};
+```
+
+## Fields
+
+| Field              | Type               | Required           | Description        |
+| ------------------ | ------------------ | ------------------ | ------------------ |
+| `expression`       | *string*           | :heavy_check_mark: | N/A                |
+| `title`            | *string*           | :heavy_check_mark: | N/A                |

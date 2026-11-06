@@ -15,6 +15,7 @@ import { projectsConfigureSource } from "../funcs/projectsConfigureSource.js";
 import { projectsCreate } from "../funcs/projectsCreate.js";
 import { projectsCreateFromTemplate } from "../funcs/projectsCreateFromTemplate.js";
 import { projectsDelete } from "../funcs/projectsDelete.js";
+import { projectsDisableCapability } from "../funcs/projectsDisableCapability.js";
 import { projectsEnsureSandboxBaseImageRepository } from "../funcs/projectsEnsureSandboxBaseImageRepository.js";
 import { projectsGet } from "../funcs/projectsGet.js";
 import { projectsGetActiveRelease } from "../funcs/projectsGetActiveRelease.js";
@@ -257,6 +258,20 @@ export class Projects extends ClientSDK {
       this,
       idOrName,
       requestBody,
+      options,
+    ));
+  }
+
+  /**
+   * Turn off one of a Project's features. Refused while deployments of that feature (or, for models, direct provider connections) still exist, so turning it off never strands a customer's resources.
+   */
+  async disableCapability(
+    request: operations.DisableProjectCapabilityRequest,
+    options?: RequestOptions,
+  ): Promise<models.ProjectCapabilities> {
+    return unwrapAsync(projectsDisableCapability(
+      this,
+      request,
       options,
     ));
   }

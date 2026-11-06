@@ -17,7 +17,7 @@ let value: DeploymentSetupStackSettingsPolicyKubernetes = {};
 
 ## Fields
 
-| Field                                                    | Type                                                     | Required                                                 | Description                                              |
-| -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- |
-| `cluster`                                                | *models.DeploymentSetupStackSettingsPolicyClusterUnion*  | :heavy_minus_sign:                                       | N/A                                                      |
-| `exposure`                                               | *models.DeploymentSetupStackSettingsPolicyExposureUnion* | :heavy_minus_sign:                                       | N/A                                                      |
+| Field                                                   | Type                                                    | Required                                                | Description                                             |
+| ------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------- |
+| `cluster`                                               | *models.DeploymentSetupStackSettingsPolicyClusterUnion* | :heavy_minus_sign:                                      | N/A                                                     |
+| `exposure`                                              | *models.DeploymentSetupStackSettingsPolicyExposure*     | :heavy_minus_sign:                                      | N/A                                                     |

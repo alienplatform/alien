@@ -6,7 +6,7 @@
 import { GetReleaseRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: GetReleaseRequest = {
-  id: "rel_WbhQgksrawSKIpEN0NAssHX9",
+  id: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
 };
 ```
 
@@ -14,5 +14,5 @@ let value: GetReleaseRequest = {
 
 | Field                                                                          | Type                                                                           | Required                                                                       | Description                                                                    | Example                                                                        |
 | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
-| `id`                                                                           | *string*                                                                       | :heavy_check_mark:                                                             | Unique identifier for the release.                                             | rel_WbhQgksrawSKIpEN0NAssHX9                                                   |
+| `id`                                                                           | *string*                                                                       | :heavy_check_mark:                                                             | Unique identifier for the release.                                             | rel_WbhQgksrawSKIpEN0NAssHX9E2Su                                               |
 | `include`                                                                      | [operations.GetReleaseInclude](../../models/operations/getreleaseinclude.md)[] | :heavy_minus_sign:                                                             | Optional fields to include: project, rollout                                   |                                                                                |

@@ -14,6 +14,30 @@ import {
   ExternalBindingUnion$Outbound,
   ExternalBindingUnion$outboundSchema,
 } from "./externalbindingunion.js";
+import {
+  KubernetesExposureCustom,
+  KubernetesExposureCustom$inboundSchema,
+  KubernetesExposureCustom$Outbound,
+  KubernetesExposureCustom$outboundSchema,
+} from "./kubernetesexposurecustom.js";
+import {
+  KubernetesExposureCustomBaseDomain,
+  KubernetesExposureCustomBaseDomain$inboundSchema,
+  KubernetesExposureCustomBaseDomain$Outbound,
+  KubernetesExposureCustomBaseDomain$outboundSchema,
+} from "./kubernetesexposurecustombasedomain.js";
+import {
+  KubernetesExposureDisabled,
+  KubernetesExposureDisabled$inboundSchema,
+  KubernetesExposureDisabled$Outbound,
+  KubernetesExposureDisabled$outboundSchema,
+} from "./kubernetesexposuredisabled.js";
+import {
+  KubernetesExposureGenerated,
+  KubernetesExposureGenerated$inboundSchema,
+  KubernetesExposureGenerated$Outbound,
+  KubernetesExposureGenerated$outboundSchema,
+} from "./kubernetesexposuregenerated.js";
 
 /**
  * Deployment-time resource allocation for a container. Omitted fields use release defaults.
@@ -58,6 +82,13 @@ export type DeploymentSetupStackSettingsPolicyFailureDomainsUnion2 =
   | string;
 
 export type DeploymentSetupStackSettingsPolicyPoolsAutoscale = {
+  /**
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
+   */
+  dataDiskGib?: number | null | undefined;
   failureDomains?:
     | DeploymentSetupStackSettingsPolicyFailureDomains2
     | string
@@ -100,6 +131,13 @@ export type DeploymentSetupStackSettingsPolicyFailureDomainsUnion1 =
   | string;
 
 export type DeploymentSetupStackSettingsPolicyPoolsFixed = {
+  /**
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
+   */
+  dataDiskGib?: number | null | undefined;
   failureDomains?:
     | DeploymentSetupStackSettingsPolicyFailureDomains1
     | string
@@ -218,14 +256,28 @@ export type DeploymentSetupStackSettingsPolicyDomainsKubernetesUnion =
   | string;
 
 /**
+ * Managed certificate issuance settings.
+ */
+export type DeploymentSetupStackSettingsPolicyManaged = {};
+
+export type DeploymentSetupStackSettingsPolicyManagedUnion =
+  | DeploymentSetupStackSettingsPolicyManaged
+  | string;
+
+/**
  * Platform-specific certificate references for custom domains.
  */
-export type DeploymentSetupStackSettingsPolicyDomainsCertificate = {
+export type DeploymentSetupStackSettingsPolicyCertificate = {
   aws?: DeploymentSetupStackSettingsPolicyAws | string | null | undefined;
   azure?: DeploymentSetupStackSettingsPolicyAzure | string | null | undefined;
   gcp?: DeploymentSetupStackSettingsPolicyGcp | string | null | undefined;
   kubernetes?:
     | DeploymentSetupStackSettingsPolicyDomainsKubernetes
+    | string
+    | null
+    | undefined;
+  managed?:
+    | DeploymentSetupStackSettingsPolicyManaged
     | string
     | null
     | undefined;
@@ -238,11 +290,15 @@ export type DeploymentSetupStackSettingsPolicyCustomDomains = {
   /**
    * Platform-specific certificate references for custom domains.
    */
-  certificate: DeploymentSetupStackSettingsPolicyDomainsCertificate;
+  certificate: DeploymentSetupStackSettingsPolicyCertificate;
   /**
-   * Fully qualified domain name to use.
+   * Fully qualified domain name for a supplied certificate.
    */
-  domain: string;
+  domain?: string | undefined;
+  /**
+   * Hostnames keyed by endpoint name for a managed certificate.
+   */
+  endpoints?: { [k: string]: string } | undefined;
 };
 
 export const DeploymentSetupStackSettingsPolicyModeLoadBalancer = {
@@ -284,7 +340,7 @@ export type DeploymentSetupStackSettingsPolicyPublicEndpointTargetUnion =
  * @remarks
  *
  * When `custom_domains` is set, the specified resources use customer-provided
- * domains and certificates. Otherwise, Alien auto-generates domains.
+ * domains with supplied or managed certificates. Otherwise, Alien auto-generates domains.
  */
 export type DeploymentSetupStackSettingsPolicyDomains = {
   /**
@@ -385,633 +441,11 @@ export type DeploymentSetupStackSettingsPolicyClusterUnion =
   | DeploymentSetupStackSettingsPolicyCluster
   | string;
 
-export type DeploymentSetupStackSettingsPolicyCertificateNone2 = {
-  mode: "none";
-};
-
-export type DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2 = {
-  mode: "managedTlsSecret";
-  /**
-   * Secret name template. Runtime may substitute resource/deployment tokens.
-   */
-  secretNameTemplate: string;
-};
-
-export type DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn2 = {
-  /**
-   * Existing ACM certificate ARN.
-   */
-  certificateArn: string;
-  mode: "awsAcmArn";
-};
-
-export type DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport2 = {
-  mode: "managedAcmImport";
-  /**
-   * ACM region. Defaults to the deployment region when omitted.
-   */
-  region?: string | null | undefined;
-  /**
-   * Tags applied to runtime-imported ACM certificates.
-   */
-  tags?: { [k: string]: string } | undefined;
-};
-
-/**
- * Namespace-scoped Kubernetes TLS Secret reference.
- */
-export type DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef2 = {
-  /**
-   * Secret namespace. Defaults to the release namespace when omitted.
-   */
-  namespace?: string | null | undefined;
-  /**
-   * Secret name.
-   */
-  secretName: string;
-  mode: "tlsSecretRef";
-};
-
-/**
- * Certificate publication or reference mode for Kubernetes public endpoints.
- */
-export type DeploymentSetupStackSettingsPolicyCertificateUnion2 =
-  | DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef2
-  | DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport2
-  | DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn2
-  | DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2
-  | DeploymentSetupStackSettingsPolicyCertificateNone2;
-
-export const DeploymentSetupStackSettingsPolicyModeCustom = {
-  Custom: "custom",
-} as const;
-export type DeploymentSetupStackSettingsPolicyModeCustom = ClosedEnum<
-  typeof DeploymentSetupStackSettingsPolicyModeCustom
->;
-
-export const DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum4 =
-  {
-    AzureApplicationGatewayForContainers:
-      "azureApplicationGatewayForContainers",
-  } as const;
-export type DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum4 =
-  ClosedEnum<
-    typeof DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum4
-  >;
-
-export type DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4 =
-  {
-    /**
-     * Optional ALB name when using BYO Application Gateway resources.
-     */
-    albName?: string | null | undefined;
-    /**
-     * Optional ALB namespace when using BYO Application Gateway resources.
-     */
-    albNamespace?: string | null | undefined;
-    /**
-     * Public or internal frontend exposure.
-     */
-    frontend: string;
-    provider:
-      DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum4;
-  };
-
-export const DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum4 = {
-  GkeGateway: "gkeGateway",
-} as const;
-export type DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum4 =
-  ClosedEnum<typeof DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum4>;
-
-export type DeploymentSetupStackSettingsPolicyProviderGkeGateway4 = {
-  provider: DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum4;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum4 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum4 = ClosedEnum<
-  typeof DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum4
->;
-
-export type DeploymentSetupStackSettingsPolicyProviderAwsAlb4 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum4;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type DeploymentSetupStackSettingsPolicyProviderUnion4 =
-  | DeploymentSetupStackSettingsPolicyProviderAwsAlb4
-  | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4
-  | DeploymentSetupStackSettingsPolicyProviderGkeGateway4
-  | string;
-
-/**
- * Shared Gateway API route profile values.
- */
-export type DeploymentSetupStackSettingsPolicyRouteGateway2 = {
-  /**
-   * Annotations applied to route objects.
-   */
-  annotations?: { [k: string]: string } | undefined;
-  /**
-   * Route controller identifier, for example a cloud Gateway controller.
-   */
-  controller?: string | null | undefined;
-  /**
-   * GatewayClass selected for generated Gateways.
-   */
-  gatewayClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  /**
-   * Listener port, usually 443.
-   */
-  listenerPort: number;
-  provider?:
-    | DeploymentSetupStackSettingsPolicyProviderAwsAlb4
-    | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4
-    | DeploymentSetupStackSettingsPolicyProviderGkeGateway4
-    | string
-    | null
-    | undefined;
-  routeApi: "gateway";
-};
-
-export const DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum3 =
-  {
-    AzureApplicationGatewayForContainers:
-      "azureApplicationGatewayForContainers",
-  } as const;
-export type DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum3 =
-  ClosedEnum<
-    typeof DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum3
-  >;
-
-export type DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3 =
-  {
-    /**
-     * Optional ALB name when using BYO Application Gateway resources.
-     */
-    albName?: string | null | undefined;
-    /**
-     * Optional ALB namespace when using BYO Application Gateway resources.
-     */
-    albNamespace?: string | null | undefined;
-    /**
-     * Public or internal frontend exposure.
-     */
-    frontend: string;
-    provider:
-      DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum3;
-  };
-
-export const DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum3 = {
-  GkeGateway: "gkeGateway",
-} as const;
-export type DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum3 =
-  ClosedEnum<typeof DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum3>;
-
-export type DeploymentSetupStackSettingsPolicyProviderGkeGateway3 = {
-  provider: DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum3;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum3 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum3 = ClosedEnum<
-  typeof DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum3
->;
-
-export type DeploymentSetupStackSettingsPolicyProviderAwsAlb3 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum3;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type DeploymentSetupStackSettingsPolicyProviderUnion3 =
-  | DeploymentSetupStackSettingsPolicyProviderAwsAlb3
-  | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3
-  | DeploymentSetupStackSettingsPolicyProviderGkeGateway3
-  | string;
-
-/**
- * Shared Ingress route profile values.
- */
-export type DeploymentSetupStackSettingsPolicyRouteIngress2 = {
-  /**
-   * Annotations applied to route objects.
-   */
-  annotations?: { [k: string]: string } | undefined;
-  /**
-   * Route controller identifier, for example `eks.amazonaws.com/alb`.
-   */
-  controller?: string | null | undefined;
-  /**
-   * `spec.ingressClassName` for generated Ingresses.
-   */
-  ingressClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  provider?:
-    | DeploymentSetupStackSettingsPolicyProviderAwsAlb3
-    | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3
-    | DeploymentSetupStackSettingsPolicyProviderGkeGateway3
-    | string
-    | null
-    | undefined;
-  routeApi: "ingress";
-};
-
-/**
- * Kubernetes route API selected for public endpoints.
- */
-export type DeploymentSetupStackSettingsPolicyRouteUnion2 =
-  | DeploymentSetupStackSettingsPolicyRouteIngress2
-  | DeploymentSetupStackSettingsPolicyRouteGateway2;
-
-export type DeploymentSetupStackSettingsPolicyExposureCustom = {
-  /**
-   * Certificate publication or reference mode for Kubernetes public endpoints.
-   */
-  certificate:
-    | DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef2
-    | DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport2
-    | DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn2
-    | DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2
-    | DeploymentSetupStackSettingsPolicyCertificateNone2;
-  /**
-   * Hostname routed by the Kubernetes public endpoint.
-   */
-  domain: string;
-  mode: DeploymentSetupStackSettingsPolicyModeCustom;
-  /**
-   * Kubernetes route API selected for public endpoints.
-   */
-  route:
-    | DeploymentSetupStackSettingsPolicyRouteIngress2
-    | DeploymentSetupStackSettingsPolicyRouteGateway2;
-};
-
-export type DeploymentSetupStackSettingsPolicyCertificateNone1 = {
-  mode: "none";
-};
-
-export type DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1 = {
-  mode: "managedTlsSecret";
-  /**
-   * Secret name template. Runtime may substitute resource/deployment tokens.
-   */
-  secretNameTemplate: string;
-};
-
-export type DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn1 = {
-  /**
-   * Existing ACM certificate ARN.
-   */
-  certificateArn: string;
-  mode: "awsAcmArn";
-};
-
-export type DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport1 = {
-  mode: "managedAcmImport";
-  /**
-   * ACM region. Defaults to the deployment region when omitted.
-   */
-  region?: string | null | undefined;
-  /**
-   * Tags applied to runtime-imported ACM certificates.
-   */
-  tags?: { [k: string]: string } | undefined;
-};
-
-/**
- * Namespace-scoped Kubernetes TLS Secret reference.
- */
-export type DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef1 = {
-  /**
-   * Secret namespace. Defaults to the release namespace when omitted.
-   */
-  namespace?: string | null | undefined;
-  /**
-   * Secret name.
-   */
-  secretName: string;
-  mode: "tlsSecretRef";
-};
-
-/**
- * Certificate publication or reference mode for Kubernetes public endpoints.
- */
-export type DeploymentSetupStackSettingsPolicyCertificateUnion1 =
-  | DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef1
-  | DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport1
-  | DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn1
-  | DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1
-  | DeploymentSetupStackSettingsPolicyCertificateNone1;
-
-export const DeploymentSetupStackSettingsPolicyModeGenerated = {
-  Generated: "generated",
-} as const;
-export type DeploymentSetupStackSettingsPolicyModeGenerated = ClosedEnum<
-  typeof DeploymentSetupStackSettingsPolicyModeGenerated
->;
-
-export const DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum2 =
-  {
-    AzureApplicationGatewayForContainers:
-      "azureApplicationGatewayForContainers",
-  } as const;
-export type DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum2 =
-  ClosedEnum<
-    typeof DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum2
-  >;
-
-export type DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2 =
-  {
-    /**
-     * Optional ALB name when using BYO Application Gateway resources.
-     */
-    albName?: string | null | undefined;
-    /**
-     * Optional ALB namespace when using BYO Application Gateway resources.
-     */
-    albNamespace?: string | null | undefined;
-    /**
-     * Public or internal frontend exposure.
-     */
-    frontend: string;
-    provider:
-      DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum2;
-  };
-
-export const DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum2 = {
-  GkeGateway: "gkeGateway",
-} as const;
-export type DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum2 =
-  ClosedEnum<typeof DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum2>;
-
-export type DeploymentSetupStackSettingsPolicyProviderGkeGateway2 = {
-  provider: DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum2;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum2 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum2 = ClosedEnum<
-  typeof DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum2
->;
-
-export type DeploymentSetupStackSettingsPolicyProviderAwsAlb2 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum2;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type DeploymentSetupStackSettingsPolicyProviderUnion2 =
-  | DeploymentSetupStackSettingsPolicyProviderAwsAlb2
-  | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2
-  | DeploymentSetupStackSettingsPolicyProviderGkeGateway2
-  | string;
-
-/**
- * Shared Gateway API route profile values.
- */
-export type DeploymentSetupStackSettingsPolicyRouteGateway1 = {
-  /**
-   * Annotations applied to route objects.
-   */
-  annotations?: { [k: string]: string } | undefined;
-  /**
-   * Route controller identifier, for example a cloud Gateway controller.
-   */
-  controller?: string | null | undefined;
-  /**
-   * GatewayClass selected for generated Gateways.
-   */
-  gatewayClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  /**
-   * Listener port, usually 443.
-   */
-  listenerPort: number;
-  provider?:
-    | DeploymentSetupStackSettingsPolicyProviderAwsAlb2
-    | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2
-    | DeploymentSetupStackSettingsPolicyProviderGkeGateway2
-    | string
-    | null
-    | undefined;
-  routeApi: "gateway";
-};
-
-export const DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum1 =
-  {
-    AzureApplicationGatewayForContainers:
-      "azureApplicationGatewayForContainers",
-  } as const;
-export type DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum1 =
-  ClosedEnum<
-    typeof DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum1
-  >;
-
-export type DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1 =
-  {
-    /**
-     * Optional ALB name when using BYO Application Gateway resources.
-     */
-    albName?: string | null | undefined;
-    /**
-     * Optional ALB namespace when using BYO Application Gateway resources.
-     */
-    albNamespace?: string | null | undefined;
-    /**
-     * Public or internal frontend exposure.
-     */
-    frontend: string;
-    provider:
-      DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum1;
-  };
-
-export const DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum1 = {
-  GkeGateway: "gkeGateway",
-} as const;
-export type DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum1 =
-  ClosedEnum<typeof DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum1>;
-
-export type DeploymentSetupStackSettingsPolicyProviderGkeGateway1 = {
-  provider: DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum1;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum1 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum1 = ClosedEnum<
-  typeof DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum1
->;
-
-export type DeploymentSetupStackSettingsPolicyProviderAwsAlb1 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum1;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type DeploymentSetupStackSettingsPolicyProviderUnion1 =
-  | DeploymentSetupStackSettingsPolicyProviderAwsAlb1
-  | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1
-  | DeploymentSetupStackSettingsPolicyProviderGkeGateway1
-  | string;
-
-/**
- * Shared Ingress route profile values.
- */
-export type DeploymentSetupStackSettingsPolicyRouteIngress1 = {
-  /**
-   * Annotations applied to route objects.
-   */
-  annotations?: { [k: string]: string } | undefined;
-  /**
-   * Route controller identifier, for example `eks.amazonaws.com/alb`.
-   */
-  controller?: string | null | undefined;
-  /**
-   * `spec.ingressClassName` for generated Ingresses.
-   */
-  ingressClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  provider?:
-    | DeploymentSetupStackSettingsPolicyProviderAwsAlb1
-    | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1
-    | DeploymentSetupStackSettingsPolicyProviderGkeGateway1
-    | string
-    | null
-    | undefined;
-  routeApi: "ingress";
-};
-
-/**
- * Kubernetes route API selected for public endpoints.
- */
-export type DeploymentSetupStackSettingsPolicyRouteUnion1 =
-  | DeploymentSetupStackSettingsPolicyRouteIngress1
-  | DeploymentSetupStackSettingsPolicyRouteGateway1;
-
-export type DeploymentSetupStackSettingsPolicyExposureGenerated = {
-  /**
-   * Certificate publication or reference mode for Kubernetes public endpoints.
-   */
-  certificate:
-    | DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef1
-    | DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport1
-    | DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn1
-    | DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1
-    | DeploymentSetupStackSettingsPolicyCertificateNone1;
-  mode: DeploymentSetupStackSettingsPolicyModeGenerated;
-  /**
-   * Kubernetes route API selected for public endpoints.
-   */
-  route:
-    | DeploymentSetupStackSettingsPolicyRouteIngress1
-    | DeploymentSetupStackSettingsPolicyRouteGateway1;
-};
-
-export const DeploymentSetupStackSettingsPolicyModeDisabled = {
-  Disabled: "disabled",
-} as const;
-export type DeploymentSetupStackSettingsPolicyModeDisabled = ClosedEnum<
-  typeof DeploymentSetupStackSettingsPolicyModeDisabled
->;
-
-export type DeploymentSetupStackSettingsPolicyExposureDisabled = {
-  mode: DeploymentSetupStackSettingsPolicyModeDisabled;
-};
-
-export type DeploymentSetupStackSettingsPolicyExposureUnion =
-  | DeploymentSetupStackSettingsPolicyExposureCustom
-  | DeploymentSetupStackSettingsPolicyExposureGenerated
-  | DeploymentSetupStackSettingsPolicyExposureDisabled
+export type DeploymentSetupStackSettingsPolicyExposure =
+  | KubernetesExposureCustom
+  | KubernetesExposureCustomBaseDomain
+  | KubernetesExposureGenerated
+  | KubernetesExposureDisabled
   | string;
 
 /**
@@ -1031,9 +465,10 @@ export type DeploymentSetupStackSettingsPolicyKubernetes = {
     | null
     | undefined;
   exposure?:
-    | DeploymentSetupStackSettingsPolicyExposureCustom
-    | DeploymentSetupStackSettingsPolicyExposureGenerated
-    | DeploymentSetupStackSettingsPolicyExposureDisabled
+    | KubernetesExposureCustom
+    | KubernetesExposureCustomBaseDomain
+    | KubernetesExposureGenerated
+    | KubernetesExposureDisabled
     | string
     | null
     | undefined;
@@ -1186,6 +621,36 @@ export type DeploymentSetupStackSettingsPolicySetupManagement = ClosedEnum<
 >;
 
 /**
+ * What setup pins for a protected install.
+ *
+ * @remarks
+ *
+ * Take the values from the vendor's install guide or signed release, not from the
+ * control plane.
+ */
+export type DeploymentSetupStackSettingsPolicySigning = {
+  /**
+   * Release channel the install follows, such as `production`.
+   */
+  channel: string;
+  /**
+   * `SHA256:<64 hex>` fingerprint of the vendor's signer list version 1.
+   */
+  fingerprint: string;
+  /**
+   * Customer setup pins this private instance machine endpoint and enables
+   *
+   * @remarks
+   * install-local input custody. It cannot be changed by the runtime role.
+   */
+  privateMachineApiUrl?: string | null | undefined;
+};
+
+export type DeploymentSetupStackSettingsPolicySigningUnion =
+  | DeploymentSetupStackSettingsPolicySigning
+  | string;
+
+/**
  * How telemetry (logs, metrics, traces) is handled.
  */
 export const DeploymentSetupStackSettingsPolicyTelemetry = {
@@ -1227,6 +692,13 @@ export type DeploymentSetupStackSettingsPolicyUpdates = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type Defaults = {
+  /**
+   * Deliver Kubernetes updates and reports as carried bundles instead of a live connection.
+   *
+   * @remarks
+   * The Operator still executes deployments with the pull model.
+   */
+  airgapped?: boolean | undefined;
   compute?:
     | DeploymentSetupStackSettingsPolicyCompute
     | string
@@ -1289,6 +761,11 @@ export type Defaults = {
    */
   setupManagement?:
     | DeploymentSetupStackSettingsPolicySetupManagement
+    | undefined;
+  signing?:
+    | DeploymentSetupStackSettingsPolicySigning
+    | string
+    | null
     | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
@@ -1512,6 +989,7 @@ export function deploymentSetupStackSettingsPolicyFailureDomainsUnion2FromJSON(
 export const DeploymentSetupStackSettingsPolicyPoolsAutoscale$inboundSchema:
   z.ZodType<DeploymentSetupStackSettingsPolicyPoolsAutoscale, unknown> = z
     .object({
+      dataDiskGib: z.nullable(z.int()).optional(),
       failure_domains: z.nullable(
         z.union([
           z.lazy(() =>
@@ -1531,6 +1009,7 @@ export const DeploymentSetupStackSettingsPolicyPoolsAutoscale$inboundSchema:
     });
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyPoolsAutoscale$Outbound = {
+  dataDiskGib?: number | null | undefined;
   failure_domains?:
     | DeploymentSetupStackSettingsPolicyFailureDomains2$Outbound
     | string
@@ -1548,6 +1027,7 @@ export const DeploymentSetupStackSettingsPolicyPoolsAutoscale$outboundSchema:
     DeploymentSetupStackSettingsPolicyPoolsAutoscale$Outbound,
     DeploymentSetupStackSettingsPolicyPoolsAutoscale
   > = z.object({
+    dataDiskGib: z.nullable(z.int()).optional(),
     failureDomains: z.nullable(
       z.union([
         z.lazy(() =>
@@ -1695,6 +1175,7 @@ export function deploymentSetupStackSettingsPolicyFailureDomainsUnion1FromJSON(
 /** @internal */
 export const DeploymentSetupStackSettingsPolicyPoolsFixed$inboundSchema:
   z.ZodType<DeploymentSetupStackSettingsPolicyPoolsFixed, unknown> = z.object({
+    dataDiskGib: z.nullable(z.int()).optional(),
     failure_domains: z.nullable(
       z.union([
         z.lazy(() =>
@@ -1713,6 +1194,7 @@ export const DeploymentSetupStackSettingsPolicyPoolsFixed$inboundSchema:
   });
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyPoolsFixed$Outbound = {
+  dataDiskGib?: number | null | undefined;
   failure_domains?:
     | DeploymentSetupStackSettingsPolicyFailureDomains1$Outbound
     | string
@@ -1729,6 +1211,7 @@ export const DeploymentSetupStackSettingsPolicyPoolsFixed$outboundSchema:
     DeploymentSetupStackSettingsPolicyPoolsFixed$Outbound,
     DeploymentSetupStackSettingsPolicyPoolsFixed
   > = z.object({
+    dataDiskGib: z.nullable(z.int()).optional(),
     failureDomains: z.nullable(
       z.union([
         z.lazy(() =>
@@ -2381,38 +1864,131 @@ export function deploymentSetupStackSettingsPolicyDomainsKubernetesUnionFromJSON
 }
 
 /** @internal */
-export const DeploymentSetupStackSettingsPolicyDomainsCertificate$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyDomainsCertificate, unknown> = z
-    .object({
-      aws: z.nullable(
-        z.union([
-          z.lazy(() => DeploymentSetupStackSettingsPolicyAws$inboundSchema),
-          z.string(),
-        ]),
-      ).optional(),
-      azure: z.nullable(
-        z.union([
-          z.lazy(() => DeploymentSetupStackSettingsPolicyAzure$inboundSchema),
-          z.string(),
-        ]),
-      ).optional(),
-      gcp: z.nullable(
-        z.union([
-          z.lazy(() => DeploymentSetupStackSettingsPolicyGcp$inboundSchema),
-          z.string(),
-        ]),
-      ).optional(),
-      kubernetes: z.nullable(
-        z.union([
-          z.lazy(() =>
-            DeploymentSetupStackSettingsPolicyDomainsKubernetes$inboundSchema
-          ),
-          z.string(),
-        ]),
-      ).optional(),
-    });
+export const DeploymentSetupStackSettingsPolicyManaged$inboundSchema: z.ZodType<
+  DeploymentSetupStackSettingsPolicyManaged,
+  unknown
+> = z.object({});
 /** @internal */
-export type DeploymentSetupStackSettingsPolicyDomainsCertificate$Outbound = {
+export type DeploymentSetupStackSettingsPolicyManaged$Outbound = {};
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyManaged$outboundSchema:
+  z.ZodType<
+    DeploymentSetupStackSettingsPolicyManaged$Outbound,
+    DeploymentSetupStackSettingsPolicyManaged
+  > = z.object({});
+
+export function deploymentSetupStackSettingsPolicyManagedToJSON(
+  deploymentSetupStackSettingsPolicyManaged:
+    DeploymentSetupStackSettingsPolicyManaged,
+): string {
+  return JSON.stringify(
+    DeploymentSetupStackSettingsPolicyManaged$outboundSchema.parse(
+      deploymentSetupStackSettingsPolicyManaged,
+    ),
+  );
+}
+export function deploymentSetupStackSettingsPolicyManagedFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentSetupStackSettingsPolicyManaged,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentSetupStackSettingsPolicyManaged$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentSetupStackSettingsPolicyManaged' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyManagedUnion$inboundSchema:
+  z.ZodType<DeploymentSetupStackSettingsPolicyManagedUnion, unknown> = z.union([
+    z.lazy(() => DeploymentSetupStackSettingsPolicyManaged$inboundSchema),
+    z.string(),
+  ]);
+/** @internal */
+export type DeploymentSetupStackSettingsPolicyManagedUnion$Outbound =
+  | DeploymentSetupStackSettingsPolicyManaged$Outbound
+  | string;
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyManagedUnion$outboundSchema:
+  z.ZodType<
+    DeploymentSetupStackSettingsPolicyManagedUnion$Outbound,
+    DeploymentSetupStackSettingsPolicyManagedUnion
+  > = z.union([
+    z.lazy(() => DeploymentSetupStackSettingsPolicyManaged$outboundSchema),
+    z.string(),
+  ]);
+
+export function deploymentSetupStackSettingsPolicyManagedUnionToJSON(
+  deploymentSetupStackSettingsPolicyManagedUnion:
+    DeploymentSetupStackSettingsPolicyManagedUnion,
+): string {
+  return JSON.stringify(
+    DeploymentSetupStackSettingsPolicyManagedUnion$outboundSchema.parse(
+      deploymentSetupStackSettingsPolicyManagedUnion,
+    ),
+  );
+}
+export function deploymentSetupStackSettingsPolicyManagedUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentSetupStackSettingsPolicyManagedUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentSetupStackSettingsPolicyManagedUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentSetupStackSettingsPolicyManagedUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyCertificate$inboundSchema:
+  z.ZodType<DeploymentSetupStackSettingsPolicyCertificate, unknown> = z.object({
+    aws: z.nullable(
+      z.union([
+        z.lazy(() => DeploymentSetupStackSettingsPolicyAws$inboundSchema),
+        z.string(),
+      ]),
+    ).optional(),
+    azure: z.nullable(
+      z.union([
+        z.lazy(() => DeploymentSetupStackSettingsPolicyAzure$inboundSchema),
+        z.string(),
+      ]),
+    ).optional(),
+    gcp: z.nullable(
+      z.union([
+        z.lazy(() => DeploymentSetupStackSettingsPolicyGcp$inboundSchema),
+        z.string(),
+      ]),
+    ).optional(),
+    kubernetes: z.nullable(
+      z.union([
+        z.lazy(() =>
+          DeploymentSetupStackSettingsPolicyDomainsKubernetes$inboundSchema
+        ),
+        z.string(),
+      ]),
+    ).optional(),
+    managed: z.nullable(
+      z.union([
+        z.lazy(() => DeploymentSetupStackSettingsPolicyManaged$inboundSchema),
+        z.string(),
+      ]),
+    ).optional(),
+  });
+/** @internal */
+export type DeploymentSetupStackSettingsPolicyCertificate$Outbound = {
   aws?:
     | DeploymentSetupStackSettingsPolicyAws$Outbound
     | string
@@ -2433,13 +2009,18 @@ export type DeploymentSetupStackSettingsPolicyDomainsCertificate$Outbound = {
     | string
     | null
     | undefined;
+  managed?:
+    | DeploymentSetupStackSettingsPolicyManaged$Outbound
+    | string
+    | null
+    | undefined;
 };
 
 /** @internal */
-export const DeploymentSetupStackSettingsPolicyDomainsCertificate$outboundSchema:
+export const DeploymentSetupStackSettingsPolicyCertificate$outboundSchema:
   z.ZodType<
-    DeploymentSetupStackSettingsPolicyDomainsCertificate$Outbound,
-    DeploymentSetupStackSettingsPolicyDomainsCertificate
+    DeploymentSetupStackSettingsPolicyCertificate$Outbound,
+    DeploymentSetupStackSettingsPolicyCertificate
   > = z.object({
     aws: z.nullable(
       z.union([
@@ -2467,31 +2048,37 @@ export const DeploymentSetupStackSettingsPolicyDomainsCertificate$outboundSchema
         z.string(),
       ]),
     ).optional(),
+    managed: z.nullable(
+      z.union([
+        z.lazy(() => DeploymentSetupStackSettingsPolicyManaged$outboundSchema),
+        z.string(),
+      ]),
+    ).optional(),
   });
 
-export function deploymentSetupStackSettingsPolicyDomainsCertificateToJSON(
-  deploymentSetupStackSettingsPolicyDomainsCertificate:
-    DeploymentSetupStackSettingsPolicyDomainsCertificate,
+export function deploymentSetupStackSettingsPolicyCertificateToJSON(
+  deploymentSetupStackSettingsPolicyCertificate:
+    DeploymentSetupStackSettingsPolicyCertificate,
 ): string {
   return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyDomainsCertificate$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyDomainsCertificate,
+    DeploymentSetupStackSettingsPolicyCertificate$outboundSchema.parse(
+      deploymentSetupStackSettingsPolicyCertificate,
     ),
   );
 }
-export function deploymentSetupStackSettingsPolicyDomainsCertificateFromJSON(
+export function deploymentSetupStackSettingsPolicyCertificateFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyDomainsCertificate,
+  DeploymentSetupStackSettingsPolicyCertificate,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      DeploymentSetupStackSettingsPolicyDomainsCertificate$inboundSchema.parse(
+      DeploymentSetupStackSettingsPolicyCertificate$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyDomainsCertificate' from JSON`,
+    `Failed to parse 'DeploymentSetupStackSettingsPolicyCertificate' from JSON`,
   );
 }
 
@@ -2500,14 +2087,16 @@ export const DeploymentSetupStackSettingsPolicyCustomDomains$inboundSchema:
   z.ZodType<DeploymentSetupStackSettingsPolicyCustomDomains, unknown> = z
     .object({
       certificate: z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyDomainsCertificate$inboundSchema
+        DeploymentSetupStackSettingsPolicyCertificate$inboundSchema
       ),
-      domain: z.string(),
+      domain: z.string().optional(),
+      endpoints: z.record(z.string(), z.string()).optional(),
     });
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyCustomDomains$Outbound = {
-  certificate: DeploymentSetupStackSettingsPolicyDomainsCertificate$Outbound;
-  domain: string;
+  certificate: DeploymentSetupStackSettingsPolicyCertificate$Outbound;
+  domain?: string | undefined;
+  endpoints?: { [k: string]: string } | undefined;
 };
 
 /** @internal */
@@ -2517,9 +2106,10 @@ export const DeploymentSetupStackSettingsPolicyCustomDomains$outboundSchema:
     DeploymentSetupStackSettingsPolicyCustomDomains
   > = z.object({
     certificate: z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyDomainsCertificate$outboundSchema
+      DeploymentSetupStackSettingsPolicyCertificate$outboundSchema
     ),
-    domain: z.string(),
+    domain: z.string().optional(),
+    endpoints: z.record(z.string(), z.string()).optional(),
   });
 
 export function deploymentSetupStackSettingsPolicyCustomDomainsToJSON(
@@ -3122,2566 +2712,58 @@ export function deploymentSetupStackSettingsPolicyClusterUnionFromJSON(
 }
 
 /** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateNone2$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyCertificateNone2, unknown> = z
-    .object({
-      mode: z.literal("none"),
-    });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyCertificateNone2$Outbound = {
-  mode: "none";
-};
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateNone2$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyCertificateNone2$Outbound,
-    DeploymentSetupStackSettingsPolicyCertificateNone2
-  > = z.object({
-    mode: z.literal("none"),
-  });
-
-export function deploymentSetupStackSettingsPolicyCertificateNone2ToJSON(
-  deploymentSetupStackSettingsPolicyCertificateNone2:
-    DeploymentSetupStackSettingsPolicyCertificateNone2,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyCertificateNone2$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyCertificateNone2,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyCertificateNone2FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyCertificateNone2,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyCertificateNone2$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyCertificateNone2' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2$inboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2,
-    unknown
-  > = z.object({
-    mode: z.literal("managedTlsSecret"),
-    secretNameTemplate: z.string(),
-  });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2$Outbound =
-  {
-    mode: "managedTlsSecret";
-    secretNameTemplate: string;
-  };
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2$Outbound,
-    DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2
-  > = z.object({
-    mode: z.literal("managedTlsSecret"),
-    secretNameTemplate: z.string(),
-  });
-
-export function deploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2ToJSON(
-  deploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2:
-    DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2$outboundSchema
-      .parse(deploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2),
-  );
-}
-export function deploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2$inboundSchema
-        .parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn2$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn2, unknown> =
-    z.object({
-      certificateArn: z.string(),
-      mode: z.literal("awsAcmArn"),
-    });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn2$Outbound = {
-  certificateArn: string;
-  mode: "awsAcmArn";
-};
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn2$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn2$Outbound,
-    DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn2
-  > = z.object({
-    certificateArn: z.string(),
-    mode: z.literal("awsAcmArn"),
-  });
-
-export function deploymentSetupStackSettingsPolicyCertificateAwsAcmArn2ToJSON(
-  deploymentSetupStackSettingsPolicyCertificateAwsAcmArn2:
-    DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn2,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn2$outboundSchema
-      .parse(deploymentSetupStackSettingsPolicyCertificateAwsAcmArn2),
-  );
-}
-export function deploymentSetupStackSettingsPolicyCertificateAwsAcmArn2FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn2,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn2$inboundSchema
-        .parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn2' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport2$inboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport2,
-    unknown
-  > = z.object({
-    mode: z.literal("managedAcmImport"),
-    region: z.nullable(z.string()).optional(),
-    tags: z.record(z.string(), z.string()).optional(),
-  });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport2$Outbound =
-  {
-    mode: "managedAcmImport";
-    region?: string | null | undefined;
-    tags?: { [k: string]: string } | undefined;
-  };
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport2$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport2$Outbound,
-    DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport2
-  > = z.object({
-    mode: z.literal("managedAcmImport"),
-    region: z.nullable(z.string()).optional(),
-    tags: z.record(z.string(), z.string()).optional(),
-  });
-
-export function deploymentSetupStackSettingsPolicyCertificateManagedAcmImport2ToJSON(
-  deploymentSetupStackSettingsPolicyCertificateManagedAcmImport2:
-    DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport2,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport2$outboundSchema
-      .parse(deploymentSetupStackSettingsPolicyCertificateManagedAcmImport2),
-  );
-}
-export function deploymentSetupStackSettingsPolicyCertificateManagedAcmImport2FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport2,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport2$inboundSchema
-        .parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport2' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef2$inboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef2,
-    unknown
-  > = z.object({
-    namespace: z.nullable(z.string()).optional(),
-    secretName: z.string(),
-    mode: z.literal("tlsSecretRef"),
-  });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef2$Outbound =
-  {
-    namespace?: string | null | undefined;
-    secretName: string;
-    mode: "tlsSecretRef";
-  };
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef2$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef2$Outbound,
-    DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef2
-  > = z.object({
-    namespace: z.nullable(z.string()).optional(),
-    secretName: z.string(),
-    mode: z.literal("tlsSecretRef"),
-  });
-
-export function deploymentSetupStackSettingsPolicyCertificateTLSSecretRef2ToJSON(
-  deploymentSetupStackSettingsPolicyCertificateTLSSecretRef2:
-    DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef2,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef2$outboundSchema
-      .parse(deploymentSetupStackSettingsPolicyCertificateTLSSecretRef2),
-  );
-}
-export function deploymentSetupStackSettingsPolicyCertificateTLSSecretRef2FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef2,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef2$inboundSchema
-        .parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef2' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateUnion2$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyCertificateUnion2, unknown> = z
-    .union([
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef2$inboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport2$inboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn2$inboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2$inboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyCertificateNone2$inboundSchema
-      ),
-    ]);
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyCertificateUnion2$Outbound =
-  | DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef2$Outbound
-  | DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport2$Outbound
-  | DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn2$Outbound
-  | DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2$Outbound
-  | DeploymentSetupStackSettingsPolicyCertificateNone2$Outbound;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateUnion2$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyCertificateUnion2$Outbound,
-    DeploymentSetupStackSettingsPolicyCertificateUnion2
-  > = z.union([
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef2$outboundSchema
-    ),
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport2$outboundSchema
-    ),
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn2$outboundSchema
-    ),
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2$outboundSchema
-    ),
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyCertificateNone2$outboundSchema
-    ),
+export const DeploymentSetupStackSettingsPolicyExposure$inboundSchema:
+  z.ZodType<DeploymentSetupStackSettingsPolicyExposure, unknown> = z.union([
+    KubernetesExposureCustom$inboundSchema,
+    KubernetesExposureCustomBaseDomain$inboundSchema,
+    KubernetesExposureGenerated$inboundSchema,
+    KubernetesExposureDisabled$inboundSchema,
+    z.string(),
   ]);
-
-export function deploymentSetupStackSettingsPolicyCertificateUnion2ToJSON(
-  deploymentSetupStackSettingsPolicyCertificateUnion2:
-    DeploymentSetupStackSettingsPolicyCertificateUnion2,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyCertificateUnion2$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyCertificateUnion2,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyCertificateUnion2FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyCertificateUnion2,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyCertificateUnion2$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyCertificateUnion2' from JSON`,
-  );
-}
-
 /** @internal */
-export const DeploymentSetupStackSettingsPolicyModeCustom$inboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyModeCustom> = z.enum(
-    DeploymentSetupStackSettingsPolicyModeCustom,
-  );
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyModeCustom$outboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyModeCustom> =
-    DeploymentSetupStackSettingsPolicyModeCustom$inboundSchema;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum4$inboundSchema:
-  z.ZodEnum<
-    typeof DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum4
-  > = z.enum(
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum4,
-  );
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum4$outboundSchema:
-  z.ZodEnum<
-    typeof DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum4
-  > =
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum4$inboundSchema;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4$inboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4,
-    unknown
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum4$inboundSchema,
-  });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4$Outbound =
-  {
-    albName?: string | null | undefined;
-    albNamespace?: string | null | undefined;
-    frontend: string;
-    provider: string;
-  };
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4$Outbound,
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum4$outboundSchema,
-  });
-
-export function deploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4ToJSON(
-  deploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4:
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4$outboundSchema
-      .parse(
-        deploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4,
-      ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4$inboundSchema
-        .parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum4$inboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum4> =
-    z.enum(DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum4);
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum4$outboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum4> =
-    DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum4$inboundSchema;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderGkeGateway4$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyProviderGkeGateway4, unknown> = z
-    .object({
-      provider:
-        DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum4$inboundSchema,
-      staticAddressName: z.nullable(z.string()).optional(),
-    });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyProviderGkeGateway4$Outbound = {
-  provider: string;
-  staticAddressName?: string | null | undefined;
-};
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderGkeGateway4$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyProviderGkeGateway4$Outbound,
-    DeploymentSetupStackSettingsPolicyProviderGkeGateway4
-  > = z.object({
-    provider:
-      DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum4$outboundSchema,
-    staticAddressName: z.nullable(z.string()).optional(),
-  });
-
-export function deploymentSetupStackSettingsPolicyProviderGkeGateway4ToJSON(
-  deploymentSetupStackSettingsPolicyProviderGkeGateway4:
-    DeploymentSetupStackSettingsPolicyProviderGkeGateway4,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyProviderGkeGateway4$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyProviderGkeGateway4,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyProviderGkeGateway4FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyProviderGkeGateway4,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyProviderGkeGateway4$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyProviderGkeGateway4' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum4$inboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum4> = z
-    .enum(DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum4);
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum4$outboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum4> =
-    DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum4$inboundSchema;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAwsAlb4$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyProviderAwsAlb4, unknown> = z
-    .object({
-      ipAddressType: z.nullable(z.string()).optional(),
-      provider:
-        DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum4$inboundSchema,
-      scheme: z.string(),
-      subnetIds: z.array(z.string()).optional(),
-      targetType: z.string(),
-    });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyProviderAwsAlb4$Outbound = {
-  ipAddressType?: string | null | undefined;
-  provider: string;
-  scheme: string;
-  subnetIds?: Array<string> | undefined;
-  targetType: string;
-};
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAwsAlb4$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyProviderAwsAlb4$Outbound,
-    DeploymentSetupStackSettingsPolicyProviderAwsAlb4
-  > = z.object({
-    ipAddressType: z.nullable(z.string()).optional(),
-    provider:
-      DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum4$outboundSchema,
-    scheme: z.string(),
-    subnetIds: z.array(z.string()).optional(),
-    targetType: z.string(),
-  });
-
-export function deploymentSetupStackSettingsPolicyProviderAwsAlb4ToJSON(
-  deploymentSetupStackSettingsPolicyProviderAwsAlb4:
-    DeploymentSetupStackSettingsPolicyProviderAwsAlb4,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyProviderAwsAlb4$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyProviderAwsAlb4,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyProviderAwsAlb4FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyProviderAwsAlb4,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyProviderAwsAlb4$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyProviderAwsAlb4' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderUnion4$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyProviderUnion4, unknown> = z
-    .union([
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyProviderAwsAlb4$inboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4$inboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyProviderGkeGateway4$inboundSchema
-      ),
-      z.string(),
-    ]);
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyProviderUnion4$Outbound =
-  | DeploymentSetupStackSettingsPolicyProviderAwsAlb4$Outbound
-  | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4$Outbound
-  | DeploymentSetupStackSettingsPolicyProviderGkeGateway4$Outbound
+export type DeploymentSetupStackSettingsPolicyExposure$Outbound =
+  | KubernetesExposureCustom$Outbound
+  | KubernetesExposureCustomBaseDomain$Outbound
+  | KubernetesExposureGenerated$Outbound
+  | KubernetesExposureDisabled$Outbound
   | string;
 
 /** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderUnion4$outboundSchema:
+export const DeploymentSetupStackSettingsPolicyExposure$outboundSchema:
   z.ZodType<
-    DeploymentSetupStackSettingsPolicyProviderUnion4$Outbound,
-    DeploymentSetupStackSettingsPolicyProviderUnion4
+    DeploymentSetupStackSettingsPolicyExposure$Outbound,
+    DeploymentSetupStackSettingsPolicyExposure
   > = z.union([
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyProviderAwsAlb4$outboundSchema
-    ),
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4$outboundSchema
-    ),
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyProviderGkeGateway4$outboundSchema
-    ),
+    KubernetesExposureCustom$outboundSchema,
+    KubernetesExposureCustomBaseDomain$outboundSchema,
+    KubernetesExposureGenerated$outboundSchema,
+    KubernetesExposureDisabled$outboundSchema,
     z.string(),
   ]);
 
-export function deploymentSetupStackSettingsPolicyProviderUnion4ToJSON(
-  deploymentSetupStackSettingsPolicyProviderUnion4:
-    DeploymentSetupStackSettingsPolicyProviderUnion4,
+export function deploymentSetupStackSettingsPolicyExposureToJSON(
+  deploymentSetupStackSettingsPolicyExposure:
+    DeploymentSetupStackSettingsPolicyExposure,
 ): string {
   return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyProviderUnion4$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyProviderUnion4,
+    DeploymentSetupStackSettingsPolicyExposure$outboundSchema.parse(
+      deploymentSetupStackSettingsPolicyExposure,
     ),
   );
 }
-export function deploymentSetupStackSettingsPolicyProviderUnion4FromJSON(
+export function deploymentSetupStackSettingsPolicyExposureFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyProviderUnion4,
+  DeploymentSetupStackSettingsPolicyExposure,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      DeploymentSetupStackSettingsPolicyProviderUnion4$inboundSchema.parse(
+      DeploymentSetupStackSettingsPolicyExposure$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyProviderUnion4' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyRouteGateway2$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyRouteGateway2, unknown> = z
-    .object({
-      annotations: z.record(z.string(), z.string()).optional(),
-      controller: z.nullable(z.string()).optional(),
-      gatewayClassName: z.string(),
-      labels: z.record(z.string(), z.string()).optional(),
-      listenerPort: z.int(),
-      provider: z.nullable(
-        z.union([
-          z.lazy(() =>
-            DeploymentSetupStackSettingsPolicyProviderAwsAlb4$inboundSchema
-          ),
-          z.lazy(() =>
-            DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4$inboundSchema
-          ),
-          z.lazy(() =>
-            DeploymentSetupStackSettingsPolicyProviderGkeGateway4$inboundSchema
-          ),
-          z.string(),
-        ]),
-      ).optional(),
-      routeApi: z.literal("gateway"),
-    });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyRouteGateway2$Outbound = {
-  annotations?: { [k: string]: string } | undefined;
-  controller?: string | null | undefined;
-  gatewayClassName: string;
-  labels?: { [k: string]: string } | undefined;
-  listenerPort: number;
-  provider?:
-    | DeploymentSetupStackSettingsPolicyProviderAwsAlb4$Outbound
-    | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4$Outbound
-    | DeploymentSetupStackSettingsPolicyProviderGkeGateway4$Outbound
-    | string
-    | null
-    | undefined;
-  routeApi: "gateway";
-};
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyRouteGateway2$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyRouteGateway2$Outbound,
-    DeploymentSetupStackSettingsPolicyRouteGateway2
-  > = z.object({
-    annotations: z.record(z.string(), z.string()).optional(),
-    controller: z.nullable(z.string()).optional(),
-    gatewayClassName: z.string(),
-    labels: z.record(z.string(), z.string()).optional(),
-    listenerPort: z.int(),
-    provider: z.nullable(
-      z.union([
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyProviderAwsAlb4$outboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4$outboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyProviderGkeGateway4$outboundSchema
-        ),
-        z.string(),
-      ]),
-    ).optional(),
-    routeApi: z.literal("gateway"),
-  });
-
-export function deploymentSetupStackSettingsPolicyRouteGateway2ToJSON(
-  deploymentSetupStackSettingsPolicyRouteGateway2:
-    DeploymentSetupStackSettingsPolicyRouteGateway2,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyRouteGateway2$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyRouteGateway2,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyRouteGateway2FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyRouteGateway2,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyRouteGateway2$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyRouteGateway2' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum3$inboundSchema:
-  z.ZodEnum<
-    typeof DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum3
-  > = z.enum(
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum3,
-  );
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum3$outboundSchema:
-  z.ZodEnum<
-    typeof DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum3
-  > =
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum3$inboundSchema;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3$inboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3,
-    unknown
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum3$inboundSchema,
-  });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3$Outbound =
-  {
-    albName?: string | null | undefined;
-    albNamespace?: string | null | undefined;
-    frontend: string;
-    provider: string;
-  };
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3$Outbound,
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum3$outboundSchema,
-  });
-
-export function deploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3ToJSON(
-  deploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3:
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3$outboundSchema
-      .parse(
-        deploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3,
-      ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3$inboundSchema
-        .parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum3$inboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum3> =
-    z.enum(DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum3);
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum3$outboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum3> =
-    DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum3$inboundSchema;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderGkeGateway3$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyProviderGkeGateway3, unknown> = z
-    .object({
-      provider:
-        DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum3$inboundSchema,
-      staticAddressName: z.nullable(z.string()).optional(),
-    });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyProviderGkeGateway3$Outbound = {
-  provider: string;
-  staticAddressName?: string | null | undefined;
-};
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderGkeGateway3$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyProviderGkeGateway3$Outbound,
-    DeploymentSetupStackSettingsPolicyProviderGkeGateway3
-  > = z.object({
-    provider:
-      DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum3$outboundSchema,
-    staticAddressName: z.nullable(z.string()).optional(),
-  });
-
-export function deploymentSetupStackSettingsPolicyProviderGkeGateway3ToJSON(
-  deploymentSetupStackSettingsPolicyProviderGkeGateway3:
-    DeploymentSetupStackSettingsPolicyProviderGkeGateway3,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyProviderGkeGateway3$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyProviderGkeGateway3,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyProviderGkeGateway3FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyProviderGkeGateway3,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyProviderGkeGateway3$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyProviderGkeGateway3' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum3$inboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum3> = z
-    .enum(DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum3);
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum3$outboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum3> =
-    DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum3$inboundSchema;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAwsAlb3$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyProviderAwsAlb3, unknown> = z
-    .object({
-      ipAddressType: z.nullable(z.string()).optional(),
-      provider:
-        DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum3$inboundSchema,
-      scheme: z.string(),
-      subnetIds: z.array(z.string()).optional(),
-      targetType: z.string(),
-    });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyProviderAwsAlb3$Outbound = {
-  ipAddressType?: string | null | undefined;
-  provider: string;
-  scheme: string;
-  subnetIds?: Array<string> | undefined;
-  targetType: string;
-};
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAwsAlb3$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyProviderAwsAlb3$Outbound,
-    DeploymentSetupStackSettingsPolicyProviderAwsAlb3
-  > = z.object({
-    ipAddressType: z.nullable(z.string()).optional(),
-    provider:
-      DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum3$outboundSchema,
-    scheme: z.string(),
-    subnetIds: z.array(z.string()).optional(),
-    targetType: z.string(),
-  });
-
-export function deploymentSetupStackSettingsPolicyProviderAwsAlb3ToJSON(
-  deploymentSetupStackSettingsPolicyProviderAwsAlb3:
-    DeploymentSetupStackSettingsPolicyProviderAwsAlb3,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyProviderAwsAlb3$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyProviderAwsAlb3,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyProviderAwsAlb3FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyProviderAwsAlb3,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyProviderAwsAlb3$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyProviderAwsAlb3' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderUnion3$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyProviderUnion3, unknown> = z
-    .union([
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyProviderAwsAlb3$inboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3$inboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyProviderGkeGateway3$inboundSchema
-      ),
-      z.string(),
-    ]);
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyProviderUnion3$Outbound =
-  | DeploymentSetupStackSettingsPolicyProviderAwsAlb3$Outbound
-  | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3$Outbound
-  | DeploymentSetupStackSettingsPolicyProviderGkeGateway3$Outbound
-  | string;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderUnion3$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyProviderUnion3$Outbound,
-    DeploymentSetupStackSettingsPolicyProviderUnion3
-  > = z.union([
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyProviderAwsAlb3$outboundSchema
-    ),
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3$outboundSchema
-    ),
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyProviderGkeGateway3$outboundSchema
-    ),
-    z.string(),
-  ]);
-
-export function deploymentSetupStackSettingsPolicyProviderUnion3ToJSON(
-  deploymentSetupStackSettingsPolicyProviderUnion3:
-    DeploymentSetupStackSettingsPolicyProviderUnion3,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyProviderUnion3$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyProviderUnion3,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyProviderUnion3FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyProviderUnion3,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyProviderUnion3$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyProviderUnion3' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyRouteIngress2$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyRouteIngress2, unknown> = z
-    .object({
-      annotations: z.record(z.string(), z.string()).optional(),
-      controller: z.nullable(z.string()).optional(),
-      ingressClassName: z.string(),
-      labels: z.record(z.string(), z.string()).optional(),
-      provider: z.nullable(
-        z.union([
-          z.lazy(() =>
-            DeploymentSetupStackSettingsPolicyProviderAwsAlb3$inboundSchema
-          ),
-          z.lazy(() =>
-            DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3$inboundSchema
-          ),
-          z.lazy(() =>
-            DeploymentSetupStackSettingsPolicyProviderGkeGateway3$inboundSchema
-          ),
-          z.string(),
-        ]),
-      ).optional(),
-      routeApi: z.literal("ingress"),
-    });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyRouteIngress2$Outbound = {
-  annotations?: { [k: string]: string } | undefined;
-  controller?: string | null | undefined;
-  ingressClassName: string;
-  labels?: { [k: string]: string } | undefined;
-  provider?:
-    | DeploymentSetupStackSettingsPolicyProviderAwsAlb3$Outbound
-    | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3$Outbound
-    | DeploymentSetupStackSettingsPolicyProviderGkeGateway3$Outbound
-    | string
-    | null
-    | undefined;
-  routeApi: "ingress";
-};
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyRouteIngress2$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyRouteIngress2$Outbound,
-    DeploymentSetupStackSettingsPolicyRouteIngress2
-  > = z.object({
-    annotations: z.record(z.string(), z.string()).optional(),
-    controller: z.nullable(z.string()).optional(),
-    ingressClassName: z.string(),
-    labels: z.record(z.string(), z.string()).optional(),
-    provider: z.nullable(
-      z.union([
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyProviderAwsAlb3$outboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3$outboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyProviderGkeGateway3$outboundSchema
-        ),
-        z.string(),
-      ]),
-    ).optional(),
-    routeApi: z.literal("ingress"),
-  });
-
-export function deploymentSetupStackSettingsPolicyRouteIngress2ToJSON(
-  deploymentSetupStackSettingsPolicyRouteIngress2:
-    DeploymentSetupStackSettingsPolicyRouteIngress2,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyRouteIngress2$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyRouteIngress2,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyRouteIngress2FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyRouteIngress2,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyRouteIngress2$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyRouteIngress2' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyRouteUnion2$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyRouteUnion2, unknown> = z.union([
-    z.lazy(() => DeploymentSetupStackSettingsPolicyRouteIngress2$inboundSchema),
-    z.lazy(() => DeploymentSetupStackSettingsPolicyRouteGateway2$inboundSchema),
-  ]);
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyRouteUnion2$Outbound =
-  | DeploymentSetupStackSettingsPolicyRouteIngress2$Outbound
-  | DeploymentSetupStackSettingsPolicyRouteGateway2$Outbound;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyRouteUnion2$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyRouteUnion2$Outbound,
-    DeploymentSetupStackSettingsPolicyRouteUnion2
-  > = z.union([
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyRouteIngress2$outboundSchema
-    ),
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyRouteGateway2$outboundSchema
-    ),
-  ]);
-
-export function deploymentSetupStackSettingsPolicyRouteUnion2ToJSON(
-  deploymentSetupStackSettingsPolicyRouteUnion2:
-    DeploymentSetupStackSettingsPolicyRouteUnion2,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyRouteUnion2$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyRouteUnion2,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyRouteUnion2FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyRouteUnion2,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyRouteUnion2$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyRouteUnion2' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyExposureCustom$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyExposureCustom, unknown> = z
-    .object({
-      certificate: z.union([
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef2$inboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport2$inboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn2$inboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2$inboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyCertificateNone2$inboundSchema
-        ),
-      ]),
-      domain: z.string(),
-      mode: DeploymentSetupStackSettingsPolicyModeCustom$inboundSchema,
-      route: z.union([
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyRouteIngress2$inboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyRouteGateway2$inboundSchema
-        ),
-      ]),
-    });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyExposureCustom$Outbound = {
-  certificate:
-    | DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef2$Outbound
-    | DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport2$Outbound
-    | DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn2$Outbound
-    | DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2$Outbound
-    | DeploymentSetupStackSettingsPolicyCertificateNone2$Outbound;
-  domain: string;
-  mode: string;
-  route:
-    | DeploymentSetupStackSettingsPolicyRouteIngress2$Outbound
-    | DeploymentSetupStackSettingsPolicyRouteGateway2$Outbound;
-};
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyExposureCustom$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyExposureCustom$Outbound,
-    DeploymentSetupStackSettingsPolicyExposureCustom
-  > = z.object({
-    certificate: z.union([
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef2$outboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport2$outboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn2$outboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret2$outboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyCertificateNone2$outboundSchema
-      ),
-    ]),
-    domain: z.string(),
-    mode: DeploymentSetupStackSettingsPolicyModeCustom$outboundSchema,
-    route: z.union([
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyRouteIngress2$outboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyRouteGateway2$outboundSchema
-      ),
-    ]),
-  });
-
-export function deploymentSetupStackSettingsPolicyExposureCustomToJSON(
-  deploymentSetupStackSettingsPolicyExposureCustom:
-    DeploymentSetupStackSettingsPolicyExposureCustom,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyExposureCustom$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyExposureCustom,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyExposureCustomFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyExposureCustom,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyExposureCustom$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyExposureCustom' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateNone1$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyCertificateNone1, unknown> = z
-    .object({
-      mode: z.literal("none"),
-    });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyCertificateNone1$Outbound = {
-  mode: "none";
-};
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateNone1$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyCertificateNone1$Outbound,
-    DeploymentSetupStackSettingsPolicyCertificateNone1
-  > = z.object({
-    mode: z.literal("none"),
-  });
-
-export function deploymentSetupStackSettingsPolicyCertificateNone1ToJSON(
-  deploymentSetupStackSettingsPolicyCertificateNone1:
-    DeploymentSetupStackSettingsPolicyCertificateNone1,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyCertificateNone1$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyCertificateNone1,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyCertificateNone1FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyCertificateNone1,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyCertificateNone1$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyCertificateNone1' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1$inboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1,
-    unknown
-  > = z.object({
-    mode: z.literal("managedTlsSecret"),
-    secretNameTemplate: z.string(),
-  });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1$Outbound =
-  {
-    mode: "managedTlsSecret";
-    secretNameTemplate: string;
-  };
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1$Outbound,
-    DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1
-  > = z.object({
-    mode: z.literal("managedTlsSecret"),
-    secretNameTemplate: z.string(),
-  });
-
-export function deploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1ToJSON(
-  deploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1:
-    DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1$outboundSchema
-      .parse(deploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1),
-  );
-}
-export function deploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1$inboundSchema
-        .parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn1$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn1, unknown> =
-    z.object({
-      certificateArn: z.string(),
-      mode: z.literal("awsAcmArn"),
-    });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn1$Outbound = {
-  certificateArn: string;
-  mode: "awsAcmArn";
-};
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn1$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn1$Outbound,
-    DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn1
-  > = z.object({
-    certificateArn: z.string(),
-    mode: z.literal("awsAcmArn"),
-  });
-
-export function deploymentSetupStackSettingsPolicyCertificateAwsAcmArn1ToJSON(
-  deploymentSetupStackSettingsPolicyCertificateAwsAcmArn1:
-    DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn1,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn1$outboundSchema
-      .parse(deploymentSetupStackSettingsPolicyCertificateAwsAcmArn1),
-  );
-}
-export function deploymentSetupStackSettingsPolicyCertificateAwsAcmArn1FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn1,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn1$inboundSchema
-        .parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn1' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport1$inboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport1,
-    unknown
-  > = z.object({
-    mode: z.literal("managedAcmImport"),
-    region: z.nullable(z.string()).optional(),
-    tags: z.record(z.string(), z.string()).optional(),
-  });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport1$Outbound =
-  {
-    mode: "managedAcmImport";
-    region?: string | null | undefined;
-    tags?: { [k: string]: string } | undefined;
-  };
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport1$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport1$Outbound,
-    DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport1
-  > = z.object({
-    mode: z.literal("managedAcmImport"),
-    region: z.nullable(z.string()).optional(),
-    tags: z.record(z.string(), z.string()).optional(),
-  });
-
-export function deploymentSetupStackSettingsPolicyCertificateManagedAcmImport1ToJSON(
-  deploymentSetupStackSettingsPolicyCertificateManagedAcmImport1:
-    DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport1,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport1$outboundSchema
-      .parse(deploymentSetupStackSettingsPolicyCertificateManagedAcmImport1),
-  );
-}
-export function deploymentSetupStackSettingsPolicyCertificateManagedAcmImport1FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport1,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport1$inboundSchema
-        .parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport1' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef1$inboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef1,
-    unknown
-  > = z.object({
-    namespace: z.nullable(z.string()).optional(),
-    secretName: z.string(),
-    mode: z.literal("tlsSecretRef"),
-  });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef1$Outbound =
-  {
-    namespace?: string | null | undefined;
-    secretName: string;
-    mode: "tlsSecretRef";
-  };
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef1$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef1$Outbound,
-    DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef1
-  > = z.object({
-    namespace: z.nullable(z.string()).optional(),
-    secretName: z.string(),
-    mode: z.literal("tlsSecretRef"),
-  });
-
-export function deploymentSetupStackSettingsPolicyCertificateTLSSecretRef1ToJSON(
-  deploymentSetupStackSettingsPolicyCertificateTLSSecretRef1:
-    DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef1,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef1$outboundSchema
-      .parse(deploymentSetupStackSettingsPolicyCertificateTLSSecretRef1),
-  );
-}
-export function deploymentSetupStackSettingsPolicyCertificateTLSSecretRef1FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef1,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef1$inboundSchema
-        .parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef1' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateUnion1$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyCertificateUnion1, unknown> = z
-    .union([
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef1$inboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport1$inboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn1$inboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1$inboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyCertificateNone1$inboundSchema
-      ),
-    ]);
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyCertificateUnion1$Outbound =
-  | DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef1$Outbound
-  | DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport1$Outbound
-  | DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn1$Outbound
-  | DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1$Outbound
-  | DeploymentSetupStackSettingsPolicyCertificateNone1$Outbound;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyCertificateUnion1$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyCertificateUnion1$Outbound,
-    DeploymentSetupStackSettingsPolicyCertificateUnion1
-  > = z.union([
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef1$outboundSchema
-    ),
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport1$outboundSchema
-    ),
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn1$outboundSchema
-    ),
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1$outboundSchema
-    ),
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyCertificateNone1$outboundSchema
-    ),
-  ]);
-
-export function deploymentSetupStackSettingsPolicyCertificateUnion1ToJSON(
-  deploymentSetupStackSettingsPolicyCertificateUnion1:
-    DeploymentSetupStackSettingsPolicyCertificateUnion1,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyCertificateUnion1$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyCertificateUnion1,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyCertificateUnion1FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyCertificateUnion1,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyCertificateUnion1$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyCertificateUnion1' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyModeGenerated$inboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyModeGenerated> = z.enum(
-    DeploymentSetupStackSettingsPolicyModeGenerated,
-  );
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyModeGenerated$outboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyModeGenerated> =
-    DeploymentSetupStackSettingsPolicyModeGenerated$inboundSchema;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum2$inboundSchema:
-  z.ZodEnum<
-    typeof DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum2
-  > = z.enum(
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum2,
-  );
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum2$outboundSchema:
-  z.ZodEnum<
-    typeof DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum2
-  > =
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum2$inboundSchema;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2$inboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2,
-    unknown
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum2$inboundSchema,
-  });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2$Outbound =
-  {
-    albName?: string | null | undefined;
-    albNamespace?: string | null | undefined;
-    frontend: string;
-    provider: string;
-  };
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2$Outbound,
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum2$outboundSchema,
-  });
-
-export function deploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2ToJSON(
-  deploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2:
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2$outboundSchema
-      .parse(
-        deploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2,
-      ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2$inboundSchema
-        .parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum2$inboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum2> =
-    z.enum(DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum2);
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum2$outboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum2> =
-    DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum2$inboundSchema;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderGkeGateway2$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyProviderGkeGateway2, unknown> = z
-    .object({
-      provider:
-        DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum2$inboundSchema,
-      staticAddressName: z.nullable(z.string()).optional(),
-    });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyProviderGkeGateway2$Outbound = {
-  provider: string;
-  staticAddressName?: string | null | undefined;
-};
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderGkeGateway2$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyProviderGkeGateway2$Outbound,
-    DeploymentSetupStackSettingsPolicyProviderGkeGateway2
-  > = z.object({
-    provider:
-      DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum2$outboundSchema,
-    staticAddressName: z.nullable(z.string()).optional(),
-  });
-
-export function deploymentSetupStackSettingsPolicyProviderGkeGateway2ToJSON(
-  deploymentSetupStackSettingsPolicyProviderGkeGateway2:
-    DeploymentSetupStackSettingsPolicyProviderGkeGateway2,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyProviderGkeGateway2$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyProviderGkeGateway2,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyProviderGkeGateway2FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyProviderGkeGateway2,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyProviderGkeGateway2$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyProviderGkeGateway2' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum2$inboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum2> = z
-    .enum(DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum2);
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum2$outboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum2> =
-    DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum2$inboundSchema;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAwsAlb2$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyProviderAwsAlb2, unknown> = z
-    .object({
-      ipAddressType: z.nullable(z.string()).optional(),
-      provider:
-        DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum2$inboundSchema,
-      scheme: z.string(),
-      subnetIds: z.array(z.string()).optional(),
-      targetType: z.string(),
-    });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyProviderAwsAlb2$Outbound = {
-  ipAddressType?: string | null | undefined;
-  provider: string;
-  scheme: string;
-  subnetIds?: Array<string> | undefined;
-  targetType: string;
-};
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAwsAlb2$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyProviderAwsAlb2$Outbound,
-    DeploymentSetupStackSettingsPolicyProviderAwsAlb2
-  > = z.object({
-    ipAddressType: z.nullable(z.string()).optional(),
-    provider:
-      DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum2$outboundSchema,
-    scheme: z.string(),
-    subnetIds: z.array(z.string()).optional(),
-    targetType: z.string(),
-  });
-
-export function deploymentSetupStackSettingsPolicyProviderAwsAlb2ToJSON(
-  deploymentSetupStackSettingsPolicyProviderAwsAlb2:
-    DeploymentSetupStackSettingsPolicyProviderAwsAlb2,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyProviderAwsAlb2$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyProviderAwsAlb2,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyProviderAwsAlb2FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyProviderAwsAlb2,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyProviderAwsAlb2$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyProviderAwsAlb2' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderUnion2$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyProviderUnion2, unknown> = z
-    .union([
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyProviderAwsAlb2$inboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2$inboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyProviderGkeGateway2$inboundSchema
-      ),
-      z.string(),
-    ]);
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyProviderUnion2$Outbound =
-  | DeploymentSetupStackSettingsPolicyProviderAwsAlb2$Outbound
-  | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2$Outbound
-  | DeploymentSetupStackSettingsPolicyProviderGkeGateway2$Outbound
-  | string;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderUnion2$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyProviderUnion2$Outbound,
-    DeploymentSetupStackSettingsPolicyProviderUnion2
-  > = z.union([
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyProviderAwsAlb2$outboundSchema
-    ),
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2$outboundSchema
-    ),
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyProviderGkeGateway2$outboundSchema
-    ),
-    z.string(),
-  ]);
-
-export function deploymentSetupStackSettingsPolicyProviderUnion2ToJSON(
-  deploymentSetupStackSettingsPolicyProviderUnion2:
-    DeploymentSetupStackSettingsPolicyProviderUnion2,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyProviderUnion2$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyProviderUnion2,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyProviderUnion2FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyProviderUnion2,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyProviderUnion2$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyProviderUnion2' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyRouteGateway1$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyRouteGateway1, unknown> = z
-    .object({
-      annotations: z.record(z.string(), z.string()).optional(),
-      controller: z.nullable(z.string()).optional(),
-      gatewayClassName: z.string(),
-      labels: z.record(z.string(), z.string()).optional(),
-      listenerPort: z.int(),
-      provider: z.nullable(
-        z.union([
-          z.lazy(() =>
-            DeploymentSetupStackSettingsPolicyProviderAwsAlb2$inboundSchema
-          ),
-          z.lazy(() =>
-            DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2$inboundSchema
-          ),
-          z.lazy(() =>
-            DeploymentSetupStackSettingsPolicyProviderGkeGateway2$inboundSchema
-          ),
-          z.string(),
-        ]),
-      ).optional(),
-      routeApi: z.literal("gateway"),
-    });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyRouteGateway1$Outbound = {
-  annotations?: { [k: string]: string } | undefined;
-  controller?: string | null | undefined;
-  gatewayClassName: string;
-  labels?: { [k: string]: string } | undefined;
-  listenerPort: number;
-  provider?:
-    | DeploymentSetupStackSettingsPolicyProviderAwsAlb2$Outbound
-    | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2$Outbound
-    | DeploymentSetupStackSettingsPolicyProviderGkeGateway2$Outbound
-    | string
-    | null
-    | undefined;
-  routeApi: "gateway";
-};
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyRouteGateway1$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyRouteGateway1$Outbound,
-    DeploymentSetupStackSettingsPolicyRouteGateway1
-  > = z.object({
-    annotations: z.record(z.string(), z.string()).optional(),
-    controller: z.nullable(z.string()).optional(),
-    gatewayClassName: z.string(),
-    labels: z.record(z.string(), z.string()).optional(),
-    listenerPort: z.int(),
-    provider: z.nullable(
-      z.union([
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyProviderAwsAlb2$outboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2$outboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyProviderGkeGateway2$outboundSchema
-        ),
-        z.string(),
-      ]),
-    ).optional(),
-    routeApi: z.literal("gateway"),
-  });
-
-export function deploymentSetupStackSettingsPolicyRouteGateway1ToJSON(
-  deploymentSetupStackSettingsPolicyRouteGateway1:
-    DeploymentSetupStackSettingsPolicyRouteGateway1,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyRouteGateway1$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyRouteGateway1,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyRouteGateway1FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyRouteGateway1,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyRouteGateway1$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyRouteGateway1' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum1$inboundSchema:
-  z.ZodEnum<
-    typeof DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum1
-  > = z.enum(
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum1,
-  );
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum1$outboundSchema:
-  z.ZodEnum<
-    typeof DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum1
-  > =
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum1$inboundSchema;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1$inboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1,
-    unknown
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum1$inboundSchema,
-  });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1$Outbound =
-  {
-    albName?: string | null | undefined;
-    albNamespace?: string | null | undefined;
-    frontend: string;
-    provider: string;
-  };
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1$Outbound,
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainersEnum1$outboundSchema,
-  });
-
-export function deploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1ToJSON(
-  deploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1:
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1$outboundSchema
-      .parse(
-        deploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1,
-      ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1$inboundSchema
-        .parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum1$inboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum1> =
-    z.enum(DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum1);
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum1$outboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum1> =
-    DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum1$inboundSchema;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderGkeGateway1$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyProviderGkeGateway1, unknown> = z
-    .object({
-      provider:
-        DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum1$inboundSchema,
-      staticAddressName: z.nullable(z.string()).optional(),
-    });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyProviderGkeGateway1$Outbound = {
-  provider: string;
-  staticAddressName?: string | null | undefined;
-};
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderGkeGateway1$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyProviderGkeGateway1$Outbound,
-    DeploymentSetupStackSettingsPolicyProviderGkeGateway1
-  > = z.object({
-    provider:
-      DeploymentSetupStackSettingsPolicyProviderGkeGatewayEnum1$outboundSchema,
-    staticAddressName: z.nullable(z.string()).optional(),
-  });
-
-export function deploymentSetupStackSettingsPolicyProviderGkeGateway1ToJSON(
-  deploymentSetupStackSettingsPolicyProviderGkeGateway1:
-    DeploymentSetupStackSettingsPolicyProviderGkeGateway1,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyProviderGkeGateway1$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyProviderGkeGateway1,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyProviderGkeGateway1FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyProviderGkeGateway1,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyProviderGkeGateway1$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyProviderGkeGateway1' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum1$inboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum1> = z
-    .enum(DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum1);
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum1$outboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum1> =
-    DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum1$inboundSchema;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAwsAlb1$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyProviderAwsAlb1, unknown> = z
-    .object({
-      ipAddressType: z.nullable(z.string()).optional(),
-      provider:
-        DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum1$inboundSchema,
-      scheme: z.string(),
-      subnetIds: z.array(z.string()).optional(),
-      targetType: z.string(),
-    });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyProviderAwsAlb1$Outbound = {
-  ipAddressType?: string | null | undefined;
-  provider: string;
-  scheme: string;
-  subnetIds?: Array<string> | undefined;
-  targetType: string;
-};
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderAwsAlb1$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyProviderAwsAlb1$Outbound,
-    DeploymentSetupStackSettingsPolicyProviderAwsAlb1
-  > = z.object({
-    ipAddressType: z.nullable(z.string()).optional(),
-    provider:
-      DeploymentSetupStackSettingsPolicyProviderAwsAlbEnum1$outboundSchema,
-    scheme: z.string(),
-    subnetIds: z.array(z.string()).optional(),
-    targetType: z.string(),
-  });
-
-export function deploymentSetupStackSettingsPolicyProviderAwsAlb1ToJSON(
-  deploymentSetupStackSettingsPolicyProviderAwsAlb1:
-    DeploymentSetupStackSettingsPolicyProviderAwsAlb1,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyProviderAwsAlb1$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyProviderAwsAlb1,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyProviderAwsAlb1FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyProviderAwsAlb1,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyProviderAwsAlb1$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyProviderAwsAlb1' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderUnion1$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyProviderUnion1, unknown> = z
-    .union([
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyProviderAwsAlb1$inboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1$inboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyProviderGkeGateway1$inboundSchema
-      ),
-      z.string(),
-    ]);
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyProviderUnion1$Outbound =
-  | DeploymentSetupStackSettingsPolicyProviderAwsAlb1$Outbound
-  | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1$Outbound
-  | DeploymentSetupStackSettingsPolicyProviderGkeGateway1$Outbound
-  | string;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyProviderUnion1$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyProviderUnion1$Outbound,
-    DeploymentSetupStackSettingsPolicyProviderUnion1
-  > = z.union([
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyProviderAwsAlb1$outboundSchema
-    ),
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1$outboundSchema
-    ),
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyProviderGkeGateway1$outboundSchema
-    ),
-    z.string(),
-  ]);
-
-export function deploymentSetupStackSettingsPolicyProviderUnion1ToJSON(
-  deploymentSetupStackSettingsPolicyProviderUnion1:
-    DeploymentSetupStackSettingsPolicyProviderUnion1,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyProviderUnion1$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyProviderUnion1,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyProviderUnion1FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyProviderUnion1,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyProviderUnion1$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyProviderUnion1' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyRouteIngress1$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyRouteIngress1, unknown> = z
-    .object({
-      annotations: z.record(z.string(), z.string()).optional(),
-      controller: z.nullable(z.string()).optional(),
-      ingressClassName: z.string(),
-      labels: z.record(z.string(), z.string()).optional(),
-      provider: z.nullable(
-        z.union([
-          z.lazy(() =>
-            DeploymentSetupStackSettingsPolicyProviderAwsAlb1$inboundSchema
-          ),
-          z.lazy(() =>
-            DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1$inboundSchema
-          ),
-          z.lazy(() =>
-            DeploymentSetupStackSettingsPolicyProviderGkeGateway1$inboundSchema
-          ),
-          z.string(),
-        ]),
-      ).optional(),
-      routeApi: z.literal("ingress"),
-    });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyRouteIngress1$Outbound = {
-  annotations?: { [k: string]: string } | undefined;
-  controller?: string | null | undefined;
-  ingressClassName: string;
-  labels?: { [k: string]: string } | undefined;
-  provider?:
-    | DeploymentSetupStackSettingsPolicyProviderAwsAlb1$Outbound
-    | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1$Outbound
-    | DeploymentSetupStackSettingsPolicyProviderGkeGateway1$Outbound
-    | string
-    | null
-    | undefined;
-  routeApi: "ingress";
-};
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyRouteIngress1$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyRouteIngress1$Outbound,
-    DeploymentSetupStackSettingsPolicyRouteIngress1
-  > = z.object({
-    annotations: z.record(z.string(), z.string()).optional(),
-    controller: z.nullable(z.string()).optional(),
-    ingressClassName: z.string(),
-    labels: z.record(z.string(), z.string()).optional(),
-    provider: z.nullable(
-      z.union([
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyProviderAwsAlb1$outboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1$outboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyProviderGkeGateway1$outboundSchema
-        ),
-        z.string(),
-      ]),
-    ).optional(),
-    routeApi: z.literal("ingress"),
-  });
-
-export function deploymentSetupStackSettingsPolicyRouteIngress1ToJSON(
-  deploymentSetupStackSettingsPolicyRouteIngress1:
-    DeploymentSetupStackSettingsPolicyRouteIngress1,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyRouteIngress1$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyRouteIngress1,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyRouteIngress1FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyRouteIngress1,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyRouteIngress1$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyRouteIngress1' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyRouteUnion1$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyRouteUnion1, unknown> = z.union([
-    z.lazy(() => DeploymentSetupStackSettingsPolicyRouteIngress1$inboundSchema),
-    z.lazy(() => DeploymentSetupStackSettingsPolicyRouteGateway1$inboundSchema),
-  ]);
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyRouteUnion1$Outbound =
-  | DeploymentSetupStackSettingsPolicyRouteIngress1$Outbound
-  | DeploymentSetupStackSettingsPolicyRouteGateway1$Outbound;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyRouteUnion1$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyRouteUnion1$Outbound,
-    DeploymentSetupStackSettingsPolicyRouteUnion1
-  > = z.union([
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyRouteIngress1$outboundSchema
-    ),
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyRouteGateway1$outboundSchema
-    ),
-  ]);
-
-export function deploymentSetupStackSettingsPolicyRouteUnion1ToJSON(
-  deploymentSetupStackSettingsPolicyRouteUnion1:
-    DeploymentSetupStackSettingsPolicyRouteUnion1,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyRouteUnion1$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyRouteUnion1,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyRouteUnion1FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyRouteUnion1,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyRouteUnion1$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyRouteUnion1' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyExposureGenerated$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyExposureGenerated, unknown> = z
-    .object({
-      certificate: z.union([
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef1$inboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport1$inboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn1$inboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1$inboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyCertificateNone1$inboundSchema
-        ),
-      ]),
-      mode: DeploymentSetupStackSettingsPolicyModeGenerated$inboundSchema,
-      route: z.union([
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyRouteIngress1$inboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyRouteGateway1$inboundSchema
-        ),
-      ]),
-    });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyExposureGenerated$Outbound = {
-  certificate:
-    | DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef1$Outbound
-    | DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport1$Outbound
-    | DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn1$Outbound
-    | DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1$Outbound
-    | DeploymentSetupStackSettingsPolicyCertificateNone1$Outbound;
-  mode: string;
-  route:
-    | DeploymentSetupStackSettingsPolicyRouteIngress1$Outbound
-    | DeploymentSetupStackSettingsPolicyRouteGateway1$Outbound;
-};
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyExposureGenerated$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyExposureGenerated$Outbound,
-    DeploymentSetupStackSettingsPolicyExposureGenerated
-  > = z.object({
-    certificate: z.union([
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyCertificateTLSSecretRef1$outboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyCertificateManagedAcmImport1$outboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyCertificateAwsAcmArn1$outboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyCertificateManagedTLSSecret1$outboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyCertificateNone1$outboundSchema
-      ),
-    ]),
-    mode: DeploymentSetupStackSettingsPolicyModeGenerated$outboundSchema,
-    route: z.union([
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyRouteIngress1$outboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyRouteGateway1$outboundSchema
-      ),
-    ]),
-  });
-
-export function deploymentSetupStackSettingsPolicyExposureGeneratedToJSON(
-  deploymentSetupStackSettingsPolicyExposureGenerated:
-    DeploymentSetupStackSettingsPolicyExposureGenerated,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyExposureGenerated$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyExposureGenerated,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyExposureGeneratedFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyExposureGenerated,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyExposureGenerated$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyExposureGenerated' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyModeDisabled$inboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyModeDisabled> = z.enum(
-    DeploymentSetupStackSettingsPolicyModeDisabled,
-  );
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyModeDisabled$outboundSchema:
-  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyModeDisabled> =
-    DeploymentSetupStackSettingsPolicyModeDisabled$inboundSchema;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyExposureDisabled$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyExposureDisabled, unknown> = z
-    .object({
-      mode: DeploymentSetupStackSettingsPolicyModeDisabled$inboundSchema,
-    });
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyExposureDisabled$Outbound = {
-  mode: string;
-};
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyExposureDisabled$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyExposureDisabled$Outbound,
-    DeploymentSetupStackSettingsPolicyExposureDisabled
-  > = z.object({
-    mode: DeploymentSetupStackSettingsPolicyModeDisabled$outboundSchema,
-  });
-
-export function deploymentSetupStackSettingsPolicyExposureDisabledToJSON(
-  deploymentSetupStackSettingsPolicyExposureDisabled:
-    DeploymentSetupStackSettingsPolicyExposureDisabled,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyExposureDisabled$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyExposureDisabled,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyExposureDisabledFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyExposureDisabled,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyExposureDisabled$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyExposureDisabled' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyExposureUnion$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyExposureUnion, unknown> = z.union(
-    [
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyExposureCustom$inboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyExposureGenerated$inboundSchema
-      ),
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyExposureDisabled$inboundSchema
-      ),
-      z.string(),
-    ],
-  );
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyExposureUnion$Outbound =
-  | DeploymentSetupStackSettingsPolicyExposureCustom$Outbound
-  | DeploymentSetupStackSettingsPolicyExposureGenerated$Outbound
-  | DeploymentSetupStackSettingsPolicyExposureDisabled$Outbound
-  | string;
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyExposureUnion$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyExposureUnion$Outbound,
-    DeploymentSetupStackSettingsPolicyExposureUnion
-  > = z.union([
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyExposureCustom$outboundSchema
-    ),
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyExposureGenerated$outboundSchema
-    ),
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyExposureDisabled$outboundSchema
-    ),
-    z.string(),
-  ]);
-
-export function deploymentSetupStackSettingsPolicyExposureUnionToJSON(
-  deploymentSetupStackSettingsPolicyExposureUnion:
-    DeploymentSetupStackSettingsPolicyExposureUnion,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyExposureUnion$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyExposureUnion,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyExposureUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyExposureUnion,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyExposureUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyExposureUnion' from JSON`,
+    `Failed to parse 'DeploymentSetupStackSettingsPolicyExposure' from JSON`,
   );
 }
 
@@ -5696,15 +2778,10 @@ export const DeploymentSetupStackSettingsPolicyKubernetes$inboundSchema:
     ).optional(),
     exposure: z.nullable(
       z.union([
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyExposureCustom$inboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyExposureGenerated$inboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyExposureDisabled$inboundSchema
-        ),
+        KubernetesExposureCustom$inboundSchema,
+        KubernetesExposureCustomBaseDomain$inboundSchema,
+        KubernetesExposureGenerated$inboundSchema,
+        KubernetesExposureDisabled$inboundSchema,
         z.string(),
       ]),
     ).optional(),
@@ -5717,9 +2794,10 @@ export type DeploymentSetupStackSettingsPolicyKubernetes$Outbound = {
     | null
     | undefined;
   exposure?:
-    | DeploymentSetupStackSettingsPolicyExposureCustom$Outbound
-    | DeploymentSetupStackSettingsPolicyExposureGenerated$Outbound
-    | DeploymentSetupStackSettingsPolicyExposureDisabled$Outbound
+    | KubernetesExposureCustom$Outbound
+    | KubernetesExposureCustomBaseDomain$Outbound
+    | KubernetesExposureGenerated$Outbound
+    | KubernetesExposureDisabled$Outbound
     | string
     | null
     | undefined;
@@ -5739,15 +2817,10 @@ export const DeploymentSetupStackSettingsPolicyKubernetes$outboundSchema:
     ).optional(),
     exposure: z.nullable(
       z.union([
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyExposureCustom$outboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyExposureGenerated$outboundSchema
-        ),
-        z.lazy(() =>
-          DeploymentSetupStackSettingsPolicyExposureDisabled$outboundSchema
-        ),
+        KubernetesExposureCustom$outboundSchema,
+        KubernetesExposureCustomBaseDomain$outboundSchema,
+        KubernetesExposureGenerated$outboundSchema,
+        KubernetesExposureDisabled$outboundSchema,
         z.string(),
       ]),
     ).optional(),
@@ -6285,6 +3358,106 @@ export const DeploymentSetupStackSettingsPolicySetupManagement$outboundSchema:
     DeploymentSetupStackSettingsPolicySetupManagement$inboundSchema;
 
 /** @internal */
+export const DeploymentSetupStackSettingsPolicySigning$inboundSchema: z.ZodType<
+  DeploymentSetupStackSettingsPolicySigning,
+  unknown
+> = z.object({
+  channel: z.string(),
+  fingerprint: z.string(),
+  privateMachineApiUrl: z.nullable(z.string()).optional(),
+});
+/** @internal */
+export type DeploymentSetupStackSettingsPolicySigning$Outbound = {
+  channel: string;
+  fingerprint: string;
+  privateMachineApiUrl?: string | null | undefined;
+};
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicySigning$outboundSchema:
+  z.ZodType<
+    DeploymentSetupStackSettingsPolicySigning$Outbound,
+    DeploymentSetupStackSettingsPolicySigning
+  > = z.object({
+    channel: z.string(),
+    fingerprint: z.string(),
+    privateMachineApiUrl: z.nullable(z.string()).optional(),
+  });
+
+export function deploymentSetupStackSettingsPolicySigningToJSON(
+  deploymentSetupStackSettingsPolicySigning:
+    DeploymentSetupStackSettingsPolicySigning,
+): string {
+  return JSON.stringify(
+    DeploymentSetupStackSettingsPolicySigning$outboundSchema.parse(
+      deploymentSetupStackSettingsPolicySigning,
+    ),
+  );
+}
+export function deploymentSetupStackSettingsPolicySigningFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentSetupStackSettingsPolicySigning,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentSetupStackSettingsPolicySigning$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentSetupStackSettingsPolicySigning' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicySigningUnion$inboundSchema:
+  z.ZodType<DeploymentSetupStackSettingsPolicySigningUnion, unknown> = z.union([
+    z.lazy(() => DeploymentSetupStackSettingsPolicySigning$inboundSchema),
+    z.string(),
+  ]);
+/** @internal */
+export type DeploymentSetupStackSettingsPolicySigningUnion$Outbound =
+  | DeploymentSetupStackSettingsPolicySigning$Outbound
+  | string;
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicySigningUnion$outboundSchema:
+  z.ZodType<
+    DeploymentSetupStackSettingsPolicySigningUnion$Outbound,
+    DeploymentSetupStackSettingsPolicySigningUnion
+  > = z.union([
+    z.lazy(() => DeploymentSetupStackSettingsPolicySigning$outboundSchema),
+    z.string(),
+  ]);
+
+export function deploymentSetupStackSettingsPolicySigningUnionToJSON(
+  deploymentSetupStackSettingsPolicySigningUnion:
+    DeploymentSetupStackSettingsPolicySigningUnion,
+): string {
+  return JSON.stringify(
+    DeploymentSetupStackSettingsPolicySigningUnion$outboundSchema.parse(
+      deploymentSetupStackSettingsPolicySigningUnion,
+    ),
+  );
+}
+export function deploymentSetupStackSettingsPolicySigningUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentSetupStackSettingsPolicySigningUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentSetupStackSettingsPolicySigningUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentSetupStackSettingsPolicySigningUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentSetupStackSettingsPolicyTelemetry$inboundSchema:
   z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyTelemetry> = z.enum(
     DeploymentSetupStackSettingsPolicyTelemetry,
@@ -6305,6 +3478,7 @@ export const DeploymentSetupStackSettingsPolicyUpdates$outboundSchema:
 
 /** @internal */
 export const Defaults$inboundSchema: z.ZodType<Defaults, unknown> = z.object({
+  airgapped: z.boolean().optional(),
   compute: z.nullable(
     z.union([
       z.lazy(() => DeploymentSetupStackSettingsPolicyCompute$inboundSchema),
@@ -6358,12 +3532,19 @@ export const Defaults$inboundSchema: z.ZodType<Defaults, unknown> = z.object({
   quotaWarningOverrides: z.array(z.string()).optional(),
   setupManagement:
     DeploymentSetupStackSettingsPolicySetupManagement$inboundSchema.optional(),
+  signing: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentSetupStackSettingsPolicySigning$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
   telemetry: DeploymentSetupStackSettingsPolicyTelemetry$inboundSchema
     .optional(),
   updates: DeploymentSetupStackSettingsPolicyUpdates$inboundSchema.optional(),
 });
 /** @internal */
 export type Defaults$Outbound = {
+  airgapped?: boolean | undefined;
   compute?:
     | DeploymentSetupStackSettingsPolicyCompute$Outbound
     | string
@@ -6398,6 +3579,11 @@ export type Defaults$Outbound = {
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   quotaWarningOverrides?: Array<string> | undefined;
   setupManagement?: string | undefined;
+  signing?:
+    | DeploymentSetupStackSettingsPolicySigning$Outbound
+    | string
+    | null
+    | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -6405,6 +3591,7 @@ export type Defaults$Outbound = {
 /** @internal */
 export const Defaults$outboundSchema: z.ZodType<Defaults$Outbound, Defaults> = z
   .object({
+    airgapped: z.boolean().optional(),
     compute: z.nullable(
       z.union([
         z.lazy(() => DeploymentSetupStackSettingsPolicyCompute$outboundSchema),
@@ -6463,6 +3650,12 @@ export const Defaults$outboundSchema: z.ZodType<Defaults$Outbound, Defaults> = z
     setupManagement:
       DeploymentSetupStackSettingsPolicySetupManagement$outboundSchema
         .optional(),
+    signing: z.nullable(
+      z.union([
+        z.lazy(() => DeploymentSetupStackSettingsPolicySigning$outboundSchema),
+        z.string(),
+      ]),
+    ).optional(),
     telemetry: DeploymentSetupStackSettingsPolicyTelemetry$outboundSchema
       .optional(),
     updates: DeploymentSetupStackSettingsPolicyUpdates$outboundSchema

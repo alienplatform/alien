@@ -15,7 +15,7 @@ let value: CreateManagerResponseSetupConfig = {
     allowedSetupMethods: [],
   },
   validatedReleaseSelection: {
-    releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
     releaseChannel: "<value>",
     platform: "local",
   },
@@ -25,7 +25,7 @@ let value: CreateManagerResponseSetupConfig = {
       source: {
         type: "project-release",
         releaseChannel: "<value>",
-        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
       },
       required: false,
     },

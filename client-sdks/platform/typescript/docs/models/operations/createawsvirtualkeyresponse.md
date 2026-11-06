@@ -9,7 +9,7 @@ import { CreateAwsVirtualKeyResponse } from "@alienplatform/platform-api/models/
 
 let value: CreateAwsVirtualKeyResponse = {
   virtualKey: {
-    id: "vkey_0p9nwqgtftugsoey99lqyqq",
+    id: "vkey_0p9nwqgtftugsoey99lqyqq8eq8z",
     projectId: "<id>",
     status: "ready",
     externalKeyId: "<id>",

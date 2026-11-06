@@ -13,6 +13,9 @@ export type CreateReleaseChannelGlobals = {
 };
 
 export type CreateReleaseChannelRequestBody = {
+  /**
+   * Channel the release was signed for
+   */
   name: string;
   /**
    * Unique identifier for the release.

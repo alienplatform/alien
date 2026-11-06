@@ -17,14 +17,13 @@ let value: DeploymentInfoSetupConfig = {
   environmentVariables: [],
   items: [
     {
-      item: "registry",
+      item: "deployment",
       source: {
-        type: "built-in",
-        definitionId: "customer-ai",
-        version: "<value>",
-        sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        type: "project-release",
+        releaseChannel: "<value>",
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
       },
-      required: true,
+      required: false,
     },
   ],
 };

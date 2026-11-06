@@ -30,7 +30,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.releases.list({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -56,7 +56,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await releasesList(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -332,7 +332,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.releases.listBranches({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -358,7 +358,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await releasesListBranches(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -515,7 +515,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.releases.listAuthors({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -541,7 +541,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await releasesListAuthors(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1012,7 +1012,7 @@ const alien = new Alien({
 async function run() {
   const result = await alien.releases.promote({
     name: "<value>",
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
     requestBody: {
       releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       expectedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
@@ -1043,7 +1043,7 @@ const alien = new AlienCore({
 async function run() {
   const res = await releasesPromote(alien, {
     name: "<value>",
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
     requestBody: {
       releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       expectedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",

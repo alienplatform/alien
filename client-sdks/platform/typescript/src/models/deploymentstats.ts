@@ -3,9 +3,28 @@
  */
 
 import * as z from "zod/v4";
+import { remap as remap$ } from "../lib/primitives.js";
 import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+
+export type ListCounts = {
+  all: number;
+  attention: number;
+  inactive: number;
+};
+
+/**
+ * With includeListCounts: deployments by purpose, matching every filter except purpose, so each kind's count stays visible while one is selected
+ */
+export type ByPurpose = {
+  application?: number | undefined;
+  encryption?: number | undefined;
+  ai?: number | undefined;
+  storage?: number | undefined;
+  containerRegistry?: number | undefined;
+  sandbox?: number | undefined;
+};
 
 /**
  * Count of deployments introduced through each deployment path.
@@ -16,6 +35,11 @@ export type ByOrigin = {
 };
 
 export type DeploymentStats = {
+  listCounts?: ListCounts | undefined;
+  /**
+   * With includeListCounts: deployments by purpose, matching every filter except purpose, so each kind's count stays visible while one is selected
+   */
+  byPurpose?: ByPurpose | undefined;
   /**
    * Total number of deployments matching filters
    */
@@ -43,6 +67,48 @@ export type DeploymentStats = {
 };
 
 /** @internal */
+export const ListCounts$inboundSchema: z.ZodType<ListCounts, unknown> = z
+  .object({
+    all: z.number(),
+    attention: z.number(),
+    inactive: z.number(),
+  });
+
+export function listCountsFromJSON(
+  jsonString: string,
+): SafeParseResult<ListCounts, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ListCounts$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ListCounts' from JSON`,
+  );
+}
+
+/** @internal */
+export const ByPurpose$inboundSchema: z.ZodType<ByPurpose, unknown> = z.object({
+  application: z.number().optional(),
+  encryption: z.number().optional(),
+  ai: z.number().optional(),
+  storage: z.number().optional(),
+  "container-registry": z.number().optional(),
+  sandbox: z.number().optional(),
+}).transform((v) => {
+  return remap$(v, {
+    "container-registry": "containerRegistry",
+  });
+});
+
+export function byPurposeFromJSON(
+  jsonString: string,
+): SafeParseResult<ByPurpose, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ByPurpose$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ByPurpose' from JSON`,
+  );
+}
+
+/** @internal */
 export const ByOrigin$inboundSchema: z.ZodType<ByOrigin, unknown> = z.object({
   framework: z.number().optional(),
   remoteOperator: z.number().optional(),
@@ -63,6 +129,8 @@ export const DeploymentStats$inboundSchema: z.ZodType<
   DeploymentStats,
   unknown
 > = z.object({
+  listCounts: z.lazy(() => ListCounts$inboundSchema).optional(),
+  byPurpose: z.lazy(() => ByPurpose$inboundSchema).optional(),
   total: z.number(),
   byStatus: z.record(z.string(), z.number()),
   byPlatform: z.record(z.string(), z.number()),

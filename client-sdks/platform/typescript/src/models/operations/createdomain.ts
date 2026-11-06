@@ -3,6 +3,7 @@
  */
 
 import * as z from "zod/v4";
+import { ClosedEnum } from "../../types/enums.js";
 
 export type CreateDomainGlobals = {
   /**
@@ -10,6 +11,12 @@ export type CreateDomainGlobals = {
    */
   workspace?: string | undefined;
 };
+
+export const Dns = {
+  Alien: "alien",
+  Customer: "customer",
+} as const;
+export type Dns = ClosedEnum<typeof Dns>;
 
 export type CreateDomainSetup = {
   deploymentPortal?: boolean | undefined;
@@ -23,8 +30,12 @@ export type CreateDomainSetup = {
 
 export type CreateDomainRequest = {
   domain: string;
+  dns?: Dns | undefined;
   setup?: CreateDomainSetup | undefined;
 };
+
+/** @internal */
+export const Dns$outboundSchema: z.ZodEnum<typeof Dns> = z.enum(Dns);
 
 /** @internal */
 export type CreateDomainSetup$Outbound = {
@@ -56,6 +67,7 @@ export function createDomainSetupToJSON(
 /** @internal */
 export type CreateDomainRequest$Outbound = {
   domain: string;
+  dns: string;
   setup?: CreateDomainSetup$Outbound | undefined;
 };
 
@@ -65,6 +77,7 @@ export const CreateDomainRequest$outboundSchema: z.ZodType<
   CreateDomainRequest
 > = z.object({
   domain: z.string(),
+  dns: Dns$outboundSchema.default("alien"),
   setup: z.lazy(() => CreateDomainSetup$outboundSchema).optional(),
 });
 

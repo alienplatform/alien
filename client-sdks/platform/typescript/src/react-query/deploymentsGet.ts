@@ -122,7 +122,7 @@ export function invalidateDeploymentsGet(
     ...filters,
     queryKey: [
       "@alienplatform/platform-api",
-      "deployments",
+      "Deployments",
       "get",
       ...queryKeyBase,
     ],
@@ -135,6 +135,6 @@ export function invalidateAllDeploymentsGet(
 ): Promise<void> {
   return client.invalidateQueries({
     ...filters,
-    queryKey: ["@alienplatform/platform-api", "deployments", "get"],
+    queryKey: ["@alienplatform/platform-api", "Deployments", "get"],
   });
 }

@@ -10,6 +10,10 @@ import {
   APIKeyDeploymentSetupConfig,
   APIKeyDeploymentSetupConfig$inboundSchema,
 } from "./apikeydeploymentsetupconfig.js";
+import {
+  ApplicationRole,
+  ApplicationRole$inboundSchema,
+} from "./applicationrole.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export const CreateAPIKeyResponseType = {
@@ -32,6 +36,10 @@ export type KeyInfo = {
   keyPrefix: string;
   type: CreateAPIKeyResponseType;
   role: string;
+  /**
+   * Application roles a project key holds beside `role`
+   */
+  additionalRoles: Array<ApplicationRole>;
   workspaceId: string;
   projectId: string | null;
   deploymentId: string | null;
@@ -68,6 +76,7 @@ export const KeyInfo$inboundSchema: z.ZodType<KeyInfo, unknown> = z.object({
   keyPrefix: z.string(),
   type: CreateAPIKeyResponseType$inboundSchema,
   role: z.string(),
+  additionalRoles: z.array(ApplicationRole$inboundSchema),
   workspaceId: z.string(),
   projectId: z.nullable(z.string()),
   deploymentId: z.nullable(z.string()),

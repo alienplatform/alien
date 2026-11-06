@@ -3,12 +3,128 @@
 
 ## Supported Types
 
+### `models.ProjectFeatureChangedEvent`
+
+```typescript
+const value: models.ProjectFeatureChangedEvent = {
+  type: "ProjectFeatureChanged",
+  feature: "remoteSandbox",
+  enabled: true,
+};
+```
+
+### `models.DeploymentAirgappedBundleDownloadedEvent`
+
+```typescript
+const value: models.DeploymentAirgappedBundleDownloadedEvent = {
+  releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+  downloadedAt: new Date("2025-07-23T22:38:40.273Z"),
+  type: "DeploymentAirgappedBundleDownloaded",
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+};
+```
+
+### `models.DeploymentAirgappedReportReceivedEvent`
+
+```typescript
+const value: models.DeploymentAirgappedReportReceivedEvent = {
+  receivedAt: new Date("2025-08-04T07:20:53.708Z"),
+  status: "deleted",
+  installedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+  attemptedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+  replicas: {
+    ready: 500417,
+    desired: 538429,
+  },
+  type: "DeploymentAirgappedReportReceived",
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+};
+```
+
 ### `models.DeploymentCheckRequestedEvent`
 
 ```typescript
 const value: models.DeploymentCheckRequestedEvent = {
   type: "DeploymentCheckRequested",
-  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+};
+```
+
+### `models.DeploymentSetupComputeIgnoredEvent`
+
+```typescript
+const value: models.DeploymentSetupComputeIgnoredEvent = {
+  type: "DeploymentSetupComputeIgnored",
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+  sent: {},
+  kept: {},
+};
+```
+
+### `models.CloudAccountComputeCleanupRequestedEvent`
+
+```typescript
+const value: models.CloudAccountComputeCleanupRequestedEvent = {
+  type: "CloudAccountComputeCleanupRequested",
+  cloudAccountId: "<id>",
+  actor: {
+    kind: "user",
+    id: "<id>",
+  },
+};
+```
+
+### `models.CloudAccountSetupCleanupRequestedEvent`
+
+```typescript
+const value: models.CloudAccountSetupCleanupRequestedEvent = {
+  type: "CloudAccountSetupCleanupRequested",
+  cloudAccountId: "<id>",
+  actor: {
+    kind: "serviceAccount",
+    id: "<id>",
+  },
+};
+```
+
+### `models.CloudAccountClosureRequestedEvent`
+
+```typescript
+const value: models.CloudAccountClosureRequestedEvent = {
+  type: "CloudAccountClosureRequested",
+  cloudAccountId: "<id>",
+  actor: {
+    kind: "serviceAccount",
+    id: "<id>",
+  },
+};
+```
+
+### `models.CloudAccountAssignedEvent`
+
+```typescript
+const value: models.CloudAccountAssignedEvent = {
+  type: "CloudAccountAssigned",
+  cloudAccountId: "<id>",
+  deploymentGroupId: "<id>",
+  actor: {
+    kind: "serviceAccount",
+    id: "<id>",
+  },
+};
+```
+
+### `models.CloudAccountRequestedEvent`
+
+```typescript
+const value: models.CloudAccountRequestedEvent = {
+  type: "CloudAccountRequested",
+  cloudAccountId: "<id>",
+  connectionId: "<id>",
+  actor: {
+    kind: "user",
+    id: "<id>",
+  },
 };
 ```
 
@@ -17,7 +133,7 @@ const value: models.DeploymentCheckRequestedEvent = {
 ```typescript
 const value: models.DeploymentEndpointHealthChangedEvent = {
   type: "DeploymentEndpointHealthChanged",
-  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
   resourceId: "<id>",
   observedAt: new Date("2025-09-02T13:18:55.549Z"),
   targets: [],
@@ -33,7 +149,7 @@ const value: models.DeploymentGroupMovedEvent = {
     kind: "serviceAccount",
     id: "<id>",
   },
-  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
   previousDeploymentGroupId: "<id>",
   deploymentGroupId: "<id>",
   membershipRevision: 67016,
@@ -523,7 +639,7 @@ const value: models.EventDataDeploymentDeletionRequested = {
 ```typescript
 const value: models.DeploymentCredentialRotationEvent = {
   type: "DeploymentCredentialRotation",
-  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
   rotationId: "<id>",
   revision: 519446,
   status: "cancelled",

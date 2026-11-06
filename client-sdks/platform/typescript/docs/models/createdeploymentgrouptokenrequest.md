@@ -8,7 +8,7 @@ import { CreateDeploymentGroupTokenRequest } from "@alienplatform/platform-api/m
 let value: CreateDeploymentGroupTokenRequest = {
   deploymentSetupConfig: {
     validatedReleaseSelection: {
-      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
       releaseChannel: "<value>",
       platform: "aws",
     },

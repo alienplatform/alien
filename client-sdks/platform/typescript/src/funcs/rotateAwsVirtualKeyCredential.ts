@@ -173,6 +173,7 @@ async function $do(
   >(
     M.json(200, operations.RotateAwsVirtualKeyCredentialResponse$inboundSchema),
     M.jsonErr([401, 404, 409], errors.APIError$inboundSchema),
+    M.jsonErr(500, errors.APIError$inboundSchema),
     M.fail("4XX"),
     M.fail("5XX"),
   )(response, req, { extraFields: responseFields });

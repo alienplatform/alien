@@ -27,6 +27,17 @@ export type CreateDeploymentResponseDeploymentModel = ClosedEnum<
   typeof CreateDeploymentResponseDeploymentModel
 >;
 
+export type Airgapped = {
+  /**
+   * Deliver this trusted signing key separately to the site administrator.
+   */
+  bundleSigningKey: string;
+  /**
+   * First command to run on the online machine.
+   */
+  command: string;
+};
+
 export type CreateDeploymentResponse = {
   deployment: Deployment;
   /**
@@ -40,12 +51,29 @@ export type CreateDeploymentResponse = {
    * Deployment token (returned for deployment-group creation and await-registration reservations)
    */
   token?: string | undefined;
+  airgapped?: Airgapped | undefined;
 };
 
 /** @internal */
 export const CreateDeploymentResponseDeploymentModel$inboundSchema: z.ZodEnum<
   typeof CreateDeploymentResponseDeploymentModel
 > = z.enum(CreateDeploymentResponseDeploymentModel);
+
+/** @internal */
+export const Airgapped$inboundSchema: z.ZodType<Airgapped, unknown> = z.object({
+  bundleSigningKey: z.string(),
+  command: z.string(),
+});
+
+export function airgappedFromJSON(
+  jsonString: string,
+): SafeParseResult<Airgapped, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Airgapped$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Airgapped' from JSON`,
+  );
+}
 
 /** @internal */
 export const CreateDeploymentResponse$inboundSchema: z.ZodType<
@@ -58,6 +86,7 @@ export const CreateDeploymentResponse$inboundSchema: z.ZodType<
   managementExternalId: z.string().optional(),
   runtimeEncryptionKey: z.string().optional(),
   token: z.string().optional(),
+  airgapped: z.lazy(() => Airgapped$inboundSchema).optional(),
 });
 
 export function createDeploymentResponseFromJSON(

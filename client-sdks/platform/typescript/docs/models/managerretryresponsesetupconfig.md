@@ -15,7 +15,7 @@ let value: ManagerRetryResponseSetupConfig = {
     allowedSetupMethods: [],
   },
   validatedReleaseSelection: {
-    releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
     releaseChannel: "<value>",
     platform: "aws",
   },
@@ -26,7 +26,7 @@ let value: ManagerRetryResponseSetupConfig = {
         type: "built-in",
         definitionId: "customer-ai",
         version: "<value>",
-        sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
       },
       required: true,
     },

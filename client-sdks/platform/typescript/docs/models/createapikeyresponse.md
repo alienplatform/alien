@@ -10,40 +10,54 @@ import { CreateAPIKeyResponse } from "@alienplatform/platform-api/models";
 let value: CreateAPIKeyResponse = {
   apiKey: "<value>",
   keyInfo: {
-    id: "apikey_ye96yxs1tjnrrwulp8frh",
+    id: "apikey_ye96yxs1tjnrrwulp8frh6w5t6e0",
     description: "vice leading schlep yahoo demob um",
     keyPrefix: "<value>",
     type: "manager",
     role: "<value>",
+    additionalRoles: [
+      "project.encryption",
+    ],
     workspaceId: "<id>",
     projectId: "<id>",
-    deploymentId: null,
+    deploymentId: "<id>",
     deploymentGroupId: "<id>",
     managerId: "<id>",
-    enabled: false,
-    createdAt: new Date("2025-12-31T21:17:56.658Z"),
-    expiresAt: new Date("2024-02-24T06:55:32.074Z"),
-    lastUsedAt: new Date("2024-06-18T02:25:10.121Z"),
-    revokedAt: new Date("2026-05-07T23:47:05.462Z"),
+    enabled: true,
+    createdAt: new Date("2024-02-24T06:55:32.074Z"),
+    expiresAt: new Date("2024-06-18T02:25:10.121Z"),
+    lastUsedAt: new Date("2026-05-07T23:47:05.462Z"),
+    revokedAt: new Date("2024-04-10T14:18:39.161Z"),
     deploymentSetupConfig: {
       metadata: {
         "key": "<value>",
+        "key1": "<value>",
       },
       policy: {
         allowedPlatforms: [],
         allowedSetupMethods: [],
       },
-      environmentVariables: [],
+      environmentVariables: [
+        {
+          name: "<value>",
+          type: "secret",
+          targetResources: [
+            "<value 1>",
+            "<value 2>",
+            "<value 3>",
+          ],
+        },
+      ],
       items: [
         {
-          item: "bucket",
+          item: "models",
           source: {
             type: "built-in",
             definitionId: "customer-sandbox",
             version: "<value>",
-            sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+            sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
           },
-          required: false,
+          required: true,
         },
       ],
     },

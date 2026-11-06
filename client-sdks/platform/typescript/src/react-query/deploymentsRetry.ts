@@ -67,7 +67,7 @@ export function useDeploymentsRetryMutation(
 }
 
 export function mutationKeyDeploymentsRetry(): MutationKey {
-  return ["@alienplatform/platform-api", "deployments", "retry"];
+  return ["@alienplatform/platform-api", "Deployments", "retry"];
 }
 
 export function buildDeploymentsRetryMutation(

@@ -14,7 +14,7 @@ let value: TargetReleaseProfileGcpResource = {
 
 ## Fields
 
-| Field                                               | Type                                                | Required                                            | Description                                         |
-| --------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------- |
-| `condition`                                         | *models.TargetReleaseProfileResourceConditionUnion* | :heavy_minus_sign:                                  | N/A                                                 |
-| `scope`                                             | *string*                                            | :heavy_check_mark:                                  | Scope (project/resource level)                      |
+| Field                                                  | Type                                                   | Required                                               | Description                                            |
+| ------------------------------------------------------ | ------------------------------------------------------ | ------------------------------------------------------ | ------------------------------------------------------ |
+| `condition`                                            | *models.TargetReleaseProfileGcpResourceConditionUnion* | :heavy_minus_sign:                                     | N/A                                                    |
+| `scope`                                                | *string*                                               | :heavy_check_mark:                                     | Scope (project/resource level)                         |

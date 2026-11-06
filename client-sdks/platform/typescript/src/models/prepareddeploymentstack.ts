@@ -126,6 +126,27 @@ export type PreparedDeploymentStackEnv = {
 };
 
 /**
+ * A file delivered from the install-owned input store after a signed release
+ *
+ * @remarks
+ * authorizes its exact destination. Values are never part of the release.
+ */
+export type PreparedDeploymentStackFile = {
+  /**
+   * Optional environment variable containing the destination path.
+   */
+  envName?: string | null | undefined;
+  /**
+   * Absolute destination inside the workload.
+   */
+  path: string;
+  /**
+   * Resource IDs or prefix patterns; absent selects all workloads.
+   */
+  targetResources?: Array<string> | null | undefined;
+};
+
+/**
  * Asks Alien to generate a secret input's value.
  *
  * @remarks
@@ -245,6 +266,24 @@ export type PreparedDeploymentStackValidationUnion =
   | string;
 
 /**
+ * A boolean input condition controlling whether another input applies.
+ */
+export type PreparedDeploymentStackWhen = {
+  /**
+   * Boolean value for which this input applies.
+   */
+  equals: boolean;
+  /**
+   * ID of an unconditional boolean input in the same stack.
+   */
+  input: string;
+};
+
+export type PreparedDeploymentStackWhenUnion =
+  | PreparedDeploymentStackWhen
+  | string;
+
+/**
  * Stack input definition serialized into a release stack.
  */
 export type PreparedDeploymentStackInput = {
@@ -264,6 +303,13 @@ export type PreparedDeploymentStackInput = {
    * Runtime env-var mappings for v1 input resolution.
    */
   env?: Array<PreparedDeploymentStackEnv> | undefined;
+  /**
+   * Private file projections. Supported only for unconditional, deployer-only
+   *
+   * @remarks
+   * secret inputs in a protected private installation.
+   */
+  files?: Array<PreparedDeploymentStackFile> | undefined;
   generate?: PreparedDeploymentStackGenerate | string | null | undefined;
   /**
    * Stable input ID used by CLI/API calls.
@@ -294,6 +340,7 @@ export type PreparedDeploymentStackInput = {
    */
   required: boolean;
   validation?: PreparedDeploymentStackValidation | string | null | undefined;
+  when?: PreparedDeploymentStackWhen | string | null | undefined;
 };
 
 /**
@@ -542,13 +589,23 @@ export type PreparedDeploymentStackManagementEnum = ClosedEnum<
 >;
 
 /**
+ * An IAM condition accepts one string or a list of alternative string values.
+ */
+export type PreparedDeploymentStackOverrideAwResourceCondition =
+  | Array<string>
+  | string;
+
+/**
  * AWS-specific binding specification
  */
 export type PreparedDeploymentStackOverrideAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
-  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  condition?:
+    | { [k: string]: { [k: string]: Array<string> | string } }
+    | null
+    | undefined;
   /**
    * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
    *
@@ -564,13 +621,21 @@ export type PreparedDeploymentStackOverrideAwResource = {
 };
 
 /**
+ * An IAM condition accepts one string or a list of alternative string values.
+ */
+export type PreparedDeploymentStackOverrideAwCondition = Array<string> | string;
+
+/**
  * AWS-specific binding specification
  */
 export type PreparedDeploymentStackOverrideAwStack = {
   /**
    * Optional condition for additional filtering (rare)
    */
-  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  condition?:
+    | { [k: string]: { [k: string]: Array<string> | string } }
+    | null
+    | undefined;
   /**
    * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
    *
@@ -750,13 +815,13 @@ export type PreparedDeploymentStackOverrideAzure = {
 /**
  * GCP IAM condition
  */
-export type PreparedDeploymentStackOverrideConditionResource = {
+export type PreparedDeploymentStackOverrideConditionGcpResource = {
   expression: string;
   title: string;
 };
 
-export type PreparedDeploymentStackOverrideResourceConditionUnion =
-  | PreparedDeploymentStackOverrideConditionResource
+export type PreparedDeploymentStackOverrideGcpResourceConditionUnion =
+  | PreparedDeploymentStackOverrideConditionGcpResource
   | string;
 
 /**
@@ -764,7 +829,7 @@ export type PreparedDeploymentStackOverrideResourceConditionUnion =
  */
 export type PreparedDeploymentStackOverrideGcpResource = {
   condition?:
-    | PreparedDeploymentStackOverrideConditionResource
+    | PreparedDeploymentStackOverrideConditionGcpResource
     | string
     | null
     | undefined;
@@ -777,13 +842,13 @@ export type PreparedDeploymentStackOverrideGcpResource = {
 /**
  * GCP IAM condition
  */
-export type PreparedDeploymentStackOverrideCondition = {
+export type PreparedDeploymentStackOverrideConditionGcp = {
   expression: string;
   title: string;
 };
 
-export type PreparedDeploymentStackOverrideConditionUnion =
-  | PreparedDeploymentStackOverrideCondition
+export type PreparedDeploymentStackOverrideGcpConditionUnion =
+  | PreparedDeploymentStackOverrideConditionGcp
   | string;
 
 /**
@@ -791,7 +856,7 @@ export type PreparedDeploymentStackOverrideConditionUnion =
  */
 export type PreparedDeploymentStackOverrideGcpStack = {
   condition?:
-    | PreparedDeploymentStackOverrideCondition
+    | PreparedDeploymentStackOverrideConditionGcp
     | string
     | null
     | undefined;
@@ -917,13 +982,23 @@ export type PreparedDeploymentStackManagement2 = {
 };
 
 /**
+ * An IAM condition accepts one string or a list of alternative string values.
+ */
+export type PreparedDeploymentStackExtendAwResourceCondition =
+  | Array<string>
+  | string;
+
+/**
  * AWS-specific binding specification
  */
 export type PreparedDeploymentStackExtendAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
-  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  condition?:
+    | { [k: string]: { [k: string]: Array<string> | string } }
+    | null
+    | undefined;
   /**
    * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
    *
@@ -939,13 +1014,21 @@ export type PreparedDeploymentStackExtendAwResource = {
 };
 
 /**
+ * An IAM condition accepts one string or a list of alternative string values.
+ */
+export type PreparedDeploymentStackExtendAwCondition = Array<string> | string;
+
+/**
  * AWS-specific binding specification
  */
 export type PreparedDeploymentStackExtendAwStack = {
   /**
    * Optional condition for additional filtering (rare)
    */
-  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  condition?:
+    | { [k: string]: { [k: string]: Array<string> | string } }
+    | null
+    | undefined;
   /**
    * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
    *
@@ -1125,13 +1208,13 @@ export type PreparedDeploymentStackExtendAzure = {
 /**
  * GCP IAM condition
  */
-export type PreparedDeploymentStackExtendConditionResource = {
+export type PreparedDeploymentStackExtendConditionGcpResource = {
   expression: string;
   title: string;
 };
 
-export type PreparedDeploymentStackExtendResourceConditionUnion =
-  | PreparedDeploymentStackExtendConditionResource
+export type PreparedDeploymentStackExtendGcpResourceConditionUnion =
+  | PreparedDeploymentStackExtendConditionGcpResource
   | string;
 
 /**
@@ -1139,7 +1222,7 @@ export type PreparedDeploymentStackExtendResourceConditionUnion =
  */
 export type PreparedDeploymentStackExtendGcpResource = {
   condition?:
-    | PreparedDeploymentStackExtendConditionResource
+    | PreparedDeploymentStackExtendConditionGcpResource
     | string
     | null
     | undefined;
@@ -1152,13 +1235,13 @@ export type PreparedDeploymentStackExtendGcpResource = {
 /**
  * GCP IAM condition
  */
-export type PreparedDeploymentStackExtendCondition = {
+export type PreparedDeploymentStackExtendConditionGcp = {
   expression: string;
   title: string;
 };
 
-export type PreparedDeploymentStackExtendConditionUnion =
-  | PreparedDeploymentStackExtendCondition
+export type PreparedDeploymentStackExtendGcpConditionUnion =
+  | PreparedDeploymentStackExtendConditionGcp
   | string;
 
 /**
@@ -1166,7 +1249,7 @@ export type PreparedDeploymentStackExtendConditionUnion =
  */
 export type PreparedDeploymentStackExtendGcpStack = {
   condition?:
-    | PreparedDeploymentStackExtendCondition
+    | PreparedDeploymentStackExtendConditionGcp
     | string
     | null
     | undefined;
@@ -1300,13 +1383,23 @@ export type PreparedDeploymentStackManagementUnion =
   | PreparedDeploymentStackManagementEnum;
 
 /**
+ * An IAM condition accepts one string or a list of alternative string values.
+ */
+export type PreparedDeploymentStackProfileAwResourceCondition =
+  | Array<string>
+  | string;
+
+/**
  * AWS-specific binding specification
  */
 export type PreparedDeploymentStackProfileAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
-  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  condition?:
+    | { [k: string]: { [k: string]: Array<string> | string } }
+    | null
+    | undefined;
   /**
    * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
    *
@@ -1322,13 +1415,21 @@ export type PreparedDeploymentStackProfileAwResource = {
 };
 
 /**
+ * An IAM condition accepts one string or a list of alternative string values.
+ */
+export type PreparedDeploymentStackProfileAwCondition = Array<string> | string;
+
+/**
  * AWS-specific binding specification
  */
 export type PreparedDeploymentStackProfileAwStack = {
   /**
    * Optional condition for additional filtering (rare)
    */
-  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  condition?:
+    | { [k: string]: { [k: string]: Array<string> | string } }
+    | null
+    | undefined;
   /**
    * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
    *
@@ -1508,13 +1609,13 @@ export type PreparedDeploymentStackProfileAzure = {
 /**
  * GCP IAM condition
  */
-export type PreparedDeploymentStackProfileConditionResource = {
+export type PreparedDeploymentStackProfileConditionGcpResource = {
   expression: string;
   title: string;
 };
 
-export type PreparedDeploymentStackProfileResourceConditionUnion =
-  | PreparedDeploymentStackProfileConditionResource
+export type PreparedDeploymentStackProfileGcpResourceConditionUnion =
+  | PreparedDeploymentStackProfileConditionGcpResource
   | string;
 
 /**
@@ -1522,7 +1623,7 @@ export type PreparedDeploymentStackProfileResourceConditionUnion =
  */
 export type PreparedDeploymentStackProfileGcpResource = {
   condition?:
-    | PreparedDeploymentStackProfileConditionResource
+    | PreparedDeploymentStackProfileConditionGcpResource
     | string
     | null
     | undefined;
@@ -1535,13 +1636,13 @@ export type PreparedDeploymentStackProfileGcpResource = {
 /**
  * GCP IAM condition
  */
-export type PreparedDeploymentStackProfileCondition = {
+export type PreparedDeploymentStackProfileConditionGcp = {
   expression: string;
   title: string;
 };
 
-export type PreparedDeploymentStackProfileConditionUnion =
-  | PreparedDeploymentStackProfileCondition
+export type PreparedDeploymentStackProfileGcpConditionUnion =
+  | PreparedDeploymentStackProfileConditionGcp
   | string;
 
 /**
@@ -1549,7 +1650,7 @@ export type PreparedDeploymentStackProfileConditionUnion =
  */
 export type PreparedDeploymentStackProfileGcpStack = {
   condition?:
-    | PreparedDeploymentStackProfileCondition
+    | PreparedDeploymentStackProfileConditionGcp
     | string
     | null
     | undefined;
@@ -2024,6 +2125,26 @@ export function preparedDeploymentStackEnvFromJSON(
 }
 
 /** @internal */
+export const PreparedDeploymentStackFile$inboundSchema: z.ZodType<
+  PreparedDeploymentStackFile,
+  unknown
+> = z.object({
+  envName: z.nullable(z.string()).optional(),
+  path: z.string(),
+  targetResources: z.nullable(z.array(z.string())).optional(),
+});
+
+export function preparedDeploymentStackFileFromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackFile, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PreparedDeploymentStackFile$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackFile' from JSON`,
+  );
+}
+
+/** @internal */
 export const PreparedDeploymentStackGenerate$inboundSchema: z.ZodType<
   PreparedDeploymentStackGenerate,
   unknown
@@ -2123,6 +2244,44 @@ export function preparedDeploymentStackValidationUnionFromJSON(
 }
 
 /** @internal */
+export const PreparedDeploymentStackWhen$inboundSchema: z.ZodType<
+  PreparedDeploymentStackWhen,
+  unknown
+> = z.object({
+  equals: z.boolean(),
+  input: z.string(),
+});
+
+export function preparedDeploymentStackWhenFromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackWhen, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PreparedDeploymentStackWhen$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackWhen' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackWhenUnion$inboundSchema: z.ZodType<
+  PreparedDeploymentStackWhenUnion,
+  unknown
+> = z.union([
+  z.lazy(() => PreparedDeploymentStackWhen$inboundSchema),
+  z.string(),
+]);
+
+export function preparedDeploymentStackWhenUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackWhenUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PreparedDeploymentStackWhenUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackWhenUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const PreparedDeploymentStackInput$inboundSchema: z.ZodType<
   PreparedDeploymentStackInput,
   unknown
@@ -2138,6 +2297,8 @@ export const PreparedDeploymentStackInput$inboundSchema: z.ZodType<
   ).optional(),
   description: z.string(),
   env: z.array(z.lazy(() => PreparedDeploymentStackEnv$inboundSchema))
+    .optional(),
+  files: z.array(z.lazy(() => PreparedDeploymentStackFile$inboundSchema))
     .optional(),
   generate: z.nullable(
     z.union([
@@ -2157,6 +2318,12 @@ export const PreparedDeploymentStackInput$inboundSchema: z.ZodType<
   validation: z.nullable(
     z.union([
       z.lazy(() => PreparedDeploymentStackValidation$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  when: z.nullable(
+    z.union([
+      z.lazy(() => PreparedDeploymentStackWhen$inboundSchema),
       z.string(),
     ]),
   ).optional(),
@@ -2575,12 +2742,37 @@ export const PreparedDeploymentStackManagementEnum$inboundSchema: z.ZodEnum<
 > = z.enum(PreparedDeploymentStackManagementEnum);
 
 /** @internal */
+export const PreparedDeploymentStackOverrideAwResourceCondition$inboundSchema:
+  z.ZodType<PreparedDeploymentStackOverrideAwResourceCondition, unknown> = z
+    .union([z.array(z.string()), z.string()]);
+
+export function preparedDeploymentStackOverrideAwResourceConditionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  PreparedDeploymentStackOverrideAwResourceCondition,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackOverrideAwResourceCondition$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'PreparedDeploymentStackOverrideAwResourceCondition' from JSON`,
+  );
+}
+
+/** @internal */
 export const PreparedDeploymentStackOverrideAwResource$inboundSchema: z.ZodType<
   PreparedDeploymentStackOverrideAwResource,
   unknown
 > = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
+  condition: z.nullable(
+    z.record(
+      z.string(),
+      z.record(z.string(), z.union([z.array(z.string()), z.string()])),
+    ),
+  ).optional(),
   notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
@@ -2602,12 +2794,39 @@ export function preparedDeploymentStackOverrideAwResourceFromJSON(
 }
 
 /** @internal */
+export const PreparedDeploymentStackOverrideAwCondition$inboundSchema:
+  z.ZodType<PreparedDeploymentStackOverrideAwCondition, unknown> = z.union([
+    z.array(z.string()),
+    z.string(),
+  ]);
+
+export function preparedDeploymentStackOverrideAwConditionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  PreparedDeploymentStackOverrideAwCondition,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackOverrideAwCondition$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'PreparedDeploymentStackOverrideAwCondition' from JSON`,
+  );
+}
+
+/** @internal */
 export const PreparedDeploymentStackOverrideAwStack$inboundSchema: z.ZodType<
   PreparedDeploymentStackOverrideAwStack,
   unknown
 > = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
+  condition: z.nullable(
+    z.record(
+      z.string(),
+      z.record(z.string(), z.union([z.array(z.string()), z.string()])),
+    ),
+  ).optional(),
   notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
@@ -2826,52 +3045,51 @@ export function preparedDeploymentStackOverrideAzureFromJSON(
 }
 
 /** @internal */
-export const PreparedDeploymentStackOverrideConditionResource$inboundSchema:
-  z.ZodType<PreparedDeploymentStackOverrideConditionResource, unknown> = z
+export const PreparedDeploymentStackOverrideConditionGcpResource$inboundSchema:
+  z.ZodType<PreparedDeploymentStackOverrideConditionGcpResource, unknown> = z
     .object({
       expression: z.string(),
       title: z.string(),
     });
 
-export function preparedDeploymentStackOverrideConditionResourceFromJSON(
+export function preparedDeploymentStackOverrideConditionGcpResourceFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  PreparedDeploymentStackOverrideConditionResource,
+  PreparedDeploymentStackOverrideConditionGcpResource,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      PreparedDeploymentStackOverrideConditionResource$inboundSchema.parse(
+      PreparedDeploymentStackOverrideConditionGcpResource$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'PreparedDeploymentStackOverrideConditionResource' from JSON`,
+    `Failed to parse 'PreparedDeploymentStackOverrideConditionGcpResource' from JSON`,
   );
 }
 
 /** @internal */
-export const PreparedDeploymentStackOverrideResourceConditionUnion$inboundSchema:
-  z.ZodType<PreparedDeploymentStackOverrideResourceConditionUnion, unknown> = z
-    .union([
+export const PreparedDeploymentStackOverrideGcpResourceConditionUnion$inboundSchema:
+  z.ZodType<PreparedDeploymentStackOverrideGcpResourceConditionUnion, unknown> =
+    z.union([
       z.lazy(() =>
-        PreparedDeploymentStackOverrideConditionResource$inboundSchema
+        PreparedDeploymentStackOverrideConditionGcpResource$inboundSchema
       ),
       z.string(),
     ]);
 
-export function preparedDeploymentStackOverrideResourceConditionUnionFromJSON(
+export function preparedDeploymentStackOverrideGcpResourceConditionUnionFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  PreparedDeploymentStackOverrideResourceConditionUnion,
+  PreparedDeploymentStackOverrideGcpResourceConditionUnion,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      PreparedDeploymentStackOverrideResourceConditionUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'PreparedDeploymentStackOverrideResourceConditionUnion' from JSON`,
+      PreparedDeploymentStackOverrideGcpResourceConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackOverrideGcpResourceConditionUnion' from JSON`,
   );
 }
 
@@ -2881,7 +3099,7 @@ export const PreparedDeploymentStackOverrideGcpResource$inboundSchema:
     condition: z.nullable(
       z.union([
         z.lazy(() =>
-          PreparedDeploymentStackOverrideConditionResource$inboundSchema
+          PreparedDeploymentStackOverrideConditionGcpResource$inboundSchema
         ),
         z.string(),
       ]),
@@ -2906,50 +3124,49 @@ export function preparedDeploymentStackOverrideGcpResourceFromJSON(
 }
 
 /** @internal */
-export const PreparedDeploymentStackOverrideCondition$inboundSchema: z.ZodType<
-  PreparedDeploymentStackOverrideCondition,
-  unknown
-> = z.object({
-  expression: z.string(),
-  title: z.string(),
-});
+export const PreparedDeploymentStackOverrideConditionGcp$inboundSchema:
+  z.ZodType<PreparedDeploymentStackOverrideConditionGcp, unknown> = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
 
-export function preparedDeploymentStackOverrideConditionFromJSON(
+export function preparedDeploymentStackOverrideConditionGcpFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  PreparedDeploymentStackOverrideCondition,
+  PreparedDeploymentStackOverrideConditionGcp,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      PreparedDeploymentStackOverrideCondition$inboundSchema.parse(
+      PreparedDeploymentStackOverrideConditionGcp$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'PreparedDeploymentStackOverrideCondition' from JSON`,
+    `Failed to parse 'PreparedDeploymentStackOverrideConditionGcp' from JSON`,
   );
 }
 
 /** @internal */
-export const PreparedDeploymentStackOverrideConditionUnion$inboundSchema:
-  z.ZodType<PreparedDeploymentStackOverrideConditionUnion, unknown> = z.union([
-    z.lazy(() => PreparedDeploymentStackOverrideCondition$inboundSchema),
-    z.string(),
-  ]);
+export const PreparedDeploymentStackOverrideGcpConditionUnion$inboundSchema:
+  z.ZodType<PreparedDeploymentStackOverrideGcpConditionUnion, unknown> = z
+    .union([
+      z.lazy(() => PreparedDeploymentStackOverrideConditionGcp$inboundSchema),
+      z.string(),
+    ]);
 
-export function preparedDeploymentStackOverrideConditionUnionFromJSON(
+export function preparedDeploymentStackOverrideGcpConditionUnionFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  PreparedDeploymentStackOverrideConditionUnion,
+  PreparedDeploymentStackOverrideGcpConditionUnion,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      PreparedDeploymentStackOverrideConditionUnion$inboundSchema.parse(
+      PreparedDeploymentStackOverrideGcpConditionUnion$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'PreparedDeploymentStackOverrideConditionUnion' from JSON`,
+    `Failed to parse 'PreparedDeploymentStackOverrideGcpConditionUnion' from JSON`,
   );
 }
 
@@ -2960,7 +3177,7 @@ export const PreparedDeploymentStackOverrideGcpStack$inboundSchema: z.ZodType<
 > = z.object({
   condition: z.nullable(
     z.union([
-      z.lazy(() => PreparedDeploymentStackOverrideCondition$inboundSchema),
+      z.lazy(() => PreparedDeploymentStackOverrideConditionGcp$inboundSchema),
       z.string(),
     ]),
   ).optional(),
@@ -3163,12 +3380,37 @@ export function preparedDeploymentStackManagement2FromJSON(
 }
 
 /** @internal */
+export const PreparedDeploymentStackExtendAwResourceCondition$inboundSchema:
+  z.ZodType<PreparedDeploymentStackExtendAwResourceCondition, unknown> = z
+    .union([z.array(z.string()), z.string()]);
+
+export function preparedDeploymentStackExtendAwResourceConditionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  PreparedDeploymentStackExtendAwResourceCondition,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackExtendAwResourceCondition$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'PreparedDeploymentStackExtendAwResourceCondition' from JSON`,
+  );
+}
+
+/** @internal */
 export const PreparedDeploymentStackExtendAwResource$inboundSchema: z.ZodType<
   PreparedDeploymentStackExtendAwResource,
   unknown
 > = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
+  condition: z.nullable(
+    z.record(
+      z.string(),
+      z.record(z.string(), z.union([z.array(z.string()), z.string()])),
+    ),
+  ).optional(),
   notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
@@ -3190,12 +3432,38 @@ export function preparedDeploymentStackExtendAwResourceFromJSON(
 }
 
 /** @internal */
+export const PreparedDeploymentStackExtendAwCondition$inboundSchema: z.ZodType<
+  PreparedDeploymentStackExtendAwCondition,
+  unknown
+> = z.union([z.array(z.string()), z.string()]);
+
+export function preparedDeploymentStackExtendAwConditionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  PreparedDeploymentStackExtendAwCondition,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackExtendAwCondition$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'PreparedDeploymentStackExtendAwCondition' from JSON`,
+  );
+}
+
+/** @internal */
 export const PreparedDeploymentStackExtendAwStack$inboundSchema: z.ZodType<
   PreparedDeploymentStackExtendAwStack,
   unknown
 > = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
+  condition: z.nullable(
+    z.record(
+      z.string(),
+      z.record(z.string(), z.union([z.array(z.string()), z.string()])),
+    ),
+  ).optional(),
   notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
@@ -3410,53 +3678,51 @@ export function preparedDeploymentStackExtendAzureFromJSON(
 }
 
 /** @internal */
-export const PreparedDeploymentStackExtendConditionResource$inboundSchema:
-  z.ZodType<PreparedDeploymentStackExtendConditionResource, unknown> = z.object(
-    {
+export const PreparedDeploymentStackExtendConditionGcpResource$inboundSchema:
+  z.ZodType<PreparedDeploymentStackExtendConditionGcpResource, unknown> = z
+    .object({
       expression: z.string(),
       title: z.string(),
-    },
-  );
+    });
 
-export function preparedDeploymentStackExtendConditionResourceFromJSON(
+export function preparedDeploymentStackExtendConditionGcpResourceFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  PreparedDeploymentStackExtendConditionResource,
+  PreparedDeploymentStackExtendConditionGcpResource,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      PreparedDeploymentStackExtendConditionResource$inboundSchema.parse(
+      PreparedDeploymentStackExtendConditionGcpResource$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'PreparedDeploymentStackExtendConditionResource' from JSON`,
+    `Failed to parse 'PreparedDeploymentStackExtendConditionGcpResource' from JSON`,
   );
 }
 
 /** @internal */
-export const PreparedDeploymentStackExtendResourceConditionUnion$inboundSchema:
-  z.ZodType<PreparedDeploymentStackExtendResourceConditionUnion, unknown> = z
+export const PreparedDeploymentStackExtendGcpResourceConditionUnion$inboundSchema:
+  z.ZodType<PreparedDeploymentStackExtendGcpResourceConditionUnion, unknown> = z
     .union([
       z.lazy(() =>
-        PreparedDeploymentStackExtendConditionResource$inboundSchema
+        PreparedDeploymentStackExtendConditionGcpResource$inboundSchema
       ),
       z.string(),
     ]);
 
-export function preparedDeploymentStackExtendResourceConditionUnionFromJSON(
+export function preparedDeploymentStackExtendGcpResourceConditionUnionFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  PreparedDeploymentStackExtendResourceConditionUnion,
+  PreparedDeploymentStackExtendGcpResourceConditionUnion,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      PreparedDeploymentStackExtendResourceConditionUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'PreparedDeploymentStackExtendResourceConditionUnion' from JSON`,
+      PreparedDeploymentStackExtendGcpResourceConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackExtendGcpResourceConditionUnion' from JSON`,
   );
 }
 
@@ -3468,7 +3734,7 @@ export const PreparedDeploymentStackExtendGcpResource$inboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() =>
-        PreparedDeploymentStackExtendConditionResource$inboundSchema
+        PreparedDeploymentStackExtendConditionGcpResource$inboundSchema
       ),
       z.string(),
     ]),
@@ -3493,45 +3759,50 @@ export function preparedDeploymentStackExtendGcpResourceFromJSON(
 }
 
 /** @internal */
-export const PreparedDeploymentStackExtendCondition$inboundSchema: z.ZodType<
-  PreparedDeploymentStackExtendCondition,
+export const PreparedDeploymentStackExtendConditionGcp$inboundSchema: z.ZodType<
+  PreparedDeploymentStackExtendConditionGcp,
   unknown
 > = z.object({
   expression: z.string(),
   title: z.string(),
 });
 
-export function preparedDeploymentStackExtendConditionFromJSON(
-  jsonString: string,
-): SafeParseResult<PreparedDeploymentStackExtendCondition, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      PreparedDeploymentStackExtendCondition$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'PreparedDeploymentStackExtendCondition' from JSON`,
-  );
-}
-
-/** @internal */
-export const PreparedDeploymentStackExtendConditionUnion$inboundSchema:
-  z.ZodType<PreparedDeploymentStackExtendConditionUnion, unknown> = z.union([
-    z.lazy(() => PreparedDeploymentStackExtendCondition$inboundSchema),
-    z.string(),
-  ]);
-
-export function preparedDeploymentStackExtendConditionUnionFromJSON(
+export function preparedDeploymentStackExtendConditionGcpFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  PreparedDeploymentStackExtendConditionUnion,
+  PreparedDeploymentStackExtendConditionGcp,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      PreparedDeploymentStackExtendConditionUnion$inboundSchema.parse(
+      PreparedDeploymentStackExtendConditionGcp$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'PreparedDeploymentStackExtendConditionUnion' from JSON`,
+    `Failed to parse 'PreparedDeploymentStackExtendConditionGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackExtendGcpConditionUnion$inboundSchema:
+  z.ZodType<PreparedDeploymentStackExtendGcpConditionUnion, unknown> = z.union([
+    z.lazy(() => PreparedDeploymentStackExtendConditionGcp$inboundSchema),
+    z.string(),
+  ]);
+
+export function preparedDeploymentStackExtendGcpConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  PreparedDeploymentStackExtendGcpConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackExtendGcpConditionUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'PreparedDeploymentStackExtendGcpConditionUnion' from JSON`,
   );
 }
 
@@ -3542,7 +3813,7 @@ export const PreparedDeploymentStackExtendGcpStack$inboundSchema: z.ZodType<
 > = z.object({
   condition: z.nullable(
     z.union([
-      z.lazy(() => PreparedDeploymentStackExtendCondition$inboundSchema),
+      z.lazy(() => PreparedDeploymentStackExtendConditionGcp$inboundSchema),
       z.string(),
     ]),
   ).optional(),
@@ -3745,12 +4016,37 @@ export function preparedDeploymentStackManagementUnionFromJSON(
 }
 
 /** @internal */
+export const PreparedDeploymentStackProfileAwResourceCondition$inboundSchema:
+  z.ZodType<PreparedDeploymentStackProfileAwResourceCondition, unknown> = z
+    .union([z.array(z.string()), z.string()]);
+
+export function preparedDeploymentStackProfileAwResourceConditionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  PreparedDeploymentStackProfileAwResourceCondition,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackProfileAwResourceCondition$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'PreparedDeploymentStackProfileAwResourceCondition' from JSON`,
+  );
+}
+
+/** @internal */
 export const PreparedDeploymentStackProfileAwResource$inboundSchema: z.ZodType<
   PreparedDeploymentStackProfileAwResource,
   unknown
 > = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
+  condition: z.nullable(
+    z.record(
+      z.string(),
+      z.record(z.string(), z.union([z.array(z.string()), z.string()])),
+    ),
+  ).optional(),
   notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
@@ -3772,12 +4068,38 @@ export function preparedDeploymentStackProfileAwResourceFromJSON(
 }
 
 /** @internal */
+export const PreparedDeploymentStackProfileAwCondition$inboundSchema: z.ZodType<
+  PreparedDeploymentStackProfileAwCondition,
+  unknown
+> = z.union([z.array(z.string()), z.string()]);
+
+export function preparedDeploymentStackProfileAwConditionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  PreparedDeploymentStackProfileAwCondition,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackProfileAwCondition$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'PreparedDeploymentStackProfileAwCondition' from JSON`,
+  );
+}
+
+/** @internal */
 export const PreparedDeploymentStackProfileAwStack$inboundSchema: z.ZodType<
   PreparedDeploymentStackProfileAwStack,
   unknown
 > = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
+  condition: z.nullable(
+    z.record(
+      z.string(),
+      z.record(z.string(), z.union([z.array(z.string()), z.string()])),
+    ),
+  ).optional(),
   notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
@@ -3995,52 +4317,51 @@ export function preparedDeploymentStackProfileAzureFromJSON(
 }
 
 /** @internal */
-export const PreparedDeploymentStackProfileConditionResource$inboundSchema:
-  z.ZodType<PreparedDeploymentStackProfileConditionResource, unknown> = z
+export const PreparedDeploymentStackProfileConditionGcpResource$inboundSchema:
+  z.ZodType<PreparedDeploymentStackProfileConditionGcpResource, unknown> = z
     .object({
       expression: z.string(),
       title: z.string(),
     });
 
-export function preparedDeploymentStackProfileConditionResourceFromJSON(
+export function preparedDeploymentStackProfileConditionGcpResourceFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  PreparedDeploymentStackProfileConditionResource,
+  PreparedDeploymentStackProfileConditionGcpResource,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      PreparedDeploymentStackProfileConditionResource$inboundSchema.parse(
+      PreparedDeploymentStackProfileConditionGcpResource$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'PreparedDeploymentStackProfileConditionResource' from JSON`,
+    `Failed to parse 'PreparedDeploymentStackProfileConditionGcpResource' from JSON`,
   );
 }
 
 /** @internal */
-export const PreparedDeploymentStackProfileResourceConditionUnion$inboundSchema:
-  z.ZodType<PreparedDeploymentStackProfileResourceConditionUnion, unknown> = z
-    .union([
+export const PreparedDeploymentStackProfileGcpResourceConditionUnion$inboundSchema:
+  z.ZodType<PreparedDeploymentStackProfileGcpResourceConditionUnion, unknown> =
+    z.union([
       z.lazy(() =>
-        PreparedDeploymentStackProfileConditionResource$inboundSchema
+        PreparedDeploymentStackProfileConditionGcpResource$inboundSchema
       ),
       z.string(),
     ]);
 
-export function preparedDeploymentStackProfileResourceConditionUnionFromJSON(
+export function preparedDeploymentStackProfileGcpResourceConditionUnionFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  PreparedDeploymentStackProfileResourceConditionUnion,
+  PreparedDeploymentStackProfileGcpResourceConditionUnion,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      PreparedDeploymentStackProfileResourceConditionUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'PreparedDeploymentStackProfileResourceConditionUnion' from JSON`,
+      PreparedDeploymentStackProfileGcpResourceConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackProfileGcpResourceConditionUnion' from JSON`,
   );
 }
 
@@ -4052,7 +4373,7 @@ export const PreparedDeploymentStackProfileGcpResource$inboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() =>
-        PreparedDeploymentStackProfileConditionResource$inboundSchema
+        PreparedDeploymentStackProfileConditionGcpResource$inboundSchema
       ),
       z.string(),
     ]),
@@ -4077,50 +4398,50 @@ export function preparedDeploymentStackProfileGcpResourceFromJSON(
 }
 
 /** @internal */
-export const PreparedDeploymentStackProfileCondition$inboundSchema: z.ZodType<
-  PreparedDeploymentStackProfileCondition,
-  unknown
-> = z.object({
-  expression: z.string(),
-  title: z.string(),
-});
+export const PreparedDeploymentStackProfileConditionGcp$inboundSchema:
+  z.ZodType<PreparedDeploymentStackProfileConditionGcp, unknown> = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
 
-export function preparedDeploymentStackProfileConditionFromJSON(
+export function preparedDeploymentStackProfileConditionGcpFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  PreparedDeploymentStackProfileCondition,
+  PreparedDeploymentStackProfileConditionGcp,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      PreparedDeploymentStackProfileCondition$inboundSchema.parse(
+      PreparedDeploymentStackProfileConditionGcp$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'PreparedDeploymentStackProfileCondition' from JSON`,
+    `Failed to parse 'PreparedDeploymentStackProfileConditionGcp' from JSON`,
   );
 }
 
 /** @internal */
-export const PreparedDeploymentStackProfileConditionUnion$inboundSchema:
-  z.ZodType<PreparedDeploymentStackProfileConditionUnion, unknown> = z.union([
-    z.lazy(() => PreparedDeploymentStackProfileCondition$inboundSchema),
-    z.string(),
-  ]);
+export const PreparedDeploymentStackProfileGcpConditionUnion$inboundSchema:
+  z.ZodType<PreparedDeploymentStackProfileGcpConditionUnion, unknown> = z.union(
+    [
+      z.lazy(() => PreparedDeploymentStackProfileConditionGcp$inboundSchema),
+      z.string(),
+    ],
+  );
 
-export function preparedDeploymentStackProfileConditionUnionFromJSON(
+export function preparedDeploymentStackProfileGcpConditionUnionFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  PreparedDeploymentStackProfileConditionUnion,
+  PreparedDeploymentStackProfileGcpConditionUnion,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      PreparedDeploymentStackProfileConditionUnion$inboundSchema.parse(
+      PreparedDeploymentStackProfileGcpConditionUnion$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'PreparedDeploymentStackProfileConditionUnion' from JSON`,
+    `Failed to parse 'PreparedDeploymentStackProfileGcpConditionUnion' from JSON`,
   );
 }
 
@@ -4131,7 +4452,7 @@ export const PreparedDeploymentStackProfileGcpStack$inboundSchema: z.ZodType<
 > = z.object({
   condition: z.nullable(
     z.union([
-      z.lazy(() => PreparedDeploymentStackProfileCondition$inboundSchema),
+      z.lazy(() => PreparedDeploymentStackProfileConditionGcp$inboundSchema),
       z.string(),
     ]),
   ).optional(),

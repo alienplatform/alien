@@ -8,11 +8,11 @@ Request to acquire deployments for processing
 import { SyncAcquireRequest } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireRequest = {
-  managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
+  managerId: "mgr_enxscjrqiiu2lrc672hwwuc5tv5y",
   session: "<value>",
   requestId: "<id>",
   deploymentIds: [
-    "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
   ],
   deploymentModel: "pull",
 };
@@ -23,7 +23,7 @@ let value: SyncAcquireRequest = {
 | Field                                                                                      | Type                                                                                       | Required                                                                                   | Description                                                                                | Example                                                                                    |
 | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
 | `maxSupportedDeploymentProtocolVersion`                                                    | *number*                                                                                   | :heavy_minus_sign:                                                                         | Highest deployment protocol this runtime can interpret. Omitted means version 1.           |                                                                                            |
-| `managerId`                                                                                | *string*                                                                                   | :heavy_minus_sign:                                                                         | N/A                                                                                        | mgr_enxscjrqiiu2lrc672hwwuc5                                                               |
+| `managerId`                                                                                | *string*                                                                                   | :heavy_minus_sign:                                                                         | N/A                                                                                        | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                                                           |
 | `session`                                                                                  | *string*                                                                                   | :heavy_check_mark:                                                                         | Unique session identifier for lock tracking                                                |                                                                                            |
 | `requestId`                                                                                | *string*                                                                                   | :heavy_check_mark:                                                                         | Idempotency key for one logical acquire request                                            |                                                                                            |
 | `deploymentIds`                                                                            | *string*[]                                                                                 | :heavy_minus_sign:                                                                         | Specific deployment IDs to lock (for Pull model sync)                                      |                                                                                            |

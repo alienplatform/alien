@@ -113,6 +113,27 @@ export type DeploymentInputsResponseEnv = {
 };
 
 /**
+ * A file delivered from the install-owned input store after a signed release
+ *
+ * @remarks
+ * authorizes its exact destination. Values are never part of the release.
+ */
+export type DeploymentInputsResponseFile = {
+  /**
+   * Optional environment variable containing the destination path.
+   */
+  envName?: string | null | undefined;
+  /**
+   * Absolute destination inside the workload.
+   */
+  path: string;
+  /**
+   * Resource IDs or prefix patterns; absent selects all workloads.
+   */
+  targetResources?: Array<string> | null | undefined;
+};
+
+/**
  * Asks Alien to generate a secret input's value.
  *
  * @remarks
@@ -232,6 +253,24 @@ export type DeploymentInputsResponseValidationUnion =
   | string;
 
 /**
+ * A boolean input condition controlling whether another input applies.
+ */
+export type DeploymentInputsResponseWhen = {
+  /**
+   * Boolean value for which this input applies.
+   */
+  equals: boolean;
+  /**
+   * ID of an unconditional boolean input in the same stack.
+   */
+  input: string;
+};
+
+export type DeploymentInputsResponseWhenUnion =
+  | DeploymentInputsResponseWhen
+  | string;
+
+/**
  * Stack input definition serialized into a release stack.
  */
 export type DeploymentInputsResponseInput = {
@@ -251,6 +290,13 @@ export type DeploymentInputsResponseInput = {
    * Runtime env-var mappings for v1 input resolution.
    */
   env?: Array<DeploymentInputsResponseEnv> | undefined;
+  /**
+   * Private file projections. Supported only for unconditional, deployer-only
+   *
+   * @remarks
+   * secret inputs in a protected private installation.
+   */
+  files?: Array<DeploymentInputsResponseFile> | undefined;
   generate?: DeploymentInputsResponseGenerate | string | null | undefined;
   /**
    * Stable input ID used by CLI/API calls.
@@ -281,6 +327,7 @@ export type DeploymentInputsResponseInput = {
    */
   required: boolean;
   validation?: DeploymentInputsResponseValidation | string | null | undefined;
+  when?: DeploymentInputsResponseWhen | string | null | undefined;
 };
 
 export type DeploymentInputsResponse = {
@@ -467,6 +514,26 @@ export function deploymentInputsResponseEnvFromJSON(
 }
 
 /** @internal */
+export const DeploymentInputsResponseFile$inboundSchema: z.ZodType<
+  DeploymentInputsResponseFile,
+  unknown
+> = z.object({
+  envName: z.nullable(z.string()).optional(),
+  path: z.string(),
+  targetResources: z.nullable(z.array(z.string())).optional(),
+});
+
+export function deploymentInputsResponseFileFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInputsResponseFile, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInputsResponseFile$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInputsResponseFile' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentInputsResponseGenerate$inboundSchema: z.ZodType<
   DeploymentInputsResponseGenerate,
   unknown
@@ -572,6 +639,44 @@ export function deploymentInputsResponseValidationUnionFromJSON(
 }
 
 /** @internal */
+export const DeploymentInputsResponseWhen$inboundSchema: z.ZodType<
+  DeploymentInputsResponseWhen,
+  unknown
+> = z.object({
+  equals: z.boolean(),
+  input: z.string(),
+});
+
+export function deploymentInputsResponseWhenFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInputsResponseWhen, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInputsResponseWhen$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInputsResponseWhen' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInputsResponseWhenUnion$inboundSchema: z.ZodType<
+  DeploymentInputsResponseWhenUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentInputsResponseWhen$inboundSchema),
+  z.string(),
+]);
+
+export function deploymentInputsResponseWhenUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInputsResponseWhenUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInputsResponseWhenUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInputsResponseWhenUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentInputsResponseInput$inboundSchema: z.ZodType<
   DeploymentInputsResponseInput,
   unknown
@@ -587,6 +692,8 @@ export const DeploymentInputsResponseInput$inboundSchema: z.ZodType<
   ).optional(),
   description: z.string(),
   env: z.array(z.lazy(() => DeploymentInputsResponseEnv$inboundSchema))
+    .optional(),
+  files: z.array(z.lazy(() => DeploymentInputsResponseFile$inboundSchema))
     .optional(),
   generate: z.nullable(
     z.union([
@@ -605,6 +712,12 @@ export const DeploymentInputsResponseInput$inboundSchema: z.ZodType<
   validation: z.nullable(
     z.union([
       z.lazy(() => DeploymentInputsResponseValidation$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  when: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentInputsResponseWhen$inboundSchema),
       z.string(),
     ]),
   ).optional(),

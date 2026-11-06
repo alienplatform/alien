@@ -30,14 +30,14 @@ export type CreateContainerRegistryCredentialResponseCredential = {
   createdAt: Date;
 };
 
-export const UsernameEnum = {
+export const Username = {
   Alien: "alien",
 } as const;
-export type UsernameEnum = ClosedEnum<typeof UsernameEnum>;
+export type Username = ClosedEnum<typeof Username>;
 
 export type CreateContainerRegistryCredentialResponse = {
   credential: CreateContainerRegistryCredentialResponseCredential;
-  username: UsernameEnum;
+  username: Username;
   password: string;
 };
 
@@ -84,8 +84,9 @@ export function createContainerRegistryCredentialResponseCredentialFromJSON(
 }
 
 /** @internal */
-export const UsernameEnum$inboundSchema: z.ZodEnum<typeof UsernameEnum> = z
-  .enum(UsernameEnum);
+export const Username$inboundSchema: z.ZodEnum<typeof Username> = z.enum(
+  Username,
+);
 
 /** @internal */
 export const CreateContainerRegistryCredentialResponse$inboundSchema: z.ZodType<
@@ -95,7 +96,7 @@ export const CreateContainerRegistryCredentialResponse$inboundSchema: z.ZodType<
   credential: z.lazy(() =>
     CreateContainerRegistryCredentialResponseCredential$inboundSchema
   ),
-  username: UsernameEnum$inboundSchema,
+  username: Username$inboundSchema,
   password: z.string(),
 });
 

@@ -335,7 +335,7 @@ export type ReleaseReported = {
   latest: boolean;
 };
 
-export type Rollout = {
+export type GetRemoteOperatorProjectSummaryRollout = {
   releaseId: string;
   version: string;
   upToDate: number;
@@ -360,7 +360,7 @@ export type ReleaseData = {
   /**
    * Desired releases, most deployments first, with how many Remote Operator deployments run each one, still need the change, report no release, or failed after it
    */
-  rollout: Array<Rollout>;
+  rollout: Array<GetRemoteOperatorProjectSummaryRollout>;
 };
 
 export type GetRemoteOperatorProjectSummaryRelease = {
@@ -1190,7 +1190,10 @@ export function releaseReportedFromJSON(
 }
 
 /** @internal */
-export const Rollout$inboundSchema: z.ZodType<Rollout, unknown> = z.object({
+export const GetRemoteOperatorProjectSummaryRollout$inboundSchema: z.ZodType<
+  GetRemoteOperatorProjectSummaryRollout,
+  unknown
+> = z.object({
   releaseId: z.string(),
   version: z.string(),
   upToDate: z.int(),
@@ -1199,13 +1202,14 @@ export const Rollout$inboundSchema: z.ZodType<Rollout, unknown> = z.object({
   failed: z.int(),
 });
 
-export function rolloutFromJSON(
+export function getRemoteOperatorProjectSummaryRolloutFromJSON(
   jsonString: string,
-): SafeParseResult<Rollout, SDKValidationError> {
+): SafeParseResult<GetRemoteOperatorProjectSummaryRollout, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Rollout$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Rollout' from JSON`,
+    (x) =>
+      GetRemoteOperatorProjectSummaryRollout$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetRemoteOperatorProjectSummaryRollout' from JSON`,
   );
 }
 
@@ -1215,7 +1219,9 @@ export const ReleaseData$inboundSchema: z.ZodType<ReleaseData, unknown> = z
     reported: z.array(z.lazy(() => ReleaseReported$inboundSchema)),
     older: z.int(),
     unknown: z.int(),
-    rollout: z.array(z.lazy(() => Rollout$inboundSchema)),
+    rollout: z.array(
+      z.lazy(() => GetRemoteOperatorProjectSummaryRollout$inboundSchema),
+    ),
   });
 
 export function releaseDataFromJSON(

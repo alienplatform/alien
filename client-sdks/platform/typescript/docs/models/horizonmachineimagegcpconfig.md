@@ -1,6 +1,6 @@
 # HorizonMachineImageGcpConfig
 
-GCP Horizon machine image catalog.
+GCP machine image catalog.
 
 ## Example Usage
 

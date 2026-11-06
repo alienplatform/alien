@@ -1,6 +1,6 @@
 # DeploymentConfigBaseImage
 
-Base image metadata for the Horizon machine image.
+Base image metadata for the machine image.
 
 ## Example Usage
 

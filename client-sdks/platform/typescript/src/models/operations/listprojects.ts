@@ -19,6 +19,7 @@ export type ListProjectsGlobals = {
 export const ListProjectsInclude = {
   DeploymentCount: "deploymentCount",
   LatestRelease: "latestRelease",
+  Health: "health",
 } as const;
 export type ListProjectsInclude = ClosedEnum<typeof ListProjectsInclude>;
 
@@ -28,7 +29,7 @@ export type ListProjectsRequest = {
    */
   search?: string | undefined;
   /**
-   * Optional fields to include: deploymentCount, latestRelease
+   * Optional fields to include: deploymentCount, latestRelease, health
    */
   include?: Array<ListProjectsInclude> | undefined;
   /**

@@ -6,10 +6,10 @@
 import { CommandListItemResponse } from "@alienplatform/platform-api/models";
 
 let value: CommandListItemResponse = {
-  id: "cmd_2sxjXxvOYct7IohT3ukliAzf",
-  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-  projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  workspaceId: "ws_It13CUaGEhLLAB87simX0",
+  id: "cmd_2sxjXxvOYct7IohT3ukliAzf7Nzb",
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+  projectId: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
+  workspaceId: "ws_It13CUaGEhLLAB87simX07Xb",
   name: "<value>",
   state: "EXPIRED",
   deploymentModel: "push",
@@ -33,12 +33,12 @@ let value: CommandListItemResponse = {
     reason: null,
   },
   deployment: {
-    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
     name: "<value>",
     managerId: "<id>",
   },
   project: {
-    id: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    id: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
     name: "<value>",
   },
 };
@@ -48,10 +48,10 @@ let value: CommandListItemResponse = {
 
 | Field                                                                                                      | Type                                                                                                       | Required                                                                                                   | Description                                                                                                | Example                                                                                                    |
 | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `id`                                                                                                       | *string*                                                                                                   | :heavy_check_mark:                                                                                         | Unique identifier for the command.                                                                         | cmd_2sxjXxvOYct7IohT3ukliAzf                                                                               |
-| `deploymentId`                                                                                             | *string*                                                                                                   | :heavy_check_mark:                                                                                         | Unique identifier for the deployment.                                                                      | dep_0c29fq4a2yjb7kx3smwdgxlc                                                                               |
-| `projectId`                                                                                                | *string*                                                                                                   | :heavy_check_mark:                                                                                         | Unique identifier for the project.                                                                         | prj_mcytp6z3j91f7tn5ryqsfwtr                                                                               |
-| `workspaceId`                                                                                              | *string*                                                                                                   | :heavy_check_mark:                                                                                         | Unique identifier for the workspace.                                                                       | ws_It13CUaGEhLLAB87simX0                                                                                   |
+| `id`                                                                                                       | *string*                                                                                                   | :heavy_check_mark:                                                                                         | Unique identifier for the command.                                                                         | cmd_2sxjXxvOYct7IohT3ukliAzf7Nzb                                                                           |
+| `deploymentId`                                                                                             | *string*                                                                                                   | :heavy_check_mark:                                                                                         | Unique identifier for the deployment.                                                                      | dep_0c29fq4a2yjb7kx3smwdgxlcxd7f                                                                           |
+| `projectId`                                                                                                | *string*                                                                                                   | :heavy_check_mark:                                                                                         | Unique identifier for the project.                                                                         | prj_mcytp6z3j91f7tn5ryqsfwtrdqkv                                                                           |
+| `workspaceId`                                                                                              | *string*                                                                                                   | :heavy_check_mark:                                                                                         | Unique identifier for the workspace.                                                                       | ws_It13CUaGEhLLAB87simX07Xb                                                                                |
 | `name`                                                                                                     | *string*                                                                                                   | :heavy_check_mark:                                                                                         | Command name (e.g., 'analyze-repository', 'sync-data')                                                     |                                                                                                            |
 | `state`                                                                                                    | [models.CommandListItemResponseState](../models/commandlistitemresponsestate.md)                           | :heavy_check_mark:                                                                                         | Command states in the Commands protocol lifecycle                                                          |                                                                                                            |
 | `deploymentModel`                                                                                          | [models.CommandListItemResponseDeploymentModel](../models/commandlistitemresponsedeploymentmodel.md)       | :heavy_check_mark:                                                                                         | Delivery mode for this command (push/pull), derived from the target at creation time                       |                                                                                                            |

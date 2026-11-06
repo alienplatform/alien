@@ -7,9 +7,9 @@ import { DeploymentPortalDomainResponse } from "@alienplatform/platform-api/mode
 
 let value: DeploymentPortalDomainResponse = {
   deploymentPortalEndpoint: {
-    id: "dend_1bb6gdvm1bs74acqkjstcgv",
-    workspaceId: "ws_It13CUaGEhLLAB87simX0",
-    domainId: "dom_469m0agk8luj4s16sakmmpdd",
+    id: "dend_1bb6gdvm1bs74acqkjstcgvxnc82",
+    workspaceId: "ws_It13CUaGEhLLAB87simX07Xb",
+    domainId: "dom_469m0agk8luj4s16sakmmpddz07x",
     kind: "workspace_packages",
     owner: {
       type: "manager",
@@ -29,9 +29,9 @@ let value: DeploymentPortalDomainResponse = {
     updatedAt: new Date("2025-01-30T06:43:41.751Z"),
   },
   packageEndpoint: {
-    id: "dend_1bb6gdvm1bs74acqkjstcgv",
-    workspaceId: "ws_It13CUaGEhLLAB87simX0",
-    domainId: "dom_469m0agk8luj4s16sakmmpdd",
+    id: "dend_1bb6gdvm1bs74acqkjstcgvxnc82",
+    workspaceId: "ws_It13CUaGEhLLAB87simX07Xb",
+    domainId: "dom_469m0agk8luj4s16sakmmpddz07x",
     kind: "manager_api",
     owner: {
       type: "manager",

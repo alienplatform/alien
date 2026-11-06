@@ -40,6 +40,7 @@ export type DeploymentInstallationTerraform = {
 
 export type DeploymentInstallationHelm = {
   command: string;
+  upgradeCommand?: string | undefined;
   managerUrl: string;
   values?: string | undefined;
 };
@@ -86,6 +87,7 @@ export type DeploymentInstallation = {
   region?: string | undefined;
   stackName?: string | undefined;
   launchUrl?: string | undefined;
+  verifyCommand?: string | undefined;
   terraform?: DeploymentInstallationTerraform | undefined;
   helm?: DeploymentInstallationHelm | undefined;
   cli?: DeploymentInstallationCli | undefined;
@@ -129,6 +131,7 @@ export const DeploymentInstallationHelm$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   command: z.string(),
+  upgradeCommand: z.string().optional(),
   managerUrl: z.string(),
   values: z.string().optional(),
 });
@@ -274,6 +277,7 @@ export const DeploymentInstallation$inboundSchema: z.ZodType<
   region: z.string().optional(),
   stackName: z.string().optional(),
   launchUrl: z.string().optional(),
+  verifyCommand: z.string().optional(),
   terraform: z.lazy(() => DeploymentInstallationTerraform$inboundSchema)
     .optional(),
   helm: z.lazy(() => DeploymentInstallationHelm$inboundSchema).optional(),

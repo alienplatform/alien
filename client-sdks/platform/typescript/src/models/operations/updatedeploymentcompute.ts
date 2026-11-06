@@ -27,17 +27,19 @@ export type UpdateDeploymentComputeRequest = {
     | undefined;
 };
 
-export const Outcome = {
+export const UpdateDeploymentComputeOutcome = {
   Accepted: "accepted",
   Unchanged: "unchanged",
 } as const;
-export type Outcome = ClosedEnum<typeof Outcome>;
+export type UpdateDeploymentComputeOutcome = ClosedEnum<
+  typeof UpdateDeploymentComputeOutcome
+>;
 
 /**
  * Compute settings saved or already current.
  */
 export type UpdateDeploymentComputeResponse = {
-  outcome: Outcome;
+  outcome: UpdateDeploymentComputeOutcome;
   operation: models.DeploymentUpdateOperationSummary | null;
 };
 
@@ -74,14 +76,16 @@ export function updateDeploymentComputeRequestToJSON(
 }
 
 /** @internal */
-export const Outcome$inboundSchema: z.ZodEnum<typeof Outcome> = z.enum(Outcome);
+export const UpdateDeploymentComputeOutcome$inboundSchema: z.ZodEnum<
+  typeof UpdateDeploymentComputeOutcome
+> = z.enum(UpdateDeploymentComputeOutcome);
 
 /** @internal */
 export const UpdateDeploymentComputeResponse$inboundSchema: z.ZodType<
   UpdateDeploymentComputeResponse,
   unknown
 > = z.object({
-  outcome: Outcome$inboundSchema,
+  outcome: UpdateDeploymentComputeOutcome$inboundSchema,
   operation: z.nullable(models.DeploymentUpdateOperationSummary$inboundSchema),
 });
 

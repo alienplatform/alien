@@ -9,13 +9,13 @@ import { DeploymentConfigCustomDomains } from "@alienplatform/platform-api/model
 
 let value: DeploymentConfigCustomDomains = {
   certificate: {},
-  domain: "animated-produce.com",
 };
 ```
 
 ## Fields
 
-| Field                                                                                        | Type                                                                                         | Required                                                                                     | Description                                                                                  |
-| -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `certificate`                                                                                | [models.DeploymentConfigDomainsCertificate](../models/deploymentconfigdomainscertificate.md) | :heavy_check_mark:                                                                           | Platform-specific certificate references for custom domains.                                 |
-| `domain`                                                                                     | *string*                                                                                     | :heavy_check_mark:                                                                           | Fully qualified domain name to use.                                                          |
+| Field                                                                          | Type                                                                           | Required                                                                       | Description                                                                    |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| `certificate`                                                                  | [models.DeploymentConfigCertificate](../models/deploymentconfigcertificate.md) | :heavy_check_mark:                                                             | Platform-specific certificate references for custom domains.                   |
+| `domain`                                                                       | *string*                                                                       | :heavy_minus_sign:                                                             | Fully qualified domain name for a supplied certificate.                        |
+| `endpoints`                                                                    | Record<string, *string*>                                                       | :heavy_minus_sign:                                                             | Hostnames keyed by endpoint name for a managed certificate.                    |

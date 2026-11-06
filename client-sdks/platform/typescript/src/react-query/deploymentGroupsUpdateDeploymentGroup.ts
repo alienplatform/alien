@@ -36,7 +36,7 @@ export type DeploymentGroupsUpdateDeploymentGroupMutationVariables = {
 };
 
 export type DeploymentGroupsUpdateDeploymentGroupMutationData =
-  models.DeploymentGroup;
+  models.UpdateDeploymentGroupResponse;
 
 export type DeploymentGroupsUpdateDeploymentGroupMutationError =
   | errors.APIError

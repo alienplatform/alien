@@ -20,6 +20,10 @@ export type DeploymentGroupInfo = {
    * Case-sensitive, URL- and header-safe identifier from the integrating application.
    */
   externalId: string | null;
+  /**
+   * Total deployments visible to the caller in this customer, independent of pagination and search
+   */
+  deploymentCount?: number | undefined;
 };
 
 /** @internal */
@@ -30,6 +34,7 @@ export const DeploymentGroupInfo$inboundSchema: z.ZodType<
   id: z.string(),
   name: z.string(),
   externalId: z.nullable(z.string()),
+  deploymentCount: z.int().optional(),
 });
 
 export function deploymentGroupInfoFromJSON(

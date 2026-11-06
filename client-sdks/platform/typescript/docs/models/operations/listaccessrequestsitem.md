@@ -15,7 +15,7 @@ let value: ListAccessRequestsItem = {
     id: "<id>",
     name: "<value>",
     deploymentGroup: {
-      id: "dg_r27ict8c7vcgsumpj90ackf7b",
+      id: "dg_r27ict8c7vcgsumpj90ackf7bnwt",
       name: "prod-us-east-1",
       externalId: "ext_example_01",
     },

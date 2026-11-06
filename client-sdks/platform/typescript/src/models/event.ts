@@ -11,6 +11,34 @@ import {
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import {
+  CloudAccountAssignedEvent,
+  CloudAccountAssignedEvent$inboundSchema,
+} from "./cloudaccountassignedevent.js";
+import {
+  CloudAccountClosureRequestedEvent,
+  CloudAccountClosureRequestedEvent$inboundSchema,
+} from "./cloudaccountclosurerequestedevent.js";
+import {
+  CloudAccountComputeCleanupRequestedEvent,
+  CloudAccountComputeCleanupRequestedEvent$inboundSchema,
+} from "./cloudaccountcomputecleanuprequestedevent.js";
+import {
+  CloudAccountRequestedEvent,
+  CloudAccountRequestedEvent$inboundSchema,
+} from "./cloudaccountrequestedevent.js";
+import {
+  CloudAccountSetupCleanupRequestedEvent,
+  CloudAccountSetupCleanupRequestedEvent$inboundSchema,
+} from "./cloudaccountsetupcleanuprequestedevent.js";
+import {
+  DeploymentAirgappedBundleDownloadedEvent,
+  DeploymentAirgappedBundleDownloadedEvent$inboundSchema,
+} from "./deploymentairgappedbundledownloadedevent.js";
+import {
+  DeploymentAirgappedReportReceivedEvent,
+  DeploymentAirgappedReportReceivedEvent$inboundSchema,
+} from "./deploymentairgappedreportreceivedevent.js";
+import {
   DeploymentCheckRequestedEvent,
   DeploymentCheckRequestedEvent$inboundSchema,
 } from "./deploymentcheckrequestedevent.js";
@@ -26,7 +54,15 @@ import {
   DeploymentGroupMovedEvent,
   DeploymentGroupMovedEvent$inboundSchema,
 } from "./deploymentgroupmovedevent.js";
+import {
+  DeploymentSetupComputeIgnoredEvent,
+  DeploymentSetupComputeIgnoredEvent$inboundSchema,
+} from "./deploymentsetupcomputeignoredevent.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  ProjectFeatureChangedEvent,
+  ProjectFeatureChangedEvent$inboundSchema,
+} from "./projectfeaturechangedevent.js";
 
 export type EventDataDeploymentDeletionRequested = {
   /**
@@ -1415,6 +1451,15 @@ export type EventResources = {
   displayName?: string | null | undefined;
   error?: EventErrorNextState | string | null | undefined;
   /**
+   * Whether this resource was adopted from an external binding instead of provisioned.
+   *
+   * @remarks
+   * The binding may exist only where the adopting executor ran (a Helm value or a
+   * chart-created database), so the record carries it: deleting the resource releases it
+   * and never touches what the binding points at.
+   */
+  externalBinding?: boolean | undefined;
+  /**
    * Stores the controller state that failed, used for manual retry operations.
    *
    * @remarks
@@ -1636,7 +1681,16 @@ export type EventDataLoadingConfiguration = {
 };
 
 export type EventDataUnion =
+  | ProjectFeatureChangedEvent
+  | DeploymentAirgappedBundleDownloadedEvent
+  | DeploymentAirgappedReportReceivedEvent
   | DeploymentCheckRequestedEvent
+  | DeploymentSetupComputeIgnoredEvent
+  | CloudAccountComputeCleanupRequestedEvent
+  | CloudAccountSetupCleanupRequestedEvent
+  | CloudAccountClosureRequestedEvent
+  | CloudAccountAssignedEvent
+  | CloudAccountRequestedEvent
   | DeploymentEndpointHealthChangedEvent
   | DeploymentGroupMovedEvent
   | EventDataLoadingConfiguration
@@ -1832,7 +1886,16 @@ export type Event = {
    */
   debugSessionId?: string | null | undefined;
   data:
+    | ProjectFeatureChangedEvent
+    | DeploymentAirgappedBundleDownloadedEvent
+    | DeploymentAirgappedReportReceivedEvent
     | DeploymentCheckRequestedEvent
+    | DeploymentSetupComputeIgnoredEvent
+    | CloudAccountComputeCleanupRequestedEvent
+    | CloudAccountSetupCleanupRequestedEvent
+    | CloudAccountClosureRequestedEvent
+    | CloudAccountAssignedEvent
+    | CloudAccountRequestedEvent
     | DeploymentEndpointHealthChangedEvent
     | DeploymentGroupMovedEvent
     | EventDataLoadingConfiguration
@@ -3492,6 +3555,7 @@ export const EventResources$inboundSchema: z.ZodType<EventResources, unknown> =
     error: z.nullable(
       z.union([z.lazy(() => EventErrorNextState$inboundSchema), z.string()]),
     ).optional(),
+    externalBinding: z.boolean().optional(),
     lastFailedState: z.nullable(z.any()).optional(),
     lifecycle: z.nullable(
       z.union([EventLifecycleEnum$inboundSchema, z.string()]),
@@ -3838,7 +3902,16 @@ export function eventDataLoadingConfigurationFromJSON(
 /** @internal */
 export const EventDataUnion$inboundSchema: z.ZodType<EventDataUnion, unknown> =
   z.union([
+    ProjectFeatureChangedEvent$inboundSchema,
+    DeploymentAirgappedBundleDownloadedEvent$inboundSchema,
+    DeploymentAirgappedReportReceivedEvent$inboundSchema,
     DeploymentCheckRequestedEvent$inboundSchema,
+    DeploymentSetupComputeIgnoredEvent$inboundSchema,
+    CloudAccountComputeCleanupRequestedEvent$inboundSchema,
+    CloudAccountSetupCleanupRequestedEvent$inboundSchema,
+    CloudAccountClosureRequestedEvent$inboundSchema,
+    CloudAccountAssignedEvent$inboundSchema,
+    CloudAccountRequestedEvent$inboundSchema,
     DeploymentEndpointHealthChangedEvent$inboundSchema,
     DeploymentGroupMovedEvent$inboundSchema,
     z.lazy(() => EventDataLoadingConfiguration$inboundSchema),
@@ -4018,7 +4091,16 @@ export const Event$inboundSchema: z.ZodType<Event, unknown> = z.object({
   releaseId: z.nullable(z.string()).optional(),
   debugSessionId: z.nullable(z.string()).optional(),
   data: z.union([
+    ProjectFeatureChangedEvent$inboundSchema,
+    DeploymentAirgappedBundleDownloadedEvent$inboundSchema,
+    DeploymentAirgappedReportReceivedEvent$inboundSchema,
     DeploymentCheckRequestedEvent$inboundSchema,
+    DeploymentSetupComputeIgnoredEvent$inboundSchema,
+    CloudAccountComputeCleanupRequestedEvent$inboundSchema,
+    CloudAccountSetupCleanupRequestedEvent$inboundSchema,
+    CloudAccountClosureRequestedEvent$inboundSchema,
+    CloudAccountAssignedEvent$inboundSchema,
+    CloudAccountRequestedEvent$inboundSchema,
     DeploymentEndpointHealthChangedEvent$inboundSchema,
     DeploymentGroupMovedEvent$inboundSchema,
     z.lazy(() => EventDataLoadingConfiguration$inboundSchema),

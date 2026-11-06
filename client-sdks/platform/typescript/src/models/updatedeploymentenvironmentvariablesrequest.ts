@@ -25,9 +25,9 @@ export type UpdateDeploymentEnvironmentVariablesRequestVariable = {
    */
   name: string;
   /**
-   * Variable value
+   * New variable value. Omit to keep the stored value of an existing variable with the same name.
    */
-  value: string;
+  value?: string | undefined;
   /**
    * Variable type
    */
@@ -57,7 +57,7 @@ export const UpdateDeploymentEnvironmentVariablesRequestType$outboundSchema:
 /** @internal */
 export type UpdateDeploymentEnvironmentVariablesRequestVariable$Outbound = {
   name: string;
-  value: string;
+  value?: string | undefined;
   type: string;
   targetResources?: Array<string> | null | undefined;
 };
@@ -69,7 +69,7 @@ export const UpdateDeploymentEnvironmentVariablesRequestVariable$outboundSchema:
     UpdateDeploymentEnvironmentVariablesRequestVariable
   > = z.object({
     name: z.string(),
-    value: z.string(),
+    value: z.string().optional(),
     type: UpdateDeploymentEnvironmentVariablesRequestType$outboundSchema,
     targetResources: z.nullable(z.array(z.string())).optional(),
   });

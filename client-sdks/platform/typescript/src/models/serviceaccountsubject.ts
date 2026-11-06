@@ -5,6 +5,10 @@
 import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
+import {
+  ApplicationRole,
+  ApplicationRole$inboundSchema,
+} from "./applicationrole.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import { Role, Role$inboundSchema } from "./role.js";
 import { SubjectScope, SubjectScope$inboundSchema } from "./subjectscope.js";
@@ -37,6 +41,10 @@ export type ServiceAccountSubject = {
    * Role defining what actions this service account can perform within its scope
    */
   role: Role;
+  /**
+   * Application roles a project key holds beside `role`
+   */
+  additionalRoles?: Array<ApplicationRole> | undefined;
 };
 
 /** @internal */
@@ -50,6 +58,7 @@ export const ServiceAccountSubject$inboundSchema: z.ZodType<
   workspaceName: z.string().optional(),
   scope: SubjectScope$inboundSchema,
   role: Role$inboundSchema,
+  additionalRoles: z.array(ApplicationRole$inboundSchema).optional(),
 });
 
 export function serviceAccountSubjectFromJSON(

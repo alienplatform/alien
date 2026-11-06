@@ -10,6 +10,26 @@ import {
   ExternalBindingUnion$Outbound,
   ExternalBindingUnion$outboundSchema,
 } from "./externalbindingunion.js";
+import {
+  KubernetesExposureCustom,
+  KubernetesExposureCustom$Outbound,
+  KubernetesExposureCustom$outboundSchema,
+} from "./kubernetesexposurecustom.js";
+import {
+  KubernetesExposureCustomBaseDomain,
+  KubernetesExposureCustomBaseDomain$Outbound,
+  KubernetesExposureCustomBaseDomain$outboundSchema,
+} from "./kubernetesexposurecustombasedomain.js";
+import {
+  KubernetesExposureDisabled,
+  KubernetesExposureDisabled$Outbound,
+  KubernetesExposureDisabled$outboundSchema,
+} from "./kubernetesexposuredisabled.js";
+import {
+  KubernetesExposureGenerated,
+  KubernetesExposureGenerated$Outbound,
+  KubernetesExposureGenerated$outboundSchema,
+} from "./kubernetesexposuregenerated.js";
 
 /**
  * Deployment-time resource allocation for a container. Omitted fields use release defaults.
@@ -54,6 +74,13 @@ export type StackSettingsFailureDomainsUnion2 =
   | string;
 
 export type StackSettingsPoolsAutoscale = {
+  /**
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
+   */
+  dataDiskGib?: number | null | undefined;
   failureDomains?: StackSettingsFailureDomains2 | string | null | undefined;
   /**
    * Provider machine type selected for this deployment.
@@ -92,6 +119,13 @@ export type StackSettingsFailureDomainsUnion1 =
   | string;
 
 export type StackSettingsPoolsFixed = {
+  /**
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
+   */
+  dataDiskGib?: number | null | undefined;
   failureDomains?: StackSettingsFailureDomains1 | string | null | undefined;
   /**
    * Provider machine type selected for this deployment.
@@ -194,13 +228,21 @@ export type StackSettingsDomainsKubernetesUnion =
   | string;
 
 /**
+ * Managed certificate issuance settings.
+ */
+export type StackSettingsManaged = {};
+
+export type StackSettingsManagedUnion = StackSettingsManaged | string;
+
+/**
  * Platform-specific certificate references for custom domains.
  */
-export type StackSettingsDomainsCertificate = {
+export type StackSettingsCertificate = {
   aws?: StackSettingsAws | string | null | undefined;
   azure?: StackSettingsAzure | string | null | undefined;
   gcp?: StackSettingsGcp | string | null | undefined;
   kubernetes?: StackSettingsDomainsKubernetes | string | null | undefined;
+  managed?: StackSettingsManaged | string | null | undefined;
 };
 
 /**
@@ -210,11 +252,15 @@ export type StackSettingsCustomDomains = {
   /**
    * Platform-specific certificate references for custom domains.
    */
-  certificate: StackSettingsDomainsCertificate;
+  certificate: StackSettingsCertificate;
   /**
-   * Fully qualified domain name to use.
+   * Fully qualified domain name for a supplied certificate.
    */
-  domain: string;
+  domain?: string | undefined;
+  /**
+   * Hostnames keyed by endpoint name for a managed certificate.
+   */
+  endpoints?: { [k: string]: string } | undefined;
 };
 
 export const StackSettingsModeLoadBalancer = {
@@ -254,7 +300,7 @@ export type StackSettingsPublicEndpointTargetUnion =
  * @remarks
  *
  * When `custom_domains` is set, the specified resources use customer-provided
- * domains and certificates. Otherwise, Alien auto-generates domains.
+ * domains with supplied or managed certificates. Otherwise, Alien auto-generates domains.
  */
 export type StackSettingsDomains = {
   /**
@@ -347,617 +393,11 @@ export type StackSettingsCluster = {
 
 export type StackSettingsClusterUnion = StackSettingsCluster | string;
 
-export type StackSettingsCertificateNone2 = {
-  mode: "none";
-};
-
-export type StackSettingsCertificateManagedTLSSecret2 = {
-  mode: "managedTlsSecret";
-  /**
-   * Secret name template. Runtime may substitute resource/deployment tokens.
-   */
-  secretNameTemplate: string;
-};
-
-export type StackSettingsCertificateAwsAcmArn2 = {
-  /**
-   * Existing ACM certificate ARN.
-   */
-  certificateArn: string;
-  mode: "awsAcmArn";
-};
-
-export type StackSettingsCertificateManagedAcmImport2 = {
-  mode: "managedAcmImport";
-  /**
-   * ACM region. Defaults to the deployment region when omitted.
-   */
-  region?: string | null | undefined;
-  /**
-   * Tags applied to runtime-imported ACM certificates.
-   */
-  tags?: { [k: string]: string } | undefined;
-};
-
-/**
- * Namespace-scoped Kubernetes TLS Secret reference.
- */
-export type StackSettingsCertificateTLSSecretRef2 = {
-  /**
-   * Secret namespace. Defaults to the release namespace when omitted.
-   */
-  namespace?: string | null | undefined;
-  /**
-   * Secret name.
-   */
-  secretName: string;
-  mode: "tlsSecretRef";
-};
-
-/**
- * Certificate publication or reference mode for Kubernetes public endpoints.
- */
-export type StackSettingsCertificateUnion2 =
-  | StackSettingsCertificateTLSSecretRef2
-  | StackSettingsCertificateManagedAcmImport2
-  | StackSettingsCertificateAwsAcmArn2
-  | StackSettingsCertificateManagedTLSSecret2
-  | StackSettingsCertificateNone2;
-
-export const StackSettingsModeCustom = {
-  Custom: "custom",
-} as const;
-export type StackSettingsModeCustom = ClosedEnum<
-  typeof StackSettingsModeCustom
->;
-
-export const StackSettingsProviderAzureApplicationGatewayForContainersEnum4 = {
-  AzureApplicationGatewayForContainers: "azureApplicationGatewayForContainers",
-} as const;
-export type StackSettingsProviderAzureApplicationGatewayForContainersEnum4 =
-  ClosedEnum<
-    typeof StackSettingsProviderAzureApplicationGatewayForContainersEnum4
-  >;
-
-export type StackSettingsProviderAzureApplicationGatewayForContainers4 = {
-  /**
-   * Optional ALB name when using BYO Application Gateway resources.
-   */
-  albName?: string | null | undefined;
-  /**
-   * Optional ALB namespace when using BYO Application Gateway resources.
-   */
-  albNamespace?: string | null | undefined;
-  /**
-   * Public or internal frontend exposure.
-   */
-  frontend: string;
-  provider: StackSettingsProviderAzureApplicationGatewayForContainersEnum4;
-};
-
-export const StackSettingsProviderGkeGatewayEnum4 = {
-  GkeGateway: "gkeGateway",
-} as const;
-export type StackSettingsProviderGkeGatewayEnum4 = ClosedEnum<
-  typeof StackSettingsProviderGkeGatewayEnum4
->;
-
-export type StackSettingsProviderGkeGateway4 = {
-  provider: StackSettingsProviderGkeGatewayEnum4;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const StackSettingsProviderAwsAlbEnum4 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type StackSettingsProviderAwsAlbEnum4 = ClosedEnum<
-  typeof StackSettingsProviderAwsAlbEnum4
->;
-
-export type StackSettingsProviderAwsAlb4 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: StackSettingsProviderAwsAlbEnum4;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type StackSettingsProviderUnion4 =
-  | StackSettingsProviderAwsAlb4
-  | StackSettingsProviderAzureApplicationGatewayForContainers4
-  | StackSettingsProviderGkeGateway4
-  | string;
-
-/**
- * Shared Gateway API route profile values.
- */
-export type StackSettingsRouteGateway2 = {
-  /**
-   * Annotations applied to route objects.
-   */
-  annotations?: { [k: string]: string } | undefined;
-  /**
-   * Route controller identifier, for example a cloud Gateway controller.
-   */
-  controller?: string | null | undefined;
-  /**
-   * GatewayClass selected for generated Gateways.
-   */
-  gatewayClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  /**
-   * Listener port, usually 443.
-   */
-  listenerPort: number;
-  provider?:
-    | StackSettingsProviderAwsAlb4
-    | StackSettingsProviderAzureApplicationGatewayForContainers4
-    | StackSettingsProviderGkeGateway4
-    | string
-    | null
-    | undefined;
-  routeApi: "gateway";
-};
-
-export const StackSettingsProviderAzureApplicationGatewayForContainersEnum3 = {
-  AzureApplicationGatewayForContainers: "azureApplicationGatewayForContainers",
-} as const;
-export type StackSettingsProviderAzureApplicationGatewayForContainersEnum3 =
-  ClosedEnum<
-    typeof StackSettingsProviderAzureApplicationGatewayForContainersEnum3
-  >;
-
-export type StackSettingsProviderAzureApplicationGatewayForContainers3 = {
-  /**
-   * Optional ALB name when using BYO Application Gateway resources.
-   */
-  albName?: string | null | undefined;
-  /**
-   * Optional ALB namespace when using BYO Application Gateway resources.
-   */
-  albNamespace?: string | null | undefined;
-  /**
-   * Public or internal frontend exposure.
-   */
-  frontend: string;
-  provider: StackSettingsProviderAzureApplicationGatewayForContainersEnum3;
-};
-
-export const StackSettingsProviderGkeGatewayEnum3 = {
-  GkeGateway: "gkeGateway",
-} as const;
-export type StackSettingsProviderGkeGatewayEnum3 = ClosedEnum<
-  typeof StackSettingsProviderGkeGatewayEnum3
->;
-
-export type StackSettingsProviderGkeGateway3 = {
-  provider: StackSettingsProviderGkeGatewayEnum3;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const StackSettingsProviderAwsAlbEnum3 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type StackSettingsProviderAwsAlbEnum3 = ClosedEnum<
-  typeof StackSettingsProviderAwsAlbEnum3
->;
-
-export type StackSettingsProviderAwsAlb3 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: StackSettingsProviderAwsAlbEnum3;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type StackSettingsProviderUnion3 =
-  | StackSettingsProviderAwsAlb3
-  | StackSettingsProviderAzureApplicationGatewayForContainers3
-  | StackSettingsProviderGkeGateway3
-  | string;
-
-/**
- * Shared Ingress route profile values.
- */
-export type StackSettingsRouteIngress2 = {
-  /**
-   * Annotations applied to route objects.
-   */
-  annotations?: { [k: string]: string } | undefined;
-  /**
-   * Route controller identifier, for example `eks.amazonaws.com/alb`.
-   */
-  controller?: string | null | undefined;
-  /**
-   * `spec.ingressClassName` for generated Ingresses.
-   */
-  ingressClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  provider?:
-    | StackSettingsProviderAwsAlb3
-    | StackSettingsProviderAzureApplicationGatewayForContainers3
-    | StackSettingsProviderGkeGateway3
-    | string
-    | null
-    | undefined;
-  routeApi: "ingress";
-};
-
-/**
- * Kubernetes route API selected for public endpoints.
- */
-export type StackSettingsRouteUnion2 =
-  | StackSettingsRouteIngress2
-  | StackSettingsRouteGateway2;
-
-export type StackSettingsExposureCustom = {
-  /**
-   * Certificate publication or reference mode for Kubernetes public endpoints.
-   */
-  certificate:
-    | StackSettingsCertificateTLSSecretRef2
-    | StackSettingsCertificateManagedAcmImport2
-    | StackSettingsCertificateAwsAcmArn2
-    | StackSettingsCertificateManagedTLSSecret2
-    | StackSettingsCertificateNone2;
-  /**
-   * Hostname routed by the Kubernetes public endpoint.
-   */
-  domain: string;
-  mode: StackSettingsModeCustom;
-  /**
-   * Kubernetes route API selected for public endpoints.
-   */
-  route: StackSettingsRouteIngress2 | StackSettingsRouteGateway2;
-};
-
-export type StackSettingsCertificateNone1 = {
-  mode: "none";
-};
-
-export type StackSettingsCertificateManagedTLSSecret1 = {
-  mode: "managedTlsSecret";
-  /**
-   * Secret name template. Runtime may substitute resource/deployment tokens.
-   */
-  secretNameTemplate: string;
-};
-
-export type StackSettingsCertificateAwsAcmArn1 = {
-  /**
-   * Existing ACM certificate ARN.
-   */
-  certificateArn: string;
-  mode: "awsAcmArn";
-};
-
-export type StackSettingsCertificateManagedAcmImport1 = {
-  mode: "managedAcmImport";
-  /**
-   * ACM region. Defaults to the deployment region when omitted.
-   */
-  region?: string | null | undefined;
-  /**
-   * Tags applied to runtime-imported ACM certificates.
-   */
-  tags?: { [k: string]: string } | undefined;
-};
-
-/**
- * Namespace-scoped Kubernetes TLS Secret reference.
- */
-export type StackSettingsCertificateTLSSecretRef1 = {
-  /**
-   * Secret namespace. Defaults to the release namespace when omitted.
-   */
-  namespace?: string | null | undefined;
-  /**
-   * Secret name.
-   */
-  secretName: string;
-  mode: "tlsSecretRef";
-};
-
-/**
- * Certificate publication or reference mode for Kubernetes public endpoints.
- */
-export type StackSettingsCertificateUnion1 =
-  | StackSettingsCertificateTLSSecretRef1
-  | StackSettingsCertificateManagedAcmImport1
-  | StackSettingsCertificateAwsAcmArn1
-  | StackSettingsCertificateManagedTLSSecret1
-  | StackSettingsCertificateNone1;
-
-export const StackSettingsModeGenerated = {
-  Generated: "generated",
-} as const;
-export type StackSettingsModeGenerated = ClosedEnum<
-  typeof StackSettingsModeGenerated
->;
-
-export const StackSettingsProviderAzureApplicationGatewayForContainersEnum2 = {
-  AzureApplicationGatewayForContainers: "azureApplicationGatewayForContainers",
-} as const;
-export type StackSettingsProviderAzureApplicationGatewayForContainersEnum2 =
-  ClosedEnum<
-    typeof StackSettingsProviderAzureApplicationGatewayForContainersEnum2
-  >;
-
-export type StackSettingsProviderAzureApplicationGatewayForContainers2 = {
-  /**
-   * Optional ALB name when using BYO Application Gateway resources.
-   */
-  albName?: string | null | undefined;
-  /**
-   * Optional ALB namespace when using BYO Application Gateway resources.
-   */
-  albNamespace?: string | null | undefined;
-  /**
-   * Public or internal frontend exposure.
-   */
-  frontend: string;
-  provider: StackSettingsProviderAzureApplicationGatewayForContainersEnum2;
-};
-
-export const StackSettingsProviderGkeGatewayEnum2 = {
-  GkeGateway: "gkeGateway",
-} as const;
-export type StackSettingsProviderGkeGatewayEnum2 = ClosedEnum<
-  typeof StackSettingsProviderGkeGatewayEnum2
->;
-
-export type StackSettingsProviderGkeGateway2 = {
-  provider: StackSettingsProviderGkeGatewayEnum2;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const StackSettingsProviderAwsAlbEnum2 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type StackSettingsProviderAwsAlbEnum2 = ClosedEnum<
-  typeof StackSettingsProviderAwsAlbEnum2
->;
-
-export type StackSettingsProviderAwsAlb2 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: StackSettingsProviderAwsAlbEnum2;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type StackSettingsProviderUnion2 =
-  | StackSettingsProviderAwsAlb2
-  | StackSettingsProviderAzureApplicationGatewayForContainers2
-  | StackSettingsProviderGkeGateway2
-  | string;
-
-/**
- * Shared Gateway API route profile values.
- */
-export type StackSettingsRouteGateway1 = {
-  /**
-   * Annotations applied to route objects.
-   */
-  annotations?: { [k: string]: string } | undefined;
-  /**
-   * Route controller identifier, for example a cloud Gateway controller.
-   */
-  controller?: string | null | undefined;
-  /**
-   * GatewayClass selected for generated Gateways.
-   */
-  gatewayClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  /**
-   * Listener port, usually 443.
-   */
-  listenerPort: number;
-  provider?:
-    | StackSettingsProviderAwsAlb2
-    | StackSettingsProviderAzureApplicationGatewayForContainers2
-    | StackSettingsProviderGkeGateway2
-    | string
-    | null
-    | undefined;
-  routeApi: "gateway";
-};
-
-export const StackSettingsProviderAzureApplicationGatewayForContainersEnum1 = {
-  AzureApplicationGatewayForContainers: "azureApplicationGatewayForContainers",
-} as const;
-export type StackSettingsProviderAzureApplicationGatewayForContainersEnum1 =
-  ClosedEnum<
-    typeof StackSettingsProviderAzureApplicationGatewayForContainersEnum1
-  >;
-
-export type StackSettingsProviderAzureApplicationGatewayForContainers1 = {
-  /**
-   * Optional ALB name when using BYO Application Gateway resources.
-   */
-  albName?: string | null | undefined;
-  /**
-   * Optional ALB namespace when using BYO Application Gateway resources.
-   */
-  albNamespace?: string | null | undefined;
-  /**
-   * Public or internal frontend exposure.
-   */
-  frontend: string;
-  provider: StackSettingsProviderAzureApplicationGatewayForContainersEnum1;
-};
-
-export const StackSettingsProviderGkeGatewayEnum1 = {
-  GkeGateway: "gkeGateway",
-} as const;
-export type StackSettingsProviderGkeGatewayEnum1 = ClosedEnum<
-  typeof StackSettingsProviderGkeGatewayEnum1
->;
-
-export type StackSettingsProviderGkeGateway1 = {
-  provider: StackSettingsProviderGkeGatewayEnum1;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const StackSettingsProviderAwsAlbEnum1 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type StackSettingsProviderAwsAlbEnum1 = ClosedEnum<
-  typeof StackSettingsProviderAwsAlbEnum1
->;
-
-export type StackSettingsProviderAwsAlb1 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: StackSettingsProviderAwsAlbEnum1;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type StackSettingsProviderUnion1 =
-  | StackSettingsProviderAwsAlb1
-  | StackSettingsProviderAzureApplicationGatewayForContainers1
-  | StackSettingsProviderGkeGateway1
-  | string;
-
-/**
- * Shared Ingress route profile values.
- */
-export type StackSettingsRouteIngress1 = {
-  /**
-   * Annotations applied to route objects.
-   */
-  annotations?: { [k: string]: string } | undefined;
-  /**
-   * Route controller identifier, for example `eks.amazonaws.com/alb`.
-   */
-  controller?: string | null | undefined;
-  /**
-   * `spec.ingressClassName` for generated Ingresses.
-   */
-  ingressClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  provider?:
-    | StackSettingsProviderAwsAlb1
-    | StackSettingsProviderAzureApplicationGatewayForContainers1
-    | StackSettingsProviderGkeGateway1
-    | string
-    | null
-    | undefined;
-  routeApi: "ingress";
-};
-
-/**
- * Kubernetes route API selected for public endpoints.
- */
-export type StackSettingsRouteUnion1 =
-  | StackSettingsRouteIngress1
-  | StackSettingsRouteGateway1;
-
-export type StackSettingsExposureGenerated = {
-  /**
-   * Certificate publication or reference mode for Kubernetes public endpoints.
-   */
-  certificate:
-    | StackSettingsCertificateTLSSecretRef1
-    | StackSettingsCertificateManagedAcmImport1
-    | StackSettingsCertificateAwsAcmArn1
-    | StackSettingsCertificateManagedTLSSecret1
-    | StackSettingsCertificateNone1;
-  mode: StackSettingsModeGenerated;
-  /**
-   * Kubernetes route API selected for public endpoints.
-   */
-  route: StackSettingsRouteIngress1 | StackSettingsRouteGateway1;
-};
-
-export const StackSettingsModeDisabled = {
-  Disabled: "disabled",
-} as const;
-export type StackSettingsModeDisabled = ClosedEnum<
-  typeof StackSettingsModeDisabled
->;
-
-export type StackSettingsExposureDisabled = {
-  mode: StackSettingsModeDisabled;
-};
-
-export type StackSettingsExposureUnion =
-  | StackSettingsExposureCustom
-  | StackSettingsExposureGenerated
-  | StackSettingsExposureDisabled
+export type StackSettingsExposure =
+  | KubernetesExposureCustom
+  | KubernetesExposureCustomBaseDomain
+  | KubernetesExposureGenerated
+  | KubernetesExposureDisabled
   | string;
 
 /**
@@ -973,9 +413,10 @@ export type StackSettingsExposureUnion =
 export type StackSettingsKubernetes = {
   cluster?: StackSettingsCluster | string | null | undefined;
   exposure?:
-    | StackSettingsExposureCustom
-    | StackSettingsExposureGenerated
-    | StackSettingsExposureDisabled
+    | KubernetesExposureCustom
+    | KubernetesExposureCustomBaseDomain
+    | KubernetesExposureGenerated
+    | KubernetesExposureDisabled
     | string
     | null
     | undefined;
@@ -1126,6 +567,34 @@ export type StackSettingsSetupManagement = ClosedEnum<
 >;
 
 /**
+ * What setup pins for a protected install.
+ *
+ * @remarks
+ *
+ * Take the values from the vendor's install guide or signed release, not from the
+ * control plane.
+ */
+export type StackSettingsSigning = {
+  /**
+   * Release channel the install follows, such as `production`.
+   */
+  channel: string;
+  /**
+   * `SHA256:<64 hex>` fingerprint of the vendor's signer list version 1.
+   */
+  fingerprint: string;
+  /**
+   * Customer setup pins this private instance machine endpoint and enables
+   *
+   * @remarks
+   * install-local input custody. It cannot be changed by the runtime role.
+   */
+  privateMachineApiUrl?: string | null | undefined;
+};
+
+export type StackSettingsSigningUnion = StackSettingsSigning | string;
+
+/**
  * How telemetry (logs, metrics, traces) is handled.
  */
 export const StackSettingsTelemetry = {
@@ -1163,6 +632,13 @@ export type StackSettingsUpdates = ClosedEnum<typeof StackSettingsUpdates>;
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type StackSettings = {
+  /**
+   * Deliver Kubernetes updates and reports as carried bundles instead of a live connection.
+   *
+   * @remarks
+   * The Operator still executes deployments with the pull model.
+   */
+  airgapped?: boolean | undefined;
   compute?: StackSettingsCompute | string | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
@@ -1210,6 +686,7 @@ export type StackSettings = {
    * Whether setup remains a separate administrator operation.
    */
   setupManagement?: StackSettingsSetupManagement | undefined;
+  signing?: StackSettingsSigning | string | null | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -1296,6 +773,7 @@ export function stackSettingsFailureDomainsUnion2ToJSON(
 
 /** @internal */
 export type StackSettingsPoolsAutoscale$Outbound = {
+  dataDiskGib?: number | null | undefined;
   failure_domains?:
     | StackSettingsFailureDomains2$Outbound
     | string
@@ -1312,6 +790,7 @@ export const StackSettingsPoolsAutoscale$outboundSchema: z.ZodType<
   StackSettingsPoolsAutoscale$Outbound,
   StackSettingsPoolsAutoscale
 > = z.object({
+  dataDiskGib: z.nullable(z.int()).optional(),
   failureDomains: z.nullable(
     z.union([
       z.lazy(() => StackSettingsFailureDomains2$outboundSchema),
@@ -1389,6 +868,7 @@ export function stackSettingsFailureDomainsUnion1ToJSON(
 
 /** @internal */
 export type StackSettingsPoolsFixed$Outbound = {
+  dataDiskGib?: number | null | undefined;
   failure_domains?:
     | StackSettingsFailureDomains1$Outbound
     | string
@@ -1404,6 +884,7 @@ export const StackSettingsPoolsFixed$outboundSchema: z.ZodType<
   StackSettingsPoolsFixed$Outbound,
   StackSettingsPoolsFixed
 > = z.object({
+  dataDiskGib: z.nullable(z.int()).optional(),
   failureDomains: z.nullable(
     z.union([
       z.lazy(() => StackSettingsFailureDomains1$outboundSchema),
@@ -1698,7 +1179,43 @@ export function stackSettingsDomainsKubernetesUnionToJSON(
 }
 
 /** @internal */
-export type StackSettingsDomainsCertificate$Outbound = {
+export type StackSettingsManaged$Outbound = {};
+
+/** @internal */
+export const StackSettingsManaged$outboundSchema: z.ZodType<
+  StackSettingsManaged$Outbound,
+  StackSettingsManaged
+> = z.object({});
+
+export function stackSettingsManagedToJSON(
+  stackSettingsManaged: StackSettingsManaged,
+): string {
+  return JSON.stringify(
+    StackSettingsManaged$outboundSchema.parse(stackSettingsManaged),
+  );
+}
+
+/** @internal */
+export type StackSettingsManagedUnion$Outbound =
+  | StackSettingsManaged$Outbound
+  | string;
+
+/** @internal */
+export const StackSettingsManagedUnion$outboundSchema: z.ZodType<
+  StackSettingsManagedUnion$Outbound,
+  StackSettingsManagedUnion
+> = z.union([z.lazy(() => StackSettingsManaged$outboundSchema), z.string()]);
+
+export function stackSettingsManagedUnionToJSON(
+  stackSettingsManagedUnion: StackSettingsManagedUnion,
+): string {
+  return JSON.stringify(
+    StackSettingsManagedUnion$outboundSchema.parse(stackSettingsManagedUnion),
+  );
+}
+
+/** @internal */
+export type StackSettingsCertificate$Outbound = {
   aws?: StackSettingsAws$Outbound | string | null | undefined;
   azure?: StackSettingsAzure$Outbound | string | null | undefined;
   gcp?: StackSettingsGcp$Outbound | string | null | undefined;
@@ -1707,12 +1224,13 @@ export type StackSettingsDomainsCertificate$Outbound = {
     | string
     | null
     | undefined;
+  managed?: StackSettingsManaged$Outbound | string | null | undefined;
 };
 
 /** @internal */
-export const StackSettingsDomainsCertificate$outboundSchema: z.ZodType<
-  StackSettingsDomainsCertificate$Outbound,
-  StackSettingsDomainsCertificate
+export const StackSettingsCertificate$outboundSchema: z.ZodType<
+  StackSettingsCertificate$Outbound,
+  StackSettingsCertificate
 > = z.object({
   aws: z.nullable(
     z.union([z.lazy(() => StackSettingsAws$outboundSchema), z.string()]),
@@ -1729,22 +1247,24 @@ export const StackSettingsDomainsCertificate$outboundSchema: z.ZodType<
       z.string(),
     ]),
   ).optional(),
+  managed: z.nullable(
+    z.union([z.lazy(() => StackSettingsManaged$outboundSchema), z.string()]),
+  ).optional(),
 });
 
-export function stackSettingsDomainsCertificateToJSON(
-  stackSettingsDomainsCertificate: StackSettingsDomainsCertificate,
+export function stackSettingsCertificateToJSON(
+  stackSettingsCertificate: StackSettingsCertificate,
 ): string {
   return JSON.stringify(
-    StackSettingsDomainsCertificate$outboundSchema.parse(
-      stackSettingsDomainsCertificate,
-    ),
+    StackSettingsCertificate$outboundSchema.parse(stackSettingsCertificate),
   );
 }
 
 /** @internal */
 export type StackSettingsCustomDomains$Outbound = {
-  certificate: StackSettingsDomainsCertificate$Outbound;
-  domain: string;
+  certificate: StackSettingsCertificate$Outbound;
+  domain?: string | undefined;
+  endpoints?: { [k: string]: string } | undefined;
 };
 
 /** @internal */
@@ -1752,8 +1272,9 @@ export const StackSettingsCustomDomains$outboundSchema: z.ZodType<
   StackSettingsCustomDomains$Outbound,
   StackSettingsCustomDomains
 > = z.object({
-  certificate: z.lazy(() => StackSettingsDomainsCertificate$outboundSchema),
-  domain: z.string(),
+  certificate: z.lazy(() => StackSettingsCertificate$outboundSchema),
+  domain: z.string().optional(),
+  endpoints: z.record(z.string(), z.string()).optional(),
 });
 
 export function stackSettingsCustomDomainsToJSON(
@@ -2034,1244 +1555,30 @@ export function stackSettingsClusterUnionToJSON(
 }
 
 /** @internal */
-export type StackSettingsCertificateNone2$Outbound = {
-  mode: "none";
-};
-
-/** @internal */
-export const StackSettingsCertificateNone2$outboundSchema: z.ZodType<
-  StackSettingsCertificateNone2$Outbound,
-  StackSettingsCertificateNone2
-> = z.object({
-  mode: z.literal("none"),
-});
-
-export function stackSettingsCertificateNone2ToJSON(
-  stackSettingsCertificateNone2: StackSettingsCertificateNone2,
-): string {
-  return JSON.stringify(
-    StackSettingsCertificateNone2$outboundSchema.parse(
-      stackSettingsCertificateNone2,
-    ),
-  );
-}
-
-/** @internal */
-export type StackSettingsCertificateManagedTLSSecret2$Outbound = {
-  mode: "managedTlsSecret";
-  secretNameTemplate: string;
-};
-
-/** @internal */
-export const StackSettingsCertificateManagedTLSSecret2$outboundSchema:
-  z.ZodType<
-    StackSettingsCertificateManagedTLSSecret2$Outbound,
-    StackSettingsCertificateManagedTLSSecret2
-  > = z.object({
-    mode: z.literal("managedTlsSecret"),
-    secretNameTemplate: z.string(),
-  });
-
-export function stackSettingsCertificateManagedTLSSecret2ToJSON(
-  stackSettingsCertificateManagedTLSSecret2:
-    StackSettingsCertificateManagedTLSSecret2,
-): string {
-  return JSON.stringify(
-    StackSettingsCertificateManagedTLSSecret2$outboundSchema.parse(
-      stackSettingsCertificateManagedTLSSecret2,
-    ),
-  );
-}
-
-/** @internal */
-export type StackSettingsCertificateAwsAcmArn2$Outbound = {
-  certificateArn: string;
-  mode: "awsAcmArn";
-};
-
-/** @internal */
-export const StackSettingsCertificateAwsAcmArn2$outboundSchema: z.ZodType<
-  StackSettingsCertificateAwsAcmArn2$Outbound,
-  StackSettingsCertificateAwsAcmArn2
-> = z.object({
-  certificateArn: z.string(),
-  mode: z.literal("awsAcmArn"),
-});
-
-export function stackSettingsCertificateAwsAcmArn2ToJSON(
-  stackSettingsCertificateAwsAcmArn2: StackSettingsCertificateAwsAcmArn2,
-): string {
-  return JSON.stringify(
-    StackSettingsCertificateAwsAcmArn2$outboundSchema.parse(
-      stackSettingsCertificateAwsAcmArn2,
-    ),
-  );
-}
-
-/** @internal */
-export type StackSettingsCertificateManagedAcmImport2$Outbound = {
-  mode: "managedAcmImport";
-  region?: string | null | undefined;
-  tags?: { [k: string]: string } | undefined;
-};
-
-/** @internal */
-export const StackSettingsCertificateManagedAcmImport2$outboundSchema:
-  z.ZodType<
-    StackSettingsCertificateManagedAcmImport2$Outbound,
-    StackSettingsCertificateManagedAcmImport2
-  > = z.object({
-    mode: z.literal("managedAcmImport"),
-    region: z.nullable(z.string()).optional(),
-    tags: z.record(z.string(), z.string()).optional(),
-  });
-
-export function stackSettingsCertificateManagedAcmImport2ToJSON(
-  stackSettingsCertificateManagedAcmImport2:
-    StackSettingsCertificateManagedAcmImport2,
-): string {
-  return JSON.stringify(
-    StackSettingsCertificateManagedAcmImport2$outboundSchema.parse(
-      stackSettingsCertificateManagedAcmImport2,
-    ),
-  );
-}
-
-/** @internal */
-export type StackSettingsCertificateTLSSecretRef2$Outbound = {
-  namespace?: string | null | undefined;
-  secretName: string;
-  mode: "tlsSecretRef";
-};
-
-/** @internal */
-export const StackSettingsCertificateTLSSecretRef2$outboundSchema: z.ZodType<
-  StackSettingsCertificateTLSSecretRef2$Outbound,
-  StackSettingsCertificateTLSSecretRef2
-> = z.object({
-  namespace: z.nullable(z.string()).optional(),
-  secretName: z.string(),
-  mode: z.literal("tlsSecretRef"),
-});
-
-export function stackSettingsCertificateTLSSecretRef2ToJSON(
-  stackSettingsCertificateTLSSecretRef2: StackSettingsCertificateTLSSecretRef2,
-): string {
-  return JSON.stringify(
-    StackSettingsCertificateTLSSecretRef2$outboundSchema.parse(
-      stackSettingsCertificateTLSSecretRef2,
-    ),
-  );
-}
-
-/** @internal */
-export type StackSettingsCertificateUnion2$Outbound =
-  | StackSettingsCertificateTLSSecretRef2$Outbound
-  | StackSettingsCertificateManagedAcmImport2$Outbound
-  | StackSettingsCertificateAwsAcmArn2$Outbound
-  | StackSettingsCertificateManagedTLSSecret2$Outbound
-  | StackSettingsCertificateNone2$Outbound;
-
-/** @internal */
-export const StackSettingsCertificateUnion2$outboundSchema: z.ZodType<
-  StackSettingsCertificateUnion2$Outbound,
-  StackSettingsCertificateUnion2
-> = z.union([
-  z.lazy(() => StackSettingsCertificateTLSSecretRef2$outboundSchema),
-  z.lazy(() => StackSettingsCertificateManagedAcmImport2$outboundSchema),
-  z.lazy(() => StackSettingsCertificateAwsAcmArn2$outboundSchema),
-  z.lazy(() => StackSettingsCertificateManagedTLSSecret2$outboundSchema),
-  z.lazy(() => StackSettingsCertificateNone2$outboundSchema),
-]);
-
-export function stackSettingsCertificateUnion2ToJSON(
-  stackSettingsCertificateUnion2: StackSettingsCertificateUnion2,
-): string {
-  return JSON.stringify(
-    StackSettingsCertificateUnion2$outboundSchema.parse(
-      stackSettingsCertificateUnion2,
-    ),
-  );
-}
-
-/** @internal */
-export const StackSettingsModeCustom$outboundSchema: z.ZodEnum<
-  typeof StackSettingsModeCustom
-> = z.enum(StackSettingsModeCustom);
-
-/** @internal */
-export const StackSettingsProviderAzureApplicationGatewayForContainersEnum4$outboundSchema:
-  z.ZodEnum<
-    typeof StackSettingsProviderAzureApplicationGatewayForContainersEnum4
-  > = z.enum(StackSettingsProviderAzureApplicationGatewayForContainersEnum4);
-
-/** @internal */
-export type StackSettingsProviderAzureApplicationGatewayForContainers4$Outbound =
-  {
-    albName?: string | null | undefined;
-    albNamespace?: string | null | undefined;
-    frontend: string;
-    provider: string;
-  };
-
-/** @internal */
-export const StackSettingsProviderAzureApplicationGatewayForContainers4$outboundSchema:
-  z.ZodType<
-    StackSettingsProviderAzureApplicationGatewayForContainers4$Outbound,
-    StackSettingsProviderAzureApplicationGatewayForContainers4
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      StackSettingsProviderAzureApplicationGatewayForContainersEnum4$outboundSchema,
-  });
-
-export function stackSettingsProviderAzureApplicationGatewayForContainers4ToJSON(
-  stackSettingsProviderAzureApplicationGatewayForContainers4:
-    StackSettingsProviderAzureApplicationGatewayForContainers4,
-): string {
-  return JSON.stringify(
-    StackSettingsProviderAzureApplicationGatewayForContainers4$outboundSchema
-      .parse(stackSettingsProviderAzureApplicationGatewayForContainers4),
-  );
-}
-
-/** @internal */
-export const StackSettingsProviderGkeGatewayEnum4$outboundSchema: z.ZodEnum<
-  typeof StackSettingsProviderGkeGatewayEnum4
-> = z.enum(StackSettingsProviderGkeGatewayEnum4);
-
-/** @internal */
-export type StackSettingsProviderGkeGateway4$Outbound = {
-  provider: string;
-  staticAddressName?: string | null | undefined;
-};
-
-/** @internal */
-export const StackSettingsProviderGkeGateway4$outboundSchema: z.ZodType<
-  StackSettingsProviderGkeGateway4$Outbound,
-  StackSettingsProviderGkeGateway4
-> = z.object({
-  provider: StackSettingsProviderGkeGatewayEnum4$outboundSchema,
-  staticAddressName: z.nullable(z.string()).optional(),
-});
-
-export function stackSettingsProviderGkeGateway4ToJSON(
-  stackSettingsProviderGkeGateway4: StackSettingsProviderGkeGateway4,
-): string {
-  return JSON.stringify(
-    StackSettingsProviderGkeGateway4$outboundSchema.parse(
-      stackSettingsProviderGkeGateway4,
-    ),
-  );
-}
-
-/** @internal */
-export const StackSettingsProviderAwsAlbEnum4$outboundSchema: z.ZodEnum<
-  typeof StackSettingsProviderAwsAlbEnum4
-> = z.enum(StackSettingsProviderAwsAlbEnum4);
-
-/** @internal */
-export type StackSettingsProviderAwsAlb4$Outbound = {
-  ipAddressType?: string | null | undefined;
-  provider: string;
-  scheme: string;
-  subnetIds?: Array<string> | undefined;
-  targetType: string;
-};
-
-/** @internal */
-export const StackSettingsProviderAwsAlb4$outboundSchema: z.ZodType<
-  StackSettingsProviderAwsAlb4$Outbound,
-  StackSettingsProviderAwsAlb4
-> = z.object({
-  ipAddressType: z.nullable(z.string()).optional(),
-  provider: StackSettingsProviderAwsAlbEnum4$outboundSchema,
-  scheme: z.string(),
-  subnetIds: z.array(z.string()).optional(),
-  targetType: z.string(),
-});
-
-export function stackSettingsProviderAwsAlb4ToJSON(
-  stackSettingsProviderAwsAlb4: StackSettingsProviderAwsAlb4,
-): string {
-  return JSON.stringify(
-    StackSettingsProviderAwsAlb4$outboundSchema.parse(
-      stackSettingsProviderAwsAlb4,
-    ),
-  );
-}
-
-/** @internal */
-export type StackSettingsProviderUnion4$Outbound =
-  | StackSettingsProviderAwsAlb4$Outbound
-  | StackSettingsProviderAzureApplicationGatewayForContainers4$Outbound
-  | StackSettingsProviderGkeGateway4$Outbound
+export type StackSettingsExposure$Outbound =
+  | KubernetesExposureCustom$Outbound
+  | KubernetesExposureCustomBaseDomain$Outbound
+  | KubernetesExposureGenerated$Outbound
+  | KubernetesExposureDisabled$Outbound
   | string;
 
 /** @internal */
-export const StackSettingsProviderUnion4$outboundSchema: z.ZodType<
-  StackSettingsProviderUnion4$Outbound,
-  StackSettingsProviderUnion4
+export const StackSettingsExposure$outboundSchema: z.ZodType<
+  StackSettingsExposure$Outbound,
+  StackSettingsExposure
 > = z.union([
-  z.lazy(() => StackSettingsProviderAwsAlb4$outboundSchema),
-  z.lazy(() =>
-    StackSettingsProviderAzureApplicationGatewayForContainers4$outboundSchema
-  ),
-  z.lazy(() => StackSettingsProviderGkeGateway4$outboundSchema),
+  KubernetesExposureCustom$outboundSchema,
+  KubernetesExposureCustomBaseDomain$outboundSchema,
+  KubernetesExposureGenerated$outboundSchema,
+  KubernetesExposureDisabled$outboundSchema,
   z.string(),
 ]);
 
-export function stackSettingsProviderUnion4ToJSON(
-  stackSettingsProviderUnion4: StackSettingsProviderUnion4,
+export function stackSettingsExposureToJSON(
+  stackSettingsExposure: StackSettingsExposure,
 ): string {
   return JSON.stringify(
-    StackSettingsProviderUnion4$outboundSchema.parse(
-      stackSettingsProviderUnion4,
-    ),
-  );
-}
-
-/** @internal */
-export type StackSettingsRouteGateway2$Outbound = {
-  annotations?: { [k: string]: string } | undefined;
-  controller?: string | null | undefined;
-  gatewayClassName: string;
-  labels?: { [k: string]: string } | undefined;
-  listenerPort: number;
-  provider?:
-    | StackSettingsProviderAwsAlb4$Outbound
-    | StackSettingsProviderAzureApplicationGatewayForContainers4$Outbound
-    | StackSettingsProviderGkeGateway4$Outbound
-    | string
-    | null
-    | undefined;
-  routeApi: "gateway";
-};
-
-/** @internal */
-export const StackSettingsRouteGateway2$outboundSchema: z.ZodType<
-  StackSettingsRouteGateway2$Outbound,
-  StackSettingsRouteGateway2
-> = z.object({
-  annotations: z.record(z.string(), z.string()).optional(),
-  controller: z.nullable(z.string()).optional(),
-  gatewayClassName: z.string(),
-  labels: z.record(z.string(), z.string()).optional(),
-  listenerPort: z.int(),
-  provider: z.nullable(
-    z.union([
-      z.lazy(() => StackSettingsProviderAwsAlb4$outboundSchema),
-      z.lazy(() =>
-        StackSettingsProviderAzureApplicationGatewayForContainers4$outboundSchema
-      ),
-      z.lazy(() => StackSettingsProviderGkeGateway4$outboundSchema),
-      z.string(),
-    ]),
-  ).optional(),
-  routeApi: z.literal("gateway"),
-});
-
-export function stackSettingsRouteGateway2ToJSON(
-  stackSettingsRouteGateway2: StackSettingsRouteGateway2,
-): string {
-  return JSON.stringify(
-    StackSettingsRouteGateway2$outboundSchema.parse(stackSettingsRouteGateway2),
-  );
-}
-
-/** @internal */
-export const StackSettingsProviderAzureApplicationGatewayForContainersEnum3$outboundSchema:
-  z.ZodEnum<
-    typeof StackSettingsProviderAzureApplicationGatewayForContainersEnum3
-  > = z.enum(StackSettingsProviderAzureApplicationGatewayForContainersEnum3);
-
-/** @internal */
-export type StackSettingsProviderAzureApplicationGatewayForContainers3$Outbound =
-  {
-    albName?: string | null | undefined;
-    albNamespace?: string | null | undefined;
-    frontend: string;
-    provider: string;
-  };
-
-/** @internal */
-export const StackSettingsProviderAzureApplicationGatewayForContainers3$outboundSchema:
-  z.ZodType<
-    StackSettingsProviderAzureApplicationGatewayForContainers3$Outbound,
-    StackSettingsProviderAzureApplicationGatewayForContainers3
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      StackSettingsProviderAzureApplicationGatewayForContainersEnum3$outboundSchema,
-  });
-
-export function stackSettingsProviderAzureApplicationGatewayForContainers3ToJSON(
-  stackSettingsProviderAzureApplicationGatewayForContainers3:
-    StackSettingsProviderAzureApplicationGatewayForContainers3,
-): string {
-  return JSON.stringify(
-    StackSettingsProviderAzureApplicationGatewayForContainers3$outboundSchema
-      .parse(stackSettingsProviderAzureApplicationGatewayForContainers3),
-  );
-}
-
-/** @internal */
-export const StackSettingsProviderGkeGatewayEnum3$outboundSchema: z.ZodEnum<
-  typeof StackSettingsProviderGkeGatewayEnum3
-> = z.enum(StackSettingsProviderGkeGatewayEnum3);
-
-/** @internal */
-export type StackSettingsProviderGkeGateway3$Outbound = {
-  provider: string;
-  staticAddressName?: string | null | undefined;
-};
-
-/** @internal */
-export const StackSettingsProviderGkeGateway3$outboundSchema: z.ZodType<
-  StackSettingsProviderGkeGateway3$Outbound,
-  StackSettingsProviderGkeGateway3
-> = z.object({
-  provider: StackSettingsProviderGkeGatewayEnum3$outboundSchema,
-  staticAddressName: z.nullable(z.string()).optional(),
-});
-
-export function stackSettingsProviderGkeGateway3ToJSON(
-  stackSettingsProviderGkeGateway3: StackSettingsProviderGkeGateway3,
-): string {
-  return JSON.stringify(
-    StackSettingsProviderGkeGateway3$outboundSchema.parse(
-      stackSettingsProviderGkeGateway3,
-    ),
-  );
-}
-
-/** @internal */
-export const StackSettingsProviderAwsAlbEnum3$outboundSchema: z.ZodEnum<
-  typeof StackSettingsProviderAwsAlbEnum3
-> = z.enum(StackSettingsProviderAwsAlbEnum3);
-
-/** @internal */
-export type StackSettingsProviderAwsAlb3$Outbound = {
-  ipAddressType?: string | null | undefined;
-  provider: string;
-  scheme: string;
-  subnetIds?: Array<string> | undefined;
-  targetType: string;
-};
-
-/** @internal */
-export const StackSettingsProviderAwsAlb3$outboundSchema: z.ZodType<
-  StackSettingsProviderAwsAlb3$Outbound,
-  StackSettingsProviderAwsAlb3
-> = z.object({
-  ipAddressType: z.nullable(z.string()).optional(),
-  provider: StackSettingsProviderAwsAlbEnum3$outboundSchema,
-  scheme: z.string(),
-  subnetIds: z.array(z.string()).optional(),
-  targetType: z.string(),
-});
-
-export function stackSettingsProviderAwsAlb3ToJSON(
-  stackSettingsProviderAwsAlb3: StackSettingsProviderAwsAlb3,
-): string {
-  return JSON.stringify(
-    StackSettingsProviderAwsAlb3$outboundSchema.parse(
-      stackSettingsProviderAwsAlb3,
-    ),
-  );
-}
-
-/** @internal */
-export type StackSettingsProviderUnion3$Outbound =
-  | StackSettingsProviderAwsAlb3$Outbound
-  | StackSettingsProviderAzureApplicationGatewayForContainers3$Outbound
-  | StackSettingsProviderGkeGateway3$Outbound
-  | string;
-
-/** @internal */
-export const StackSettingsProviderUnion3$outboundSchema: z.ZodType<
-  StackSettingsProviderUnion3$Outbound,
-  StackSettingsProviderUnion3
-> = z.union([
-  z.lazy(() => StackSettingsProviderAwsAlb3$outboundSchema),
-  z.lazy(() =>
-    StackSettingsProviderAzureApplicationGatewayForContainers3$outboundSchema
-  ),
-  z.lazy(() => StackSettingsProviderGkeGateway3$outboundSchema),
-  z.string(),
-]);
-
-export function stackSettingsProviderUnion3ToJSON(
-  stackSettingsProviderUnion3: StackSettingsProviderUnion3,
-): string {
-  return JSON.stringify(
-    StackSettingsProviderUnion3$outboundSchema.parse(
-      stackSettingsProviderUnion3,
-    ),
-  );
-}
-
-/** @internal */
-export type StackSettingsRouteIngress2$Outbound = {
-  annotations?: { [k: string]: string } | undefined;
-  controller?: string | null | undefined;
-  ingressClassName: string;
-  labels?: { [k: string]: string } | undefined;
-  provider?:
-    | StackSettingsProviderAwsAlb3$Outbound
-    | StackSettingsProviderAzureApplicationGatewayForContainers3$Outbound
-    | StackSettingsProviderGkeGateway3$Outbound
-    | string
-    | null
-    | undefined;
-  routeApi: "ingress";
-};
-
-/** @internal */
-export const StackSettingsRouteIngress2$outboundSchema: z.ZodType<
-  StackSettingsRouteIngress2$Outbound,
-  StackSettingsRouteIngress2
-> = z.object({
-  annotations: z.record(z.string(), z.string()).optional(),
-  controller: z.nullable(z.string()).optional(),
-  ingressClassName: z.string(),
-  labels: z.record(z.string(), z.string()).optional(),
-  provider: z.nullable(
-    z.union([
-      z.lazy(() => StackSettingsProviderAwsAlb3$outboundSchema),
-      z.lazy(() =>
-        StackSettingsProviderAzureApplicationGatewayForContainers3$outboundSchema
-      ),
-      z.lazy(() => StackSettingsProviderGkeGateway3$outboundSchema),
-      z.string(),
-    ]),
-  ).optional(),
-  routeApi: z.literal("ingress"),
-});
-
-export function stackSettingsRouteIngress2ToJSON(
-  stackSettingsRouteIngress2: StackSettingsRouteIngress2,
-): string {
-  return JSON.stringify(
-    StackSettingsRouteIngress2$outboundSchema.parse(stackSettingsRouteIngress2),
-  );
-}
-
-/** @internal */
-export type StackSettingsRouteUnion2$Outbound =
-  | StackSettingsRouteIngress2$Outbound
-  | StackSettingsRouteGateway2$Outbound;
-
-/** @internal */
-export const StackSettingsRouteUnion2$outboundSchema: z.ZodType<
-  StackSettingsRouteUnion2$Outbound,
-  StackSettingsRouteUnion2
-> = z.union([
-  z.lazy(() => StackSettingsRouteIngress2$outboundSchema),
-  z.lazy(() => StackSettingsRouteGateway2$outboundSchema),
-]);
-
-export function stackSettingsRouteUnion2ToJSON(
-  stackSettingsRouteUnion2: StackSettingsRouteUnion2,
-): string {
-  return JSON.stringify(
-    StackSettingsRouteUnion2$outboundSchema.parse(stackSettingsRouteUnion2),
-  );
-}
-
-/** @internal */
-export type StackSettingsExposureCustom$Outbound = {
-  certificate:
-    | StackSettingsCertificateTLSSecretRef2$Outbound
-    | StackSettingsCertificateManagedAcmImport2$Outbound
-    | StackSettingsCertificateAwsAcmArn2$Outbound
-    | StackSettingsCertificateManagedTLSSecret2$Outbound
-    | StackSettingsCertificateNone2$Outbound;
-  domain: string;
-  mode: string;
-  route:
-    | StackSettingsRouteIngress2$Outbound
-    | StackSettingsRouteGateway2$Outbound;
-};
-
-/** @internal */
-export const StackSettingsExposureCustom$outboundSchema: z.ZodType<
-  StackSettingsExposureCustom$Outbound,
-  StackSettingsExposureCustom
-> = z.object({
-  certificate: z.union([
-    z.lazy(() => StackSettingsCertificateTLSSecretRef2$outboundSchema),
-    z.lazy(() => StackSettingsCertificateManagedAcmImport2$outboundSchema),
-    z.lazy(() => StackSettingsCertificateAwsAcmArn2$outboundSchema),
-    z.lazy(() => StackSettingsCertificateManagedTLSSecret2$outboundSchema),
-    z.lazy(() => StackSettingsCertificateNone2$outboundSchema),
-  ]),
-  domain: z.string(),
-  mode: StackSettingsModeCustom$outboundSchema,
-  route: z.union([
-    z.lazy(() => StackSettingsRouteIngress2$outboundSchema),
-    z.lazy(() => StackSettingsRouteGateway2$outboundSchema),
-  ]),
-});
-
-export function stackSettingsExposureCustomToJSON(
-  stackSettingsExposureCustom: StackSettingsExposureCustom,
-): string {
-  return JSON.stringify(
-    StackSettingsExposureCustom$outboundSchema.parse(
-      stackSettingsExposureCustom,
-    ),
-  );
-}
-
-/** @internal */
-export type StackSettingsCertificateNone1$Outbound = {
-  mode: "none";
-};
-
-/** @internal */
-export const StackSettingsCertificateNone1$outboundSchema: z.ZodType<
-  StackSettingsCertificateNone1$Outbound,
-  StackSettingsCertificateNone1
-> = z.object({
-  mode: z.literal("none"),
-});
-
-export function stackSettingsCertificateNone1ToJSON(
-  stackSettingsCertificateNone1: StackSettingsCertificateNone1,
-): string {
-  return JSON.stringify(
-    StackSettingsCertificateNone1$outboundSchema.parse(
-      stackSettingsCertificateNone1,
-    ),
-  );
-}
-
-/** @internal */
-export type StackSettingsCertificateManagedTLSSecret1$Outbound = {
-  mode: "managedTlsSecret";
-  secretNameTemplate: string;
-};
-
-/** @internal */
-export const StackSettingsCertificateManagedTLSSecret1$outboundSchema:
-  z.ZodType<
-    StackSettingsCertificateManagedTLSSecret1$Outbound,
-    StackSettingsCertificateManagedTLSSecret1
-  > = z.object({
-    mode: z.literal("managedTlsSecret"),
-    secretNameTemplate: z.string(),
-  });
-
-export function stackSettingsCertificateManagedTLSSecret1ToJSON(
-  stackSettingsCertificateManagedTLSSecret1:
-    StackSettingsCertificateManagedTLSSecret1,
-): string {
-  return JSON.stringify(
-    StackSettingsCertificateManagedTLSSecret1$outboundSchema.parse(
-      stackSettingsCertificateManagedTLSSecret1,
-    ),
-  );
-}
-
-/** @internal */
-export type StackSettingsCertificateAwsAcmArn1$Outbound = {
-  certificateArn: string;
-  mode: "awsAcmArn";
-};
-
-/** @internal */
-export const StackSettingsCertificateAwsAcmArn1$outboundSchema: z.ZodType<
-  StackSettingsCertificateAwsAcmArn1$Outbound,
-  StackSettingsCertificateAwsAcmArn1
-> = z.object({
-  certificateArn: z.string(),
-  mode: z.literal("awsAcmArn"),
-});
-
-export function stackSettingsCertificateAwsAcmArn1ToJSON(
-  stackSettingsCertificateAwsAcmArn1: StackSettingsCertificateAwsAcmArn1,
-): string {
-  return JSON.stringify(
-    StackSettingsCertificateAwsAcmArn1$outboundSchema.parse(
-      stackSettingsCertificateAwsAcmArn1,
-    ),
-  );
-}
-
-/** @internal */
-export type StackSettingsCertificateManagedAcmImport1$Outbound = {
-  mode: "managedAcmImport";
-  region?: string | null | undefined;
-  tags?: { [k: string]: string } | undefined;
-};
-
-/** @internal */
-export const StackSettingsCertificateManagedAcmImport1$outboundSchema:
-  z.ZodType<
-    StackSettingsCertificateManagedAcmImport1$Outbound,
-    StackSettingsCertificateManagedAcmImport1
-  > = z.object({
-    mode: z.literal("managedAcmImport"),
-    region: z.nullable(z.string()).optional(),
-    tags: z.record(z.string(), z.string()).optional(),
-  });
-
-export function stackSettingsCertificateManagedAcmImport1ToJSON(
-  stackSettingsCertificateManagedAcmImport1:
-    StackSettingsCertificateManagedAcmImport1,
-): string {
-  return JSON.stringify(
-    StackSettingsCertificateManagedAcmImport1$outboundSchema.parse(
-      stackSettingsCertificateManagedAcmImport1,
-    ),
-  );
-}
-
-/** @internal */
-export type StackSettingsCertificateTLSSecretRef1$Outbound = {
-  namespace?: string | null | undefined;
-  secretName: string;
-  mode: "tlsSecretRef";
-};
-
-/** @internal */
-export const StackSettingsCertificateTLSSecretRef1$outboundSchema: z.ZodType<
-  StackSettingsCertificateTLSSecretRef1$Outbound,
-  StackSettingsCertificateTLSSecretRef1
-> = z.object({
-  namespace: z.nullable(z.string()).optional(),
-  secretName: z.string(),
-  mode: z.literal("tlsSecretRef"),
-});
-
-export function stackSettingsCertificateTLSSecretRef1ToJSON(
-  stackSettingsCertificateTLSSecretRef1: StackSettingsCertificateTLSSecretRef1,
-): string {
-  return JSON.stringify(
-    StackSettingsCertificateTLSSecretRef1$outboundSchema.parse(
-      stackSettingsCertificateTLSSecretRef1,
-    ),
-  );
-}
-
-/** @internal */
-export type StackSettingsCertificateUnion1$Outbound =
-  | StackSettingsCertificateTLSSecretRef1$Outbound
-  | StackSettingsCertificateManagedAcmImport1$Outbound
-  | StackSettingsCertificateAwsAcmArn1$Outbound
-  | StackSettingsCertificateManagedTLSSecret1$Outbound
-  | StackSettingsCertificateNone1$Outbound;
-
-/** @internal */
-export const StackSettingsCertificateUnion1$outboundSchema: z.ZodType<
-  StackSettingsCertificateUnion1$Outbound,
-  StackSettingsCertificateUnion1
-> = z.union([
-  z.lazy(() => StackSettingsCertificateTLSSecretRef1$outboundSchema),
-  z.lazy(() => StackSettingsCertificateManagedAcmImport1$outboundSchema),
-  z.lazy(() => StackSettingsCertificateAwsAcmArn1$outboundSchema),
-  z.lazy(() => StackSettingsCertificateManagedTLSSecret1$outboundSchema),
-  z.lazy(() => StackSettingsCertificateNone1$outboundSchema),
-]);
-
-export function stackSettingsCertificateUnion1ToJSON(
-  stackSettingsCertificateUnion1: StackSettingsCertificateUnion1,
-): string {
-  return JSON.stringify(
-    StackSettingsCertificateUnion1$outboundSchema.parse(
-      stackSettingsCertificateUnion1,
-    ),
-  );
-}
-
-/** @internal */
-export const StackSettingsModeGenerated$outboundSchema: z.ZodEnum<
-  typeof StackSettingsModeGenerated
-> = z.enum(StackSettingsModeGenerated);
-
-/** @internal */
-export const StackSettingsProviderAzureApplicationGatewayForContainersEnum2$outboundSchema:
-  z.ZodEnum<
-    typeof StackSettingsProviderAzureApplicationGatewayForContainersEnum2
-  > = z.enum(StackSettingsProviderAzureApplicationGatewayForContainersEnum2);
-
-/** @internal */
-export type StackSettingsProviderAzureApplicationGatewayForContainers2$Outbound =
-  {
-    albName?: string | null | undefined;
-    albNamespace?: string | null | undefined;
-    frontend: string;
-    provider: string;
-  };
-
-/** @internal */
-export const StackSettingsProviderAzureApplicationGatewayForContainers2$outboundSchema:
-  z.ZodType<
-    StackSettingsProviderAzureApplicationGatewayForContainers2$Outbound,
-    StackSettingsProviderAzureApplicationGatewayForContainers2
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      StackSettingsProviderAzureApplicationGatewayForContainersEnum2$outboundSchema,
-  });
-
-export function stackSettingsProviderAzureApplicationGatewayForContainers2ToJSON(
-  stackSettingsProviderAzureApplicationGatewayForContainers2:
-    StackSettingsProviderAzureApplicationGatewayForContainers2,
-): string {
-  return JSON.stringify(
-    StackSettingsProviderAzureApplicationGatewayForContainers2$outboundSchema
-      .parse(stackSettingsProviderAzureApplicationGatewayForContainers2),
-  );
-}
-
-/** @internal */
-export const StackSettingsProviderGkeGatewayEnum2$outboundSchema: z.ZodEnum<
-  typeof StackSettingsProviderGkeGatewayEnum2
-> = z.enum(StackSettingsProviderGkeGatewayEnum2);
-
-/** @internal */
-export type StackSettingsProviderGkeGateway2$Outbound = {
-  provider: string;
-  staticAddressName?: string | null | undefined;
-};
-
-/** @internal */
-export const StackSettingsProviderGkeGateway2$outboundSchema: z.ZodType<
-  StackSettingsProviderGkeGateway2$Outbound,
-  StackSettingsProviderGkeGateway2
-> = z.object({
-  provider: StackSettingsProviderGkeGatewayEnum2$outboundSchema,
-  staticAddressName: z.nullable(z.string()).optional(),
-});
-
-export function stackSettingsProviderGkeGateway2ToJSON(
-  stackSettingsProviderGkeGateway2: StackSettingsProviderGkeGateway2,
-): string {
-  return JSON.stringify(
-    StackSettingsProviderGkeGateway2$outboundSchema.parse(
-      stackSettingsProviderGkeGateway2,
-    ),
-  );
-}
-
-/** @internal */
-export const StackSettingsProviderAwsAlbEnum2$outboundSchema: z.ZodEnum<
-  typeof StackSettingsProviderAwsAlbEnum2
-> = z.enum(StackSettingsProviderAwsAlbEnum2);
-
-/** @internal */
-export type StackSettingsProviderAwsAlb2$Outbound = {
-  ipAddressType?: string | null | undefined;
-  provider: string;
-  scheme: string;
-  subnetIds?: Array<string> | undefined;
-  targetType: string;
-};
-
-/** @internal */
-export const StackSettingsProviderAwsAlb2$outboundSchema: z.ZodType<
-  StackSettingsProviderAwsAlb2$Outbound,
-  StackSettingsProviderAwsAlb2
-> = z.object({
-  ipAddressType: z.nullable(z.string()).optional(),
-  provider: StackSettingsProviderAwsAlbEnum2$outboundSchema,
-  scheme: z.string(),
-  subnetIds: z.array(z.string()).optional(),
-  targetType: z.string(),
-});
-
-export function stackSettingsProviderAwsAlb2ToJSON(
-  stackSettingsProviderAwsAlb2: StackSettingsProviderAwsAlb2,
-): string {
-  return JSON.stringify(
-    StackSettingsProviderAwsAlb2$outboundSchema.parse(
-      stackSettingsProviderAwsAlb2,
-    ),
-  );
-}
-
-/** @internal */
-export type StackSettingsProviderUnion2$Outbound =
-  | StackSettingsProviderAwsAlb2$Outbound
-  | StackSettingsProviderAzureApplicationGatewayForContainers2$Outbound
-  | StackSettingsProviderGkeGateway2$Outbound
-  | string;
-
-/** @internal */
-export const StackSettingsProviderUnion2$outboundSchema: z.ZodType<
-  StackSettingsProviderUnion2$Outbound,
-  StackSettingsProviderUnion2
-> = z.union([
-  z.lazy(() => StackSettingsProviderAwsAlb2$outboundSchema),
-  z.lazy(() =>
-    StackSettingsProviderAzureApplicationGatewayForContainers2$outboundSchema
-  ),
-  z.lazy(() => StackSettingsProviderGkeGateway2$outboundSchema),
-  z.string(),
-]);
-
-export function stackSettingsProviderUnion2ToJSON(
-  stackSettingsProviderUnion2: StackSettingsProviderUnion2,
-): string {
-  return JSON.stringify(
-    StackSettingsProviderUnion2$outboundSchema.parse(
-      stackSettingsProviderUnion2,
-    ),
-  );
-}
-
-/** @internal */
-export type StackSettingsRouteGateway1$Outbound = {
-  annotations?: { [k: string]: string } | undefined;
-  controller?: string | null | undefined;
-  gatewayClassName: string;
-  labels?: { [k: string]: string } | undefined;
-  listenerPort: number;
-  provider?:
-    | StackSettingsProviderAwsAlb2$Outbound
-    | StackSettingsProviderAzureApplicationGatewayForContainers2$Outbound
-    | StackSettingsProviderGkeGateway2$Outbound
-    | string
-    | null
-    | undefined;
-  routeApi: "gateway";
-};
-
-/** @internal */
-export const StackSettingsRouteGateway1$outboundSchema: z.ZodType<
-  StackSettingsRouteGateway1$Outbound,
-  StackSettingsRouteGateway1
-> = z.object({
-  annotations: z.record(z.string(), z.string()).optional(),
-  controller: z.nullable(z.string()).optional(),
-  gatewayClassName: z.string(),
-  labels: z.record(z.string(), z.string()).optional(),
-  listenerPort: z.int(),
-  provider: z.nullable(
-    z.union([
-      z.lazy(() => StackSettingsProviderAwsAlb2$outboundSchema),
-      z.lazy(() =>
-        StackSettingsProviderAzureApplicationGatewayForContainers2$outboundSchema
-      ),
-      z.lazy(() => StackSettingsProviderGkeGateway2$outboundSchema),
-      z.string(),
-    ]),
-  ).optional(),
-  routeApi: z.literal("gateway"),
-});
-
-export function stackSettingsRouteGateway1ToJSON(
-  stackSettingsRouteGateway1: StackSettingsRouteGateway1,
-): string {
-  return JSON.stringify(
-    StackSettingsRouteGateway1$outboundSchema.parse(stackSettingsRouteGateway1),
-  );
-}
-
-/** @internal */
-export const StackSettingsProviderAzureApplicationGatewayForContainersEnum1$outboundSchema:
-  z.ZodEnum<
-    typeof StackSettingsProviderAzureApplicationGatewayForContainersEnum1
-  > = z.enum(StackSettingsProviderAzureApplicationGatewayForContainersEnum1);
-
-/** @internal */
-export type StackSettingsProviderAzureApplicationGatewayForContainers1$Outbound =
-  {
-    albName?: string | null | undefined;
-    albNamespace?: string | null | undefined;
-    frontend: string;
-    provider: string;
-  };
-
-/** @internal */
-export const StackSettingsProviderAzureApplicationGatewayForContainers1$outboundSchema:
-  z.ZodType<
-    StackSettingsProviderAzureApplicationGatewayForContainers1$Outbound,
-    StackSettingsProviderAzureApplicationGatewayForContainers1
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      StackSettingsProviderAzureApplicationGatewayForContainersEnum1$outboundSchema,
-  });
-
-export function stackSettingsProviderAzureApplicationGatewayForContainers1ToJSON(
-  stackSettingsProviderAzureApplicationGatewayForContainers1:
-    StackSettingsProviderAzureApplicationGatewayForContainers1,
-): string {
-  return JSON.stringify(
-    StackSettingsProviderAzureApplicationGatewayForContainers1$outboundSchema
-      .parse(stackSettingsProviderAzureApplicationGatewayForContainers1),
-  );
-}
-
-/** @internal */
-export const StackSettingsProviderGkeGatewayEnum1$outboundSchema: z.ZodEnum<
-  typeof StackSettingsProviderGkeGatewayEnum1
-> = z.enum(StackSettingsProviderGkeGatewayEnum1);
-
-/** @internal */
-export type StackSettingsProviderGkeGateway1$Outbound = {
-  provider: string;
-  staticAddressName?: string | null | undefined;
-};
-
-/** @internal */
-export const StackSettingsProviderGkeGateway1$outboundSchema: z.ZodType<
-  StackSettingsProviderGkeGateway1$Outbound,
-  StackSettingsProviderGkeGateway1
-> = z.object({
-  provider: StackSettingsProviderGkeGatewayEnum1$outboundSchema,
-  staticAddressName: z.nullable(z.string()).optional(),
-});
-
-export function stackSettingsProviderGkeGateway1ToJSON(
-  stackSettingsProviderGkeGateway1: StackSettingsProviderGkeGateway1,
-): string {
-  return JSON.stringify(
-    StackSettingsProviderGkeGateway1$outboundSchema.parse(
-      stackSettingsProviderGkeGateway1,
-    ),
-  );
-}
-
-/** @internal */
-export const StackSettingsProviderAwsAlbEnum1$outboundSchema: z.ZodEnum<
-  typeof StackSettingsProviderAwsAlbEnum1
-> = z.enum(StackSettingsProviderAwsAlbEnum1);
-
-/** @internal */
-export type StackSettingsProviderAwsAlb1$Outbound = {
-  ipAddressType?: string | null | undefined;
-  provider: string;
-  scheme: string;
-  subnetIds?: Array<string> | undefined;
-  targetType: string;
-};
-
-/** @internal */
-export const StackSettingsProviderAwsAlb1$outboundSchema: z.ZodType<
-  StackSettingsProviderAwsAlb1$Outbound,
-  StackSettingsProviderAwsAlb1
-> = z.object({
-  ipAddressType: z.nullable(z.string()).optional(),
-  provider: StackSettingsProviderAwsAlbEnum1$outboundSchema,
-  scheme: z.string(),
-  subnetIds: z.array(z.string()).optional(),
-  targetType: z.string(),
-});
-
-export function stackSettingsProviderAwsAlb1ToJSON(
-  stackSettingsProviderAwsAlb1: StackSettingsProviderAwsAlb1,
-): string {
-  return JSON.stringify(
-    StackSettingsProviderAwsAlb1$outboundSchema.parse(
-      stackSettingsProviderAwsAlb1,
-    ),
-  );
-}
-
-/** @internal */
-export type StackSettingsProviderUnion1$Outbound =
-  | StackSettingsProviderAwsAlb1$Outbound
-  | StackSettingsProviderAzureApplicationGatewayForContainers1$Outbound
-  | StackSettingsProviderGkeGateway1$Outbound
-  | string;
-
-/** @internal */
-export const StackSettingsProviderUnion1$outboundSchema: z.ZodType<
-  StackSettingsProviderUnion1$Outbound,
-  StackSettingsProviderUnion1
-> = z.union([
-  z.lazy(() => StackSettingsProviderAwsAlb1$outboundSchema),
-  z.lazy(() =>
-    StackSettingsProviderAzureApplicationGatewayForContainers1$outboundSchema
-  ),
-  z.lazy(() => StackSettingsProviderGkeGateway1$outboundSchema),
-  z.string(),
-]);
-
-export function stackSettingsProviderUnion1ToJSON(
-  stackSettingsProviderUnion1: StackSettingsProviderUnion1,
-): string {
-  return JSON.stringify(
-    StackSettingsProviderUnion1$outboundSchema.parse(
-      stackSettingsProviderUnion1,
-    ),
-  );
-}
-
-/** @internal */
-export type StackSettingsRouteIngress1$Outbound = {
-  annotations?: { [k: string]: string } | undefined;
-  controller?: string | null | undefined;
-  ingressClassName: string;
-  labels?: { [k: string]: string } | undefined;
-  provider?:
-    | StackSettingsProviderAwsAlb1$Outbound
-    | StackSettingsProviderAzureApplicationGatewayForContainers1$Outbound
-    | StackSettingsProviderGkeGateway1$Outbound
-    | string
-    | null
-    | undefined;
-  routeApi: "ingress";
-};
-
-/** @internal */
-export const StackSettingsRouteIngress1$outboundSchema: z.ZodType<
-  StackSettingsRouteIngress1$Outbound,
-  StackSettingsRouteIngress1
-> = z.object({
-  annotations: z.record(z.string(), z.string()).optional(),
-  controller: z.nullable(z.string()).optional(),
-  ingressClassName: z.string(),
-  labels: z.record(z.string(), z.string()).optional(),
-  provider: z.nullable(
-    z.union([
-      z.lazy(() => StackSettingsProviderAwsAlb1$outboundSchema),
-      z.lazy(() =>
-        StackSettingsProviderAzureApplicationGatewayForContainers1$outboundSchema
-      ),
-      z.lazy(() => StackSettingsProviderGkeGateway1$outboundSchema),
-      z.string(),
-    ]),
-  ).optional(),
-  routeApi: z.literal("ingress"),
-});
-
-export function stackSettingsRouteIngress1ToJSON(
-  stackSettingsRouteIngress1: StackSettingsRouteIngress1,
-): string {
-  return JSON.stringify(
-    StackSettingsRouteIngress1$outboundSchema.parse(stackSettingsRouteIngress1),
-  );
-}
-
-/** @internal */
-export type StackSettingsRouteUnion1$Outbound =
-  | StackSettingsRouteIngress1$Outbound
-  | StackSettingsRouteGateway1$Outbound;
-
-/** @internal */
-export const StackSettingsRouteUnion1$outboundSchema: z.ZodType<
-  StackSettingsRouteUnion1$Outbound,
-  StackSettingsRouteUnion1
-> = z.union([
-  z.lazy(() => StackSettingsRouteIngress1$outboundSchema),
-  z.lazy(() => StackSettingsRouteGateway1$outboundSchema),
-]);
-
-export function stackSettingsRouteUnion1ToJSON(
-  stackSettingsRouteUnion1: StackSettingsRouteUnion1,
-): string {
-  return JSON.stringify(
-    StackSettingsRouteUnion1$outboundSchema.parse(stackSettingsRouteUnion1),
-  );
-}
-
-/** @internal */
-export type StackSettingsExposureGenerated$Outbound = {
-  certificate:
-    | StackSettingsCertificateTLSSecretRef1$Outbound
-    | StackSettingsCertificateManagedAcmImport1$Outbound
-    | StackSettingsCertificateAwsAcmArn1$Outbound
-    | StackSettingsCertificateManagedTLSSecret1$Outbound
-    | StackSettingsCertificateNone1$Outbound;
-  mode: string;
-  route:
-    | StackSettingsRouteIngress1$Outbound
-    | StackSettingsRouteGateway1$Outbound;
-};
-
-/** @internal */
-export const StackSettingsExposureGenerated$outboundSchema: z.ZodType<
-  StackSettingsExposureGenerated$Outbound,
-  StackSettingsExposureGenerated
-> = z.object({
-  certificate: z.union([
-    z.lazy(() => StackSettingsCertificateTLSSecretRef1$outboundSchema),
-    z.lazy(() => StackSettingsCertificateManagedAcmImport1$outboundSchema),
-    z.lazy(() => StackSettingsCertificateAwsAcmArn1$outboundSchema),
-    z.lazy(() => StackSettingsCertificateManagedTLSSecret1$outboundSchema),
-    z.lazy(() => StackSettingsCertificateNone1$outboundSchema),
-  ]),
-  mode: StackSettingsModeGenerated$outboundSchema,
-  route: z.union([
-    z.lazy(() => StackSettingsRouteIngress1$outboundSchema),
-    z.lazy(() => StackSettingsRouteGateway1$outboundSchema),
-  ]),
-});
-
-export function stackSettingsExposureGeneratedToJSON(
-  stackSettingsExposureGenerated: StackSettingsExposureGenerated,
-): string {
-  return JSON.stringify(
-    StackSettingsExposureGenerated$outboundSchema.parse(
-      stackSettingsExposureGenerated,
-    ),
-  );
-}
-
-/** @internal */
-export const StackSettingsModeDisabled$outboundSchema: z.ZodEnum<
-  typeof StackSettingsModeDisabled
-> = z.enum(StackSettingsModeDisabled);
-
-/** @internal */
-export type StackSettingsExposureDisabled$Outbound = {
-  mode: string;
-};
-
-/** @internal */
-export const StackSettingsExposureDisabled$outboundSchema: z.ZodType<
-  StackSettingsExposureDisabled$Outbound,
-  StackSettingsExposureDisabled
-> = z.object({
-  mode: StackSettingsModeDisabled$outboundSchema,
-});
-
-export function stackSettingsExposureDisabledToJSON(
-  stackSettingsExposureDisabled: StackSettingsExposureDisabled,
-): string {
-  return JSON.stringify(
-    StackSettingsExposureDisabled$outboundSchema.parse(
-      stackSettingsExposureDisabled,
-    ),
-  );
-}
-
-/** @internal */
-export type StackSettingsExposureUnion$Outbound =
-  | StackSettingsExposureCustom$Outbound
-  | StackSettingsExposureGenerated$Outbound
-  | StackSettingsExposureDisabled$Outbound
-  | string;
-
-/** @internal */
-export const StackSettingsExposureUnion$outboundSchema: z.ZodType<
-  StackSettingsExposureUnion$Outbound,
-  StackSettingsExposureUnion
-> = z.union([
-  z.lazy(() => StackSettingsExposureCustom$outboundSchema),
-  z.lazy(() => StackSettingsExposureGenerated$outboundSchema),
-  z.lazy(() => StackSettingsExposureDisabled$outboundSchema),
-  z.string(),
-]);
-
-export function stackSettingsExposureUnionToJSON(
-  stackSettingsExposureUnion: StackSettingsExposureUnion,
-): string {
-  return JSON.stringify(
-    StackSettingsExposureUnion$outboundSchema.parse(stackSettingsExposureUnion),
+    StackSettingsExposure$outboundSchema.parse(stackSettingsExposure),
   );
 }
 
@@ -3279,9 +1586,10 @@ export function stackSettingsExposureUnionToJSON(
 export type StackSettingsKubernetes$Outbound = {
   cluster?: StackSettingsCluster$Outbound | string | null | undefined;
   exposure?:
-    | StackSettingsExposureCustom$Outbound
-    | StackSettingsExposureGenerated$Outbound
-    | StackSettingsExposureDisabled$Outbound
+    | KubernetesExposureCustom$Outbound
+    | KubernetesExposureCustomBaseDomain$Outbound
+    | KubernetesExposureGenerated$Outbound
+    | KubernetesExposureDisabled$Outbound
     | string
     | null
     | undefined;
@@ -3297,9 +1605,10 @@ export const StackSettingsKubernetes$outboundSchema: z.ZodType<
   ).optional(),
   exposure: z.nullable(
     z.union([
-      z.lazy(() => StackSettingsExposureCustom$outboundSchema),
-      z.lazy(() => StackSettingsExposureGenerated$outboundSchema),
-      z.lazy(() => StackSettingsExposureDisabled$outboundSchema),
+      KubernetesExposureCustom$outboundSchema,
+      KubernetesExposureCustomBaseDomain$outboundSchema,
+      KubernetesExposureGenerated$outboundSchema,
+      KubernetesExposureDisabled$outboundSchema,
       z.string(),
     ]),
   ).optional(),
@@ -3560,6 +1869,50 @@ export const StackSettingsSetupManagement$outboundSchema: z.ZodEnum<
 > = z.enum(StackSettingsSetupManagement);
 
 /** @internal */
+export type StackSettingsSigning$Outbound = {
+  channel: string;
+  fingerprint: string;
+  privateMachineApiUrl?: string | null | undefined;
+};
+
+/** @internal */
+export const StackSettingsSigning$outboundSchema: z.ZodType<
+  StackSettingsSigning$Outbound,
+  StackSettingsSigning
+> = z.object({
+  channel: z.string(),
+  fingerprint: z.string(),
+  privateMachineApiUrl: z.nullable(z.string()).optional(),
+});
+
+export function stackSettingsSigningToJSON(
+  stackSettingsSigning: StackSettingsSigning,
+): string {
+  return JSON.stringify(
+    StackSettingsSigning$outboundSchema.parse(stackSettingsSigning),
+  );
+}
+
+/** @internal */
+export type StackSettingsSigningUnion$Outbound =
+  | StackSettingsSigning$Outbound
+  | string;
+
+/** @internal */
+export const StackSettingsSigningUnion$outboundSchema: z.ZodType<
+  StackSettingsSigningUnion$Outbound,
+  StackSettingsSigningUnion
+> = z.union([z.lazy(() => StackSettingsSigning$outboundSchema), z.string()]);
+
+export function stackSettingsSigningUnionToJSON(
+  stackSettingsSigningUnion: StackSettingsSigningUnion,
+): string {
+  return JSON.stringify(
+    StackSettingsSigningUnion$outboundSchema.parse(stackSettingsSigningUnion),
+  );
+}
+
+/** @internal */
 export const StackSettingsTelemetry$outboundSchema: z.ZodEnum<
   typeof StackSettingsTelemetry
 > = z.enum(StackSettingsTelemetry);
@@ -3571,6 +1924,7 @@ export const StackSettingsUpdates$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type StackSettings$Outbound = {
+  airgapped?: boolean | undefined;
   compute?: StackSettingsCompute$Outbound | string | null | undefined;
   deploymentModel?: string | undefined;
   domains?: StackSettingsDomains$Outbound | string | null | undefined;
@@ -3593,6 +1947,7 @@ export type StackSettings$Outbound = {
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   quotaWarningOverrides?: Array<string> | undefined;
   setupManagement?: string | undefined;
+  signing?: StackSettingsSigning$Outbound | string | null | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -3602,6 +1957,7 @@ export const StackSettings$outboundSchema: z.ZodType<
   StackSettings$Outbound,
   StackSettings
 > = z.object({
+  airgapped: z.boolean().optional(),
   compute: z.nullable(
     z.union([z.lazy(() => StackSettingsCompute$outboundSchema), z.string()]),
   ).optional(),
@@ -3632,6 +1988,9 @@ export const StackSettings$outboundSchema: z.ZodType<
   ).optional(),
   quotaWarningOverrides: z.array(z.string()).optional(),
   setupManagement: StackSettingsSetupManagement$outboundSchema.optional(),
+  signing: z.nullable(
+    z.union([z.lazy(() => StackSettingsSigning$outboundSchema), z.string()]),
+  ).optional(),
   telemetry: StackSettingsTelemetry$outboundSchema.optional(),
   updates: StackSettingsUpdates$outboundSchema.optional(),
 });

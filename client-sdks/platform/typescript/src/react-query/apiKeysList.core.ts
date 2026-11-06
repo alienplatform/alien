@@ -41,6 +41,7 @@ export function buildApiKeysListQuery(
   return {
     queryKey: queryKeyApiKeysList({
       project: request?.project,
+      setupLinksForGroup: request?.setupLinksForGroup,
       limit: request?.limit,
       cursor: request?.cursor,
     }),
@@ -70,6 +71,7 @@ export function buildApiKeysListQuery(
 export function queryKeyApiKeysList(
   parameters: {
     project?: string | undefined;
+    setupLinksForGroup?: string | undefined;
     limit?: number | undefined;
     cursor?: string | undefined;
   },

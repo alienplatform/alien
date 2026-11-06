@@ -78,6 +78,13 @@ export type PlanDeploymentComputeFailureDomainsUnion2 =
   | string;
 
 export type PlanDeploymentComputePoolsAutoscale = {
+  /**
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
+   */
+  dataDiskGib?: number | null | undefined;
   failureDomains?:
     | PlanDeploymentComputeFailureDomains2
     | string
@@ -120,6 +127,13 @@ export type PlanDeploymentComputeFailureDomainsUnion1 =
   | string;
 
 export type PlanDeploymentComputePoolsFixed = {
+  /**
+   * Data disk size per machine, in whole GiB, within the pool's declared
+   *
+   * @remarks
+   * range. Omitted uses the release default; 0 runs the pool without one.
+   */
+  dataDiskGib?: number | null | undefined;
   failureDomains?:
     | PlanDeploymentComputeFailureDomains1
     | string
@@ -232,9 +246,18 @@ export type PlanDeploymentComputeDomainsKubernetesUnion =
   | string;
 
 /**
+ * Managed certificate issuance settings.
+ */
+export type PlanDeploymentComputeManaged = {};
+
+export type PlanDeploymentComputeManagedUnion =
+  | PlanDeploymentComputeManaged
+  | string;
+
+/**
  * Platform-specific certificate references for custom domains.
  */
-export type PlanDeploymentComputeDomainsCertificate = {
+export type PlanDeploymentComputeCertificate = {
   aws?: PlanDeploymentComputeAws | string | null | undefined;
   azure?: PlanDeploymentComputeAzure | string | null | undefined;
   gcp?: PlanDeploymentComputeGcp | string | null | undefined;
@@ -243,6 +266,7 @@ export type PlanDeploymentComputeDomainsCertificate = {
     | string
     | null
     | undefined;
+  managed?: PlanDeploymentComputeManaged | string | null | undefined;
 };
 
 /**
@@ -252,11 +276,15 @@ export type PlanDeploymentComputeCustomDomains = {
   /**
    * Platform-specific certificate references for custom domains.
    */
-  certificate: PlanDeploymentComputeDomainsCertificate;
+  certificate: PlanDeploymentComputeCertificate;
   /**
-   * Fully qualified domain name to use.
+   * Fully qualified domain name for a supplied certificate.
    */
-  domain: string;
+  domain?: string | undefined;
+  /**
+   * Hostnames keyed by endpoint name for a managed certificate.
+   */
+  endpoints?: { [k: string]: string } | undefined;
 };
 
 export const PlanDeploymentComputeModeLoadBalancer = {
@@ -296,7 +324,7 @@ export type PlanDeploymentComputePublicEndpointTargetUnion =
  * @remarks
  *
  * When `custom_domains` is set, the specified resources use customer-provided
- * domains and certificates. Otherwise, Alien auto-generates domains.
+ * domains with supplied or managed certificates. Otherwise, Alien auto-generates domains.
  */
 export type PlanDeploymentComputeDomains = {
   /**
@@ -397,637 +425,11 @@ export type PlanDeploymentComputeClusterUnion =
   | PlanDeploymentComputeCluster
   | string;
 
-export type PlanDeploymentComputeCertificateNone2 = {
-  mode: "none";
-};
-
-export type PlanDeploymentComputeCertificateManagedTLSSecret2 = {
-  mode: "managedTlsSecret";
-  /**
-   * Secret name template. Runtime may substitute resource/deployment tokens.
-   */
-  secretNameTemplate: string;
-};
-
-export type PlanDeploymentComputeCertificateAwsAcmArn2 = {
-  /**
-   * Existing ACM certificate ARN.
-   */
-  certificateArn: string;
-  mode: "awsAcmArn";
-};
-
-export type PlanDeploymentComputeCertificateManagedAcmImport2 = {
-  mode: "managedAcmImport";
-  /**
-   * ACM region. Defaults to the deployment region when omitted.
-   */
-  region?: string | null | undefined;
-  /**
-   * Tags applied to runtime-imported ACM certificates.
-   */
-  tags?: { [k: string]: string } | undefined;
-};
-
-/**
- * Namespace-scoped Kubernetes TLS Secret reference.
- */
-export type PlanDeploymentComputeCertificateTLSSecretRef2 = {
-  /**
-   * Secret namespace. Defaults to the release namespace when omitted.
-   */
-  namespace?: string | null | undefined;
-  /**
-   * Secret name.
-   */
-  secretName: string;
-  mode: "tlsSecretRef";
-};
-
-/**
- * Certificate publication or reference mode for Kubernetes public endpoints.
- */
-export type PlanDeploymentComputeCertificateUnion2 =
-  | PlanDeploymentComputeCertificateTLSSecretRef2
-  | PlanDeploymentComputeCertificateManagedAcmImport2
-  | PlanDeploymentComputeCertificateAwsAcmArn2
-  | PlanDeploymentComputeCertificateManagedTLSSecret2
-  | PlanDeploymentComputeCertificateNone2;
-
-export const PlanDeploymentComputeModeCustom = {
-  Custom: "custom",
-} as const;
-export type PlanDeploymentComputeModeCustom = ClosedEnum<
-  typeof PlanDeploymentComputeModeCustom
->;
-
-export const PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum4 =
-  {
-    AzureApplicationGatewayForContainers:
-      "azureApplicationGatewayForContainers",
-  } as const;
-export type PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum4 =
-  ClosedEnum<
-    typeof PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum4
-  >;
-
-export type PlanDeploymentComputeProviderAzureApplicationGatewayForContainers4 =
-  {
-    /**
-     * Optional ALB name when using BYO Application Gateway resources.
-     */
-    albName?: string | null | undefined;
-    /**
-     * Optional ALB namespace when using BYO Application Gateway resources.
-     */
-    albNamespace?: string | null | undefined;
-    /**
-     * Public or internal frontend exposure.
-     */
-    frontend: string;
-    provider:
-      PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum4;
-  };
-
-export const PlanDeploymentComputeProviderGkeGatewayEnum4 = {
-  GkeGateway: "gkeGateway",
-} as const;
-export type PlanDeploymentComputeProviderGkeGatewayEnum4 = ClosedEnum<
-  typeof PlanDeploymentComputeProviderGkeGatewayEnum4
->;
-
-export type PlanDeploymentComputeProviderGkeGateway4 = {
-  provider: PlanDeploymentComputeProviderGkeGatewayEnum4;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const PlanDeploymentComputeProviderAwsAlbEnum4 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type PlanDeploymentComputeProviderAwsAlbEnum4 = ClosedEnum<
-  typeof PlanDeploymentComputeProviderAwsAlbEnum4
->;
-
-export type PlanDeploymentComputeProviderAwsAlb4 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: PlanDeploymentComputeProviderAwsAlbEnum4;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type PlanDeploymentComputeProviderUnion4 =
-  | PlanDeploymentComputeProviderAwsAlb4
-  | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers4
-  | PlanDeploymentComputeProviderGkeGateway4
-  | string;
-
-/**
- * Shared Gateway API route profile values.
- */
-export type PlanDeploymentComputeRouteGateway2 = {
-  /**
-   * Annotations applied to route objects.
-   */
-  annotations?: { [k: string]: string } | undefined;
-  /**
-   * Route controller identifier, for example a cloud Gateway controller.
-   */
-  controller?: string | null | undefined;
-  /**
-   * GatewayClass selected for generated Gateways.
-   */
-  gatewayClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  /**
-   * Listener port, usually 443.
-   */
-  listenerPort: number;
-  provider?:
-    | PlanDeploymentComputeProviderAwsAlb4
-    | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers4
-    | PlanDeploymentComputeProviderGkeGateway4
-    | string
-    | null
-    | undefined;
-  routeApi: "gateway";
-};
-
-export const PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum3 =
-  {
-    AzureApplicationGatewayForContainers:
-      "azureApplicationGatewayForContainers",
-  } as const;
-export type PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum3 =
-  ClosedEnum<
-    typeof PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum3
-  >;
-
-export type PlanDeploymentComputeProviderAzureApplicationGatewayForContainers3 =
-  {
-    /**
-     * Optional ALB name when using BYO Application Gateway resources.
-     */
-    albName?: string | null | undefined;
-    /**
-     * Optional ALB namespace when using BYO Application Gateway resources.
-     */
-    albNamespace?: string | null | undefined;
-    /**
-     * Public or internal frontend exposure.
-     */
-    frontend: string;
-    provider:
-      PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum3;
-  };
-
-export const PlanDeploymentComputeProviderGkeGatewayEnum3 = {
-  GkeGateway: "gkeGateway",
-} as const;
-export type PlanDeploymentComputeProviderGkeGatewayEnum3 = ClosedEnum<
-  typeof PlanDeploymentComputeProviderGkeGatewayEnum3
->;
-
-export type PlanDeploymentComputeProviderGkeGateway3 = {
-  provider: PlanDeploymentComputeProviderGkeGatewayEnum3;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const PlanDeploymentComputeProviderAwsAlbEnum3 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type PlanDeploymentComputeProviderAwsAlbEnum3 = ClosedEnum<
-  typeof PlanDeploymentComputeProviderAwsAlbEnum3
->;
-
-export type PlanDeploymentComputeProviderAwsAlb3 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: PlanDeploymentComputeProviderAwsAlbEnum3;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type PlanDeploymentComputeProviderUnion3 =
-  | PlanDeploymentComputeProviderAwsAlb3
-  | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers3
-  | PlanDeploymentComputeProviderGkeGateway3
-  | string;
-
-/**
- * Shared Ingress route profile values.
- */
-export type PlanDeploymentComputeRouteIngress2 = {
-  /**
-   * Annotations applied to route objects.
-   */
-  annotations?: { [k: string]: string } | undefined;
-  /**
-   * Route controller identifier, for example `eks.amazonaws.com/alb`.
-   */
-  controller?: string | null | undefined;
-  /**
-   * `spec.ingressClassName` for generated Ingresses.
-   */
-  ingressClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  provider?:
-    | PlanDeploymentComputeProviderAwsAlb3
-    | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers3
-    | PlanDeploymentComputeProviderGkeGateway3
-    | string
-    | null
-    | undefined;
-  routeApi: "ingress";
-};
-
-/**
- * Kubernetes route API selected for public endpoints.
- */
-export type PlanDeploymentComputeRouteUnion2 =
-  | PlanDeploymentComputeRouteIngress2
-  | PlanDeploymentComputeRouteGateway2;
-
-export type PlanDeploymentComputeExposureCustom = {
-  /**
-   * Certificate publication or reference mode for Kubernetes public endpoints.
-   */
-  certificate:
-    | PlanDeploymentComputeCertificateTLSSecretRef2
-    | PlanDeploymentComputeCertificateManagedAcmImport2
-    | PlanDeploymentComputeCertificateAwsAcmArn2
-    | PlanDeploymentComputeCertificateManagedTLSSecret2
-    | PlanDeploymentComputeCertificateNone2;
-  /**
-   * Hostname routed by the Kubernetes public endpoint.
-   */
-  domain: string;
-  mode: PlanDeploymentComputeModeCustom;
-  /**
-   * Kubernetes route API selected for public endpoints.
-   */
-  route:
-    | PlanDeploymentComputeRouteIngress2
-    | PlanDeploymentComputeRouteGateway2;
-};
-
-export type PlanDeploymentComputeCertificateNone1 = {
-  mode: "none";
-};
-
-export type PlanDeploymentComputeCertificateManagedTLSSecret1 = {
-  mode: "managedTlsSecret";
-  /**
-   * Secret name template. Runtime may substitute resource/deployment tokens.
-   */
-  secretNameTemplate: string;
-};
-
-export type PlanDeploymentComputeCertificateAwsAcmArn1 = {
-  /**
-   * Existing ACM certificate ARN.
-   */
-  certificateArn: string;
-  mode: "awsAcmArn";
-};
-
-export type PlanDeploymentComputeCertificateManagedAcmImport1 = {
-  mode: "managedAcmImport";
-  /**
-   * ACM region. Defaults to the deployment region when omitted.
-   */
-  region?: string | null | undefined;
-  /**
-   * Tags applied to runtime-imported ACM certificates.
-   */
-  tags?: { [k: string]: string } | undefined;
-};
-
-/**
- * Namespace-scoped Kubernetes TLS Secret reference.
- */
-export type PlanDeploymentComputeCertificateTLSSecretRef1 = {
-  /**
-   * Secret namespace. Defaults to the release namespace when omitted.
-   */
-  namespace?: string | null | undefined;
-  /**
-   * Secret name.
-   */
-  secretName: string;
-  mode: "tlsSecretRef";
-};
-
-/**
- * Certificate publication or reference mode for Kubernetes public endpoints.
- */
-export type PlanDeploymentComputeCertificateUnion1 =
-  | PlanDeploymentComputeCertificateTLSSecretRef1
-  | PlanDeploymentComputeCertificateManagedAcmImport1
-  | PlanDeploymentComputeCertificateAwsAcmArn1
-  | PlanDeploymentComputeCertificateManagedTLSSecret1
-  | PlanDeploymentComputeCertificateNone1;
-
-export const PlanDeploymentComputeModeGenerated = {
-  Generated: "generated",
-} as const;
-export type PlanDeploymentComputeModeGenerated = ClosedEnum<
-  typeof PlanDeploymentComputeModeGenerated
->;
-
-export const PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum2 =
-  {
-    AzureApplicationGatewayForContainers:
-      "azureApplicationGatewayForContainers",
-  } as const;
-export type PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum2 =
-  ClosedEnum<
-    typeof PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum2
-  >;
-
-export type PlanDeploymentComputeProviderAzureApplicationGatewayForContainers2 =
-  {
-    /**
-     * Optional ALB name when using BYO Application Gateway resources.
-     */
-    albName?: string | null | undefined;
-    /**
-     * Optional ALB namespace when using BYO Application Gateway resources.
-     */
-    albNamespace?: string | null | undefined;
-    /**
-     * Public or internal frontend exposure.
-     */
-    frontend: string;
-    provider:
-      PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum2;
-  };
-
-export const PlanDeploymentComputeProviderGkeGatewayEnum2 = {
-  GkeGateway: "gkeGateway",
-} as const;
-export type PlanDeploymentComputeProviderGkeGatewayEnum2 = ClosedEnum<
-  typeof PlanDeploymentComputeProviderGkeGatewayEnum2
->;
-
-export type PlanDeploymentComputeProviderGkeGateway2 = {
-  provider: PlanDeploymentComputeProviderGkeGatewayEnum2;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const PlanDeploymentComputeProviderAwsAlbEnum2 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type PlanDeploymentComputeProviderAwsAlbEnum2 = ClosedEnum<
-  typeof PlanDeploymentComputeProviderAwsAlbEnum2
->;
-
-export type PlanDeploymentComputeProviderAwsAlb2 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: PlanDeploymentComputeProviderAwsAlbEnum2;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type PlanDeploymentComputeProviderUnion2 =
-  | PlanDeploymentComputeProviderAwsAlb2
-  | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers2
-  | PlanDeploymentComputeProviderGkeGateway2
-  | string;
-
-/**
- * Shared Gateway API route profile values.
- */
-export type PlanDeploymentComputeRouteGateway1 = {
-  /**
-   * Annotations applied to route objects.
-   */
-  annotations?: { [k: string]: string } | undefined;
-  /**
-   * Route controller identifier, for example a cloud Gateway controller.
-   */
-  controller?: string | null | undefined;
-  /**
-   * GatewayClass selected for generated Gateways.
-   */
-  gatewayClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  /**
-   * Listener port, usually 443.
-   */
-  listenerPort: number;
-  provider?:
-    | PlanDeploymentComputeProviderAwsAlb2
-    | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers2
-    | PlanDeploymentComputeProviderGkeGateway2
-    | string
-    | null
-    | undefined;
-  routeApi: "gateway";
-};
-
-export const PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum1 =
-  {
-    AzureApplicationGatewayForContainers:
-      "azureApplicationGatewayForContainers",
-  } as const;
-export type PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum1 =
-  ClosedEnum<
-    typeof PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum1
-  >;
-
-export type PlanDeploymentComputeProviderAzureApplicationGatewayForContainers1 =
-  {
-    /**
-     * Optional ALB name when using BYO Application Gateway resources.
-     */
-    albName?: string | null | undefined;
-    /**
-     * Optional ALB namespace when using BYO Application Gateway resources.
-     */
-    albNamespace?: string | null | undefined;
-    /**
-     * Public or internal frontend exposure.
-     */
-    frontend: string;
-    provider:
-      PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum1;
-  };
-
-export const PlanDeploymentComputeProviderGkeGatewayEnum1 = {
-  GkeGateway: "gkeGateway",
-} as const;
-export type PlanDeploymentComputeProviderGkeGatewayEnum1 = ClosedEnum<
-  typeof PlanDeploymentComputeProviderGkeGatewayEnum1
->;
-
-export type PlanDeploymentComputeProviderGkeGateway1 = {
-  provider: PlanDeploymentComputeProviderGkeGatewayEnum1;
-  /**
-   * Optional static address name for the Gateway frontend.
-   */
-  staticAddressName?: string | null | undefined;
-};
-
-export const PlanDeploymentComputeProviderAwsAlbEnum1 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type PlanDeploymentComputeProviderAwsAlbEnum1 = ClosedEnum<
-  typeof PlanDeploymentComputeProviderAwsAlbEnum1
->;
-
-export type PlanDeploymentComputeProviderAwsAlb1 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: PlanDeploymentComputeProviderAwsAlbEnum1;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type PlanDeploymentComputeProviderUnion1 =
-  | PlanDeploymentComputeProviderAwsAlb1
-  | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers1
-  | PlanDeploymentComputeProviderGkeGateway1
-  | string;
-
-/**
- * Shared Ingress route profile values.
- */
-export type PlanDeploymentComputeRouteIngress1 = {
-  /**
-   * Annotations applied to route objects.
-   */
-  annotations?: { [k: string]: string } | undefined;
-  /**
-   * Route controller identifier, for example `eks.amazonaws.com/alb`.
-   */
-  controller?: string | null | undefined;
-  /**
-   * `spec.ingressClassName` for generated Ingresses.
-   */
-  ingressClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  provider?:
-    | PlanDeploymentComputeProviderAwsAlb1
-    | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers1
-    | PlanDeploymentComputeProviderGkeGateway1
-    | string
-    | null
-    | undefined;
-  routeApi: "ingress";
-};
-
-/**
- * Kubernetes route API selected for public endpoints.
- */
-export type PlanDeploymentComputeRouteUnion1 =
-  | PlanDeploymentComputeRouteIngress1
-  | PlanDeploymentComputeRouteGateway1;
-
-export type PlanDeploymentComputeExposureGenerated = {
-  /**
-   * Certificate publication or reference mode for Kubernetes public endpoints.
-   */
-  certificate:
-    | PlanDeploymentComputeCertificateTLSSecretRef1
-    | PlanDeploymentComputeCertificateManagedAcmImport1
-    | PlanDeploymentComputeCertificateAwsAcmArn1
-    | PlanDeploymentComputeCertificateManagedTLSSecret1
-    | PlanDeploymentComputeCertificateNone1;
-  mode: PlanDeploymentComputeModeGenerated;
-  /**
-   * Kubernetes route API selected for public endpoints.
-   */
-  route:
-    | PlanDeploymentComputeRouteIngress1
-    | PlanDeploymentComputeRouteGateway1;
-};
-
-export const PlanDeploymentComputeModeDisabled = {
-  Disabled: "disabled",
-} as const;
-export type PlanDeploymentComputeModeDisabled = ClosedEnum<
-  typeof PlanDeploymentComputeModeDisabled
->;
-
-export type PlanDeploymentComputeExposureDisabled = {
-  mode: PlanDeploymentComputeModeDisabled;
-};
-
-export type PlanDeploymentComputeExposureUnion =
-  | PlanDeploymentComputeExposureCustom
-  | PlanDeploymentComputeExposureGenerated
-  | PlanDeploymentComputeExposureDisabled
+export type PlanDeploymentComputeExposure =
+  | models.KubernetesExposureCustom
+  | models.KubernetesExposureCustomBaseDomain
+  | models.KubernetesExposureGenerated
+  | models.KubernetesExposureDisabled
   | string;
 
 /**
@@ -1043,9 +445,10 @@ export type PlanDeploymentComputeExposureUnion =
 export type PlanDeploymentComputeKubernetes = {
   cluster?: PlanDeploymentComputeCluster | string | null | undefined;
   exposure?:
-    | PlanDeploymentComputeExposureCustom
-    | PlanDeploymentComputeExposureGenerated
-    | PlanDeploymentComputeExposureDisabled
+    | models.KubernetesExposureCustom
+    | models.KubernetesExposureCustomBaseDomain
+    | models.KubernetesExposureGenerated
+    | models.KubernetesExposureDisabled
     | string
     | null
     | undefined;
@@ -1198,6 +601,36 @@ export type PlanDeploymentComputeSetupManagement = ClosedEnum<
 >;
 
 /**
+ * What setup pins for a protected install.
+ *
+ * @remarks
+ *
+ * Take the values from the vendor's install guide or signed release, not from the
+ * control plane.
+ */
+export type PlanDeploymentComputeSigning = {
+  /**
+   * Release channel the install follows, such as `production`.
+   */
+  channel: string;
+  /**
+   * `SHA256:<64 hex>` fingerprint of the vendor's signer list version 1.
+   */
+  fingerprint: string;
+  /**
+   * Customer setup pins this private instance machine endpoint and enables
+   *
+   * @remarks
+   * install-local input custody. It cannot be changed by the runtime role.
+   */
+  privateMachineApiUrl?: string | null | undefined;
+};
+
+export type PlanDeploymentComputeSigningUnion =
+  | PlanDeploymentComputeSigning
+  | string;
+
+/**
  * How telemetry (logs, metrics, traces) is handled.
  */
 export const PlanDeploymentComputeTelemetry = {
@@ -1239,6 +672,13 @@ export type PlanDeploymentComputeUpdates = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type PlanDeploymentComputeStackSettings = {
+  /**
+   * Deliver Kubernetes updates and reports as carried bundles instead of a live connection.
+   *
+   * @remarks
+   * The Operator still executes deployments with the pull model.
+   */
+  airgapped?: boolean | undefined;
   compute?: PlanDeploymentComputeCompute | string | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
@@ -1289,6 +729,7 @@ export type PlanDeploymentComputeStackSettings = {
    * Whether setup remains a separate administrator operation.
    */
   setupManagement?: PlanDeploymentComputeSetupManagement | undefined;
+  signing?: PlanDeploymentComputeSigning | string | null | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -1300,6 +741,7 @@ export type PlanDeploymentComputeStackSettings = {
 };
 
 export type PlanDeploymentComputeRequest = {
+  releaseChannel?: string | undefined;
   setupItem?: PlanDeploymentComputeSetupItem | undefined;
   deploymentId?: string | undefined;
   updateOperationId?: string | undefined;
@@ -1411,6 +853,7 @@ export function planDeploymentComputeFailureDomainsUnion2ToJSON(
 
 /** @internal */
 export type PlanDeploymentComputePoolsAutoscale$Outbound = {
+  dataDiskGib?: number | null | undefined;
   failure_domains?:
     | PlanDeploymentComputeFailureDomains2$Outbound
     | string
@@ -1427,6 +870,7 @@ export const PlanDeploymentComputePoolsAutoscale$outboundSchema: z.ZodType<
   PlanDeploymentComputePoolsAutoscale$Outbound,
   PlanDeploymentComputePoolsAutoscale
 > = z.object({
+  dataDiskGib: z.nullable(z.int()).optional(),
   failureDomains: z.nullable(
     z.union([
       z.lazy(() => PlanDeploymentComputeFailureDomains2$outboundSchema),
@@ -1506,6 +950,7 @@ export function planDeploymentComputeFailureDomainsUnion1ToJSON(
 
 /** @internal */
 export type PlanDeploymentComputePoolsFixed$Outbound = {
+  dataDiskGib?: number | null | undefined;
   failure_domains?:
     | PlanDeploymentComputeFailureDomains1$Outbound
     | string
@@ -1521,6 +966,7 @@ export const PlanDeploymentComputePoolsFixed$outboundSchema: z.ZodType<
   PlanDeploymentComputePoolsFixed$Outbound,
   PlanDeploymentComputePoolsFixed
 > = z.object({
+  dataDiskGib: z.nullable(z.int()).optional(),
   failureDomains: z.nullable(
     z.union([
       z.lazy(() => PlanDeploymentComputeFailureDomains1$outboundSchema),
@@ -1852,7 +1298,50 @@ export function planDeploymentComputeDomainsKubernetesUnionToJSON(
 }
 
 /** @internal */
-export type PlanDeploymentComputeDomainsCertificate$Outbound = {
+export type PlanDeploymentComputeManaged$Outbound = {};
+
+/** @internal */
+export const PlanDeploymentComputeManaged$outboundSchema: z.ZodType<
+  PlanDeploymentComputeManaged$Outbound,
+  PlanDeploymentComputeManaged
+> = z.object({});
+
+export function planDeploymentComputeManagedToJSON(
+  planDeploymentComputeManaged: PlanDeploymentComputeManaged,
+): string {
+  return JSON.stringify(
+    PlanDeploymentComputeManaged$outboundSchema.parse(
+      planDeploymentComputeManaged,
+    ),
+  );
+}
+
+/** @internal */
+export type PlanDeploymentComputeManagedUnion$Outbound =
+  | PlanDeploymentComputeManaged$Outbound
+  | string;
+
+/** @internal */
+export const PlanDeploymentComputeManagedUnion$outboundSchema: z.ZodType<
+  PlanDeploymentComputeManagedUnion$Outbound,
+  PlanDeploymentComputeManagedUnion
+> = z.union([
+  z.lazy(() => PlanDeploymentComputeManaged$outboundSchema),
+  z.string(),
+]);
+
+export function planDeploymentComputeManagedUnionToJSON(
+  planDeploymentComputeManagedUnion: PlanDeploymentComputeManagedUnion,
+): string {
+  return JSON.stringify(
+    PlanDeploymentComputeManagedUnion$outboundSchema.parse(
+      planDeploymentComputeManagedUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type PlanDeploymentComputeCertificate$Outbound = {
   aws?: PlanDeploymentComputeAws$Outbound | string | null | undefined;
   azure?: PlanDeploymentComputeAzure$Outbound | string | null | undefined;
   gcp?: PlanDeploymentComputeGcp$Outbound | string | null | undefined;
@@ -1861,12 +1350,13 @@ export type PlanDeploymentComputeDomainsCertificate$Outbound = {
     | string
     | null
     | undefined;
+  managed?: PlanDeploymentComputeManaged$Outbound | string | null | undefined;
 };
 
 /** @internal */
-export const PlanDeploymentComputeDomainsCertificate$outboundSchema: z.ZodType<
-  PlanDeploymentComputeDomainsCertificate$Outbound,
-  PlanDeploymentComputeDomainsCertificate
+export const PlanDeploymentComputeCertificate$outboundSchema: z.ZodType<
+  PlanDeploymentComputeCertificate$Outbound,
+  PlanDeploymentComputeCertificate
 > = z.object({
   aws: z.nullable(
     z.union([
@@ -1892,23 +1382,29 @@ export const PlanDeploymentComputeDomainsCertificate$outboundSchema: z.ZodType<
       z.string(),
     ]),
   ).optional(),
+  managed: z.nullable(
+    z.union([
+      z.lazy(() => PlanDeploymentComputeManaged$outboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
 });
 
-export function planDeploymentComputeDomainsCertificateToJSON(
-  planDeploymentComputeDomainsCertificate:
-    PlanDeploymentComputeDomainsCertificate,
+export function planDeploymentComputeCertificateToJSON(
+  planDeploymentComputeCertificate: PlanDeploymentComputeCertificate,
 ): string {
   return JSON.stringify(
-    PlanDeploymentComputeDomainsCertificate$outboundSchema.parse(
-      planDeploymentComputeDomainsCertificate,
+    PlanDeploymentComputeCertificate$outboundSchema.parse(
+      planDeploymentComputeCertificate,
     ),
   );
 }
 
 /** @internal */
 export type PlanDeploymentComputeCustomDomains$Outbound = {
-  certificate: PlanDeploymentComputeDomainsCertificate$Outbound;
-  domain: string;
+  certificate: PlanDeploymentComputeCertificate$Outbound;
+  domain?: string | undefined;
+  endpoints?: { [k: string]: string } | undefined;
 };
 
 /** @internal */
@@ -1916,10 +1412,9 @@ export const PlanDeploymentComputeCustomDomains$outboundSchema: z.ZodType<
   PlanDeploymentComputeCustomDomains$Outbound,
   PlanDeploymentComputeCustomDomains
 > = z.object({
-  certificate: z.lazy(() =>
-    PlanDeploymentComputeDomainsCertificate$outboundSchema
-  ),
-  domain: z.string(),
+  certificate: z.lazy(() => PlanDeploymentComputeCertificate$outboundSchema),
+  domain: z.string().optional(),
+  endpoints: z.record(z.string(), z.string()).optional(),
 });
 
 export function planDeploymentComputeCustomDomainsToJSON(
@@ -2228,1308 +1723,31 @@ export function planDeploymentComputeClusterUnionToJSON(
 }
 
 /** @internal */
-export type PlanDeploymentComputeCertificateNone2$Outbound = {
-  mode: "none";
-};
-
-/** @internal */
-export const PlanDeploymentComputeCertificateNone2$outboundSchema: z.ZodType<
-  PlanDeploymentComputeCertificateNone2$Outbound,
-  PlanDeploymentComputeCertificateNone2
-> = z.object({
-  mode: z.literal("none"),
-});
-
-export function planDeploymentComputeCertificateNone2ToJSON(
-  planDeploymentComputeCertificateNone2: PlanDeploymentComputeCertificateNone2,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeCertificateNone2$outboundSchema.parse(
-      planDeploymentComputeCertificateNone2,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeCertificateManagedTLSSecret2$Outbound = {
-  mode: "managedTlsSecret";
-  secretNameTemplate: string;
-};
-
-/** @internal */
-export const PlanDeploymentComputeCertificateManagedTLSSecret2$outboundSchema:
-  z.ZodType<
-    PlanDeploymentComputeCertificateManagedTLSSecret2$Outbound,
-    PlanDeploymentComputeCertificateManagedTLSSecret2
-  > = z.object({
-    mode: z.literal("managedTlsSecret"),
-    secretNameTemplate: z.string(),
-  });
-
-export function planDeploymentComputeCertificateManagedTLSSecret2ToJSON(
-  planDeploymentComputeCertificateManagedTLSSecret2:
-    PlanDeploymentComputeCertificateManagedTLSSecret2,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeCertificateManagedTLSSecret2$outboundSchema.parse(
-      planDeploymentComputeCertificateManagedTLSSecret2,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeCertificateAwsAcmArn2$Outbound = {
-  certificateArn: string;
-  mode: "awsAcmArn";
-};
-
-/** @internal */
-export const PlanDeploymentComputeCertificateAwsAcmArn2$outboundSchema:
-  z.ZodType<
-    PlanDeploymentComputeCertificateAwsAcmArn2$Outbound,
-    PlanDeploymentComputeCertificateAwsAcmArn2
-  > = z.object({
-    certificateArn: z.string(),
-    mode: z.literal("awsAcmArn"),
-  });
-
-export function planDeploymentComputeCertificateAwsAcmArn2ToJSON(
-  planDeploymentComputeCertificateAwsAcmArn2:
-    PlanDeploymentComputeCertificateAwsAcmArn2,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeCertificateAwsAcmArn2$outboundSchema.parse(
-      planDeploymentComputeCertificateAwsAcmArn2,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeCertificateManagedAcmImport2$Outbound = {
-  mode: "managedAcmImport";
-  region?: string | null | undefined;
-  tags?: { [k: string]: string } | undefined;
-};
-
-/** @internal */
-export const PlanDeploymentComputeCertificateManagedAcmImport2$outboundSchema:
-  z.ZodType<
-    PlanDeploymentComputeCertificateManagedAcmImport2$Outbound,
-    PlanDeploymentComputeCertificateManagedAcmImport2
-  > = z.object({
-    mode: z.literal("managedAcmImport"),
-    region: z.nullable(z.string()).optional(),
-    tags: z.record(z.string(), z.string()).optional(),
-  });
-
-export function planDeploymentComputeCertificateManagedAcmImport2ToJSON(
-  planDeploymentComputeCertificateManagedAcmImport2:
-    PlanDeploymentComputeCertificateManagedAcmImport2,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeCertificateManagedAcmImport2$outboundSchema.parse(
-      planDeploymentComputeCertificateManagedAcmImport2,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeCertificateTLSSecretRef2$Outbound = {
-  namespace?: string | null | undefined;
-  secretName: string;
-  mode: "tlsSecretRef";
-};
-
-/** @internal */
-export const PlanDeploymentComputeCertificateTLSSecretRef2$outboundSchema:
-  z.ZodType<
-    PlanDeploymentComputeCertificateTLSSecretRef2$Outbound,
-    PlanDeploymentComputeCertificateTLSSecretRef2
-  > = z.object({
-    namespace: z.nullable(z.string()).optional(),
-    secretName: z.string(),
-    mode: z.literal("tlsSecretRef"),
-  });
-
-export function planDeploymentComputeCertificateTLSSecretRef2ToJSON(
-  planDeploymentComputeCertificateTLSSecretRef2:
-    PlanDeploymentComputeCertificateTLSSecretRef2,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeCertificateTLSSecretRef2$outboundSchema.parse(
-      planDeploymentComputeCertificateTLSSecretRef2,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeCertificateUnion2$Outbound =
-  | PlanDeploymentComputeCertificateTLSSecretRef2$Outbound
-  | PlanDeploymentComputeCertificateManagedAcmImport2$Outbound
-  | PlanDeploymentComputeCertificateAwsAcmArn2$Outbound
-  | PlanDeploymentComputeCertificateManagedTLSSecret2$Outbound
-  | PlanDeploymentComputeCertificateNone2$Outbound;
-
-/** @internal */
-export const PlanDeploymentComputeCertificateUnion2$outboundSchema: z.ZodType<
-  PlanDeploymentComputeCertificateUnion2$Outbound,
-  PlanDeploymentComputeCertificateUnion2
-> = z.union([
-  z.lazy(() => PlanDeploymentComputeCertificateTLSSecretRef2$outboundSchema),
-  z.lazy(() =>
-    PlanDeploymentComputeCertificateManagedAcmImport2$outboundSchema
-  ),
-  z.lazy(() => PlanDeploymentComputeCertificateAwsAcmArn2$outboundSchema),
-  z.lazy(() =>
-    PlanDeploymentComputeCertificateManagedTLSSecret2$outboundSchema
-  ),
-  z.lazy(() => PlanDeploymentComputeCertificateNone2$outboundSchema),
-]);
-
-export function planDeploymentComputeCertificateUnion2ToJSON(
-  planDeploymentComputeCertificateUnion2:
-    PlanDeploymentComputeCertificateUnion2,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeCertificateUnion2$outboundSchema.parse(
-      planDeploymentComputeCertificateUnion2,
-    ),
-  );
-}
-
-/** @internal */
-export const PlanDeploymentComputeModeCustom$outboundSchema: z.ZodEnum<
-  typeof PlanDeploymentComputeModeCustom
-> = z.enum(PlanDeploymentComputeModeCustom);
-
-/** @internal */
-export const PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum4$outboundSchema:
-  z.ZodEnum<
-    typeof PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum4
-  > = z.enum(
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum4,
-  );
-
-/** @internal */
-export type PlanDeploymentComputeProviderAzureApplicationGatewayForContainers4$Outbound =
-  {
-    albName?: string | null | undefined;
-    albNamespace?: string | null | undefined;
-    frontend: string;
-    provider: string;
-  };
-
-/** @internal */
-export const PlanDeploymentComputeProviderAzureApplicationGatewayForContainers4$outboundSchema:
-  z.ZodType<
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainers4$Outbound,
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainers4
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum4$outboundSchema,
-  });
-
-export function planDeploymentComputeProviderAzureApplicationGatewayForContainers4ToJSON(
-  planDeploymentComputeProviderAzureApplicationGatewayForContainers4:
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainers4,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainers4$outboundSchema
-      .parse(
-        planDeploymentComputeProviderAzureApplicationGatewayForContainers4,
-      ),
-  );
-}
-
-/** @internal */
-export const PlanDeploymentComputeProviderGkeGatewayEnum4$outboundSchema:
-  z.ZodEnum<typeof PlanDeploymentComputeProviderGkeGatewayEnum4> = z.enum(
-    PlanDeploymentComputeProviderGkeGatewayEnum4,
-  );
-
-/** @internal */
-export type PlanDeploymentComputeProviderGkeGateway4$Outbound = {
-  provider: string;
-  staticAddressName?: string | null | undefined;
-};
-
-/** @internal */
-export const PlanDeploymentComputeProviderGkeGateway4$outboundSchema: z.ZodType<
-  PlanDeploymentComputeProviderGkeGateway4$Outbound,
-  PlanDeploymentComputeProviderGkeGateway4
-> = z.object({
-  provider: PlanDeploymentComputeProviderGkeGatewayEnum4$outboundSchema,
-  staticAddressName: z.nullable(z.string()).optional(),
-});
-
-export function planDeploymentComputeProviderGkeGateway4ToJSON(
-  planDeploymentComputeProviderGkeGateway4:
-    PlanDeploymentComputeProviderGkeGateway4,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeProviderGkeGateway4$outboundSchema.parse(
-      planDeploymentComputeProviderGkeGateway4,
-    ),
-  );
-}
-
-/** @internal */
-export const PlanDeploymentComputeProviderAwsAlbEnum4$outboundSchema: z.ZodEnum<
-  typeof PlanDeploymentComputeProviderAwsAlbEnum4
-> = z.enum(PlanDeploymentComputeProviderAwsAlbEnum4);
-
-/** @internal */
-export type PlanDeploymentComputeProviderAwsAlb4$Outbound = {
-  ipAddressType?: string | null | undefined;
-  provider: string;
-  scheme: string;
-  subnetIds?: Array<string> | undefined;
-  targetType: string;
-};
-
-/** @internal */
-export const PlanDeploymentComputeProviderAwsAlb4$outboundSchema: z.ZodType<
-  PlanDeploymentComputeProviderAwsAlb4$Outbound,
-  PlanDeploymentComputeProviderAwsAlb4
-> = z.object({
-  ipAddressType: z.nullable(z.string()).optional(),
-  provider: PlanDeploymentComputeProviderAwsAlbEnum4$outboundSchema,
-  scheme: z.string(),
-  subnetIds: z.array(z.string()).optional(),
-  targetType: z.string(),
-});
-
-export function planDeploymentComputeProviderAwsAlb4ToJSON(
-  planDeploymentComputeProviderAwsAlb4: PlanDeploymentComputeProviderAwsAlb4,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeProviderAwsAlb4$outboundSchema.parse(
-      planDeploymentComputeProviderAwsAlb4,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeProviderUnion4$Outbound =
-  | PlanDeploymentComputeProviderAwsAlb4$Outbound
-  | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers4$Outbound
-  | PlanDeploymentComputeProviderGkeGateway4$Outbound
+export type PlanDeploymentComputeExposure$Outbound =
+  | models.KubernetesExposureCustom$Outbound
+  | models.KubernetesExposureCustomBaseDomain$Outbound
+  | models.KubernetesExposureGenerated$Outbound
+  | models.KubernetesExposureDisabled$Outbound
   | string;
 
 /** @internal */
-export const PlanDeploymentComputeProviderUnion4$outboundSchema: z.ZodType<
-  PlanDeploymentComputeProviderUnion4$Outbound,
-  PlanDeploymentComputeProviderUnion4
+export const PlanDeploymentComputeExposure$outboundSchema: z.ZodType<
+  PlanDeploymentComputeExposure$Outbound,
+  PlanDeploymentComputeExposure
 > = z.union([
-  z.lazy(() => PlanDeploymentComputeProviderAwsAlb4$outboundSchema),
-  z.lazy(() =>
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainers4$outboundSchema
-  ),
-  z.lazy(() => PlanDeploymentComputeProviderGkeGateway4$outboundSchema),
+  models.KubernetesExposureCustom$outboundSchema,
+  models.KubernetesExposureCustomBaseDomain$outboundSchema,
+  models.KubernetesExposureGenerated$outboundSchema,
+  models.KubernetesExposureDisabled$outboundSchema,
   z.string(),
 ]);
 
-export function planDeploymentComputeProviderUnion4ToJSON(
-  planDeploymentComputeProviderUnion4: PlanDeploymentComputeProviderUnion4,
+export function planDeploymentComputeExposureToJSON(
+  planDeploymentComputeExposure: PlanDeploymentComputeExposure,
 ): string {
   return JSON.stringify(
-    PlanDeploymentComputeProviderUnion4$outboundSchema.parse(
-      planDeploymentComputeProviderUnion4,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeRouteGateway2$Outbound = {
-  annotations?: { [k: string]: string } | undefined;
-  controller?: string | null | undefined;
-  gatewayClassName: string;
-  labels?: { [k: string]: string } | undefined;
-  listenerPort: number;
-  provider?:
-    | PlanDeploymentComputeProviderAwsAlb4$Outbound
-    | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers4$Outbound
-    | PlanDeploymentComputeProviderGkeGateway4$Outbound
-    | string
-    | null
-    | undefined;
-  routeApi: "gateway";
-};
-
-/** @internal */
-export const PlanDeploymentComputeRouteGateway2$outboundSchema: z.ZodType<
-  PlanDeploymentComputeRouteGateway2$Outbound,
-  PlanDeploymentComputeRouteGateway2
-> = z.object({
-  annotations: z.record(z.string(), z.string()).optional(),
-  controller: z.nullable(z.string()).optional(),
-  gatewayClassName: z.string(),
-  labels: z.record(z.string(), z.string()).optional(),
-  listenerPort: z.int(),
-  provider: z.nullable(
-    z.union([
-      z.lazy(() => PlanDeploymentComputeProviderAwsAlb4$outboundSchema),
-      z.lazy(() =>
-        PlanDeploymentComputeProviderAzureApplicationGatewayForContainers4$outboundSchema
-      ),
-      z.lazy(() => PlanDeploymentComputeProviderGkeGateway4$outboundSchema),
-      z.string(),
-    ]),
-  ).optional(),
-  routeApi: z.literal("gateway"),
-});
-
-export function planDeploymentComputeRouteGateway2ToJSON(
-  planDeploymentComputeRouteGateway2: PlanDeploymentComputeRouteGateway2,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeRouteGateway2$outboundSchema.parse(
-      planDeploymentComputeRouteGateway2,
-    ),
-  );
-}
-
-/** @internal */
-export const PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum3$outboundSchema:
-  z.ZodEnum<
-    typeof PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum3
-  > = z.enum(
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum3,
-  );
-
-/** @internal */
-export type PlanDeploymentComputeProviderAzureApplicationGatewayForContainers3$Outbound =
-  {
-    albName?: string | null | undefined;
-    albNamespace?: string | null | undefined;
-    frontend: string;
-    provider: string;
-  };
-
-/** @internal */
-export const PlanDeploymentComputeProviderAzureApplicationGatewayForContainers3$outboundSchema:
-  z.ZodType<
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainers3$Outbound,
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainers3
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum3$outboundSchema,
-  });
-
-export function planDeploymentComputeProviderAzureApplicationGatewayForContainers3ToJSON(
-  planDeploymentComputeProviderAzureApplicationGatewayForContainers3:
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainers3,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainers3$outboundSchema
-      .parse(
-        planDeploymentComputeProviderAzureApplicationGatewayForContainers3,
-      ),
-  );
-}
-
-/** @internal */
-export const PlanDeploymentComputeProviderGkeGatewayEnum3$outboundSchema:
-  z.ZodEnum<typeof PlanDeploymentComputeProviderGkeGatewayEnum3> = z.enum(
-    PlanDeploymentComputeProviderGkeGatewayEnum3,
-  );
-
-/** @internal */
-export type PlanDeploymentComputeProviderGkeGateway3$Outbound = {
-  provider: string;
-  staticAddressName?: string | null | undefined;
-};
-
-/** @internal */
-export const PlanDeploymentComputeProviderGkeGateway3$outboundSchema: z.ZodType<
-  PlanDeploymentComputeProviderGkeGateway3$Outbound,
-  PlanDeploymentComputeProviderGkeGateway3
-> = z.object({
-  provider: PlanDeploymentComputeProviderGkeGatewayEnum3$outboundSchema,
-  staticAddressName: z.nullable(z.string()).optional(),
-});
-
-export function planDeploymentComputeProviderGkeGateway3ToJSON(
-  planDeploymentComputeProviderGkeGateway3:
-    PlanDeploymentComputeProviderGkeGateway3,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeProviderGkeGateway3$outboundSchema.parse(
-      planDeploymentComputeProviderGkeGateway3,
-    ),
-  );
-}
-
-/** @internal */
-export const PlanDeploymentComputeProviderAwsAlbEnum3$outboundSchema: z.ZodEnum<
-  typeof PlanDeploymentComputeProviderAwsAlbEnum3
-> = z.enum(PlanDeploymentComputeProviderAwsAlbEnum3);
-
-/** @internal */
-export type PlanDeploymentComputeProviderAwsAlb3$Outbound = {
-  ipAddressType?: string | null | undefined;
-  provider: string;
-  scheme: string;
-  subnetIds?: Array<string> | undefined;
-  targetType: string;
-};
-
-/** @internal */
-export const PlanDeploymentComputeProviderAwsAlb3$outboundSchema: z.ZodType<
-  PlanDeploymentComputeProviderAwsAlb3$Outbound,
-  PlanDeploymentComputeProviderAwsAlb3
-> = z.object({
-  ipAddressType: z.nullable(z.string()).optional(),
-  provider: PlanDeploymentComputeProviderAwsAlbEnum3$outboundSchema,
-  scheme: z.string(),
-  subnetIds: z.array(z.string()).optional(),
-  targetType: z.string(),
-});
-
-export function planDeploymentComputeProviderAwsAlb3ToJSON(
-  planDeploymentComputeProviderAwsAlb3: PlanDeploymentComputeProviderAwsAlb3,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeProviderAwsAlb3$outboundSchema.parse(
-      planDeploymentComputeProviderAwsAlb3,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeProviderUnion3$Outbound =
-  | PlanDeploymentComputeProviderAwsAlb3$Outbound
-  | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers3$Outbound
-  | PlanDeploymentComputeProviderGkeGateway3$Outbound
-  | string;
-
-/** @internal */
-export const PlanDeploymentComputeProviderUnion3$outboundSchema: z.ZodType<
-  PlanDeploymentComputeProviderUnion3$Outbound,
-  PlanDeploymentComputeProviderUnion3
-> = z.union([
-  z.lazy(() => PlanDeploymentComputeProviderAwsAlb3$outboundSchema),
-  z.lazy(() =>
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainers3$outboundSchema
-  ),
-  z.lazy(() => PlanDeploymentComputeProviderGkeGateway3$outboundSchema),
-  z.string(),
-]);
-
-export function planDeploymentComputeProviderUnion3ToJSON(
-  planDeploymentComputeProviderUnion3: PlanDeploymentComputeProviderUnion3,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeProviderUnion3$outboundSchema.parse(
-      planDeploymentComputeProviderUnion3,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeRouteIngress2$Outbound = {
-  annotations?: { [k: string]: string } | undefined;
-  controller?: string | null | undefined;
-  ingressClassName: string;
-  labels?: { [k: string]: string } | undefined;
-  provider?:
-    | PlanDeploymentComputeProviderAwsAlb3$Outbound
-    | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers3$Outbound
-    | PlanDeploymentComputeProviderGkeGateway3$Outbound
-    | string
-    | null
-    | undefined;
-  routeApi: "ingress";
-};
-
-/** @internal */
-export const PlanDeploymentComputeRouteIngress2$outboundSchema: z.ZodType<
-  PlanDeploymentComputeRouteIngress2$Outbound,
-  PlanDeploymentComputeRouteIngress2
-> = z.object({
-  annotations: z.record(z.string(), z.string()).optional(),
-  controller: z.nullable(z.string()).optional(),
-  ingressClassName: z.string(),
-  labels: z.record(z.string(), z.string()).optional(),
-  provider: z.nullable(
-    z.union([
-      z.lazy(() => PlanDeploymentComputeProviderAwsAlb3$outboundSchema),
-      z.lazy(() =>
-        PlanDeploymentComputeProviderAzureApplicationGatewayForContainers3$outboundSchema
-      ),
-      z.lazy(() => PlanDeploymentComputeProviderGkeGateway3$outboundSchema),
-      z.string(),
-    ]),
-  ).optional(),
-  routeApi: z.literal("ingress"),
-});
-
-export function planDeploymentComputeRouteIngress2ToJSON(
-  planDeploymentComputeRouteIngress2: PlanDeploymentComputeRouteIngress2,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeRouteIngress2$outboundSchema.parse(
-      planDeploymentComputeRouteIngress2,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeRouteUnion2$Outbound =
-  | PlanDeploymentComputeRouteIngress2$Outbound
-  | PlanDeploymentComputeRouteGateway2$Outbound;
-
-/** @internal */
-export const PlanDeploymentComputeRouteUnion2$outboundSchema: z.ZodType<
-  PlanDeploymentComputeRouteUnion2$Outbound,
-  PlanDeploymentComputeRouteUnion2
-> = z.union([
-  z.lazy(() => PlanDeploymentComputeRouteIngress2$outboundSchema),
-  z.lazy(() => PlanDeploymentComputeRouteGateway2$outboundSchema),
-]);
-
-export function planDeploymentComputeRouteUnion2ToJSON(
-  planDeploymentComputeRouteUnion2: PlanDeploymentComputeRouteUnion2,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeRouteUnion2$outboundSchema.parse(
-      planDeploymentComputeRouteUnion2,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeExposureCustom$Outbound = {
-  certificate:
-    | PlanDeploymentComputeCertificateTLSSecretRef2$Outbound
-    | PlanDeploymentComputeCertificateManagedAcmImport2$Outbound
-    | PlanDeploymentComputeCertificateAwsAcmArn2$Outbound
-    | PlanDeploymentComputeCertificateManagedTLSSecret2$Outbound
-    | PlanDeploymentComputeCertificateNone2$Outbound;
-  domain: string;
-  mode: string;
-  route:
-    | PlanDeploymentComputeRouteIngress2$Outbound
-    | PlanDeploymentComputeRouteGateway2$Outbound;
-};
-
-/** @internal */
-export const PlanDeploymentComputeExposureCustom$outboundSchema: z.ZodType<
-  PlanDeploymentComputeExposureCustom$Outbound,
-  PlanDeploymentComputeExposureCustom
-> = z.object({
-  certificate: z.union([
-    z.lazy(() => PlanDeploymentComputeCertificateTLSSecretRef2$outboundSchema),
-    z.lazy(() =>
-      PlanDeploymentComputeCertificateManagedAcmImport2$outboundSchema
-    ),
-    z.lazy(() => PlanDeploymentComputeCertificateAwsAcmArn2$outboundSchema),
-    z.lazy(() =>
-      PlanDeploymentComputeCertificateManagedTLSSecret2$outboundSchema
-    ),
-    z.lazy(() => PlanDeploymentComputeCertificateNone2$outboundSchema),
-  ]),
-  domain: z.string(),
-  mode: PlanDeploymentComputeModeCustom$outboundSchema,
-  route: z.union([
-    z.lazy(() => PlanDeploymentComputeRouteIngress2$outboundSchema),
-    z.lazy(() => PlanDeploymentComputeRouteGateway2$outboundSchema),
-  ]),
-});
-
-export function planDeploymentComputeExposureCustomToJSON(
-  planDeploymentComputeExposureCustom: PlanDeploymentComputeExposureCustom,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeExposureCustom$outboundSchema.parse(
-      planDeploymentComputeExposureCustom,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeCertificateNone1$Outbound = {
-  mode: "none";
-};
-
-/** @internal */
-export const PlanDeploymentComputeCertificateNone1$outboundSchema: z.ZodType<
-  PlanDeploymentComputeCertificateNone1$Outbound,
-  PlanDeploymentComputeCertificateNone1
-> = z.object({
-  mode: z.literal("none"),
-});
-
-export function planDeploymentComputeCertificateNone1ToJSON(
-  planDeploymentComputeCertificateNone1: PlanDeploymentComputeCertificateNone1,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeCertificateNone1$outboundSchema.parse(
-      planDeploymentComputeCertificateNone1,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeCertificateManagedTLSSecret1$Outbound = {
-  mode: "managedTlsSecret";
-  secretNameTemplate: string;
-};
-
-/** @internal */
-export const PlanDeploymentComputeCertificateManagedTLSSecret1$outboundSchema:
-  z.ZodType<
-    PlanDeploymentComputeCertificateManagedTLSSecret1$Outbound,
-    PlanDeploymentComputeCertificateManagedTLSSecret1
-  > = z.object({
-    mode: z.literal("managedTlsSecret"),
-    secretNameTemplate: z.string(),
-  });
-
-export function planDeploymentComputeCertificateManagedTLSSecret1ToJSON(
-  planDeploymentComputeCertificateManagedTLSSecret1:
-    PlanDeploymentComputeCertificateManagedTLSSecret1,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeCertificateManagedTLSSecret1$outboundSchema.parse(
-      planDeploymentComputeCertificateManagedTLSSecret1,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeCertificateAwsAcmArn1$Outbound = {
-  certificateArn: string;
-  mode: "awsAcmArn";
-};
-
-/** @internal */
-export const PlanDeploymentComputeCertificateAwsAcmArn1$outboundSchema:
-  z.ZodType<
-    PlanDeploymentComputeCertificateAwsAcmArn1$Outbound,
-    PlanDeploymentComputeCertificateAwsAcmArn1
-  > = z.object({
-    certificateArn: z.string(),
-    mode: z.literal("awsAcmArn"),
-  });
-
-export function planDeploymentComputeCertificateAwsAcmArn1ToJSON(
-  planDeploymentComputeCertificateAwsAcmArn1:
-    PlanDeploymentComputeCertificateAwsAcmArn1,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeCertificateAwsAcmArn1$outboundSchema.parse(
-      planDeploymentComputeCertificateAwsAcmArn1,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeCertificateManagedAcmImport1$Outbound = {
-  mode: "managedAcmImport";
-  region?: string | null | undefined;
-  tags?: { [k: string]: string } | undefined;
-};
-
-/** @internal */
-export const PlanDeploymentComputeCertificateManagedAcmImport1$outboundSchema:
-  z.ZodType<
-    PlanDeploymentComputeCertificateManagedAcmImport1$Outbound,
-    PlanDeploymentComputeCertificateManagedAcmImport1
-  > = z.object({
-    mode: z.literal("managedAcmImport"),
-    region: z.nullable(z.string()).optional(),
-    tags: z.record(z.string(), z.string()).optional(),
-  });
-
-export function planDeploymentComputeCertificateManagedAcmImport1ToJSON(
-  planDeploymentComputeCertificateManagedAcmImport1:
-    PlanDeploymentComputeCertificateManagedAcmImport1,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeCertificateManagedAcmImport1$outboundSchema.parse(
-      planDeploymentComputeCertificateManagedAcmImport1,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeCertificateTLSSecretRef1$Outbound = {
-  namespace?: string | null | undefined;
-  secretName: string;
-  mode: "tlsSecretRef";
-};
-
-/** @internal */
-export const PlanDeploymentComputeCertificateTLSSecretRef1$outboundSchema:
-  z.ZodType<
-    PlanDeploymentComputeCertificateTLSSecretRef1$Outbound,
-    PlanDeploymentComputeCertificateTLSSecretRef1
-  > = z.object({
-    namespace: z.nullable(z.string()).optional(),
-    secretName: z.string(),
-    mode: z.literal("tlsSecretRef"),
-  });
-
-export function planDeploymentComputeCertificateTLSSecretRef1ToJSON(
-  planDeploymentComputeCertificateTLSSecretRef1:
-    PlanDeploymentComputeCertificateTLSSecretRef1,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeCertificateTLSSecretRef1$outboundSchema.parse(
-      planDeploymentComputeCertificateTLSSecretRef1,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeCertificateUnion1$Outbound =
-  | PlanDeploymentComputeCertificateTLSSecretRef1$Outbound
-  | PlanDeploymentComputeCertificateManagedAcmImport1$Outbound
-  | PlanDeploymentComputeCertificateAwsAcmArn1$Outbound
-  | PlanDeploymentComputeCertificateManagedTLSSecret1$Outbound
-  | PlanDeploymentComputeCertificateNone1$Outbound;
-
-/** @internal */
-export const PlanDeploymentComputeCertificateUnion1$outboundSchema: z.ZodType<
-  PlanDeploymentComputeCertificateUnion1$Outbound,
-  PlanDeploymentComputeCertificateUnion1
-> = z.union([
-  z.lazy(() => PlanDeploymentComputeCertificateTLSSecretRef1$outboundSchema),
-  z.lazy(() =>
-    PlanDeploymentComputeCertificateManagedAcmImport1$outboundSchema
-  ),
-  z.lazy(() => PlanDeploymentComputeCertificateAwsAcmArn1$outboundSchema),
-  z.lazy(() =>
-    PlanDeploymentComputeCertificateManagedTLSSecret1$outboundSchema
-  ),
-  z.lazy(() => PlanDeploymentComputeCertificateNone1$outboundSchema),
-]);
-
-export function planDeploymentComputeCertificateUnion1ToJSON(
-  planDeploymentComputeCertificateUnion1:
-    PlanDeploymentComputeCertificateUnion1,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeCertificateUnion1$outboundSchema.parse(
-      planDeploymentComputeCertificateUnion1,
-    ),
-  );
-}
-
-/** @internal */
-export const PlanDeploymentComputeModeGenerated$outboundSchema: z.ZodEnum<
-  typeof PlanDeploymentComputeModeGenerated
-> = z.enum(PlanDeploymentComputeModeGenerated);
-
-/** @internal */
-export const PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum2$outboundSchema:
-  z.ZodEnum<
-    typeof PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum2
-  > = z.enum(
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum2,
-  );
-
-/** @internal */
-export type PlanDeploymentComputeProviderAzureApplicationGatewayForContainers2$Outbound =
-  {
-    albName?: string | null | undefined;
-    albNamespace?: string | null | undefined;
-    frontend: string;
-    provider: string;
-  };
-
-/** @internal */
-export const PlanDeploymentComputeProviderAzureApplicationGatewayForContainers2$outboundSchema:
-  z.ZodType<
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainers2$Outbound,
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainers2
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum2$outboundSchema,
-  });
-
-export function planDeploymentComputeProviderAzureApplicationGatewayForContainers2ToJSON(
-  planDeploymentComputeProviderAzureApplicationGatewayForContainers2:
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainers2,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainers2$outboundSchema
-      .parse(
-        planDeploymentComputeProviderAzureApplicationGatewayForContainers2,
-      ),
-  );
-}
-
-/** @internal */
-export const PlanDeploymentComputeProviderGkeGatewayEnum2$outboundSchema:
-  z.ZodEnum<typeof PlanDeploymentComputeProviderGkeGatewayEnum2> = z.enum(
-    PlanDeploymentComputeProviderGkeGatewayEnum2,
-  );
-
-/** @internal */
-export type PlanDeploymentComputeProviderGkeGateway2$Outbound = {
-  provider: string;
-  staticAddressName?: string | null | undefined;
-};
-
-/** @internal */
-export const PlanDeploymentComputeProviderGkeGateway2$outboundSchema: z.ZodType<
-  PlanDeploymentComputeProviderGkeGateway2$Outbound,
-  PlanDeploymentComputeProviderGkeGateway2
-> = z.object({
-  provider: PlanDeploymentComputeProviderGkeGatewayEnum2$outboundSchema,
-  staticAddressName: z.nullable(z.string()).optional(),
-});
-
-export function planDeploymentComputeProviderGkeGateway2ToJSON(
-  planDeploymentComputeProviderGkeGateway2:
-    PlanDeploymentComputeProviderGkeGateway2,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeProviderGkeGateway2$outboundSchema.parse(
-      planDeploymentComputeProviderGkeGateway2,
-    ),
-  );
-}
-
-/** @internal */
-export const PlanDeploymentComputeProviderAwsAlbEnum2$outboundSchema: z.ZodEnum<
-  typeof PlanDeploymentComputeProviderAwsAlbEnum2
-> = z.enum(PlanDeploymentComputeProviderAwsAlbEnum2);
-
-/** @internal */
-export type PlanDeploymentComputeProviderAwsAlb2$Outbound = {
-  ipAddressType?: string | null | undefined;
-  provider: string;
-  scheme: string;
-  subnetIds?: Array<string> | undefined;
-  targetType: string;
-};
-
-/** @internal */
-export const PlanDeploymentComputeProviderAwsAlb2$outboundSchema: z.ZodType<
-  PlanDeploymentComputeProviderAwsAlb2$Outbound,
-  PlanDeploymentComputeProviderAwsAlb2
-> = z.object({
-  ipAddressType: z.nullable(z.string()).optional(),
-  provider: PlanDeploymentComputeProviderAwsAlbEnum2$outboundSchema,
-  scheme: z.string(),
-  subnetIds: z.array(z.string()).optional(),
-  targetType: z.string(),
-});
-
-export function planDeploymentComputeProviderAwsAlb2ToJSON(
-  planDeploymentComputeProviderAwsAlb2: PlanDeploymentComputeProviderAwsAlb2,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeProviderAwsAlb2$outboundSchema.parse(
-      planDeploymentComputeProviderAwsAlb2,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeProviderUnion2$Outbound =
-  | PlanDeploymentComputeProviderAwsAlb2$Outbound
-  | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers2$Outbound
-  | PlanDeploymentComputeProviderGkeGateway2$Outbound
-  | string;
-
-/** @internal */
-export const PlanDeploymentComputeProviderUnion2$outboundSchema: z.ZodType<
-  PlanDeploymentComputeProviderUnion2$Outbound,
-  PlanDeploymentComputeProviderUnion2
-> = z.union([
-  z.lazy(() => PlanDeploymentComputeProviderAwsAlb2$outboundSchema),
-  z.lazy(() =>
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainers2$outboundSchema
-  ),
-  z.lazy(() => PlanDeploymentComputeProviderGkeGateway2$outboundSchema),
-  z.string(),
-]);
-
-export function planDeploymentComputeProviderUnion2ToJSON(
-  planDeploymentComputeProviderUnion2: PlanDeploymentComputeProviderUnion2,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeProviderUnion2$outboundSchema.parse(
-      planDeploymentComputeProviderUnion2,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeRouteGateway1$Outbound = {
-  annotations?: { [k: string]: string } | undefined;
-  controller?: string | null | undefined;
-  gatewayClassName: string;
-  labels?: { [k: string]: string } | undefined;
-  listenerPort: number;
-  provider?:
-    | PlanDeploymentComputeProviderAwsAlb2$Outbound
-    | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers2$Outbound
-    | PlanDeploymentComputeProviderGkeGateway2$Outbound
-    | string
-    | null
-    | undefined;
-  routeApi: "gateway";
-};
-
-/** @internal */
-export const PlanDeploymentComputeRouteGateway1$outboundSchema: z.ZodType<
-  PlanDeploymentComputeRouteGateway1$Outbound,
-  PlanDeploymentComputeRouteGateway1
-> = z.object({
-  annotations: z.record(z.string(), z.string()).optional(),
-  controller: z.nullable(z.string()).optional(),
-  gatewayClassName: z.string(),
-  labels: z.record(z.string(), z.string()).optional(),
-  listenerPort: z.int(),
-  provider: z.nullable(
-    z.union([
-      z.lazy(() => PlanDeploymentComputeProviderAwsAlb2$outboundSchema),
-      z.lazy(() =>
-        PlanDeploymentComputeProviderAzureApplicationGatewayForContainers2$outboundSchema
-      ),
-      z.lazy(() => PlanDeploymentComputeProviderGkeGateway2$outboundSchema),
-      z.string(),
-    ]),
-  ).optional(),
-  routeApi: z.literal("gateway"),
-});
-
-export function planDeploymentComputeRouteGateway1ToJSON(
-  planDeploymentComputeRouteGateway1: PlanDeploymentComputeRouteGateway1,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeRouteGateway1$outboundSchema.parse(
-      planDeploymentComputeRouteGateway1,
-    ),
-  );
-}
-
-/** @internal */
-export const PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum1$outboundSchema:
-  z.ZodEnum<
-    typeof PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum1
-  > = z.enum(
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum1,
-  );
-
-/** @internal */
-export type PlanDeploymentComputeProviderAzureApplicationGatewayForContainers1$Outbound =
-  {
-    albName?: string | null | undefined;
-    albNamespace?: string | null | undefined;
-    frontend: string;
-    provider: string;
-  };
-
-/** @internal */
-export const PlanDeploymentComputeProviderAzureApplicationGatewayForContainers1$outboundSchema:
-  z.ZodType<
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainers1$Outbound,
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainers1
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      PlanDeploymentComputeProviderAzureApplicationGatewayForContainersEnum1$outboundSchema,
-  });
-
-export function planDeploymentComputeProviderAzureApplicationGatewayForContainers1ToJSON(
-  planDeploymentComputeProviderAzureApplicationGatewayForContainers1:
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainers1,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainers1$outboundSchema
-      .parse(
-        planDeploymentComputeProviderAzureApplicationGatewayForContainers1,
-      ),
-  );
-}
-
-/** @internal */
-export const PlanDeploymentComputeProviderGkeGatewayEnum1$outboundSchema:
-  z.ZodEnum<typeof PlanDeploymentComputeProviderGkeGatewayEnum1> = z.enum(
-    PlanDeploymentComputeProviderGkeGatewayEnum1,
-  );
-
-/** @internal */
-export type PlanDeploymentComputeProviderGkeGateway1$Outbound = {
-  provider: string;
-  staticAddressName?: string | null | undefined;
-};
-
-/** @internal */
-export const PlanDeploymentComputeProviderGkeGateway1$outboundSchema: z.ZodType<
-  PlanDeploymentComputeProviderGkeGateway1$Outbound,
-  PlanDeploymentComputeProviderGkeGateway1
-> = z.object({
-  provider: PlanDeploymentComputeProviderGkeGatewayEnum1$outboundSchema,
-  staticAddressName: z.nullable(z.string()).optional(),
-});
-
-export function planDeploymentComputeProviderGkeGateway1ToJSON(
-  planDeploymentComputeProviderGkeGateway1:
-    PlanDeploymentComputeProviderGkeGateway1,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeProviderGkeGateway1$outboundSchema.parse(
-      planDeploymentComputeProviderGkeGateway1,
-    ),
-  );
-}
-
-/** @internal */
-export const PlanDeploymentComputeProviderAwsAlbEnum1$outboundSchema: z.ZodEnum<
-  typeof PlanDeploymentComputeProviderAwsAlbEnum1
-> = z.enum(PlanDeploymentComputeProviderAwsAlbEnum1);
-
-/** @internal */
-export type PlanDeploymentComputeProviderAwsAlb1$Outbound = {
-  ipAddressType?: string | null | undefined;
-  provider: string;
-  scheme: string;
-  subnetIds?: Array<string> | undefined;
-  targetType: string;
-};
-
-/** @internal */
-export const PlanDeploymentComputeProviderAwsAlb1$outboundSchema: z.ZodType<
-  PlanDeploymentComputeProviderAwsAlb1$Outbound,
-  PlanDeploymentComputeProviderAwsAlb1
-> = z.object({
-  ipAddressType: z.nullable(z.string()).optional(),
-  provider: PlanDeploymentComputeProviderAwsAlbEnum1$outboundSchema,
-  scheme: z.string(),
-  subnetIds: z.array(z.string()).optional(),
-  targetType: z.string(),
-});
-
-export function planDeploymentComputeProviderAwsAlb1ToJSON(
-  planDeploymentComputeProviderAwsAlb1: PlanDeploymentComputeProviderAwsAlb1,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeProviderAwsAlb1$outboundSchema.parse(
-      planDeploymentComputeProviderAwsAlb1,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeProviderUnion1$Outbound =
-  | PlanDeploymentComputeProviderAwsAlb1$Outbound
-  | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers1$Outbound
-  | PlanDeploymentComputeProviderGkeGateway1$Outbound
-  | string;
-
-/** @internal */
-export const PlanDeploymentComputeProviderUnion1$outboundSchema: z.ZodType<
-  PlanDeploymentComputeProviderUnion1$Outbound,
-  PlanDeploymentComputeProviderUnion1
-> = z.union([
-  z.lazy(() => PlanDeploymentComputeProviderAwsAlb1$outboundSchema),
-  z.lazy(() =>
-    PlanDeploymentComputeProviderAzureApplicationGatewayForContainers1$outboundSchema
-  ),
-  z.lazy(() => PlanDeploymentComputeProviderGkeGateway1$outboundSchema),
-  z.string(),
-]);
-
-export function planDeploymentComputeProviderUnion1ToJSON(
-  planDeploymentComputeProviderUnion1: PlanDeploymentComputeProviderUnion1,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeProviderUnion1$outboundSchema.parse(
-      planDeploymentComputeProviderUnion1,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeRouteIngress1$Outbound = {
-  annotations?: { [k: string]: string } | undefined;
-  controller?: string | null | undefined;
-  ingressClassName: string;
-  labels?: { [k: string]: string } | undefined;
-  provider?:
-    | PlanDeploymentComputeProviderAwsAlb1$Outbound
-    | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers1$Outbound
-    | PlanDeploymentComputeProviderGkeGateway1$Outbound
-    | string
-    | null
-    | undefined;
-  routeApi: "ingress";
-};
-
-/** @internal */
-export const PlanDeploymentComputeRouteIngress1$outboundSchema: z.ZodType<
-  PlanDeploymentComputeRouteIngress1$Outbound,
-  PlanDeploymentComputeRouteIngress1
-> = z.object({
-  annotations: z.record(z.string(), z.string()).optional(),
-  controller: z.nullable(z.string()).optional(),
-  ingressClassName: z.string(),
-  labels: z.record(z.string(), z.string()).optional(),
-  provider: z.nullable(
-    z.union([
-      z.lazy(() => PlanDeploymentComputeProviderAwsAlb1$outboundSchema),
-      z.lazy(() =>
-        PlanDeploymentComputeProviderAzureApplicationGatewayForContainers1$outboundSchema
-      ),
-      z.lazy(() => PlanDeploymentComputeProviderGkeGateway1$outboundSchema),
-      z.string(),
-    ]),
-  ).optional(),
-  routeApi: z.literal("ingress"),
-});
-
-export function planDeploymentComputeRouteIngress1ToJSON(
-  planDeploymentComputeRouteIngress1: PlanDeploymentComputeRouteIngress1,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeRouteIngress1$outboundSchema.parse(
-      planDeploymentComputeRouteIngress1,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeRouteUnion1$Outbound =
-  | PlanDeploymentComputeRouteIngress1$Outbound
-  | PlanDeploymentComputeRouteGateway1$Outbound;
-
-/** @internal */
-export const PlanDeploymentComputeRouteUnion1$outboundSchema: z.ZodType<
-  PlanDeploymentComputeRouteUnion1$Outbound,
-  PlanDeploymentComputeRouteUnion1
-> = z.union([
-  z.lazy(() => PlanDeploymentComputeRouteIngress1$outboundSchema),
-  z.lazy(() => PlanDeploymentComputeRouteGateway1$outboundSchema),
-]);
-
-export function planDeploymentComputeRouteUnion1ToJSON(
-  planDeploymentComputeRouteUnion1: PlanDeploymentComputeRouteUnion1,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeRouteUnion1$outboundSchema.parse(
-      planDeploymentComputeRouteUnion1,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeExposureGenerated$Outbound = {
-  certificate:
-    | PlanDeploymentComputeCertificateTLSSecretRef1$Outbound
-    | PlanDeploymentComputeCertificateManagedAcmImport1$Outbound
-    | PlanDeploymentComputeCertificateAwsAcmArn1$Outbound
-    | PlanDeploymentComputeCertificateManagedTLSSecret1$Outbound
-    | PlanDeploymentComputeCertificateNone1$Outbound;
-  mode: string;
-  route:
-    | PlanDeploymentComputeRouteIngress1$Outbound
-    | PlanDeploymentComputeRouteGateway1$Outbound;
-};
-
-/** @internal */
-export const PlanDeploymentComputeExposureGenerated$outboundSchema: z.ZodType<
-  PlanDeploymentComputeExposureGenerated$Outbound,
-  PlanDeploymentComputeExposureGenerated
-> = z.object({
-  certificate: z.union([
-    z.lazy(() => PlanDeploymentComputeCertificateTLSSecretRef1$outboundSchema),
-    z.lazy(() =>
-      PlanDeploymentComputeCertificateManagedAcmImport1$outboundSchema
-    ),
-    z.lazy(() => PlanDeploymentComputeCertificateAwsAcmArn1$outboundSchema),
-    z.lazy(() =>
-      PlanDeploymentComputeCertificateManagedTLSSecret1$outboundSchema
-    ),
-    z.lazy(() => PlanDeploymentComputeCertificateNone1$outboundSchema),
-  ]),
-  mode: PlanDeploymentComputeModeGenerated$outboundSchema,
-  route: z.union([
-    z.lazy(() => PlanDeploymentComputeRouteIngress1$outboundSchema),
-    z.lazy(() => PlanDeploymentComputeRouteGateway1$outboundSchema),
-  ]),
-});
-
-export function planDeploymentComputeExposureGeneratedToJSON(
-  planDeploymentComputeExposureGenerated:
-    PlanDeploymentComputeExposureGenerated,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeExposureGenerated$outboundSchema.parse(
-      planDeploymentComputeExposureGenerated,
-    ),
-  );
-}
-
-/** @internal */
-export const PlanDeploymentComputeModeDisabled$outboundSchema: z.ZodEnum<
-  typeof PlanDeploymentComputeModeDisabled
-> = z.enum(PlanDeploymentComputeModeDisabled);
-
-/** @internal */
-export type PlanDeploymentComputeExposureDisabled$Outbound = {
-  mode: string;
-};
-
-/** @internal */
-export const PlanDeploymentComputeExposureDisabled$outboundSchema: z.ZodType<
-  PlanDeploymentComputeExposureDisabled$Outbound,
-  PlanDeploymentComputeExposureDisabled
-> = z.object({
-  mode: PlanDeploymentComputeModeDisabled$outboundSchema,
-});
-
-export function planDeploymentComputeExposureDisabledToJSON(
-  planDeploymentComputeExposureDisabled: PlanDeploymentComputeExposureDisabled,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeExposureDisabled$outboundSchema.parse(
-      planDeploymentComputeExposureDisabled,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeExposureUnion$Outbound =
-  | PlanDeploymentComputeExposureCustom$Outbound
-  | PlanDeploymentComputeExposureGenerated$Outbound
-  | PlanDeploymentComputeExposureDisabled$Outbound
-  | string;
-
-/** @internal */
-export const PlanDeploymentComputeExposureUnion$outboundSchema: z.ZodType<
-  PlanDeploymentComputeExposureUnion$Outbound,
-  PlanDeploymentComputeExposureUnion
-> = z.union([
-  z.lazy(() => PlanDeploymentComputeExposureCustom$outboundSchema),
-  z.lazy(() => PlanDeploymentComputeExposureGenerated$outboundSchema),
-  z.lazy(() => PlanDeploymentComputeExposureDisabled$outboundSchema),
-  z.string(),
-]);
-
-export function planDeploymentComputeExposureUnionToJSON(
-  planDeploymentComputeExposureUnion: PlanDeploymentComputeExposureUnion,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeExposureUnion$outboundSchema.parse(
-      planDeploymentComputeExposureUnion,
+    PlanDeploymentComputeExposure$outboundSchema.parse(
+      planDeploymentComputeExposure,
     ),
   );
 }
@@ -3538,9 +1756,10 @@ export function planDeploymentComputeExposureUnionToJSON(
 export type PlanDeploymentComputeKubernetes$Outbound = {
   cluster?: PlanDeploymentComputeCluster$Outbound | string | null | undefined;
   exposure?:
-    | PlanDeploymentComputeExposureCustom$Outbound
-    | PlanDeploymentComputeExposureGenerated$Outbound
-    | PlanDeploymentComputeExposureDisabled$Outbound
+    | models.KubernetesExposureCustom$Outbound
+    | models.KubernetesExposureCustomBaseDomain$Outbound
+    | models.KubernetesExposureGenerated$Outbound
+    | models.KubernetesExposureDisabled$Outbound
     | string
     | null
     | undefined;
@@ -3559,9 +1778,10 @@ export const PlanDeploymentComputeKubernetes$outboundSchema: z.ZodType<
   ).optional(),
   exposure: z.nullable(
     z.union([
-      z.lazy(() => PlanDeploymentComputeExposureCustom$outboundSchema),
-      z.lazy(() => PlanDeploymentComputeExposureGenerated$outboundSchema),
-      z.lazy(() => PlanDeploymentComputeExposureDisabled$outboundSchema),
+      models.KubernetesExposureCustom$outboundSchema,
+      models.KubernetesExposureCustomBaseDomain$outboundSchema,
+      models.KubernetesExposureGenerated$outboundSchema,
+      models.KubernetesExposureDisabled$outboundSchema,
       z.string(),
     ]),
   ).optional(),
@@ -3833,6 +2053,57 @@ export const PlanDeploymentComputeSetupManagement$outboundSchema: z.ZodEnum<
 > = z.enum(PlanDeploymentComputeSetupManagement);
 
 /** @internal */
+export type PlanDeploymentComputeSigning$Outbound = {
+  channel: string;
+  fingerprint: string;
+  privateMachineApiUrl?: string | null | undefined;
+};
+
+/** @internal */
+export const PlanDeploymentComputeSigning$outboundSchema: z.ZodType<
+  PlanDeploymentComputeSigning$Outbound,
+  PlanDeploymentComputeSigning
+> = z.object({
+  channel: z.string(),
+  fingerprint: z.string(),
+  privateMachineApiUrl: z.nullable(z.string()).optional(),
+});
+
+export function planDeploymentComputeSigningToJSON(
+  planDeploymentComputeSigning: PlanDeploymentComputeSigning,
+): string {
+  return JSON.stringify(
+    PlanDeploymentComputeSigning$outboundSchema.parse(
+      planDeploymentComputeSigning,
+    ),
+  );
+}
+
+/** @internal */
+export type PlanDeploymentComputeSigningUnion$Outbound =
+  | PlanDeploymentComputeSigning$Outbound
+  | string;
+
+/** @internal */
+export const PlanDeploymentComputeSigningUnion$outboundSchema: z.ZodType<
+  PlanDeploymentComputeSigningUnion$Outbound,
+  PlanDeploymentComputeSigningUnion
+> = z.union([
+  z.lazy(() => PlanDeploymentComputeSigning$outboundSchema),
+  z.string(),
+]);
+
+export function planDeploymentComputeSigningUnionToJSON(
+  planDeploymentComputeSigningUnion: PlanDeploymentComputeSigningUnion,
+): string {
+  return JSON.stringify(
+    PlanDeploymentComputeSigningUnion$outboundSchema.parse(
+      planDeploymentComputeSigningUnion,
+    ),
+  );
+}
+
+/** @internal */
 export const PlanDeploymentComputeTelemetry$outboundSchema: z.ZodEnum<
   typeof PlanDeploymentComputeTelemetry
 > = z.enum(PlanDeploymentComputeTelemetry);
@@ -3844,6 +2115,7 @@ export const PlanDeploymentComputeUpdates$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type PlanDeploymentComputeStackSettings$Outbound = {
+  airgapped?: boolean | undefined;
   compute?: PlanDeploymentComputeCompute$Outbound | string | null | undefined;
   deploymentModel?: string | undefined;
   domains?: PlanDeploymentComputeDomains$Outbound | string | null | undefined;
@@ -3870,6 +2142,7 @@ export type PlanDeploymentComputeStackSettings$Outbound = {
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   quotaWarningOverrides?: Array<string> | undefined;
   setupManagement?: string | undefined;
+  signing?: PlanDeploymentComputeSigning$Outbound | string | null | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -3879,6 +2152,7 @@ export const PlanDeploymentComputeStackSettings$outboundSchema: z.ZodType<
   PlanDeploymentComputeStackSettings$Outbound,
   PlanDeploymentComputeStackSettings
 > = z.object({
+  airgapped: z.boolean().optional(),
   compute: z.nullable(
     z.union([
       z.lazy(() => PlanDeploymentComputeCompute$outboundSchema),
@@ -3920,6 +2194,12 @@ export const PlanDeploymentComputeStackSettings$outboundSchema: z.ZodType<
   quotaWarningOverrides: z.array(z.string()).optional(),
   setupManagement: PlanDeploymentComputeSetupManagement$outboundSchema
     .optional(),
+  signing: z.nullable(
+    z.union([
+      z.lazy(() => PlanDeploymentComputeSigning$outboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
   telemetry: PlanDeploymentComputeTelemetry$outboundSchema.optional(),
   updates: PlanDeploymentComputeUpdates$outboundSchema.optional(),
 });
@@ -3936,6 +2216,7 @@ export function planDeploymentComputeStackSettingsToJSON(
 
 /** @internal */
 export type PlanDeploymentComputeRequest$Outbound = {
+  releaseChannel?: string | undefined;
   setupItem?: string | undefined;
   deploymentId?: string | undefined;
   updateOperationId?: string | undefined;
@@ -3950,6 +2231,7 @@ export const PlanDeploymentComputeRequest$outboundSchema: z.ZodType<
   PlanDeploymentComputeRequest$Outbound,
   PlanDeploymentComputeRequest
 > = z.object({
+  releaseChannel: z.string().optional(),
   setupItem: PlanDeploymentComputeSetupItem$outboundSchema.optional(),
   deploymentId: z.string().optional(),
   updateOperationId: z.string().optional(),

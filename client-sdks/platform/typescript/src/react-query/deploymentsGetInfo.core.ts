@@ -67,5 +67,5 @@ export function buildDeploymentsGetInfoQuery(
 }
 
 export function queryKeyDeploymentsGetInfo(id: string): QueryKey {
-  return ["@alienplatform/platform-api", "deployments", "getInfo", id];
+  return ["@alienplatform/platform-api", "Deployments", "getInfo", id];
 }

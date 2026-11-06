@@ -6,7 +6,7 @@
 import { CreateManagerResponse } from "@alienplatform/platform-api/models";
 
 let value: CreateManagerResponse = {
-  managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
+  managerId: "mgr_enxscjrqiiu2lrc672hwwuc5tv5y",
   setupStatus: "pending",
   setupToken: "<value>",
   setupTokenId: "<id>",
@@ -21,7 +21,7 @@ let value: CreateManagerResponse = {
       allowedSetupMethods: [],
     },
     validatedReleaseSelection: {
-      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
       releaseChannel: "<value>",
       platform: "local",
     },
@@ -31,7 +31,7 @@ let value: CreateManagerResponse = {
         source: {
           type: "project-release",
           releaseChannel: "<value>",
-          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
         },
         required: false,
       },
@@ -60,7 +60,7 @@ let value: CreateManagerResponse = {
 
 | Field                                                                                    | Type                                                                                     | Required                                                                                 | Description                                                                              | Example                                                                                  |
 | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `managerId`                                                                              | *string*                                                                                 | :heavy_check_mark:                                                                       | N/A                                                                                      | mgr_enxscjrqiiu2lrc672hwwuc5                                                             |
+| `managerId`                                                                              | *string*                                                                                 | :heavy_check_mark:                                                                       | Unique identifier for a manager.                                                         | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                                                         |
 | `setupStatus`                                                                            | [models.CreateManagerResponseSetupStatus](../models/createmanagerresponsesetupstatus.md) | :heavy_check_mark:                                                                       | N/A                                                                                      |                                                                                          |
 | `setupToken`                                                                             | *string*                                                                                 | :heavy_check_mark:                                                                       | N/A                                                                                      |                                                                                          |
 | `setupTokenId`                                                                           | *string*                                                                                 | :heavy_check_mark:                                                                       | N/A                                                                                      |                                                                                          |

@@ -98,9 +98,19 @@ const value: models.ExternalBindingFlexibleServer = {
 const value: models.ExternalBindingExternal = {
   database: "<value>",
   host: "rewarding-premier.biz",
-  password: "sxvGxoxE7DCD9Ar",
+  password: {
+    secretRef: {
+      key: "<key>",
+      name: "<value>",
+    },
+  },
   port: "<value>",
-  username: "Sister_Gutmann",
+  username: {
+    "secretRef": {
+      "key": "<key>",
+      "name": "<value>",
+    },
+  },
   service: "external",
   type: "postgres",
 };

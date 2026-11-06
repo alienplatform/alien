@@ -706,6 +706,16 @@ export type OutputsTerraform = {
    * Terraform provider registry outputs.
    */
   provider: PackageProvider;
+  /**
+   * What this build's modules register with besides the release:
+   *
+   * @remarks
+   * `{"terraformRegistration": {providerName, providerSource, providerVersion, resourceType}}`
+   * (the release-independent part of alien-cli-common `SetupHostingOptions`). A vendor's CLI
+   * renders protected Terraform modules that register through this build's provider with it.
+   * Absent on builds made before it was recorded.
+   */
+  setupHosting?: { [k: string]: any | null } | undefined;
   type: OutputsTypeTerraform;
 };
 
@@ -894,6 +904,16 @@ export type OutputsTypeCloudformation = ClosedEnum<
  */
 export type OutputsCloudformation = {
   /**
+   * What this build rendered the `aws` template with besides the stack: registration,
+   *
+   * @remarks
+   * description, management trust and supported regions (alien-cli-common
+   * `SetupHostingOptions` without the per-release setup fingerprint). A vendor's CLI renders
+   * protected setup templates with these, so they register and are managed the same way.
+   * Absent on builds made before it was recorded.
+   */
+  setupHosting?: { [k: string]: any | null } | undefined;
+  /**
    * Template artifacts by CloudFormation target.
    */
   targets: { [k: string]: PackageTargets };
@@ -917,6 +937,10 @@ export type OutputsHelm = {
    * Default management endpoint embedded in this chart, if available.
    */
   managerUrl?: string | undefined;
+  /**
+   * Whether this chart accepts explicit in-cluster Postgres opt-in values.
+   */
+  supportsPostgres?: boolean | undefined;
   /**
    * Chart version (e.g., "1.2.3")
    */
@@ -1713,6 +1737,7 @@ export const OutputsTerraform$inboundSchema: z.ZodType<
 > = z.object({
   modules: z.record(z.string(), z.lazy(() => PackageModules$inboundSchema)),
   provider: z.lazy(() => PackageProvider$inboundSchema),
+  setupHosting: z.record(z.string(), z.nullable(z.any())).optional(),
   type: OutputsTypeTerraform$inboundSchema,
 });
 
@@ -1875,6 +1900,7 @@ export const OutputsCloudformation$inboundSchema: z.ZodType<
   OutputsCloudformation,
   unknown
 > = z.object({
+  setupHosting: z.record(z.string(), z.nullable(z.any())).optional(),
   targets: z.record(z.string(), z.lazy(() => PackageTargets$inboundSchema)),
   type: OutputsTypeCloudformation$inboundSchema,
 });
@@ -1898,6 +1924,7 @@ export const OutputsHelm$inboundSchema: z.ZodType<OutputsHelm, unknown> = z
   .object({
     chart: z.string(),
     managerUrl: z.string().optional(),
+    supportsPostgres: z.boolean().optional(),
     version: z.string(),
     type: OutputsTypeHelm$inboundSchema,
   });

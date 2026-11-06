@@ -812,6 +812,10 @@ export type SyncReconcileRequest = {
    * Execution attempt claimed at acquisition. Required with operationId for update execution.
    */
   attemptId?: string | undefined;
+  /**
+   * Configuration revision confirmed Running by an air-gapped site receipt.
+   */
+  appliedConfigurationRevision?: string | undefined;
   state: DeploymentState;
   /**
    * Update heartbeat timestamp (for successful health checks)
@@ -2127,6 +2131,7 @@ export type SyncReconcileRequest$Outbound = {
   session?: string | undefined;
   operationId?: string | undefined;
   attemptId?: string | undefined;
+  appliedConfigurationRevision?: string | undefined;
   state: DeploymentState$Outbound;
   updateHeartbeat?: boolean | undefined;
   suggestedDelayMs?: number | undefined;
@@ -2149,6 +2154,7 @@ export const SyncReconcileRequest$outboundSchema: z.ZodType<
   session: z.string().optional(),
   operationId: z.string().optional(),
   attemptId: z.string().optional(),
+  appliedConfigurationRevision: z.string().optional(),
   state: DeploymentState$outboundSchema,
   updateHeartbeat: z.boolean().optional(),
   suggestedDelayMs: z.int().optional(),

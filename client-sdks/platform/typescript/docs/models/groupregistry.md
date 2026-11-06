@@ -9,7 +9,7 @@ let value: GroupRegistry = {
   capability: "models",
   enabled: true,
   state: "revoked",
-  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
   observation: {
     provider: "<value>",
     platform: "gcp",
@@ -33,7 +33,7 @@ let value: GroupRegistry = {
 | `capability`                                                         | [models.RegistryCapability](../models/registrycapability.md)         | :heavy_check_mark:                                                   | N/A                                                                  |                                                                      |
 | `enabled`                                                            | *boolean*                                                            | :heavy_check_mark:                                                   | N/A                                                                  |                                                                      |
 | `state`                                                              | [models.RegistryState](../models/registrystate.md)                   | :heavy_check_mark:                                                   | N/A                                                                  |                                                                      |
-| `deploymentId`                                                       | *string*                                                             | :heavy_check_mark:                                                   | Unique identifier for the deployment.                                | dep_0c29fq4a2yjb7kx3smwdgxlc                                         |
+| `deploymentId`                                                       | *string*                                                             | :heavy_check_mark:                                                   | Unique identifier for the deployment.                                | dep_0c29fq4a2yjb7kx3smwdgxlcxd7f                                     |
 | `source`                                                             | [models.RegistrySource](../models/registrysource.md)                 | :heavy_minus_sign:                                                   | N/A                                                                  |                                                                      |
 | `sandboxUpdate`                                                      | [models.RegistrySandboxUpdate](../models/registrysandboxupdate.md)   | :heavy_minus_sign:                                                   | N/A                                                                  |                                                                      |
 | `observation`                                                        | [models.RegistryObservation](../models/registryobservation.md)       | :heavy_check_mark:                                                   | N/A                                                                  |                                                                      |

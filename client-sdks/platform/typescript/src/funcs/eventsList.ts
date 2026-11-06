@@ -90,6 +90,7 @@ async function $do(
   const path = pathToFunc("/v1/events")();
 
   const query = encodeFormQuery({
+    "category": payload?.category,
     "cursor": payload?.cursor,
     "deploymentId": payload?.deploymentId,
     "include": payload?.include,

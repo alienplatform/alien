@@ -335,16 +335,18 @@ export type DataLocal5 = {
   backend: "local";
 };
 
-export const Category4 = {
+export const GetResourceDeploymentDetailCategory4 = {
   Quota: "quota",
   Capacity: "capacity",
   Allocation: "allocation",
   Other: "other",
 } as const;
-export type Category4 = ClosedEnum<typeof Category4>;
+export type GetResourceDeploymentDetailCategory4 = ClosedEnum<
+  typeof GetResourceDeploymentDetailCategory4
+>;
 
 export type CapacityBlocker4 = {
-  category: Category4;
+  category: GetResourceDeploymentDetailCategory4;
   message: string;
   observedAt: Date;
   providerCode?: string | null | undefined;
@@ -557,16 +559,18 @@ export type DataMachines2 = {
   backend: "machines";
 };
 
-export const Category3 = {
+export const GetResourceDeploymentDetailCategory3 = {
   Quota: "quota",
   Capacity: "capacity",
   Allocation: "allocation",
   Other: "other",
 } as const;
-export type Category3 = ClosedEnum<typeof Category3>;
+export type GetResourceDeploymentDetailCategory3 = ClosedEnum<
+  typeof GetResourceDeploymentDetailCategory3
+>;
 
 export type CapacityBlocker3 = {
-  category: Category3;
+  category: GetResourceDeploymentDetailCategory3;
   message: string;
   observedAt: Date;
   providerCode?: string | null | undefined;
@@ -761,16 +765,18 @@ export type DataAzure2 = {
   backend: "azure";
 };
 
-export const Category2 = {
+export const GetResourceDeploymentDetailCategory2 = {
   Quota: "quota",
   Capacity: "capacity",
   Allocation: "allocation",
   Other: "other",
 } as const;
-export type Category2 = ClosedEnum<typeof Category2>;
+export type GetResourceDeploymentDetailCategory2 = ClosedEnum<
+  typeof GetResourceDeploymentDetailCategory2
+>;
 
 export type CapacityBlocker2 = {
-  category: Category2;
+  category: GetResourceDeploymentDetailCategory2;
   message: string;
   observedAt: Date;
   providerCode?: string | null | undefined;
@@ -965,16 +971,18 @@ export type DataGcp2 = {
   backend: "gcp";
 };
 
-export const Category1 = {
+export const GetResourceDeploymentDetailCategory1 = {
   Quota: "quota",
   Capacity: "capacity",
   Allocation: "allocation",
   Other: "other",
 } as const;
-export type Category1 = ClosedEnum<typeof Category1>;
+export type GetResourceDeploymentDetailCategory1 = ClosedEnum<
+  typeof GetResourceDeploymentDetailCategory1
+>;
 
 export type CapacityBlocker1 = {
-  category: Category1;
+  category: GetResourceDeploymentDetailCategory1;
   message: string;
   observedAt: Date;
   providerCode?: string | null | undefined;
@@ -1749,16 +1757,16 @@ export function dataLocal5FromJSON(
 }
 
 /** @internal */
-export const Category4$inboundSchema: z.ZodEnum<typeof Category4> = z.enum(
-  Category4,
-);
+export const GetResourceDeploymentDetailCategory4$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailCategory4
+> = z.enum(GetResourceDeploymentDetailCategory4);
 
 /** @internal */
 export const CapacityBlocker4$inboundSchema: z.ZodType<
   CapacityBlocker4,
   unknown
 > = z.object({
-  category: Category4$inboundSchema,
+  category: GetResourceDeploymentDetailCategory4$inboundSchema,
   message: z.string(),
   observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   providerCode: z.nullable(z.string()).optional(),
@@ -2201,16 +2209,16 @@ export function dataMachines2FromJSON(
 }
 
 /** @internal */
-export const Category3$inboundSchema: z.ZodEnum<typeof Category3> = z.enum(
-  Category3,
-);
+export const GetResourceDeploymentDetailCategory3$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailCategory3
+> = z.enum(GetResourceDeploymentDetailCategory3);
 
 /** @internal */
 export const CapacityBlocker3$inboundSchema: z.ZodType<
   CapacityBlocker3,
   unknown
 > = z.object({
-  category: Category3$inboundSchema,
+  category: GetResourceDeploymentDetailCategory3$inboundSchema,
   message: z.string(),
   observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   providerCode: z.nullable(z.string()).optional(),
@@ -2626,16 +2634,16 @@ export function dataAzure2FromJSON(
 }
 
 /** @internal */
-export const Category2$inboundSchema: z.ZodEnum<typeof Category2> = z.enum(
-  Category2,
-);
+export const GetResourceDeploymentDetailCategory2$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailCategory2
+> = z.enum(GetResourceDeploymentDetailCategory2);
 
 /** @internal */
 export const CapacityBlocker2$inboundSchema: z.ZodType<
   CapacityBlocker2,
   unknown
 > = z.object({
-  category: Category2$inboundSchema,
+  category: GetResourceDeploymentDetailCategory2$inboundSchema,
   message: z.string(),
   observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   providerCode: z.nullable(z.string()).optional(),
@@ -3049,16 +3057,16 @@ export function dataGcp2FromJSON(
 }
 
 /** @internal */
-export const Category1$inboundSchema: z.ZodEnum<typeof Category1> = z.enum(
-  Category1,
-);
+export const GetResourceDeploymentDetailCategory1$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailCategory1
+> = z.enum(GetResourceDeploymentDetailCategory1);
 
 /** @internal */
 export const CapacityBlocker1$inboundSchema: z.ZodType<
   CapacityBlocker1,
   unknown
 > = z.object({
-  category: Category1$inboundSchema,
+  category: GetResourceDeploymentDetailCategory1$inboundSchema,
   message: z.string(),
   observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   providerCode: z.nullable(z.string()).optional(),

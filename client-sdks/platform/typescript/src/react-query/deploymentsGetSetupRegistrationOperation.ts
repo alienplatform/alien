@@ -122,7 +122,7 @@ export function invalidateDeploymentsGetSetupRegistrationOperation(
     ...filters,
     queryKey: [
       "@alienplatform/platform-api",
-      "deployments",
+      "Deployments",
       "getSetupRegistrationOperation",
       ...queryKeyBase,
     ],
@@ -137,7 +137,7 @@ export function invalidateAllDeploymentsGetSetupRegistrationOperation(
     ...filters,
     queryKey: [
       "@alienplatform/platform-api",
-      "deployments",
+      "Deployments",
       "getSetupRegistrationOperation",
     ],
   });

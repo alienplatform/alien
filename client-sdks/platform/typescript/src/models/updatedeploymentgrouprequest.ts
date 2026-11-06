@@ -13,12 +13,17 @@ export type UpdateDeploymentGroupRequest = {
    * Maximum number of deployments in this deployment group
    */
   maxDeployments?: number | undefined;
+  /**
+   * Protect new deployments once the project's signing is ready. Existing deployments are unchanged.
+   */
+  protectNewDeployments?: boolean | undefined;
 };
 
 /** @internal */
 export type UpdateDeploymentGroupRequest$Outbound = {
   name?: string | undefined;
   maxDeployments?: number | undefined;
+  protectNewDeployments?: boolean | undefined;
 };
 
 /** @internal */
@@ -28,6 +33,7 @@ export const UpdateDeploymentGroupRequest$outboundSchema: z.ZodType<
 > = z.object({
   name: z.string().optional(),
   maxDeployments: z.int().optional(),
+  protectNewDeployments: z.boolean().optional(),
 });
 
 export function updateDeploymentGroupRequestToJSON(

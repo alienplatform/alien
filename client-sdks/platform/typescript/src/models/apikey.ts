@@ -10,6 +10,10 @@ import {
   APIKeyDeploymentSetupConfig,
   APIKeyDeploymentSetupConfig$inboundSchema,
 } from "./apikeydeploymentsetupconfig.js";
+import {
+  ApplicationRole,
+  ApplicationRole$inboundSchema,
+} from "./applicationrole.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export const APIKeyType = {
@@ -26,6 +30,10 @@ export type APIKeyType = ClosedEnum<typeof APIKeyType>;
  */
 export type CreatedByUser = {
   id: string;
+  /**
+   * Display name, when the person set one
+   */
+  name: string | null;
   email: string;
   image: string | null;
 };
@@ -42,6 +50,10 @@ export type APIKey = {
   keyPrefix: string;
   type: APIKeyType;
   role: string;
+  /**
+   * Application roles a project key holds beside `role`
+   */
+  additionalRoles: Array<ApplicationRole>;
   workspaceId: string;
   projectId: string | null;
   deploymentId: string | null;
@@ -68,6 +80,7 @@ export const APIKeyType$inboundSchema: z.ZodEnum<typeof APIKeyType> = z.enum(
 export const CreatedByUser$inboundSchema: z.ZodType<CreatedByUser, unknown> = z
   .object({
     id: z.string(),
+    name: z.nullable(z.string()),
     email: z.string(),
     image: z.nullable(z.string()),
   });
@@ -89,6 +102,7 @@ export const APIKey$inboundSchema: z.ZodType<APIKey, unknown> = z.object({
   keyPrefix: z.string(),
   type: APIKeyType$inboundSchema,
   role: z.string(),
+  additionalRoles: z.array(ApplicationRole$inboundSchema),
   workspaceId: z.string(),
   projectId: z.nullable(z.string()),
   deploymentId: z.nullable(z.string()),

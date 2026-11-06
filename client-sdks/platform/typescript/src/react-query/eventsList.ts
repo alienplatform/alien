@@ -95,6 +95,7 @@ export function setEventsListData(
       project?: string | undefined;
       deploymentId?: string | undefined;
       releaseId?: string | undefined;
+      category?: operations.ListEventsCategory | undefined;
       include?: Array<operations.ListEventsInclude> | undefined;
       limit?: number | undefined;
       cursor?: string | undefined;
@@ -114,6 +115,7 @@ export function invalidateEventsList(
       project?: string | undefined;
       deploymentId?: string | undefined;
       releaseId?: string | undefined;
+      category?: operations.ListEventsCategory | undefined;
       include?: Array<operations.ListEventsInclude> | undefined;
       limit?: number | undefined;
       cursor?: string | undefined;

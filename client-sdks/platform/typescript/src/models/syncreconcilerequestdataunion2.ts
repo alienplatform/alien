@@ -251,7 +251,7 @@ export type Pod2 = {
   waitingReason?: string | null | undefined;
 };
 
-export type Replicas3 = {
+export type SyncReconcileRequestReplicas3 = {
   available?: number | null | undefined;
   current?: number | null | undefined;
   desired?: number | null | undefined;
@@ -357,7 +357,7 @@ export type DataKubernetes2 = {
   name: string;
   namespace: string;
   pods: Array<Pod2>;
-  replicas: Replicas3;
+  replicas: SyncReconcileRequestReplicas3;
   restarts?: number | null | undefined;
   status: ResourceHeartbeatStatus11;
   workload?: Workload2 | string | null | undefined;
@@ -493,7 +493,7 @@ export type ReplicaUnit = {
   waitingReason?: string | null | undefined;
 };
 
-export type Replicas2 = {
+export type SyncReconcileRequestReplicas2 = {
   available?: number | null | undefined;
   current?: number | null | undefined;
   desired?: number | null | undefined;
@@ -579,7 +579,7 @@ export type DataHorizonPlatform = {
   memory?: SyncReconcileRequestMemory3 | string | null | undefined;
   observedImage?: string | null | undefined;
   replicaUnits: Array<ReplicaUnit>;
-  replicas: Replicas2;
+  replicas: SyncReconcileRequestReplicas2;
   schedulingMode: SchedulingMode;
   status: ResourceHeartbeatStatus10;
   backend: "horizonPlatform";
@@ -932,7 +932,7 @@ export type Pod1 = {
   waitingReason?: string | null | undefined;
 };
 
-export type Replicas1 = {
+export type SyncReconcileRequestReplicas1 = {
   available?: number | null | undefined;
   current?: number | null | undefined;
   desired?: number | null | undefined;
@@ -1038,7 +1038,7 @@ export type DataKubernetes1 = {
   name: string;
   namespace: string;
   pods: Array<Pod1>;
-  replicas: Replicas1;
+  replicas: SyncReconcileRequestReplicas1;
   restarts?: number | null | undefined;
   status: ResourceHeartbeatStatus8;
   triggerCount: number;
@@ -1877,7 +1877,7 @@ export function pod2ToJSON(pod2: Pod2): string {
 }
 
 /** @internal */
-export type Replicas3$Outbound = {
+export type SyncReconcileRequestReplicas3$Outbound = {
   available?: number | null | undefined;
   current?: number | null | undefined;
   desired?: number | null | undefined;
@@ -1887,9 +1887,9 @@ export type Replicas3$Outbound = {
 };
 
 /** @internal */
-export const Replicas3$outboundSchema: z.ZodType<
-  Replicas3$Outbound,
-  Replicas3
+export const SyncReconcileRequestReplicas3$outboundSchema: z.ZodType<
+  SyncReconcileRequestReplicas3$Outbound,
+  SyncReconcileRequestReplicas3
 > = z.object({
   available: z.nullable(z.int()).optional(),
   current: z.nullable(z.int()).optional(),
@@ -1899,8 +1899,14 @@ export const Replicas3$outboundSchema: z.ZodType<
   updated: z.nullable(z.int()).optional(),
 });
 
-export function replicas3ToJSON(replicas3: Replicas3): string {
-  return JSON.stringify(Replicas3$outboundSchema.parse(replicas3));
+export function syncReconcileRequestReplicas3ToJSON(
+  syncReconcileRequestReplicas3: SyncReconcileRequestReplicas3,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestReplicas3$outboundSchema.parse(
+      syncReconcileRequestReplicas3,
+    ),
+  );
 }
 
 /** @internal */
@@ -2071,7 +2077,7 @@ export type DataKubernetes2$Outbound = {
   name: string;
   namespace: string;
   pods: Array<Pod2$Outbound>;
-  replicas: Replicas3$Outbound;
+  replicas: SyncReconcileRequestReplicas3$Outbound;
   restarts?: number | null | undefined;
   status: ResourceHeartbeatStatus11$Outbound;
   workload?: Workload2$Outbound | string | null | undefined;
@@ -2100,7 +2106,7 @@ export const DataKubernetes2$outboundSchema: z.ZodType<
   name: z.string(),
   namespace: z.string(),
   pods: z.array(z.lazy(() => Pod2$outboundSchema)),
-  replicas: z.lazy(() => Replicas3$outboundSchema),
+  replicas: z.lazy(() => SyncReconcileRequestReplicas3$outboundSchema),
   restarts: z.nullable(z.int()).optional(),
   status: z.lazy(() => ResourceHeartbeatStatus11$outboundSchema),
   workload: z.nullable(
@@ -2499,7 +2505,7 @@ export function replicaUnitToJSON(replicaUnit: ReplicaUnit): string {
 }
 
 /** @internal */
-export type Replicas2$Outbound = {
+export type SyncReconcileRequestReplicas2$Outbound = {
   available?: number | null | undefined;
   current?: number | null | undefined;
   desired?: number | null | undefined;
@@ -2509,9 +2515,9 @@ export type Replicas2$Outbound = {
 };
 
 /** @internal */
-export const Replicas2$outboundSchema: z.ZodType<
-  Replicas2$Outbound,
-  Replicas2
+export const SyncReconcileRequestReplicas2$outboundSchema: z.ZodType<
+  SyncReconcileRequestReplicas2$Outbound,
+  SyncReconcileRequestReplicas2
 > = z.object({
   available: z.nullable(z.int()).optional(),
   current: z.nullable(z.int()).optional(),
@@ -2521,8 +2527,14 @@ export const Replicas2$outboundSchema: z.ZodType<
   updated: z.nullable(z.int()).optional(),
 });
 
-export function replicas2ToJSON(replicas2: Replicas2): string {
-  return JSON.stringify(Replicas2$outboundSchema.parse(replicas2));
+export function syncReconcileRequestReplicas2ToJSON(
+  syncReconcileRequestReplicas2: SyncReconcileRequestReplicas2,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestReplicas2$outboundSchema.parse(
+      syncReconcileRequestReplicas2,
+    ),
+  );
 }
 
 /** @internal */
@@ -2622,7 +2634,7 @@ export type DataHorizonPlatform$Outbound = {
   memory?: SyncReconcileRequestMemory3$Outbound | string | null | undefined;
   observedImage?: string | null | undefined;
   replicaUnits: Array<ReplicaUnit$Outbound>;
-  replicas: Replicas2$Outbound;
+  replicas: SyncReconcileRequestReplicas2$Outbound;
   schedulingMode: string;
   status: ResourceHeartbeatStatus10$Outbound;
   backend: "horizonPlatform";
@@ -2652,7 +2664,7 @@ export const DataHorizonPlatform$outboundSchema: z.ZodType<
   ).optional(),
   observedImage: z.nullable(z.string()).optional(),
   replicaUnits: z.array(z.lazy(() => ReplicaUnit$outboundSchema)),
-  replicas: z.lazy(() => Replicas2$outboundSchema),
+  replicas: z.lazy(() => SyncReconcileRequestReplicas2$outboundSchema),
   schedulingMode: SchedulingMode$outboundSchema,
   status: z.lazy(() => ResourceHeartbeatStatus10$outboundSchema),
   backend: z.literal("horizonPlatform"),
@@ -3581,7 +3593,7 @@ export function pod1ToJSON(pod1: Pod1): string {
 }
 
 /** @internal */
-export type Replicas1$Outbound = {
+export type SyncReconcileRequestReplicas1$Outbound = {
   available?: number | null | undefined;
   current?: number | null | undefined;
   desired?: number | null | undefined;
@@ -3591,9 +3603,9 @@ export type Replicas1$Outbound = {
 };
 
 /** @internal */
-export const Replicas1$outboundSchema: z.ZodType<
-  Replicas1$Outbound,
-  Replicas1
+export const SyncReconcileRequestReplicas1$outboundSchema: z.ZodType<
+  SyncReconcileRequestReplicas1$Outbound,
+  SyncReconcileRequestReplicas1
 > = z.object({
   available: z.nullable(z.int()).optional(),
   current: z.nullable(z.int()).optional(),
@@ -3603,8 +3615,14 @@ export const Replicas1$outboundSchema: z.ZodType<
   updated: z.nullable(z.int()).optional(),
 });
 
-export function replicas1ToJSON(replicas1: Replicas1): string {
-  return JSON.stringify(Replicas1$outboundSchema.parse(replicas1));
+export function syncReconcileRequestReplicas1ToJSON(
+  syncReconcileRequestReplicas1: SyncReconcileRequestReplicas1,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestReplicas1$outboundSchema.parse(
+      syncReconcileRequestReplicas1,
+    ),
+  );
 }
 
 /** @internal */
@@ -3774,7 +3792,7 @@ export type DataKubernetes1$Outbound = {
   name: string;
   namespace: string;
   pods: Array<Pod1$Outbound>;
-  replicas: Replicas1$Outbound;
+  replicas: SyncReconcileRequestReplicas1$Outbound;
   restarts?: number | null | undefined;
   status: ResourceHeartbeatStatus8$Outbound;
   triggerCount: number;
@@ -3804,7 +3822,7 @@ export const DataKubernetes1$outboundSchema: z.ZodType<
   name: z.string(),
   namespace: z.string(),
   pods: z.array(z.lazy(() => Pod1$outboundSchema)),
-  replicas: z.lazy(() => Replicas1$outboundSchema),
+  replicas: z.lazy(() => SyncReconcileRequestReplicas1$outboundSchema),
   restarts: z.nullable(z.int()).optional(),
   status: z.lazy(() => ResourceHeartbeatStatus8$outboundSchema),
   triggerCount: z.int(),

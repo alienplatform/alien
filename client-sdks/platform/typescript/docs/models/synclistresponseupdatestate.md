@@ -9,50 +9,48 @@ import { SyncListResponseUpdateState } from "@alienplatform/platform-api/models"
 
 let value: SyncListResponseUpdateState = {
   active: {
-    id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
-    status: "queued",
-    reasons: [],
-    targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    id: "duop_0vtxpb1sw4sbcdwg2xo37q6msm9l",
+    status: "blocked",
+    reasons: [
+      "release",
+    ],
+    targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
     changedKeys: [],
     cause: {
       kind: "volume-restore",
-      at: new Date("2024-04-20T16:58:36.345Z"),
-      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      at: new Date("2025-05-23T02:17:08.731Z"),
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
     },
-    requestedAt: new Date("2024-05-03T02:14:14.983Z"),
+    requestedAt: new Date("2025-05-26T07:07:30.861Z"),
   },
   next: {
-    id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
-    status: "applying",
-    reasons: [],
-    targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    id: "duop_0vtxpb1sw4sbcdwg2xo37q6msm9l",
+    status: "superseded",
+    reasons: [
+      "release",
+    ],
+    targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
     changedKeys: [
       "<value 1>",
-      "<value 2>",
-      "<value 3>",
     ],
-    cause: {
-      kind: "volume-restore",
-      at: new Date("2024-04-20T16:58:36.345Z"),
-      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-    },
-    requestedAt: new Date("2025-07-21T11:59:25.062Z"),
+    cause: null,
+    requestedAt: new Date("2025-07-14T02:26:55.487Z"),
   },
   latest: {
-    id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
-    status: "queued",
+    id: "duop_0vtxpb1sw4sbcdwg2xo37q6msm9l",
+    status: "failed",
     reasons: [],
-    targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
     changedKeys: [
       "<value 1>",
       "<value 2>",
     ],
     cause: {
       kind: "volume-restore",
-      at: new Date("2024-04-20T16:58:36.345Z"),
-      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      at: new Date("2025-05-23T02:17:08.731Z"),
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
     },
-    requestedAt: new Date("2026-06-26T04:52:21.740Z"),
+    requestedAt: new Date("2026-10-10T15:20:06.831Z"),
   },
 };
 ```

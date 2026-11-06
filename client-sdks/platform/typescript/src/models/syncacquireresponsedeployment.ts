@@ -38,6 +38,10 @@ export type SyncAcquireResponseDeployment = {
    */
   operationId: string | null;
   /**
+   * Immutable configuration revision included in offline targets and returned after successful installation.
+   */
+  configurationRevision?: string | null | undefined;
+  /**
    * Execution attempt claimed by this manager session, or null for observation-only work.
    */
   attemptId: string | null;
@@ -61,6 +65,7 @@ export const SyncAcquireResponseDeployment$inboundSchema: z.ZodType<
   deploymentGroupId: z.string(),
   setupMethod: DeploymentSetupMethod$inboundSchema.optional(),
   operationId: z.nullable(z.string()),
+  configurationRevision: z.nullable(z.string()).optional(),
   attemptId: z.nullable(z.string()),
   current: DeploymentState$inboundSchema,
   config: DeploymentConfig$inboundSchema,

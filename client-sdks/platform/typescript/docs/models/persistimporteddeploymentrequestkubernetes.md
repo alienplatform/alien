@@ -17,7 +17,7 @@ let value: PersistImportedDeploymentRequestKubernetes = {};
 
 ## Fields
 
-| Field                                                  | Type                                                   | Required                                               | Description                                            |
-| ------------------------------------------------------ | ------------------------------------------------------ | ------------------------------------------------------ | ------------------------------------------------------ |
-| `cluster`                                              | *models.PersistImportedDeploymentRequestClusterUnion*  | :heavy_minus_sign:                                     | N/A                                                    |
-| `exposure`                                             | *models.PersistImportedDeploymentRequestExposureUnion* | :heavy_minus_sign:                                     | N/A                                                    |
+| Field                                                 | Type                                                  | Required                                              | Description                                           |
+| ----------------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------- |
+| `cluster`                                             | *models.PersistImportedDeploymentRequestClusterUnion* | :heavy_minus_sign:                                    | N/A                                                   |
+| `exposure`                                            | *models.PersistImportedDeploymentRequestExposure*     | :heavy_minus_sign:                                    | N/A                                                   |

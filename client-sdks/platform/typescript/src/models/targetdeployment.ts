@@ -11,631 +11,19 @@ import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
-  ExternalBindingUnion,
-  ExternalBindingUnion$inboundSchema,
-} from "./externalbindingunion.js";
-import {
-  TargetDeploymentBasePlatformUnion,
-  TargetDeploymentBasePlatformUnion$inboundSchema,
-  TargetDeploymentComputeBackendUnion,
-  TargetDeploymentComputeBackendUnion$inboundSchema,
-  TargetDeploymentComputeUnion,
-  TargetDeploymentComputeUnion$inboundSchema,
-  TargetDeploymentDeploymentModel,
-  TargetDeploymentDeploymentModel$inboundSchema,
-  TargetDeploymentDomainMetadataUnion,
-  TargetDeploymentDomainMetadataUnion$inboundSchema,
-  TargetDeploymentDomainsUnion,
-  TargetDeploymentDomainsUnion$inboundSchema,
-  TargetDeploymentEndpointAccess,
-  TargetDeploymentEndpointAccess$inboundSchema,
-  TargetDeploymentEnvironmentVariables,
-  TargetDeploymentEnvironmentVariables$inboundSchema,
-  TargetDeploymentGcpFederationScopeUnion,
-  TargetDeploymentGcpFederationScopeUnion$inboundSchema,
-  TargetDeploymentHeartbeats,
-  TargetDeploymentHeartbeats$inboundSchema,
-  TargetDeploymentKubernetesUnion,
-  TargetDeploymentKubernetesUnion$inboundSchema,
-  TargetDeploymentManagementConfigUnion,
-  TargetDeploymentManagementConfigUnion$inboundSchema,
-  TargetDeploymentMonitoringUnion,
-  TargetDeploymentMonitoringUnion$inboundSchema,
-  TargetDeploymentNetworkUnion,
-  TargetDeploymentNetworkUnion$inboundSchema,
-  TargetDeploymentSetupManagement,
-  TargetDeploymentSetupManagement$inboundSchema,
-} from "./targetdeploymentsetupmanagement.js";
-
-/**
- * How telemetry (logs, metrics, traces) is handled.
- */
-export const TargetDeploymentTelemetry = {
-  Off: "off",
-  Auto: "auto",
-  ApprovalRequired: "approval-required",
-} as const;
-/**
- * How telemetry (logs, metrics, traces) is handled.
- */
-export type TargetDeploymentTelemetry = ClosedEnum<
-  typeof TargetDeploymentTelemetry
->;
-
-/**
- * How updates are delivered to the deployment.
- */
-export const TargetDeploymentUpdates = {
-  Auto: "auto",
-  ApprovalRequired: "approval-required",
-} as const;
-/**
- * How updates are delivered to the deployment.
- */
-export type TargetDeploymentUpdates = ClosedEnum<
-  typeof TargetDeploymentUpdates
->;
-
-/**
- * User-customizable deployment settings specified at deploy time.
- *
- * @remarks
- *
- * These settings are provided by the customer via CloudFormation parameters,
- * Terraform attributes, CLI flags, or Helm values. They customize how the
- * deployment runs and what capabilities are enabled.
- *
- * **Key distinction**: StackSettings is user-customizable, while ManagementConfig
- * is platform-derived (from the Manager's ServiceAccount).
- */
-export type TargetDeploymentStackSettings = {
-  compute?: TargetDeploymentComputeUnion | null | undefined;
-  /**
-   * Deployment model: how updates are delivered to the remote environment.
-   */
-  deploymentModel?: TargetDeploymentDeploymentModel | undefined;
-  domains?: TargetDeploymentDomainsUnion | null | undefined;
-  /**
-   * Reachability of the deployment's public endpoints, fixed at setup.
-   */
-  endpointAccess?: TargetDeploymentEndpointAccess | undefined;
-  externalBindings?: { [k: string]: ExternalBindingUnion } | null | undefined;
-  /**
-   * How heartbeat health checks are handled.
-   */
-  heartbeats?: TargetDeploymentHeartbeats | undefined;
-  kubernetes?: TargetDeploymentKubernetesUnion | null | undefined;
-  network?: TargetDeploymentNetworkUnion | null | undefined;
-  /**
-   * Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.
-   *
-   * @remarks
-   *
-   * This is intended for adopted Machines deployments whose DNS and certificates remain
-   * customer-owned. The platform passes these URLs to the runtime without creating or
-   * replacing DNS records or certificates.
-   */
-  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
-  /**
-   * Provider quota identities whose preflight failures become visible warnings
-   *
-   * @remarks
-   * for this deployment. Checks still run; deploy-time provider limits still apply.
-   * Unknown identities are rejected. An empty list restores normal blocking.
-   */
-  quotaWarningOverrides?: Array<string> | undefined;
-  /**
-   * Whether setup remains a separate administrator operation.
-   */
-  setupManagement?: TargetDeploymentSetupManagement | undefined;
-  /**
-   * How telemetry (logs, metrics, traces) is handled.
-   */
-  telemetry?: TargetDeploymentTelemetry | undefined;
-  /**
-   * How updates are delivered to the deployment.
-   */
-  updates?: TargetDeploymentUpdates | undefined;
-};
-
-/**
- * Replace one replica's persistent volume with a new volume made from a snapshot.
- *
- * @remarks
- *
- * The controller stops the replica, snapshots the volume it is about to
- * replace (so the restore can be undone), creates the new volume in the same
- * zone, starts the replica on it, and deletes the replaced volume.
- */
-export type TargetDeploymentVolumeRestore = {
-  /**
-   * Replica ordinal whose volume is replaced
-   */
-  ordinal: number;
-  /**
-   * Unique ID of this request. A controller performs each request once.
-   */
-  requestId: string;
-  /**
-   * ID of the container resource that owns the volume
-   */
-  resourceId: string;
-  /**
-   * Cloud ID of the snapshot to restore: an EBS snapshot ID, a Compute
-   *
-   * @remarks
-   * Engine snapshot name, or an Azure snapshot resource ID
-   */
-  snapshotId: string;
-};
-
-/**
- * Deployment configuration
- *
- * @remarks
- *
- * Configuration for how to perform the deployment.
- * Note: Credentials (ClientConfig) are passed separately to step() function.
- */
-export type TargetDeploymentConfig = {
-  /**
-   * Allow frozen resource changes during updates
-   *
-   * @remarks
-   * When true, skips the frozen resources compatibility check.
-   * This requires running with elevated cloud credentials.
-   */
-  allowFrozenChanges?: boolean | undefined;
-  basePlatform?: TargetDeploymentBasePlatformUnion | null | undefined;
-  computeBackend?: TargetDeploymentComputeBackendUnion | null | undefined;
-  /**
-   * Human-readable deployment name for cloud console metadata.
-   *
-   * @remarks
-   *
-   * This is separate from the physical resource prefix in StackState. It is
-   * used only for display text such as IAM role descriptions, service
-   * account descriptions, and custom role titles.
-   */
-  deploymentName?: string | null | undefined;
-  /**
-   * Deployment token for pull authentication with the manager's registry.
-   *
-   * @remarks
-   *
-   * Used by controllers to configure registry credentials so cloud platforms
-   * and K8s can pull images from the manager's `/v2/` endpoint.
-   */
-  deploymentToken?: string | null | undefined;
-  domainMetadata?: TargetDeploymentDomainMetadataUnion | null | undefined;
-  /**
-   * Snapshot of environment variables at a point in time
-   */
-  environmentVariables: TargetDeploymentEnvironmentVariables;
-  /**
-   * Map from resource ID to external binding.
-   *
-   * @remarks
-   *
-   * Validated at runtime: binding type must match resource type.
-   */
-  externalBindings?: { [k: string]: ExternalBindingUnion } | undefined;
-  gcpFederationScope?:
-    | TargetDeploymentGcpFederationScopeUnion
-    | null
-    | undefined;
-  /**
-   * Deployer-provided stack input values, keyed by input id. A resource
-   *
-   * @remarks
-   * gated with `.enabled(input)` and a Live lifecycle follows these
-   * values; a missing key falls back to the input's declared boolean
-   * default. Suppliers must not place secret-kind input values here:
-   * this map serializes and debug-prints unredacted.
-   */
-  inputValues?: { [k: string]: any | null } | undefined;
-  /**
-   * DNS-style label domain used for Kubernetes resource ownership labels.
-   *
-   * @remarks
-   *
-   * Defaults to `alien.dev` when absent. Whitelabeled Operator builds set this
-   * so generated workloads and optional log collectors share the same label
-   * namespace.
-   */
-  labelDomain?: string | null | undefined;
-  managementConfig?: TargetDeploymentManagementConfigUnion | null | undefined;
-  /**
-   * Manager base URL (e.g., "https://manager.alien.dev").
-   *
-   * @remarks
-   *
-   * The manager IS the container registry — its `/v2/` endpoint serves as
-   * the OCI Distribution API. Controllers derive the proxy host from this
-   * to configure pull auth (RegistryCredentials, imagePullSecrets).
-   *
-   * When None (e.g., `alien dev`), controllers use image URIs as-is.
-   */
-  managerUrl?: string | null | undefined;
-  monitoring?: TargetDeploymentMonitoringUnion | null | undefined;
-  /**
-   * Native image registry host+prefix for platforms that require it.
-   *
-   * @remarks
-   *
-   * Lambda (ECR) and Cloud Run (GAR) require native registry URIs. Other
-   * runtimes, including Azure Container Apps, pull through the manager's
-   * registry proxy.
-   *
-   * Derived by the manager from the artifact registry binding:
-   * - ECR: `{account_id}.dkr.ecr.{region}.amazonaws.com/{repository_prefix}`
-   * - GAR: `{region}-docker.pkg.dev/{project_id}/{repository_name}`
-   */
-  nativeImageHost?: string | null | undefined;
-  /**
-   * When true the observe pass reports raw resources across every namespace
-   *
-   * @remarks
-   * (cluster scope); otherwise it stays within the operator's own namespace.
-   * The label selector, if any, still filters within whichever scope applies.
-   * Ignored by cloud observers.
-   */
-  observeAllNamespaces?: boolean | undefined;
-  /**
-   * Kubernetes label selector that narrows which raw resources the observe
-   *
-   * @remarks
-   * pass reports (e.g. `app.kubernetes.io/part-of=my-app`). `None` observes
-   * everything in the namespace. Ignored by cloud observers.
-   */
-  observeLabelSelector?: string | null | undefined;
-  /**
-   * Public endpoint URLs for exposed resources (optional override).
-   *
-   * @remarks
-   *
-   * Use this only when a caller already knows the public URL. Managed public
-   * endpoint flows should prefer `domain_metadata` plus controller-reported
-   * load balancer outputs so DNS, certificate renewal, and route readiness
-   * stay tied to the resource state.
-   *
-   * If not set, platforms determine public endpoint URLs from other sources:
-   * - Managed DNS/TLS flows: `domain_metadata` FQDN or load balancer DNS
-   * - Local: `http://localhost:{allocated_port}`
-   * - Custom or disabled exposure: no public endpoint URL unless a controller reports one
-   *
-   * Outer key: resource ID. Inner key: endpoint name. Value: public URL.
-   */
-  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
-  /**
-   * User-customizable deployment settings specified at deploy time.
-   *
-   * @remarks
-   *
-   * These settings are provided by the customer via CloudFormation parameters,
-   * Terraform attributes, CLI flags, or Helm values. They customize how the
-   * deployment runs and what capabilities are enabled.
-   *
-   * **Key distinction**: StackSettings is user-customizable, while ManagementConfig
-   * is platform-derived (from the Manager's ServiceAccount).
-   */
-  stackSettings?: TargetDeploymentStackSettings | undefined;
-  /**
-   * IDs of applicable secret inputs stored for this exact deployment target.
-   *
-   * @remarks
-   * Trusted presence metadata only: never values, gate answers, or authority.
-   * Absent on legacy targets; an explicit empty list means no stored secrets.
-   */
-  storedSecretInputIds?: Array<string> | undefined;
-  /**
-   * Operator requests to replace a replica's persistent volume with a new
-   *
-   * @remarks
-   * volume made from a snapshot. A container controller performs each
-   * request once, identified by its `request_id`, and reports it in
-   * `ContainerOutputs.volumes`. Only a volume that a controller reports in
-   * `ContainerOutputs.volumes` can be the target of a request.
-   */
-  volumeRestores?: Array<TargetDeploymentVolumeRestore> | undefined;
-};
-
-export const ReleaseInfoTypeStringList = {
-  StringList: "stringList",
-} as const;
-export type ReleaseInfoTypeStringList = ClosedEnum<
-  typeof ReleaseInfoTypeStringList
->;
-
-export type TargetDeploymentDefaultStringList = {
-  type: ReleaseInfoTypeStringList;
-  /**
-   * String list default.
-   */
-  value: Array<string>;
-};
-
-export const ReleaseInfoTypeBoolean = {
-  Boolean: "boolean",
-} as const;
-export type ReleaseInfoTypeBoolean = ClosedEnum<typeof ReleaseInfoTypeBoolean>;
-
-export type TargetDeploymentDefaultBoolean = {
-  type: ReleaseInfoTypeBoolean;
-  /**
-   * Boolean default.
-   */
-  value: boolean;
-};
-
-export const ReleaseInfoTypeNumber = {
-  Number: "number",
-} as const;
-export type ReleaseInfoTypeNumber = ClosedEnum<typeof ReleaseInfoTypeNumber>;
-
-export type TargetDeploymentDefaultNumber = {
-  type: ReleaseInfoTypeNumber;
-  /**
-   * Number default.
-   */
-  value: string;
-};
-
-export const ReleaseInfoTypeString = {
-  String: "string",
-} as const;
-export type ReleaseInfoTypeString = ClosedEnum<typeof ReleaseInfoTypeString>;
-
-export type TargetDeploymentDefaultString = {
-  type: ReleaseInfoTypeString;
-  /**
-   * String default.
-   */
-  value: string;
-};
-
-export type TargetDeploymentDefaultUnion =
-  | TargetDeploymentDefaultString
-  | TargetDeploymentDefaultNumber
-  | TargetDeploymentDefaultBoolean
-  | TargetDeploymentDefaultStringList
-  | string;
-
-/**
- * Environment variable handling for a stack input mapping.
- */
-export const TypeReleaseInfoEnvEnum = {
-  Plain: "plain",
-  Secret: "secret",
-} as const;
-/**
- * Environment variable handling for a stack input mapping.
- */
-export type TypeReleaseInfoEnvEnum = ClosedEnum<typeof TypeReleaseInfoEnvEnum>;
-
-export type ReleaseInfoTypeUnion = TypeReleaseInfoEnvEnum | string;
-
-/**
- * How a resolved stack input is injected into runtime environment variables.
- */
-export type TargetDeploymentEnv = {
-  /**
-   * Environment variable name.
-   */
-  name: string;
-  /**
-   * Target resource IDs or patterns. None means every env-capable resource.
-   */
-  targetResources?: Array<string> | null | undefined;
-  type?: TypeReleaseInfoEnvEnum | string | null | undefined;
-};
-
-/**
- * Asks Alien to generate a secret input's value.
- *
- * @remarks
- *
- * The value is an alphanumeric string (`A-Z`, `a-z`, `0-9`), so it is safe in
- * connection strings, command lines and environment variables. It is generated
- * once, when the deployment's input values are first resolved, and then kept
- * with the deployment's other input values.
- */
-export type TargetDeploymentGenerate = {
-  /**
-   * Number of characters to generate.
-   */
-  length: number;
-};
-
-export type TargetDeploymentGenerateUnion = TargetDeploymentGenerate | string;
-
-/**
- * Primitive stack input kind.
- */
-export const TargetDeploymentKind = {
-  String: "string",
-  Secret: "secret",
-  Number: "number",
-  Integer: "integer",
-  Boolean: "boolean",
-  Enum: "enum",
-  StringList: "stringList",
-} as const;
-/**
- * Primitive stack input kind.
- */
-export type TargetDeploymentKind = ClosedEnum<typeof TargetDeploymentKind>;
-
-/**
- * Represents the target cloud platform.
- */
-export const ReleaseInfoPlatform = {
-  Aws: "aws",
-  Gcp: "gcp",
-  Azure: "azure",
-  Kubernetes: "kubernetes",
-  Machines: "machines",
-  Local: "local",
-  Test: "test",
-} as const;
-/**
- * Represents the target cloud platform.
- */
-export type ReleaseInfoPlatform = ClosedEnum<typeof ReleaseInfoPlatform>;
-
-/**
- * Who can provide a stack input value.
- */
-export const TargetDeploymentProvidedBy = {
-  Developer: "developer",
-  Deployer: "deployer",
-} as const;
-/**
- * Who can provide a stack input value.
- */
-export type TargetDeploymentProvidedBy = ClosedEnum<
-  typeof TargetDeploymentProvidedBy
->;
-
-/**
- * Portable stack input validation constraints.
- */
-export type TargetDeploymentValidation = {
-  /**
-   * Semantic format hint such as url.
-   */
-  format?: string | null | undefined;
-  /**
-   * Maximum number.
-   */
-  max?: string | null | undefined;
-  /**
-   * Maximum string-list items.
-   */
-  maxItems?: number | null | undefined;
-  /**
-   * Maximum string length.
-   */
-  maxLength?: number | null | undefined;
-  /**
-   * Minimum number.
-   */
-  min?: string | null | undefined;
-  /**
-   * Minimum string-list items.
-   */
-  minItems?: number | null | undefined;
-  /**
-   * Minimum string length.
-   */
-  minLength?: number | null | undefined;
-  /**
-   * Portable whole-value regex pattern.
-   */
-  pattern?: string | null | undefined;
-  /**
-   * Allowed string enum values.
-   */
-  values?: Array<string> | null | undefined;
-};
-
-export type TargetDeploymentValidationUnion =
-  | TargetDeploymentValidation
-  | string;
-
-/**
- * Stack input definition serialized into a release stack.
- */
-export type TargetDeploymentInput = {
-  default?:
-    | TargetDeploymentDefaultString
-    | TargetDeploymentDefaultNumber
-    | TargetDeploymentDefaultBoolean
-    | TargetDeploymentDefaultStringList
-    | string
-    | null
-    | undefined;
-  /**
-   * Human-facing helper text.
-   */
-  description: string;
-  /**
-   * Runtime env-var mappings for v1 input resolution.
-   */
-  env?: Array<TargetDeploymentEnv> | undefined;
-  generate?: TargetDeploymentGenerate | string | null | undefined;
-  /**
-   * Stable input ID used by CLI/API calls.
-   */
-  id: string;
-  /**
-   * Primitive stack input kind.
-   */
-  kind: TargetDeploymentKind;
-  /**
-   * Human-facing field label.
-   */
-  label: string;
-  /**
-   * Example placeholder shown in UI.
-   */
-  placeholder?: string | null | undefined;
-  /**
-   * Platforms where this input applies.
-   */
-  platforms?: Array<ReleaseInfoPlatform> | null | undefined;
-  /**
-   * Who can provide this value.
-   */
-  providedBy: Array<TargetDeploymentProvidedBy>;
-  /**
-   * Whether a resolved value is required before deployment can proceed.
-   */
-  required: boolean;
-  validation?: TargetDeploymentValidation | string | null | undefined;
-};
-
-/**
- * Whether matching operations run without approval.
- */
-export const TargetDeploymentCustomDecision = {
-  Auto: "auto",
-  Manual: "manual",
-} as const;
-/**
- * Whether matching operations run without approval.
- */
-export type TargetDeploymentCustomDecision = ClosedEnum<
-  typeof TargetDeploymentCustomDecision
->;
-
-export type TargetDeploymentApprovalCustom = {
-  /**
-   * Whether matching operations run without approval.
-   */
-  decision: TargetDeploymentCustomDecision;
-  /**
-   * Highest risk tier (`read-only`, `mutating`, `destructive`) a wildcard
-   *
-   * @remarks
-   * access request for these operations may cover.
-   */
-  maxRisk?: string | null | undefined;
-};
-
-/**
- * Whether matching operations run without approval.
- */
-export const TargetDeploymentApprovalCustomEnum = {
-  Auto: "auto",
-  Manual: "manual",
-} as const;
-/**
- * Whether matching operations run without approval.
- */
-export type TargetDeploymentApprovalCustomEnum = ClosedEnum<
-  typeof TargetDeploymentApprovalCustomEnum
->;
+  TargetDeploymentApprovalCustom,
+  TargetDeploymentApprovalCustom$inboundSchema,
+  TargetDeploymentApprovalCustomEnum,
+  TargetDeploymentApprovalCustomEnum$inboundSchema,
+  TargetDeploymentConfig,
+  TargetDeploymentConfig$inboundSchema,
+  TargetDeploymentInput,
+  TargetDeploymentInput$inboundSchema,
+  TargetDeploymentSignedUnion,
+  TargetDeploymentSignedUnion$inboundSchema,
+  TargetDeploymentSignerList,
+  TargetDeploymentSignerList$inboundSchema,
+} from "./targetdeploymentapprovalcustomenum.js";
 
 /**
  * Approval rule for the operations a pattern matches.
@@ -841,13 +229,23 @@ export type TargetDeploymentManagementEnum = ClosedEnum<
 >;
 
 /**
+ * An IAM condition accepts one string or a list of alternative string values.
+ */
+export type TargetDeploymentOverrideAwResourceCondition =
+  | Array<string>
+  | string;
+
+/**
  * AWS-specific binding specification
  */
 export type TargetDeploymentOverrideAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
-  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  condition?:
+    | { [k: string]: { [k: string]: Array<string> | string } }
+    | null
+    | undefined;
   /**
    * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
    *
@@ -863,13 +261,21 @@ export type TargetDeploymentOverrideAwResource = {
 };
 
 /**
+ * An IAM condition accepts one string or a list of alternative string values.
+ */
+export type TargetDeploymentOverrideAwCondition = Array<string> | string;
+
+/**
  * AWS-specific binding specification
  */
 export type TargetDeploymentOverrideAwStack = {
   /**
    * Optional condition for additional filtering (rare)
    */
-  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  condition?:
+    | { [k: string]: { [k: string]: Array<string> | string } }
+    | null
+    | undefined;
   /**
    * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
    *
@@ -1049,13 +455,13 @@ export type OverrideReleaseInfoAzure = {
 /**
  * GCP IAM condition
  */
-export type TargetDeploymentOverrideConditionResource = {
+export type TargetDeploymentOverrideConditionGcpResource = {
   expression: string;
   title: string;
 };
 
-export type TargetDeploymentOverrideResourceConditionUnion =
-  | TargetDeploymentOverrideConditionResource
+export type TargetDeploymentOverrideGcpResourceConditionUnion =
+  | TargetDeploymentOverrideConditionGcpResource
   | string;
 
 /**
@@ -1063,7 +469,7 @@ export type TargetDeploymentOverrideResourceConditionUnion =
  */
 export type TargetDeploymentOverrideGcpResource = {
   condition?:
-    | TargetDeploymentOverrideConditionResource
+    | TargetDeploymentOverrideConditionGcpResource
     | string
     | null
     | undefined;
@@ -1076,20 +482,20 @@ export type TargetDeploymentOverrideGcpResource = {
 /**
  * GCP IAM condition
  */
-export type TargetDeploymentOverrideCondition = {
+export type TargetDeploymentOverrideConditionGcp = {
   expression: string;
   title: string;
 };
 
-export type TargetDeploymentOverrideConditionUnion =
-  | TargetDeploymentOverrideCondition
+export type TargetDeploymentOverrideGcpConditionUnion =
+  | TargetDeploymentOverrideConditionGcp
   | string;
 
 /**
  * GCP-specific binding specification
  */
 export type TargetDeploymentOverrideGcpStack = {
-  condition?: TargetDeploymentOverrideCondition | string | null | undefined;
+  condition?: TargetDeploymentOverrideConditionGcp | string | null | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -1210,13 +616,21 @@ export type TargetDeploymentManagement2 = {
 };
 
 /**
+ * An IAM condition accepts one string or a list of alternative string values.
+ */
+export type TargetDeploymentExtendAwResourceCondition = Array<string> | string;
+
+/**
  * AWS-specific binding specification
  */
 export type TargetDeploymentExtendAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
-  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  condition?:
+    | { [k: string]: { [k: string]: Array<string> | string } }
+    | null
+    | undefined;
   /**
    * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
    *
@@ -1232,13 +646,21 @@ export type TargetDeploymentExtendAwResource = {
 };
 
 /**
+ * An IAM condition accepts one string or a list of alternative string values.
+ */
+export type TargetDeploymentExtendAwCondition = Array<string> | string;
+
+/**
  * AWS-specific binding specification
  */
 export type TargetDeploymentExtendAwStack = {
   /**
    * Optional condition for additional filtering (rare)
    */
-  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  condition?:
+    | { [k: string]: { [k: string]: Array<string> | string } }
+    | null
+    | undefined;
   /**
    * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
    *
@@ -1418,13 +840,13 @@ export type ExtendReleaseInfoAzure = {
 /**
  * GCP IAM condition
  */
-export type TargetDeploymentExtendConditionResource = {
+export type TargetDeploymentExtendConditionGcpResource = {
   expression: string;
   title: string;
 };
 
-export type TargetDeploymentExtendResourceConditionUnion =
-  | TargetDeploymentExtendConditionResource
+export type TargetDeploymentExtendGcpResourceConditionUnion =
+  | TargetDeploymentExtendConditionGcpResource
   | string;
 
 /**
@@ -1432,7 +854,7 @@ export type TargetDeploymentExtendResourceConditionUnion =
  */
 export type TargetDeploymentExtendGcpResource = {
   condition?:
-    | TargetDeploymentExtendConditionResource
+    | TargetDeploymentExtendConditionGcpResource
     | string
     | null
     | undefined;
@@ -1445,20 +867,20 @@ export type TargetDeploymentExtendGcpResource = {
 /**
  * GCP IAM condition
  */
-export type TargetDeploymentExtendCondition = {
+export type TargetDeploymentExtendConditionGcp = {
   expression: string;
   title: string;
 };
 
-export type TargetDeploymentExtendConditionUnion =
-  | TargetDeploymentExtendCondition
+export type TargetDeploymentExtendGcpConditionUnion =
+  | TargetDeploymentExtendConditionGcp
   | string;
 
 /**
  * GCP-specific binding specification
  */
 export type TargetDeploymentExtendGcpStack = {
-  condition?: TargetDeploymentExtendCondition | string | null | undefined;
+  condition?: TargetDeploymentExtendConditionGcp | string | null | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -1587,13 +1009,21 @@ export type TargetDeploymentManagementUnion =
   | TargetDeploymentManagementEnum;
 
 /**
+ * An IAM condition accepts one string or a list of alternative string values.
+ */
+export type TargetDeploymentProfileAwResourceCondition = Array<string> | string;
+
+/**
  * AWS-specific binding specification
  */
 export type TargetDeploymentProfileAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
-  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  condition?:
+    | { [k: string]: { [k: string]: Array<string> | string } }
+    | null
+    | undefined;
   /**
    * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
    *
@@ -1609,13 +1039,21 @@ export type TargetDeploymentProfileAwResource = {
 };
 
 /**
+ * An IAM condition accepts one string or a list of alternative string values.
+ */
+export type TargetDeploymentProfileAwCondition = Array<string> | string;
+
+/**
  * AWS-specific binding specification
  */
 export type TargetDeploymentProfileAwStack = {
   /**
    * Optional condition for additional filtering (rare)
    */
-  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  condition?:
+    | { [k: string]: { [k: string]: Array<string> | string } }
+    | null
+    | undefined;
   /**
    * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
    *
@@ -1795,13 +1233,13 @@ export type ProfileReleaseInfoAzure = {
 /**
  * GCP IAM condition
  */
-export type TargetDeploymentProfileConditionResource = {
+export type TargetDeploymentProfileConditionGcpResource = {
   expression: string;
   title: string;
 };
 
-export type TargetDeploymentProfileResourceConditionUnion =
-  | TargetDeploymentProfileConditionResource
+export type TargetDeploymentProfileGcpResourceConditionUnion =
+  | TargetDeploymentProfileConditionGcpResource
   | string;
 
 /**
@@ -1809,7 +1247,7 @@ export type TargetDeploymentProfileResourceConditionUnion =
  */
 export type TargetDeploymentProfileGcpResource = {
   condition?:
-    | TargetDeploymentProfileConditionResource
+    | TargetDeploymentProfileConditionGcpResource
     | string
     | null
     | undefined;
@@ -1822,20 +1260,20 @@ export type TargetDeploymentProfileGcpResource = {
 /**
  * GCP IAM condition
  */
-export type TargetDeploymentProfileCondition = {
+export type TargetDeploymentProfileConditionGcp = {
   expression: string;
   title: string;
 };
 
-export type TargetDeploymentProfileConditionUnion =
-  | TargetDeploymentProfileCondition
+export type TargetDeploymentProfileGcpConditionUnion =
+  | TargetDeploymentProfileConditionGcp
   | string;
 
 /**
  * GCP-specific binding specification
  */
 export type TargetDeploymentProfileGcpStack = {
-  condition?: TargetDeploymentProfileCondition | string | null | undefined;
+  condition?: TargetDeploymentProfileConditionGcp | string | null | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -2137,6 +1575,14 @@ export type ReleaseInfo = {
    * Alien-assigned release — the platform resolves a release from `version`.
    */
   releaseId?: string | null | undefined;
+  signed?: TargetDeploymentSignedUnion | null | undefined;
+  /**
+   * The project's signer list chain, oldest first, carried with a signed
+   *
+   * @remarks
+   * release so the deployment can verify it.
+   */
+  signerLists?: Array<TargetDeploymentSignerList> | undefined;
   /**
    * A bag of resources, unaware of any cloud.
    */
@@ -2152,11 +1598,6 @@ export type ReleaseInfo = {
  */
 export type TargetDeployment = {
   /**
-   * Deployment configuration
-   *
-   * @remarks
-   *
-   * Configuration for how to perform the deployment.
    * Note: Credentials (ClientConfig) are passed separately to step() function.
    */
   config: TargetDeploymentConfig;
@@ -2173,456 +1614,11 @@ export type TargetDeployment = {
 };
 
 /** @internal */
-export const TargetDeploymentTelemetry$inboundSchema: z.ZodEnum<
-  typeof TargetDeploymentTelemetry
-> = z.enum(TargetDeploymentTelemetry);
-
-/** @internal */
-export const TargetDeploymentUpdates$inboundSchema: z.ZodEnum<
-  typeof TargetDeploymentUpdates
-> = z.enum(TargetDeploymentUpdates);
-
-/** @internal */
-export const TargetDeploymentStackSettings$inboundSchema: z.ZodType<
-  TargetDeploymentStackSettings,
-  unknown
-> = z.object({
-  compute: z.nullable(TargetDeploymentComputeUnion$inboundSchema).optional(),
-  deploymentModel: TargetDeploymentDeploymentModel$inboundSchema.optional(),
-  domains: z.nullable(TargetDeploymentDomainsUnion$inboundSchema).optional(),
-  endpointAccess: TargetDeploymentEndpointAccess$inboundSchema.optional(),
-  externalBindings: z.nullable(
-    z.record(z.string(), ExternalBindingUnion$inboundSchema),
-  ).optional(),
-  heartbeats: TargetDeploymentHeartbeats$inboundSchema.optional(),
-  kubernetes: z.nullable(TargetDeploymentKubernetesUnion$inboundSchema)
-    .optional(),
-  network: z.nullable(TargetDeploymentNetworkUnion$inboundSchema).optional(),
-  publicEndpoints: z.nullable(
-    z.record(z.string(), z.record(z.string(), z.string())),
-  ).optional(),
-  quotaWarningOverrides: z.array(z.string()).optional(),
-  setupManagement: TargetDeploymentSetupManagement$inboundSchema.optional(),
-  telemetry: TargetDeploymentTelemetry$inboundSchema.optional(),
-  updates: TargetDeploymentUpdates$inboundSchema.optional(),
-});
-
-export function targetDeploymentStackSettingsFromJSON(
-  jsonString: string,
-): SafeParseResult<TargetDeploymentStackSettings, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TargetDeploymentStackSettings$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentStackSettings' from JSON`,
-  );
-}
-
-/** @internal */
-export const TargetDeploymentVolumeRestore$inboundSchema: z.ZodType<
-  TargetDeploymentVolumeRestore,
-  unknown
-> = z.object({
-  ordinal: z.int(),
-  requestId: z.string(),
-  resourceId: z.string(),
-  snapshotId: z.string(),
-});
-
-export function targetDeploymentVolumeRestoreFromJSON(
-  jsonString: string,
-): SafeParseResult<TargetDeploymentVolumeRestore, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TargetDeploymentVolumeRestore$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentVolumeRestore' from JSON`,
-  );
-}
-
-/** @internal */
-export const TargetDeploymentConfig$inboundSchema: z.ZodType<
-  TargetDeploymentConfig,
-  unknown
-> = z.object({
-  allowFrozenChanges: z.boolean().optional(),
-  basePlatform: z.nullable(TargetDeploymentBasePlatformUnion$inboundSchema)
-    .optional(),
-  computeBackend: z.nullable(TargetDeploymentComputeBackendUnion$inboundSchema)
-    .optional(),
-  deploymentName: z.nullable(z.string()).optional(),
-  deploymentToken: z.nullable(z.string()).optional(),
-  domainMetadata: z.nullable(TargetDeploymentDomainMetadataUnion$inboundSchema)
-    .optional(),
-  environmentVariables: TargetDeploymentEnvironmentVariables$inboundSchema,
-  externalBindings: z.record(z.string(), ExternalBindingUnion$inboundSchema)
-    .optional(),
-  gcpFederationScope: z.nullable(
-    TargetDeploymentGcpFederationScopeUnion$inboundSchema,
-  ).optional(),
-  inputValues: z.record(z.string(), z.nullable(z.any())).optional(),
-  labelDomain: z.nullable(z.string()).optional(),
-  managementConfig: z.nullable(
-    TargetDeploymentManagementConfigUnion$inboundSchema,
-  ).optional(),
-  managerUrl: z.nullable(z.string()).optional(),
-  monitoring: z.nullable(TargetDeploymentMonitoringUnion$inboundSchema)
-    .optional(),
-  nativeImageHost: z.nullable(z.string()).optional(),
-  observeAllNamespaces: z.boolean().optional(),
-  observeLabelSelector: z.nullable(z.string()).optional(),
-  publicEndpoints: z.nullable(
-    z.record(z.string(), z.record(z.string(), z.string())),
-  ).optional(),
-  stackSettings: z.lazy(() => TargetDeploymentStackSettings$inboundSchema)
-    .optional(),
-  storedSecretInputIds: z.array(z.string()).optional(),
-  volumeRestores: z.array(
-    z.lazy(() => TargetDeploymentVolumeRestore$inboundSchema),
-  ).optional(),
-});
-
-export function targetDeploymentConfigFromJSON(
-  jsonString: string,
-): SafeParseResult<TargetDeploymentConfig, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TargetDeploymentConfig$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentConfig' from JSON`,
-  );
-}
-
-/** @internal */
-export const ReleaseInfoTypeStringList$inboundSchema: z.ZodEnum<
-  typeof ReleaseInfoTypeStringList
-> = z.enum(ReleaseInfoTypeStringList);
-
-/** @internal */
-export const TargetDeploymentDefaultStringList$inboundSchema: z.ZodType<
-  TargetDeploymentDefaultStringList,
-  unknown
-> = z.object({
-  type: ReleaseInfoTypeStringList$inboundSchema,
-  value: z.array(z.string()),
-});
-
-export function targetDeploymentDefaultStringListFromJSON(
-  jsonString: string,
-): SafeParseResult<TargetDeploymentDefaultStringList, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TargetDeploymentDefaultStringList$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentDefaultStringList' from JSON`,
-  );
-}
-
-/** @internal */
-export const ReleaseInfoTypeBoolean$inboundSchema: z.ZodEnum<
-  typeof ReleaseInfoTypeBoolean
-> = z.enum(ReleaseInfoTypeBoolean);
-
-/** @internal */
-export const TargetDeploymentDefaultBoolean$inboundSchema: z.ZodType<
-  TargetDeploymentDefaultBoolean,
-  unknown
-> = z.object({
-  type: ReleaseInfoTypeBoolean$inboundSchema,
-  value: z.boolean(),
-});
-
-export function targetDeploymentDefaultBooleanFromJSON(
-  jsonString: string,
-): SafeParseResult<TargetDeploymentDefaultBoolean, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TargetDeploymentDefaultBoolean$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentDefaultBoolean' from JSON`,
-  );
-}
-
-/** @internal */
-export const ReleaseInfoTypeNumber$inboundSchema: z.ZodEnum<
-  typeof ReleaseInfoTypeNumber
-> = z.enum(ReleaseInfoTypeNumber);
-
-/** @internal */
-export const TargetDeploymentDefaultNumber$inboundSchema: z.ZodType<
-  TargetDeploymentDefaultNumber,
-  unknown
-> = z.object({
-  type: ReleaseInfoTypeNumber$inboundSchema,
-  value: z.string(),
-});
-
-export function targetDeploymentDefaultNumberFromJSON(
-  jsonString: string,
-): SafeParseResult<TargetDeploymentDefaultNumber, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TargetDeploymentDefaultNumber$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentDefaultNumber' from JSON`,
-  );
-}
-
-/** @internal */
-export const ReleaseInfoTypeString$inboundSchema: z.ZodEnum<
-  typeof ReleaseInfoTypeString
-> = z.enum(ReleaseInfoTypeString);
-
-/** @internal */
-export const TargetDeploymentDefaultString$inboundSchema: z.ZodType<
-  TargetDeploymentDefaultString,
-  unknown
-> = z.object({
-  type: ReleaseInfoTypeString$inboundSchema,
-  value: z.string(),
-});
-
-export function targetDeploymentDefaultStringFromJSON(
-  jsonString: string,
-): SafeParseResult<TargetDeploymentDefaultString, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TargetDeploymentDefaultString$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentDefaultString' from JSON`,
-  );
-}
-
-/** @internal */
-export const TargetDeploymentDefaultUnion$inboundSchema: z.ZodType<
-  TargetDeploymentDefaultUnion,
-  unknown
-> = z.union([
-  z.lazy(() => TargetDeploymentDefaultString$inboundSchema),
-  z.lazy(() => TargetDeploymentDefaultNumber$inboundSchema),
-  z.lazy(() => TargetDeploymentDefaultBoolean$inboundSchema),
-  z.lazy(() => TargetDeploymentDefaultStringList$inboundSchema),
-  z.string(),
-]);
-
-export function targetDeploymentDefaultUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<TargetDeploymentDefaultUnion, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TargetDeploymentDefaultUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentDefaultUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const TypeReleaseInfoEnvEnum$inboundSchema: z.ZodEnum<
-  typeof TypeReleaseInfoEnvEnum
-> = z.enum(TypeReleaseInfoEnvEnum);
-
-/** @internal */
-export const ReleaseInfoTypeUnion$inboundSchema: z.ZodType<
-  ReleaseInfoTypeUnion,
-  unknown
-> = z.union([TypeReleaseInfoEnvEnum$inboundSchema, z.string()]);
-
-export function releaseInfoTypeUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<ReleaseInfoTypeUnion, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ReleaseInfoTypeUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ReleaseInfoTypeUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const TargetDeploymentEnv$inboundSchema: z.ZodType<
-  TargetDeploymentEnv,
-  unknown
-> = z.object({
-  name: z.string(),
-  targetResources: z.nullable(z.array(z.string())).optional(),
-  type: z.nullable(z.union([TypeReleaseInfoEnvEnum$inboundSchema, z.string()]))
-    .optional(),
-});
-
-export function targetDeploymentEnvFromJSON(
-  jsonString: string,
-): SafeParseResult<TargetDeploymentEnv, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TargetDeploymentEnv$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentEnv' from JSON`,
-  );
-}
-
-/** @internal */
-export const TargetDeploymentGenerate$inboundSchema: z.ZodType<
-  TargetDeploymentGenerate,
-  unknown
-> = z.object({
-  length: z.int(),
-});
-
-export function targetDeploymentGenerateFromJSON(
-  jsonString: string,
-): SafeParseResult<TargetDeploymentGenerate, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TargetDeploymentGenerate$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentGenerate' from JSON`,
-  );
-}
-
-/** @internal */
-export const TargetDeploymentGenerateUnion$inboundSchema: z.ZodType<
-  TargetDeploymentGenerateUnion,
-  unknown
-> = z.union([z.lazy(() => TargetDeploymentGenerate$inboundSchema), z.string()]);
-
-export function targetDeploymentGenerateUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<TargetDeploymentGenerateUnion, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TargetDeploymentGenerateUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentGenerateUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const TargetDeploymentKind$inboundSchema: z.ZodEnum<
-  typeof TargetDeploymentKind
-> = z.enum(TargetDeploymentKind);
-
-/** @internal */
-export const ReleaseInfoPlatform$inboundSchema: z.ZodEnum<
-  typeof ReleaseInfoPlatform
-> = z.enum(ReleaseInfoPlatform);
-
-/** @internal */
-export const TargetDeploymentProvidedBy$inboundSchema: z.ZodEnum<
-  typeof TargetDeploymentProvidedBy
-> = z.enum(TargetDeploymentProvidedBy);
-
-/** @internal */
-export const TargetDeploymentValidation$inboundSchema: z.ZodType<
-  TargetDeploymentValidation,
-  unknown
-> = z.object({
-  format: z.nullable(z.string()).optional(),
-  max: z.nullable(z.string()).optional(),
-  maxItems: z.nullable(z.int()).optional(),
-  maxLength: z.nullable(z.int()).optional(),
-  min: z.nullable(z.string()).optional(),
-  minItems: z.nullable(z.int()).optional(),
-  minLength: z.nullable(z.int()).optional(),
-  pattern: z.nullable(z.string()).optional(),
-  values: z.nullable(z.array(z.string())).optional(),
-});
-
-export function targetDeploymentValidationFromJSON(
-  jsonString: string,
-): SafeParseResult<TargetDeploymentValidation, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TargetDeploymentValidation$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentValidation' from JSON`,
-  );
-}
-
-/** @internal */
-export const TargetDeploymentValidationUnion$inboundSchema: z.ZodType<
-  TargetDeploymentValidationUnion,
-  unknown
-> = z.union([
-  z.lazy(() => TargetDeploymentValidation$inboundSchema),
-  z.string(),
-]);
-
-export function targetDeploymentValidationUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<TargetDeploymentValidationUnion, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TargetDeploymentValidationUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentValidationUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const TargetDeploymentInput$inboundSchema: z.ZodType<
-  TargetDeploymentInput,
-  unknown
-> = z.object({
-  default: z.nullable(
-    z.union([
-      z.lazy(() => TargetDeploymentDefaultString$inboundSchema),
-      z.lazy(() => TargetDeploymentDefaultNumber$inboundSchema),
-      z.lazy(() => TargetDeploymentDefaultBoolean$inboundSchema),
-      z.lazy(() => TargetDeploymentDefaultStringList$inboundSchema),
-      z.string(),
-    ]),
-  ).optional(),
-  description: z.string(),
-  env: z.array(z.lazy(() => TargetDeploymentEnv$inboundSchema)).optional(),
-  generate: z.nullable(
-    z.union([z.lazy(() => TargetDeploymentGenerate$inboundSchema), z.string()]),
-  ).optional(),
-  id: z.string(),
-  kind: TargetDeploymentKind$inboundSchema,
-  label: z.string(),
-  placeholder: z.nullable(z.string()).optional(),
-  platforms: z.nullable(z.array(ReleaseInfoPlatform$inboundSchema)).optional(),
-  providedBy: z.array(TargetDeploymentProvidedBy$inboundSchema),
-  required: z.boolean(),
-  validation: z.nullable(
-    z.union([
-      z.lazy(() => TargetDeploymentValidation$inboundSchema),
-      z.string(),
-    ]),
-  ).optional(),
-});
-
-export function targetDeploymentInputFromJSON(
-  jsonString: string,
-): SafeParseResult<TargetDeploymentInput, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TargetDeploymentInput$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentInput' from JSON`,
-  );
-}
-
-/** @internal */
-export const TargetDeploymentCustomDecision$inboundSchema: z.ZodEnum<
-  typeof TargetDeploymentCustomDecision
-> = z.enum(TargetDeploymentCustomDecision);
-
-/** @internal */
-export const TargetDeploymentApprovalCustom$inboundSchema: z.ZodType<
-  TargetDeploymentApprovalCustom,
-  unknown
-> = z.object({
-  decision: TargetDeploymentCustomDecision$inboundSchema,
-  maxRisk: z.nullable(z.string()).optional(),
-});
-
-export function targetDeploymentApprovalCustomFromJSON(
-  jsonString: string,
-): SafeParseResult<TargetDeploymentApprovalCustom, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TargetDeploymentApprovalCustom$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentApprovalCustom' from JSON`,
-  );
-}
-
-/** @internal */
-export const TargetDeploymentApprovalCustomEnum$inboundSchema: z.ZodEnum<
-  typeof TargetDeploymentApprovalCustomEnum
-> = z.enum(TargetDeploymentApprovalCustomEnum);
-
-/** @internal */
 export const TargetDeploymentCustomApprovalUnion$inboundSchema: z.ZodType<
   TargetDeploymentCustomApprovalUnion,
   unknown
 > = z.union([
-  z.lazy(() => TargetDeploymentApprovalCustom$inboundSchema),
+  TargetDeploymentApprovalCustom$inboundSchema,
   TargetDeploymentApprovalCustomEnum$inboundSchema,
 ]);
 
@@ -2721,7 +1717,7 @@ export const TargetDeploymentCustom$inboundSchema: z.ZodType<
   approval: z.record(
     z.string(),
     z.union([
-      z.lazy(() => TargetDeploymentApprovalCustom$inboundSchema),
+      TargetDeploymentApprovalCustom$inboundSchema,
       TargetDeploymentApprovalCustomEnum$inboundSchema,
     ]),
   ).optional(),
@@ -2954,12 +1950,39 @@ export const TargetDeploymentManagementEnum$inboundSchema: z.ZodEnum<
 > = z.enum(TargetDeploymentManagementEnum);
 
 /** @internal */
+export const TargetDeploymentOverrideAwResourceCondition$inboundSchema:
+  z.ZodType<TargetDeploymentOverrideAwResourceCondition, unknown> = z.union([
+    z.array(z.string()),
+    z.string(),
+  ]);
+
+export function targetDeploymentOverrideAwResourceConditionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  TargetDeploymentOverrideAwResourceCondition,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetDeploymentOverrideAwResourceCondition$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'TargetDeploymentOverrideAwResourceCondition' from JSON`,
+  );
+}
+
+/** @internal */
 export const TargetDeploymentOverrideAwResource$inboundSchema: z.ZodType<
   TargetDeploymentOverrideAwResource,
   unknown
 > = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
+  condition: z.nullable(
+    z.record(
+      z.string(),
+      z.record(z.string(), z.union([z.array(z.string()), z.string()])),
+    ),
+  ).optional(),
   notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
@@ -2976,12 +1999,33 @@ export function targetDeploymentOverrideAwResourceFromJSON(
 }
 
 /** @internal */
+export const TargetDeploymentOverrideAwCondition$inboundSchema: z.ZodType<
+  TargetDeploymentOverrideAwCondition,
+  unknown
+> = z.union([z.array(z.string()), z.string()]);
+
+export function targetDeploymentOverrideAwConditionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentOverrideAwCondition, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetDeploymentOverrideAwCondition$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentOverrideAwCondition' from JSON`,
+  );
+}
+
+/** @internal */
 export const TargetDeploymentOverrideAwStack$inboundSchema: z.ZodType<
   TargetDeploymentOverrideAwStack,
   unknown
 > = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
+  condition: z.nullable(
+    z.record(
+      z.string(),
+      z.record(z.string(), z.union([z.array(z.string()), z.string()])),
+    ),
+  ).optional(),
   notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
@@ -3170,50 +2214,49 @@ export function overrideReleaseInfoAzureFromJSON(
 }
 
 /** @internal */
-export const TargetDeploymentOverrideConditionResource$inboundSchema: z.ZodType<
-  TargetDeploymentOverrideConditionResource,
-  unknown
-> = z.object({
-  expression: z.string(),
-  title: z.string(),
-});
+export const TargetDeploymentOverrideConditionGcpResource$inboundSchema:
+  z.ZodType<TargetDeploymentOverrideConditionGcpResource, unknown> = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
 
-export function targetDeploymentOverrideConditionResourceFromJSON(
+export function targetDeploymentOverrideConditionGcpResourceFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  TargetDeploymentOverrideConditionResource,
+  TargetDeploymentOverrideConditionGcpResource,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      TargetDeploymentOverrideConditionResource$inboundSchema.parse(
+      TargetDeploymentOverrideConditionGcpResource$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'TargetDeploymentOverrideConditionResource' from JSON`,
+    `Failed to parse 'TargetDeploymentOverrideConditionGcpResource' from JSON`,
   );
 }
 
 /** @internal */
-export const TargetDeploymentOverrideResourceConditionUnion$inboundSchema:
-  z.ZodType<TargetDeploymentOverrideResourceConditionUnion, unknown> = z.union([
-    z.lazy(() => TargetDeploymentOverrideConditionResource$inboundSchema),
-    z.string(),
-  ]);
+export const TargetDeploymentOverrideGcpResourceConditionUnion$inboundSchema:
+  z.ZodType<TargetDeploymentOverrideGcpResourceConditionUnion, unknown> = z
+    .union([
+      z.lazy(() => TargetDeploymentOverrideConditionGcpResource$inboundSchema),
+      z.string(),
+    ]);
 
-export function targetDeploymentOverrideResourceConditionUnionFromJSON(
+export function targetDeploymentOverrideGcpResourceConditionUnionFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  TargetDeploymentOverrideResourceConditionUnion,
+  TargetDeploymentOverrideGcpResourceConditionUnion,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      TargetDeploymentOverrideResourceConditionUnion$inboundSchema.parse(
+      TargetDeploymentOverrideGcpResourceConditionUnion$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'TargetDeploymentOverrideResourceConditionUnion' from JSON`,
+    `Failed to parse 'TargetDeploymentOverrideGcpResourceConditionUnion' from JSON`,
   );
 }
 
@@ -3224,7 +2267,7 @@ export const TargetDeploymentOverrideGcpResource$inboundSchema: z.ZodType<
 > = z.object({
   condition: z.nullable(
     z.union([
-      z.lazy(() => TargetDeploymentOverrideConditionResource$inboundSchema),
+      z.lazy(() => TargetDeploymentOverrideConditionGcpResource$inboundSchema),
       z.string(),
     ]),
   ).optional(),
@@ -3243,41 +2286,47 @@ export function targetDeploymentOverrideGcpResourceFromJSON(
 }
 
 /** @internal */
-export const TargetDeploymentOverrideCondition$inboundSchema: z.ZodType<
-  TargetDeploymentOverrideCondition,
+export const TargetDeploymentOverrideConditionGcp$inboundSchema: z.ZodType<
+  TargetDeploymentOverrideConditionGcp,
   unknown
 > = z.object({
   expression: z.string(),
   title: z.string(),
 });
 
-export function targetDeploymentOverrideConditionFromJSON(
+export function targetDeploymentOverrideConditionGcpFromJSON(
   jsonString: string,
-): SafeParseResult<TargetDeploymentOverrideCondition, SDKValidationError> {
+): SafeParseResult<TargetDeploymentOverrideConditionGcp, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => TargetDeploymentOverrideCondition$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentOverrideCondition' from JSON`,
+    (x) =>
+      TargetDeploymentOverrideConditionGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentOverrideConditionGcp' from JSON`,
   );
 }
 
 /** @internal */
-export const TargetDeploymentOverrideConditionUnion$inboundSchema: z.ZodType<
-  TargetDeploymentOverrideConditionUnion,
+export const TargetDeploymentOverrideGcpConditionUnion$inboundSchema: z.ZodType<
+  TargetDeploymentOverrideGcpConditionUnion,
   unknown
 > = z.union([
-  z.lazy(() => TargetDeploymentOverrideCondition$inboundSchema),
+  z.lazy(() => TargetDeploymentOverrideConditionGcp$inboundSchema),
   z.string(),
 ]);
 
-export function targetDeploymentOverrideConditionUnionFromJSON(
+export function targetDeploymentOverrideGcpConditionUnionFromJSON(
   jsonString: string,
-): SafeParseResult<TargetDeploymentOverrideConditionUnion, SDKValidationError> {
+): SafeParseResult<
+  TargetDeploymentOverrideGcpConditionUnion,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
     (x) =>
-      TargetDeploymentOverrideConditionUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentOverrideConditionUnion' from JSON`,
+      TargetDeploymentOverrideGcpConditionUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'TargetDeploymentOverrideGcpConditionUnion' from JSON`,
   );
 }
 
@@ -3288,7 +2337,7 @@ export const TargetDeploymentOverrideGcpStack$inboundSchema: z.ZodType<
 > = z.object({
   condition: z.nullable(
     z.union([
-      z.lazy(() => TargetDeploymentOverrideCondition$inboundSchema),
+      z.lazy(() => TargetDeploymentOverrideConditionGcp$inboundSchema),
       z.string(),
     ]),
   ).optional(),
@@ -3456,12 +2505,38 @@ export function targetDeploymentManagement2FromJSON(
 }
 
 /** @internal */
+export const TargetDeploymentExtendAwResourceCondition$inboundSchema: z.ZodType<
+  TargetDeploymentExtendAwResourceCondition,
+  unknown
+> = z.union([z.array(z.string()), z.string()]);
+
+export function targetDeploymentExtendAwResourceConditionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  TargetDeploymentExtendAwResourceCondition,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetDeploymentExtendAwResourceCondition$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'TargetDeploymentExtendAwResourceCondition' from JSON`,
+  );
+}
+
+/** @internal */
 export const TargetDeploymentExtendAwResource$inboundSchema: z.ZodType<
   TargetDeploymentExtendAwResource,
   unknown
 > = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
+  condition: z.nullable(
+    z.record(
+      z.string(),
+      z.record(z.string(), z.union([z.array(z.string()), z.string()])),
+    ),
+  ).optional(),
   notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
@@ -3477,12 +2552,32 @@ export function targetDeploymentExtendAwResourceFromJSON(
 }
 
 /** @internal */
+export const TargetDeploymentExtendAwCondition$inboundSchema: z.ZodType<
+  TargetDeploymentExtendAwCondition,
+  unknown
+> = z.union([z.array(z.string()), z.string()]);
+
+export function targetDeploymentExtendAwConditionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentExtendAwCondition, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentExtendAwCondition$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentExtendAwCondition' from JSON`,
+  );
+}
+
+/** @internal */
 export const TargetDeploymentExtendAwStack$inboundSchema: z.ZodType<
   TargetDeploymentExtendAwStack,
   unknown
 > = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
+  condition: z.nullable(
+    z.record(
+      z.string(),
+      z.record(z.string(), z.union([z.array(z.string()), z.string()])),
+    ),
+  ).optional(),
   notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
@@ -3669,50 +2764,50 @@ export function extendReleaseInfoAzureFromJSON(
 }
 
 /** @internal */
-export const TargetDeploymentExtendConditionResource$inboundSchema: z.ZodType<
-  TargetDeploymentExtendConditionResource,
-  unknown
-> = z.object({
-  expression: z.string(),
-  title: z.string(),
-});
+export const TargetDeploymentExtendConditionGcpResource$inboundSchema:
+  z.ZodType<TargetDeploymentExtendConditionGcpResource, unknown> = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
 
-export function targetDeploymentExtendConditionResourceFromJSON(
+export function targetDeploymentExtendConditionGcpResourceFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  TargetDeploymentExtendConditionResource,
+  TargetDeploymentExtendConditionGcpResource,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      TargetDeploymentExtendConditionResource$inboundSchema.parse(
+      TargetDeploymentExtendConditionGcpResource$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'TargetDeploymentExtendConditionResource' from JSON`,
+    `Failed to parse 'TargetDeploymentExtendConditionGcpResource' from JSON`,
   );
 }
 
 /** @internal */
-export const TargetDeploymentExtendResourceConditionUnion$inboundSchema:
-  z.ZodType<TargetDeploymentExtendResourceConditionUnion, unknown> = z.union([
-    z.lazy(() => TargetDeploymentExtendConditionResource$inboundSchema),
-    z.string(),
-  ]);
+export const TargetDeploymentExtendGcpResourceConditionUnion$inboundSchema:
+  z.ZodType<TargetDeploymentExtendGcpResourceConditionUnion, unknown> = z.union(
+    [
+      z.lazy(() => TargetDeploymentExtendConditionGcpResource$inboundSchema),
+      z.string(),
+    ],
+  );
 
-export function targetDeploymentExtendResourceConditionUnionFromJSON(
+export function targetDeploymentExtendGcpResourceConditionUnionFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  TargetDeploymentExtendResourceConditionUnion,
+  TargetDeploymentExtendGcpResourceConditionUnion,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      TargetDeploymentExtendResourceConditionUnion$inboundSchema.parse(
+      TargetDeploymentExtendGcpResourceConditionUnion$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'TargetDeploymentExtendResourceConditionUnion' from JSON`,
+    `Failed to parse 'TargetDeploymentExtendGcpResourceConditionUnion' from JSON`,
   );
 }
 
@@ -3723,7 +2818,7 @@ export const TargetDeploymentExtendGcpResource$inboundSchema: z.ZodType<
 > = z.object({
   condition: z.nullable(
     z.union([
-      z.lazy(() => TargetDeploymentExtendConditionResource$inboundSchema),
+      z.lazy(() => TargetDeploymentExtendConditionGcpResource$inboundSchema),
       z.string(),
     ]),
   ).optional(),
@@ -3741,41 +2836,47 @@ export function targetDeploymentExtendGcpResourceFromJSON(
 }
 
 /** @internal */
-export const TargetDeploymentExtendCondition$inboundSchema: z.ZodType<
-  TargetDeploymentExtendCondition,
+export const TargetDeploymentExtendConditionGcp$inboundSchema: z.ZodType<
+  TargetDeploymentExtendConditionGcp,
   unknown
 > = z.object({
   expression: z.string(),
   title: z.string(),
 });
 
-export function targetDeploymentExtendConditionFromJSON(
+export function targetDeploymentExtendConditionGcpFromJSON(
   jsonString: string,
-): SafeParseResult<TargetDeploymentExtendCondition, SDKValidationError> {
+): SafeParseResult<TargetDeploymentExtendConditionGcp, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => TargetDeploymentExtendCondition$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentExtendCondition' from JSON`,
+    (x) =>
+      TargetDeploymentExtendConditionGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentExtendConditionGcp' from JSON`,
   );
 }
 
 /** @internal */
-export const TargetDeploymentExtendConditionUnion$inboundSchema: z.ZodType<
-  TargetDeploymentExtendConditionUnion,
+export const TargetDeploymentExtendGcpConditionUnion$inboundSchema: z.ZodType<
+  TargetDeploymentExtendGcpConditionUnion,
   unknown
 > = z.union([
-  z.lazy(() => TargetDeploymentExtendCondition$inboundSchema),
+  z.lazy(() => TargetDeploymentExtendConditionGcp$inboundSchema),
   z.string(),
 ]);
 
-export function targetDeploymentExtendConditionUnionFromJSON(
+export function targetDeploymentExtendGcpConditionUnionFromJSON(
   jsonString: string,
-): SafeParseResult<TargetDeploymentExtendConditionUnion, SDKValidationError> {
+): SafeParseResult<
+  TargetDeploymentExtendGcpConditionUnion,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
     (x) =>
-      TargetDeploymentExtendConditionUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentExtendConditionUnion' from JSON`,
+      TargetDeploymentExtendGcpConditionUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'TargetDeploymentExtendGcpConditionUnion' from JSON`,
   );
 }
 
@@ -3786,7 +2887,7 @@ export const TargetDeploymentExtendGcpStack$inboundSchema: z.ZodType<
 > = z.object({
   condition: z.nullable(
     z.union([
-      z.lazy(() => TargetDeploymentExtendCondition$inboundSchema),
+      z.lazy(() => TargetDeploymentExtendConditionGcp$inboundSchema),
       z.string(),
     ]),
   ).optional(),
@@ -3969,12 +3070,39 @@ export function targetDeploymentManagementUnionFromJSON(
 }
 
 /** @internal */
+export const TargetDeploymentProfileAwResourceCondition$inboundSchema:
+  z.ZodType<TargetDeploymentProfileAwResourceCondition, unknown> = z.union([
+    z.array(z.string()),
+    z.string(),
+  ]);
+
+export function targetDeploymentProfileAwResourceConditionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  TargetDeploymentProfileAwResourceCondition,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetDeploymentProfileAwResourceCondition$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'TargetDeploymentProfileAwResourceCondition' from JSON`,
+  );
+}
+
+/** @internal */
 export const TargetDeploymentProfileAwResource$inboundSchema: z.ZodType<
   TargetDeploymentProfileAwResource,
   unknown
 > = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
+  condition: z.nullable(
+    z.record(
+      z.string(),
+      z.record(z.string(), z.union([z.array(z.string()), z.string()])),
+    ),
+  ).optional(),
   notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
@@ -3990,12 +3118,33 @@ export function targetDeploymentProfileAwResourceFromJSON(
 }
 
 /** @internal */
+export const TargetDeploymentProfileAwCondition$inboundSchema: z.ZodType<
+  TargetDeploymentProfileAwCondition,
+  unknown
+> = z.union([z.array(z.string()), z.string()]);
+
+export function targetDeploymentProfileAwConditionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentProfileAwCondition, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetDeploymentProfileAwCondition$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentProfileAwCondition' from JSON`,
+  );
+}
+
+/** @internal */
 export const TargetDeploymentProfileAwStack$inboundSchema: z.ZodType<
   TargetDeploymentProfileAwStack,
   unknown
 > = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
+  condition: z.nullable(
+    z.record(
+      z.string(),
+      z.record(z.string(), z.union([z.array(z.string()), z.string()])),
+    ),
+  ).optional(),
   notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
@@ -4182,50 +3331,49 @@ export function profileReleaseInfoAzureFromJSON(
 }
 
 /** @internal */
-export const TargetDeploymentProfileConditionResource$inboundSchema: z.ZodType<
-  TargetDeploymentProfileConditionResource,
-  unknown
-> = z.object({
-  expression: z.string(),
-  title: z.string(),
-});
+export const TargetDeploymentProfileConditionGcpResource$inboundSchema:
+  z.ZodType<TargetDeploymentProfileConditionGcpResource, unknown> = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
 
-export function targetDeploymentProfileConditionResourceFromJSON(
+export function targetDeploymentProfileConditionGcpResourceFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  TargetDeploymentProfileConditionResource,
+  TargetDeploymentProfileConditionGcpResource,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      TargetDeploymentProfileConditionResource$inboundSchema.parse(
+      TargetDeploymentProfileConditionGcpResource$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'TargetDeploymentProfileConditionResource' from JSON`,
+    `Failed to parse 'TargetDeploymentProfileConditionGcpResource' from JSON`,
   );
 }
 
 /** @internal */
-export const TargetDeploymentProfileResourceConditionUnion$inboundSchema:
-  z.ZodType<TargetDeploymentProfileResourceConditionUnion, unknown> = z.union([
-    z.lazy(() => TargetDeploymentProfileConditionResource$inboundSchema),
-    z.string(),
-  ]);
+export const TargetDeploymentProfileGcpResourceConditionUnion$inboundSchema:
+  z.ZodType<TargetDeploymentProfileGcpResourceConditionUnion, unknown> = z
+    .union([
+      z.lazy(() => TargetDeploymentProfileConditionGcpResource$inboundSchema),
+      z.string(),
+    ]);
 
-export function targetDeploymentProfileResourceConditionUnionFromJSON(
+export function targetDeploymentProfileGcpResourceConditionUnionFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  TargetDeploymentProfileResourceConditionUnion,
+  TargetDeploymentProfileGcpResourceConditionUnion,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      TargetDeploymentProfileResourceConditionUnion$inboundSchema.parse(
+      TargetDeploymentProfileGcpResourceConditionUnion$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'TargetDeploymentProfileResourceConditionUnion' from JSON`,
+    `Failed to parse 'TargetDeploymentProfileGcpResourceConditionUnion' from JSON`,
   );
 }
 
@@ -4236,7 +3384,7 @@ export const TargetDeploymentProfileGcpResource$inboundSchema: z.ZodType<
 > = z.object({
   condition: z.nullable(
     z.union([
-      z.lazy(() => TargetDeploymentProfileConditionResource$inboundSchema),
+      z.lazy(() => TargetDeploymentProfileConditionGcpResource$inboundSchema),
       z.string(),
     ]),
   ).optional(),
@@ -4255,41 +3403,47 @@ export function targetDeploymentProfileGcpResourceFromJSON(
 }
 
 /** @internal */
-export const TargetDeploymentProfileCondition$inboundSchema: z.ZodType<
-  TargetDeploymentProfileCondition,
+export const TargetDeploymentProfileConditionGcp$inboundSchema: z.ZodType<
+  TargetDeploymentProfileConditionGcp,
   unknown
 > = z.object({
   expression: z.string(),
   title: z.string(),
 });
 
-export function targetDeploymentProfileConditionFromJSON(
+export function targetDeploymentProfileConditionGcpFromJSON(
   jsonString: string,
-): SafeParseResult<TargetDeploymentProfileCondition, SDKValidationError> {
+): SafeParseResult<TargetDeploymentProfileConditionGcp, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => TargetDeploymentProfileCondition$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentProfileCondition' from JSON`,
+    (x) =>
+      TargetDeploymentProfileConditionGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentProfileConditionGcp' from JSON`,
   );
 }
 
 /** @internal */
-export const TargetDeploymentProfileConditionUnion$inboundSchema: z.ZodType<
-  TargetDeploymentProfileConditionUnion,
+export const TargetDeploymentProfileGcpConditionUnion$inboundSchema: z.ZodType<
+  TargetDeploymentProfileGcpConditionUnion,
   unknown
 > = z.union([
-  z.lazy(() => TargetDeploymentProfileCondition$inboundSchema),
+  z.lazy(() => TargetDeploymentProfileConditionGcp$inboundSchema),
   z.string(),
 ]);
 
-export function targetDeploymentProfileConditionUnionFromJSON(
+export function targetDeploymentProfileGcpConditionUnionFromJSON(
   jsonString: string,
-): SafeParseResult<TargetDeploymentProfileConditionUnion, SDKValidationError> {
+): SafeParseResult<
+  TargetDeploymentProfileGcpConditionUnion,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
     (x) =>
-      TargetDeploymentProfileConditionUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentProfileConditionUnion' from JSON`,
+      TargetDeploymentProfileGcpConditionUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'TargetDeploymentProfileGcpConditionUnion' from JSON`,
   );
 }
 
@@ -4300,7 +3454,7 @@ export const TargetDeploymentProfileGcpStack$inboundSchema: z.ZodType<
 > = z.object({
   condition: z.nullable(
     z.union([
-      z.lazy(() => TargetDeploymentProfileCondition$inboundSchema),
+      z.lazy(() => TargetDeploymentProfileConditionGcp$inboundSchema),
       z.string(),
     ]),
   ).optional(),
@@ -4559,7 +3713,7 @@ export const TargetDeploymentStack$inboundSchema: z.ZodType<
   dynamicContainerImageResources: z.array(z.string()).optional(),
   dynamicContainerRepositories: z.array(z.string()).optional(),
   id: z.string(),
-  inputs: z.array(z.lazy(() => TargetDeploymentInput$inboundSchema)).optional(),
+  inputs: z.array(TargetDeploymentInput$inboundSchema).optional(),
   operations: z.nullable(
     z.union([
       z.lazy(() => TargetDeploymentOperations$inboundSchema),
@@ -4592,6 +3746,8 @@ export const ReleaseInfo$inboundSchema: z.ZodType<ReleaseInfo, unknown> = z
   .object({
     description: z.nullable(z.string()).optional(),
     releaseId: z.nullable(z.string()).optional(),
+    signed: z.nullable(TargetDeploymentSignedUnion$inboundSchema).optional(),
+    signerLists: z.array(TargetDeploymentSignerList$inboundSchema).optional(),
     stack: z.lazy(() => TargetDeploymentStack$inboundSchema),
     version: z.nullable(z.string()).optional(),
   });
@@ -4611,7 +3767,7 @@ export const TargetDeployment$inboundSchema: z.ZodType<
   TargetDeployment,
   unknown
 > = z.object({
-  config: z.lazy(() => TargetDeploymentConfig$inboundSchema),
+  config: TargetDeploymentConfig$inboundSchema,
   releaseInfo: z.lazy(() => ReleaseInfo$inboundSchema),
 });
 

@@ -72,7 +72,7 @@ export function queryKeyDeploymentsGetSetupRegistrationOperation(
 ): QueryKey {
   return [
     "@alienplatform/platform-api",
-    "deployments",
+    "Deployments",
     "getSetupRegistrationOperation",
     id,
   ];

@@ -6,7 +6,7 @@
 import { GetWorkspaceInviteLinkRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: GetWorkspaceInviteLinkRequest = {
-  id: "ws_It13CUaGEhLLAB87simX0",
+  id: "ws_It13CUaGEhLLAB87simX07Xb",
 };
 ```
 
@@ -14,4 +14,4 @@ let value: GetWorkspaceInviteLinkRequest = {
 
 | Field                                | Type                                 | Required                             | Description                          | Example                              |
 | ------------------------------------ | ------------------------------------ | ------------------------------------ | ------------------------------------ | ------------------------------------ |
-| `id`                                 | *string*                             | :heavy_check_mark:                   | Unique identifier for the workspace. | ws_It13CUaGEhLLAB87simX0             |
+| `id`                                 | *string*                             | :heavy_check_mark:                   | Unique identifier for the workspace. | ws_It13CUaGEhLLAB87simX07Xb          |

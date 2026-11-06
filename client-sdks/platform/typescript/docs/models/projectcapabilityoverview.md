@@ -56,7 +56,7 @@ let value: ProjectCapabilityOverview = {
   },
   groups: [
     {
-      deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
+      deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7bnwt",
       name: "<value>",
       externalId: "<id>",
       createdAt: new Date("2024-07-21T22:43:29.070Z"),
@@ -65,7 +65,7 @@ let value: ProjectCapabilityOverview = {
           capability: "remoteSandbox",
           enabled: true,
           state: "not-connected",
-          deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+          deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
           observation: {
             provider: "<value>",
             platform: "local",
@@ -84,7 +84,7 @@ let value: ProjectCapabilityOverview = {
           capability: "registry",
           enabled: true,
           state: "connected",
-          deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+          deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
           observation: {
             provider: "<value>",
             platform: "gcp",
@@ -103,7 +103,7 @@ let value: ProjectCapabilityOverview = {
           capability: "models",
           enabled: true,
           state: "needs-attention",
-          deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+          deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
           observation: {
             provider: "<value>",
             platform: "test",
@@ -122,7 +122,7 @@ let value: ProjectCapabilityOverview = {
           capability: "buckets",
           enabled: false,
           state: "needs-attention",
-          deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+          deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
           observation: {
             provider: "<value>",
             platform: "gcp",
@@ -141,7 +141,7 @@ let value: ProjectCapabilityOverview = {
           capability: "buckets",
           enabled: false,
           state: "not-connected",
-          deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+          deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
           observation: {
             provider: "<value>",
             platform: "gcp",

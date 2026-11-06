@@ -6,24 +6,27 @@
 import { DomainWithUsage } from "@alienplatform/platform-api/models";
 
 let value: DomainWithUsage = {
-  id: "dom_469m0agk8luj4s16sakmmpdd",
-  workspaceId: "ws_It13CUaGEhLLAB87simX0",
+  id: "dom_469m0agk8luj4s16sakmmpddz07x",
+  workspaceId: "ws_It13CUaGEhLLAB87simX07Xb",
   domain: "free-antelope.name",
-  isSystem: false,
+  dns: "customer",
+  isSystem: true,
   claimToken: "<value>",
-  status: "pending-verification",
-  createdAt: new Date("2025-12-13T18:16:52.351Z"),
-  updatedAt: new Date("2025-02-11T22:17:17.700Z"),
+  status: "lost-verification",
+  createdAt: new Date("2025-02-11T22:17:17.700Z"),
+  updatedAt: new Date("2024-07-21T08:54:10.474Z"),
   endpoints: [],
   usage: {
     deploymentUrlProjects: [],
-    portalBindings: [],
-    packageDomains: [
+    portalBindings: [
       {
         id: "<id>",
-        hostname: "faint-submitter.com",
+        projectId: "<id>",
+        projectName: "<value>",
+        hostname: "superior-mathematics.name",
       },
     ],
+    packageDomains: [],
     managerBindings: [],
   },
 };
@@ -33,9 +36,11 @@ let value: DomainWithUsage = {
 
 | Field                                                                                         | Type                                                                                          | Required                                                                                      | Description                                                                                   | Example                                                                                       |
 | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `id`                                                                                          | *string*                                                                                      | :heavy_check_mark:                                                                            | Unique identifier for the domain.                                                             | dom_469m0agk8luj4s16sakmmpdd                                                                  |
-| `workspaceId`                                                                                 | *string*                                                                                      | :heavy_check_mark:                                                                            | Unique identifier for the workspace.                                                          | ws_It13CUaGEhLLAB87simX0                                                                      |
+| `id`                                                                                          | *string*                                                                                      | :heavy_check_mark:                                                                            | Unique identifier for the domain.                                                             | dom_469m0agk8luj4s16sakmmpddz07x                                                              |
+| `workspaceId`                                                                                 | *string*                                                                                      | :heavy_check_mark:                                                                            | Unique identifier for the workspace.                                                          | ws_It13CUaGEhLLAB87simX07Xb                                                                   |
 | `domain`                                                                                      | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `dns`                                                                                         | [models.Dns](../models/dns.md)                                                                | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `acmeChallengeTarget`                                                                         | *string*                                                                                      | :heavy_minus_sign:                                                                            | N/A                                                                                           |                                                                                               |
 | `isSystem`                                                                                    | *boolean*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `claimToken`                                                                                  | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `hostedZoneId`                                                                                | *string*                                                                                      | :heavy_minus_sign:                                                                            | N/A                                                                                           |                                                                                               |

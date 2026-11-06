@@ -32,6 +32,10 @@ export type DeploymentGroup = {
    * Maximum number of deployments allowed in this deployment group
    */
   maxDeployments: number;
+  /**
+   * Whether new deployments from this group are protected once the project's signing is ready. On by default; the vendor may turn it off.
+   */
+  protectNewDeployments: boolean;
   createdAt: Date;
 };
 
@@ -46,6 +50,7 @@ export const DeploymentGroup$inboundSchema: z.ZodType<
   projectId: z.string(),
   workspaceId: z.string(),
   maxDeployments: z.int().default(100),
+  protectNewDeployments: z.boolean().default(true),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
 });
 

@@ -16,20 +16,24 @@ let value: APIKeyDeploymentSetupConfig = {
   environmentVariables: [
     {
       name: "<value>",
-      type: "plain",
-      targetResources: [],
+      type: "secret",
+      targetResources: [
+        "<value 1>",
+        "<value 2>",
+        "<value 3>",
+      ],
     },
   ],
   items: [
     {
-      item: "bucket",
+      item: "models",
       source: {
         type: "built-in",
         definitionId: "customer-sandbox",
         version: "<value>",
-        sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
       },
-      required: false,
+      required: true,
     },
   ],
 };
@@ -45,3 +49,4 @@ let value: APIKeyDeploymentSetupConfig = {
 | `policy`                                                                                                                                                                                                                                                                                                                                   | [models.DeploymentSetupPolicy](../models/deploymentsetuppolicy.md)                                                                                                                                                                                                                                                                         | :heavy_check_mark:                                                                                                                                                                                                                                                                                                                         | N/A                                                                                                                                                                                                                                                                                                                                        |
 | `environmentVariables`                                                                                                                                                                                                                                                                                                                     | [models.APIKeyDeploymentSetupEnvironmentVariable](../models/apikeydeploymentsetupenvironmentvariable.md)[]                                                                                                                                                                                                                                 | :heavy_check_mark:                                                                                                                                                                                                                                                                                                                         | N/A                                                                                                                                                                                                                                                                                                                                        |
 | `items`                                                                                                                                                                                                                                                                                                                                    | [models.APIKeyDeploymentSetupConfigItem](../models/apikeydeploymentsetupconfigitem.md)[]                                                                                                                                                                                                                                                   | :heavy_minus_sign:                                                                                                                                                                                                                                                                                                                         | N/A                                                                                                                                                                                                                                                                                                                                        |
+| `developerInputsByPlatform`                                                                                                                                                                                                                                                                                                                | Record<string, [models.DeveloperInputsByPlatform](../models/developerinputsbyplatform.md)[]>                                                                                                                                                                                                                                               | :heavy_minus_sign:                                                                                                                                                                                                                                                                                                                         | Applicable developer input summaries per platform, returned when retrieving a link. Stored answers are omitted.                                                                                                                                                                                                                            |

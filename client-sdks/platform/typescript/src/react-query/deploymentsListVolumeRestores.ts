@@ -119,7 +119,7 @@ export function invalidateDeploymentsListVolumeRestores(
     ...filters,
     queryKey: [
       "@alienplatform/platform-api",
-      "deployments",
+      "Deployments",
       "listVolumeRestores",
       ...queryKeyBase,
     ],
@@ -134,7 +134,7 @@ export function invalidateAllDeploymentsListVolumeRestores(
     ...filters,
     queryKey: [
       "@alienplatform/platform-api",
-      "deployments",
+      "Deployments",
       "listVolumeRestores",
     ],
   });

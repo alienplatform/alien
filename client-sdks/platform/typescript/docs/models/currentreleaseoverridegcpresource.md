@@ -14,7 +14,7 @@ let value: CurrentReleaseOverrideGcpResource = {
 
 ## Fields
 
-| Field                                                 | Type                                                  | Required                                              | Description                                           |
-| ----------------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------- |
-| `condition`                                           | *models.CurrentReleaseOverrideResourceConditionUnion* | :heavy_minus_sign:                                    | N/A                                                   |
-| `scope`                                               | *string*                                              | :heavy_check_mark:                                    | Scope (project/resource level)                        |
+| Field                                                    | Type                                                     | Required                                                 | Description                                              |
+| -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- |
+| `condition`                                              | *models.CurrentReleaseOverrideGcpResourceConditionUnion* | :heavy_minus_sign:                                       | N/A                                                      |
+| `scope`                                                  | *string*                                                 | :heavy_check_mark:                                       | Scope (project/resource level)                           |

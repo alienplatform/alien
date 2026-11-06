@@ -9,7 +9,7 @@ let value: GroupModels = {
   capability: "keys",
   enabled: true,
   state: "revoked",
-  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
   observation: {
     provider: "<value>",
     platform: "local",
@@ -33,7 +33,7 @@ let value: GroupModels = {
 | `capability`                                                     | [models.ModelsCapability](../models/modelscapability.md)         | :heavy_check_mark:                                               | N/A                                                              |                                                                  |
 | `enabled`                                                        | *boolean*                                                        | :heavy_check_mark:                                               | N/A                                                              |                                                                  |
 | `state`                                                          | [models.ModelsState](../models/modelsstate.md)                   | :heavy_check_mark:                                               | N/A                                                              |                                                                  |
-| `deploymentId`                                                   | *string*                                                         | :heavy_check_mark:                                               | Unique identifier for the deployment.                            | dep_0c29fq4a2yjb7kx3smwdgxlc                                     |
+| `deploymentId`                                                   | *string*                                                         | :heavy_check_mark:                                               | Unique identifier for the deployment.                            | dep_0c29fq4a2yjb7kx3smwdgxlcxd7f                                 |
 | `source`                                                         | [models.ModelsSource](../models/modelssource.md)                 | :heavy_minus_sign:                                               | N/A                                                              |                                                                  |
 | `sandboxUpdate`                                                  | [models.ModelsSandboxUpdate](../models/modelssandboxupdate.md)   | :heavy_minus_sign:                                               | N/A                                                              |                                                                  |
 | `observation`                                                    | [models.ModelsObservation](../models/modelsobservation.md)       | :heavy_check_mark:                                               | N/A                                                              |                                                                  |

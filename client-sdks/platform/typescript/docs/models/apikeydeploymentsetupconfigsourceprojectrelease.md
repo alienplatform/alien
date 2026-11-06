@@ -8,7 +8,7 @@ import { APIKeyDeploymentSetupConfigSourceProjectRelease } from "@alienplatform/
 let value: APIKeyDeploymentSetupConfigSourceProjectRelease = {
   type: "project-release",
   releaseChannel: "<value>",
-  releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+  releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
 };
 ```
 
@@ -18,5 +18,5 @@ let value: APIKeyDeploymentSetupConfigSourceProjectRelease = {
 | ---------------------------------- | ---------------------------------- | ---------------------------------- | ---------------------------------- | ---------------------------------- |
 | `type`                             | *"project-release"*                | :heavy_check_mark:                 | N/A                                |                                    |
 | `releaseChannel`                   | *string*                           | :heavy_check_mark:                 | N/A                                |                                    |
-| `releaseId`                        | *string*                           | :heavy_check_mark:                 | Unique identifier for the release. | rel_WbhQgksrawSKIpEN0NAssHX9       |
+| `releaseId`                        | *string*                           | :heavy_check_mark:                 | Unique identifier for the release. | rel_WbhQgksrawSKIpEN0NAssHX9E2Su   |
 | `resourceId`                       | *string*                           | :heavy_minus_sign:                 | N/A                                |                                    |

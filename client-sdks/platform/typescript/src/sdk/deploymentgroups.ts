@@ -118,7 +118,7 @@ export class DeploymentGroups extends ClientSDK {
       | models.UpdateDeploymentGroupRequest
       | undefined,
     options?: RequestOptions,
-  ): Promise<models.DeploymentGroup> {
+  ): Promise<models.UpdateDeploymentGroupResponse> {
     return unwrapAsync(deploymentGroupsUpdateDeploymentGroup(
       this,
       id,
@@ -203,12 +203,16 @@ export class DeploymentGroups extends ClientSDK {
    * Mints a short-lived deployment-group token with the recommended self-deploy policy for the authenticated developer.
    */
   async createFirstPartyDeploymentSession(
-    request: operations.CreateFirstPartyDeploymentSessionRequest,
+    id: string,
+    createFirstPartyDeploymentSessionRequest?:
+      | models.CreateFirstPartyDeploymentSessionRequest
+      | undefined,
     options?: RequestOptions,
   ): Promise<models.CreateFirstPartyDeploymentSessionResponse> {
     return unwrapAsync(deploymentGroupsCreateFirstPartyDeploymentSession(
       this,
-      request,
+      id,
+      createFirstPartyDeploymentSessionRequest,
       options,
     ));
   }

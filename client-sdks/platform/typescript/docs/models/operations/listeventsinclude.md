@@ -5,11 +5,11 @@
 ```typescript
 import { ListEventsInclude } from "@alienplatform/platform-api/models/operations";
 
-let value: ListEventsInclude = "endpointHealth";
+let value: ListEventsInclude = "deployments";
 ```
 
 ## Values
 
 ```typescript
-"releaseCreatedAt" | "endpointHealth" | "releases"
+"releaseCreatedAt" | "endpointHealth" | "releases" | "airgappedSyncs" | "setupCompute" | "deployments" | "cloudAccounts" | "rollouts" | "actors" | "projectFeatures"
 ```

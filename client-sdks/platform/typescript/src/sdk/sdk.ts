@@ -31,6 +31,7 @@ import { listAwsVirtualKeys } from "../funcs/listAwsVirtualKeys.js";
 import { listWorkspaceInvitations } from "../funcs/listWorkspaceInvitations.js";
 import { prepareDeploymentCredentialRotation } from "../funcs/prepareDeploymentCredentialRotation.js";
 import { prepareDeploymentInstallation } from "../funcs/prepareDeploymentInstallation.js";
+import { recordAirgappedBundleSigned } from "../funcs/recordAirgappedBundleSigned.js";
 import { reportLogExportDelivery } from "../funcs/reportLogExportDelivery.js";
 import { requestDeploymentCheck } from "../funcs/requestDeploymentCheck.js";
 import { resendWorkspaceInvitation } from "../funcs/resendWorkspaceInvitation.js";
@@ -73,6 +74,7 @@ import { RemoteBindings } from "./remotebindings.js";
 import { Resolve } from "./resolve.js";
 import { Resources } from "./resources.js";
 import { SetupLinks } from "./setuplinks.js";
+import { Signing } from "./signing.js";
 import { SlackIntegration } from "./slackintegration.js";
 import { Sync } from "./sync.js";
 import { User } from "./user.js";
@@ -93,6 +95,16 @@ export class Alien extends ClientSDK {
   private _webhooks?: Webhooks;
   get webhooks(): Webhooks {
     return (this._webhooks ??= new Webhooks(this._options));
+  }
+
+  private _deployments?: Deployments;
+  get deployments(): Deployments {
+    return (this._deployments ??= new Deployments(this._options));
+  }
+
+  private _signing?: Signing;
+  get signing(): Signing {
+    return (this._signing ??= new Signing(this._options));
   }
 
   private _workspaces?: Workspaces;
@@ -138,11 +150,6 @@ export class Alien extends ClientSDK {
   private _releaseChannels?: ReleaseChannels;
   get releaseChannels(): ReleaseChannels {
     return (this._releaseChannels ??= new ReleaseChannels(this._options));
-  }
-
-  private _deployments?: Deployments;
-  get deployments(): Deployments {
-    return (this._deployments ??= new Deployments(this._options));
   }
 
   private _dynamicContainers?: DynamicContainers;
@@ -476,7 +483,7 @@ export class Alien extends ClientSDK {
   }
 
   /**
-   * Metrics Horizon reported for each replica, from the deployment's heartbeats in [from, to): the latest sample per replica per bucket, with empty buckets as null. Kept for 30 days, best effort.
+   * Metrics the machine agent reported for each replica, from the deployment's heartbeats in [from, to): the latest sample per replica per bucket, with empty buckets as null. Kept for 30 days, best effort.
    */
   async getDeploymentMetricsHistory(
     request: operations.GetDeploymentMetricsHistoryRequest,
@@ -535,6 +542,17 @@ export class Alien extends ClientSDK {
       this,
       id,
       requestBody,
+      options,
+    ));
+  }
+
+  async recordAirgappedBundleSigned(
+    request?: operations.RecordAirgappedBundleSignedRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<operations.RecordAirgappedBundleSignedResponse> {
+    return unwrapAsync(recordAirgappedBundleSigned(
+      this,
+      request,
       options,
     ));
   }

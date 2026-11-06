@@ -11,7 +11,7 @@ let value: DeploymentInfoSetupConfigItem = {
     type: "built-in",
     definitionId: "customer-sandbox",
     version: "<value>",
-    sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
   },
   required: true,
 };

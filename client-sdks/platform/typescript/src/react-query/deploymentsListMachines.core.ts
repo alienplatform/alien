@@ -68,5 +68,5 @@ export function buildDeploymentsListMachinesQuery(
 }
 
 export function queryKeyDeploymentsListMachines(id: string): QueryKey {
-  return ["@alienplatform/platform-api", "deployments", "listMachines", id];
+  return ["@alienplatform/platform-api", "Deployments", "listMachines", id];
 }

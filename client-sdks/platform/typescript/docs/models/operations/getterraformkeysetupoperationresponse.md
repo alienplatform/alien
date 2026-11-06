@@ -16,7 +16,7 @@ let value: GetTerraformKeySetupOperationResponse = {
   configuration: {
     action: "delete",
     requestId: "1cd6e012-1f98-40b9-92b2-b4f6d023fb25",
-    connectedKeyDeploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    connectedKeyDeploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
     setupRoleArn: "<value>",
     deletionWindowDays: 88093,
     target: {

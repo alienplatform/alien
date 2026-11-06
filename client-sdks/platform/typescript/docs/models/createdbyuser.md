@@ -9,15 +9,17 @@ import { CreatedByUser } from "@alienplatform/platform-api/models";
 
 let value: CreatedByUser = {
   id: "<id>",
-  email: "Lori82@gmail.com",
-  image: "https://loremflickr.com/3209/1448?lock=7150140494017859",
+  name: "<value>",
+  email: "Carrie_Schneider@yahoo.com",
+  image: "https://picsum.photos/seed/mKHgc/1448/97",
 };
 ```
 
 ## Fields
 
-| Field              | Type               | Required           | Description        |
-| ------------------ | ------------------ | ------------------ | ------------------ |
-| `id`               | *string*           | :heavy_check_mark: | N/A                |
-| `email`            | *string*           | :heavy_check_mark: | N/A                |
-| `image`            | *string*           | :heavy_check_mark: | N/A                |
+| Field                                 | Type                                  | Required                              | Description                           |
+| ------------------------------------- | ------------------------------------- | ------------------------------------- | ------------------------------------- |
+| `id`                                  | *string*                              | :heavy_check_mark:                    | N/A                                   |
+| `name`                                | *string*                              | :heavy_check_mark:                    | Display name, when the person set one |
+| `email`                               | *string*                              | :heavy_check_mark:                    | N/A                                   |
+| `image`                               | *string*                              | :heavy_check_mark:                    | N/A                                   |

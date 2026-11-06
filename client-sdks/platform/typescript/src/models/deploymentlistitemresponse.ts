@@ -7,6 +7,14 @@ import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import {
+  AirgappedDownloadSummary,
+  AirgappedDownloadSummary$inboundSchema,
+} from "./airgappeddownloadsummary.js";
+import {
+  AirgappedReportSummary,
+  AirgappedReportSummary$inboundSchema,
+} from "./airgappedreportsummary.js";
+import {
   DeploymentGroupInfo,
   DeploymentGroupInfo$inboundSchema,
 } from "./deploymentgroupinfo.js";
@@ -27,6 +35,29 @@ import {
   OperatorCapabilityReport,
   OperatorCapabilityReport$inboundSchema,
 } from "./operatorcapabilityreport.js";
+
+export const CloudAccountStatus = {
+  Creating: "Creating",
+  WaitingForQuota: "Waiting for quota",
+  Empty: "Empty",
+  InUse: "In use",
+  Closing: "Closing",
+  Closed: "Closed",
+  Failed: "Failed",
+  Drifted: "Drifted",
+} as const;
+export type CloudAccountStatus = ClosedEnum<typeof CloudAccountStatus>;
+
+/**
+ * Subaccount summary, only when the caller can read the subaccount.
+ */
+export type CloudAccount = {
+  id: string;
+  name: string;
+  providerId: string | null;
+  status: CloudAccountStatus;
+  reason: string | null;
+};
 
 /**
  * Deployment status in the deployment lifecycle.
@@ -73,6 +104,50 @@ export const DeploymentListItemResponseStatus = {
 export type DeploymentListItemResponseStatus = ClosedEnum<
   typeof DeploymentListItemResponseStatus
 >;
+
+export const ListState = {
+  Active: "active",
+  Attention: "attention",
+  Inactive: "inactive",
+} as const;
+export type ListState = ClosedEnum<typeof ListState>;
+
+export const DeploymentListItemResponseState = {
+  Connecting: "connecting",
+  Stale: "stale",
+  Unhealthy: "unhealthy",
+  Unverified: "unverified",
+} as const;
+export type DeploymentListItemResponseState = ClosedEnum<
+  typeof DeploymentListItemResponseState
+>;
+
+export type OperationsSync = {};
+
+export type RemoteOperatorState = {
+  state: DeploymentListItemResponseState;
+  stateReason: string;
+  actionNeeded: string | null;
+  operationsSync: OperationsSync | null;
+};
+
+/**
+ * When an air-gapped site's latest status was written and received.
+ */
+export type DeploymentListItemResponseAirgappedReport = {
+  /**
+   * Manager clock time when the report was accepted.
+   */
+  receivedAt: Date;
+  /**
+   * Site clock time; absent for reports from older clients.
+   */
+  writtenAt?: Date | null | undefined;
+};
+
+export type DeploymentListItemResponseAirgappedReportUnion =
+  | DeploymentListItemResponseAirgappedReport
+  | string;
 
 /**
  * Target platform for the deployment
@@ -256,6 +331,34 @@ export type DeploymentListItemResponseSetupMethod = ClosedEnum<
 >;
 
 /**
+ * How the deployment was installed; absent for older installations.
+ */
+export const DeploymentListItemResponseInstalledVia = {
+  Dashboard: "dashboard",
+  SetupLink: "setup-link",
+  Api: "api",
+} as const;
+/**
+ * How the deployment was installed; absent for older installations.
+ */
+export type DeploymentListItemResponseInstalledVia = ClosedEnum<
+  typeof DeploymentListItemResponseInstalledVia
+>;
+
+/**
+ * Display-only progress of a pending deployment's saved setup, as the deployment detail derives it from setup metadata. Null when the deployment is not pending or has no saved setup.
+ */
+export const SetupStatusLabel = {
+  AwaitingSetup: "Awaiting setup",
+  SettingUp: "Setting up",
+  SetupRolledBack: "Setup rolled back",
+} as const;
+/**
+ * Display-only progress of a pending deployment's saved setup, as the deployment detail derives it from setup metadata. Null when the deployment is not pending or has no saved setup.
+ */
+export type SetupStatusLabel = ClosedEnum<typeof SetupStatusLabel>;
+
+/**
  * Latest error information if in a failed state
  */
 export type DeploymentListItemResponseError = {
@@ -333,11 +436,29 @@ export type DeploymentListItemResponseError = {
   source?: any | null | undefined;
 };
 
+/**
+ * Kind of action needed by a blocked update. Input values and internal error details are excluded.
+ */
+export const UpdateBlocker = {
+  Input: "input",
+  Setup: "setup",
+  Other: "other",
+} as const;
+/**
+ * Kind of action needed by a blocked update. Input values and internal error details are excluded.
+ */
+export type UpdateBlocker = ClosedEnum<typeof UpdateBlocker>;
+
 export type DeploymentListItemResponse = {
   /**
    * Unique identifier for the deployment.
    */
   id: string;
+  /**
+   * Subaccount summary, only when the caller can read the subaccount.
+   */
+  cloudAccount?: CloudAccount | null | undefined;
+  cloudAccountRegion?: string | null | undefined;
   name: string;
   /**
    * Deployment status in the deployment lifecycle.
@@ -349,10 +470,29 @@ export type DeploymentListItemResponse = {
    * resource health comes from inventory and resource heartbeat data.
    */
   status: DeploymentListItemResponseStatus;
+  listState?: ListState | undefined;
+  remoteOperatorState?: RemoteOperatorState | undefined;
   /**
    * A customer encryption key is unavailable. Dependent resources are preserved until access returns.
    */
   customerKeyUnavailable?: boolean | undefined;
+  /**
+   * An installed deployment with automatic setup applies updates through setup: its `initial-setup` is an update in progress and its `initial-setup-failed` a failed update, while the installed release keeps serving. Computed from the setup grant the backend uses.
+   */
+  automaticUpdateInSetup?: boolean | undefined;
+  /**
+   * An installed deployment with automatic setup applies updates through setup, so its `initial-setup-failed` is a failed update: the installed release keeps serving.
+   */
+  automaticUpdateFailure?: boolean | undefined;
+  airgapped?: boolean | undefined;
+  heartbeatsOff?: boolean | undefined;
+  lastAirgappedReport?: AirgappedReportSummary | null | undefined;
+  lastAirgappedDownload?: AirgappedDownloadSummary | null | undefined;
+  airgappedReport?:
+    | DeploymentListItemResponseAirgappedReport
+    | string
+    | null
+    | undefined;
   /**
    * Unique identifier for the project.
    */
@@ -411,6 +551,14 @@ export type DeploymentListItemResponse = {
    */
   setupMetadata?: { [k: string]: any | null } | null | undefined;
   /**
+   * How the deployment was installed; absent for older installations.
+   */
+  installedVia?: DeploymentListItemResponseInstalledVia | null | undefined;
+  /**
+   * Display-only progress of a pending deployment's saved setup, as the deployment detail derives it from setup metadata. Null when the deployment is not pending or has no saved setup.
+   */
+  setupStatusLabel?: SetupStatusLabel | null | undefined;
+  /**
    * Imported setup target for compatibility checks
    */
   setupTarget?: string | null | undefined;
@@ -451,28 +599,150 @@ export type DeploymentListItemResponse = {
    */
   retryRequested: boolean;
   /**
+   * Kind of action needed by a blocked update. Input values and internal error details are excluded.
+   */
+  updateBlocker?: UpdateBlocker | null | undefined;
+  /**
    * Whether the deployment's latest update waits for the deployment owner to rerun setup. The deployment keeps running its current release until then.
    */
   updateBlocked: boolean;
   createdAt: Date;
   updatedAt: Date;
-  /**
-   * ID of the manager
-   */
   managerId: string;
   /**
    * Unique identifier for the workspace.
    */
   workspaceId: string;
   release?: DeploymentReleaseInfo | null | undefined;
+  desiredRelease?: DeploymentReleaseInfo | null | undefined;
   deploymentGroup?: DeploymentGroupInfo | undefined;
   project?: DeploymentProjectInfo | undefined;
 };
 
 /** @internal */
+export const CloudAccountStatus$inboundSchema: z.ZodEnum<
+  typeof CloudAccountStatus
+> = z.enum(CloudAccountStatus);
+
+/** @internal */
+export const CloudAccount$inboundSchema: z.ZodType<CloudAccount, unknown> = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    providerId: z.nullable(z.string()),
+    status: CloudAccountStatus$inboundSchema,
+    reason: z.nullable(z.string()),
+  });
+
+export function cloudAccountFromJSON(
+  jsonString: string,
+): SafeParseResult<CloudAccount, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CloudAccount$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CloudAccount' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentListItemResponseStatus$inboundSchema: z.ZodEnum<
   typeof DeploymentListItemResponseStatus
 > = z.enum(DeploymentListItemResponseStatus);
+
+/** @internal */
+export const ListState$inboundSchema: z.ZodEnum<typeof ListState> = z.enum(
+  ListState,
+);
+
+/** @internal */
+export const DeploymentListItemResponseState$inboundSchema: z.ZodEnum<
+  typeof DeploymentListItemResponseState
+> = z.enum(DeploymentListItemResponseState);
+
+/** @internal */
+export const OperationsSync$inboundSchema: z.ZodType<OperationsSync, unknown> =
+  z.object({});
+
+export function operationsSyncFromJSON(
+  jsonString: string,
+): SafeParseResult<OperationsSync, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OperationsSync$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OperationsSync' from JSON`,
+  );
+}
+
+/** @internal */
+export const RemoteOperatorState$inboundSchema: z.ZodType<
+  RemoteOperatorState,
+  unknown
+> = z.object({
+  state: DeploymentListItemResponseState$inboundSchema,
+  stateReason: z.string(),
+  actionNeeded: z.nullable(z.string()),
+  operationsSync: z.nullable(z.lazy(() => OperationsSync$inboundSchema)),
+});
+
+export function remoteOperatorStateFromJSON(
+  jsonString: string,
+): SafeParseResult<RemoteOperatorState, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => RemoteOperatorState$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'RemoteOperatorState' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentListItemResponseAirgappedReport$inboundSchema: z.ZodType<
+  DeploymentListItemResponseAirgappedReport,
+  unknown
+> = z.object({
+  receivedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  writtenAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+});
+
+export function deploymentListItemResponseAirgappedReportFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentListItemResponseAirgappedReport,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentListItemResponseAirgappedReport$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentListItemResponseAirgappedReport' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentListItemResponseAirgappedReportUnion$inboundSchema:
+  z.ZodType<DeploymentListItemResponseAirgappedReportUnion, unknown> = z.union([
+    z.lazy(() => DeploymentListItemResponseAirgappedReport$inboundSchema),
+    z.string(),
+  ]);
+
+export function deploymentListItemResponseAirgappedReportUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentListItemResponseAirgappedReportUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentListItemResponseAirgappedReportUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentListItemResponseAirgappedReportUnion' from JSON`,
+  );
+}
 
 /** @internal */
 export const DeploymentListItemResponsePlatform$inboundSchema: z.ZodEnum<
@@ -668,6 +938,16 @@ export const DeploymentListItemResponseSetupMethod$inboundSchema: z.ZodEnum<
 > = z.enum(DeploymentListItemResponseSetupMethod);
 
 /** @internal */
+export const DeploymentListItemResponseInstalledVia$inboundSchema: z.ZodEnum<
+  typeof DeploymentListItemResponseInstalledVia
+> = z.enum(DeploymentListItemResponseInstalledVia);
+
+/** @internal */
+export const SetupStatusLabel$inboundSchema: z.ZodEnum<
+  typeof SetupStatusLabel
+> = z.enum(SetupStatusLabel);
+
+/** @internal */
 export const DeploymentListItemResponseError$inboundSchema: z.ZodType<
   DeploymentListItemResponseError,
   unknown
@@ -693,14 +973,37 @@ export function deploymentListItemResponseErrorFromJSON(
 }
 
 /** @internal */
+export const UpdateBlocker$inboundSchema: z.ZodEnum<typeof UpdateBlocker> = z
+  .enum(UpdateBlocker);
+
+/** @internal */
 export const DeploymentListItemResponse$inboundSchema: z.ZodType<
   DeploymentListItemResponse,
   unknown
 > = z.object({
   id: z.string(),
+  cloudAccount: z.nullable(z.lazy(() => CloudAccount$inboundSchema)).optional(),
+  cloudAccountRegion: z.nullable(z.string()).optional(),
   name: z.string(),
   status: DeploymentListItemResponseStatus$inboundSchema,
+  listState: ListState$inboundSchema.optional(),
+  remoteOperatorState: z.lazy(() => RemoteOperatorState$inboundSchema)
+    .optional(),
   customerKeyUnavailable: z.boolean().optional(),
+  automaticUpdateInSetup: z.boolean().optional(),
+  automaticUpdateFailure: z.boolean().optional(),
+  airgapped: z.boolean().optional(),
+  heartbeatsOff: z.boolean().optional(),
+  lastAirgappedReport: z.nullable(AirgappedReportSummary$inboundSchema)
+    .optional(),
+  lastAirgappedDownload: z.nullable(AirgappedDownloadSummary$inboundSchema)
+    .optional(),
+  airgappedReport: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentListItemResponseAirgappedReport$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
   projectId: z.string(),
   platform: DeploymentListItemResponsePlatform$inboundSchema,
   deploymentProtocolVersion: z.int(),
@@ -732,6 +1035,9 @@ export const DeploymentListItemResponse$inboundSchema: z.ZodType<
     .optional(),
   setupMetadata: z.nullable(z.record(z.string(), z.nullable(z.any())))
     .optional(),
+  installedVia: z.nullable(DeploymentListItemResponseInstalledVia$inboundSchema)
+    .optional(),
+  setupStatusLabel: z.nullable(SetupStatusLabel$inboundSchema).optional(),
   setupTarget: z.nullable(z.string()).optional(),
   setupFingerprint: z.nullable(z.string()).optional(),
   setupFingerprintVersion: z.nullable(z.int()).optional(),
@@ -746,12 +1052,14 @@ export const DeploymentListItemResponse$inboundSchema: z.ZodType<
   error: z.nullable(z.lazy(() => DeploymentListItemResponseError$inboundSchema))
     .optional(),
   retryRequested: z.boolean(),
+  updateBlocker: z.nullable(UpdateBlocker$inboundSchema).optional(),
   updateBlocked: z.boolean(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   updatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   managerId: z.string(),
   workspaceId: z.string(),
   release: z.nullable(DeploymentReleaseInfo$inboundSchema).optional(),
+  desiredRelease: z.nullable(DeploymentReleaseInfo$inboundSchema).optional(),
   deploymentGroup: DeploymentGroupInfo$inboundSchema.optional(),
   project: DeploymentProjectInfo$inboundSchema.optional(),
 });

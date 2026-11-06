@@ -1,6 +1,6 @@
 # HorizonMachineImageAzureConfig
 
-Azure Horizon machine image catalog.
+Azure machine image catalog.
 
 ## Example Usage
 

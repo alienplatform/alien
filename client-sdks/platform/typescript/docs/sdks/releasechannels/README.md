@@ -25,7 +25,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.releaseChannels.list({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -51,7 +51,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await releaseChannelsList(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -207,7 +207,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.releaseChannels.create("prj_mcytp6z3j91f7tn5ryqsfwtr", {
+  const result = await alien.releaseChannels.create("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv", {
     name: "<value>",
     releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   });
@@ -234,7 +234,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await releaseChannelsCreate(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr", {
+  const res = await releaseChannelsCreate(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv", {
     name: "<value>",
     releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   });

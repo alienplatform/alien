@@ -12,7 +12,7 @@ let value: SyncAcquireResponse = {
   failures: [],
   notAcquired: [
     {
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
       reason: "limitReached",
     },
   ],

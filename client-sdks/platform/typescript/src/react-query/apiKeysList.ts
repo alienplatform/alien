@@ -96,6 +96,7 @@ export function setApiKeysListData(
   queryKeyBase: [
     parameters: {
       project?: string | undefined;
+      setupLinksForGroup?: string | undefined;
       limit?: number | undefined;
       cursor?: string | undefined;
     },
@@ -112,6 +113,7 @@ export function invalidateApiKeysList(
   queryKeyBase: TupleToPrefixes<
     [parameters: {
       project?: string | undefined;
+      setupLinksForGroup?: string | undefined;
       limit?: number | undefined;
       cursor?: string | undefined;
     }]

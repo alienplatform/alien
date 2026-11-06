@@ -14,7 +14,7 @@ let value: CurrentReleaseExtendGcpStack = {
 
 ## Fields
 
-| Field                                       | Type                                        | Required                                    | Description                                 |
-| ------------------------------------------- | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- |
-| `condition`                                 | *models.CurrentReleaseExtendConditionUnion* | :heavy_minus_sign:                          | N/A                                         |
-| `scope`                                     | *string*                                    | :heavy_check_mark:                          | Scope (project/resource level)              |
+| Field                                          | Type                                           | Required                                       | Description                                    |
+| ---------------------------------------------- | ---------------------------------------------- | ---------------------------------------------- | ---------------------------------------------- |
+| `condition`                                    | *models.CurrentReleaseExtendGcpConditionUnion* | :heavy_minus_sign:                             | N/A                                            |
+| `scope`                                        | *string*                                       | :heavy_check_mark:                             | Scope (project/resource level)                 |

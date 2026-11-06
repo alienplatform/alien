@@ -37,7 +37,7 @@ export type Metrics = {
   memoryPercent: number | null;
   inFlightRequests: number | null;
   /**
-   * Requests per second in this bucket, from the increases of Horizon's running total between consecutive heartbeats. Pairs across a counter reset or a long gap are left out; null when none remain or when the probe restarted inside the bucket.
+   * Requests per second in this bucket, from the increases of the machine agent's running total between consecutive heartbeats. Pairs across a counter reset or a long gap are left out; null when none remain or when the probe restarted inside the bucket.
    */
   requestsPerSecond: number | null;
   status2xxPerSecond: number | null;
@@ -50,7 +50,7 @@ export type Metrics = {
 export type Sample = {
   observedAt: string;
   /**
-   * When Horizon last updated the metrics; null when none were reported.
+   * When the machine agent last updated the metrics; null when none were reported.
    */
   sourceAt: string | null;
   /**
@@ -58,7 +58,7 @@ export type Sample = {
    */
   metrics: Metrics | null;
   /**
-   * The replica as Horizon reported it, as JSON.
+   * The replica as the machine agent reported it, as JSON.
    */
   payload: string;
 };

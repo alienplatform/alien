@@ -22,7 +22,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.remoteBindings.createExternalAccess("prj_mcytp6z3j91f7tn5ryqsfwtr", {
+  const result = await alien.remoteBindings.createExternalAccess("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv", {
     externalId: "ext_example_01",
     capability: "storage",
   });
@@ -49,7 +49,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await remoteBindingsCreateExternalAccess(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr", {
+  const res = await remoteBindingsCreateExternalAccess(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv", {
     externalId: "ext_example_01",
     capability: "storage",
   });

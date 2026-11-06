@@ -24,7 +24,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.resources.listInventory({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -50,7 +50,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await resourcesListInventory(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -207,7 +207,7 @@ const alien = new Alien({
 async function run() {
   const result = await alien.resources.listOverview({
     area: "daemon",
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -234,7 +234,7 @@ const alien = new AlienCore({
 async function run() {
   const res = await resourcesListOverview(alien, {
     area: "daemon",
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -396,7 +396,7 @@ async function run() {
   const result = await alien.resources.listDeployments({
     area: "daemon",
     resourceId: "<id>",
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -424,7 +424,7 @@ async function run() {
   const res = await resourcesListDeployments(alien, {
     area: "daemon",
     resourceId: "<id>",
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -587,7 +587,7 @@ async function run() {
     area: "container",
     deploymentId: "<id>",
     resourceId: "<id>",
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -616,7 +616,7 @@ async function run() {
     area: "container",
     deploymentId: "<id>",
     resourceId: "<id>",
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;

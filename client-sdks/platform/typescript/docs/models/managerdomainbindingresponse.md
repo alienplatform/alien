@@ -7,9 +7,9 @@ import { ManagerDomainBindingResponse } from "@alienplatform/platform-api/models
 
 let value: ManagerDomainBindingResponse = {
   managerDomainBinding: {
-    id: "dend_1bb6gdvm1bs74acqkjstcgv",
-    workspaceId: "ws_It13CUaGEhLLAB87simX0",
-    domainId: "dom_469m0agk8luj4s16sakmmpdd",
+    id: "dend_1bb6gdvm1bs74acqkjstcgvxnc82",
+    workspaceId: "ws_It13CUaGEhLLAB87simX07Xb",
+    domainId: "dom_469m0agk8luj4s16sakmmpddz07x",
     kind: "deployment_portal",
     owner: {
       type: "manager",

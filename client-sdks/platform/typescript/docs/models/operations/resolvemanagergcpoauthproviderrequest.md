@@ -6,7 +6,7 @@
 import { ResolveManagerGcpOAuthProviderRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: ResolveManagerGcpOAuthProviderRequest = {
-  id: "mgr_enxscjrqiiu2lrc672hwwuc5",
+  id: "mgr_enxscjrqiiu2lrc672hwwuc5tv5y",
 };
 ```
 
@@ -14,5 +14,5 @@ let value: ResolveManagerGcpOAuthProviderRequest = {
 
 | Field                                                                                                 | Type                                                                                                  | Required                                                                                              | Description                                                                                           | Example                                                                                               |
 | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `id`                                                                                                  | *string*                                                                                              | :heavy_check_mark:                                                                                    | Unique identifier for a manager.                                                                      | mgr_enxscjrqiiu2lrc672hwwuc5                                                                          |
+| `id`                                                                                                  | *string*                                                                                              | :heavy_check_mark:                                                                                    | Unique identifier for a manager.                                                                      | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                                                                      |
 | `resolveManagerGcpOAuthProviderRequest`                                                               | [models.ResolveManagerGcpOAuthProviderRequest](../../models/resolvemanagergcpoauthproviderrequest.md) | :heavy_minus_sign:                                                                                    | N/A                                                                                                   |                                                                                                       |

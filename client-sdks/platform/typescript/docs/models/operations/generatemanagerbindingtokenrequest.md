@@ -6,9 +6,9 @@
 import { GenerateManagerBindingTokenRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: GenerateManagerBindingTokenRequest = {
-  id: "mgr_enxscjrqiiu2lrc672hwwuc5",
+  id: "mgr_enxscjrqiiu2lrc672hwwuc5tv5y",
   generateManagerBindingTokenRequest: {
-    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
   },
 };
 ```
@@ -17,5 +17,5 @@ let value: GenerateManagerBindingTokenRequest = {
 
 | Field                                                                                           | Type                                                                                            | Required                                                                                        | Description                                                                                     | Example                                                                                         |
 | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `id`                                                                                            | *string*                                                                                        | :heavy_check_mark:                                                                              | Unique identifier for a manager.                                                                | mgr_enxscjrqiiu2lrc672hwwuc5                                                                    |
+| `id`                                                                                            | *string*                                                                                        | :heavy_check_mark:                                                                              | Unique identifier for a manager.                                                                | mgr_enxscjrqiiu2lrc672hwwuc5tv5y                                                                |
 | `generateManagerBindingTokenRequest`                                                            | [models.GenerateManagerBindingTokenRequest](../../models/generatemanagerbindingtokenrequest.md) | :heavy_check_mark:                                                                              | N/A                                                                                             |                                                                                                 |

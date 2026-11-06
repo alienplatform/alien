@@ -17,7 +17,7 @@ let value: CreateManagerResponseKubernetes1 = {};
 
 ## Fields
 
-| Field                                        | Type                                         | Required                                     | Description                                  |
-| -------------------------------------------- | -------------------------------------------- | -------------------------------------------- | -------------------------------------------- |
-| `cluster`                                    | *models.CreateManagerResponseClusterUnion1*  | :heavy_minus_sign:                           | N/A                                          |
-| `exposure`                                   | *models.CreateManagerResponseExposureUnion1* | :heavy_minus_sign:                           | N/A                                          |
+| Field                                       | Type                                        | Required                                    | Description                                 |
+| ------------------------------------------- | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- |
+| `cluster`                                   | *models.CreateManagerResponseClusterUnion1* | :heavy_minus_sign:                          | N/A                                         |
+| `exposure`                                  | *models.CreateManagerResponseExposure1*     | :heavy_minus_sign:                          | N/A                                         |

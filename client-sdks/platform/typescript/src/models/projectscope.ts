@@ -3,6 +3,10 @@
  */
 
 import * as z from "zod/v4";
+import {
+  ApplicationRole,
+  ApplicationRole$outboundSchema,
+} from "./applicationrole.js";
 import { ProjectRole, ProjectRole$outboundSchema } from "./projectrole.js";
 
 /**
@@ -18,6 +22,10 @@ export type ProjectScope = {
    * Role for project-scoped service accounts
    */
   role: ProjectRole;
+  /**
+   * More application roles the key holds beside `role`, which must be an application role too. One key then reaches several features.
+   */
+  additionalRoles?: Array<ApplicationRole> | undefined;
 };
 
 /** @internal */
@@ -25,6 +33,7 @@ export type ProjectScope$Outbound = {
   type: "project";
   projectId: string;
   role: string;
+  additionalRoles?: Array<string> | undefined;
 };
 
 /** @internal */
@@ -35,6 +44,7 @@ export const ProjectScope$outboundSchema: z.ZodType<
   type: z.literal("project"),
   projectId: z.string(),
   role: ProjectRole$outboundSchema,
+  additionalRoles: z.array(ApplicationRole$outboundSchema).optional(),
 });
 
 export function projectScopeToJSON(projectScope: ProjectScope): string {

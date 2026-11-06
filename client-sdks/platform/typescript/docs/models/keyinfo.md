@@ -6,40 +6,52 @@
 import { KeyInfo } from "@alienplatform/platform-api/models";
 
 let value: KeyInfo = {
-  id: "apikey_ye96yxs1tjnrrwulp8frh",
+  id: "apikey_ye96yxs1tjnrrwulp8frh6w5t6e0",
   description: "carpool ha fiercely brr decongestant ew",
   keyPrefix: "<value>",
   type: "manager",
   role: "<value>",
+  additionalRoles: [],
   workspaceId: "<id>",
-  projectId: "<id>",
-  deploymentId: null,
-  deploymentGroupId: "<id>",
-  managerId: null,
+  projectId: null,
+  deploymentId: "<id>",
+  deploymentGroupId: null,
+  managerId: "<id>",
   enabled: false,
-  createdAt: new Date("2026-10-14T21:34:35.370Z"),
-  expiresAt: new Date("2025-12-06T17:54:43.268Z"),
-  lastUsedAt: new Date("2025-08-16T08:23:11.867Z"),
-  revokedAt: new Date("2026-05-29T18:50:17.810Z"),
+  createdAt: new Date("2026-03-02T19:02:43.885Z"),
+  expiresAt: new Date("2026-03-08T23:18:28.226Z"),
+  lastUsedAt: new Date("2025-11-09T01:34:30.956Z"),
+  revokedAt: new Date("2026-03-31T23:02:08.394Z"),
   deploymentSetupConfig: {
     metadata: {
       "key": "<value>",
+      "key1": "<value>",
     },
     policy: {
       allowedPlatforms: [],
       allowedSetupMethods: [],
     },
-    environmentVariables: [],
+    environmentVariables: [
+      {
+        name: "<value>",
+        type: "secret",
+        targetResources: [
+          "<value 1>",
+          "<value 2>",
+          "<value 3>",
+        ],
+      },
+    ],
     items: [
       {
-        item: "bucket",
+        item: "models",
         source: {
           type: "built-in",
           definitionId: "customer-sandbox",
           version: "<value>",
-          sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+          sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
         },
-        required: false,
+        required: true,
       },
     ],
   },
@@ -50,11 +62,12 @@ let value: KeyInfo = {
 
 | Field                                                                                         | Type                                                                                          | Required                                                                                      | Description                                                                                   | Example                                                                                       |
 | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `id`                                                                                          | *string*                                                                                      | :heavy_check_mark:                                                                            | Unique identifier for the api key.                                                            | apikey_ye96yxs1tjnrrwulp8frh                                                                  |
+| `id`                                                                                          | *string*                                                                                      | :heavy_check_mark:                                                                            | Unique identifier for the api key.                                                            | apikey_ye96yxs1tjnrrwulp8frh6w5t6e0                                                           |
 | `description`                                                                                 | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `keyPrefix`                                                                                   | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `type`                                                                                        | [models.CreateAPIKeyResponseType](../models/createapikeyresponsetype.md)                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `role`                                                                                        | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `additionalRoles`                                                                             | [models.ApplicationRole](../models/applicationrole.md)[]                                      | :heavy_check_mark:                                                                            | Application roles a project key holds beside `role`                                           |                                                                                               |
 | `workspaceId`                                                                                 | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `projectId`                                                                                   | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `deploymentId`                                                                                | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |

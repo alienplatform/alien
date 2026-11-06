@@ -7,7 +7,7 @@ import { DeploymentSetupConfigInput } from "@alienplatform/platform-api/models";
 
 let value: DeploymentSetupConfigInput = {
   validatedReleaseSelection: {
-    releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
     releaseChannel: "<value>",
     platform: "aws",
   },

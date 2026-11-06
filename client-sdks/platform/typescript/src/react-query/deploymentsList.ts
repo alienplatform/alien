@@ -100,8 +100,11 @@ export function setDeploymentsListData(
   queryKeyBase: [
     parameters: {
       project?: string | undefined;
+      cloudAccountId?: string | undefined;
       deploymentGroup?: string | undefined;
       name?: string | undefined;
+      listState?: operations.ListDeploymentsListState | undefined;
+      order?: operations.Order | undefined;
       managerId?: string | undefined;
       purpose?: models.DeploymentPurpose | undefined;
       search?: string | undefined;
@@ -124,8 +127,11 @@ export function invalidateDeploymentsList(
   queryKeyBase: TupleToPrefixes<
     [parameters: {
       project?: string | undefined;
+      cloudAccountId?: string | undefined;
       deploymentGroup?: string | undefined;
       name?: string | undefined;
+      listState?: operations.ListDeploymentsListState | undefined;
+      order?: operations.Order | undefined;
       managerId?: string | undefined;
       purpose?: models.DeploymentPurpose | undefined;
       search?: string | undefined;
@@ -142,7 +148,7 @@ export function invalidateDeploymentsList(
     ...filters,
     queryKey: [
       "@alienplatform/platform-api",
-      "deployments",
+      "Deployments",
       "list",
       ...queryKeyBase,
     ],
@@ -155,6 +161,6 @@ export function invalidateAllDeploymentsList(
 ): Promise<void> {
   return client.invalidateQueries({
     ...filters,
-    queryKey: ["@alienplatform/platform-api", "deployments", "list"],
+    queryKey: ["@alienplatform/platform-api", "Deployments", "list"],
   });
 }

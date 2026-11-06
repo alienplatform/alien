@@ -1,8 +1,5 @@
 # TargetDeploymentConfig
 
-Deployment configuration
-
-Configuration for how to perform the deployment.
 Note: Credentials (ClientConfig) are passed separately to step() function.
 
 ## Example Usage

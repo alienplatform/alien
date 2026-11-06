@@ -31,7 +31,7 @@ export type GetDynamicContainerLogsRequest = {
   cursor?: string | undefined;
 };
 
-export type Log = {
+export type GetDynamicContainerLogsLog = {
   timestamp: Date;
   level: string;
   message: string;
@@ -42,7 +42,7 @@ export type Log = {
  * Container logs.
  */
 export type GetDynamicContainerLogsResponse = {
-  logs: Array<Log>;
+  logs: Array<GetDynamicContainerLogsLog>;
   numHits: number;
   nextCursor: string | null;
   partial: boolean;
@@ -85,20 +85,23 @@ export function getDynamicContainerLogsRequestToJSON(
 }
 
 /** @internal */
-export const Log$inboundSchema: z.ZodType<Log, unknown> = z.object({
+export const GetDynamicContainerLogsLog$inboundSchema: z.ZodType<
+  GetDynamicContainerLogsLog,
+  unknown
+> = z.object({
   timestamp: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   level: z.string(),
   message: z.string(),
   replicaId: z.nullable(z.string()),
 });
 
-export function logFromJSON(
+export function getDynamicContainerLogsLogFromJSON(
   jsonString: string,
-): SafeParseResult<Log, SDKValidationError> {
+): SafeParseResult<GetDynamicContainerLogsLog, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Log$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Log' from JSON`,
+    (x) => GetDynamicContainerLogsLog$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetDynamicContainerLogsLog' from JSON`,
   );
 }
 
@@ -107,7 +110,7 @@ export const GetDynamicContainerLogsResponse$inboundSchema: z.ZodType<
   GetDynamicContainerLogsResponse,
   unknown
 > = z.object({
-  logs: z.array(z.lazy(() => Log$inboundSchema)),
+  logs: z.array(z.lazy(() => GetDynamicContainerLogsLog$inboundSchema)),
   numHits: z.number(),
   nextCursor: z.nullable(z.string()),
   partial: z.boolean(),

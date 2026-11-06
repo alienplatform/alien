@@ -6,7 +6,7 @@
 import { GetDeploymentGroupManagementExternalIdRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: GetDeploymentGroupManagementExternalIdRequest = {
-  id: "dg_r27ict8c7vcgsumpj90ackf7b",
+  id: "dg_r27ict8c7vcgsumpj90ackf7bnwt",
 };
 ```
 
@@ -14,4 +14,4 @@ let value: GetDeploymentGroupManagementExternalIdRequest = {
 
 | Field                                       | Type                                        | Required                                    | Description                                 | Example                                     |
 | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- |
-| `id`                                        | *string*                                    | :heavy_check_mark:                          | Unique identifier for the deployment group. | dg_r27ict8c7vcgsumpj90ackf7b                |
+| `id`                                        | *string*                                    | :heavy_check_mark:                          | Unique identifier for the deployment group. | dg_r27ict8c7vcgsumpj90ackf7bnwt             |

@@ -6,7 +6,7 @@
 import { RevokeWorkspaceInvitationRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: RevokeWorkspaceInvitationRequest = {
-  id: "ws_It13CUaGEhLLAB87simX0",
+  id: "ws_It13CUaGEhLLAB87simX07Xb",
   invitationId: "<id>",
 };
 ```
@@ -15,5 +15,5 @@ let value: RevokeWorkspaceInvitationRequest = {
 
 | Field                                | Type                                 | Required                             | Description                          | Example                              |
 | ------------------------------------ | ------------------------------------ | ------------------------------------ | ------------------------------------ | ------------------------------------ |
-| `id`                                 | *string*                             | :heavy_check_mark:                   | Unique identifier for the workspace. | ws_It13CUaGEhLLAB87simX0             |
+| `id`                                 | *string*                             | :heavy_check_mark:                   | Unique identifier for the workspace. | ws_It13CUaGEhLLAB87simX07Xb          |
 | `invitationId`                       | *string*                             | :heavy_check_mark:                   | N/A                                  |                                      |

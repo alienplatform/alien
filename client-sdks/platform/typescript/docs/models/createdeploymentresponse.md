@@ -7,74 +7,75 @@ import { CreateDeploymentResponse } from "@alienplatform/platform-api/models";
 
 let value: CreateDeploymentResponse = {
   deployment: {
-    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlcxd7f",
     name: "acme-prod",
     status: "refresh-failed",
-    projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    projectId: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
     platform: "kubernetes",
     deploymentProtocolVersion: 883690,
-    deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
+    deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7bnwt",
     purpose: "encryption",
     stackSettings: {},
-    currentReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-    desiredReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-    pinnedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    currentReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+    desiredReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
+    pinnedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
     releaseChannel: "<value>",
-    retryRequested: false,
+    protected: false,
+    signingFingerprint: "<value>",
+    retryRequested: true,
     updateState: {
       active: {
-        id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
-        status: "queued",
-        reasons: [],
-        targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        id: "duop_0vtxpb1sw4sbcdwg2xo37q6msm9l",
+        status: "blocked",
+        reasons: [
+          "release",
+        ],
+        targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
         changedKeys: [],
         cause: {
           kind: "volume-restore",
-          at: new Date("2024-04-20T16:58:36.345Z"),
-          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+          at: new Date("2025-05-23T02:17:08.731Z"),
+          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
         },
-        requestedAt: new Date("2024-05-03T02:14:14.983Z"),
+        requestedAt: new Date("2025-05-26T07:07:30.861Z"),
       },
       next: {
-        id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
-        status: "applying",
-        reasons: [],
-        targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        id: "duop_0vtxpb1sw4sbcdwg2xo37q6msm9l",
+        status: "superseded",
+        reasons: [
+          "release",
+        ],
+        targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
         changedKeys: [
           "<value 1>",
-          "<value 2>",
-          "<value 3>",
         ],
-        cause: {
-          kind: "volume-restore",
-          at: new Date("2024-04-20T16:58:36.345Z"),
-          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-        },
-        requestedAt: new Date("2025-07-21T11:59:25.062Z"),
+        cause: null,
+        requestedAt: new Date("2025-07-14T02:26:55.487Z"),
       },
       latest: {
-        id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
-        status: "queued",
+        id: "duop_0vtxpb1sw4sbcdwg2xo37q6msm9l",
+        status: "failed",
         reasons: [],
-        targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
         changedKeys: [
           "<value 1>",
           "<value 2>",
         ],
         cause: {
           kind: "volume-restore",
-          at: new Date("2024-04-20T16:58:36.345Z"),
-          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+          at: new Date("2025-05-23T02:17:08.731Z"),
+          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9E2Su",
         },
-        requestedAt: new Date("2026-06-26T04:52:21.740Z"),
+        requestedAt: new Date("2026-10-10T15:20:06.831Z"),
       },
     },
-    createdAt: new Date("2024-01-13T13:20:22.491Z"),
-    updatedAt: new Date("2025-07-24T15:47:13.039Z"),
-    managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspaceId: "ws_It13CUaGEhLLAB87simX0",
+    createdAt: new Date("2026-04-09T17:19:50.603Z"),
+    updatedAt: new Date("2025-03-12T21:42:58.399Z"),
+    managerId: "mgr_enxscjrqiiu2lrc672hwwuc5tv5y",
+    workspaceId: "ws_It13CUaGEhLLAB87simX07Xb",
+    installId: "<id>",
   },
-  deploymentModel: "pull",
+  deploymentModel: "push",
 };
 ```
 
@@ -88,3 +89,4 @@ let value: CreateDeploymentResponse = {
 | `managementExternalId`                                                                                 | *string*                                                                                               | :heavy_minus_sign:                                                                                     | N/A                                                                                                    |
 | `runtimeEncryptionKey`                                                                                 | *string*                                                                                               | :heavy_minus_sign:                                                                                     | N/A                                                                                                    |
 | `token`                                                                                                | *string*                                                                                               | :heavy_minus_sign:                                                                                     | Deployment token (returned for deployment-group creation and await-registration reservations)          |
+| `airgapped`                                                                                            | [models.Airgapped](../models/airgapped.md)                                                             | :heavy_minus_sign:                                                                                     | N/A                                                                                                    |

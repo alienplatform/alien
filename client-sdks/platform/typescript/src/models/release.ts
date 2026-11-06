@@ -4,6 +4,7 @@
 
 import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
+import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import { GitMetadata, GitMetadata$inboundSchema } from "./gitmetadata.js";
@@ -11,6 +12,10 @@ import {
   SetupFingerprintInfo,
   SetupFingerprintInfo$inboundSchema,
 } from "./setupfingerprintinfo.js";
+import {
+  SignedStatement,
+  SignedStatement$inboundSchema,
+} from "./signedstatement.js";
 
 export type ReleaseStack = {
   aws?: any | null | undefined;
@@ -20,6 +25,47 @@ export type ReleaseStack = {
   machines?: any | null | undefined;
   local?: any | null | undefined;
   test?: any | null | undefined;
+};
+
+export type ReleaseSignedStacks = {
+  aws?: SignedStatement | undefined;
+  gcp?: SignedStatement | undefined;
+  azure?: SignedStatement | undefined;
+  kubernetes?: SignedStatement | undefined;
+  machines?: SignedStatement | undefined;
+  local?: SignedStatement | undefined;
+  test?: SignedStatement | undefined;
+};
+
+export const ReleaseKind = {
+  Device: "device",
+  Ci: "ci",
+  Recovery: "recovery",
+  Unknown: "unknown",
+} as const;
+export type ReleaseKind = ClosedEnum<typeof ReleaseKind>;
+
+export type ReleaseSigner = {
+  id: string;
+  /**
+   * Label from the trusted-device list, such as `alice-mbp`
+   */
+  label: string;
+  kind: ReleaseKind;
+};
+
+/**
+ * Who signed the release and for which channel; null when unsigned
+ */
+export type ReleaseSigning = {
+  /**
+   * Channel the release was signed for
+   */
+  channel: string;
+  /**
+   * Who signed it
+   */
+  signers: Array<ReleaseSigner>;
 };
 
 export type Release = {
@@ -36,6 +82,11 @@ export type Release = {
   gitMetadata?: GitMetadata | null | undefined;
   createdAt: Date;
   stack?: ReleaseStack | null | undefined;
+  signedStacks?: ReleaseSignedStacks | null | undefined;
+  /**
+   * Who signed the release and for which channel; null when unsigned
+   */
+  signing?: ReleaseSigning | null | undefined;
   /**
    * Per-target setup compatibility fingerprints for this release
    */
@@ -71,6 +122,70 @@ export function releaseStackFromJSON(
 }
 
 /** @internal */
+export const ReleaseSignedStacks$inboundSchema: z.ZodType<
+  ReleaseSignedStacks,
+  unknown
+> = z.object({
+  aws: SignedStatement$inboundSchema.optional(),
+  gcp: SignedStatement$inboundSchema.optional(),
+  azure: SignedStatement$inboundSchema.optional(),
+  kubernetes: SignedStatement$inboundSchema.optional(),
+  machines: SignedStatement$inboundSchema.optional(),
+  local: SignedStatement$inboundSchema.optional(),
+  test: SignedStatement$inboundSchema.optional(),
+});
+
+export function releaseSignedStacksFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseSignedStacks, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseSignedStacks$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseSignedStacks' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseKind$inboundSchema: z.ZodEnum<typeof ReleaseKind> = z.enum(
+  ReleaseKind,
+);
+
+/** @internal */
+export const ReleaseSigner$inboundSchema: z.ZodType<ReleaseSigner, unknown> = z
+  .object({
+    id: z.string(),
+    label: z.string(),
+    kind: ReleaseKind$inboundSchema,
+  });
+
+export function releaseSignerFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseSigner, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseSigner$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseSigner' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseSigning$inboundSchema: z.ZodType<ReleaseSigning, unknown> =
+  z.object({
+    channel: z.string(),
+    signers: z.array(z.lazy(() => ReleaseSigner$inboundSchema)),
+  });
+
+export function releaseSigningFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseSigning, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseSigning$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseSigning' from JSON`,
+  );
+}
+
+/** @internal */
 export const Release$inboundSchema: z.ZodType<Release, unknown> = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -79,6 +194,9 @@ export const Release$inboundSchema: z.ZodType<Release, unknown> = z.object({
   gitMetadata: z.nullable(GitMetadata$inboundSchema).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   stack: z.nullable(z.lazy(() => ReleaseStack$inboundSchema)).optional(),
+  signedStacks: z.nullable(z.lazy(() => ReleaseSignedStacks$inboundSchema))
+    .optional(),
+  signing: z.nullable(z.lazy(() => ReleaseSigning$inboundSchema)).optional(),
   setupFingerprints: z.record(z.string(), SetupFingerprintInfo$inboundSchema),
   rootDirectory: z.nullable(z.string()).optional(),
   createdByUserId: z.nullable(z.string()).optional(),

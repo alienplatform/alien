@@ -37,7 +37,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.operations.listPlugins({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
 
   console.log(result);
@@ -63,7 +63,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await operationsListPlugins(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -220,7 +220,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.publishPlugin("prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const result = await alien.operations.publishPlugin("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
 
   console.log(result);
 }
@@ -244,7 +244,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsPublishPlugin(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const res = await operationsPublishPlugin(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -375,7 +375,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.createBundleUploadUrl("prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const result = await alien.operations.createBundleUploadUrl("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
 
   console.log(result);
 }
@@ -399,7 +399,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsCreateBundleUploadUrl(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const res = await operationsCreateBundleUploadUrl(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -530,7 +530,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.invoke("prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const result = await alien.operations.invoke("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
 
   console.log(result);
 }
@@ -554,7 +554,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsInvoke(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr");
+  const res = await operationsInvoke(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -685,7 +685,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.verifyCheck("prj_mcytp6z3j91f7tn5ryqsfwtr", {
+  const result = await alien.operations.verifyCheck("prj_mcytp6z3j91f7tn5ryqsfwtrdqkv", {
     deploymentId: "<id>",
     commandId: "cmd_2sxjXxvOYct7IohT3ukliAzf",
   });
@@ -712,7 +712,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsVerifyCheck(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr", {
+  const res = await operationsVerifyCheck(alien, "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv", {
     deploymentId: "<id>",
     commandId: "cmd_2sxjXxvOYct7IohT3ukliAzf",
   });
@@ -957,7 +957,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.operations.listAccessRequests({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
     deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   });
 
@@ -984,7 +984,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await operationsListAccessRequests(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtrdqkv",
     deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   });
   if (res.ok) {

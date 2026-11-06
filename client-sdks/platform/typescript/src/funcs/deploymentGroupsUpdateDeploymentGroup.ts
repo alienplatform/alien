@@ -39,7 +39,7 @@ export function deploymentGroupsUpdateDeploymentGroup(
   options?: RequestOptions,
 ): APIPromise<
   Result<
-    models.DeploymentGroup,
+    models.UpdateDeploymentGroupResponse,
     | errors.APIError
     | AlienError
     | ResponseValidationError
@@ -69,7 +69,7 @@ async function $do(
 ): Promise<
   [
     Result<
-      models.DeploymentGroup,
+      models.UpdateDeploymentGroupResponse,
       | errors.APIError
       | AlienError
       | ResponseValidationError
@@ -171,7 +171,7 @@ async function $do(
   };
 
   const [result] = await M.match<
-    models.DeploymentGroup,
+    models.UpdateDeploymentGroupResponse,
     | errors.APIError
     | AlienError
     | ResponseValidationError
@@ -182,7 +182,7 @@ async function $do(
     | UnexpectedClientError
     | SDKValidationError
   >(
-    M.json(200, models.DeploymentGroup$inboundSchema),
+    M.json(200, models.UpdateDeploymentGroupResponse$inboundSchema),
     M.jsonErr([404, 409], errors.APIError$inboundSchema),
     M.jsonErr(500, errors.APIError$inboundSchema),
     M.fail("4XX"),

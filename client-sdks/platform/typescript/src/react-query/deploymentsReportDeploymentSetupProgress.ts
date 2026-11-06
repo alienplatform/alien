@@ -69,7 +69,7 @@ export function useDeploymentsReportDeploymentSetupProgressMutation(
 export function mutationKeyDeploymentsReportDeploymentSetupProgress(): MutationKey {
   return [
     "@alienplatform/platform-api",
-    "deployments",
+    "Deployments",
     "reportDeploymentSetupProgress",
   ];
 }

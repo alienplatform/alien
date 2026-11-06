@@ -21,6 +21,10 @@ export type ListAPIKeysRequest = {
    */
   project?: string | undefined;
   /**
+   * List setup links for this deployment group, excluding dashboard sessions
+   */
+  setupLinksForGroup?: string | undefined;
+  /**
    * Maximum number of items to return per page
    */
   limit?: number | undefined;
@@ -47,6 +51,7 @@ export type ListAPIKeysResponse = {
 /** @internal */
 export type ListAPIKeysRequest$Outbound = {
   project?: string | undefined;
+  setupLinksForGroup?: string | undefined;
   limit: number;
   cursor?: string | undefined;
 };
@@ -57,6 +62,7 @@ export const ListAPIKeysRequest$outboundSchema: z.ZodType<
   ListAPIKeysRequest
 > = z.object({
   project: z.string().optional(),
+  setupLinksForGroup: z.string().optional(),
   limit: z.int().default(20),
   cursor: z.string().optional(),
 });
