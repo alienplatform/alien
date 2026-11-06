@@ -294,7 +294,16 @@ pub fn plan_compute_with_state(
                     })
                 });
         }
-        let workload_machines = group.scale.default_max_size();
+        // The machines the workloads need, within the fleet a generated pool offers. The
+        // rolling-update machine is left out: it sits empty between releases.
+        let workload_machines = if group.generated {
+            group
+                .scale
+                .default_max_size()
+                .min(GENERATED_POOL_MAX_MACHINES)
+        } else {
+            group.scale.default_max_size()
+        };
         if group.generated {
             group.scale = generated_pool_scale_policy(
                 group.scale.default_min_size(),
@@ -302,8 +311,6 @@ pub fn plan_compute_with_state(
                 selected.map(ComputePoolSelection::max_size),
             );
         }
-        // Machine sizing spreads the workloads over the machines they need, not over the
-        // rolling-update machine, which sits empty between releases.
         let machines = selected
             .map(ComputePoolSelection::max_size)
             .unwrap_or(workload_machines)
