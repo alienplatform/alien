@@ -314,7 +314,9 @@ fn command_push_requires_trusted_worker_identity() {
     let command_push = command_push_config(&config, &HashMap::new())
         .expect("valid command push config")
         .expect("command push enabled");
-    assert_eq!(command_push.token, "deployment-token");
+    assert!(
+        matches!(command_push.credential, crate::transports::local::CommandPushCredential::Legacy(ref token) if token == "deployment-token")
+    );
     assert_eq!(command_push.deployment_id, "deployment");
     assert_eq!(command_push.worker_resource_id, "reports");
 }
@@ -359,6 +361,9 @@ fn application_subprocess_cannot_inherit_runtime_only_credentials() {
         ])
         .env(SUBPROCESS_DRIVER, "1")
         .env(ENV_ALIEN_COMMANDS_TOKEN, "must-not-reach-application")
+        .env("ALIEN_COMMANDS_CAPABILITY_FILE", "/private/commands.json")
+        .env("ALIEN_TELEMETRY_CAPABILITY_FILE", "/private/telemetry.json")
+        .env("ALIEN_SESSION_FILE", "/private/session.json")
         .env(ENV_ALIEN_BINDINGS_MODE, "grpc")
         .env(
             ENV_ALIEN_RUNTIME_SECRETS,
@@ -422,6 +427,13 @@ fn application_environment_observer() {
         std::env::var(ENV_ALIEN_BINDINGS_MODE),
         Err(std::env::VarError::NotPresent)
     );
+    for name in [
+        "ALIEN_COMMANDS_CAPABILITY_FILE",
+        "ALIEN_TELEMETRY_CAPABILITY_FILE",
+        "ALIEN_SESSION_FILE",
+    ] {
+        assert_eq!(std::env::var(name), Err(std::env::VarError::NotPresent));
+    }
     assert_eq!(std::env::var(USER_VISIBLE_ENV).as_deref(), Ok("visible"));
 }
 

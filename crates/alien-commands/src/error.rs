@@ -5,6 +5,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// The receiver's authority expired before delegated credentials could be issued.
+    #[error(
+        code = "COMMAND_AUTHORITY_EXPIRED",
+        message = "Command receiver authority expired",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 401
+    )]
+    CommandAuthorityExpired,
+
     /// Command validation failed or contains invalid data.
     #[error(
         code = "INVALID_COMMAND",

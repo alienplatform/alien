@@ -57,6 +57,28 @@ pub trait ReleaseStore: Send + Sync {
         id: &str,
     ) -> Result<Option<ReleaseRecord>, AlienError>;
 
+    /// Read only the release pinned by a verified setup intent. This is an
+    /// internal import read, not permission to list/export release contents.
+    async fn get_verified_setup_release(
+        &self,
+        authority: &crate::auth::verified_setup::VerifiedSetupImport,
+    ) -> Result<Option<ReleaseRecord>, AlienError> {
+        if !authority.is_current() {
+            return Err(
+                crate::error::ErrorData::forbidden("Verified setup authority expired")
+                    .into_generic(),
+            );
+        }
+        let release = self
+            .get_release(&authority.subject(), &authority.release_id)
+            .await?;
+        Ok(release.filter(|release| {
+            release.id == authority.release_id
+                && release.workspace_id == authority.workspace_id
+                && release.project_id == authority.project_id
+        }))
+    }
+
     async fn get_latest_release(
         &self,
         caller: &crate::auth::Subject,

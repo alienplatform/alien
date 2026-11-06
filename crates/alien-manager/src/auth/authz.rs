@@ -51,6 +51,12 @@ pub trait Authz: Send + Sync {
     fn can_create_deployment(&self, subject: &Subject, ctx: DeploymentCreateCtx<'_>) -> bool;
     fn can_read_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
     fn can_update_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
+    /// Import an already verified setup intent into an existing reservation.
+    /// A new setup role is denied until the policy explicitly opts in.
+    fn can_import_setup(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool {
+        subject.role != crate::auth::Role::VerifiedSetupImporter
+            && self.can_update_deployment(subject, deployment)
+    }
     /// `kind` and `resource_id` come from the release current at use, not at token issue.
     /// Implementations should apply `remote_binding_capability::resolve_decision`, then
     /// `write_authority_covers`: write authority must never reach a sandbox.
@@ -110,6 +116,22 @@ pub trait Authz: Send + Sync {
 
     // -- Sync protocol -----------------------------------------------------
     fn can_sync_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
+    /// Connecting an operator tunnel is separate from reconciling its deployment.
+    fn can_connect_operator_tunnel(
+        &self,
+        subject: &Subject,
+        deployment: &DeploymentRecord,
+    ) -> bool {
+        if subject.role == crate::auth::Role::OperatorTunnel {
+            return subject.workspace_id == deployment.workspace_id
+                && matches!(&subject.scope, crate::auth::Scope::Deployment { deployment_id, project_id }
+                    if deployment_id == &deployment.id && project_id == &deployment.project_id);
+        }
+        // A bounded sync credential is not a tunnel credential.
+        subject.role != crate::auth::Role::OperatorSync
+            && self.can_sync_deployment(subject, deployment)
+    }
+
     fn can_acquire_deployments(&self, subject: &Subject, deployments: &[DeploymentRecord]) -> bool;
 
     // -- Telemetry ingest --------------------------------------------------

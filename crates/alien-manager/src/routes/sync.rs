@@ -520,7 +520,19 @@ async fn acquire(
     };
     let mut deployments = Vec::with_capacity(acquire_result.deployments.len());
     for acquired in &acquire_result.deployments {
-        match acquired_deployment_response(state.release_store.as_ref(), &sources, acquired).await {
+        let response =
+            acquired_deployment_response(state.release_store.as_ref(), &sources, acquired)
+                .await
+                .and_then(|mut deployment| {
+                    if subject.role == crate::auth::Role::OperatorSync {
+                        deployment.deployment["deploymentToken"] = serde_json::Value::Null;
+                        if let Some(config) = deployment.deployment.get_mut("deploymentConfig") {
+                            remove_legacy_runtime_credentials(config, &state.config.base_url())?;
+                        }
+                    }
+                    Ok(deployment)
+                });
+        match response {
             Ok(deployment) => deployments.push(deployment),
             Err(error) => {
                 // The caller never learns it holds these leases, so give them
@@ -548,6 +560,53 @@ async fn acquire(
         not_acquired: acquire_result.not_acquired,
     })
     .into_response()
+}
+
+/// Bounded operators receive endpoints and external monitoring configuration, never
+/// a legacy deployment bearer or a manager monitoring bearer to persist.
+fn remove_legacy_runtime_credentials(
+    config: &mut serde_json::Value,
+    audience: &str,
+) -> Result<(), AlienError> {
+    if config
+        .pointer("/computeBackend/clusters")
+        .is_some_and(|clusters| {
+            !clusters.is_null()
+                && clusters
+                    .as_object()
+                    .is_none_or(|clusters| !clusters.is_empty())
+        })
+    {
+        return Err(ErrorData::forbidden(
+            "Bounded operators do not support external compute clusters",
+        )
+        .into_generic());
+    }
+    let Some(config) = config.as_object_mut() else {
+        return Ok(());
+    };
+    config.insert("deploymentToken".into(), serde_json::Value::Null);
+    config.insert("runtimeIdentityAudience".into(), audience.into());
+    let manager_origin = reqwest::Url::parse(audience).ok().map(|url| url.origin());
+    if let Some(monitoring) = config
+        .get_mut("monitoring")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for (endpoint, authorization) in [
+            ("logsEndpoint", "logsAuthHeader"),
+            ("metricsEndpoint", "metricsAuthHeader"),
+        ] {
+            let same_origin = monitoring
+                .get(endpoint)
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| reqwest::Url::parse(value).ok())
+                .is_some_and(|url| Some(url.origin()) == manager_origin);
+            if same_origin {
+                monitoring.insert(authorization.into(), "".into());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// An acquired deployment as the runner that acquired it receives it.
@@ -2409,6 +2468,7 @@ mod tests {
 
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            runtime_identity_audience: None,
             gcp_federation_scope: None,
             stored_secret_input_ids: None,
             input_values: Default::default(),
@@ -3257,7 +3317,19 @@ async fn agent_sync(
         execution_claim,
         current_state,
         target: match target.map(|t| serde_json::to_value(&t)).transpose() {
-            Ok(v) => v,
+            Ok(mut value) => {
+                if subject.role == crate::auth::Role::OperatorSync {
+                    if let Some(config) = value.as_mut().and_then(|target| target.get_mut("config"))
+                    {
+                        if let Err(error) =
+                            remove_legacy_runtime_credentials(config, &state.config.base_url())
+                        {
+                            return error.into_response();
+                        }
+                    }
+                }
+                value
+            }
             Err(e) => {
                 tracing::warn!("Failed to serialize target deployment: {e}");
                 return ErrorData::internal("Failed to serialize target deployment")

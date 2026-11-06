@@ -51,7 +51,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use alien_preflights::compatibility::PermissionProfilesUnchangedCheck;
 
 use super::{auth, AppState};
-use crate::auth::{Scope, Subject};
+use crate::auth::{verified_setup::VerifiedSetupImport, Role, Scope, Subject};
 use crate::error::ErrorData;
 use crate::ids;
 use crate::traits::{
@@ -91,16 +91,52 @@ pub async fn stack_import(
     headers: HeaderMap,
     Json(raw_req): Json<serde_json::Value>,
 ) -> Response {
-    let mut req = match parse_stack_import_request(raw_req) {
+    let req = match parse_stack_import_request(raw_req) {
         Ok(req) => req,
         Err(e) => return e.into_response(),
     };
-
     let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
+    if subject.role == Role::VerifiedSetupImporter {
+        return ErrorData::forbidden("Verified setup authority requires the cloud verifier")
+            .into_response();
+    }
+    stack_import_as(state, subject, req, None).await
+}
 
+/// Local adapter entry point after authoritative cloud verification. No bearer
+/// is issued or forwarded. The exact intent is pinned before import processing;
+/// persistence must atomically fence its binding revision and deadline.
+pub async fn stack_import_verified(
+    state: AppState,
+    authority: VerifiedSetupImport,
+    request: StackImportRequest,
+) -> Response {
+    if !authority.covers_request(&request) {
+        return ErrorData::forbidden("Verified setup intent is expired or does not match")
+            .into_response();
+    }
+    let request = match serde_json::to_value(request)
+        .into_alien_error()
+        .context(ErrorData::BadRequest {
+            reason: "Could not normalize verified setup intent".into(),
+        })
+        .and_then(parse_stack_import_request)
+    {
+        Ok(request) => request,
+        Err(error) => return error.into_response(),
+    };
+    stack_import_as(state, authority.subject(), request, Some(authority)).await
+}
+
+async fn stack_import_as(
+    state: AppState,
+    subject: Subject,
+    mut req: StackImportRequest,
+    verified: Option<VerifiedSetupImport>,
+) -> Response {
     // Bootstrap may create in a group. A deployment credential may only
     // re-register its own existing setup; it must never fall through to create.
     let deployment_group_id = match &subject.scope {
@@ -119,7 +155,7 @@ pub async fn stack_import(
                 Err(error) => return error.into_response(),
             };
             if existing.name != req.deployment_name.trim()
-                || !state.authz.can_update_deployment(&subject, &existing)
+                || !state.authz.can_import_setup(&subject, &existing)
             {
                 return ErrorData::forbidden("Cannot register setup for another deployment")
                     .into_response();
@@ -137,14 +173,17 @@ pub async fn stack_import(
     let automatic = req.stack_settings.setup_management == alien_core::SetupManagement::Automatic;
     let mut approved_automatic_installation = None;
     if automatic {
-        let approved = match state
-            .deployment_store
-            .get_deployment_by_name(&subject, &deployment_group_id, req.deployment_name.trim())
-            .await
+        let approved = match lookup_import_deployment(
+            &state,
+            &subject,
+            &deployment_group_id,
+            req.deployment_name.trim(),
+        )
+        .await
         {
             Ok(Some(existing)) => {
                 if existing.import_source.is_some()
-                    && state.authz.can_update_deployment(&subject, &existing)
+                    && state.authz.can_import_setup(&subject, &existing)
                 {
                     if let Err(error) = validate_reserved_setup_management(&req, &existing) {
                         return error.into_response();
@@ -154,7 +193,7 @@ pub async fn stack_import(
                     req.platform,
                     Platform::Aws | Platform::Gcp | Platform::Azure
                 ) && existing.import_source.is_some()
-                    && state.authz.can_update_deployment(&subject, &existing)
+                    && state.authz.can_import_setup(&subject, &existing)
                     && existing.stack_settings.as_ref().is_some_and(|settings| {
                         settings.setup_management == alien_core::SetupManagement::Automatic
                     })
@@ -202,23 +241,35 @@ pub async fn stack_import(
         Err(error) => return error.into_response(),
     };
 
-    let release = match req.release_id.as_deref() {
-        Some(release_id) => match state.release_store.get_release(&subject, release_id).await {
-            Ok(Some(r)) => r,
-            Ok(None) => return ErrorData::not_found_release(release_id).into_response(),
-            Err(e) => return e.into_response(),
-        },
-        None => match state.release_store.get_latest_release(&subject).await {
-            Ok(Some(r)) => r,
-            Ok(None) => {
-                return ErrorData::bad_request(
-                    "No release exists in this project — run `alien release` before \
+    let release = if let Some(authority) = &verified {
+        match state
+            .release_store
+            .get_verified_setup_release(authority)
+            .await
+        {
+            Ok(Some(release)) => release,
+            Ok(None) => return ErrorData::not_found_release(&authority.release_id).into_response(),
+            Err(error) => return error.into_response(),
+        }
+    } else {
+        match req.release_id.as_deref() {
+            Some(release_id) => match state.release_store.get_release(&subject, release_id).await {
+                Ok(Some(r)) => r,
+                Ok(None) => return ErrorData::not_found_release(release_id).into_response(),
+                Err(e) => return e.into_response(),
+            },
+            None => match state.release_store.get_latest_release(&subject).await {
+                Ok(Some(r)) => r,
+                Ok(None) => {
+                    return ErrorData::bad_request(
+                        "No release exists in this project — run `alien release` before \
                      importing a stack from a setup artifact",
-                )
-                .into_response();
-            }
-            Err(e) => return e.into_response(),
-        },
+                    )
+                    .into_response();
+                }
+                Err(e) => return e.into_response(),
+            },
+        }
     };
 
     let source_stack = match resolve_stack(&release, req.platform) {
@@ -274,14 +325,13 @@ pub async fn stack_import(
     ) {
         return e.into_response();
     }
-    let existing_deployment = match state
-        .deployment_store
-        .get_deployment_by_name(&subject, &deployment_group_id, &deployment_name)
-        .await
-    {
-        Ok(existing) => existing,
-        Err(error) => return error.into_response(),
-    };
+    let existing_deployment =
+        match lookup_import_deployment(&state, &subject, &deployment_group_id, &deployment_name)
+            .await
+        {
+            Ok(existing) => existing,
+            Err(error) => return error.into_response(),
+        };
     // Deployment credentials cannot read group configuration. A re-registration
     // replaces the input map, so saved answers cannot satisfy missing required values.
     let needs_group_values = !matches!(subject.scope, Scope::Deployment { .. })
@@ -435,7 +485,7 @@ pub async fn stack_import(
             })
             .into_response();
         }
-        if !state.authz.can_update_deployment(&subject, &existing) {
+        if !state.authz.can_import_setup(&subject, &existing) {
             return ErrorData::forbidden("Cannot update imported deployment in this group")
                 .into_response();
         }
@@ -667,28 +717,36 @@ pub async fn stack_import(
         let activation_status = activates_setup_reservation
             .then(|| initial_import_status(&prepared_stack, &stack_state));
         let setup_metadata = merge_setup_metadata(&existing.setup_metadata, setup_metadata);
-        let updated = match state
-            .deployment_store
-            .update_imported_stack_state(
-                &subject,
-                &existing.id,
-                UpdateImportedDeploymentParams {
-                    stack_settings: req.stack_settings.clone(),
-                    stack_state: stack_state.clone(),
-                    environment_info: environment_info.clone(),
-                    runtime_metadata: runtime_metadata.clone(),
-                    setup_metadata,
-                    current_release_id: Some(release.id.clone()),
-                    setup_target: req.setup_target.clone(),
-                    setup_fingerprint: req.setup_fingerprint.clone(),
-                    setup_fingerprint_version: req.setup_fingerprint_version,
-                    activation_status,
-                    schedule_reconciliation: should_reconcile,
-                    input_values: req.input_values.clone(),
-                },
-            )
-            .await
-        {
+        let params = UpdateImportedDeploymentParams {
+            stack_settings: req.stack_settings.clone(),
+            stack_state: stack_state.clone(),
+            environment_info: environment_info.clone(),
+            runtime_metadata: runtime_metadata.clone(),
+            setup_metadata,
+            current_release_id: Some(release.id.clone()),
+            setup_target: req.setup_target.clone(),
+            setup_fingerprint: req.setup_fingerprint.clone(),
+            setup_fingerprint_version: req.setup_fingerprint_version,
+            activation_status,
+            schedule_reconciliation: should_reconcile,
+            input_values: req.input_values.clone(),
+        };
+        let update = if let Some(authority) = &verified {
+            if !authority.is_current() {
+                return ErrorData::forbidden("Verified setup authority expired during preparation")
+                    .into_response();
+            }
+            state
+                .deployment_store
+                .update_verified_setup_import(&subject, authority, params)
+                .await
+        } else {
+            state
+                .deployment_store
+                .update_imported_stack_state(&subject, &existing.id, params)
+                .await
+        };
+        let updated = match update {
             Ok(d) => d,
             Err(e) => return e.into_response(),
         };
@@ -831,12 +889,41 @@ pub async fn stack_import(
         .into_response()
 }
 
+async fn lookup_import_deployment(
+    state: &AppState,
+    subject: &Subject,
+    group_id: &str,
+    name: &str,
+) -> Result<Option<DeploymentRecord>, alien_error::AlienError> {
+    if subject.role == Role::VerifiedSetupImporter {
+        let Scope::Deployment { deployment_id, .. } = &subject.scope else {
+            return Ok(None);
+        };
+        return Ok(state
+            .deployment_store
+            .get_deployment(subject, deployment_id)
+            .await?
+            .filter(|deployment| {
+                deployment.name == name
+                    && deployment.deployment_group_id == group_id
+                    && crate::auth::verified_setup::permits_import(subject, deployment)
+            }));
+    }
+    state
+        .deployment_store
+        .get_deployment_by_name(subject, group_id, name)
+        .await
+}
+
 /// Return the credential a setup driver must persist after registration.
 ///
 /// A deployment-scoped caller already presented the durable credential for
 /// this exact deployment. Echo it from request scope rather than requiring a
 /// deployment store to expose plaintext credentials.
 fn response_deployment_token(subject: &Subject, deployment: &DeploymentRecord) -> Option<String> {
+    if subject.role == Role::VerifiedSetupImporter {
+        return None;
+    }
     match &subject.scope {
         Scope::Deployment { deployment_id, .. }
             if deployment_id == &deployment.id && !subject.bearer_token.is_empty() =>
@@ -1600,6 +1687,7 @@ async fn prepare_import_stack(
         domain_metadata: None,
         monitoring: None,
         manager_url: None,
+        runtime_identity_audience: None,
         deployment_token: None,
         native_image_host: None,
         volume_restores: Vec::new(),
@@ -1973,6 +2061,34 @@ mod setup_update_authorization_tests {
             input_values: HashMap::new(),
             resources: vec![],
         }
+    }
+
+    #[test]
+    fn verified_setup_authority_binds_exact_request_and_release() {
+        let mut request = request();
+        let now = Utc::now().timestamp_millis();
+        let authority = VerifiedSetupImport {
+            workspace_id: "default".into(),
+            project_id: "default".into(),
+            deployment_id: "dep_fixture".into(),
+            release_id: "release".into(),
+            binding_revision: 1,
+            intent_digest: VerifiedSetupImport::request_digest(&request).unwrap(),
+            verified_at: now,
+            expires_at: now + 300_000,
+        };
+        assert!(authority.covers_request(&request));
+        request.deployment_name = "other".into();
+        assert!(!authority.covers_request(&request));
+        request.deployment_name = "deployment".into();
+        request.release_id = Some("other".into());
+        assert!(!authority.covers_request(&request));
+        request.release_id = Some("release".into());
+        request.deployment_group_token = "unexpected-bearer".into();
+        assert!(!authority.covers_request(&request));
+        request.deployment_group_token.clear();
+        assert!(authority.covers_request(&request));
+        assert!(authority.subject().bearer_token.is_empty());
     }
 
     #[test]

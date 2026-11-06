@@ -211,6 +211,7 @@ fn get_or_create_local_bindings_provider(
 }
 
 pub struct DeploymentLoop {
+    runtime_credentials: Option<Arc<crate::auth::runtime_capability::RuntimeCredentials>>,
     config: Arc<ManagerConfig>,
     deployment_store: Arc<dyn DeploymentStore>,
     release_store: Arc<dyn ReleaseStore>,
@@ -307,6 +308,7 @@ impl DeploymentLoop {
         dev_status_tx: Option<watch::Sender<()>>,
     ) -> Self {
         Self {
+            runtime_credentials: None,
             config,
             deployment_store,
             release_store,
@@ -317,6 +319,14 @@ impl DeploymentLoop {
             settled_stack_cache: Mutex::new(HashMap::new()),
             deferred: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub(crate) fn with_runtime_credentials(
+        mut self,
+        credentials: Option<Arc<crate::auth::runtime_capability::RuntimeCredentials>>,
+    ) -> Self {
+        self.runtime_credentials = credentials;
+        self
     }
 
     /// Add acquisition exclusions without enumerating a possibly capped candidate list.
@@ -1106,6 +1116,17 @@ impl DeploymentLoop {
         .deployment_config(&deployment, deployment_stack.as_ref(), management_config)
         .await?;
 
+        // Local `alien dev` workers keep the deployment token.
+        let runtime_credentials = self
+            .runtime_credentials
+            .as_ref()
+            .filter(|_| deployment.platform != Platform::Local);
+        if let Some(credentials) = runtime_credentials {
+            // Controllers obtain bounded credentials from the trusted per-deployment
+            // provider below; the audience itself carries no authority.
+            config.runtime_identity_audience = Some(credentials.audience().to_owned());
+        }
+
         // Standalone-mode bridge: inject a BYO Horizon backend from env vars
         // when an external control plane did not supply one. It stays out of
         // the shared config: its management token is this manager's own
@@ -1123,6 +1144,7 @@ impl DeploymentLoop {
                         alien_core::HorizonClusterConfig {
                             cluster_id,
                             management_token: token,
+                            runtime_identity: None,
                             horizon_machine_image: None,
                         },
                     );
@@ -1139,9 +1161,7 @@ impl DeploymentLoop {
 
         // 6. Build service provider.
         // Use LocalBindingsProvider for local platform, default provider for cloud platforms.
-        let service_provider: Arc<dyn alien_infra::PlatformServiceProvider> = match deployment
-            .platform
-        {
+        let mut service_provider = match deployment.platform {
             alien_core::Platform::Local => {
                 let state_dir = self.config.state_dir.as_ref().ok_or_else(|| {
                     AlienError::new(GenericError {
@@ -1158,12 +1178,24 @@ impl DeploymentLoop {
                     local_bindings.queue_manager().clone(),
                     &self.config.base_url(),
                 );
-                Arc::new(DefaultPlatformServiceProvider::with_local_bindings(
-                    local_bindings,
-                ))
+                DefaultPlatformServiceProvider::with_local_bindings(local_bindings)
             }
-            _ => Arc::new(DefaultPlatformServiceProvider::default()),
+            _ => DefaultPlatformServiceProvider::default(),
         };
+        if let Some(credentials) = runtime_credentials {
+            service_provider = service_provider.with_runtime_registry_credentials(Arc::new(
+                crate::auth::runtime_capability::DeploymentRegistryCredentials::new(
+                    credentials.clone(),
+                    &deployment,
+                    deployment_stack
+                        .as_ref()
+                        .map(|stack| stack.command_targets())
+                        .unwrap_or_default(),
+                ),
+            ));
+        }
+        let service_provider: Arc<dyn alien_infra::PlatformServiceProvider> =
+            Arc::new(service_provider);
 
         // 7. Step loop — use the shared runner with ManagerTransport for
         //    per-step reconciliation (state persistence + registry access).
@@ -1692,6 +1724,7 @@ impl RunnerConfigSources<'_> {
                 domain_metadata: None,
                 monitoring,
                 manager_url: Some(self.config.base_url()),
+                runtime_identity_audience: None,
                 deployment_token: deployment.deployment_token.clone(),
                 native_image_host,
                 volume_restores: Vec::new(),

@@ -336,8 +336,16 @@ pub enum Role {
     ProjectViewer,
     DeploymentManager,
     DeploymentTelemetryWriter,
+    /// Reconcile only the enrolled operator deployment.
+    OperatorSync,
+    /// Pull images without push or generic project access.
+    RegistryPull,
+    /// Maintain the enrolled deployment tunnel connection.
+    OperatorTunnel,
     DeploymentViewer,
     DeploymentGroupDeployer,
+    /// Local verified setup import only; never generic deployment or sync authority.
+    VerifiedSetupImporter,
     /// Inert outside command-specific authorization gates.
     CommandCapability,
     /// Inert outside signal-specific telemetry authorization.

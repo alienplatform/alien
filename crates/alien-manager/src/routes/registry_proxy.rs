@@ -1460,6 +1460,16 @@ fn refuse_capability_pull(subject: &Subject) -> Result<(), RegistryRefusal> {
             "Sandbox image push credentials cannot pull images",
         ));
     }
+    if matches!(
+        subject.role,
+        Role::VerifiedSetupImporter | Role::OperatorSync | Role::OperatorTunnel
+    ) {
+        return Err(RegistryRefusal::new(
+            StatusCode::FORBIDDEN,
+            "DENIED",
+            "This credential cannot pull images",
+        ));
+    }
     Ok(())
 }
 

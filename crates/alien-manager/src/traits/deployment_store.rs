@@ -5,11 +5,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
+    import::ImportSourceKind,
+    sync::{ObservedApplicationReport, OperatorCapabilityReport, OperatorImageReport},
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentInfo,
     EnvironmentVariable, GcpEnvironmentInfo, ManagementConfig, ObservedInventoryBatch, Platform,
     ResourceHeartbeat, RuntimeMetadata, Stack, StackSettings, StackState,
-    import::ImportSourceKind,
-    sync::{ObservedApplicationReport, OperatorCapabilityReport, OperatorImageReport},
 };
 use alien_error::AlienError;
 
@@ -631,6 +631,22 @@ pub trait DeploymentStore: Send + Sync {
         deployment_id: &str,
         params: UpdateImportedDeploymentParams,
     ) -> Result<DeploymentRecord, AlienError>;
+
+    /// Persist a cloud-verified setup import. Implementations must lock the
+    /// current deployment assignment and setup binding, then recheck the
+    /// binding revision and authority deadline before committing any change.
+    /// No fallback to the ordinary credential-bearing mutation is permitted.
+    async fn update_verified_setup_import(
+        &self,
+        _caller: &crate::auth::Subject,
+        _authority: &crate::auth::verified_setup::VerifiedSetupImport,
+        _params: UpdateImportedDeploymentParams,
+    ) -> Result<DeploymentRecord, AlienError> {
+        Err(crate::error::ErrorData::forbidden(
+            "This deployment store does not support verified setup imports",
+        )
+        .into_generic())
+    }
 
     async fn get_deployment(
         &self,

@@ -1002,6 +1002,47 @@
         }
       }
     },
+    "/v1/deployments/{id}/enrollment-code": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Issue the code that `management.enrollmentCode` carries into a Helm install.",
+        "operationId": "issueEnrollmentCode",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedEnrollmentCode"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        }
+      }
+    },
     "/v1/deployments/{id}/info": {
       "get": {
         "tags": [
@@ -1592,6 +1633,115 @@
             "bearer": []
           }
         ]
+      }
+    },
+    "/v1/identity/enroll": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "operationId": "enrollRuntimeIdentity",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IdentityEnrollmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityEnrollmentResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/v1/identity/exchange": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Exchange a verified component proof for one bounded runtime purpose.",
+        "operationId": "exchangeRuntimeIdentity",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IdentityExchangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Bounded runtime credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedRuntimeCredential"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Identity proof or requested purpose refused"
+          },
+          "503": {
+            "description": "Identity verification unavailable"
+          }
+        }
+      }
+    },
+    "/v1/identity/rotate": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "operationId": "rotateRuntimeIdentity",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IdentityRotationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityRotationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
       }
     },
     "/v1/initialize": {
@@ -11013,6 +11163,112 @@
           "daemon"
         ]
       },
+      "IdentityEnrollmentRequest": {
+        "type": "object",
+        "description": "A client must durably save the corresponding key before sending this request.",
+        "required": [
+          "code",
+          "initialKeyHash"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "initialKeyHash": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "IdentityEnrollmentResponse": {
+        "type": "object",
+        "required": [
+          "deploymentId",
+          "componentId",
+          "expiresAt",
+          "revision"
+        ],
+        "properties": {
+          "componentId": {
+            "type": "string"
+          },
+          "deploymentId": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "IdentityExchangeRequest": {
+        "type": "object",
+        "required": [
+          "deploymentId",
+          "purpose",
+          "proof"
+        ],
+        "properties": {
+          "deploymentId": {
+            "type": "string",
+            "description": "Selects the binding to verify; never establishes membership by itself."
+          },
+          "proof": {
+            "$ref": "#/components/schemas/RuntimeIdentityProof"
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/RuntimePurpose"
+          }
+        },
+        "additionalProperties": false
+      },
+      "IdentityRotationRequest": {
+        "type": "object",
+        "description": "A client saves its generated successor before the atomic hash replacement.",
+        "required": [
+          "deploymentId",
+          "key",
+          "successorHash"
+        ],
+        "properties": {
+          "deploymentId": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "successorHash": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "IdentityRotationResponse": {
+        "type": "object",
+        "description": "No successor credential or hash is disclosed to a retired key holder.",
+        "required": [
+          "expiresAt",
+          "revision"
+        ],
+        "properties": {
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
       "ImportSourceKind": {
         "type": "string",
         "description": "Package source that produced an import request. Observability label\nonly — the manager does not branch on this value, and any new deployment\npathway can omit it without affecting import behavior.",
@@ -11178,6 +11434,50 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "IssuedEnrollmentCode": {
+        "type": "object",
+        "description": "A one-hour, one-use code that enrolls the deployment's operator.",
+        "required": [
+          "deploymentId",
+          "code",
+          "expiresAt",
+          "managerAudience"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "deploymentId": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "managerAudience": {
+            "type": "string",
+            "description": "The audience the operator must use for this manager."
+          }
+        },
+        "additionalProperties": false
+      },
+      "IssuedRuntimeCredential": {
+        "type": "object",
+        "description": "Response credential and its hard deadline. Never log or persist a debug dump.",
+        "required": [
+          "token",
+          "expiresAt"
+        ],
+        "properties": {
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "token": {
+            "type": "string"
           }
         }
       },
@@ -18678,6 +18978,205 @@
             "description": "URL where deployments submit responses"
           }
         }
+      },
+      "RuntimeIdentityProof": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "An audience-signed STS GetCallerIdentity request.",
+            "required": [
+              "presigned_url",
+              "type"
+            ],
+            "properties": {
+              "presigned_url": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "aws"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A metadata identity token for this manager's audience.",
+            "required": [
+              "id_token",
+              "type"
+            ],
+            "properties": {
+              "id_token": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "gcp"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A bounded parent session; it cannot renew itself.",
+            "required": [
+              "token",
+              "type"
+            ],
+            "properties": {
+              "token": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "session"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The explicit daily-key exception for enrolled components.",
+            "required": [
+              "key",
+              "type"
+            ],
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "dailyKey"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Proof material is intentionally not Debug: providers must never log it."
+      },
+      "RuntimePurpose": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Ingest telemetry for the recorded deployment.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "telemetry"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Reconcile the recorded operator deployment.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "operatorSync"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Pull deployment images through the registry receiver.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "registryPull"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Connect the recorded operator tunnel.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "operatorTunnel"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Receive the operator's fixed operations queue.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "operatorOperations"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Relay commands to one app worker, without dispatch or administrative rights.",
+            "required": [
+              "target",
+              "type"
+            ],
+            "properties": {
+              "target": {
+                "$ref": "#/components/schemas/CommandTarget"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "operationRelay"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Receive commands for one app-owned target.",
+            "required": [
+              "target",
+              "type"
+            ],
+            "properties": {
+              "target": {
+                "$ref": "#/components/schemas/CommandTarget"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "receiveCommands"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Runtime operations cannot administer deployments or mint credentials."
       },
       "S3StorageBinding": {
         "type": "object",

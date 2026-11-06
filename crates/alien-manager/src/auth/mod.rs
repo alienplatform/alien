@@ -9,9 +9,15 @@
 //!   table; embedders inject their own when they need stricter policy.
 
 pub mod authz;
+pub mod aws_identity;
 pub mod command_capability;
+pub mod identity_exchange;
 pub mod remote_binding_capability;
+pub mod runtime_capability;
+#[cfg(feature = "sqlite")]
+pub mod standalone_identity;
 pub mod subject;
+pub mod verified_setup;
 
 pub use authz::{Authz, DeploymentCreateCtx};
 pub use subject::{

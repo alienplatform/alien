@@ -415,6 +415,19 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
             channel TEXT NOT NULL,
             pinned_release_id TEXT
         )",
+        // One-use operator enrollment codes and daily operator keys, hashed.
+        "CREATE TABLE IF NOT EXISTS runtime_enrollment_codes (
+            code_hash TEXT PRIMARY KEY,
+            deployment_id TEXT NOT NULL,
+            expires_at INTEGER NOT NULL,
+            initial_key_hash TEXT
+        )",
+        "CREATE TABLE IF NOT EXISTS runtime_daily_keys (
+            deployment_id TEXT PRIMARY KEY,
+            key_hash TEXT NOT NULL,
+            expires_at INTEGER NOT NULL,
+            revision INTEGER NOT NULL
+        )",
     ];
     for sql in channel_statements {
         conn.execute(sql, ())
