@@ -1793,7 +1793,7 @@ mod tests {
         assert!(check_deployer_secrets(&stack, &state, &ClientConfig::Test, &config, Platform::Aws).await.unwrap().is_empty());
         assert!(deployer_secrets_blocking_start(&stack, &config, Platform::Aws, &legacy).is_empty());
         inject_environment_variables(&mut stack, &config, Platform::Aws, &legacy).unwrap();
-        let container = stack.resources["web"].config.as_container().unwrap();
+        let container = stack.resources["web"].config.downcast_ref::<alien_core::Container>().unwrap();
         assert!(!container.environment.contains_key(ENV_ALIEN_DEPLOYER_SECRETS));
         assert!(!container.environment.contains_key("API_KEY"));
     }
