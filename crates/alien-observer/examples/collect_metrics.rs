@@ -6,8 +6,32 @@ use opentelemetry_proto::tonic::metrics::v1::metric::Data;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    if run().await.is_err() {
-        eprintln!("Collection failed; no successful measurement proof was produced");
+    if let Err(error) = run().await {
+        // Print only classifications, never HTTP bodies, labels, URLs, or credential values.
+        let classification = if let Some(error) = error.downcast_ref::<serde_json::Error>() {
+            format!(
+                "input JSON {:?} at line {} column {}",
+                error.classify(),
+                error.line(),
+                error.column()
+            )
+        } else if let Some(error) = error.downcast_ref::<std::io::Error>() {
+            format!("input IO {:?}", error.kind())
+        } else if let Some(error) =
+            error.downcast_ref::<alien_error::AlienError<alien_client_core::ErrorData>>()
+        {
+            format!(
+                "provider code={} HTTP={:?}",
+                error.code, error.http_status_code
+            )
+        } else if error.to_string() == "Provider returned no measurements" {
+            "provider returned no measurements for this window".into()
+        } else {
+            "request or input failure".into()
+        };
+        eprintln!(
+            "Collection failed ({classification}); no successful measurement proof was produced"
+        );
         std::process::exit(1);
     }
 }
