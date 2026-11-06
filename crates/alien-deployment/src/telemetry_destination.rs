@@ -118,17 +118,23 @@ pub fn resolve(
         .ok_or_else(|| failure("Telemetry destination hostname is required"))?;
     if matches!(
         host,
-        "metadata.google.internal" | "metadata.google" | "169.254.169.254" | "169.254.170.2"
+        "metadata.google.internal"
+            | "metadata.google"
+            | "169.254.169.254"
+            | "169.254.170.2"
+            | "168.63.129.16"
+            | "100.100.100.200"
     ) {
         return Err(failure("Cloud metadata cannot be a telemetry destination"));
     }
-    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+    if let Ok(ip) = host.trim_matches(['[', ']']).parse::<std::net::IpAddr>() {
         let denied = match ip {
             std::net::IpAddr::V4(ip) => {
                 ip.is_link_local() || ip.is_unspecified() || ip.is_multicast()
             }
             std::net::IpAddr::V6(ip) => {
-                ip.is_unicast_link_local()
+                matches!(ip.to_string().as_str(), "fd00:ec2::254" | "fd20:ce::254")
+                    || ip.is_unicast_link_local()
                     || ip.is_unspecified()
                     || ip.is_multicast()
                     || ip.to_ipv4_mapped().is_some_and(|ip| ip.is_link_local())

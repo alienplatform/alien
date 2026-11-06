@@ -393,7 +393,10 @@ fn forbidden_address(address: &IpAddr) -> bool {
                 || matches!(address.octets(), [168, 63, 129, 16] | [100, 100, 100, 200])
         }
         IpAddr::V6(address) => {
-            address
+            matches!(
+                address.to_string().as_str(),
+                "fd00:ec2::254" | "fd20:ce::254"
+            ) || address
                 .to_ipv4_mapped()
                 .is_some_and(|address| forbidden_address(&IpAddr::V4(address)))
                 || address.is_unicast_link_local()
@@ -500,6 +503,8 @@ mod tests {
             "168.63.129.16",
             "100.100.100.200",
             "fe80::1",
+            "fd00:ec2::254",
+            "fd20:ce::254",
         ] {
             assert!(forbidden_address(&value.parse().unwrap()), "{value}");
         }
