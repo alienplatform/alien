@@ -1,5 +1,6 @@
 pub mod error;
 pub mod request_utils;
+pub mod otlp_retention;
 
 // Re-export commonly used types for convenience
 pub use error::{Error, ErrorData, Result};

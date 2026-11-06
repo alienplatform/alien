@@ -86,7 +86,7 @@ pub struct AirgappedReportMetadata {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeMetadata {
-    /// Fully acknowledged metric intervals, durably persisted by the deployment lease owner.
+    /// Handled metric intervals, durably persisted with any retention-loss receipts.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub metrics_checkpoints: std::collections::BTreeMap<String, super::MetricsCollectionCheckpoint>,
     /// Per-source collection status; errors never masquerade as fresh empty metrics.
@@ -96,6 +96,9 @@ pub struct RuntimeMetadata {
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub metrics_collection_attempts:
         std::collections::BTreeMap<String, chrono::DateTime<chrono::Utc>>,
+    /// Most recent 100 durable metric loss receipts; retained across later successful exports.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub metrics_collection_gaps: Vec<super::MetricsCollectionGap>,
     /// User-authorized data disposition, persisted before deletion starts.
     #[serde(default)]
     pub deletion_policy: DeletionPolicy,

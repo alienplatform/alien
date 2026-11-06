@@ -189,8 +189,14 @@ pub async fn collect_and_checkpoint(
                     )
                     .await;
                 }
+                pending.push(PendingJob {
+                    id: job.id.clone(),
+                    resource_id: job.resource_id.clone(),
+                    source_hash,
+                    end,
+                    timestamps: point_timestamps(&request),
+                });
                 export.resource_metrics.extend(request.resource_metrics);
-                pending.push((job.id.clone(), source_hash, end));
             }
             Err(error) => {
                 metadata
@@ -227,9 +233,41 @@ pub async fn collect_and_checkpoint(
     Ok(())
 }
 
+struct PendingJob {
+    id: String,
+    resource_id: String,
+    source_hash: String,
+    end: chrono::DateTime<Utc>,
+    timestamps: Vec<u64>,
+}
+
+fn point_timestamps(request: &ExportMetricsServiceRequest) -> Vec<u64> {
+    use opentelemetry_proto::tonic::metrics::v1::metric::Data;
+    request
+        .resource_metrics
+        .iter()
+        .flat_map(|r| &r.scope_metrics)
+        .flat_map(|s| &s.metrics)
+        .flat_map(|m| match &m.data {
+            Some(Data::Gauge(v)) => v
+                .data_points
+                .iter()
+                .map(|p| p.time_unix_nano)
+                .collect::<Vec<_>>(),
+            Some(Data::Sum(v)) => v.data_points.iter().map(|p| p.time_unix_nano).collect(),
+            Some(Data::Histogram(v)) => v.data_points.iter().map(|p| p.time_unix_nano).collect(),
+            Some(Data::ExponentialHistogram(v)) => {
+                v.data_points.iter().map(|p| p.time_unix_nano).collect()
+            }
+            Some(Data::Summary(v)) => v.data_points.iter().map(|p| p.time_unix_nano).collect(),
+            None => Vec::new(),
+        })
+        .collect()
+}
+
 async fn flush_export(
     export: &mut ExportMetricsServiceRequest,
-    pending: &mut Vec<(String, String, chrono::DateTime<Utc>)>,
+    pending: &mut Vec<PendingJob>,
     metadata: &mut alien_core::RuntimeMetadata,
     transport: &dyn DeploymentLoopTransport,
     deployment_id: &str,
@@ -254,27 +292,87 @@ async fn flush_export(
             message: error.message.clone(),
         })),
     };
-    for (id, source_hash, collected_through) in pending.drain(..) {
-        match &result {
-            Ok(()) => {
-                metadata.metrics_checkpoints.insert(
-                    id.clone(),
-                    MetricsCollectionCheckpoint {
-                        source_hash,
-                        collected_through,
-                    },
-                );
-                metadata.metrics_collection_errors.remove(&id);
+    let loss = result
+        .as_ref()
+        .err()
+        .and_then(alien_client_core::otlp_retention::RetentionLoss::from_error)
+        .filter(|loss| {
+            let expired = pending
+                .iter()
+                .flat_map(|job| &job.timestamps)
+                .filter(|time| **time < loss.cutoff_nanos)
+                .count() as u64;
+            let total = pending
+                .iter()
+                .map(|job| job.timestamps.len() as u64)
+                .sum::<u64>();
+            expired == loss.rejected_count && (loss.fresh_accepted || expired == total)
+        });
+    for job in pending.drain(..) {
+        let PendingJob {
+            id,
+            resource_id,
+            source_hash,
+            end: collected_through,
+            timestamps,
+        } = job;
+        if let Some(loss) = &loss {
+            let expired: Vec<_> = timestamps
+                .iter()
+                .copied()
+                .filter(|time| *time < loss.cutoff_nanos)
+                .collect();
+            if !expired.is_empty()
+                && !metadata
+                    .metrics_collection_gaps
+                    .iter()
+                    .any(|gap| gap.job_id == id && gap.loss_receipt == loss.loss_receipt)
+            {
+                let date = |time: u64| {
+                    chrono::DateTime::from_timestamp(
+                        (time / 1_000_000_000) as i64,
+                        (time % 1_000_000_000) as u32,
+                    )
+                };
+                if let (Some(start), Some(end)) = (
+                    date(*expired.iter().min().unwrap()),
+                    date(*expired.iter().max().unwrap()),
+                ) {
+                    metadata
+                        .metrics_collection_gaps
+                        .push(alien_core::MetricsCollectionGap {
+                            job_id: id.clone(),
+                            resource_id,
+                            source_hash: source_hash.clone(),
+                            loss_receipt: loss.loss_receipt.clone(),
+                            start,
+                            end,
+                            rejected_points: expired.len() as u64,
+                            reason: "retention-expired".into(),
+                        });
+                    if metadata.metrics_collection_gaps.len() > 100 {
+                        metadata.metrics_collection_gaps.remove(0);
+                    }
+                }
             }
-            Err(error) => {
-                metadata.metrics_collection_errors.insert(
-                    id,
-                    format!(
-                        "OTLP export not acknowledged: {}: {}",
-                        error.code, error.message
-                    ),
-                );
-            }
+        }
+        if result.is_ok() || loss.is_some() {
+            metadata.metrics_checkpoints.insert(
+                id.clone(),
+                MetricsCollectionCheckpoint {
+                    source_hash,
+                    collected_through,
+                },
+            );
+            metadata.metrics_collection_errors.remove(&id);
+        } else if let Err(error) = &result {
+            metadata.metrics_collection_errors.insert(
+                id,
+                format!(
+                    "OTLP export not acknowledged: {}: {}",
+                    error.code, error.message,
+                ),
+            );
         }
     }
     export.resource_metrics.clear();
@@ -374,20 +472,26 @@ async fn collect_source(
     }
 }
 
-pub async fn export_to_endpoint(config: &DeploymentConfig, data: Vec<u8>) -> Result<()> {
+pub async fn export_to_endpoint(
+    config: &DeploymentConfig,
+    data: Vec<u8>,
+) -> std::result::Result<(), AlienError> {
     let monitoring = config.monitoring.as_ref().ok_or_else(|| {
-        AlienError::new(failure("Metric collection requires configured OTLP export"))
+        AlienError::new(export_failure(
+            "Metric collection requires configured OTLP export",
+        ))
     })?;
-    let endpoint = monitoring
-        .metrics_endpoint
-        .as_ref()
-        .ok_or_else(|| AlienError::new(failure("Metric collection requires metrics endpoint")))?;
+    let endpoint = monitoring.metrics_endpoint.as_ref().ok_or_else(|| {
+        AlienError::new(export_failure(
+            "Metric collection requires metrics endpoint",
+        ))
+    })?;
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(30))
         .build()
         .into_alien_error()
-        .context(failure("Could not initialize OTLP export"))?;
+        .context(export_failure("Could not initialize OTLP export"))?;
     let mut request = client
         .post(endpoint)
         .header("content-type", "application/x-protobuf");
@@ -400,7 +504,7 @@ pub async fn export_to_endpoint(config: &DeploymentConfig, data: Vec<u8>) -> Res
     {
         let (key, value) = header
             .split_once('=')
-            .ok_or_else(|| AlienError::new(failure("Invalid OTLP metric auth header")))?;
+            .ok_or_else(|| AlienError::new(export_failure("Invalid OTLP metric auth header")))?;
         request = request.header(key.trim(), value.trim());
     }
     let response = request
@@ -408,9 +512,16 @@ pub async fn export_to_endpoint(config: &DeploymentConfig, data: Vec<u8>) -> Res
         .send()
         .await
         .into_alien_error()
-        .context(failure("OTLP metrics export failed"))?;
-    if !response.status().is_success() {
-        return Err(AlienError::new(failure(
+        .context(export_failure("OTLP metrics export failed"))?;
+    let status = response.status();
+    let headers = response.headers().clone();
+    if let Some(loss) =
+        alien_client_core::otlp_retention::RetentionLoss::from_response(status, &headers, None)
+    {
+        return Err(loss.into_error());
+    }
+    if !status.is_success() {
+        return Err(AlienError::new(export_failure(
             "OTLP metric endpoint did not acknowledge batch",
         )));
     }
@@ -419,16 +530,32 @@ pub async fn export_to_endpoint(config: &DeploymentConfig, data: Vec<u8>) -> Res
         .bytes()
         .await
         .into_alien_error()
-        .context(failure("Could not read OTLP acknowledgement"))?;
-    let response = <opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceResponse as prost::Message>::decode(bytes).into_alien_error().context(failure("Invalid OTLP metrics acknowledgement"))?;
+        .context(export_failure("Could not read OTLP acknowledgement"))?;
+    let response = <opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceResponse as prost::Message>::decode(bytes).into_alien_error().context(export_failure("Invalid OTLP metrics acknowledgement"))?;
+    if let Some(loss) = alien_client_core::otlp_retention::RetentionLoss::from_response(
+        status,
+        &headers,
+        response
+            .partial_success
+            .as_ref()
+            .map(|p| p.rejected_data_points),
+    ) {
+        return Err(loss.into_error());
+    }
     if response.partial_success.is_some_and(|partial| {
         partial.rejected_data_points > 0 || !partial.error_message.is_empty()
     }) {
-        return Err(AlienError::new(failure(
+        return Err(AlienError::new(export_failure(
             "OTLP endpoint partially rejected metric batch",
         )));
     }
     Ok(())
+}
+
+fn export_failure(message: &str) -> alien_error::GenericError {
+    alien_error::GenericError {
+        message: message.into(),
+    }
 }
 
 fn failure(message: &str) -> ErrorData {

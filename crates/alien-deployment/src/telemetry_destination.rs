@@ -257,7 +257,16 @@ impl ResolvedDestination {
             .context(GenericError {
                 message: "Declared OTLP destination export failed".into(),
             })?;
-        if !response.status().is_success() {
+        let status = response.status();
+        let headers = response.headers().clone();
+        if matches!(signal, Signal::Metrics) {
+            if let Some(loss) = alien_client_core::otlp_retention::RetentionLoss::from_response(
+                status, &headers, None,
+            ) {
+                return Err(loss.into_error());
+            }
+        }
+        if !status.is_success() {
             return Err(failure(
                 "Declared OTLP destination did not acknowledge export",
             ));
@@ -275,6 +284,23 @@ impl ResolvedDestination {
                 return Err(failure("Declared OTLP acknowledgement exceeds size limit"));
             }
             bytes.extend_from_slice(&chunk);
+        }
+        if matches!(signal, Signal::Metrics) {
+            let acknowledgement = ExportMetricsServiceResponse::decode(bytes.as_slice())
+                .into_alien_error()
+                .context(GenericError {
+                    message: "Invalid declared OTLP acknowledgement".into(),
+                })?;
+            if let Some(loss) = alien_client_core::otlp_retention::RetentionLoss::from_response(
+                status,
+                &headers,
+                acknowledgement
+                    .partial_success
+                    .as_ref()
+                    .map(|p| p.rejected_data_points),
+            ) {
+                return Err(loss.into_error());
+            }
         }
         let rejected = match signal {
             Signal::Metrics => {
@@ -456,5 +482,34 @@ mod tests {
             .await
             .is_err());
         mock.assert_hits_async(1).await;
+    }
+    #[tokio::test]
+    async fn durable_partial_retention_ack_is_preserved_as_a_typed_loss() {
+        let server = httpmock::MockServer::start_async().await;
+        let receipt = "b".repeat(64);
+        server.mock_async(|when, then| {
+            when.method(httpmock::Method::POST).path("/metrics");
+            then.status(200)
+                .header("x-otlp-rejection-reason", "retention-expired")
+                .header("x-otlp-loss-receipt", &receipt)
+                .header("x-otlp-retention-cutoff-nanos", "123")
+                .header("x-otlp-rejected-count", "2")
+                .header("x-otlp-accepted-receipt", "fresh-durable-receipt")
+                .body(ExportMetricsServiceResponse { partial_success: Some(opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsPartialSuccess { rejected_data_points: 2, error_message: "retention-expired".into() }) }.encode_to_vec());
+        }).await;
+        let mut config = destination();
+        config.allow_insecure_http = true;
+        config.endpoint = OtlpDestinationEndpoint::Url {
+            url: server.url("/metrics"),
+        };
+        let destination = resolve(&config, None, &[secret()], "deployment").unwrap();
+        let error = destination
+            .export(Signal::Metrics, Vec::new())
+            .await
+            .unwrap_err();
+        let loss = alien_client_core::otlp_retention::RetentionLoss::from_error(&error).unwrap();
+        assert!(loss.fresh_accepted);
+        assert_eq!(loss.rejected_count, 2);
+        assert_eq!(loss.loss_receipt, receipt);
     }
 }

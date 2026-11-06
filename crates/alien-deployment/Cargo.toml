@@ -7,6 +7,7 @@ license-file.workspace = true
 openapi = ["dep:utoipa"]
 
 [dependencies]
+alien-client-core = { workspace = true }
 # Core Alien crates
 alien-core = { workspace = true }
 alien-error = { workspace = true }
@@ -52,7 +53,6 @@ opentelemetry-proto = { workspace = true }
 utoipa = { version = "5", optional = true }
 
 [dev-dependencies]
-alien-client-core = { workspace = true }
 alien-local = { workspace = true }
 alien-permissions = { workspace = true }
 tokio-test = "0.4"

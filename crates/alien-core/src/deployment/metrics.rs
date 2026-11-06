@@ -116,3 +116,18 @@ pub struct MetricsCollectionCheckpoint {
     /// Last fully exported interval end. Updated only after OTLP acknowledgement.
     pub collected_through: DateTime<Utc>,
 }
+
+/// Durable evidence of source points lost to retention. Contains no metric labels or payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct MetricsCollectionGap {
+    pub job_id: String,
+    pub resource_id: String,
+    pub source_hash: String,
+    pub loss_receipt: String,
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+    pub rejected_points: u64,
+    pub reason: String,
+}

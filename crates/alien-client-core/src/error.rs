@@ -5,6 +5,22 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// A durable receipt accounts for metric points rejected by retention.
+    #[error(
+        code = "OTLP_RETENTION_LOSS",
+        message = "Metric points expired before delivery",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 410
+    )]
+    OtlpRetentionLoss {
+        loss_receipt: String,
+        cutoff_nanos: u64,
+        rejected_count: u64,
+        fresh_accepted: bool,
+        accepted_receipt: Option<String>,
+    },
+
     /// Invalid or malformed platform configuration.
     #[error(
         code = "INVALID_client_config",

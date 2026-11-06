@@ -31,6 +31,7 @@ struct DurableTransport {
     exports: Mutex<Vec<ExportMetricsServiceRequest>>,
     reject_export: AtomicBool,
     reject_checkpoint: AtomicBool,
+    retention_loss: AtomicBool,
 }
 
 #[async_trait]
@@ -42,7 +43,31 @@ impl DeploymentLoopTransport for DurableTransport {
         bytes: Vec<u8>,
     ) -> Result<(), AlienError> {
         let request = ExportMetricsServiceRequest::decode(bytes.as_slice()).unwrap();
+        let times: Vec<_> = request
+            .resource_metrics
+            .iter()
+            .flat_map(|r| &r.scope_metrics)
+            .flat_map(|s| &s.metrics)
+            .flat_map(|metric| match &metric.data {
+                Some(Data::Gauge(gauge)) => gauge
+                    .data_points
+                    .iter()
+                    .map(|p| p.time_unix_nano)
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .collect();
         self.exports.lock().unwrap().push(request);
+        if self.retention_loss.load(Ordering::SeqCst) {
+            return Err(alien_client_core::otlp_retention::RetentionLoss {
+                loss_receipt: "a".repeat(64),
+                cutoff_nanos: times[0] + 1,
+                rejected_count: times.iter().filter(|t| **t <= times[0]).count() as u64,
+                fresh_accepted: times.iter().any(|t| *t > times[0]),
+                accepted_receipt: Some("fresh-durable-receipt".into()),
+            }
+            .into_error());
+        }
         if self.reject_export.load(Ordering::SeqCst) {
             return Err(AlienError::new(GenericError {
                 message: "backend unavailable".into(),
@@ -132,6 +157,7 @@ async fn real_http_scrape_runs_in_scheduler_exports_otlp_and_restores_checkpoint
         exports: Mutex::new(Vec::new()),
         reject_export: AtomicBool::new(false),
         reject_checkpoint: AtomicBool::new(false),
+        retention_loss: AtomicBool::new(false),
     };
     let mut state = state();
     let mut config = config(&server);
@@ -212,6 +238,7 @@ async fn backend_failure_is_visible_without_advancing_checkpoint_or_failing_depl
         exports: Mutex::new(Vec::new()),
         reject_export: AtomicBool::new(true),
         reject_checkpoint: AtomicBool::new(false),
+        retention_loss: AtomicBool::new(false),
     };
     let mut state = state();
     let config = config(&server);
@@ -261,6 +288,7 @@ async fn checkpoint_failure_leaves_caller_state_unchanged_after_backend_ack() {
         exports: Mutex::new(Vec::new()),
         reject_export: AtomicBool::new(false),
         reject_checkpoint: AtomicBool::new(true),
+        retention_loss: AtomicBool::new(false),
     };
     let mut state = state();
     let before = serde_json::to_value(&state).unwrap();
@@ -322,6 +350,7 @@ async fn controller_descriptors_derive_jobs_coalesce_exports_and_survive_restart
         exports: Mutex::new(Vec::new()),
         reject_export: AtomicBool::new(false),
         reject_checkpoint: AtomicBool::new(false),
+        retention_loss: AtomicBool::new(false),
     };
     collect_and_checkpoint(
         &mut current,
@@ -410,6 +439,7 @@ async fn authored_destination_receives_scraped_metrics_without_manager_fallback(
         exports: Mutex::new(Vec::new()),
         reject_export: AtomicBool::new(true),
         reject_checkpoint: AtomicBool::new(false),
+        retention_loss: AtomicBool::new(false),
     };
     let mut state = state();
     collect_and_checkpoint(
@@ -443,6 +473,89 @@ async fn authored_destination_receives_scraped_metrics_without_manager_fallback(
             .runtime_metadata
             .unwrap()
             .metrics_checkpoints
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn durable_retention_loss_advances_only_with_persisted_gap_and_keeps_history() {
+    let server = MockServer::start_async().await;
+    server
+        .mock_async(|when, then| {
+            when.method(GET).path("/metrics");
+            then.status(200).body("# TYPE active gauge\nactive 1\n");
+        })
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let transport = DurableTransport {
+        state_file: dir.path().join("state.json"),
+        exports: Mutex::new(Vec::new()),
+        reject_export: AtomicBool::new(false),
+        reject_checkpoint: AtomicBool::new(true),
+        retention_loss: AtomicBool::new(true),
+    };
+    let mut current = state();
+    let mut cfg = config(&server);
+    let mut second = cfg.stack_settings.metrics_collection.as_ref().unwrap().jobs[0].clone();
+    second.id = "second-replica".into();
+    if let MetricsSource::Scrape(endpoint) = &mut second.source {
+        endpoint.replica_id = "replica-2".into();
+    }
+    cfg.stack_settings
+        .metrics_collection
+        .as_mut()
+        .unwrap()
+        .jobs
+        .push(second);
+    let before = serde_json::to_value(&current).unwrap();
+    assert!(collect_and_checkpoint(
+        &mut current,
+        &cfg,
+        &ClientConfig::Test,
+        "deployment",
+        &transport
+    )
+    .await
+    .is_err());
+    assert_eq!(serde_json::to_value(&current).unwrap(), before);
+    transport.reject_checkpoint.store(false, Ordering::SeqCst);
+    collect_and_checkpoint(
+        &mut current,
+        &cfg,
+        &ClientConfig::Test,
+        "deployment",
+        &transport,
+    )
+    .await
+    .unwrap();
+    let mut restored: DeploymentState =
+        serde_json::from_slice(&std::fs::read(&transport.state_file).unwrap()).unwrap();
+    let metadata = restored.runtime_metadata.as_mut().unwrap();
+    assert_eq!(metadata.metrics_checkpoints.len(), 2);
+    assert_eq!(metadata.metrics_collection_gaps.len(), 1);
+    assert_eq!(metadata.metrics_collection_gaps[0].rejected_points, 1);
+    assert_eq!(
+        metadata.metrics_collection_gaps[0].loss_receipt,
+        "a".repeat(64)
+    );
+    metadata.metrics_collection_attempts.clear();
+    metadata.metrics_checkpoints.clear();
+    transport.retention_loss.store(false, Ordering::SeqCst);
+    collect_and_checkpoint(
+        &mut restored,
+        &cfg,
+        &ClientConfig::Test,
+        "deployment",
+        &transport,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        restored
+            .runtime_metadata
+            .unwrap()
+            .metrics_collection_gaps
             .len(),
         1
     );
