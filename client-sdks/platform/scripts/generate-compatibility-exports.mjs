@@ -760,7 +760,10 @@ const externalBindingAliases = ["EndpointSecretRef", "ExternalBindingEndpoint"].
     `export { ${serializer}1ToJSON as ${serializer}ToJSON };`,
   ];
 });
-await writeFile(externalBindingUrl, `${externalBindingSource}${externalBindingMarker}${externalBindingAliases.join("\n")}\n`);
+const externalBindingOutput = externalBindingAliases.length
+  ? `${externalBindingSource.trimEnd()}${externalBindingMarker}${externalBindingAliases.join("\n")}`
+  : externalBindingSource.trimEnd();
+await writeFile(externalBindingUrl, `${externalBindingOutput}\n`);
 
 // The access-request risk enum is named `MaxRisk` once no other inline
 // `maxRisk` enum competes for the name. Preserve its published name.
