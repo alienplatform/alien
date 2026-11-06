@@ -203,6 +203,43 @@ async fn copy_blob(
     identity: &str,
     size: u64,
 ) -> Result<()> {
+    let download_client = blob_download_client_builder(scheme)
+        .build()
+        .into_alien_error()
+        .context(transfer_error("create download client"))?;
+    copy_blob_with_download_client(
+        client,
+        &download_client,
+        source,
+        target,
+        source_auth,
+        target_auth,
+        scheme,
+        identity,
+        size,
+    )
+    .await
+}
+
+fn blob_download_client_builder(scheme: &str) -> reqwest::ClientBuilder {
+    Client::builder()
+        .https_only(scheme == "https")
+        .connect_timeout(Duration::from_secs(10))
+        .read_timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::limited(3))
+}
+
+async fn copy_blob_with_download_client(
+    client: &Client,
+    download_client: &Client,
+    source: &Reference,
+    target: &Reference,
+    source_auth: &RegistryAuth,
+    target_auth: &RegistryAuth,
+    scheme: &str,
+    identity: &str,
+    size: u64,
+) -> Result<()> {
     if blob_exists(client, target, target_auth, scheme, identity, size).await? {
         return Ok(());
     }
@@ -212,13 +249,6 @@ async fn copy_blob(
         .into_alien_error()
         .context(transfer_error("create image spool"))?;
     let mut file = tokio::fs::File::from_std(file);
-    let download_client = Client::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .read_timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::limited(3))
-        .build()
-        .into_alien_error()
-        .context(transfer_error("create download client"))?;
     let response = successful(
         send(
             authenticate(
@@ -673,6 +703,190 @@ mod tests {
             axum::serve(listener, app).await.unwrap();
         });
         (registry, address.to_string(), task)
+    }
+
+    fn tls_server(app: Router) -> (String, reqwest::Certificate, tokio::task::JoinHandle<()>) {
+        let certificate = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+        let server_config = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![certificate.cert.der().clone()],
+            rustls::pki_types::PrivatePkcs8KeyDer::from(certificate.key_pair.serialize_der())
+                .into(),
+        )
+        .unwrap();
+        let tls = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(server_config));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let host = listener.local_addr().unwrap().to_string();
+        let task = tokio::spawn(async move {
+            axum_server::from_tcp_rustls(listener, tls)
+                .unwrap()
+                .serve(app.into_make_service())
+                .await
+                .unwrap();
+        });
+        let trust = reqwest::Certificate::from_pem(certificate.cert.pem().as_bytes()).unwrap();
+        (host, trust, task)
+    }
+
+    async fn redirected_blob_copy(receiver_https: bool) {
+        let bytes = b"verified redirected image layer";
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let receiver = Router::new().fallback(any({
+            let received = received.clone();
+            move |request: Request| {
+                let received = received.clone();
+                async move {
+                    received.lock().unwrap().push(request.headers().clone());
+                    Response::new(Body::from(bytes.as_slice()))
+                }
+            }
+        }));
+        let (receiver_host, receiver_trust, receiver_task) = if receiver_https {
+            let (host, trust, task) = tls_server(receiver);
+            (host, Some(trust), task)
+        } else {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let host = listener.local_addr().unwrap().to_string();
+            let task = tokio::spawn(async move {
+                axum::serve(listener, receiver).await.unwrap();
+            });
+            (host, None, task)
+        };
+        let redirect_url = format!(
+            "{}://{receiver_host}/object",
+            if receiver_https { "https" } else { "http" }
+        );
+        let writes: Arc<Mutex<Vec<(axum::http::Method, Vec<u8>)>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let source_requests = Arc::new(Mutex::new(Vec::new()));
+        let registry_app = Router::new().fallback(any({
+            let writes = writes.clone();
+            let source_requests = source_requests.clone();
+            move |request: Request| {
+                let writes = writes.clone();
+                let source_requests = source_requests.clone();
+                let redirect_url = redirect_url.clone();
+                async move {
+                    if request.method() == "HEAD" {
+                        if writes
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .any(|(method, _)| method == "PUT")
+                        {
+                            return Response::builder()
+                                .header("Content-Length", bytes.len())
+                                .header("Docker-Content-Digest", digest(bytes))
+                                .body(Body::empty())
+                                .unwrap();
+                        }
+                        return Response::builder().status(404).body(Body::empty()).unwrap();
+                    }
+                    if request.method() == "GET" {
+                        source_requests
+                            .lock()
+                            .unwrap()
+                            .push(request.headers().clone());
+                        return Response::builder()
+                            .status(307)
+                            .header("Location", redirect_url)
+                            .body(Body::empty())
+                            .unwrap();
+                    }
+                    let method = request.method().clone();
+                    let body = to_bytes(request.into_body(), 1024).await.unwrap();
+                    writes.lock().unwrap().push((method.clone(), body.to_vec()));
+                    if method == "POST" {
+                        Response::builder()
+                            .status(202)
+                            .header("Location", "/v2/target/blobs/uploads/session")
+                            .body(Body::empty())
+                            .unwrap()
+                    } else {
+                        Response::builder().status(201).body(Body::empty()).unwrap()
+                    }
+                }
+            }
+        }));
+        let (registry_host, registry_trust, registry_task) = tls_server(registry_app);
+        let control_client = Client::builder()
+            .add_root_certificate(registry_trust.clone())
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let mut download_builder =
+            blob_download_client_builder("https").add_root_certificate(registry_trust);
+        if let Some(trust) = receiver_trust {
+            download_builder = download_builder.add_root_certificate(trust);
+        }
+        let download_client = download_builder.build().unwrap();
+        let identity = digest(bytes);
+        let source = format!("{registry_host}/source@{identity}")
+            .parse()
+            .unwrap();
+        let target = format!("{registry_host}/target@{identity}")
+            .parse()
+            .unwrap();
+        let result = copy_blob_with_download_client(
+            &control_client,
+            &download_client,
+            &source,
+            &target,
+            &RegistryAuth::Bearer("source-only-token".into()),
+            &RegistryAuth::Bearer("target-only-token".into()),
+            "https",
+            &identity,
+            bytes.len() as u64,
+        )
+        .await;
+        let requests = source_requests.lock().unwrap();
+        assert_eq!(requests.len(), 1, "must reach the trusted source over TLS");
+        assert_eq!(
+            requests[0][header::AUTHORIZATION],
+            "Bearer source-only-token"
+        );
+        let received = received.lock().unwrap();
+        let writes = writes.lock().unwrap();
+        if receiver_https {
+            result.unwrap();
+            assert_eq!(received.len(), 1);
+            assert!(!received[0].contains_key(header::AUTHORIZATION));
+            assert_eq!(writes.len(), 2);
+            assert_eq!(writes[0].0, "POST");
+            assert_eq!(writes[1].0, "PUT");
+            assert_eq!(writes[1].1, bytes);
+        } else {
+            assert!(
+                result.is_err(),
+                "HTTPS redirects must never downgrade to HTTP"
+            );
+            assert!(
+                received.is_empty(),
+                "the HTTP receiver must get no request or credentials"
+            );
+            assert!(
+                writes.is_empty(),
+                "downgraded downloads must not start destination uploads"
+            );
+        }
+        registry_task.abort();
+        receiver_task.abort();
+    }
+
+    #[tokio::test]
+    async fn blob_download_refuses_https_to_http_redirect_before_upload() {
+        redirected_blob_copy(false).await;
+    }
+
+    #[tokio::test]
+    async fn blob_download_follows_https_object_store_redirect_without_registry_credentials() {
+        redirected_blob_copy(true).await;
     }
 
     #[tokio::test]
