@@ -40,6 +40,14 @@ Publishing first verifies that the merged commit has the qualified Git tree and
 that every stored checksum and image digest still matches. It then promotes
 those artifacts without rebuilding them.
 
+The verifier image is also copied, with its digest unchanged, to ECR in the
+machine-image publisher account (Lambda pulls only from ECR in its own region,
+so publishing waits until ECR has replicated it to every region) and to
+Artifact Registry (for Cloud Run). This needs the repository variables
+`VERIFIER_IMAGE_AWS_REPOSITORY`, `VERIFIER_IMAGE_GCP_REPOSITORY`,
+`VERIFIER_IMAGE_GCP_WIF_PROVIDER` and `VERIFIER_IMAGE_GCP_SERVICE_ACCOUNT`,
+and the `alien-verifier-publisher` role in the publisher account.
+
 Each destination is resumable:
 
 - an absent package or object is published;

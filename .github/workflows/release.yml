@@ -2405,7 +2405,8 @@ jobs:
     needs: prepare
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
     runs-on: depot-ubuntu-24.04-arm
-    timeout-minutes: 10
+    # Includes waiting up to 10 minutes for ECR to replicate the verifier image.
+    timeout-minutes: 25
     steps:
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -2481,9 +2482,45 @@ jobs:
           path: enforcer-digests.json
           if-no-files-found: error
 
+      # The checkout below cleans the workspace, so keep the verifier digest for
+      # the copy that runs after it.
+      - name: Read the verifier digest
+        id: verifier_digest
+        run: echo "digest=$(jq -r '.images["alien-verifier"]' qualification/qualified-image-digests.json)" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.qualification_head_sha }}
+
+      # Protected installs run the verifier from the machine-image publisher's
+      # registries, named by digest: Lambda pulls only from ECR in its own
+      # region and Cloud Run only from Artifact Registry. Container Apps pull
+      # the ghcr.io image above.
+      - uses: imjasonh/setup-crane@v0.4
+
+      - name: Configure AWS credentials (verifier publisher)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.MACHINE_IMAGE_PUBLISHER_AWS_ACCOUNT }}:role/alien-verifier-publisher
+          aws-region: us-east-1
+
+      - name: Authenticate to Google Cloud (verifier publisher)
+        id: gcp_verifier
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.VERIFIER_IMAGE_GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.VERIFIER_IMAGE_GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Copy the verifier image to ECR and Artifact Registry
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          VERIFIER_IMAGE_AWS_ACCOUNT: ${{ vars.MACHINE_IMAGE_PUBLISHER_AWS_ACCOUNT }}
+          VERIFIER_IMAGE_AWS_REPOSITORY: ${{ vars.VERIFIER_IMAGE_AWS_REPOSITORY }}
+          VERIFIER_IMAGE_GCP_REPOSITORY: ${{ vars.VERIFIER_IMAGE_GCP_REPOSITORY }}
+          GCP_ACCESS_TOKEN: ${{ steps.gcp_verifier.outputs.access_token }}
+        run: |
+          scripts/publish-verifier-image.sh "${{ steps.verifier_digest.outputs.digest }}" "$VERSION"
 
       - uses: azure/setup-helm@v5
 
