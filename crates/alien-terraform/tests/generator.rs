@@ -9,6 +9,7 @@
 mod generator {
     pub mod helpers;
     pub mod network_inputs_tests;
+    pub mod protected_registration_tests;
     pub mod remote_kv_tests;
     pub mod remote_queue_tests;
 

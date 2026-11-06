@@ -1282,4 +1282,385 @@ mod tests {
             "the malformed array should fail explicitly: {error:?}"
         );
     }
+
+    mod terraform {
+        //! `register --import terraform` against each protected module as rendered for a
+        //! release: the outputs it declares, with the values `terraform output -json`
+        //! prints for them, read through a stand-in `terraform` command.
+
+        use std::os::unix::fs::PermissionsExt as _;
+
+        use super::super::*;
+        use crate::commands::verify_terraform::tests::{module, stack};
+        use crate::commands::verify_terraform::ModuleCloud;
+
+        /// What a module carries besides the providers the clouds publish.
+        const PUBLIC_PROVIDERS: &[&str] = &["hashicorp/", "Azure/azapi"];
+
+        fn module_files(bytes: &[u8]) -> std::collections::BTreeMap<String, String> {
+            serde_json::from_slice(bytes).expect("module file map")
+        }
+
+        /// Every provider source the module requires.
+        fn provider_sources(files: &std::collections::BTreeMap<String, String>) -> Vec<String> {
+            let versions: hcl::Body = hcl::from_str(&files["versions.tf"]).expect("versions.tf");
+            let mut sources = Vec::new();
+            for terraform in versions.blocks().filter(|b| b.identifier() == "terraform") {
+                for providers in terraform
+                    .body()
+                    .blocks()
+                    .filter(|b| b.identifier() == "required_providers")
+                {
+                    for attribute in providers.body().attributes() {
+                        let hcl::Expression::Object(object) = attribute.expr() else {
+                            panic!("provider {} is not an object", attribute.key());
+                        };
+                        let source = object
+                            .iter()
+                            .find(|(key, _)| key.to_string().trim_matches('"') == "source")
+                            .map(|(_, value)| value.to_string())
+                            .unwrap_or_else(|| {
+                                panic!("provider {} has no source", attribute.key())
+                            });
+                        sources.push(source.trim_matches('"').to_string());
+                    }
+                }
+            }
+            sources
+        }
+
+        /// Output name to its expression, from `outputs.tf`.
+        fn declared_outputs(
+            files: &std::collections::BTreeMap<String, String>,
+        ) -> std::collections::BTreeMap<String, hcl::Expression> {
+            let outputs: hcl::Body = hcl::from_str(&files["outputs.tf"]).expect("outputs.tf");
+            outputs
+                .blocks()
+                .filter(|block| block.identifier() == "output")
+                .map(|block| {
+                    let name = block.labels()[0].as_str().to_string();
+                    let value = block
+                        .body()
+                        .attributes()
+                        .find(|attribute| attribute.key() == "value")
+                        .expect("output value")
+                        .expr()
+                        .clone();
+                    (name, value)
+                })
+                .collect()
+        }
+
+        fn literal(expression: &hcl::Expression) -> JsonValue {
+            match expression {
+                hcl::Expression::String(text) => JsonValue::String(text.clone()),
+                hcl::Expression::Number(number) => {
+                    serde_json::from_str(&number.to_string()).expect("number")
+                }
+                other => panic!("expected a literal, got {other:?}"),
+            }
+        }
+
+        /// What `terraform output -json` prints after apply: the module's literals as
+        /// written, the computed values as each cloud resolves them.
+        fn recorded_outputs(
+            cloud: ModuleCloud,
+            declared: &std::collections::BTreeMap<String, hcl::Expression>,
+        ) -> JsonValue {
+            let settings = serde_json::json!({
+                "setupManagement": "manual",
+                "signing": {
+                    "fingerprint": crate::commands::verify::tests::fingerprint(),
+                    "channel": "production"
+                }
+            });
+            let (region, management, resources) = match cloud {
+                ModuleCloud::Aws => (
+                    "us-east-1",
+                    serde_json::json!({ "platform": "aws", "managingRoleArn": "arn:aws:iam::111122223333:role/manager" }),
+                    serde_json::json!([{ "id": "assets", "type": "storage", "importData": { "bucketName": "acme-prod-assets" } }]),
+                ),
+                ModuleCloud::Gcp => (
+                    "us-central1",
+                    serde_json::json!({ "platform": "gcp", "serviceAccountEmail": "manager@example-project.iam.gserviceaccount.com" }),
+                    serde_json::json!([{ "id": "assets", "type": "storage", "importData": { "bucketName": "acme-prod-assets" } }]),
+                ),
+                ModuleCloud::Azure => (
+                    "eastus",
+                    serde_json::json!({ "platform": "azure", "managingTenantId": "00000000-0000-0000-0000-000000000001", "oidcIssuer": "https://issuer.example", "oidcSubject": "manager" }),
+                    serde_json::json!([{ "id": "assets", "type": "storage", "importData": { "storageAccountName": "acmeprodassets", "containerName": "assets" } }]),
+                ),
+            };
+            let mut outputs = serde_json::Map::new();
+            for (name, expression) in declared {
+                let value = match name.as_str() {
+                    "deployment_name" => JsonValue::from("acme-prod"),
+                    "deployment_resource_prefix" => JsonValue::from("acme-prod"),
+                    "deployment_platform" => JsonValue::from(cloud.platform()),
+                    "deployment_region" => JsonValue::from(region),
+                    "deployment_management_config" => JsonValue::from(management.to_string()),
+                    "deployment_stack_settings" => JsonValue::from(settings.to_string()),
+                    "deployment_resources" => JsonValue::from(resources.to_string()),
+                    "deployment_signing_vault" => JsonValue::from("acme-prod-signin-a1b2c3"),
+                    _ => match expression {
+                        hcl::Expression::String(_) | hcl::Expression::Number(_) => {
+                            literal(expression)
+                        }
+                        _ => JsonValue::from("computed"),
+                    },
+                };
+                outputs.insert(
+                    name.clone(),
+                    serde_json::json!({ "sensitive": false, "type": "string", "value": value }),
+                );
+            }
+            JsonValue::Object(outputs)
+        }
+
+        /// A `terraform` that prints `recorded` for `-chdir=<dir> output -json` only.
+        fn stand_in_terraform(dir: &std::path::Path, recorded: &JsonValue) -> std::path::PathBuf {
+            let recorded_path = dir.join("recorded.json");
+            std::fs::write(&recorded_path, recorded.to_string()).unwrap();
+            let script = dir.join("terraform");
+            std::fs::write(
+                &script,
+                format!(
+                    "#!/bin/sh\n[ \"$1\" = \"-chdir={}\" ] && [ \"$2\" = output ] && [ \"$3\" = -json ] && [ $# -eq 3 ] || {{ echo \"unexpected: $*\" >&2; exit 3; }}\ncat '{}'\n",
+                    dir.display(),
+                    recorded_path.display()
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            script
+        }
+
+        #[tokio::test]
+        async fn each_protected_module_registers_from_its_outputs() {
+            for cloud in [ModuleCloud::Aws, ModuleCloud::Gcp, ModuleCloud::Azure] {
+                let files = module_files(&module(cloud).await.bytes);
+
+                // No provider of the service that hosts the module: only the clouds' own, so
+                // no registration resource either (a resource needs its provider).
+                for source in provider_sources(&files) {
+                    assert!(
+                        PUBLIC_PROVIDERS
+                            .iter()
+                            .any(|public| source.starts_with(public)),
+                        "{cloud:?} module requires provider {source}"
+                    );
+                }
+
+                let declared = declared_outputs(&files);
+                assert_eq!(
+                    declared.contains_key("deployment_signing_vault"),
+                    cloud == ModuleCloud::Azure,
+                    "{cloud:?}: the signing vault output is Azure's only"
+                );
+                let dir = tempfile::tempdir().unwrap();
+                let terraform = stand_in_terraform(dir.path(), &recorded_outputs(cloud, &declared));
+                let outputs = read_terraform_outputs(terraform.to_str().unwrap(), dir.path())
+                    .expect("outputs read");
+                let request = build_import_request(
+                    &outputs,
+                    ImportSourceKind::Terraform,
+                    outputs
+                        .deployment_name
+                        .as_deref()
+                        .expect("deployment_name output"),
+                    "module",
+                    match &outputs.input_values {
+                        Some(JsonValue::Object(values)) => values.clone().into_iter().collect(),
+                        _ => HashMap::new(),
+                    },
+                )
+                .expect("request");
+
+                let (fingerprint, version) = alien_cli_common::setup_fingerprint::setup_fingerprint(
+                    &serde_json::to_value(stack()).unwrap(),
+                    cloud.platform(),
+                );
+                assert_eq!(request.setup_target, cloud.platform(), "{cloud:?}");
+                assert_eq!(request.setup_fingerprint, fingerprint, "{cloud:?}");
+                assert_eq!(request.setup_fingerprint_version, version, "{cloud:?}");
+                assert_eq!(
+                    request.setup_import_format_version,
+                    literal(&declared["deployment_setup_import_format_version"])
+                        .as_u64()
+                        .unwrap() as u32
+                );
+                assert_eq!(request.source_kind, Some(ImportSourceKind::Terraform));
+                assert_eq!(request.release_id, None);
+                assert_eq!(request.deployment_name, "acme-prod");
+                assert_eq!(request.resource_prefix, "acme-prod");
+                assert_eq!(request.platform.as_str(), cloud.platform());
+                assert_eq!(request.base_platform, None);
+                assert_eq!(
+                    request
+                        .stack_settings
+                        .signing
+                        .as_ref()
+                        .map(|s| s.channel.as_str()),
+                    Some("production")
+                );
+                assert_eq!(request.resources.len(), 1);
+                assert_eq!(request.resources[0].id, "assets");
+                assert!(request.input_values.is_empty());
+
+                let body = serialize_registration_request(
+                    &RegistrationTarget::Platform("https://api.example".to_string()),
+                    &request,
+                )
+                .unwrap();
+                let source = &body["source"];
+                assert_eq!(body["mode"], "forward");
+                assert_eq!(source["sourceKind"], "terraform");
+                assert_eq!(source["setupTarget"], cloud.platform());
+                assert_eq!(source["setupFingerprint"], fingerprint.as_str());
+                assert!(source.get("releaseId").is_none(), "{cloud:?}: {body}");
+            }
+        }
+
+        fn protected_outputs_dir() -> (tempfile::TempDir, JsonValue) {
+            let mut declared = std::collections::BTreeMap::new();
+            for name in [
+                "deployment_name",
+                "deployment_resource_prefix",
+                "deployment_platform",
+                "deployment_region",
+                "deployment_management_config",
+                "deployment_stack_settings",
+                "deployment_resources",
+            ] {
+                declared.insert(name.to_string(), hcl::Expression::Null);
+            }
+            declared.insert(
+                "deployment_setup_target".to_string(),
+                hcl::Expression::String("aws".to_string()),
+            );
+            declared.insert(
+                "deployment_setup_fingerprint".to_string(),
+                hcl::Expression::String("abc".to_string()),
+            );
+            declared.insert(
+                "deployment_setup_fingerprint_version".to_string(),
+                hcl::Expression::Number(1.into()),
+            );
+            declared.insert(
+                "deployment_setup_import_format_version".to_string(),
+                hcl::Expression::Number(1.into()),
+            );
+            (
+                tempfile::tempdir().unwrap(),
+                recorded_outputs(ModuleCloud::Aws, &declared),
+            )
+        }
+
+        fn args(dir: &std::path::Path, terraform: &std::path::Path) -> RegisterArgs {
+            RegisterArgs::parse_from([
+                "register",
+                "--import",
+                "terraform",
+                "--dir",
+                dir.to_str().unwrap(),
+                "--terraform-command",
+                terraform.to_str().unwrap(),
+                "--token",
+                "dg_test",
+                "--manager-url",
+                "http://127.0.0.1:9",
+                "--dry-run",
+            ])
+        }
+
+        #[tokio::test]
+        async fn a_dry_run_reads_the_module_and_sends_nothing() {
+            let (dir, recorded) = protected_outputs_dir();
+            let terraform = stand_in_terraform(dir.path(), &recorded);
+            register_command(args(dir.path(), &terraform), None)
+                .await
+                .expect("dry run");
+        }
+
+        #[tokio::test]
+        async fn inputs_on_the_command_line_are_refused() {
+            let (dir, recorded) = protected_outputs_dir();
+            let terraform = stand_in_terraform(dir.path(), &recorded);
+            let mut args = args(dir.path(), &terraform);
+            args.input_values = vec!["region=us-east-1".to_string()];
+            let error = register_command(args, None).await.expect_err("refused");
+            assert!(
+                error.message.contains("deployment_input_values"),
+                "{}",
+                error.message
+            );
+        }
+
+        #[tokio::test]
+        async fn a_name_other_than_the_modules_is_refused() {
+            let (dir, recorded) = protected_outputs_dir();
+            let terraform = stand_in_terraform(dir.path(), &recorded);
+            let mut args = args(dir.path(), &terraform);
+            args.name = Some("someone-else".to_string());
+            let error = register_command(args, None).await.expect_err("refused");
+            assert!(
+                error
+                    .message
+                    .contains("differs from the module's deployment_name"),
+                "{}",
+                error.message
+            );
+        }
+
+        #[tokio::test]
+        async fn a_module_without_a_setup_fingerprint_is_refused() {
+            let (dir, mut recorded) = protected_outputs_dir();
+            recorded["deployment_setup_fingerprint"]["value"] = JsonValue::from("");
+            let terraform = stand_in_terraform(dir.path(), &recorded);
+            let error = register_command(args(dir.path(), &terraform), None)
+                .await
+                .expect_err("refused");
+            assert!(
+                error
+                    .message
+                    .contains("reports no setup target or fingerprint"),
+                "{}",
+                error.message
+            );
+        }
+
+        #[tokio::test]
+        async fn outputs_of_another_root_module_are_refused() {
+            let (dir, mut recorded) = protected_outputs_dir();
+            recorded
+                .as_object_mut()
+                .unwrap()
+                .remove("deployment_resource_prefix");
+            let terraform = stand_in_terraform(dir.path(), &recorded);
+            let error = register_command(args(dir.path(), &terraform), None)
+                .await
+                .expect_err("refused");
+            assert!(
+                error.message.contains("no deployment_resource_prefix"),
+                "{}",
+                error.message
+            );
+        }
+
+        #[tokio::test]
+        async fn a_failing_terraform_fails_the_registration() {
+            let dir = tempfile::tempdir().unwrap();
+            let script = dir.path().join("terraform");
+            std::fs::write(&script, "#!/bin/sh\necho 'No outputs found' >&2\nexit 1\n").unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let error = register_command(args(dir.path(), &script), None)
+                .await
+                .expect_err("refused");
+            assert!(
+                error.message.contains("No outputs found"),
+                "{}",
+                error.message
+            );
+        }
+    }
 }

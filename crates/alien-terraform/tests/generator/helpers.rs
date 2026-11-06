@@ -163,7 +163,14 @@ pub fn render_with_registry(
         stack,
         target,
         TerraformOptions {
-            setup_identity: None,
+            // Protected modules report which setup they are; the value doesn't matter here.
+            setup_identity: settings.signing.as_ref().map(|_| {
+                alien_terraform::TerraformSetupIdentity {
+                    setup_target: target.cloud_platform().as_str().to_string(),
+                    setup_fingerprint: "test-fingerprint".to_string(),
+                    setup_fingerprint_version: 1,
+                }
+            }),
             pins: test_pins(),
             display_name: None,
             registry,

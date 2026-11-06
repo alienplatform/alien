@@ -13,7 +13,7 @@ use alien_signing::{Kind, ReleaseBody, SignedStatement};
 
 const PREFIX: &str = "acme-prod";
 
-fn stack() -> Stack {
+pub(crate) fn stack() -> Stack {
     serde_json::from_value(serde_json::json!({
         "id": "app",
         "resources": {
@@ -30,7 +30,7 @@ fn stack() -> Stack {
     .unwrap()
 }
 
-async fn module(cloud: ModuleCloud) -> RenderedSetupTemplate {
+pub(crate) async fn module(cloud: ModuleCloud) -> RenderedSetupTemplate {
     let signing = StackSigning {
         fingerprint: fingerprint(),
         channel: "production".to_string(),

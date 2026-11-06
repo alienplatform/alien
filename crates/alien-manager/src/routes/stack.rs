@@ -202,13 +202,51 @@ pub async fn stack_import(
         Err(error) => return error.into_response(),
     };
 
-    let release = match req.release_id.as_deref() {
-        Some(release_id) => match state.release_store.get_release(&subject, release_id).await {
-            Ok(Some(r)) => r,
-            Ok(None) => return ErrorData::not_found_release(release_id).into_response(),
-            Err(e) => return e.into_response(),
-        },
-        None => match state.release_store.get_latest_release(&subject).await {
+    let protected_channel = req
+        .stack_settings
+        .signing
+        .as_ref()
+        .map(|signing| signing.channel.clone());
+    let release = match (req.release_id.as_deref(), protected_channel) {
+        (Some(release_id), _) => {
+            match state.release_store.get_release(&subject, release_id).await {
+                Ok(Some(r)) => r,
+                Ok(None) => return ErrorData::not_found_release(release_id).into_response(),
+                Err(e) => return e.into_response(),
+            }
+        }
+        // A protected setup is signed before its release exists, so it names none: it
+        // installs the release signed for its channel whose stack it was rendered from,
+        // never whatever is newest.
+        (None, Some(channel)) => {
+            let query = crate::traits::ProtectedSetupQuery {
+                platform: req.platform,
+                channel,
+                setup_target: req.setup_target.clone(),
+                setup_fingerprint: req.setup_fingerprint.clone(),
+                setup_fingerprint_version: req.setup_fingerprint_version,
+            };
+            match state
+                .release_store
+                .get_release_for_protected_setup(&subject, &query)
+                .await
+            {
+                Ok(Some(r)) => r,
+                Ok(None) => {
+                    return alien_error::AlienError::new(
+                        ErrorData::ProtectedSetupReleaseNotFound {
+                            platform: query.platform,
+                            channel: query.channel,
+                            setup_fingerprint: query.setup_fingerprint,
+                            setup_fingerprint_version: query.setup_fingerprint_version,
+                        },
+                    )
+                    .into_response();
+                }
+                Err(e) => return e.into_response(),
+            }
+        }
+        (None, None) => match state.release_store.get_latest_release(&subject).await {
             Ok(Some(r)) => r,
             Ok(None) => {
                 return ErrorData::bad_request(
