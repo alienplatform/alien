@@ -37,6 +37,7 @@ impl ResourceImporter for AwsWorkerImporter {
         };
         let controller = AwsWorkerController {
             state: AwsWorkerState::Ready,
+            applied_image_uri: None,
             arn: Some(data.function_arn),
             url: data.url,
             worker_name: Some(data.function_name),
