@@ -350,6 +350,14 @@ struct AlienSecretsConfig {
     deployer_secrets: Vec<DeployerSecretEnv>,
 }
 
+/// Protected private installs resolve declared inputs in their enforcer. The
+/// hosted reconciler must not substitute the legacy vault or read their values.
+fn install_input_custody(config: &DeploymentConfig) -> bool {
+    config.stack_settings.signing.as_ref().is_some_and(|signing| {
+        signing.private_input_custody || signing.private_machine_api_url.is_some()
+    })
+}
+
 /// Inject environment variables into stack functions and containers.
 ///
 /// For all compute resources (Workers, Containers, and Daemons):
@@ -377,14 +385,18 @@ pub fn inject_environment_variables(
     info!("Injecting environment variables into compute resources");
 
     let snapshot = &config.environment_variables;
-    let deployer_environment = deployer_secret_environment(
-        &stack.inputs,
-        &config.input_values,
-        config.stored_secret_input_ids.as_deref(),
-        &config.environment_variables.variables,
-        platform,
-        deployer_reports,
-    );
+    let deployer_environment = if install_input_custody(config) {
+        Vec::new()
+    } else {
+        deployer_secret_environment(
+            &stack.inputs,
+            &config.input_values,
+            config.stored_secret_input_ids.as_deref(),
+            &config.environment_variables.variables,
+            platform,
+            deployer_reports,
+        )
+    };
     for (resource_name, resource_entry) in &mut stack.resources {
         let resource_type = resource_entry.config.resource_type();
 
@@ -921,6 +933,11 @@ pub async fn check_deployer_secrets(
     config: &DeploymentConfig,
     platform: Platform,
 ) -> Result<Vec<DeployerSecretReport>> {
+    if install_input_custody(config) {
+        // Missing inputs are refused by the signed workload verifier. Presence
+        // cannot be inferred by a hosted role denied access to this store.
+        return Ok(Vec::new());
+    }
     let slots = deployer_secret_slots(
         &stack.inputs,
         &config.input_values,
@@ -1068,6 +1085,9 @@ pub fn deployer_secrets_blocking_start<'a>(
     platform: Platform,
     reports: &'a [DeployerSecretReport],
 ) -> Vec<&'a DeployerSecretReport> {
+    if install_input_custody(config) {
+        return Vec::new();
+    }
     let slots = deployer_secret_slots(
         &stack.inputs,
         &config.input_values,
@@ -1747,6 +1767,35 @@ mod tests {
             .allow_frozen_changes(false)
             .external_bindings(ExternalBindings::default())
             .build()
+    }
+
+    #[tokio::test]
+    async fn private_input_custody_does_not_probe_or_inject_legacy_vault_secrets() {
+        let mut stack = make_compute_stack();
+        stack.resources.shift_remove("worker");
+        stack.resources.shift_remove("agent");
+        stack.inputs = vec![serde_json::from_value(serde_json::json!({
+            "id":"apiKey", "kind":"secret", "providedBy":["deployer"],
+            "required":true, "label":"API key", "description":"Install-owned input",
+            "env":[{"name":"API_KEY","type":"plain","targetResources":["web"]}]
+        })).unwrap()];
+        let mut config = make_config(make_snapshot(&[], &[]));
+        let state = StackState::new(Platform::Aws);
+        let legacy = check_deployer_secrets(&stack, &state, &ClientConfig::Test, &config, Platform::Aws).await.unwrap();
+        assert_eq!(legacy.len(), 1);
+        assert!(!deployer_secrets_blocking_start(&stack, &config, Platform::Aws, &legacy).is_empty());
+        config.stack_settings.signing = Some(alien_core::StackSigning {
+            fingerprint: format!("SHA256:{}", "a".repeat(64)),
+            channel: "production".to_string(),
+            private_input_custody: true,
+            private_machine_api_url: None,
+        });
+        assert!(check_deployer_secrets(&stack, &state, &ClientConfig::Test, &config, Platform::Aws).await.unwrap().is_empty());
+        assert!(deployer_secrets_blocking_start(&stack, &config, Platform::Aws, &legacy).is_empty());
+        inject_environment_variables(&mut stack, &config, Platform::Aws, &legacy).unwrap();
+        let container = stack.resources["web"].config.as_container().unwrap();
+        assert!(!container.environment.contains_key(ENV_ALIEN_DEPLOYER_SECRETS));
+        assert!(!container.environment.contains_key("API_KEY"));
     }
 
     #[tokio::test]
