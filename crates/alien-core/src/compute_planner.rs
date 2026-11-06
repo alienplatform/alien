@@ -294,16 +294,19 @@ pub fn plan_compute_with_state(
                     })
                 });
         }
+        let workload_machines = group.scale.default_max_size();
         if group.generated {
             group.scale = generated_pool_scale_policy(
                 group.scale.default_min_size(),
-                group.scale.default_max_size(),
+                workload_machines + group.rolling_update_machines,
                 selected.map(ComputePoolSelection::max_size),
             );
         }
+        // Machine sizing spreads the workloads over the machines they need, not over the
+        // rolling-update machine, which sits empty between releases.
         let machines = selected
             .map(ComputePoolSelection::max_size)
-            .unwrap_or(group.scale.default_max_size())
+            .unwrap_or(workload_machines)
             .max(1);
         let mut sizing = requirements.clone();
         // A bounded fleet must fit total demand as well as its largest replica.
@@ -474,6 +477,9 @@ struct PlannedGroup {
     /// No capacity group in the source declares this pool. Its scale is the
     /// planner's recommendation, not a bound the developer chose.
     generated: bool,
+    /// Machines a generated pool's default max adds on top of its workloads, so a rolling
+    /// update has room to start a new replica before stopping the old one.
+    rolling_update_machines: u32,
 }
 
 /// Machine count up to which a setup offers choices for a pool the source does not declare.
@@ -592,6 +598,10 @@ fn collect_workload_groups(stack: &Stack) -> Result<HashMap<String, PlannedGroup
             .any(|workload| workload.requires_failure_domain);
         let min_size = default_min_machines(&requirements);
         let max_size = default_max_machines(&requirements);
+        // A replicated container's rolling update starts the new replica before it stops the
+        // old one. A stateful container replaces in place (its volume has one owner) and a
+        // daemon runs one replica per machine, so neither needs room for an extra replica.
+        let rolling_update_machines = u32::from(workloads.iter().any(|w| w.starts_before_stop));
         planned.insert(
             pool_id,
             PlannedGroup {
@@ -602,6 +612,7 @@ fn collect_workload_groups(stack: &Stack) -> Result<HashMap<String, PlannedGroup
                 requirements,
                 requires_failure_domain,
                 generated: true,
+                rolling_update_machines,
             },
         );
     }
@@ -652,6 +663,7 @@ fn merge_explicit_compute_groups(
                     requirements: explicit_requirements,
                     requires_failure_domain: false,
                     generated: false,
+                    rolling_update_machines: 0,
                 });
         }
     }
@@ -917,6 +929,8 @@ struct Workload {
     ephemeral_storage_bytes: u64,
     gpu: Option<GpuSpec>,
     requires_failure_domain: bool,
+    /// A rolling update starts a new replica before it stops an old one.
+    starts_before_stop: bool,
 }
 
 impl Workload {
@@ -962,6 +976,7 @@ impl Workload {
                 count: gpu.count,
             }),
             requires_failure_domain: container.stateful && container.persistent_storage.is_some(),
+            starts_before_stop: !container.stateful,
         })
     }
 
@@ -975,6 +990,7 @@ impl Workload {
             ephemeral_storage_bytes: 0,
             gpu: None,
             requires_failure_domain: false,
+            starts_before_stop: false,
         })
     }
 }
