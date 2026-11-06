@@ -1298,13 +1298,22 @@ async fn resolve_deployment_id(
 /// `POST /v1/debug/sessions` — request a debug session for the given deployment.
 async fn request_debug_session(
     manager: &ManagerContext,
-    request_body: CreateDebugSessionRequest,
+    mut request_body: CreateDebugSessionRequest,
 ) -> Result<DebugSessionResponse> {
-    let url = format!(
-        "{}{}",
-        manager.manager_url.trim_end_matches('/'),
+    let private_runtime = manager.manager_is_system == Some(false)
+        && matches!(
+            request_body.kind,
+            DebugSessionKind::RuntimeShell | DebugSessionKind::RuntimeExec
+        );
+    // Commands are delivered by the signed session after its challenge. A private
+    // instance must never fall back to a hosted create/attach path on an old server.
+    let path = if private_runtime {
+        request_body.command = None;
+        "/v1/debug/private-exec/sessions"
+    } else {
         DEBUG_SESSIONS_PATH
-    );
+    };
+    let url = format!("{}{}", manager.manager_url.trim_end_matches('/'), path);
 
     let response = manager
         .http_client
@@ -1331,14 +1340,57 @@ async fn request_debug_session(
         }));
     }
 
-    response
+    let session = response
         .json::<DebugSessionResponse>()
         .await
         .into_alien_error()
         .context(ErrorData::ApiRequestFailed {
             message: "Manager returned a malformed debug session response".to_string(),
             url: Some(url),
+        })?;
+    if private_runtime {
+        validate_private_exec_response(&manager.manager_url, &session)?;
+    }
+    Ok(session)
+}
+
+fn validate_private_exec_response(selected: &str, response: &DebugSessionResponse) -> Result<()> {
+    let reject = || {
+        AlienError::new(ErrorData::ApiRequestFailed {
+            message:
+                "Private runtime sessions require the selected instance's signed exec transport"
+                    .to_string(),
+            url: None,
         })
+    };
+    let DebugSessionResponse::RemoteExec(session) = response else {
+        return Err(reject());
+    };
+    let selected = url::Url::parse(selected).map_err(|_| reject())?;
+    let attach = url::Url::parse(&session.attach_url).map_err(|_| reject())?;
+    let local = matches!(
+        selected.host_str(),
+        Some("localhost" | "127.0.0.1" | "[::1]")
+    );
+    let suffix = session.session_id.strip_prefix("dbg_").ok_or_else(reject)?;
+    if suffix.len() != 28
+        || !suffix.bytes().all(|b| b.is_ascii_alphanumeric())
+        || (selected.scheme() != "https" && !(local && selected.scheme() == "http"))
+        || attach.origin() != selected.origin()
+        || !attach.username().is_empty()
+        || attach.password().is_some()
+        || attach.query().is_some()
+        || attach.fragment().is_some()
+        || attach.path()
+            != format!(
+                "/v1/debug/private-exec/sessions/{}/client",
+                session.session_id
+            )
+        || session.platform != "machines"
+    {
+        return Err(reject());
+    }
+    Ok(())
 }
 
 /// Materialize files, build the env, and execute the user command (or a shell).
@@ -1831,6 +1883,92 @@ fn shell_echo_block(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn private_exec_create_omits_argv_and_refuses_hosted_or_legacy_attach() {
+        for outcome in ["private", "hosted", "legacy", "unavailable"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let id = "dbg_1234567890123456789012345678";
+            let attach = match outcome {
+                "hosted" => format!(
+                    "https://hosted.example.test/v1/debug/private-exec/sessions/{id}/client"
+                ),
+                "legacy" => format!("{origin}/v1/exec/sessions/{id}/attach"),
+                _ => format!("{origin}/v1/debug/private-exec/sessions/{id}/client"),
+            };
+            let reply =
+                serde_json::to_string(&DebugSessionResponse::RemoteExec(RemoteExecDebugSession {
+                    session_id: id.into(),
+                    platform: "machines".into(),
+                    attach_url: attach,
+                    client_token: "fixture-session-token".into(),
+                    tty: false,
+                    expires_at: None,
+                }))
+                .unwrap();
+            let captured = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+            let requests = captured.clone();
+            let status = if outcome == "unavailable" {
+                axum::http::StatusCode::NOT_FOUND
+            } else {
+                axum::http::StatusCode::OK
+            };
+            let app = axum::Router::new().fallback(move |request: axum::extract::Request| {
+                let captured = captured.clone();
+                let reply = reply.clone();
+                async move {
+                    let path = request.uri().path().to_string();
+                    let bytes = axum::body::to_bytes(request.into_body(), 16 * 1024)
+                        .await
+                        .unwrap();
+                    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    captured.lock().await.push((path, body));
+                    (status, [("content-type", "application/json")], reply)
+                }
+            });
+            let server = tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+            let manager = ManagerContext {
+                manager_url: origin.clone(),
+                manager_name: None,
+                manager_is_system: Some(false),
+                manager_cloud: None,
+                client: alien_manager_api::Client::new(&origin),
+                http_client: reqwest::Client::new(),
+                auth_token: None,
+                repository_name: None,
+                repository_uri: None,
+                workspace: None,
+            };
+            let result = request_debug_session(
+                &manager,
+                CreateDebugSessionRequest {
+                    deployment_id: "dep_fixture".into(),
+                    kind: DebugSessionKind::RuntimeExec,
+                    resource: Some("api".into()),
+                    machine: None,
+                    command: Some(vec!["private-argv-canary".into()]),
+                    tty: Some(false),
+                    access_request_id: None,
+                },
+            )
+            .await;
+            assert_eq!(result.is_ok(), outcome == "private", "{outcome}");
+            let observed = requests.lock().await;
+            assert_eq!(
+                observed.len(),
+                1,
+                "private requests must never retry on a legacy route"
+            );
+            assert_eq!(observed[0].0, "/v1/debug/private-exec/sessions");
+            assert!(observed[0].1.get("command").is_none());
+            assert!(!observed[0].1.to_string().contains("private-argv-canary"));
+            assert_eq!(observed[0].1["deploymentId"], "dep_fixture");
+            server.abort();
+        }
+    }
 
     fn remote_exec_session(attach_url: &str, token: &str) -> RemoteExecDebugSession {
         RemoteExecDebugSession {
