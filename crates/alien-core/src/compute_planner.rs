@@ -2948,6 +2948,24 @@ mod tests {
         );
     }
 
+    /// A pool larger than the offered machine count is sized onto bigger machines, so the
+    /// offered fleet still holds it. The rolling-update machine doesn't change that.
+    #[test]
+    fn generated_pool_beyond_the_offered_fleet_is_sized_to_fit_it() {
+        let mut stack = stack_with_container();
+        stack
+            .resources
+            .get_mut("api")
+            .and_then(|entry| entry.config.downcast_mut::<Container>())
+            .expect("test stack should contain a container")
+            .replicas = Some(200);
+
+        let plan = plan_compute(&stack, Platform::Aws, None).expect("plan should build");
+        let pool = &plan.pools[0];
+        assert!(pool.errors.is_empty(), "{:?}", pool.errors);
+        assert_eq!(pool.recommended.max_size(), GENERATED_POOL_MAX_MACHINES);
+    }
+
     #[test]
     fn generated_pool_rejects_a_fleet_too_small_for_desired_replicas() {
         let mut stack = stack_with_container();
