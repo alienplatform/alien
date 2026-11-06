@@ -862,6 +862,7 @@ pub(crate) fn render_terraform_module(
             stack_settings.setup_management,
             options.registration.as_ref(),
             setup_identity.as_ref(),
+            stack_settings.signing.is_some(),
             &import_depends_on,
             terraform_input_values_expression(&stack_inputs),
         ))?,
@@ -3280,20 +3281,24 @@ fn variables_body(
             .is_some()
             .then(|| deployment_name_default.to_string()),
     )));
-    blocks.push(nested(variable_block(
-        "token",
-        if stack_settings.setup_management == alien_core::SetupManagement::Automatic {
-            AUTOMATIC_TOKEN_DESCRIPTION
-        } else {
-            "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
-        },
-        None,
-        true,
-    )));
-    blocks.push(nested(management_url_variable_block(
-        registration.is_some(),
-        setup_only,
-    )));
+    // A protected module registers through the deploy CLI after apply, which takes the token
+    // and the endpoint itself; the module never holds them.
+    if stack_settings.signing.is_none() {
+        blocks.push(nested(variable_block(
+            "token",
+            if stack_settings.setup_management == alien_core::SetupManagement::Automatic {
+                AUTOMATIC_TOKEN_DESCRIPTION
+            } else {
+                "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
+            },
+            None,
+            true,
+        )));
+        blocks.push(nested(management_url_variable_block(
+            registration.is_some(),
+            setup_only,
+        )));
+    }
     if !setup_only {
         blocks.push(nested(string_enum_variable_block(
             "deployment_model",
@@ -5223,6 +5228,7 @@ fn registration_body(
     setup_management: alien_core::SetupManagement,
     registration: Option<&TerraformRegistration>,
     setup_identity: Option<&TerraformSetupIdentity>,
+    protected: bool,
     depends_on: &[Expression],
     input_values: Expression,
 ) -> Body {
@@ -5341,7 +5347,9 @@ fn registration_body(
                 target
                     .is_kubernetes()
                     .then(|| ("basePlatform", expr::raw("local.deployment_base_platform"))),
-            ),
+            )
+            // A protected module has no token or endpoint: the deploy CLI registers it.
+            .filter(|(key, _)| !(protected && matches!(*key, "token" | "management_url"))),
         ),
     )];
     if let Some(depends_on_attr) = depends_on_attr {
@@ -6096,7 +6104,10 @@ fn readme_md(
     emits_azure_kv_tables: bool,
     profile: alien_core::SetupConfigurationProfile,
 ) -> String {
-    let required_env = if registration.is_some() {
+    let protected = stack_settings.signing.is_some();
+    let required_env = if protected {
+        format!("export TF_VAR_name=\"{}\"", stack.id())
+    } else if registration.is_some() {
         "export TF_VAR_token=\"...\"".to_string()
     } else {
         format!(
@@ -6104,13 +6115,17 @@ fn readme_md(
             stack.id()
         )
     };
-    let registration_note = registration
+    let registration_note = if protected {
+        "This module carries no registration provider. After `terraform apply`, register it from the directory you applied in with the deploy CLI:\n\n```bash\n<deploy-cli> register --import terraform --dir . --token \"...\"\n```\n\nIt reads `terraform output -json` and sends the outputs below.\n".to_string()
+    } else {
+        registration
         .map(|_| {
             "Terraform registers the deployment after the setup resources are ready. The registration step consumes `local.deployment_management_config`, `local.deployment_settings`, and `local.deployment_resources`; keep those values intact if your organization wraps this module.\n".to_string()
         })
         .unwrap_or_else(|| {
             "This module exposes `deployment_management_config`, `deployment_stack_settings`, `deployment_resources`, and (when the stack declares deployer inputs) `deployment_input_values` outputs for registration flows managed outside Terraform.\n".to_string()
-        });
+        })
+    };
 
     // An installer reads "apply succeeded" as "the package is installed". For a runtime-built
     // sandbox that is not true, and the gap is minutes long, so the note sits right under the
@@ -6149,13 +6164,18 @@ fn readme_md(
 
     let deployment_name_default = default_deployment_name(display_name, stack.id());
     let display_name = display_name.unwrap_or_else(|| stack.id());
-    let mut input_sections = vec![readme_required_inputs(
-        registration
-            .is_some()
-            .then_some(deployment_name_default.as_str()),
-        stack_settings.setup_management == alien_core::SetupManagement::Automatic,
-    )];
-    let registered = registration.is_some();
+    let mut input_sections = vec![if protected {
+        "Required:\n\n- `name`: deployment name to include in the registration metadata: lowercase letters, numbers, and single hyphens.".to_string()
+    } else {
+        readme_required_inputs(
+            registration
+                .is_some()
+                .then_some(deployment_name_default.as_str()),
+            stack_settings.setup_management == alien_core::SetupManagement::Automatic,
+        )
+    }];
+    // A protected module has no `management_url` to list.
+    let registered = registration.is_some() || protected;
     let setup_only = stack_settings.setup_management != alien_core::SetupManagement::Automatic
         && stack
             .resources
