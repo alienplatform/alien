@@ -811,13 +811,42 @@ async fn run_remote_exec_attach(
     signing: Option<crate::commands::signed_session::SessionSigning>,
 ) -> Result<()> {
     let ws_url = remote_exec_ws_url(&session)?;
-    let (socket, _) = connect_async(ws_url.as_str())
-        .await
-        .into_alien_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "Failed to dial remote exec session".to_string(),
-            url: Some(session.attach_url.clone()),
-        })?;
+    let private = url::Url::parse(&session.attach_url)
+        .is_ok_and(|url| url.path().starts_with("/v1/debug/private-exec/sessions/"));
+    if private && signing.is_none() {
+        return Err(AlienError::new(ErrorData::SigningFailed {
+            message: "Private exec requires a signed session".into(),
+        }));
+    }
+    let mut request = ws_url.as_str().into_client_request().map_err(|_| {
+        AlienError::new(ErrorData::ApiRequestFailed {
+            message: "Invalid exec attach request".into(),
+            url: None,
+        })
+    })?;
+    if request
+        .uri()
+        .path()
+        .starts_with("/v1/debug/private-exec/sessions/")
+    {
+        let mut token =
+            reqwest::header::HeaderValue::from_str(&session.client_token).map_err(|_| {
+                AlienError::new(ErrorData::ApiRequestFailed {
+                    message: "Invalid private exec session token".into(),
+                    url: None,
+                })
+            })?;
+        token.set_sensitive(true);
+        request.headers_mut().insert("x-alien-exec-session", token);
+    }
+    let (socket, _) =
+        connect_async(request)
+            .await
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to dial remote exec session".to_string(),
+                url: Some(session.attach_url.clone()),
+            })?;
     let (mut sink, mut stream) = socket.split();
 
     let _raw_guard = if session.tty && std::io::stdin().is_terminal() {
@@ -893,6 +922,9 @@ async fn run_remote_exec_attach(
                 message: "Remote exec session read failed".to_string(),
                 url: Some(session.attach_url.clone()),
             })?;
+        if first_frame && matches!(incoming, Message::Ping(_) | Message::Pong(_)) {
+            continue;
+        }
         if std::mem::take(&mut first_frame) {
             let challenge = match &incoming {
                 Message::Text(text) => crate::commands::signed_session::challenge(text),
@@ -916,6 +948,12 @@ async fn run_remote_exec_attach(
                 *channel.lock().expect("channel lock") = Some(sealed);
                 let _ = decided_tx.send(true);
                 continue;
+            }
+            if private {
+                writer.abort();
+                return Err(AlienError::new(ErrorData::SigningFailed {
+                    message: "Private exec did not provide a valid signed-session challenge".into(),
+                }));
             }
             let _ = decided_tx.send(true);
         }
@@ -1088,8 +1126,10 @@ fn remote_exec_ws_url(session: &RemoteExecDebugSession) -> Result<String> {
             url: Some(session.attach_url.clone()),
         })
     })?;
-    url.query_pairs_mut()
-        .append_pair("token", &session.client_token);
+    if !url.path().starts_with("/v1/debug/private-exec/sessions/") {
+        url.query_pairs_mut()
+            .append_pair("token", &session.client_token);
+    }
     Ok(url.to_string())
 }
 
