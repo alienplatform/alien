@@ -882,8 +882,11 @@ async fn run_remote_exec_attach(
         loop {
             let decided = *decided_rx.borrow();
             let outgoing = tokio::select! {
-                raw = raw_rx.recv() => match raw { Some(raw) => raw, None => continue },
-                _ = decided_rx.changed(), if !decided => continue,
+                raw = raw_rx.recv() => match raw { Some(raw) => raw, None => break },
+                changed = decided_rx.changed(), if !decided => {
+                    if changed.is_err() { break; }
+                    continue;
+                },
                 input = input_rx.recv(), if decided => match input {
                     Some(input) => match seal_outgoing(&writer_channel, input) {
                         Some(sealed) => sealed,
@@ -898,6 +901,15 @@ async fn run_remote_exec_attach(
         }
         let _ = sink.close().await;
     });
+    // A read/handshake error or caller cancellation must also drop the write
+    // half, including when it is blocked sending to an unresponsive peer.
+    struct AbortWriter(tokio::task::AbortHandle);
+    impl Drop for AbortWriter {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let _writer_guard = AbortWriter(writer.abort_handle());
     let mut first_frame = signing.is_some();
 
     let mut exit_code = None;
