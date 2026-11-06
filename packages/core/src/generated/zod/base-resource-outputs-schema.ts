@@ -4,13 +4,17 @@
 */
 
 import * as z from "zod";
+import { MetricsSourceSchema } from "./metrics-source-schema.js";
 import { ResourceTypeSchema } from "./resource-type-schema.js";
 
 /**
  * @description Resource outputs that can hold output data for any resource type in the Alien system. All resource outputs share a common \'type\' field with additional type-specific output properties.
  */
 export const BaseResourceOutputsSchema = z.object({
-    get "type"(){
+    get "builtinMetricSources"(){
+                return z.array(MetricsSourceSchema.describe("An explicitly approved collection source. Provider IAM authorization remains separate.")).optional()
+              },
+get "type"(){
                 return ResourceTypeSchema.describe("Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.")
               }
     }).catchall(z.any()).describe("Resource outputs that can hold output data for any resource type in the Alien system. All resource outputs share a common 'type' field with additional type-specific output properties.")

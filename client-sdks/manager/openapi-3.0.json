@@ -3486,6 +3486,45 @@
           }
         }
       },
+      "AwsMetricSource": {
+        "type": "object",
+        "required": [
+          "namespace",
+          "metricName",
+          "dimensions",
+          "statistic",
+          "periodSeconds",
+          "unit"
+        ],
+        "properties": {
+          "dimensions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "metricName": {
+            "type": "string"
+          },
+          "monotonic": {
+            "type": "boolean",
+            "description": "True only for non-negative count/byte totals; arbitrary sums may decrease."
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "periodSeconds": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "statistic": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        }
+      },
       "AwsMicrovmSandboxHeartbeatData": {
         "type": "object",
         "description": "AWS: the image a sandbox runs from, and the lifecycle state AWS reports for it.",
@@ -4770,6 +4809,47 @@
           }
         }
       },
+      "AzureMetricSource": {
+        "type": "object",
+        "required": [
+          "resourceUri",
+          "metricNamespace",
+          "metricNames",
+          "aggregation",
+          "intervalSeconds"
+        ],
+        "properties": {
+          "aggregation": {
+            "type": "string"
+          },
+          "filter": {
+            "type": "string",
+            "description": "Explicit dimension filter, for example `EntityName eq 'approved-queue'`.",
+            "nullable": true
+          },
+          "intervalSeconds": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "metricNames": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "metricNamespace": {
+            "type": "string"
+          },
+          "monotonic": {
+            "type": "boolean",
+            "description": "True for count/byte totals, false for arbitrary aggregated values."
+          },
+          "resourceUri": {
+            "type": "string"
+          }
+        }
+      },
       "AzureRemoteStackManagementHeartbeatData": {
         "type": "object",
         "required": [
@@ -5466,6 +5546,12 @@
           "type"
         ],
         "properties": {
+          "builtinMetricSources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricsSource"
+            }
+          },
           "type": {
             "$ref": "#/components/schemas/ResourceType"
           }
@@ -8870,6 +8956,31 @@
           "serviceAccountEmail": {
             "type": "string",
             "description": "Linked source account metadata; never a direct target trust grant."
+          }
+        }
+      },
+      "GcpMetricSource": {
+        "type": "object",
+        "required": [
+          "projectId",
+          "filter"
+        ],
+        "properties": {
+          "filter": {
+            "type": "string"
+          },
+          "minimumLagSeconds": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Provider visibility delay. This is independent of the collection cadence.",
+            "minimum": 0
+          },
+          "monotonic": {
+            "type": "boolean",
+            "description": "Whether numeric DELTA points are known non-negative counter increments."
+          },
+          "projectId": {
+            "type": "string"
           }
         }
       },
@@ -12930,6 +13041,138 @@
           "requests-per-second"
         ]
       },
+      "MetricsCollectionConfig": {
+        "type": "object",
+        "required": [
+          "intervalSeconds",
+          "sourceLagSeconds"
+        ],
+        "properties": {
+          "builtInResources": {
+            "type": "boolean",
+            "description": "Derive sources only from trusted deployed resource outputs; never grants IAM rights."
+          },
+          "intervalSeconds": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Poll at least this many seconds apart (minimum 60).",
+            "minimum": 0
+          },
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricsCollectionJob"
+            },
+            "description": "Explicit sources. Configuring sources never adds IAM permissions."
+          },
+          "sourceLagSeconds": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Wait for provider emission before closing an interval (at least 60 for cloud sources).",
+            "minimum": 0
+          }
+        }
+      },
+      "MetricsCollectionJob": {
+        "type": "object",
+        "required": [
+          "id",
+          "resourceId",
+          "source"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable job ID; source changes automatically invalidate its prior checkpoint."
+          },
+          "resourceId": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/MetricsSource"
+          }
+        }
+      },
+      "MetricsSource": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "config",
+              "type"
+            ],
+            "properties": {
+              "config": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AwsMetricSource"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "aws"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "config",
+              "type"
+            ],
+            "properties": {
+              "config": {
+                "$ref": "#/components/schemas/GcpMetricSource"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "gcp"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "config",
+              "type"
+            ],
+            "properties": {
+              "config": {
+                "$ref": "#/components/schemas/AzureMetricSource"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "azure"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "config",
+              "type"
+            ],
+            "properties": {
+              "config": {
+                "$ref": "#/components/schemas/ScrapeEndpoint"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "scrape"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "An explicitly approved collection source. Provider IAM authorization remains separate."
+      },
       "NetworkHeartbeatData": {
         "oneOf": [
           {
@@ -13682,6 +13925,127 @@
           "package",
           "configured"
         ]
+      },
+      "OtlpDestinationAuthentication": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "tokenEnvironmentVariable",
+              "type"
+            ],
+            "properties": {
+              "tokenEnvironmentVariable": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "bearer"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "keyEnvironmentVariable",
+              "issuer",
+              "audience",
+              "claims",
+              "type"
+            ],
+            "properties": {
+              "audience": {
+                "type": "string"
+              },
+              "claims": {
+                "type": "object",
+                "description": "Application-owned claims. Standard issuer/audience/time claims cannot be overridden.",
+                "additionalProperties": {}
+              },
+              "issuer": {
+                "type": "string"
+              },
+              "keyEnvironmentVariable": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "jwtHs256"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "OtlpDestinationEndpoint": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "url",
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "url"
+                ]
+              },
+              "url": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "resourceId",
+              "publicEndpointName",
+              "path",
+              "type"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "publicEndpointName": {
+                "type": "string"
+              },
+              "resourceId": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "resource"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "OtlpSignalDestination": {
+        "type": "object",
+        "required": [
+          "endpoint",
+          "authentication"
+        ],
+        "properties": {
+          "allowInsecureHttp": {
+            "type": "boolean",
+            "description": "HTTP must be explicitly approved, for example for a local development collector."
+          },
+          "authentication": {
+            "$ref": "#/components/schemas/OtlpDestinationAuthentication"
+          },
+          "endpoint": {
+            "$ref": "#/components/schemas/OtlpDestinationEndpoint"
+          }
+        }
       },
       "ParameterStoreVaultBinding": {
         "type": "object",
@@ -16825,6 +17189,45 @@
           }
         }
       },
+      "ScrapeEndpoint": {
+        "type": "object",
+        "required": [
+          "url",
+          "replicaId",
+          "addresses",
+          "maxResponseBytes",
+          "maxSamples",
+          "timeoutSeconds"
+        ],
+        "properties": {
+          "addresses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Replica addresses supplied by the trusted runtime resolver; DNS is never consulted."
+          },
+          "maxResponseBytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maxSamples": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "replicaId": {
+            "type": "string"
+          },
+          "timeoutSeconds": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
       "SecretManagerVaultBinding": {
         "type": "object",
         "description": "GCP Secret Manager vault binding configuration",
@@ -17475,6 +17878,15 @@
               }
             ]
           },
+          "metricsCollection": {
+            "nullable": true,
+            "description": "Explicit infrastructure metric sources. Absent disables collection and grants no new cloud access.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MetricsCollectionConfig"
+              }
+            ]
+          },
           "network": {
             "nullable": true,
             "description": "Network configuration for the stack (VPC/VNet settings).\nIf `None`, an isolated VPC with NAT is auto-created when the stack has resources\nthat require networking (e.g., containers). Set explicitly to customize:\n`UseDefault` for the provider's default network (fast, dev/test only),\n`Create` for an isolated VPC with managed NAT (production), or `ByoVpc*`\nto reference an existing customer-managed VPC.",
@@ -17509,6 +17921,15 @@
           "telemetry": {
             "$ref": "#/components/schemas/TelemetryMode",
             "description": "How telemetry (logs, metrics, traces) is handled.\n- off: No telemetry permissions\n- auto: Telemetry flows automatically (default)\n- approval-required: Telemetry waits for explicit approval"
+          },
+          "telemetryDestinations": {
+            "nullable": true,
+            "description": "Explicit destination override. An empty object clears released overrides and uses the manager defaults.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TelemetryDestinations"
+              }
+            ]
           },
           "updates": {
             "$ref": "#/components/schemas/UpdatesMode",
@@ -17991,6 +18412,35 @@
           "hash": {
             "type": "string",
             "description": "Hash identifying this exact enabled-plugin set. Compare against\n`OperationsReport.loadedBundleHash` to detect drift."
+          }
+        }
+      },
+      "TelemetryDestinations": {
+        "type": "object",
+        "properties": {
+          "logs": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OtlpSignalDestination"
+              }
+            ]
+          },
+          "metrics": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OtlpSignalDestination"
+              }
+            ]
+          },
+          "traces": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OtlpSignalDestination"
+              }
+            ]
           }
         }
       },

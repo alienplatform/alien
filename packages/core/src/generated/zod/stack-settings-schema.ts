@@ -11,8 +11,10 @@ import { EndpointAccessSchema } from "./endpoint-access-schema.js";
 import { ExternalBindingsSchema } from "./external-bindings-schema.js";
 import { HeartbeatsModeSchema } from "./heartbeats-mode-schema.js";
 import { KubernetesSettingsSchema } from "./kubernetes-settings-schema.js";
+import { MetricsCollectionConfigSchema } from "./metrics-collection-config-schema.js";
 import { NetworkSettingsSchema } from "./network-settings-schema.js";
 import { SetupManagementSchema } from "./setup-management-schema.js";
+import { TelemetryDestinationsSchema } from "./telemetry-destinations-schema.js";
 import { TelemetryModeSchema } from "./telemetry-mode-schema.js";
 import { UpdatesModeSchema } from "./updates-mode-schema.js";
 
@@ -42,6 +44,9 @@ get "heartbeats"(){
 get "kubernetes"(){
                 return z.union([KubernetesSettingsSchema, z.null()]).optional()
               },
+get "metricsCollection"(){
+                return z.union([MetricsCollectionConfigSchema, z.null()]).optional()
+              },
 get "network"(){
                 return z.union([NetworkSettingsSchema, z.null()]).optional()
               },
@@ -56,6 +61,9 @@ get "setupManagement"(){
               },
 get "telemetry"(){
                 return TelemetryModeSchema.describe("How telemetry (logs, metrics, traces) is handled.").optional()
+              },
+get "telemetryDestinations"(){
+                return z.union([TelemetryDestinationsSchema, z.null()]).optional()
               },
 get "updates"(){
                 return UpdatesModeSchema.describe("How updates are delivered to the deployment.").optional()

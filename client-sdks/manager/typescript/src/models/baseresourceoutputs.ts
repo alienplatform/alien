@@ -9,11 +9,13 @@ import {
 } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import { MetricsSource, MetricsSource$inboundSchema } from "./metricssource.js";
 
 /**
  * Resource outputs that can hold output data for any resource type in the Alien system. All resource outputs share a common 'type' field with additional type-specific output properties.
  */
 export type BaseResourceOutputs = {
+  builtinMetricSources?: Array<MetricsSource> | undefined;
   /**
    * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
    */
@@ -27,6 +29,7 @@ export const BaseResourceOutputs$inboundSchema: z.ZodType<
   unknown
 > = collectExtraKeys$(
   z.object({
+    builtinMetricSources: z.array(MetricsSource$inboundSchema).optional(),
     type: z.string(),
   }).catchall(z.any()),
   "additionalProperties",

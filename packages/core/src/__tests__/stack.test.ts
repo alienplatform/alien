@@ -7,6 +7,29 @@ import * as alien from "../index.js"
 const SHARED_IMAGE = "docker.io/library/rust:latest"
 
 describe("Stack builder validation", () => {
+  it("preserves authored telemetry destinations through generated validation and JSON serialization", () => {
+    const destinations = {
+      metrics: {
+        endpoint: {
+          type: "resource" as const,
+          resourceId: "collector",
+          publicEndpointName: "otlp",
+          path: "/v1/metrics",
+        },
+        authentication: {
+          type: "bearer" as const,
+          tokenEnvironmentVariable: "METRICS_APPEND_TOKEN",
+        },
+        allowInsecureHttp: false,
+      },
+    }
+    const built = new alien.Stack("observed").telemetryDestinations(destinations).build()
+    expect(JSON.parse(JSON.stringify(built)).telemetryDestinations).toEqual(destinations)
+    expect(new alien.Stack("default").build()).not.toHaveProperty("telemetryDestinations")
+    expect(
+      new alien.Stack("clear").telemetryDestinations({}).build().telemetryDestinations,
+    ).toEqual({})
+  })
   it("carries resource prose outside runtime configuration", () => {
     const plain = new alien.Storage("documents").build()
     const documented = new alien.Storage("documents")

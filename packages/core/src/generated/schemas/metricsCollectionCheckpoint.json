@@ -1,0 +1,1 @@
+{"type":"object","required":["sourceHash","collectedThrough"],"properties":{"collectedThrough":{"type":"string","format":"date-time","description":"Last fully exported interval end. Updated only after OTLP acknowledgement."},"sourceHash":{"type":"string"}},"x-readme-ref-name":"MetricsCollectionCheckpoint"}

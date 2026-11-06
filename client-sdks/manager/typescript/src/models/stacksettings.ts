@@ -46,6 +46,12 @@ import {
   KubernetesSettings$outboundSchema,
 } from "./kubernetessettings.js";
 import {
+  MetricsCollectionConfig,
+  MetricsCollectionConfig$inboundSchema,
+  MetricsCollectionConfig$Outbound,
+  MetricsCollectionConfig$outboundSchema,
+} from "./metricscollectionconfig.js";
+import {
   NetworkSettings,
   NetworkSettings$inboundSchema,
   NetworkSettings$Outbound,
@@ -56,6 +62,12 @@ import {
   SetupManagement$inboundSchema,
   SetupManagement$outboundSchema,
 } from "./setupmanagement.js";
+import {
+  TelemetryDestinations,
+  TelemetryDestinations$inboundSchema,
+  TelemetryDestinations$Outbound,
+  TelemetryDestinations$outboundSchema,
+} from "./telemetrydestinations.js";
 import {
   TelemetryMode,
   TelemetryMode$inboundSchema,
@@ -103,6 +115,7 @@ export type StackSettings = {
    */
   heartbeats?: HeartbeatsMode | undefined;
   kubernetes?: KubernetesSettings | null | undefined;
+  metricsCollection?: MetricsCollectionConfig | null | undefined;
   network?: NetworkSettings | null | undefined;
   /**
    * Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.
@@ -130,6 +143,7 @@ export type StackSettings = {
    * How telemetry (logs, metrics, traces) is handled.
    */
   telemetry?: TelemetryMode | undefined;
+  telemetryDestinations?: TelemetryDestinations | null | undefined;
   /**
    * How updates are delivered to the deployment.
    */
@@ -149,6 +163,8 @@ export const StackSettings$inboundSchema: z.ZodType<StackSettings, unknown> = z
     ).optional(),
     heartbeats: HeartbeatsMode$inboundSchema.optional(),
     kubernetes: z.nullable(KubernetesSettings$inboundSchema).optional(),
+    metricsCollection: z.nullable(MetricsCollectionConfig$inboundSchema)
+      .optional(),
     network: z.nullable(NetworkSettings$inboundSchema).optional(),
     publicEndpoints: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
@@ -156,6 +172,8 @@ export const StackSettings$inboundSchema: z.ZodType<StackSettings, unknown> = z
     quotaWarningOverrides: z.array(z.string()).optional(),
     setupManagement: SetupManagement$inboundSchema.optional(),
     telemetry: TelemetryMode$inboundSchema.optional(),
+    telemetryDestinations: z.nullable(TelemetryDestinations$inboundSchema)
+      .optional(),
     updates: UpdatesMode$inboundSchema.optional(),
   });
 /** @internal */
@@ -171,11 +189,13 @@ export type StackSettings$Outbound = {
     | undefined;
   heartbeats?: string | undefined;
   kubernetes?: KubernetesSettings$Outbound | null | undefined;
+  metricsCollection?: MetricsCollectionConfig$Outbound | null | undefined;
   network?: NetworkSettings$Outbound | null | undefined;
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   quotaWarningOverrides?: Array<string> | undefined;
   setupManagement?: string | undefined;
   telemetry?: string | undefined;
+  telemetryDestinations?: TelemetryDestinations$Outbound | null | undefined;
   updates?: string | undefined;
 };
 
@@ -194,6 +214,8 @@ export const StackSettings$outboundSchema: z.ZodType<
   ).optional(),
   heartbeats: HeartbeatsMode$outboundSchema.optional(),
   kubernetes: z.nullable(KubernetesSettings$outboundSchema).optional(),
+  metricsCollection: z.nullable(MetricsCollectionConfig$outboundSchema)
+    .optional(),
   network: z.nullable(NetworkSettings$outboundSchema).optional(),
   publicEndpoints: z.nullable(
     z.record(z.string(), z.record(z.string(), z.string())),
@@ -201,6 +223,8 @@ export const StackSettings$outboundSchema: z.ZodType<
   quotaWarningOverrides: z.array(z.string()).optional(),
   setupManagement: SetupManagement$outboundSchema.optional(),
   telemetry: TelemetryMode$outboundSchema.optional(),
+  telemetryDestinations: z.nullable(TelemetryDestinations$outboundSchema)
+    .optional(),
   updates: UpdatesMode$outboundSchema.optional(),
 });
 

@@ -9,6 +9,7 @@ import { PermissionsConfigSchema } from "./permissions-config-schema.js";
 import { PlatformSchema } from "./platform-schema.js";
 import { ResourceEntrySchema } from "./resource-entry-schema.js";
 import { StackInputDefinitionSchema } from "./stack-input-definition-schema.js";
+import { TelemetryDestinationsSchema } from "./telemetry-destinations-schema.js";
 
 /**
  * @description A bag of resources, unaware of any cloud.
@@ -31,6 +32,9 @@ get "permissions"(){
     }).catchall(z.lazy(() => ResourceEntrySchema)).describe("Map of resource IDs to their configurations and lifecycle settings"),
 get "supportedPlatforms"(){
                 return z.array(PlatformSchema.describe("Represents the target cloud platform.")).describe("Which platforms this stack supports. When None, all platforms are supported.").nullish()
+              },
+get "telemetryDestinations"(){
+                return z.union([TelemetryDestinationsSchema, z.null()]).optional()
               }
     }).describe("A bag of resources, unaware of any cloud.")
 

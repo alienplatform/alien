@@ -1,0 +1,1 @@
+{"type":"object","required":["deploymentId","resourceId","provider","region"],"properties":{"deploymentId":{"type":"string"},"provider":{"type":"string"},"region":{"type":"string"},"resourceId":{"type":"string"}},"x-readme-ref-name":"MetricResource"}
