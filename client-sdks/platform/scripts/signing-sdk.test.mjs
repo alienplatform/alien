@@ -19,6 +19,44 @@ const statement = {
   signatures: [{ signer: "ci-primary", sig: "MEUCIQAB+/==" }],
 };
 
+test("command result discovery sends confirmation metadata and leaves private retrieval to the caller", async () => {
+  const id = `cmd_${"a".repeat(28)}`;
+  const connection = {
+    managerUrl: "https://instance.example",
+    token: "command-scoped-test-token",
+    commandId: id,
+    operationResultContract: { kind: "json", version: 1 },
+  };
+  let requests = 0;
+  const sdk = client(async request => {
+    requests++;
+    assert.equal(request.method, "POST");
+    assert.equal(request.url, `https://sdk-test.invalid/v1/commands/${id}/connection`);
+    assert.deepEqual(await request.json(), { confirmSensitiveOutput: true });
+    return Response.json(connection);
+  });
+  assert.deepEqual(await sdk.commands.resolveResultConnection(id, { confirmSensitiveOutput: true }), connection);
+  assert.equal(requests, 1, "discovery must not fetch the private result or follow its endpoint");
+});
+
+for (const status of [403, 409, 503]) {
+  test(`command result discovery preserves structured ${status} refusal without a fallback request`, async () => {
+    const body = { code: "COMMAND_RESULT_UNAVAILABLE", message: "Selected instance cannot serve this result", retryable: status === 503, internal: false, httpStatusCode: status };
+    let requests = 0;
+    const sdk = client(async () => {
+      requests++;
+      return Response.json(body, { status });
+    });
+    await assert.rejects(sdk.commands.resolveResultConnection(`cmd_${"a".repeat(28)}`, { confirmSensitiveOutput: false }, { retries: { strategy: "none" } }), error => {
+      assert.ok(error instanceof APIError);
+      assert.equal(error.code, body.code);
+      assert.equal(error.httpStatusCode, status);
+      return true;
+    });
+    assert.equal(requests, 1);
+  });
+}
+
 test("signed statement transport preserves a verifiable device signature", async () => {
   const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
   const signature = sign("sha256", canonicalBytes, privateKey);
