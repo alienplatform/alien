@@ -2536,6 +2536,20 @@ fn gcp_verifier_blocks(
                 attr("member", member.clone()),
             ],
         ),
+        // Cloud Run lets a principal deploy an image only if it may read it, and the verifier
+        // deploys the workloads' images. Reading an image changes nothing.
+        resource_block(
+            "google_project_iam_member",
+            "signing_verifier_pulls_images",
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "role",
+                    Expression::String("roles/artifactregistry.reader".to_string()),
+                ),
+                attr("member", member.clone()),
+            ],
+        ),
         // The settings and ledger are public values; reading them needs no name condition.
         resource_block(
             "google_project_iam_member",
@@ -2649,6 +2663,10 @@ fn gcp_verifier_blocks(
                 Expression::Array(vec![
                     expr::traversal(["google_project_iam_member", "signing_verifier"]),
                     expr::traversal(["google_project_iam_member", "signing_verifier_shared"]),
+                    expr::traversal([
+                        "google_project_iam_member",
+                        "signing_verifier_pulls_images",
+                    ]),
                     expr::traversal([
                         "google_project_iam_member",
                         "signing_verifier_reads_settings",

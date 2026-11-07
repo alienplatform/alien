@@ -17,6 +17,11 @@ fn role_permissions(role: &str) -> &'static [&'static str] {
             "parametermanager.parameters.get",
             "parametermanager.parameters.list",
         ],
+        "roles/artifactregistry.reader" => &[
+            "artifactregistry.repositories.downloadArtifacts",
+            "artifactregistry.repositories.get",
+            "artifactregistry.repositories.list",
+        ],
         "roles/parametermanager.parameterVersionAdder" => &[
             "parametermanager.parameterVersions.create",
             "parametermanager.parameters.get",
@@ -27,7 +32,7 @@ fn role_permissions(role: &str) -> &'static [&'static str] {
 }
 
 #[test]
-fn the_verifier_may_list_and_read_the_settings_and_ledger_versions() {
+fn the_verifier_may_read_its_settings_ledger_and_the_images_it_deploys() {
     let stack: Stack = serde_json::from_value(serde_json::json!({
         "id": "app",
         "resources": {
@@ -65,10 +70,12 @@ fn the_verifier_may_list_and_read_the_settings_and_ledger_versions() {
             .unwrap_or_default();
         permissions.extend(role_permissions(role));
     }
-    // `parameter()` lists a parameter's versions and gets the newest with `view=FULL`.
+    // `parameter()` lists a parameter's versions and gets the newest with `view=FULL`, and
+    // Cloud Run deploys an image only for a principal that may read it.
     for needed in [
         "parametermanager.parameterVersions.list",
         "parametermanager.parameterVersions.get",
+        "artifactregistry.repositories.downloadArtifacts",
     ] {
         assert!(permissions.contains(&needed), "{needed}: {permissions:?}");
     }
