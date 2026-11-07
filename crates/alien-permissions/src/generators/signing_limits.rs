@@ -70,11 +70,15 @@ pub const AWS_BUILD_RUNS: &[&str] = &[
     "codebuild:RetryBuildBatch",
 ];
 
-/// Changing what an install's role may do, or who may assume it. Setup creates the install's
-/// roles; on a protected install management doesn't change them.
+/// Changing what an install's role may do, or who may assume it, or removing it. Setup creates
+/// the install's roles; on a protected install management doesn't change them, and can't strip a
+/// grant setup gave one (such as a machine role's read of the install's signing settings).
 pub const AWS_ROLE_POLICY_WRITES: &[&str] = &[
     "iam:PutRolePolicy",
     "iam:AttachRolePolicy",
+    "iam:DeleteRolePolicy",
+    "iam:DetachRolePolicy",
+    "iam:DeleteRole",
     "iam:UpdateAssumeRolePolicy",
     "iam:PutRolePermissionsBoundary",
     "iam:DeleteRolePermissionsBoundary",
@@ -359,6 +363,69 @@ pub fn aws_verifier_policy(prefix: &str, account: &str, region: &str, publisher:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Whether IAM pattern `pattern` (with `*` wildcards) matches `value`.
+    fn matches(pattern: &str, value: &str) -> bool {
+        match pattern.split_once('*') {
+            None => pattern.eq_ignore_ascii_case(value),
+            Some((head, rest)) => {
+                value.len() >= head.len()
+                    && value[..head.len()].eq_ignore_ascii_case(head)
+                    && (0..=value.len() - head.len())
+                        .any(|start| matches(rest, &value[head.len() + start..]))
+            }
+        }
+    }
+
+    fn strings(value: &Value) -> Vec<String> {
+        match value {
+            Value::String(text) => vec![text.clone()],
+            Value::Array(items) => items.iter().flat_map(strings).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Whether an unconditional Deny in `policy` covers `action` on `resource`.
+    fn denies(policy: &Value, action: &str, resource: &str) -> bool {
+        policy["Statement"]
+            .as_array()
+            .expect("statements")
+            .iter()
+            .any(|statement| {
+                statement["Effect"] == "Deny"
+                    && statement.get("Condition").is_none()
+                    && strings(&statement["Action"])
+                        .iter()
+                        .any(|pattern| matches(pattern, action))
+                    && strings(&statement["Resource"])
+                        .iter()
+                        .any(|pattern| matches(pattern, resource))
+            })
+    }
+
+    #[test]
+    fn management_can_neither_change_nor_strip_nor_delete_an_install_role() {
+        let limits = aws_management_limits("orders", "111122223333", "us-east-1");
+        for role in ["orders-machine", "orders-execution-sa"] {
+            let arn = format!("arn:aws:iam::111122223333:role/{role}");
+            for action in [
+                "iam:PutRolePolicy",
+                "iam:AttachRolePolicy",
+                "iam:DeleteRolePolicy",
+                "iam:DetachRolePolicy",
+                "iam:DeleteRole",
+                "iam:UpdateAssumeRolePolicy",
+            ] {
+                assert!(denies(&limits, action, &arn), "{action} on {arn}");
+            }
+        }
+        // Another install's roles are not this policy's business.
+        assert!(!denies(
+            &limits,
+            "iam:DeleteRole",
+            "arn:aws:iam::111122223333:role/billing-machine"
+        ));
+    }
 
     #[test]
     fn limits_deny_everything_the_verifier_owns() {
