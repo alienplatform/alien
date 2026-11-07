@@ -177,6 +177,19 @@ impl SandboxRoute {
         sandbox: &str,
         template: SandboxSessionConfig,
     ) -> Result<Self> {
+        Self::ensure_at(manager, sandbox, template, None).await
+    }
+
+    /// Like [`Self::ensure`], first trying to serve at `previous`, the address an earlier process
+    /// served this sandbox at. Workloads that outlive a manager restart hold that URL in their
+    /// binding, and a route on a new port would leave them calling a dead one. Falls back to a
+    /// port the OS picks when `previous` is not a loopback address or is taken.
+    pub async fn ensure_at(
+        manager: Arc<LocalSandboxManager>,
+        sandbox: &str,
+        template: SandboxSessionConfig,
+        previous: Option<&str>,
+    ) -> Result<Self> {
         let routes = ROUTES.get_or_init(|| Mutex::new(HashMap::new()));
 
         {
@@ -192,7 +205,8 @@ impl SandboxRoute {
             }
         }
 
-        let (route, template, shutdown, serving) = Self::serve(manager, sandbox, template).await?;
+        let (route, template, shutdown, serving) =
+            Self::serve(manager, sandbox, template, previous).await?;
 
         routes.lock().expect("no panic holds this lock").insert(
             sandbox.to_string(),
@@ -307,6 +321,7 @@ impl SandboxRoute {
         manager: Arc<LocalSandboxManager>,
         sandbox: &str,
         template: SandboxSessionConfig,
+        previous: Option<&str>,
     ) -> Result<(
         Self,
         Arc<Mutex<SandboxSessionConfig>>,
@@ -352,15 +367,12 @@ impl SandboxRoute {
             .route("/v1/sessions/{session_id}/preview", get(preview))
             .with_state(state);
 
-        let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
-            .await
-            .into_alien_error()
-            .map_err(|error| {
-                AlienError::new(ErrorData::SandboxSessionFailed {
-                    session_id: sandbox.to_string(),
-                    operation: format!("bind loopback route: {error}"),
-                })
-            })?;
+        let listener = bind_listener(sandbox, previous).await.map_err(|error| {
+            AlienError::new(ErrorData::SandboxSessionFailed {
+                session_id: sandbox.to_string(),
+                operation: format!("bind loopback route: {error}"),
+            })
+        })?;
 
         let address = listener.local_addr().into_alien_error().map_err(|error| {
             AlienError::new(ErrorData::SandboxSessionFailed {
@@ -390,6 +402,27 @@ impl SandboxRoute {
             serving,
         ))
     }
+}
+
+/// Binds the route's listener on loopback: at `previous` when that is a loopback address that is
+/// free, else on a port the OS picks.
+async fn bind_listener(sandbox: &str, previous: Option<&str>) -> std::io::Result<TcpListener> {
+    let previous = previous
+        .and_then(|url| url.strip_prefix("http://"))
+        .and_then(|address| address.parse::<SocketAddr>().ok())
+        .filter(|address| address.ip().is_loopback());
+    if let Some(address) = previous {
+        match TcpListener::bind(address).await {
+            Ok(listener) => return Ok(listener),
+            Err(error) => tracing::warn!(
+                sandbox,
+                %address,
+                %error,
+                "the previous route address is taken; serving on a new port"
+            ),
+        }
+    }
+    TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal")).await
 }
 
 /// Writes the token so that it is never readable by another user on the machine, not even for an
@@ -639,6 +672,27 @@ async fn terminate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A manager restart serves the route where the workloads it outlived still call it.
+    #[tokio::test]
+    async fn the_route_comes_back_at_its_previous_address_when_it_is_free() {
+        let first = bind_listener("s", None).await.expect("binds");
+        let previous = format!("http://{}", first.local_addr().unwrap());
+        drop(first);
+
+        let again = bind_listener("s", Some(&previous)).await.expect("binds");
+        assert_eq!(format!("http://{}", again.local_addr().unwrap()), previous);
+
+        // Taken: a new port rather than a failure.
+        let moved = bind_listener("s", Some(&previous)).await.expect("binds");
+        assert_ne!(format!("http://{}", moved.local_addr().unwrap()), previous);
+
+        // Only a loopback address is ever taken from state.
+        let elsewhere = bind_listener("s", Some("http://0.0.0.0:0"))
+            .await
+            .expect("binds");
+        assert!(elsewhere.local_addr().unwrap().ip().is_loopback());
+    }
 
     /// Two sandboxes in one deployment share a state directory. With a fixed file name whichever
     /// one started last owned the credential for both, and the other's binding then authenticated

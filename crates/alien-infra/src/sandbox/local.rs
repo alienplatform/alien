@@ -68,13 +68,17 @@ impl LocalSandboxController {
 
         // The session template is fixed here rather than accepted per create: a client-supplied
         // limit is a limit the client can decline to send, and this sandbox runs its code.
-        let route =
-            alien_local::SandboxRoute::ensure(manager, &config.id, session_template(&config)?)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to serve the local sandbox route".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })?;
+        let route = alien_local::SandboxRoute::ensure_at(
+            manager,
+            &config.id,
+            session_template(&config)?,
+            self.route_url.as_deref(),
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to serve the local sandbox route".to_string(),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.route_url = Some(route.base_url.clone());
         self.token_path = Some(route.token_path.display().to_string());
@@ -98,12 +102,14 @@ impl LocalSandboxController {
 
         // Re-ensured on every tick, not only at create: the route is a listener in this
         // process, so a manager restart leaves the persisted URL pointing at a dead port until
-        // something binds it again. Idempotent by sandbox id.
+        // something binds it again, at the same address when it is free, because running
+        // workloads hold that URL. Idempotent by sandbox id.
         let manager = sandbox_manager(ctx)?;
-        let route = alien_local::SandboxRoute::ensure(
+        let route = alien_local::SandboxRoute::ensure_at(
             Arc::clone(&manager),
             &config.id,
             session_template(&config)?,
+            self.route_url.as_deref(),
         )
         .await
         .context(ErrorData::CloudPlatformError {
@@ -170,13 +176,24 @@ impl LocalSandboxController {
         // restarted: a session is a unit of work someone is waiting on, not a replica. The
         // route keeps its address — the workload already holds that URL — and takes the new
         // template.
+        //
+        // The address is recorded here too: after a manager restart the update may be the first
+        // step to serve the route, and the workloads updated after it are given this binding.
         let manager = sandbox_manager(ctx)?;
-        alien_local::SandboxRoute::ensure(manager, &config.id, session_template(&config)?)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to update the local sandbox route".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let route = alien_local::SandboxRoute::ensure_at(
+            manager,
+            &config.id,
+            session_template(&config)?,
+            self.route_url.as_deref(),
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to update the local sandbox route".to_string(),
+            resource_id: Some(config.id.clone()),
+        })?;
+        self.route_url = Some(route.base_url);
+        self.token_path = Some(route.token_path.display().to_string());
+        self.egress = Some(config.into());
 
         info!(sandbox_id = %config.id, "Updated local sandbox configuration");
 
