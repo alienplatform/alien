@@ -14,7 +14,7 @@
 //!
 //! Environment: `PREFIX`, `FROM_IMAGE`, `TO_IMAGE`, `SEQUENCE` (the release's, 1 when unset),
 //! `NOT_AFTER` (RFC 3339, when the signer list expires; the same value for every command so the
-//! fingerprint matches), `PROTECTED` (`1` signs the release and sets the stack's signing) and
+//! fingerprint matches), `ACCESS` (`1` gives the worker a schedule and a reserved concurrency), `PROTECTED` (`1` signs the release and sets the stack's signing) and
 //! `CLOUD` (`aws`, the default, `gcp` or `azure`). On AWS, the credentials to run as, normally the
 //! install's management role. On GCP, `GCP_PROJECT`, `GCP_PROJECT_NUMBER`, `GCP_REGION`,
 //! `GCP_TOKEN_FILE` (an access token allowed to impersonate it) and `MANAGEMENT_SA`, the
@@ -42,7 +42,7 @@ use alien_core::{
     ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot, GcpClientConfig, GcpCredentials,
     GcpImpersonationConfig, Platform, ReleaseStatements, ResourceLifecycle, ResourceRef,
     ResourceStatus, ServiceAccount, Stack, StackSettings, StackSigning, StackState, Worker,
-    WorkerCode,
+    WorkerCode, WorkerTrigger,
 };
 use alien_infra::{
     AwsServiceAccountImporter, AwsWorkerImporter, AzureContainerAppsEnvironmentImporter,
@@ -136,13 +136,18 @@ fn settings(prefix: &str) -> Result<SigningSettings, Error> {
 /// The stack running `image`: as the vendor authors and signs it, or `deployed` with what
 /// preflights add for the platform.
 fn stack(image: &str, deployed: bool) -> Stack {
-    let worker = Worker::new(WORKER.to_string())
+    let mut worker = Worker::new(WORKER.to_string())
         .code(WorkerCode::Image {
             image: image.to_string(),
         })
         .permissions(PROFILE.to_string())
         .memory_mb(256)
         .build();
+    // Who may invoke the worker and how often: a schedule (once a year) and a reserved limit.
+    if std::env::var("ACCESS").as_deref() == Ok("1") {
+        worker.concurrency_limit = Some(2);
+        worker.triggers = vec![WorkerTrigger::schedule("0 0 1 1 *")];
+    }
     let mut stack = Stack::new("control-plane-e2e".to_string()).add(
         ServiceAccount::new(format!("{PROFILE}-sa")).build(),
         ResourceLifecycle::Frozen,

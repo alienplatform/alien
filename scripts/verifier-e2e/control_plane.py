@@ -29,6 +29,10 @@ move `api` to image B, and checks with the caller's own credentials:
      been applied (retrying it while it reports a failure, as the control plane does), the
      ledger is at 11 and the function runs 11's image, and stays there; every other call either
      applied or was refused as older or superseded, or failed and may be retried.
+  5. protected: release 12 gives the worker a schedule and a reserved concurrency of 2. The
+     update lands; management creates the schedule's rule, the verifier sets the concurrency and
+     lets that rule (and nothing else) invoke the function, and management itself is denied
+     AddPermission and PutFunctionConcurrency.
 
 Everything is named `<p>-...`, tagged with --tag, deleted at the end, and the run fails if
 anything named `<p>` is left.
@@ -173,6 +177,9 @@ class Run:
             {"Effect": "Allow", "Action": ["logs:CreateLogGroup", "logs:PutRetentionPolicy", "logs:DescribeLogGroups"],
              "Resource": "*"},
             {"Effect": "Allow", "Action": "iam:PassRole", "Resource": f"arn:aws:iam::{self.account}:role/{install}-*"},
+            {"Effect": "Allow", "Action": ["events:PutRule", "events:PutTargets", "events:TagResource",
+                                           "events:RemoveTargets", "events:DeleteRule", "events:DescribeRule"],
+             "Resource": f"arn:aws:events:{REGION}:{self.account}:rule/{install}-*"},
             {"Effect": "Allow", "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], "Resource": "*"}]}
         caller_trust = {"Version": "2012-10-17", "Statement": [
             {"Effect": "Allow", "Principal": {"AWS": f"arn:aws:iam::{self.account}:root"}, "Action": "sts:AssumeRole"}]}
@@ -305,6 +312,38 @@ class Run:
                     f"outcomes={outcomes} retries-of-11={retries} ledger-release={ledger.get('release')} "
                     f"image={image.rsplit('@', 1)[-1][:19]} 20s-later={later.rsplit('@', 1)[-1][:19]}")
 
+    def access(self):
+        install = f"{self.prefix}-p"
+        management = self.management_env(install)
+        rule = f"{install}-api-cron-0"
+        self.created.append(("rule", rule))
+        update = {**management, "FROM_IMAGE": self.images["a"], "TO_IMAGE": self.images["a"], "PROTECTED": "1",
+                  "SEQUENCE": "12", "ACCESS": "1"}
+        result = self.driver("update", install, update, check=False)
+        outcome = json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {}
+        function = aws_json("lambda", "get-function", "--function-name", f"{install}-api", check=False)
+        reserved = function.get("Concurrency", {}).get("ReservedConcurrentExecutions")
+        policy = aws_json("lambda", "get-policy", "--function-name", f"{install}-api", check=False)
+        statements = json.loads(policy.get("Policy", "{}")).get("Statement", [])
+        (self.evidence / "access-policy.json").write_text(json.dumps(statements, indent=2))
+        rule_arn = f"arn:aws:events:{REGION}:{self.account}:rule/{rule}"
+        expected = [{"Sid": f"{install}-api-eb-0", "Principal": {"Service": "events.amazonaws.com"},
+                     "Condition": {"ArnLike": {"AWS:SourceArn": rule_arn}}}]
+        granted = [{key: statement.get(key) for key in ("Sid", "Principal", "Condition")} for statement in statements]
+        rule_exists = aws("events", "describe-rule", "--name", rule, check=False).returncode == 0
+        self.record("5 protected: the verifier sets the signed concurrency and lets only the schedule's rule invoke",
+                    result.returncode == 0 and outcome.get("outcome") == "synced" and reserved == 2
+                    and granted == expected and rule_exists,
+                    f"driver={json.dumps(outcome)[:300]} reserved={reserved} granted={granted} rule={rule_exists}")
+        grant = aws("lambda", "add-permission", "--function-name", f"{install}-api", "--statement-id", "anyone",
+                    "--action", "lambda:InvokeFunction", "--principal", "*", check=False,
+                    env={**os.environ, **management})
+        limit = aws("lambda", "put-function-concurrency", "--function-name", f"{install}-api",
+                    "--reserved-concurrent-executions", "0", check=False, env={**os.environ, **management})
+        self.record("5 protected: management itself may not AddPermission or PutFunctionConcurrency",
+                    all(r.returncode != 0 and "explicit deny" in r.stderr for r in (grant, limit)),
+                    f"add-permission={grant.stderr.strip()[:200]} put-function-concurrency={limit.stderr.strip()[:200]}")
+
     def unprotected(self):
         install = f"{self.prefix}-u"
         update = {**self.management_env(install), "FROM_IMAGE": self.images["a"], "TO_IMAGE": self.images["b"],
@@ -324,6 +363,9 @@ class Run:
         for kind, name in reversed(self.created):
             if kind == "function":
                 aws("lambda", "delete-function", "--function-name", name, check=False)
+            elif kind == "rule":
+                aws("events", "remove-targets", "--rule", name, "--ids", "1", check=False)
+                aws("events", "delete-rule", "--name", name, check=False)
             elif kind == "log-group":
                 aws("logs", "delete-log-group", "--log-group-name", name, check=False)
             elif kind == "parameter":
@@ -354,6 +396,8 @@ class Run:
         left += [p["Name"] for p in parameters]
         repos = aws_json("ecr", "describe-repositories")["repositories"]
         left += [r["repositoryName"] for r in repos if r["repositoryName"].startswith(self.prefix)]
+        rules = aws_json("events", "list-rules", "--name-prefix", self.prefix)["Rules"]
+        left += [r["Name"] for r in rules]
         groups = aws_json("logs", "describe-log-groups", "--log-group-name-prefix", f"/aws/lambda/{self.prefix}")["logGroups"]
         left += [g["logGroupName"] for g in groups]
         self.record("cleanup: nothing named after the run is left", not left, f"left={left}")
@@ -367,6 +411,7 @@ class Run:
             self.install(f"{self.prefix}-u", protected=False)
             self.protected()
             self.burst()
+            self.access()
             self.unprotected()
         finally:
             for install in (f"{self.prefix}-p",):
