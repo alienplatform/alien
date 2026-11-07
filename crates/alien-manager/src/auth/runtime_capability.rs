@@ -67,9 +67,13 @@ pub enum RuntimePurpose {
 impl RuntimePurpose {
     fn lifetime(&self) -> Duration {
         match self {
-            Self::Telemetry | Self::OperatorSync | Self::RegistryPull | Self::OperatorTunnel => {
-                Duration::hours(1)
-            }
+            Self::Telemetry | Self::OperatorSync | Self::OperatorTunnel => Duration::hours(1),
+            // Pods pull with this credential from a Kubernetes Secret that the
+            // operator refreshes. It may last as long as the operator's daily
+            // key, which caps it through the authority deadline, so new pods
+            // still start while the operator is down. Cloud proofs and the
+            // manager's own reconciliation pass a one hour deadline.
+            Self::RegistryPull => Duration::hours(24),
             Self::ReceiveCommands { .. }
             | Self::OperationRelay { .. }
             | Self::OperatorOperations => Duration::minutes(5),
@@ -228,7 +232,7 @@ impl RuntimeCredentials {
         Ok(claims)
     }
 
-    fn verify(&self, token: &str) -> Result<Subject> {
+    pub(crate) fn verify(&self, token: &str) -> Result<Subject> {
         let claims = self.verified_claims(token)?;
         let grant = claims.grant;
         let (scope, role) = match grant.purpose {

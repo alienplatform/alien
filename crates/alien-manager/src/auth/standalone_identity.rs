@@ -690,6 +690,71 @@ mod tests {
             .is_ok());
     }
 
+    /// Pods pull images with a credential the operator writes into a Secret.
+    /// It must outlive a short operator outage, and end with the daily key.
+    #[tokio::test]
+    async fn operator_pull_credential_lasts_until_the_daily_key_expires() {
+        let now = signed_at();
+        let (verifier, _directory) = verifier(
+            vec![record("dep-1", Platform::Kubernetes, None)],
+            clock(vec![now]),
+            None,
+        )
+        .await;
+        let (code, _) = verifier
+            .issue_enrollment_code(&record("dep-1", Platform::Kubernetes, None))
+            .await
+            .unwrap();
+        let key = "ax_day_v1_first";
+        let enrolled = verifier
+            .enroll(&IdentityEnrollmentRequest {
+                code,
+                initial_key_hash: sha256_hash(key),
+            })
+            .await
+            .unwrap();
+        let elapsed = Arc::new(AtomicUsize::new(0));
+        let issuer = {
+            let elapsed = elapsed.clone();
+            crate::auth::runtime_capability::RuntimeCredentials::with_clock(
+                AUDIENCE.into(),
+                [9; 32],
+                Arc::new(move || now + Duration::seconds(elapsed.load(Ordering::SeqCst) as i64)),
+            )
+            .unwrap()
+        };
+        let issue = |purpose: RuntimePurpose| async {
+            let verified = verifier
+                .verify(
+                    &IdentityExchangeRequest {
+                        deployment_id: "dep-1".into(),
+                        purpose,
+                        proof: RuntimeIdentityProof::DailyKey { key: key.into() },
+                    },
+                    AUDIENCE,
+                )
+                .await
+                .unwrap();
+            issuer
+                .issue(verified.grant, verified.authority_deadline)
+                .unwrap()
+        };
+        let pull = issue(RuntimePurpose::RegistryPull).await;
+        let telemetry = issue(RuntimePurpose::Telemetry).await;
+        assert_eq!(pull.expires_at, enrolled.expires_at);
+        assert_eq!(telemetry.expires_at, now + Duration::hours(1));
+
+        // The operator has been down for 70 minutes. A new pod still pulls.
+        elapsed.store(70 * 60, Ordering::SeqCst);
+        let subject = issuer.verify(&pull.token).unwrap();
+        assert!(matches!(subject.role, crate::auth::Role::RegistryPull));
+        assert!(issuer.verify(&telemetry.token).is_err());
+
+        // Never past the daily key.
+        elapsed.store(24 * 3600, Ordering::SeqCst);
+        assert!(issuer.verify(&pull.token).is_err());
+    }
+
     #[test]
     fn gcp_membership_needs_the_recorded_id_and_email_of_a_running_worker() {
         let email = "api@project.iam.gserviceaccount.com";
