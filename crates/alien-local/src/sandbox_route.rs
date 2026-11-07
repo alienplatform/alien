@@ -132,6 +132,8 @@ struct RouteState {
     /// updated declaration — new limits, image, egress or preview ports — reaches sessions
     /// created after it without rebinding the route the workload was already given.
     template: Arc<Mutex<SandboxSessionConfig>>,
+    /// Interactive commands across this sandbox's sessions
+    interactive: Arc<crate::sandbox_interactive::InteractiveRegistry>,
 }
 
 /// A running loopback route, and where to reach it.
@@ -271,6 +273,7 @@ impl SandboxRoute {
             sandbox: sandbox.to_string(),
             token,
             template: Arc::clone(&template),
+            interactive: Default::default(),
         };
 
         let router = Router::new()
@@ -285,6 +288,22 @@ impl SandboxRoute {
                 get(read_file).put(write_file),
             )
             .route("/v1/sessions/{session_id}/preview", get(preview))
+            .route(
+                "/v1/sessions/{session_id}/interactive",
+                post(interactive_start),
+            )
+            .route(
+                "/v1/sessions/{session_id}/interactive/stdin",
+                post(interactive_stdin),
+            )
+            .route(
+                "/v1/sessions/{session_id}/interactive/close-stdin",
+                post(interactive_close_stdin),
+            )
+            .route(
+                "/v1/sessions/{session_id}/interactive/signal",
+                post(interactive_signal),
+            )
             .with_state(state);
 
         let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
@@ -490,6 +509,150 @@ async fn exec(
             .collect(),
         exit_code: result.exit_code,
     }))
+}
+
+/// An interactive command to start: the agent's `/v1/interactive` body.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InteractiveStartBody {
+    id: String,
+    command: Vec<String>,
+    timeout_ms: u64,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    env: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InteractiveStdinBody {
+    id: String,
+    offset: u64,
+    data: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InteractiveIdBody {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InteractiveSignalBody {
+    id: String,
+    signal: alien_core::sandbox_signal::CommandSignal,
+}
+
+fn control_failed(error: crate::sandbox_interactive::ControlError) -> (StatusCode, String) {
+    use crate::sandbox_interactive::ControlError;
+    match error {
+        ControlError::NotRunning => (
+            StatusCode::NOT_FOUND,
+            "COMMAND_NOT_RUNNING: no such interactive command is running".to_string(),
+        ),
+        ControlError::Conflict(reason) => (StatusCode::CONFLICT, reason),
+        ControlError::Invalid(reason) => (StatusCode::BAD_REQUEST, reason),
+        ControlError::Full => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "the sandbox is running its maximum of interactive commands".to_string(),
+        ),
+        ControlError::Failed(reason) => (StatusCode::BAD_GATEWAY, reason),
+    }
+}
+
+/// Starts an interactive command and streams its frames as NDJSON, as the agent does.
+async fn interactive_start(
+    State(state): State<RouteState>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<InteractiveStartBody>,
+) -> std::result::Result<axum::response::Response, (StatusCode, String)> {
+    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
+    let container_id = container_for(&state, &session_id).await?;
+
+    let receiver = state
+        .interactive
+        .start(
+            Arc::clone(&state.manager),
+            container_id,
+            crate::sandbox_interactive::StartRequest {
+                id: body.id,
+                command: body.command,
+                timeout: std::time::Duration::from_millis(body.timeout_ms),
+                cwd: body.cwd,
+                env: body.env,
+            },
+        )
+        .await
+        .map_err(control_failed)?;
+
+    let frames = futures::stream::unfold(receiver, |mut receiver| async move {
+        let frame = receiver.recv().await?;
+        let mut line = match serde_json::to_vec(&frame) {
+            Ok(line) => line,
+            Err(error) => return Some((Err(std::io::Error::other(error)), receiver)),
+        };
+        line.push(b'\n');
+        Some((Ok(bytes::Bytes::from(line)), receiver))
+    });
+
+    axum::response::Response::builder()
+        .header(axum::http::header::CONTENT_TYPE, "application/x-ndjson")
+        .body(axum::body::Body::from_stream(frames))
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
+}
+
+async fn interactive_stdin(
+    State(state): State<RouteState>,
+    Path(_session_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<InteractiveStdinBody>,
+) -> std::result::Result<Json<serde_json::Value>, (StatusCode, String)> {
+    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
+    let data = BASE64.decode(&body.data).map_err(|error| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("data is not base64: {error}"),
+        )
+    })?;
+    let accepted = state
+        .interactive
+        .write(&body.id, body.offset, &data)
+        .await
+        .map_err(control_failed)?;
+    Ok(Json(serde_json::json!({ "accepted": accepted })))
+}
+
+async fn interactive_close_stdin(
+    State(state): State<RouteState>,
+    Path(_session_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<InteractiveIdBody>,
+) -> std::result::Result<StatusCode, (StatusCode, String)> {
+    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
+    state
+        .interactive
+        .close_stdin(&body.id)
+        .await
+        .map_err(control_failed)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn interactive_signal(
+    State(state): State<RouteState>,
+    Path(_session_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<InteractiveSignalBody>,
+) -> std::result::Result<StatusCode, (StatusCode, String)> {
+    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
+    state
+        .interactive
+        .signal(&state.manager, &body.id, body.signal)
+        .await
+        .map_err(control_failed)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn write_file(

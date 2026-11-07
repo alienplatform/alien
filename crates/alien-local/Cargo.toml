@@ -97,3 +97,4 @@ reqwest = { workspace = true, features = ["json"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 workspace_root = { workspace = true }
 alien-build = { workspace = true }
+alien-sandbox-conformance = { workspace = true, features = ["local"] }

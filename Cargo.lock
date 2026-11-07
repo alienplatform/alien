@@ -1049,6 +1049,7 @@ dependencies = [
  "alien-build",
  "alien-core",
  "alien-error",
+ "alien-sandbox-conformance",
  "alien-worker-protocol",
  "alien-worker-runtime",
  "async-trait",
