@@ -271,7 +271,7 @@ pub async fn debug_task(args: DebugArgs, ctx: ExecutionMode) -> Result<()> {
 }
 
 /// `--request-access` shortcut: create a debug-tool access request for
-/// `deployment_id`, wait for the customer to approve it in-cluster, and
+/// `deployment_id`, wait for it to be approved, and
 /// return its id. Creates the exact same access-request resource as `alien
 /// access-requests create --debug-tool ...` — this is sugar over that call
 /// plus a wait loop, not a separate approval path.
