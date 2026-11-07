@@ -41,7 +41,7 @@ pub fn protected_statements<'a>(
         .map(Some)
         .ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "This install is protected, but the release being deployed carries no signed statement; only its verifier may change what the function runs".to_string(),
+                message: "This install is protected, and this update carries no signed release. Protected installs update only through their manager, which hands the signed release to the install's verifier; a runner that takes the deployment itself (such as `alien deploy up`) can't update them".to_string(),
                 resource_id: Some(resource_id.to_string()),
             })
         })
