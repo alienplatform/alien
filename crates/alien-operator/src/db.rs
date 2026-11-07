@@ -205,7 +205,6 @@ impl OperatorDb {
                 AND json_extract(value, '$.deploymentId') = ?1
                 AND json_extract(value, '$.managerUrl') = ?2
                 AND json_extract(value, '$.audience') = ?3
-                AND CAST(COALESCE(json_extract(value, '$.enrollmentRevision'), 0) AS TEXT) = ?4
              )
              ON CONFLICT(key) DO UPDATE SET updated_at = excluded.updated_at
              WHERE state.value = excluded.value",
@@ -213,7 +212,6 @@ impl OperatorDb {
                     state.deployment_id.as_str(),
                     state.manager_url.as_str(),
                     state.audience.as_str(),
-                    state.enrollment_revision.to_string(),
                 ),
             )
             .await

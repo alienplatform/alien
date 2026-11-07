@@ -1102,7 +1102,6 @@ mod tests {
                 audience: "manager-one",
                 code: "enrollment-fixture",
                 deployment_id: Some("deployment-one"),
-                revision: 0,
             })
             .await;
         assert_eq!(result.unwrap(), "deployment-one");
@@ -1226,7 +1225,6 @@ mod tests {
                 audience: "manager-one",
                 code: "enrollment-fixture",
                 deployment_id: Some("deployment-one"),
-                revision: 0,
             })
             .await;
         assert!(result.is_err());
@@ -1303,7 +1301,6 @@ mod tests {
                 audience: "manager-one",
                 code: "one-use-fixture",
                 deployment_id: Some("deployment-one"),
-                revision: 0,
             })
             .await
             .unwrap();
