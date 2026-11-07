@@ -1427,25 +1427,27 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                 deployment_actions::read_secret_input_files(&secret_input_files)?;
             let target = resolve_platform_target(&ctx, &id, json, "Stack input changes").await?;
             if let Some(install) = protected_install(&ctx, &target).await? {
-                if !secret_inputs.is_empty() || !clear.is_empty() {
+                if !secret_inputs.is_empty() || !secret_input_files.is_empty() {
                     return Err(AlienError::new(ErrorData::ValidationError {
                         field: "input".to_string(),
-                        message: "This deployment is protected: it takes only --input values, signed by you. Deployer secrets are set by the customer with `inputs set`.".to_string(),
+                        message: "This deployment is protected: it takes only --input and --clear, signed by you. Deployer secrets are set by the customer with `inputs set`.".to_string(),
                     }));
                 }
-                // Sets the given inputs over the signed ones; the signed env
-                // stays as it is.
-                let inputs: Vec<(String, serde_json::Value)> =
-                    parse_pairs(&inputs, "input", "ID=VALUE")?
-                        .into_iter()
-                        .map(|(key, value)| {
-                            let value = serde_json::from_str(&value)
-                                .unwrap_or(serde_json::Value::String(value));
-                            (key, value)
-                        })
-                        .collect();
+                let inputs = parse_pairs(&inputs, "input", "ID=VALUE")?;
+                if inputs.is_empty() && clear.is_empty() {
+                    return Err(AlienError::new(ErrorData::ValidationError {
+                        field: "input".to_string(),
+                        message: "Pass at least one --input ID=VALUE or --clear ID.".to_string(),
+                    }));
+                }
+                if let Some((id, _)) = inputs.iter().find(|(id, _)| clear.contains(id)) {
+                    return Err(AlienError::new(ErrorData::ValidationError {
+                        field: "input".to_string(),
+                        message: format!("Input '{id}' is both set and cleared."),
+                    }));
+                }
                 return sign_config(&ctx, &target, &install, json, |body| {
-                    body.inputs.extend(inputs)
+                    change_signed_inputs(body, inputs, &clear)
                 })
                 .await;
             }
@@ -1563,6 +1565,23 @@ fn parse_pairs(pairs: &[String], field: &str, form: &str) -> Result<Vec<(String,
             })
         })
         .collect()
+}
+
+/// `set-inputs` on a protected deployment: `inputs` (`ID`, raw value) set
+/// over the signed ones, and the `clear` ids dropped from the signed config
+/// so the install uses the input's default. The signed env stays as it is.
+fn change_signed_inputs(
+    body: &mut alien_signing::ConfigBody,
+    inputs: Vec<(String, String)>,
+    clear: &[String],
+) {
+    for id in clear {
+        body.inputs.remove(id);
+    }
+    body.inputs.extend(inputs.into_iter().map(|(id, value)| {
+        let value = serde_json::from_str(&value).unwrap_or(serde_json::Value::String(value));
+        (id, value)
+    }));
 }
 
 /// The install id of a protected deployment, or `None` when it isn't
@@ -4454,6 +4473,62 @@ fn parse_targeted_env_var(input: &str) -> Option<(String, String, Vec<String>)> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clearing_an_input_the_new_release_dropped_unblocks_the_signed_config() {
+        // The signed config sets `region` and `tier`; the release the
+        // deployment moves to declares only `region`, so the install would
+        // refuse every update while `tier` stays.
+        let mut body = alien_signing::ConfigBody {
+            env: [("LOG_LEVEL".to_string(), "debug".to_string())].into(),
+            inputs: [
+                ("region".to_string(), serde_json::json!("us")),
+                ("tier".to_string(), serde_json::json!("gold")),
+            ]
+            .into(),
+            ..Default::default()
+        };
+        let release = alien_signing::ReleaseBody {
+            platform: "gcp".to_string(),
+            channel: "production".to_string(),
+            workloads: Vec::new(),
+            configurable: alien_signing::release::Configurable {
+                env: vec!["LOG_LEVEL".to_string()],
+                inputs: vec!["region".to_string()],
+            },
+            components: Default::default(),
+            setup: Default::default(),
+            stack: None,
+        };
+        body.check(&release)
+            .expect_err("a dropped input in the config is refused");
+
+        change_signed_inputs(
+            &mut body,
+            vec![("region".to_string(), "eu".to_string())],
+            &["tier".to_string(), "never-set".to_string()],
+        );
+
+        assert_eq!(
+            body.inputs,
+            [("region".to_string(), serde_json::json!("eu"))].into()
+        );
+        assert_eq!(body.env["LOG_LEVEL"], "debug", "the signed env is kept");
+        body.check(&release)
+            .expect("with the input cleared the release accepts the config");
+
+        // Values are read as JSON when they parse, as text otherwise.
+        change_signed_inputs(
+            &mut body,
+            vec![
+                ("count".to_string(), "3".to_string()),
+                ("name".to_string(), "acme".to_string()),
+            ],
+            &[],
+        );
+        assert_eq!(body.inputs["count"], serde_json::json!(3));
+        assert_eq!(body.inputs["name"], serde_json::json!("acme"));
+    }
 
     fn failed_cli_first_install() -> serde_json::Value {
         serde_json::json!({
