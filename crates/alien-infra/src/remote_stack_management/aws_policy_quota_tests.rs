@@ -258,6 +258,26 @@ async fn automatic_setup(account: Arc<Mutex<Account>>) -> SingleControllerExecut
         .expect("executor builds")
 }
 
+/// `value` with every object's keys sorted. IAM ignores key order, and so does the merge: it
+/// compares conditions as maps.
+fn canonical(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(object) => {
+            let mut keys: Vec<&String> = object.keys().collect();
+            keys.sort();
+            serde_json::Value::Object(
+                keys.into_iter()
+                    .map(|key| (key.clone(), canonical(&object[key])))
+                    .collect(),
+            )
+        }
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.iter().map(canonical).collect())
+        }
+        value => value.clone(),
+    }
+}
+
 /// Every action each generated statement grants, keyed by everything else in the statement.
 fn grants(statements: &[serde_json::Value]) -> Vec<(String, String)> {
     let mut grants = Vec::new();
@@ -266,7 +286,7 @@ fn grants(statements: &[serde_json::Value]) -> Vec<(String, String)> {
         let scope = scope.as_object_mut().unwrap();
         scope.remove("Sid");
         let actions = scope.remove("Action").unwrap();
-        let scope = serde_json::to_string(scope).unwrap();
+        let scope = canonical(&serde_json::Value::Object(scope.clone())).to_string();
         for action in actions.as_array().unwrap() {
             grants.push((scope.clone(), action.as_str().unwrap().to_string()));
         }
@@ -352,7 +372,18 @@ async fn packing_keeps_every_grant_of_the_automatic_profile() {
         statements.len(),
         "Sids stay unique across policies"
     );
-    assert_eq!(grants(&statements), grants(&unpacked));
+    let packed_grants = grants(&statements);
+    let unpacked_grants = grants(&unpacked);
+    let lost: Vec<_> = unpacked_grants
+        .iter()
+        .filter(|grant| !packed_grants.contains(grant))
+        .collect();
+    let added: Vec<_> = packed_grants
+        .iter()
+        .filter(|grant| !unpacked_grants.contains(grant))
+        .collect();
+    assert!(lost.is_empty(), "packing lost grants: {lost:#?}");
+    assert!(added.is_empty(), "packing added grants: {added:#?}");
 }
 
 /// A deployment whose setup failed on the quota: policies 0-19 attached, 20 and 21 created but
