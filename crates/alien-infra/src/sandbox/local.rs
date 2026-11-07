@@ -466,3 +466,7 @@ mod tests {
         assert_eq!(controller.controller_type(), "LocalSandboxController");
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "local_route_tests.rs"]
+mod route_tests;
