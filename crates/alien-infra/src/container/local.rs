@@ -320,7 +320,17 @@ impl LocalContainerController {
         }
 
         // A linked Local sandbox is reached over the host gateway with a mounted token file
-        local_utils::mount_local_sandboxes_for_container(&mut env_vars, &mut bind_mounts)?;
+        for route in
+            local_utils::mount_local_sandboxes_for_container(&mut env_vars, &mut bind_mounts)?
+        {
+            alien_local::SandboxRoute::forward_to_containers(&route)
+                .await
+                .context(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message: "Failed to make the linked sandbox reachable from the container"
+                        .to_string(),
+                })?;
+        }
 
         // Rewrite binding env vars to use container paths instead of host paths
         // This uses typed deserialization for type safety
