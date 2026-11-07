@@ -14,6 +14,7 @@ use alien_signing::{Ledger, Lookup, Workload};
 
 use crate::container_apps::AppStore;
 use crate::error::{ErrorData, Result};
+use crate::function::StillNewest;
 use crate::plan::{FunctionSpec, Place};
 use crate::trust::InstallStore;
 use crate::verifier::Backend;
@@ -371,12 +372,15 @@ impl Backend for AzureBackend {
         Ok(BTreeMap::new())
     }
 
-    async fn apply(&self, spec: &FunctionSpec) -> Result<()> {
+    async fn apply(&self, spec: &FunctionSpec, newest: &dyn StillNewest) -> Result<()> {
         if spec.architecture != "x86_64" {
             return Err(AlienError::new(ErrorData::Refused {
                 reason: "Container Apps runs only x86_64".to_string(),
             }));
         }
+        // One verifier replica serves the install, so nothing writes between this check and
+        // the write.
+        newest.check().await?;
         crate::container_apps::apply(&self.0, spec)
             .await
             .map(|_| ())

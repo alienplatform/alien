@@ -15,6 +15,7 @@ use alien_signing::{Ledger, Lookup, Workload};
 
 use crate::cloud_run::ServiceStore;
 use crate::error::{ErrorData, Result};
+use crate::function::StillNewest;
 use crate::machines;
 use crate::plan::{FunctionSpec, Place};
 use crate::trust::InstallStore;
@@ -565,12 +566,15 @@ impl Backend for GcpBackend {
         Ok(BTreeMap::new())
     }
 
-    async fn apply(&self, spec: &FunctionSpec) -> Result<()> {
+    async fn apply(&self, spec: &FunctionSpec, newest: &dyn StillNewest) -> Result<()> {
         if spec.architecture != "x86_64" {
             return Err(AlienError::new(ErrorData::Refused {
                 reason: "Cloud Run runs only x86_64".to_string(),
             }));
         }
+        // One verifier instance serves the install, so nothing writes between this check and
+        // the write.
+        newest.check().await?;
         crate::cloud_run::apply(&self.0, spec).await.map(|_| ())
     }
 

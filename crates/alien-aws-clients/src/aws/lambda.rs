@@ -322,11 +322,13 @@ impl LambdaClient {
                 resource_name: resource.into(),
             },
             // Conflict / already exists
-            "ResourceConflictException" => ErrorData::RemoteResourceConflict {
-                message,
-                resource_type: "Function".into(),
-                resource_name: resource.into(),
-            },
+            "ResourceConflictException" | "PreconditionFailedException" => {
+                ErrorData::RemoteResourceConflict {
+                    message,
+                    resource_type: "Function".into(),
+                    resource_name: resource.into(),
+                }
+            }
             // Lambda invoke-specific errors
             "EC2AccessDeniedException" | "EC2ThrottledException" | "EC2UnexpectedException" => {
                 ErrorData::RemoteServiceUnavailable { message }
@@ -1102,6 +1104,10 @@ pub struct UpdateFunctionCodeRequest {
     /// Instruction set the image is built for, such as `arm64`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub architectures: Option<Vec<String>>,
+    /// Update only if the function is still at this revision; otherwise Lambda answers
+    /// PreconditionFailedException.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Builder)]
@@ -1138,6 +1144,10 @@ pub struct UpdateFunctionConfigurationRequest {
     /// Log format and destination.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logging_config: Option<serde_json::Value>,
+    /// Update only if the function is still at this revision; otherwise Lambda answers
+    /// PreconditionFailedException.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -4,18 +4,19 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use alien_error::{AlienError, Context};
-use alien_signing::{InstallId, Trust, Workload};
+use alien_signing::{Entry, InstallId, Trust, Workload};
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::{json, Value};
 use tracing::info;
 
 use crate::error::{ErrorData, Result};
+use crate::function::StillNewest;
 use crate::machines::{self, RemoveMachines, RollMachines, Scale};
 use crate::plan::{
     functions, plan_function, FunctionSpec, Place, Reads, ReleaseRequest, Request, SetupNetwork,
 };
-use crate::trust::{accept, find_install, store_ledger, Install, InstallStore};
+use crate::trust::{accept, find_install, store_ledger, Floor, Install, InstallStore};
 
 /// The cloud writes one verifier makes.
 #[async_trait]
@@ -27,8 +28,8 @@ pub trait Backend: Send + Sync {
         place: &Place,
         workload: &Workload,
     ) -> Result<BTreeMap<String, String>>;
-    /// Write `spec` and read it back.
-    async fn apply(&self, spec: &FunctionSpec) -> Result<()>;
+    /// Write `spec` and read it back, checking `newest` before each write.
+    async fn apply(&self, spec: &FunctionSpec, newest: &dyn StillNewest) -> Result<()>;
     /// Read `spec` back.
     async fn check(&self, spec: &FunctionSpec) -> Result<()>;
     /// Roll a machine group to the signed release.
@@ -164,9 +165,17 @@ impl Verifier {
         if write {
             store_ledger(self.store.as_ref(), &place.prefix, &accepted.ledger).await?;
         }
+        let floor = Floor {
+            store: self.store.as_ref(),
+            prefix: &place.prefix,
+            release: Entry {
+                sequence: accepted.release.sequence,
+                digest: accepted.release.digest.clone(),
+            },
+        };
         for spec in &specs {
             if write {
-                self.backend.apply(spec).await?;
+                self.backend.apply(spec, &floor).await?;
                 info!(function = %spec.name, digest = %spec.digest, "applied the signed function");
             } else {
                 self.backend.check(spec).await?;
@@ -292,7 +301,7 @@ mod tests {
         ) -> Result<BTreeMap<String, String>> {
             Ok(BTreeMap::new())
         }
-        async fn apply(&self, _spec: &FunctionSpec) -> Result<()> {
+        async fn apply(&self, _spec: &FunctionSpec, _newest: &dyn StillNewest) -> Result<()> {
             unreachable!("scale writes no function")
         }
         async fn check(&self, _spec: &FunctionSpec) -> Result<()> {
@@ -445,7 +454,7 @@ mod tests {
         ) -> Result<BTreeMap<String, String>> {
             Ok(BTreeMap::new())
         }
-        async fn apply(&self, spec: &FunctionSpec) -> Result<()> {
+        async fn apply(&self, spec: &FunctionSpec, newest: &dyn StillNewest) -> Result<()> {
             self.0.lock().unwrap().push(spec.clone());
             Ok(())
         }
@@ -540,6 +549,94 @@ mod tests {
             "{reason}"
         );
         assert!(backend.0.lock().unwrap().is_empty());
+    }
+
+    /// A backend whose write of `slow_image` pauses after reading the function, until told to
+    /// go on, the way a Lambda update waits for the function to settle.
+    struct Paused {
+        slow_image: String,
+        read: tokio::sync::Notify,
+        resume: tokio::sync::Notify,
+        written: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl Backend for Paused {
+        async fn binding_reads(
+            &self,
+            _place: &Place,
+            _workload: &Workload,
+        ) -> Result<BTreeMap<String, String>> {
+            Ok(BTreeMap::new())
+        }
+        async fn apply(&self, spec: &FunctionSpec, newest: &dyn StillNewest) -> Result<()> {
+            if spec.image_uri == self.slow_image {
+                self.read.notify_one();
+                self.resume.notified().await;
+            }
+            newest.check().await?;
+            self.written.lock().unwrap().push(spec.image_uri.clone());
+            Ok(())
+        }
+        async fn check(&self, _spec: &FunctionSpec) -> Result<()> {
+            unreachable!("applyRelease reads back through apply")
+        }
+    }
+
+    #[tokio::test]
+    async fn an_older_release_applied_concurrently_never_lands_over_a_newer_one() {
+        // Release 10 is accepted and starts writing; release 11 is accepted and written while
+        // 10's write waits; then 10's write goes on. It must not land over 11.
+        let image =
+            |digit: char| format!("ghcr.io/shop/api@sha256:{}", digit.to_string().repeat(64));
+        let request = |sequence: u64, digit: char| {
+            let workload = alien_signing::Workload {
+                image: image(digit),
+                ..function_workload()
+            };
+            json!({"applyRelease": {
+                "release": signed_release(sequence, &crate::fixtures::release_body(vec![workload])),
+                "signerLists": [signer_list()],
+            }})
+        };
+        let backend = Arc::new(Paused {
+            slow_image: image('a'),
+            read: tokio::sync::Notify::new(),
+            resume: tokio::sync::Notify::new(),
+            written: Mutex::new(Vec::new()),
+        });
+        let store = Arc::new(MemoryStore::protected(&settings()));
+        let verifier = Verifier {
+            own_name: format!("{PREFIX}-verifier"),
+            install_id: Arc::new(|prefix| crate::aws::install_id(ACCOUNT, REGION, prefix)),
+            store: store.clone(),
+            backend: backend.clone(),
+            vpc: None,
+            machine_network: None,
+        };
+        let older = verifier.handle(request(10, 'a'));
+        let newer = async {
+            backend.read.notified().await;
+            let answer = verifier.handle(request(11, 'b')).await;
+            backend.resume.notify_one();
+            answer
+        };
+        let (older, newer) = tokio::join!(older, newer);
+
+        assert_eq!(newer.unwrap()["release"], json!(11));
+        let reason = refusal(older);
+        assert!(
+            reason.contains("release 11 was accepted while release 10 was being applied"),
+            "{reason}"
+        );
+        assert_eq!(*backend.written.lock().unwrap(), vec![image('b')]);
+        let ledger = match store.ledger(PREFIX).await.unwrap() {
+            alien_signing::Lookup::Found(bytes) => {
+                alien_signing::Ledger::parse(&bytes, PREFIX).unwrap()
+            }
+            other => panic!("the ledger is gone: {other:?}"),
+        };
+        assert_eq!(ledger.release.unwrap().sequence, 11);
     }
 
     #[tokio::test]

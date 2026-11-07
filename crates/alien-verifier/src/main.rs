@@ -44,7 +44,7 @@ use alien_verifier::trust::InstallStore;
 use alien_verifier::{describe, Backend, ErrorData, Result, Verifier};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use lambda_runtime::{service_fn, LambdaEvent};
+use lambda_runtime::{service_fn, Diagnostic, LambdaEvent};
 use serde_json::{json, Value};
 
 fn env(name: &str) -> Result<String> {
@@ -207,11 +207,16 @@ fn azure_verifier() -> Result<Verifier> {
 
 async fn serve_http(verifier: Arc<Verifier>) -> std::result::Result<(), lambda_runtime::Error> {
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
+    // One request at a time: setup runs one instance of the verifier, and this keeps two
+    // requests in it from interleaving their reads and writes of the install.
+    let one_at_a_time = Arc::new(tokio::sync::Mutex::new(()));
     let app = axum::Router::new().route(
         "/",
         axum::routing::post(move |axum::Json(event): axum::Json<Value>| {
             let verifier = verifier.clone();
+            let one_at_a_time = one_at_a_time.clone();
             async move {
+                let _turn = one_at_a_time.lock().await;
                 match verifier.handle(event).await {
                     Ok(body) => (StatusCode::OK, axum::Json(body)).into_response(),
                     Err(error) => {
@@ -219,7 +224,10 @@ async fn serve_http(verifier: Arc<Verifier>) -> std::result::Result<(), lambda_r
                             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                         (
                             status,
-                            axum::Json(json!({"errorMessage": describe(&error)})),
+                            axum::Json(json!({
+                                "errorType": error.code,
+                                "errorMessage": describe(&error),
+                            })),
                         )
                             .into_response()
                     }
@@ -230,6 +238,15 @@ async fn serve_http(verifier: Arc<Verifier>) -> std::result::Result<(), lambda_r
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// A refusal or failure as Lambda reports it to the caller: the error's code as the error type,
+/// so the caller can tell a refusal from a failure worth retrying, and its reasons as the message.
+fn diagnostic(error: AlienError<ErrorData>) -> Diagnostic {
+    Diagnostic {
+        error_type: error.code.clone(),
+        error_message: describe(&error),
+    }
 }
 
 #[tokio::main]
@@ -249,8 +266,8 @@ async fn main() -> std::result::Result<(), lambda_runtime::Error> {
             lambda_runtime::run(service_fn(move |event: LambdaEvent<Value>| async move {
                 let verifier = aws
                     .verifier(&event.context.invoked_function_arn)
-                    .map_err(fail)?;
-                verifier.handle(event.payload).await.map_err(fail)
+                    .map_err(diagnostic)?;
+                verifier.handle(event.payload).await.map_err(diagnostic)
             }))
             .await
         }

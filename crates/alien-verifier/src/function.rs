@@ -19,12 +19,29 @@ use crate::plan::FunctionSpec;
 pub trait FunctionStore: Send + Sync {
     /// GetFunction, exactly as returned.
     async fn get(&self, name: &str) -> Result<Value>;
-    /// UpdateFunctionCode to an image built for `architecture`.
-    async fn update_code(&self, name: &str, image_uri: &str, architecture: &str) -> Result<()>;
-    /// UpdateFunctionConfiguration with every field the verifier owns,
-    /// clearing layers, mounts, image overrides, the environment key, the
+    /// UpdateFunctionCode to an image built for `architecture`, only if the function is still
+    /// at `revision`.
+    async fn update_code(
+        &self,
+        name: &str,
+        image_uri: &str,
+        architecture: &str,
+        revision: &str,
+    ) -> Result<()>;
+    /// UpdateFunctionConfiguration with every field the verifier owns, only if the function is
+    /// still at `revision`, clearing layers, mounts, image overrides, the environment key, the
     /// dead-letter target and any custom log destination.
-    async fn update_configuration(&self, spec: &FunctionSpec) -> Result<()>;
+    async fn update_configuration(&self, spec: &FunctionSpec, revision: &str) -> Result<()>;
+}
+
+/// Whether the release being applied is still the newest one the install accepted. Checked
+/// right before each write, after the revision that write is conditioned on was read: a newer
+/// release accepted before the check refuses the write, and one whose writes land after the
+/// check finds the function at another revision, so the older release never lands over it.
+#[async_trait]
+pub trait StillNewest: Send + Sync {
+    /// Refuse when the install has accepted a newer release.
+    async fn check(&self) -> Result<()>;
 }
 
 #[async_trait]
@@ -37,13 +54,20 @@ impl<T: LambdaApi> FunctionStore for T {
             })
     }
 
-    async fn update_code(&self, name: &str, image_uri: &str, architecture: &str) -> Result<()> {
+    async fn update_code(
+        &self,
+        name: &str,
+        image_uri: &str,
+        architecture: &str,
+        revision: &str,
+    ) -> Result<()> {
         self.update_function_code(
             name,
             UpdateFunctionCodeRequest::builder()
                 .image_uri(image_uri.to_string())
                 .publish(false)
                 .architectures(vec![architecture.to_string()])
+                .revision_id(revision.to_string())
                 .build(),
         )
         .await
@@ -53,7 +77,7 @@ impl<T: LambdaApi> FunctionStore for T {
         Ok(())
     }
 
-    async fn update_configuration(&self, spec: &FunctionSpec) -> Result<()> {
+    async fn update_configuration(&self, spec: &FunctionSpec, revision: &str) -> Result<()> {
         self.update_function_configuration(
             &spec.name,
             UpdateFunctionConfigurationRequest::builder()
@@ -90,6 +114,7 @@ impl<T: LambdaApi> FunctionStore for T {
                     "LogFormat": "Text",
                     "LogGroup": default_log_group(&spec.name),
                 }))
+                .revision_id(revision.to_string())
                 .build(),
         )
         .await
@@ -110,24 +135,49 @@ const UPDATE_WAIT: Duration = Duration::from_secs(120);
 const POLL: Duration = Duration::from_secs(2);
 
 /// Write `spec` and read it back. The function must already exist: setup
-/// creates the functions the verifier owns.
-pub async fn apply(store: &dyn FunctionStore, spec: &FunctionSpec) -> Result<Value> {
-    let current = wait_until_idle(store, &spec.name).await?;
+/// creates the functions the verifier owns. Each write is conditioned on the
+/// revision read before it and preceded by `newest`.
+pub async fn apply(
+    store: &dyn FunctionStore,
+    spec: &FunctionSpec,
+    newest: &dyn StillNewest,
+) -> Result<Value> {
+    let mut current = wait_until_idle(store, &spec.name).await?;
     let architectures = current["Configuration"]["Architectures"]
         .as_array()
         .cloned();
     if current["Code"]["ImageUri"].as_str() != Some(spec.image_uri.as_str())
         || architectures != Some(vec![Value::String(spec.architecture.clone())])
     {
+        newest.check().await?;
         store
-            .update_code(&spec.name, &spec.image_uri, &spec.architecture)
+            .update_code(
+                &spec.name,
+                &spec.image_uri,
+                &spec.architecture,
+                revision(&current, &spec.name)?,
+            )
             .await?;
-        wait_until_idle(store, &spec.name).await?;
+        current = wait_until_idle(store, &spec.name).await?;
     }
-    store.update_configuration(spec).await?;
+    newest.check().await?;
+    store
+        .update_configuration(spec, revision(&current, &spec.name)?)
+        .await?;
     let back = wait_until_idle(store, &spec.name).await?;
     check_read_back(spec, &back)?;
     Ok(back)
+}
+
+/// The revision GetFunction reported, which the next write is conditioned on.
+fn revision<'a>(function: &'a Value, name: &str) -> Result<&'a str> {
+    function["Configuration"]["RevisionId"]
+        .as_str()
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::CloudCallFailed {
+                operation: format!("lambda:GetFunction {name} returned no RevisionId"),
+            })
+        })
 }
 
 async fn wait_until_idle(store: &dyn FunctionStore, name: &str) -> Result<Value> {
@@ -537,10 +587,45 @@ mod tests {
         function
     }
 
-    /// A Lambda that holds one function and applies updates to it.
+    /// A Lambda that holds one function and applies updates to it, each only at the
+    /// revision it was read at, as Lambda does with RevisionId.
     struct FakeLambda {
         function: Mutex<Value>,
         calls: Mutex<Vec<String>>,
+    }
+
+    impl FakeLambda {
+        fn new(mut function: Value) -> Self {
+            function["Configuration"]["RevisionId"] = json!("r1");
+            Self {
+                function: Mutex::new(function),
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        /// Accept a write at `revision` and move to the next one, or refuse it as Lambda
+        /// refuses a stale RevisionId.
+        fn at(&self, function: &mut Value, revision: &str, call: String) -> Result<()> {
+            let current = function["Configuration"]["RevisionId"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            if current != revision {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push(format!("{call} refused at {revision}"));
+                let mut error = AlienError::new(ErrorData::CloudCallFailed {
+                    operation: format!("{call}: PreconditionFailedException"),
+                });
+                error.retryable = true;
+                return Err(error);
+            }
+            let next: u32 = current[1..].parse().unwrap();
+            function["Configuration"]["RevisionId"] = json!(format!("r{}", next + 1));
+            self.calls.lock().unwrap().push(call);
+            Ok(())
+        }
     }
 
     #[async_trait]
@@ -548,20 +633,27 @@ mod tests {
         async fn get(&self, _name: &str) -> Result<Value> {
             Ok(self.function.lock().unwrap().clone())
         }
-        async fn update_code(&self, name: &str, image_uri: &str, architecture: &str) -> Result<()> {
-            self.calls.lock().unwrap().push(format!("code {name}"));
+        async fn update_code(
+            &self,
+            name: &str,
+            image_uri: &str,
+            architecture: &str,
+            revision: &str,
+        ) -> Result<()> {
             let mut function = self.function.lock().unwrap();
+            self.at(&mut function, revision, format!("code {name}"))?;
             function["Code"]["ImageUri"] = json!(image_uri);
             function["Code"]["ResolvedImageUri"] = json!(image_uri);
             function["Configuration"]["Architectures"] = json!([architecture]);
             Ok(())
         }
-        async fn update_configuration(&self, spec: &FunctionSpec) -> Result<()> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(format!("configuration {}", spec.name));
+        async fn update_configuration(&self, spec: &FunctionSpec, revision: &str) -> Result<()> {
             let mut function = self.function.lock().unwrap();
+            self.at(
+                &mut function,
+                revision,
+                format!("configuration {}", spec.name),
+            )?;
             function["Configuration"]["Environment"]["Variables"] = json!(spec.env);
             function["Configuration"]["Role"] = json!(spec.run_as);
             function["Configuration"]["MemorySize"] = json!(spec.memory_mb);
@@ -579,6 +671,80 @@ mod tests {
         }
     }
 
+    /// The release being applied is still the newest.
+    struct Newest;
+
+    #[async_trait]
+    impl StillNewest for Newest {
+        async fn check(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Another verifier call writes the function between this one's read and its first write.
+    struct WrittenMeanwhile<'a>(&'a FakeLambda);
+
+    #[async_trait]
+    impl StillNewest for WrittenMeanwhile<'_> {
+        async fn check(&self) -> Result<()> {
+            let mut function = self.0.function.lock().unwrap();
+            if function["Configuration"]["RevisionId"] == json!("r1") {
+                let newer = format!("{REGISTRY}api@sha256:{}", "9".repeat(64));
+                self.0
+                    .at(&mut function, "r1", "the newer release's code".to_string())?;
+                function["Code"]["ImageUri"] = json!(newer);
+            }
+            Ok(())
+        }
+    }
+
+    /// A newer release was accepted before this one's writes.
+    struct Superseded;
+
+    #[async_trait]
+    impl StillNewest for Superseded {
+        async fn check(&self) -> Result<()> {
+            Err(AlienError::new(ErrorData::Refused {
+                reason: "release 11 was accepted while release 10 was being applied".to_string(),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_write_made_meanwhile_is_never_overwritten_with_an_older_release() {
+        let mut stale = function(&spec());
+        stale["Code"]["ImageUri"] = json!(format!("{REGISTRY}api@sha256:{}", "3".repeat(64)));
+        let lambda = FakeLambda::new(stale);
+        let error = apply(&lambda, &spec(), &WrittenMeanwhile(&lambda))
+            .await
+            .expect_err("the function changed after it was read");
+        assert!(error.retryable, "the caller retries and reads it again");
+        assert_eq!(
+            *lambda.calls.lock().unwrap(),
+            [
+                "the newer release's code",
+                "code acme-prod-api refused at r1"
+            ]
+        );
+        assert_eq!(
+            lambda.function.lock().unwrap()["Code"]["ImageUri"],
+            json!(format!("{REGISTRY}api@sha256:{}", "9".repeat(64)))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_superseded_release_writes_nothing() {
+        let mut stale = function(&spec());
+        stale["Code"]["ImageUri"] = json!(format!("{REGISTRY}api@sha256:{}", "3".repeat(64)));
+        let lambda = FakeLambda::new(stale);
+        let error = apply(&lambda, &spec(), &Superseded).await.unwrap_err();
+        assert!(
+            error.to_string().contains("release 11 was accepted"),
+            "{error}"
+        );
+        assert!(lambda.calls.lock().unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn apply_writes_every_owned_field_and_reads_it_back() {
         let mut drifted = function(&spec());
@@ -592,11 +758,8 @@ mod tests {
             json!({"ImageConfig": {"EntryPoint": ["/bin/sh"]}});
         drifted["Configuration"]["KMSKeyArn"] = json!("arn:aws:kms:us-east-1:999999999999:key/x");
         drifted["Configuration"]["Architectures"] = json!(["x86_64"]);
-        let lambda = FakeLambda {
-            function: Mutex::new(drifted),
-            calls: Mutex::new(Vec::new()),
-        };
-        apply(&lambda, &spec()).await.unwrap();
+        let lambda = FakeLambda::new(drifted);
+        apply(&lambda, &spec(), &Newest).await.unwrap();
         assert_eq!(
             *lambda.calls.lock().unwrap(),
             ["code acme-prod-api", "configuration acme-prod-api"]
@@ -607,7 +770,10 @@ mod tests {
         // in place silently.
         lambda.function.lock().unwrap()["Configuration"]["TenancyConfig"] =
             json!({"TenancyMode": "PerTenant"});
-        let error = apply(&lambda, &spec()).await.unwrap_err().to_string();
+        let error = apply(&lambda, &spec(), &Newest)
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("TenancyConfig"), "{error}");
     }
 }

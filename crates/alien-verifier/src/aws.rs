@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::error::{ErrorData, Result};
-use crate::function::FunctionStore;
+use crate::function::{FunctionStore, StillNewest};
 use crate::machines::{plan_roll, roll, MachineApi, RollMachines};
 use crate::plan::{FunctionSpec, Place};
 use crate::trust::InstallStore;
@@ -32,6 +32,11 @@ impl<S: SsmApi> SsmInstall<S> {
     }
 
     async fn read(&self, name: &str) -> Result<Lookup> {
+        Ok(self.read_numbered(name).await?.0)
+    }
+
+    /// Parameter `name` and its version. `name` may select a version, as `<name>:<version>`.
+    async fn read_numbered(&self, name: &str) -> Result<(Lookup, Option<u64>)> {
         let response = self
             .ssm
             .get_parameter(GetParameterRequest {
@@ -41,19 +46,26 @@ impl<S: SsmApi> SsmInstall<S> {
             .await;
         match response {
             Ok(response) => {
-                let value = response
-                    .parameter
-                    .and_then(|parameter| parameter.value)
-                    .ok_or_else(|| {
-                        AlienError::new(ErrorData::CloudCallFailed {
-                            operation: format!("ssm:GetParameter {name} returned no value"),
-                        })
-                    })?;
-                Ok(Lookup::Found(value.into_bytes()))
+                let parameter = response.parameter.ok_or_else(|| {
+                    AlienError::new(ErrorData::CloudCallFailed {
+                        operation: format!("ssm:GetParameter {name} returned no parameter"),
+                    })
+                })?;
+                let value = parameter.value.ok_or_else(|| {
+                    AlienError::new(ErrorData::CloudCallFailed {
+                        operation: format!("ssm:GetParameter {name} returned no value"),
+                    })
+                })?;
+                let version = parameter
+                    .version
+                    .and_then(|version| u64::try_from(version).ok());
+                Ok((Lookup::Found(value.into_bytes()), version))
             }
             Err(error) => match error.error {
-                Some(CloudClientErrorData::RemoteResourceNotFound { .. }) => Ok(Lookup::Absent),
-                Some(CloudClientErrorData::RemoteAccessDenied { .. }) => Ok(Lookup::Denied),
+                Some(CloudClientErrorData::RemoteResourceNotFound { .. }) => {
+                    Ok((Lookup::Absent, None))
+                }
+                Some(CloudClientErrorData::RemoteAccessDenied { .. }) => Ok((Lookup::Denied, None)),
                 _ => Err(error).context(ErrorData::CloudCallFailed {
                     operation: format!("ssm:GetParameter {name}"),
                 }),
@@ -73,8 +85,26 @@ impl<S: SsmApi> InstallStore for SsmInstall<S> {
     }
 
     async fn store_ledger(&self, prefix: &str, ledger: &Ledger) -> Result<()> {
+        self.store_numbered_ledger(prefix, ledger).await.map(|_| ())
+    }
+
+    /// SSM numbers every write of a parameter, so a write that landed between a read and a
+    /// write shows as a skipped version.
+    async fn numbered_ledger(&self, prefix: &str) -> Result<Option<(Lookup, u64)>> {
         let name = names::aws_ledger(prefix);
-        self.ssm
+        match self.read_numbered(&name).await? {
+            (Lookup::Found(bytes), Some(version)) => Ok(Some((Lookup::Found(bytes), version))),
+            (Lookup::Found(_), None) => Err(AlienError::new(ErrorData::CloudCallFailed {
+                operation: format!("ssm:GetParameter {name} returned no version"),
+            })),
+            (lookup, _) => Ok(Some((lookup, 0))),
+        }
+    }
+
+    async fn store_numbered_ledger(&self, prefix: &str, ledger: &Ledger) -> Result<u64> {
+        let name = names::aws_ledger(prefix);
+        let written = self
+            .ssm
             .put_parameter(
                 PutParameterRequest::builder()
                     .name(name.clone())
@@ -87,7 +117,19 @@ impl<S: SsmApi> InstallStore for SsmInstall<S> {
             .context(ErrorData::CloudCallFailed {
                 operation: format!("ssm:PutParameter {name}"),
             })?;
-        Ok(())
+        written
+            .version
+            .and_then(|version| u64::try_from(version).ok())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::CloudCallFailed {
+                    operation: format!("ssm:PutParameter {name} returned no version"),
+                })
+            })
+    }
+
+    async fn ledger_version(&self, prefix: &str, version: u64) -> Result<Lookup> {
+        self.read(&format!("{}:{version}", names::aws_ledger(prefix)))
+            .await
     }
 
     async fn input(&self, prefix: &str, name: &str) -> Result<Option<String>> {
@@ -210,8 +252,10 @@ impl<L: LambdaApi, M: MachineApi> Backend for AwsBackend<L, M> {
         read_bindings(&self.lambda, &place.prefix, &self.region, workload).await
     }
 
-    async fn apply(&self, spec: &FunctionSpec) -> Result<()> {
-        crate::function::apply(&self.lambda, spec).await.map(|_| ())
+    async fn apply(&self, spec: &FunctionSpec, newest: &dyn StillNewest) -> Result<()> {
+        crate::function::apply(&self.lambda, spec, newest)
+            .await
+            .map(|_| ())
     }
 
     async fn check(&self, spec: &FunctionSpec) -> Result<()> {

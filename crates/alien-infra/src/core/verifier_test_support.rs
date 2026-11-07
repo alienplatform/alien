@@ -14,6 +14,7 @@ use alien_signing::{
     fingerprint, InstallId, Kind, Ledger, Lookup, Role, SecretKey, SignedStatement, Signer,
     SignerKind, SignerListBody, SigningSettings, Workload,
 };
+use alien_verifier::function::StillNewest;
 use alien_verifier::plan::Place;
 use alien_verifier::trust::InstallStore;
 use alien_verifier::{Backend, FunctionSpec, Verifier};
@@ -149,7 +150,12 @@ impl Backend for Recorded {
         Ok(BTreeMap::new())
     }
 
-    async fn apply(&self, spec: &FunctionSpec) -> alien_verifier::Result<()> {
+    async fn apply(
+        &self,
+        spec: &FunctionSpec,
+        newest: &dyn StillNewest,
+    ) -> alien_verifier::Result<()> {
+        newest.check().await?;
         self.0.lock().unwrap().push(spec.clone());
         Ok(())
     }

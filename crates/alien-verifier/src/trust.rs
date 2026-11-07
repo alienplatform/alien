@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use alien_error::{AlienError, Context};
 use alien_signing::settings::names;
 use alien_signing::{
-    candidate_prefixes, discover, ConfigBody, InstallId, Kind, Ledger, Lookup, ReleaseBody,
+    candidate_prefixes, discover, ConfigBody, Entry, InstallId, Kind, Ledger, Lookup, ReleaseBody,
     SignedStatement, SigningSettings, Trust, Verified,
 };
 use async_trait::async_trait;
@@ -37,6 +37,27 @@ pub trait InstallStore: Send + Sync {
     /// Where the ledger of `prefix` lives, for messages.
     fn ledger_name(&self, prefix: &str) -> String {
         names::aws_ledger(prefix)
+    }
+    /// For a store that numbers each write of the ledger: the ledger of `prefix` and its
+    /// version. `None` when the store doesn't number writes.
+    async fn numbered_ledger(&self, _prefix: &str) -> Result<Option<(Lookup, u64)>> {
+        Ok(None)
+    }
+    /// Replace the ledger of `prefix` and answer the version the store gave the write.
+    /// Called only on a store whose `numbered_ledger` answers.
+    async fn store_numbered_ledger(&self, prefix: &str, _ledger: &Ledger) -> Result<u64> {
+        Err(refused(format!(
+            "the ledger at {} has no numbered writes",
+            self.ledger_name(prefix)
+        )))
+    }
+    /// Version `version` of the ledger of `prefix`. Called only on a store whose
+    /// `numbered_ledger` answers.
+    async fn ledger_version(&self, prefix: &str, _version: u64) -> Result<Lookup> {
+        Err(refused(format!(
+            "the ledger at {} has no numbered writes",
+            self.ledger_name(prefix)
+        )))
     }
 }
 
@@ -287,29 +308,119 @@ pub fn accept(
     })
 }
 
-/// Write `accepted` back to the install's ledger: read it again, take the
-/// higher value of each entry, and store the result. Another enforcer may
-/// have raised it in between; nothing here lowers it.
-pub async fn store_ledger(store: &dyn InstallStore, prefix: &str, accepted: &Ledger) -> Result<()> {
-    let mut current = match store.ledger(prefix).await? {
+/// The ledger of `prefix` as stored. A ledger that is gone or unreadable refuses.
+async fn stored(store: &dyn InstallStore, prefix: &str, lookup: Lookup) -> Result<Ledger> {
+    match lookup {
         Lookup::Found(bytes) => Ledger::parse(&bytes, prefix).context(ErrorData::Refused {
             reason: format!("the ledger at {} is not valid", store.ledger_name(prefix)),
-        })?,
-        Lookup::Absent | Lookup::Denied => {
-            return Err(refused(format!(
-                "the ledger at {} could not be read again",
-                store.ledger_name(prefix)
-            )))
-        }
-    };
-    let before = current.clone();
-    current.merge(accepted).context(ErrorData::Refused {
-        reason: "the ledger changed in a way that forks from this release".to_string(),
-    })?;
-    if current != before {
-        store.store_ledger(prefix, &current).await?;
+        }),
+        Lookup::Absent | Lookup::Denied => Err(refused(format!(
+            "the ledger at {} could not be read again",
+            store.ledger_name(prefix)
+        ))),
     }
-    Ok(())
+}
+
+/// How many times a ledger write is merged again when other writers keep writing in between.
+const LEDGER_WRITE_ATTEMPTS: usize = 5;
+
+/// Write `accepted` back to the install's ledger: read it again, take the higher value of
+/// each entry, and store the result. Another enforcer (another verifier call, or a machine) may
+/// have raised it in between; nothing here lowers it.
+///
+/// A write can still replace one made between this read and this write. Where the store
+/// numbers writes, a version that was skipped is read and merged in, and the result written
+/// again, so a raise made concurrently is never lost. Elsewhere one verifier instance serves the
+/// install, and machines merge before they write.
+pub async fn store_ledger(store: &dyn InstallStore, prefix: &str, accepted: &Ledger) -> Result<()> {
+    let mut accepted = accepted.clone();
+    for _ in 0..LEDGER_WRITE_ATTEMPTS {
+        let Some((lookup, read)) = store.numbered_ledger(prefix).await? else {
+            let mut current = stored(store, prefix, store.ledger(prefix).await?).await?;
+            let before = current.clone();
+            merge_into(store, prefix, &mut current, &accepted)?;
+            if current != before {
+                store.store_ledger(prefix, &current).await?;
+            }
+            return Ok(());
+        };
+        let mut current = stored(store, prefix, lookup).await?;
+        let before = current.clone();
+        merge_into(store, prefix, &mut current, &accepted)?;
+        if current == before {
+            return Ok(());
+        }
+        let written = store.store_numbered_ledger(prefix, &current).await?;
+        let mut skipped = false;
+        for version in read + 1..written {
+            let other = stored(store, prefix, store.ledger_version(prefix, version).await?).await?;
+            merge_into(store, prefix, &mut current, &other)?;
+            skipped = true;
+        }
+        if !skipped {
+            return Ok(());
+        }
+        // A write landed between the read and this write and may have been replaced by it:
+        // write the union again, after reading what is there now.
+        accepted = current;
+    }
+    let mut busy = AlienError::new(ErrorData::CloudCallFailed {
+        operation: format!(
+            "writing the ledger at {}: other writers kept writing in between",
+            store.ledger_name(prefix)
+        ),
+    });
+    busy.retryable = true;
+    Err(busy)
+}
+
+fn merge_into(
+    store: &dyn InstallStore,
+    prefix: &str,
+    current: &mut Ledger,
+    other: &Ledger,
+) -> Result<()> {
+    current.merge(other).context(ErrorData::Refused {
+        reason: format!(
+            "the ledger at {} changed in a way that forks from this release",
+            store.ledger_name(prefix)
+        ),
+    })
+}
+
+/// The release a request is applying, which must still be the install's newest when each of
+/// its functions is written.
+pub struct Floor<'a> {
+    /// Where the ledger lives.
+    pub store: &'a dyn InstallStore,
+    /// The install's prefix.
+    pub prefix: &'a str,
+    /// The release, as the ledger records it.
+    pub release: Entry,
+}
+
+#[async_trait]
+impl crate::function::StillNewest for Floor<'_> {
+    async fn check(&self) -> Result<()> {
+        let ledger = stored(
+            self.store,
+            self.prefix,
+            self.store.ledger(self.prefix).await?,
+        )
+        .await?;
+        match &ledger.release {
+            Some(newest) if *newest == self.release => Ok(()),
+            Some(newest) => Err(refused(format!(
+                "release {} was accepted while release {} was being applied",
+                newest.sequence, self.release.sequence
+            ))),
+            None => Err(refused(format!(
+                "the ledger at {} no longer records release {}",
+                self.store.ledger_name(self.prefix),
+                self.release.sequence
+            ))),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -377,6 +488,82 @@ pub(crate) mod tests {
         async fn input(&self, _prefix: &str, name: &str) -> Result<Option<String>> {
             Ok(self.inputs.get(name).cloned())
         }
+    }
+
+    /// A store that numbers each ledger write, like SSM, where another writer's write lands
+    /// between the verifier's read and its write once.
+    struct Numbered {
+        versions: Mutex<Vec<Ledger>>,
+        meanwhile: Mutex<Option<Ledger>>,
+    }
+
+    #[async_trait]
+    impl InstallStore for Numbered {
+        async fn settings(&self, _prefix: &str) -> Result<Lookup> {
+            unreachable!("only the ledger is written here")
+        }
+        async fn ledger(&self, _prefix: &str) -> Result<Lookup> {
+            unreachable!("a numbered store is read through numbered_ledger")
+        }
+        async fn store_ledger(&self, _prefix: &str, _ledger: &Ledger) -> Result<()> {
+            unreachable!("a numbered store is written through store_numbered_ledger")
+        }
+        async fn input(&self, _prefix: &str, _name: &str) -> Result<Option<String>> {
+            unreachable!("only the ledger is written here")
+        }
+        async fn numbered_ledger(&self, _prefix: &str) -> Result<Option<(Lookup, u64)>> {
+            let versions = self.versions.lock().unwrap();
+            let latest = versions.last().unwrap();
+            Ok(Some((
+                Lookup::Found(latest.to_json().into_bytes()),
+                versions.len() as u64,
+            )))
+        }
+        async fn store_numbered_ledger(&self, _prefix: &str, ledger: &Ledger) -> Result<u64> {
+            let mut versions = self.versions.lock().unwrap();
+            if let Some(other) = self.meanwhile.lock().unwrap().take() {
+                versions.push(other);
+            }
+            versions.push(ledger.clone());
+            Ok(versions.len() as u64)
+        }
+        async fn ledger_version(&self, _prefix: &str, version: u64) -> Result<Lookup> {
+            let versions = self.versions.lock().unwrap();
+            Ok(Lookup::Found(
+                versions[version as usize - 1].to_json().into_bytes(),
+            ))
+        }
+    }
+
+    fn at_release(sequence: u64, digit: char) -> Ledger {
+        let mut ledger = Ledger::new(PREFIX);
+        ledger
+            .raise(
+                Kind::Release,
+                sequence,
+                &format!("sha256:{}", digit.to_string().repeat(64)),
+            )
+            .unwrap();
+        ledger
+    }
+
+    #[tokio::test]
+    async fn a_ledger_write_never_replaces_a_raise_made_meanwhile() {
+        // Another writer raises the ledger to release 11 between this read and this write of
+        // release 10. The write of 10 replaces it as the latest value; the skipped version is
+        // read back and merged in, so the ledger ends at 11.
+        let store = Numbered {
+            versions: Mutex::new(vec![Ledger::new(PREFIX)]),
+            meanwhile: Mutex::new(Some(at_release(11, 'b'))),
+        };
+        store_ledger(&store, PREFIX, &at_release(10, 'a'))
+            .await
+            .unwrap();
+        let versions = store.versions.lock().unwrap();
+        assert_eq!(versions.len(), 4, "empty, theirs, ours, the union");
+        assert_eq!(versions[1], at_release(11, 'b'));
+        assert_eq!(versions[2], at_release(10, 'a'));
+        assert_eq!(versions.last().unwrap(), &at_release(11, 'b'));
     }
 
     pub fn aws_install(prefix: &str) -> InstallId {
