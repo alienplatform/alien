@@ -612,16 +612,20 @@ async fn pump(
 
 /// Kills the command's group and waits for its output to end, which is Docker saying the exec's
 /// process is gone. Returns whether that was confirmed.
+///
+/// The output is drained while the kill runs, not after: an unread exec holds Docker's copy of
+/// its output, and until that copy moves the container's other execs (the kill among them) and
+/// its exit can stall behind it.
 async fn stop(manager: &LocalSandboxManager, command: &Command, output: &mut Output) -> bool {
-    let _ = kill_group(
+    let kill = kill_group(
         manager,
         &command.container_id,
         command.process_group,
         "KILL",
-    )
-    .await;
+    );
+    let drain = async { while output.next().await.is_some() {} };
     tokio::time::timeout(KILL_SETTLE, async {
-        while output.next().await.is_some() {}
+        let _ = tokio::join!(kill, drain);
     })
     .await
     .is_ok()
