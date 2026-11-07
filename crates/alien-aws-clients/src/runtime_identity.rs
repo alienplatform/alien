@@ -181,7 +181,7 @@ impl AwsIdentityProofVerifier {
             .and_utc();
         let expires: i64 = get("X-Amz-Expires")?.parse().map_err(|_| refused())?;
         if !(1..=300).contains(&expires)
-            || signed_at > now
+            || signed_at > now + Duration::seconds(ALLOWED_CLOCK_SKEW_SECONDS)
             || now >= signed_at + Duration::seconds(expires)
         {
             return Err(refused());
@@ -199,6 +199,15 @@ impl AwsIdentityProofVerifier {
         Ok((url, signed_at, signed_at + Duration::seconds(expires)))
     }
 }
+
+/// How far ahead of our clock a proof's `X-Amz-Date` may be. A caller whose
+/// clock runs a little fast must not be locked out. AWS accepts SigV4 requests
+/// whose timestamp is within 5 minutes of its own clock, so we use the same
+/// tolerance:
+/// https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv-troubleshooting.html
+/// The proof still ends at `signed_at + X-Amz-Expires`, and STS checks the
+/// signature and the date itself.
+pub const ALLOWED_CLOCK_SKEW_SECONDS: i64 = 300;
 
 fn refused() -> AlienError {
     ErrorData::unauthorized("AWS runtime identity proof refused").into_generic()
@@ -422,12 +431,37 @@ mod tests {
     async fn signed_window_is_enforced_at_both_edges() {
         let sts = FakeSts::start(REGION, Answer::Identity).await;
         let valid = proof(&sts, AUDIENCE, 300);
-        for (offset, accepted) in [(-1, false), (0, true), (299, true), (300, false)] {
+        for (offset, accepted) in [
+            (-ALLOWED_CLOCK_SKEW_SECONDS - 1, false),
+            (-ALLOWED_CLOCK_SKEW_SECONDS, true),
+            (0, true),
+            (299, true),
+            (300, false),
+        ] {
             let result = verifier(&sts, &[signed_at() + Duration::seconds(offset)])
                 .verify(&valid, AUDIENCE)
                 .await;
             assert_eq!(result.is_ok(), accepted, "offset {offset}");
         }
+    }
+
+    #[tokio::test]
+    async fn proof_from_a_fast_clock_is_accepted_within_five_minutes() {
+        let sts = FakeSts::start(REGION, Answer::Identity).await;
+        let valid = proof(&sts, AUDIENCE, 300);
+        // The caller's clock runs ahead of ours, so the proof looks signed
+        // in the future.
+        let two_minutes_ahead = verifier(&sts, &[signed_at() - Duration::minutes(2)])
+            .verify(&valid, AUDIENCE)
+            .await;
+        assert!(two_minutes_ahead.is_ok());
+        let six_minutes_ahead = verifier(&sts, &[signed_at() - Duration::minutes(6)])
+            .verify(&valid, AUDIENCE)
+            .await
+            .err()
+            .unwrap();
+        assert!(!six_minutes_ahead.retryable);
+        assert_eq!(sts.requests(), 1);
     }
 
     #[tokio::test]
