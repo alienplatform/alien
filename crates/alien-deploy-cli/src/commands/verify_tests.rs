@@ -218,15 +218,15 @@ fn observed() -> Observed {
                 release("dev", 19, "Resources: {}\n", ("alice-mbp", 1)),
             ),
         ],
-        before_create: false,
+        signing_from_change_set: false,
     }
 }
 
 /// The same stack as a CREATE change set waiting for review: nothing exists yet, so the
 /// signing settings and ledger are what the change set's template writes.
-fn before_create() -> Observed {
+fn signing_from_change_set() -> Observed {
     let mut observed = observed();
-    let (settings, ledger) = written_at_create(
+    let (settings, ledger) = written_by_change_set(
         &observed.template,
         &observed.stack_name,
         &observed.parameters,
@@ -234,7 +234,7 @@ fn before_create() -> Observed {
     .expect("the template writes both signing parameters");
     observed.settings = Some((settings, None));
     observed.ledger = Some(ledger);
-    observed.before_create = true;
+    observed.signing_from_change_set = true;
     observed
 }
 
@@ -243,7 +243,7 @@ fn before_create() -> Observed {
 /// parameters, and the settings and ledger its template writes.
 #[test]
 fn a_create_change_set_is_checked_before_anything_runs() {
-    let pending = before_create();
+    let pending = signing_from_change_set();
     assert_eq!(
         pending.settings.as_ref().unwrap().0,
         format!(
@@ -280,10 +280,10 @@ fn a_create_change_set_is_checked_before_anything_runs() {
         alien_signing::fingerprint(&format!("sha256:{}", "ab".repeat(32))),
     );
     let (settings, ledger) =
-        written_at_create(&overridden.template, PREFIX, &overridden.parameters).unwrap();
+        written_by_change_set(&overridden.template, PREFIX, &overridden.parameters).unwrap();
     overridden.settings = Some((settings, None));
     overridden.ledger = Some(ledger);
-    overridden.before_create = true;
+    overridden.signing_from_change_set = true;
     let error = check(&overridden, now()).expect_err("the overridden pin is refused");
     assert!(
         error.message.contains("don't verify from fingerprint"),
@@ -296,7 +296,7 @@ fn a_create_change_set_is_checked_before_anything_runs() {
         "/signed/${AWS::StackName}/fingerprint",
         "/elsewhere/${AWS::StackName}",
     );
-    let error = written_at_create(&unprotected, PREFIX, &observed().parameters).unwrap_err();
+    let error = written_by_change_set(&unprotected, PREFIX, &observed().parameters).unwrap_err();
     assert!(
         error.message.contains("is not protected"),
         "{}",
@@ -309,7 +309,7 @@ fn a_create_change_set_is_checked_before_anything_runs() {
         "${AWS::StackName}\",\"channel",
         "${AWS::AccountId}\",\"channel",
     );
-    let error = written_at_create(&foreign, PREFIX, &observed().parameters).unwrap_err();
+    let error = written_by_change_set(&foreign, PREFIX, &observed().parameters).unwrap_err();
     assert!(
         error.message.contains("AWS::AccountId"),
         "{}",
@@ -629,6 +629,68 @@ fn locking_keeps_the_existing_policy_and_adds_one_deny() {
         merged["Statement"][0]["Resource"],
         "LogicalResourceId/Database"
     );
+}
+
+/// Which signing state verify checks. A change set on a stack with no settings yet (a CREATE
+/// change set, or the update that protects an unprotected stack) is checked against what it
+/// writes; a stack that has settings is checked against its own, whatever the change set says;
+/// and without a change set, a stack with no settings is reported unprotected.
+#[test]
+fn a_change_set_that_adds_protection_is_checked_against_what_it_writes() {
+    let observed = observed();
+    let unprotected = Signing {
+        settings: None,
+        ledger: None,
+        from_change_set: false,
+    };
+    let adding = signing_to_check(
+        unprotected.clone(),
+        Some(&observed.template),
+        PREFIX,
+        &observed.parameters,
+    )
+    .unwrap();
+    assert!(adding.from_change_set);
+    assert_eq!(
+        adding.settings.unwrap().0,
+        format!(
+            r#"{{"fingerprint":"{}","prefix":"{PREFIX}","channel":"production"}}"#,
+            fingerprint()
+        )
+        .into_bytes()
+    );
+    assert_eq!(
+        adding.ledger.unwrap(),
+        format!(r#"{{"prefix":"{PREFIX}","created":true}}"#).into_bytes()
+    );
+
+    let installed = Signing {
+        settings: observed.settings.clone(),
+        ledger: observed.ledger.clone(),
+        from_change_set: false,
+    };
+    assert_eq!(
+        signing_to_check(
+            installed.clone(),
+            Some(&observed.template),
+            PREFIX,
+            &observed.parameters
+        )
+        .unwrap(),
+        installed,
+        "a protected stack's own settings are what count"
+    );
+
+    assert_eq!(
+        signing_to_check(unprotected.clone(), None, PREFIX, &observed.parameters).unwrap(),
+        unprotected
+    );
+    let mut without = observed.clone();
+    without.settings = None;
+    assert!(check(&without, now())
+        .unwrap_err()
+        .message
+        .contains("this install is not protected"));
 }
 
 /// A signed setup update that changes the verifier can't run under the lock, and

@@ -133,9 +133,10 @@ pub struct Observed {
     pub signer_lists: Vec<SignedStatement>,
     /// Release ids and their AWS statements, as the control plane serves them.
     pub releases: Vec<(String, SignedStatement)>,
-    /// Whether the stack doesn't exist yet: a CREATE change set waits for review, and
-    /// `settings` and `ledger` are what its template writes when it runs.
-    pub before_create: bool,
+    /// Whether the install has no signing settings yet and the change set writes them (a CREATE
+    /// change set, or an update that protects the stack): `settings` and `ledger` are then what
+    /// its template writes when it runs.
+    pub signing_from_change_set: bool,
 }
 
 /// How one line of the screen came out.
@@ -279,11 +280,11 @@ pub fn check(observed: &Observed, now: DateTime<Utc>) -> Result<Vec<Line>> {
         .get("ManagementExternalId")
         .is_some_and(|id| !id.is_empty());
     let mut extra = Vec::new();
-    if observed.before_create {
+    if observed.signing_from_change_set {
         extra.push(line(
             "Signing state",
             format!(
-                "not written yet: this CREATE change set writes the settings and an empty ledger shown here ({}, {})",
+                "not written yet: this change set writes the settings and an empty ledger shown here ({}, {})",
                 names::aws_settings(prefix),
                 names::aws_ledger(prefix)
             ),
@@ -303,10 +304,43 @@ pub fn check(observed: &Observed, now: DateTime<Utc>) -> Result<Vec<Line>> {
     check_signed(&signed, &installed, extra, now)
 }
 
-/// What a CREATE change set's `template` writes to the signing settings and ledger parameters
-/// of stack `stack_name` with `parameters`: the `Fn::Sub` values of its two SSM parameters, with
+/// Signing settings and a ledger to check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Signing {
+    /// The settings, with when they were last written if known.
+    pub settings: Option<(Vec<u8>, Option<DateTime<Utc>>)>,
+    /// The ledger.
+    pub ledger: Option<Vec<u8>>,
+    /// Whether they are what a change set writes, not what the install holds.
+    pub from_change_set: bool,
+}
+
+/// What to check: the install's own signing settings and ledger, or, when a change set is
+/// checked (its `template`) and the install has no settings yet, what the change set writes (a
+/// CREATE change set creates nothing before it runs; an update can be what protects the stack).
+pub fn signing_to_check(
+    installed: Signing,
+    change_set_template: Option<&str>,
+    stack_name: &str,
+    parameters: &BTreeMap<String, String>,
+) -> Result<Signing> {
+    match change_set_template {
+        Some(template) if installed.settings.is_none() => {
+            let (settings, ledger) = written_by_change_set(template, stack_name, parameters)?;
+            Ok(Signing {
+                settings: Some((settings, None)),
+                ledger: Some(ledger),
+                from_change_set: true,
+            })
+        }
+        _ => Ok(installed),
+    }
+}
+
+/// What a change set's `template` writes to the signing settings and ledger parameters of stack
+/// `stack_name` with `parameters`: the `Fn::Sub` values of its two SSM parameters, with
 /// the stack name and the template's parameters substituted. Nothing else may be referenced.
-pub fn written_at_create(
+pub fn written_by_change_set(
     template: &str,
     stack_name: &str,
     parameters: &BTreeMap<String, String>,
@@ -334,7 +368,7 @@ pub fn written_at_create(
     let mut take = |name: String| {
         written.remove(&name).map(String::into_bytes).ok_or_else(|| {
             failed(format!(
-                "the change set's template doesn't write {name}, so the install it creates is not protected"
+                "the change set's template doesn't write {name}, so the install is not protected after it runs either"
             ))
         })
     };
@@ -1050,23 +1084,24 @@ async fn observe(
         .ok_or_else(|| failed(format!("stack '{stack}' returned no template")))?
         .to_string();
 
-    // A CREATE change set waiting for review leaves the stack in REVIEW_IN_PROGRESS with nothing
-    // created: its template says what the signing parameters will hold.
-    let before_create = change_set.is_some()
-        && found.stack_status()
-            == Some(&aws_sdk_cloudformation::types::StackStatus::ReviewInProgress);
-    let (settings, ledger) = if before_create {
-        let (settings, ledger) = written_at_create(&template, &stack_name, &parameters)?;
-        (Some((settings, None)), Some(ledger))
-    } else {
-        let ssm = &ssm_client(aws, &stack_id).await?;
-        (
-            parameter(ssm, &names::aws_settings(&stack_name)).await?,
-            parameter(ssm, &names::aws_ledger(&stack_name))
-                .await?
-                .map(|(bytes, _)| bytes),
-        )
+    let ssm = &ssm_client(aws, &stack_id).await?;
+    let installed = Signing {
+        settings: parameter(ssm, &names::aws_settings(&stack_name)).await?,
+        ledger: parameter(ssm, &names::aws_ledger(&stack_name))
+            .await?
+            .map(|(bytes, _)| bytes),
+        from_change_set: false,
     };
+    let Signing {
+        settings,
+        ledger,
+        from_change_set: signing_from_change_set,
+    } = signing_to_check(
+        installed,
+        change_set.map(|_| template.as_str()),
+        &stack_name,
+        &parameters,
+    )?;
     let (signer_lists, releases) = signed_releases(url, token, "aws").await?;
     Ok(Observed {
         stack_id,
@@ -1077,7 +1112,7 @@ async fn observe(
         ledger,
         signer_lists,
         releases,
-        before_create,
+        signing_from_change_set,
     })
 }
 
