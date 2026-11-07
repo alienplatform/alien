@@ -689,6 +689,55 @@ pub fn latest_config(
         .map_err(|error| refused(format!("its body doesn't parse ({error})")))
 }
 
+/// Refuse `config` unless the release it will be applied with accepts it.
+/// `statement` is the release `release_id` signed for the deployment's
+/// platform, as the server returned it; it is checked here first. The
+/// install runs the same check and refuses every update while the newest
+/// config names something the release doesn't make configurable, so a
+/// config it would refuse is never signed.
+pub fn check_config_for_release(
+    chain: &SignerChain,
+    release_id: &str,
+    statement: &SignedStatement,
+    config: &alien_signing::ConfigBody,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let release: alien_signing::ReleaseBody = statement
+        .open()
+        .map_err(|error| format!("it doesn't open ({error})"))
+        .and_then(|opened| {
+            check_statement(chain, &opened, Kind::Release, None, now)?;
+            opened
+                .body()
+                .map_err(|error| format!("its body doesn't parse ({error})"))
+        })
+        .map_err(|reason| {
+            AlienError::new(ErrorData::SigningFailed {
+                message: format!(
+                    "The deployment's release {release_id} doesn't check out: {reason}. Nothing was signed."
+                ),
+            })
+        })?;
+    config.check(&release).map_err(|error| {
+        let listed = |names: &[String]| {
+            if names.is_empty() {
+                "none".to_string()
+            } else {
+                names.join(", ")
+            }
+        };
+        AlienError::new(ErrorData::ValidationError {
+            field: "config".to_string(),
+            message: format!(
+                "{}. Release {release_id} lets you set env: {}; inputs: {}. Nothing was signed.",
+                error.message,
+                listed(&release.configurable.env),
+                listed(&release.configurable.inputs),
+            ),
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -784,6 +833,67 @@ mod tests {
                 .contains("not aws:111122223333:us-east-1:acme"),
             "{}",
             error.message
+        );
+    }
+
+    #[test]
+    fn a_config_the_release_would_refuse_is_never_signed() {
+        let now = Utc::now();
+        let v1 = list_v1(now);
+        let fingerprint = alien_signing::fingerprint(&v1.open().unwrap().digest);
+        let chain = SignerChain::from_statements(&fingerprint, &[v1], now).unwrap();
+        let release_body = alien_signing::ReleaseBody {
+            platform: "gcp".to_string(),
+            channel: "production".to_string(),
+            workloads: Vec::new(),
+            configurable: alien_signing::release::Configurable {
+                env: vec!["LOG_LEVEL".to_string()],
+                inputs: Vec::new(),
+            },
+            components: Default::default(),
+            setup: Default::default(),
+            stack: None,
+        };
+        let release = |seed: u8| {
+            SignedStatement::new(
+                &envelope(Kind::Release, &chain, None, release_body.clone())
+                    .to_payload()
+                    .unwrap(),
+            )
+            .sign_with("alice", &SecretKey::from_secret_bytes(&[seed; 32]).unwrap())
+            .unwrap()
+        };
+        let config = |name: &str| alien_signing::ConfigBody {
+            env: [(name.to_string(), "1".to_string())].into(),
+            ..Default::default()
+        };
+
+        check_config_for_release(&chain, "rel_1", &release(1), &config("LOG_LEVEL"), now)
+            .expect("a configurable name is signed");
+
+        // A name the release doesn't declare: the install would refuse every
+        // update until a new config replaced it.
+        let error =
+            check_config_for_release(&chain, "rel_1", &release(1), &config("V8_PROBE"), now)
+                .unwrap_err();
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert_eq!(
+            error.message,
+            "Validation failed for config: The 'config/v1' statement was refused: env \
+             V8_PROBE is not configurable in the signed release. Release rel_1 lets you set \
+             env: LOG_LEVEL; inputs: none. Nothing was signed."
+        );
+
+        // The release's word is checked before it is trusted.
+        let forged =
+            check_config_for_release(&chain, "rel_1", &release(9), &config("LOG_LEVEL"), now)
+                .unwrap_err();
+        assert!(
+            forged
+                .message
+                .contains("release rel_1 doesn't check out: it isn't signed by a release key"),
+            "{}",
+            forged.message
         );
     }
 

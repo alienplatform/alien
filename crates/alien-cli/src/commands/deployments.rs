@@ -1572,7 +1572,7 @@ fn parse_pairs(pairs: &[String], field: &str, form: &str) -> Result<Vec<(String,
 async fn protected_install(
     ctx: &ExecutionMode,
     target: &PlatformTarget,
-) -> Result<Option<alien_signing::InstallId>> {
+) -> Result<Option<ProtectedInstall>> {
     let query = vec![("workspace".to_string(), target.workspace.clone())];
     let deployment = crate::signing::api::get_json(
         ctx,
@@ -1583,17 +1583,72 @@ async fn protected_install(
     if deployment["protected"].as_bool() != Some(true) {
         return Ok(None);
     }
-    crate::signing::install_id(&deployment).map(Some)
+    Ok(Some(ProtectedInstall {
+        id: crate::signing::install_id(&deployment)?,
+        deployment,
+    }))
+}
+
+/// A protected deployment, as the server reports it.
+struct ProtectedInstall {
+    /// The install id derived from what the deployment reports.
+    id: alien_signing::InstallId,
+    /// The deployment as `GET /v1/deployments/{id}` returned it.
+    deployment: serde_json::Value,
+}
+
+/// The release a config signed now is applied with: the one the deployment
+/// is moving to, or the one it runs. Returns its id and the statement
+/// signed for the deployment's platform, unchecked.
+async fn release_for_config(
+    ctx: &ExecutionMode,
+    target: &PlatformTarget,
+    deployment: &serde_json::Value,
+) -> Result<(String, alien_signing::SignedStatement)> {
+    let id = target.deployment.id.as_str();
+    let refused = |message: String| {
+        AlienError::new(ErrorData::SigningFailed {
+            message: format!("{message}. Nothing was signed."),
+        })
+    };
+    let release_id = ["desiredReleaseId", "currentReleaseId"]
+        .iter()
+        .find_map(|field| deployment[*field].as_str())
+        .ok_or_else(|| {
+            refused(format!(
+                "Deployment {id} has no release yet, so there is nothing to check a config against"
+            ))
+        })?;
+    let platform = deployment["platform"]
+        .as_str()
+        .ok_or_else(|| refused(format!("Deployment {id} doesn't report its platform")))?;
+    let query = vec![("workspace".to_string(), target.workspace.clone())];
+    let release =
+        crate::signing::api::get_json(ctx, &format!("/v1/releases/{release_id}"), &query).await?;
+    let statement = release["signedStacks"][platform].clone();
+    if statement.is_null() {
+        return Err(refused(format!(
+            "Release {release_id} carries no signed stack for {platform}"
+        )));
+    }
+    let statement = serde_json::from_value(statement)
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("Release {release_id} carries a statement that doesn't parse"),
+            url: None,
+        })?;
+    Ok((release_id.to_string(), statement))
 }
 
 /// Sign the deployment's next `config/v1` statement: its latest signed
 /// config, checked here, with `change` applied. The signer list is verified
-/// from the fingerprint in `.alien/signing.json` first. The statement
-/// replaces the deployment's previous signed config.
+/// from the fingerprint in `.alien/signing.json` first, and the result is
+/// checked against the deployment's signed release. The statement replaces
+/// the deployment's previous signed config.
 async fn sign_config(
     ctx: &ExecutionMode,
     target: &PlatformTarget,
-    install: &alien_signing::InstallId,
+    install: &ProtectedInstall,
     json: bool,
     change: impl FnOnce(&mut alien_signing::ConfigBody),
 ) -> Result<()> {
@@ -1602,9 +1657,13 @@ async fn sign_config(
     let (chain, signer) =
         crate::signing::project_signer(&api, alien_signing::Role::Release).await?;
     let stored = api.config_statements(&deployment).await?;
-    let mut body = crate::signing::latest_config(&chain, install, &stored, chrono::Utc::now())?
-        .unwrap_or_default();
+    let now = chrono::Utc::now();
+    let (release_id, release) = release_for_config(ctx, target, &install.deployment).await?;
+    let install = &install.id;
+    let mut body =
+        crate::signing::latest_config(&chain, install, &stored, now)?.unwrap_or_default();
     change(&mut body);
+    crate::signing::check_config_for_release(&chain, &release_id, &release, &body, now)?;
     let envelope =
         crate::signing::envelope(alien_signing::Kind::Config, &chain, Some(install), body);
     if let Some(gesture) = signer.gesture() {
