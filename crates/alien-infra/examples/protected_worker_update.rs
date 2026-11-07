@@ -7,7 +7,8 @@
 //!                                      writes for `$PREFIX`, as JSON
 //!   protected_worker_update policies   prints the `<prefix>-management-limits` policy and the
 //!                                      verifier's policy setup renders, for `$ACCOUNT`/`$REGION`
-//!   protected_worker_update update     updates worker `api` from `$FROM_IMAGE` to `$TO_IMAGE`
+//!   protected_worker_update update     updates worker `api` from `$FROM_IMAGE` to `$TO_IMAGE`,
+//!                                      or creates it when `$FROM_IMAGE` is empty
 //!   protected_worker_update request    prints the `applyRelease` request for release `$SEQUENCE`
 //!                                      of the stack running `$TO_IMAGE`
 //!
@@ -131,6 +132,7 @@ fn imported_state(
     account: &str,
     region: &str,
     installed: &Stack,
+    worker_installed: bool,
     settings: &StackSettings,
 ) -> Result<StackState, Error> {
     let mut state = StackState::new(Platform::Aws);
@@ -138,6 +140,9 @@ fn imported_state(
     let role_name = format!("{prefix}-{PROFILE}-sa");
     let function_name = format!("{prefix}-{WORKER}");
     for (id, entry) in installed.resources() {
+        if id == WORKER && !worker_installed {
+            continue;
+        }
         let ctx = ImportContext {
             resource_id: id,
             platform: Platform::Aws,
@@ -218,6 +223,7 @@ async fn update() -> Result<(), Error> {
         &aws.account_id,
         &aws.region,
         &stack(&env("FROM_IMAGE")?),
+        !env("FROM_IMAGE")?.is_empty(),
         &stack_settings,
     )?;
     let config = DeploymentConfig::builder()

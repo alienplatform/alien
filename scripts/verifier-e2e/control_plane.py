@@ -6,7 +6,8 @@ running as an install's management role, update the function through the install
 when the install is protected, and by writing it themselves when it isn't.
 
 Creates two installs, `<p>-p` (protected) and `<p>-u` (unprotected), each as setup would:
-  - the workload's role `<i>-execution-sa` and the function `<i>-api` on image A;
+  - the workload's role `<i>-execution-sa`, and on the unprotected one the function `<i>-api`
+    on image A (no setup creates a protected install's function; its first deployment does);
   - the management role `<i>-management`, which the caller may assume, allowed Lambda writes on
     the install's functions; the protected one also carries `<i>-management-limits`, the policy
     protected setup renders, which denies them;
@@ -15,6 +16,8 @@ Creates two installs, `<p>-p` (protected) and `<p>-u` (unprotected), each as set
 
 Then, as each management role, runs `protected_worker_update update` (alien-infra example) to
 move `api` to image B, and checks with the caller's own credentials:
+  0. protected: the first deployment creates `api` on image A through the verifier, tagged as
+     the install's runtime resources, which management can then read;
   1. protected: the update succeeds, the function runs B, the verifier logged the write, and
      the management role itself is denied UpdateFunctionCode (the path the controller used to
      take);
@@ -187,11 +190,12 @@ class Run:
                 self.created.append(("parameter", name))
             self.role(f"{install}-verifier", lambda_trust, managed=[basic], inline=policies["verifier"])
         time.sleep(15)  # IAM propagation
-        aws("lambda", "create-function", "--function-name", f"{install}-api", "--package-type", "Image",
-            "--code", f"ImageUri={self.images['a']}", "--role", f"arn:aws:iam::{self.account}:role/{install}-execution-sa",
-            "--architectures", "arm64", "--memory-size", "128", "--timeout", "3",
-            "--tags", f"{self.tag_key}={self.tag_value}")
         self.created.append(("function", f"{install}-api"))
+        if not protected:
+            aws("lambda", "create-function", "--function-name", f"{install}-api", "--package-type", "Image",
+                "--code", f"ImageUri={self.images['a']}", "--role", f"arn:aws:iam::{self.account}:role/{install}-execution-sa",
+                "--architectures", "arm64", "--memory-size", "128", "--timeout", "3",
+                "--tags", f"{self.tag_key}={self.tag_value}")
         if protected:
             aws("lambda", "create-function", "--function-name", f"{install}-verifier", "--runtime", "provided.al2023",
                 "--handler", "bootstrap", "--architectures", "x86_64", "--zip-file", f"fileb://{self.zip}",
@@ -202,7 +206,8 @@ class Run:
             self.created.append(("log-group", f"/aws/lambda/{install}-verifier"))
             self.wait_active(f"{install}-verifier")
         self.created.append(("log-group", f"/aws/lambda/{install}-api"))
-        self.wait_active(f"{install}-api")
+        if not protected:
+            self.wait_active(f"{install}-api")
 
     def management_env(self, install):
         credentials = aws_json("sts", "assume-role", "--role-arn", f"arn:aws:iam::{self.account}:role/{install}-management",
@@ -218,6 +223,20 @@ class Run:
     def protected(self):
         install = f"{self.prefix}-p"
         management = self.management_env(install)
+        create = {**management, "FROM_IMAGE": "", "TO_IMAGE": self.images["a"], "PROTECTED": "1"}
+        result = self.driver("update", install, create, check=False)
+        outcome = json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {}
+        function = aws_json("lambda", "get-function", "--function-name", f"{install}-api", check=False)
+        tags = function.get("Tags", {})
+        readable = aws("lambda", "get-function-configuration", "--function-name", f"{install}-api",
+                       check=False, env={**os.environ, **management})
+        self.record("0 protected: the first deployment creates the worker through the verifier",
+                    result.returncode == 0 and outcome.get("outcome") == "synced"
+                    and function.get("Code", {}).get("ImageUri") == self.images["a"]
+                    and tags.get("deployment") == install and tags.get("managed-by") == "runtime"
+                    and readable.returncode == 0,
+                    f"driver={outcome} image={function.get('Code', {}).get('ImageUri', '')[-19:]} tags={tags} "
+                    f"management-reads={readable.returncode == 0}")
         update = {**management, "FROM_IMAGE": self.images["a"], "TO_IMAGE": self.images["b"], "PROTECTED": "1"}
         result = self.driver("update", install, update, check=False)
         outcome = json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {}
