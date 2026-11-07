@@ -219,12 +219,12 @@ impl AgentInput {
         Ok(taken.accepted)
     }
 
-    /// Retires every write sent so far and returns where the input stands. A repeat only moves
-    /// the generation on again.
-    async fn barrier(&self) -> Result<BarrierResponse> {
+    /// Retires every write sent before it, moving the input to `generation`, and returns where
+    /// the input stands. Naming the generation makes a repeat move it once.
+    async fn barrier(&self, generation: u64) -> Result<BarrierResponse> {
         self.send_repeatable(
             "/v1/interactive/stdin-barrier",
-            json!({ "id": self.id }),
+            json!({ "id": self.id, "generation": generation }),
             WRITE_STDIN,
             "generation",
         )
@@ -244,7 +244,7 @@ impl CommandInput for AgentInput {
             let BarrierResponse {
                 accepted: taken,
                 generation,
-            } = self.barrier().await?;
+            } = self.barrier(state.generation + 1).await?;
             state.generation = generation;
             state.interrupted = false;
             if taken != state.offset {

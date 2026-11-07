@@ -18,7 +18,9 @@
 //! free again before the manager learns the command ended. A signal therefore checks the start
 //! time first: a leader with the pid but another start time is a different process, and is left
 //! alone. A leader that is gone while its group lives on cannot have been replaced, because the
-//! kernel does not hand out a number a process group still uses.
+//! kernel does not hand out a number a process group still uses. What remains is the instant
+//! between the check and the kill, in which the command would have to end, be reaped and have its
+//! number handed to a new group leader.
 //!
 //! Two things differ from the agent and are stated rather than hidden: an acknowledged write has
 //! reached Docker's attach socket rather than provably the program's pipe, and output is not
@@ -374,13 +376,18 @@ impl InteractiveRegistry {
         Ok(*accepted)
     }
 
-    /// Retires every write sent so far: waits for one in progress, then moves the input to a new
-    /// generation. Returns how many bytes the command has taken and the generation later writes
-    /// carry.
-    pub async fn barrier(&self, session: &str, id: &str) -> Result<(u64, u64), ControlError> {
+    /// Retires every write sent so far: waits for one in progress, then moves the input to
+    /// generation `target` unless it is already there or past it, so a repeated barrier moves it
+    /// once. Returns how many bytes the command has taken and the current generation.
+    pub async fn barrier(
+        &self,
+        session: &str,
+        id: &str,
+        target: u64,
+    ) -> Result<(u64, u64), ControlError> {
         let command = self.get(session, id)?;
         let mut stdin = command.stdin.lock().await;
-        stdin.generation += 1;
+        stdin.generation = stdin.generation.max(target);
         Ok((stdin.accepted, stdin.generation))
     }
 

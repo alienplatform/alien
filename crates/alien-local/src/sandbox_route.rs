@@ -546,6 +546,13 @@ struct InteractiveIdBody {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct InteractiveBarrierBody {
+    id: String,
+    generation: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct InteractiveSignalBody {
     id: String,
     signal: alien_core::sandbox_signal::CommandSignal,
@@ -569,22 +576,30 @@ async fn interactive_start(
     authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
     let container_id = container_for(&state, &session_id).await?;
 
-    let receiver = state
-        .interactive
-        .start(
-            Arc::clone(&state.manager),
-            &session_id,
-            container_id,
-            crate::sandbox_interactive::StartRequest {
-                id: body.id,
-                command: body.command,
-                timeout: std::time::Duration::from_millis(body.timeout_ms),
-                cwd: body.cwd,
-                env: body.env,
-            },
-        )
-        .await
-        .map_err(control_failed)?;
+    // Run to completion even if the caller disconnects mid-start: a start dropped after Docker
+    // began the exec would leave a command nobody tracks or bounds. Finished, it hands its frames
+    // to a receiver that is dropped, and the pump then ends the command as for any caller who left.
+    let registry = Arc::clone(&state.interactive);
+    let manager = Arc::clone(&state.manager);
+    let receiver = tokio::spawn(async move {
+        registry
+            .start(
+                manager,
+                &session_id,
+                container_id,
+                crate::sandbox_interactive::StartRequest {
+                    id: body.id,
+                    command: body.command,
+                    timeout: std::time::Duration::from_millis(body.timeout_ms),
+                    cwd: body.cwd,
+                    env: body.env,
+                },
+            )
+            .await
+    })
+    .await
+    .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+    .map_err(control_failed)?;
 
     let frames = futures::stream::unfold(receiver, |mut receiver| async move {
         let frame = receiver.recv().await?;
@@ -627,12 +642,12 @@ async fn interactive_stdin_barrier(
     State(state): State<RouteState>,
     Path(session_id): Path<String>,
     headers: HeaderMap,
-    Json(body): Json<InteractiveIdBody>,
+    Json(body): Json<InteractiveBarrierBody>,
 ) -> std::result::Result<Json<serde_json::Value>, (StatusCode, String)> {
     authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
     let (accepted, generation) = state
         .interactive
-        .barrier(&session_id, &body.id)
+        .barrier(&session_id, &body.id, body.generation)
         .await
         .map_err(control_failed)?;
     Ok(Json(
