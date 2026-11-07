@@ -29,6 +29,7 @@ pub struct AlienManager {
     pub(crate) dev_status_tx: Option<tokio::sync::watch::Sender<()>>,
     pub(crate) log_buffer: Arc<LogBuffer>,
     pub(crate) command_server: Arc<alien_commands::server::CommandServer>,
+    pub(crate) signing: Option<Arc<dyn crate::traits::SigningStore>>,
 }
 
 impl AlienManager {
@@ -102,14 +103,17 @@ impl AlienManager {
                 })?;
         let deployment_loop =
             if !self.config.disable_deployment_loop || !self.config.disable_heartbeat_loop {
-                Some(Arc::new(DeploymentLoop::new(
-                    self.config.clone(),
-                    self.deployment_store.clone(),
-                    self.release_store.clone(),
-                    self.credential_resolver.clone(),
-                    self.server_bindings.clone(),
-                    self.dev_status_tx,
-                )))
+                Some(Arc::new(
+                    DeploymentLoop::new(
+                        self.config.clone(),
+                        self.deployment_store.clone(),
+                        self.release_store.clone(),
+                        self.credential_resolver.clone(),
+                        self.server_bindings.clone(),
+                        self.dev_status_tx,
+                    )
+                    .with_signing(self.signing.clone()),
+                ))
             } else {
                 None
             };

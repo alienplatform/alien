@@ -34,7 +34,9 @@ use alien_preflights::mutations::remote_stack_management::stack_renders_manageme
 use crate::auth::Subject;
 use crate::config::ManagerConfig;
 use crate::traits::deployment_store::{DeploymentFilter, DeploymentRecord, ReconcileData};
-use crate::traits::{CredentialResolver, DeploymentStore, ReleaseStore, ServerBindings};
+use crate::traits::{
+    CredentialResolver, DeploymentStore, ReleaseStore, ServerBindings, SigningStore,
+};
 use crate::transports::ManagerTransport;
 
 /// Maximum number of step() calls per deployment per tick.
@@ -216,6 +218,9 @@ pub struct DeploymentLoop {
     release_store: Arc<dyn ReleaseStore>,
     credential_resolver: Arc<dyn CredentialResolver>,
     server_bindings: Arc<ServerBindings>,
+    /// Signer lists and signed configs, which a protected deployment's enforcers verify its
+    /// release with. `None` on a manager that stores no signing data.
+    signing: Option<Arc<dyn SigningStore>>,
     /// Signal dev mode watchers when deployment state changes.
     dev_status_tx: Option<watch::Sender<()>>,
     /// Keep local providers alive across ticks so runtime managers retain in-memory state.
@@ -312,11 +317,65 @@ impl DeploymentLoop {
             release_store,
             credential_resolver,
             server_bindings,
+            signing: None,
             dev_status_tx,
             local_bindings_cache: Mutex::new(HashMap::new()),
             settled_stack_cache: Mutex::new(HashMap::new()),
             deferred: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Use `signing` for the signer lists and signed configs of protected deployments.
+    pub fn with_signing(mut self, signing: Option<Arc<dyn SigningStore>>) -> Self {
+        self.signing = signing;
+        self
+    }
+
+    /// Give a protected deployment's step what its enforcers verify: the target release's
+    /// signed statement for this platform, the project's signer list chain and the deployment's
+    /// newest signed config. Controllers hand them over unchanged; the enforcers check them
+    /// against the install's own trust. Unprotected deployments are left as they are.
+    async fn add_signed_statements(
+        &self,
+        deployment: &DeploymentRecord,
+        state: &mut DeploymentState,
+        config: &mut DeploymentConfig,
+    ) -> Result<(), AlienError> {
+        if config.stack_settings.signing.is_none() {
+            return Ok(());
+        }
+        let Some(target) = state.target_release.as_mut() else {
+            return Ok(());
+        };
+        let Some(release_id) = target.release_id.clone() else {
+            return Ok(());
+        };
+        let signing = self.signing.as_ref().ok_or_else(|| {
+            AlienError::new(GenericError {
+                message: format!(
+                    "Deployment {} is protected, but this manager stores no signer lists to verify its releases with",
+                    deployment.id
+                ),
+            })
+        })?;
+        let release = self
+            .release_store
+            .get_release(&Subject::system(), &release_id)
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(GenericError {
+                    message: format!("Release {release_id} not found"),
+                })
+            })?;
+        target.signed = release.signed_stacks.get(&deployment.platform).cloned();
+        target.signer_lists = signing
+            .signer_lists(&release.project_id)
+            .await?
+            .into_iter()
+            .map(|record| record.statement)
+            .collect();
+        config.signed_config = signing.latest_config_statement(&deployment.id).await?;
+        Ok(())
     }
 
     /// Add acquisition exclusions without enumerating a possibly capped candidate list.
@@ -1111,6 +1170,8 @@ impl DeploymentLoop {
         }
         .deployment_config(&deployment, deployment_stack.as_ref(), management_config)
         .await?;
+        self.add_signed_statements(&deployment, &mut state, &mut config)
+            .await?;
 
         // Standalone-mode bridge: inject a BYO Horizon backend from env vars
         // when an external control plane did not supply one. It stays out of
@@ -1705,6 +1766,7 @@ impl RunnerConfigSources<'_> {
                 volume_restores: Vec::new(),
                 deletion_policy: Default::default(),
                 release_statements: None,
+                signed_config: None,
             }
         };
         Ok(config)
@@ -2040,10 +2102,11 @@ mod tests {
         ManagementRenderer, ProcessOptions, RunnerConfigSources, CREDENTIAL_ERROR_GRACE_PERIOD,
     };
     use alien_core::{
-        Container, ContainerCode, Daemon, DaemonCode, DeploymentConfig, DeploymentStatus,
-        EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform,
-        RemoteStackManagement, RemoteStackManagementOutputs, Resource, ResourceLifecycle,
-        ResourceOutputs, ResourceSpec, ResourceStatus, Stack, StackResourceState, StackSettings,
+        Container, ContainerCode, Daemon, DaemonCode, DeploymentConfig, DeploymentState,
+        DeploymentStatus, EnvironmentVariable, EnvironmentVariableType,
+        EnvironmentVariablesSnapshot, Platform, ReleaseInfo, RemoteStackManagement,
+        RemoteStackManagementOutputs, Resource, ResourceLifecycle, ResourceOutputs, ResourceSpec,
+        ResourceStatus, SignedStatement, Stack, StackResourceState, StackSettings, StackSigning,
         StackState, Worker, WorkerCode, ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID,
         ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_COMMANDS_URL,
         ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
@@ -2060,12 +2123,15 @@ mod tests {
     use crate::auth::Subject;
     use crate::error::ErrorData;
     #[cfg(feature = "sqlite")]
-    use crate::stores::sqlite::{SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore};
+    use crate::stores::sqlite::{
+        SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteSigningStore,
+    };
     use crate::traits::deployment_store::{
         CreateDeploymentParams, DeploymentFilter, DeploymentRecord, SuppliedStacks,
     };
     use crate::traits::{
-        CredentialResolver, DeploymentStore, ReleaseStore, ResolvedCredentials, ServerBindings,
+        CreateReleaseParams, CredentialResolver, DeploymentStore, ReleaseStore,
+        ResolvedCredentials, ServerBindings, SignerListRecord, SigningStore,
     };
     use alien_bindings::providers::{kv::local::LocalKv, storage::local::LocalStorage};
     use alien_commands::{dispatchers::NullCommandDispatcher, InMemoryCommandRegistry};
@@ -2150,6 +2216,181 @@ mod tests {
                 has_provision_capability: false,
             })
         }
+    }
+
+    /// A protected deployment's step gets what its enforcers verify: the target release's
+    /// signed statement for its platform, the project's signer lists and its newest signed
+    /// config. Without them every protected update fails: management may not write what runs,
+    /// and the verifier takes only signed statements.
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn a_protected_step_carries_the_signed_release_signer_lists_and_config() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            SqliteDatabase::new(temp.path().join("manager.db").to_str().unwrap())
+                .await
+                .unwrap(),
+        );
+        let releases = Arc::new(SqliteReleaseStore::new(db.clone()));
+        let signing = Arc::new(SqliteSigningStore::new(db.clone()));
+        let deployments = Arc::new(SqliteDeploymentStore::new(db.clone()));
+        let stack: Stack =
+            serde_json::from_value(serde_json::json!({"id": "shop", "resources": {}})).unwrap();
+        let signed_aws = SignedStatement::new(br#"{"type":"release/v2","platform":"aws"}"#);
+        let signed_gcp = SignedStatement::new(br#"{"type":"release/v2","platform":"gcp"}"#);
+        let release = releases
+            .create_release(
+                &Subject::system(),
+                CreateReleaseParams {
+                    project_id: "default".to_string(),
+                    stacks: HashMap::from([
+                        (Platform::Aws, stack.clone()),
+                        (Platform::Gcp, stack.clone()),
+                    ]),
+                    signed_stacks: HashMap::from([
+                        (Platform::Aws, signed_aws.clone()),
+                        (Platform::Gcp, signed_gcp),
+                    ]),
+                    setup_templates: HashMap::new(),
+                    git_commit_sha: None,
+                    git_commit_ref: None,
+                    git_commit_message: None,
+                },
+            )
+            .await
+            .unwrap();
+        let lists = [
+            SignedStatement::new(br#"{"type":"signer-list/v1","sequence":1}"#),
+            SignedStatement::new(br#"{"type":"signer-list/v1","sequence":2}"#),
+        ];
+        for (version, statement) in lists.iter().enumerate() {
+            signing
+                .add_signer_list(
+                    "default",
+                    &SignerListRecord {
+                        version: version as u64 + 1,
+                        statement: statement.clone(),
+                        created_by: "ci".to_string(),
+                        created_at: chrono::Utc::now(),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        let protected = StackSettings {
+            signing: Some(StackSigning {
+                fingerprint: format!("SHA256:{}", "a".repeat(64)),
+                channel: "production".to_string(),
+            }),
+            ..Default::default()
+        };
+        let deployment = deployments
+            .create_deployment(
+                &Subject::system(),
+                CreateDeploymentParams {
+                    name: "shop".to_string(),
+                    deployment_group_id: "dg_test".to_string(),
+                    platform: Platform::Aws,
+                    deployment_protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+                    base_platform: None,
+                    stack_settings: protected.clone(),
+                    stack_state: None,
+                    environment_variables: None,
+                    public_subdomain: None,
+                    input_values: Default::default(),
+                    setup_item: None,
+                    deployment_token: None,
+                },
+            )
+            .await
+            .unwrap();
+        let older_config = SignedStatement::new(br#"{"type":"config/v1","sequence":2}"#);
+        let newest_config = SignedStatement::new(br#"{"type":"config/v1","sequence":3}"#);
+        signing
+            .add_config_statement(&deployment.id, 2, &older_config)
+            .await
+            .unwrap();
+        signing
+            .add_config_statement(&deployment.id, 3, &newest_config)
+            .await
+            .unwrap();
+
+        let bindings = Arc::new(ServerBindings {
+            local_queues: Arc::new(alien_local::LocalQueueService::default()),
+            kv: Arc::new(LocalKv::new(temp.path().join("kv")).await.unwrap()),
+            command_storage: Arc::new(
+                LocalStorage::new(temp.path().join("storage").to_string_lossy().to_string())
+                    .unwrap(),
+            ),
+            command_dispatcher: Arc::new(NullCommandDispatcher),
+            command_registry: Arc::new(InMemoryCommandRegistry::default()),
+            artifact_registry: None,
+            bindings_provider: None,
+            target_bindings_providers: Default::default(),
+            registry_routing_table: Arc::new(
+                crate::routes::registry_proxy::RegistryRoutingTable::new(vec![]).unwrap(),
+            ),
+        });
+        let runner = |signing: Option<Arc<dyn SigningStore>>| {
+            DeploymentLoop::new(
+                Arc::new(crate::config::ManagerConfig::default()),
+                deployments.clone(),
+                releases.clone(),
+                Arc::new(RuntimeOnlyCredentials::default()),
+                bindings.clone(),
+                None,
+            )
+            .with_signing(signing)
+        };
+        let step_input = |settings: StackSettings| {
+            let state = DeploymentState {
+                target_release: Some(ReleaseInfo {
+                    release_id: Some(release.id.clone()),
+                    version: None,
+                    description: None,
+                    stack: stack.clone(),
+                    signed: None,
+                    signer_lists: Vec::new(),
+                }),
+                ..super::state_from_record(&deployment, DeploymentStatus::Updating, None, None)
+            };
+            let config = DeploymentConfig::builder()
+                .stack_settings(settings)
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: Vec::new(),
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .allow_frozen_changes(false)
+                .external_bindings(Default::default())
+                .build();
+            (state, config)
+        };
+
+        let (mut state, mut config) = step_input(protected);
+        runner(Some(signing.clone()))
+            .add_signed_statements(&deployment, &mut state, &mut config)
+            .await
+            .unwrap();
+        let target = state.target_release.unwrap();
+        assert_eq!(target.signed, Some(signed_aws), "this platform's statement");
+        assert_eq!(
+            target.signer_lists,
+            lists.to_vec(),
+            "every version, oldest first"
+        );
+        assert_eq!(config.signed_config, Some(newest_config));
+
+        // An unprotected deployment is left as it is, and never reads the signing store.
+        let (mut state, mut config) = step_input(StackSettings::default());
+        runner(None)
+            .add_signed_statements(&deployment, &mut state, &mut config)
+            .await
+            .unwrap();
+        let target = state.target_release.unwrap();
+        assert_eq!(target.signed, None);
+        assert!(target.signer_lists.is_empty());
+        assert_eq!(config.signed_config, None);
     }
 
     #[cfg(feature = "sqlite")]

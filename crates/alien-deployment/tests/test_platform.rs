@@ -289,6 +289,7 @@ fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentCo
         volume_restores: Vec::new(),
         deletion_policy: Default::default(),
         release_statements: None,
+        signed_config: None,
     }
 }
 

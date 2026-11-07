@@ -1030,7 +1030,7 @@ async fn finalize(
         tunnels,
         charts,
         release_channels,
-        signing,
+        signing: signing.clone(),
         bundle_signing_key,
         bundle_sources,
         log_buffer: log_buffer.clone(),
@@ -1071,6 +1071,7 @@ async fn finalize(
         dev_status_tx,
         log_buffer,
         command_server,
+        signing,
     })
 }
 

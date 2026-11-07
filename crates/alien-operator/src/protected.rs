@@ -815,6 +815,7 @@ fn protect_config(
         domain_metadata: None,
         native_image_host: None,
         release_statements: None,
+        signed_config: None,
     })
 }
 

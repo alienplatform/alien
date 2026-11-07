@@ -2148,6 +2148,7 @@ mod tests {
             volume_restores: Vec::new(),
             deletion_policy: Default::default(),
             release_statements: None,
+            signed_config: None,
         }
     }
 

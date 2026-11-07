@@ -45,6 +45,11 @@ pub struct DeploymentConfig {
     #[serde(skip)]
     #[cfg_attr(feature = "openapi", schema(ignore))]
     pub release_statements: Option<ReleaseStatements>,
+    /// A protected deployment's newest signed `config/v1`, which controllers hand to the
+    /// enforcers with the release. The enforcers verify it against the install's own trust and
+    /// refuse one older than what they accepted, so it is carried as received.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_config: Option<crate::SignedStatement>,
     /// Human-readable deployment name for cloud console metadata.
     ///
     /// This is separate from the physical resource prefix in StackState. It is

@@ -202,6 +202,7 @@ async fn prepare_stack_for_render(
         setup_run: false,
         setup_run_id: None,
         release_statements: None,
+        signed_config: None,
         compute_backend: None,
         external_bindings: ExternalBindings::default(),
         base_platform,
@@ -819,6 +820,7 @@ mod tests {
                     volume_restores: Vec::new(),
                     deletion_policy: Default::default(),
                     release_statements: None,
+                    signed_config: None,
                 };
                 let runner = alien_preflights::runner::PreflightRunner::new();
                 let on_gcp = runner

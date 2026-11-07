@@ -198,6 +198,7 @@ mod tests {
         DeploymentConfig {
             gcp_federation_scope: None,
             release_statements: None,
+            signed_config: None,
             deployment_name: None,
             stack_settings,
             management_config: None,
