@@ -150,11 +150,15 @@ pub struct Applied {
     pub functions: Vec<AppliedFunction>,
 }
 
+/// The code the verifier gives a refusal: the request or its statements don't allow the write.
+/// Any other code is a failure applying again may get past.
+const REFUSED: &str = "VERIFIER_REFUSED";
+
 /// Why a call to the verifier didn't produce an answer.
 #[derive(Debug)]
 pub enum CallError {
-    /// The verifier answered and refused, with its reason.
-    Refused(String),
+    /// The verifier answered with an error: its code and what it reported.
+    Answered { code: String, reason: String },
     /// The call itself failed: the verifier was unreachable or answered with something that
     /// isn't an answer.
     Failed(AlienError<ErrorData>),
@@ -179,10 +183,18 @@ pub async fn apply_release(
 ) -> Result<Applied> {
     let answer = match verifier.call(&Request::ApplyRelease(request)).await {
         Ok(answer) => answer,
-        Err(CallError::Refused(reason)) => {
+        Err(CallError::Answered { code, reason }) if code == REFUSED => {
             return Err(AlienError::new(ErrorData::ReleaseRefusedByVerifier {
                 resource_id: resource_id.to_string(),
                 verifier: verifier.name().to_string(),
+                reason,
+            }))
+        }
+        Err(CallError::Answered { code, reason }) => {
+            return Err(AlienError::new(ErrorData::VerifierFailed {
+                resource_id: resource_id.to_string(),
+                verifier: verifier.name().to_string(),
+                code,
                 reason,
             }))
         }
@@ -230,11 +242,34 @@ impl LambdaVerifier {
     }
 }
 
-/// The error a Lambda function returns, as the runtime encodes it.
+/// An error as the verifier reports it: through the Lambda runtime, or as the HTTP body.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct LambdaFunctionError {
+struct ReportedError {
+    #[serde(default)]
+    error_type: String,
     error_message: String,
+}
+
+impl ReportedError {
+    /// What the verifier reported in `body`. A body that names no code is reported under
+    /// `fallback_code`, and one that isn't a report at all is the reason as is.
+    fn read(body: &[u8], fallback_code: String) -> CallError {
+        match serde_json::from_slice::<ReportedError>(body) {
+            Ok(reported) if !reported.error_type.is_empty() => CallError::Answered {
+                code: reported.error_type,
+                reason: reported.error_message,
+            },
+            Ok(reported) => CallError::Answered {
+                code: fallback_code,
+                reason: reported.error_message,
+            },
+            Err(_) => CallError::Answered {
+                code: fallback_code,
+                reason: String::from_utf8_lossy(body).into_owned(),
+            },
+        }
+    }
 }
 
 #[async_trait]
@@ -269,11 +304,8 @@ impl Verifier for LambdaVerifier {
                 self.function_name
             )))
             .map_err(CallError::Failed)?;
-        if response.function_error.is_some() {
-            let reason = serde_json::from_slice::<LambdaFunctionError>(&response.payload)
-                .map(|error| error.error_message)
-                .unwrap_or_else(|_| String::from_utf8_lossy(&response.payload).into_owned());
-            return Err(CallError::Refused(reason));
+        if let Some(kind) = response.function_error {
+            return Err(ReportedError::read(&response.payload, kind));
         }
         serde_json::from_slice(&response.payload)
             .into_alien_error()
@@ -453,12 +485,6 @@ impl HttpVerifier {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct HttpRefusal {
-    error_message: String,
-}
-
 #[async_trait]
 impl Verifier for HttpVerifier {
     fn name(&self) -> &str {
@@ -497,10 +523,7 @@ impl Verifier for HttpVerifier {
             )))
             .map_err(CallError::Failed)?;
         if !status.is_success() {
-            let reason = serde_json::from_slice::<HttpRefusal>(&body)
-                .map(|refusal| refusal.error_message)
-                .unwrap_or_else(|_| format!("HTTP {status}: {}", String::from_utf8_lossy(&body)));
-            return Err(CallError::Refused(reason));
+            return Err(ReportedError::read(&body, format!("HTTP {status}")));
         }
         serde_json::from_slice(&body)
             .into_alien_error()

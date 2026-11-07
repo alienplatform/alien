@@ -102,6 +102,26 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// A protected install's verifier answered with a failure that isn't a refusal, such as a
+    /// cloud call that failed or a write that raced another; applying again may succeed.
+    #[error(
+        code = "VERIFIER_FAILED",
+        message = "The install's verifier '{verifier}' failed to apply the release to '{resource_id}' ({code}): {reason}",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 502
+    )]
+    VerifierFailed {
+        /// The resource the release was applied to
+        resource_id: String,
+        /// The verifier, `<prefix>-verifier`
+        verifier: String,
+        /// The verifier's error code, or the cloud's when the verifier didn't answer
+        code: String,
+        /// What the verifier reported
+        reason: String,
+    },
+
     /// A required vault-native deployer secret is not in the deployment's
     /// secrets vault, so the workload does not start.
     #[error(

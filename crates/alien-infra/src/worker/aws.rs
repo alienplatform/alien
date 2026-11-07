@@ -12148,7 +12148,7 @@ mod tests {
     #[tokio::test]
     async fn a_refused_protected_update_fails_with_the_verifiers_reason() {
         let refusal = serde_json::json!({
-            "errorType": "&alloc::string::String",
+            "errorType": "VERIFIER_REFUSED",
             "errorMessage": "Refused: the release was refused: SIGNING_RELEASE_OLDER: the release is older than one this install accepted",
         });
         let (_, result, invocations, _) =
@@ -12165,6 +12165,33 @@ mod tests {
         assert!(
             message.contains("the release is older than one this install accepted"),
             "{message}"
+        );
+    }
+
+    /// A verifier failure that isn't a refusal (a cloud call, a write that raced another) is
+    /// retried, not reported as a refusal.
+    #[tokio::test]
+    async fn a_failed_verifier_call_is_retried_not_refused() {
+        let failure = serde_json::json!({
+            "errorType": "VERIFIER_CLOUD_CALL_FAILED",
+            "errorMessage": "lambda:UpdateFunctionCode test-api failed: Conflict with Function 'test-api': PreconditionFailedException",
+        });
+        let (_, result, invocations, _) =
+            protected_update(invoke_answer(Some("Unhandled"), failure)).await;
+
+        let error = result.expect_err("the verifier failed");
+        assert_eq!(invocations.len(), 1);
+        assert_eq!(error.code, "VERIFIER_FAILED", "{error:?}");
+        assert!(error.retryable);
+        assert!(
+            error.message.contains("VERIFIER_CLOUD_CALL_FAILED"),
+            "{}",
+            error.message
+        );
+        assert!(
+            error.message.contains("PreconditionFailedException"),
+            "{}",
+            error.message
         );
     }
 

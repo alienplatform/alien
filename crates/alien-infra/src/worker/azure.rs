@@ -8428,7 +8428,7 @@ mod tests {
     async fn a_refused_protected_update_fails_with_the_verifiers_reason() {
         let (result, requests, _) = protected_update(
             axum::http::StatusCode::FORBIDDEN,
-            serde_json::json!({"errorMessage": "Refused: the release was refused: SIGNING_SIGNATURE_INVALID: no valid signature"}),
+            serde_json::json!({"errorType": "VERIFIER_REFUSED", "errorMessage": "Refused: the release was refused: SIGNING_SIGNATURE_INVALID: no valid signature"}),
         )
         .await;
 
