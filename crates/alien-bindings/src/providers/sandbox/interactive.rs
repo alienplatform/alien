@@ -358,8 +358,9 @@ mod tests {
         /// Stdin requests to send to a port nobody listens on before the real one, so a lost
         /// write is exercised for real.
         unanswered_writes: AtomicUsize,
-        /// Stdin requests to send, after those, to a server that answers with headers and then
-        /// never finishes the body, so a lost acknowledgement is exercised for real.
+        /// Stdin requests to send, after those, through a server that lets the agent apply them
+        /// and then stalls the answer after its headers, so a lost acknowledgement is exercised
+        /// for real.
         stalled_acks: AtomicUsize,
         stall_url: String,
         _root: tempfile::TempDir,
@@ -372,22 +373,58 @@ mod tests {
         .is_ok()
     }
 
-    /// A server that takes any request, sends success headers promising a body, and then holds
-    /// the connection open without sending it.
-    async fn stalling_server() -> String {
+    /// A server in front of the agent that passes each request on, so the agent applies it, and
+    /// then answers with the agent's status and only the first byte of its body, holding the
+    /// rest back for good: an acknowledgement lost after its headers.
+    async fn stalling_server(agent_url: String) -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move {
             while let Ok((mut socket, _)) = listener.accept().await {
+                let agent_url = agent_url.clone();
                 tokio::spawn(async move {
-                    let mut request = [0u8; 4096];
-                    let _ = socket.read(&mut request).await;
-                    let _ = socket
-                        .write_all(
-                            b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 64\r\n\r\n{",
-                        )
-                        .await;
+                    let mut request = Vec::new();
+                    let mut buffer = [0u8; 8192];
+                    let head_end = loop {
+                        let read = socket.read(&mut buffer).await.unwrap();
+                        assert!(read > 0, "the client sent a whole request");
+                        request.extend_from_slice(&buffer[..read]);
+                        if let Some(at) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                            break at + 4;
+                        }
+                    };
+                    let head = String::from_utf8_lossy(&request[..head_end]).to_string();
+                    let header = |name: &str| {
+                        head.lines().find_map(|line| {
+                            let (key, value) = line.split_once(':')?;
+                            key.eq_ignore_ascii_case(name)
+                                .then(|| value.trim().to_string())
+                        })
+                    };
+                    let length: usize = header("content-length").unwrap().parse().unwrap();
+                    while request.len() < head_end + length {
+                        let read = socket.read(&mut buffer).await.unwrap();
+                        request.extend_from_slice(&buffer[..read]);
+                    }
+                    let path = head.split_whitespace().nth(1).unwrap().to_string();
+                    let answer = reqwest::Client::new()
+                        .post(format!("{agent_url}{path}"))
+                        .header("authorization", header("authorization").unwrap())
+                        .header("content-type", "application/json")
+                        .body(request[head_end..head_end + length].to_vec())
+                        .send()
+                        .await
+                        .unwrap();
+                    let status = answer.status().as_u16();
+                    let body = answer.bytes().await.unwrap();
+                    let mut reply = format!(
+                        "HTTP/1.1 {status} OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+                        body.len()
+                    )
+                    .into_bytes();
+                    reply.extend_from_slice(&body[..1]);
+                    socket.write_all(&reply).await.unwrap();
                     tokio::time::sleep(Duration::from_secs(3600)).await;
                 });
             }
@@ -474,12 +511,13 @@ mod tests {
             &keys.sk,
         )
         .unwrap();
+        let stall_url = stalling_server(url.clone()).await;
         Arc::new(LoopbackAgent {
             url,
             token,
             unanswered_writes: AtomicUsize::new(unanswered_writes),
             stalled_acks: AtomicUsize::new(stalled_acks),
-            stall_url: stalling_server().await,
+            stall_url,
             _root: root,
         })
     }
@@ -648,7 +686,8 @@ mod tests {
 
     /// An acknowledgement whose headers arrive and whose body never does is as unanswered as one
     /// that never arrives: the write is sent again within the response deadline instead of
-    /// holding the input, and every later write and close behind it, for good.
+    /// holding the input, and every later write and close behind it, for good. The agent applied
+    /// the stalled attempts, so the resends must be deduplicated, not applied again.
     #[tokio::test]
     async fn a_write_whose_answer_stalls_after_its_headers_is_sent_again() {
         let agent = stalling_agent(0, 2).await;
