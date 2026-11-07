@@ -12324,6 +12324,33 @@ mod tests {
         (executor, result, invocations, release)
     }
 
+    /// Env the deployment holds beside the signed release (set in the dashboard before the
+    /// install was protected) never reaches a protected worker: the controller builds its env
+    /// from what the release signs, and the verifier's tables accept the request.
+    #[tokio::test]
+    async fn a_protected_function_gets_no_env_the_release_doesnt_sign() {
+        let authored = pinned_worker('2', 512);
+        let mut deployed = authored.clone();
+        deployed
+            .environment
+            .insert("V8_PROBE".to_string(), "1".to_string());
+        let (_, result, invocations, _) =
+            protected_update_to(authored, deployed, None, written("Update")).await;
+
+        result.expect("the update completes through the verifier");
+        assert_eq!(invocations.len(), 1);
+        let request: serde_json::Value = serde_json::from_slice(&invocations[0].1).unwrap();
+        let env = request["applyWrite"]["writes"][1]["updateFunctionConfiguration"]["request"]
+            ["Environment"]["Variables"]
+            .as_object()
+            .expect("the configuration update carries the env")
+            .clone();
+        assert!(!env.contains_key("V8_PROBE"), "{env:?}");
+        assert!(env.contains_key("ALIEN_TRANSPORT"), "{env:?}");
+        let (answer, _) = run_write(aws_install(), "test", None, &invocations[0].1).await;
+        answer.expect("the verifier's tables accept the controller's request");
+    }
+
     /// On a protected install management may not write the function: the update hands the
     /// verifier the UpdateFunctionCode, UpdateFunctionConfiguration and concurrency it built,
     /// with the signed release, in one request, so a refusal of any leaves the function on the

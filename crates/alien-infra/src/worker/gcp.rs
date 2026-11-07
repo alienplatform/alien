@@ -9515,13 +9515,35 @@ mod tests {
         Vec<(Option<String>, Vec<u8>)>,
         alien_core::ReleaseStatements,
     ) {
-        let to = pinned_worker('2', 512);
+        protected_update_injecting(status, answer, setup_policy, management, &[]).await
+    }
+
+    /// [`protected_update_with`], with `injected` env the deployment adds to the worker beside
+    /// what the vendor signed (dashboard variables set before the install was protected).
+    async fn protected_update_injecting(
+        status: axum::http::StatusCode,
+        answer: serde_json::Value,
+        setup_policy: IamPolicy,
+        management: alien_core::ManagementPermissions,
+        injected: &[(&str, &str)],
+    ) -> (
+        Result<(), AlienError<crate::error::ErrorData>>,
+        Vec<(Option<String>, Vec<u8>)>,
+        alien_core::ReleaseStatements,
+    ) {
+        let signed = pinned_worker('2', 512);
         let release = signed_release(
             Platform::Gcp,
             &Stack::new("test".to_string())
-                .add(to.clone(), ResourceLifecycle::Live)
+                .add(signed.clone(), ResourceLifecycle::Live)
                 .build(),
             2,
+        );
+        let mut to = signed;
+        to.environment.extend(
+            injected
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string())),
         );
         let (url, requests) = http_verifier_stub(status, answer).await;
         let mut executor = SingleControllerExecutor::builder()
@@ -9552,6 +9574,37 @@ mod tests {
         }
         let requests = requests.lock().unwrap().clone();
         (result, requests, release)
+    }
+
+    /// Env the deployment holds beside the signed release (set in the dashboard before the
+    /// install was protected) never reaches a protected worker: the controller builds its env
+    /// from what the release signs, and the verifier's tables accept the request.
+    #[tokio::test]
+    async fn a_protected_service_gets_no_env_the_release_doesnt_sign() {
+        let (result, requests, _) = protected_update_injecting(
+            axum::http::StatusCode::OK,
+            written(2),
+            setup_policy(),
+            alien_core::ManagementPermissions::Auto,
+            &[("V8_PROBE", "1")],
+        )
+        .await;
+
+        result.expect("the update completes through the verifier");
+        let writes = checked_writes(&requests).await;
+        assert_eq!(operations(&writes), ["replaceService"]);
+        let env: Vec<&str> = writes[0]["replaceService"]["service"]["template"]["containers"][0]
+            ["env"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["name"].as_str().unwrap())
+            .collect();
+        assert!(!env.contains(&"V8_PROBE"), "{env:?}");
+        assert!(
+            env.contains(&"ALIEN_TRANSPORT"),
+            "the runtime's own env is still there: {env:?}"
+        );
     }
 
     /// Setup grants management's permissions for every worker (`*`) at the project, so the

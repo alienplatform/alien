@@ -21,9 +21,10 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::iam::{GenerateIdTokenRequest, IamApi};
-use alien_signing::ReleaseBody;
+use alien_signing::{binding_env_name, ReleaseBody};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -57,10 +58,13 @@ pub fn protected_statements<'a>(
 pub const WORKLOAD_SECRETS: &str = "WORKLOAD_SECRETS";
 
 /// Render into `env`, the environment a controller built for `workload`, what the signed
-/// statements decide on a protected install: the secrets list it loads at start
-/// (`WORKLOAD_SECRETS` from the signed workload, in place of the deployment's `ALIEN_SECRETS`)
-/// and the values the signed `config` sets for the names the release makes configurable. The
-/// deployment's telemetry goes to the signed config's endpoint, or nowhere.
+/// statements decide on a protected install: the signed values, the secrets list it loads at
+/// start (`WORKLOAD_SECRETS` from the signed workload, in place of the deployment's
+/// `ALIEN_SECRETS`) and the values the signed `config` sets for the names the release makes
+/// configurable. The deployment's telemetry goes to the signed config's endpoint, or nowhere.
+/// Anything else the deployment holds (such as variables set in the dashboard before the
+/// install was protected) is left out: only names the release lets the deployment provide,
+/// and the bindings the verifier derives, stay.
 pub fn apply_signed_values(
     statements: &ReleaseStatements,
     config: Option<&SignedStatement>,
@@ -135,8 +139,61 @@ pub fn apply_signed_values(
         Some(value) => env.insert(OTLP_METRICS_ENDPOINT.to_string(), value.clone()),
         None => env.remove(OTLP_METRICS_ENDPOINT),
     };
+
+    for (name, value) in &signed.env {
+        env.insert(name.clone(), value.clone());
+    }
+    let bindings: Vec<String> = signed
+        .bindings
+        .keys()
+        .map(|id| binding_env_name(id))
+        .chain([binding_env_name(workload), binding_env_name(SECRETS_VAULT)])
+        .collect();
+    let mut left_out: Vec<String> = env
+        .keys()
+        .filter(|name| {
+            let name = name.as_str();
+            !(signed.env.contains_key(name)
+                || (signed
+                    .configurable_env
+                    .iter()
+                    .any(|configurable| configurable == name)
+                    && config.env.contains_key(name))
+                || signed.provided_env.iter().any(|provided| provided == name)
+                || signed.deployer_env.contains_key(name)
+                || bindings.iter().any(|binding| binding == name)
+                || RENDERED_HERE.contains(&name))
+        })
+        .cloned()
+        .collect();
+    left_out.sort();
+    for name in &left_out {
+        env.remove(name);
+    }
+    if !left_out.is_empty() {
+        info!(
+            workload,
+            ?left_out,
+            "Left out env the signed release doesn't let the deployment set"
+        );
+    }
     Ok(())
 }
+
+/// The install's `secrets` vault, which every protected function's runtime reads.
+const SECRETS_VAULT: &str = "secrets";
+
+/// What [`apply_signed_values`] renders itself, which the verifier checks by its own rules: the
+/// secrets list and telemetry.
+const RENDERED_HERE: &[&str] = &[
+    WORKLOAD_SECRETS,
+    OTLP_LOGS_ENDPOINT,
+    OTLP_METRICS_ENDPOINT,
+    "OTEL_SERVICE_NAME",
+    "OTEL_RESOURCE_ATTRIBUTES",
+    alien_core::ENV_ALIEN_RUNTIME_SECRETS,
+    alien_core::ENV_ALIEN_RUNTIME_SEND_OTLP,
+];
 
 /// Where a workload sends its logs; on a protected install only the signed config's
 /// `telemetryEndpoint` may be it.
