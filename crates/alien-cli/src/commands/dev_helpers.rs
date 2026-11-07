@@ -977,14 +977,16 @@ pub async fn wait_for_resumed_dev_deployment(port: u16, deployment_name: &str) -
 /// Prepare the deployment used by the full `alien dev` session.
 ///
 /// Reuse its durable deployment so restart does not delete storage or change bindings.
+/// `input_values` are the stack input values a new deployment is created with; like
+/// `alien dev deploy --input`, they are ignored when the deployment already exists.
 pub async fn prepare_dev_session_deployment(
     deployment_name: &str,
     port: u16,
     environment_variables: Option<Vec<alien_core::EnvironmentVariable>>,
+    input_values: HashMap<String, serde_json::Value>,
 ) -> Result<String> {
-    let id =
-        create_initial_deployment(deployment_name, port, environment_variables, HashMap::new())
-            .await?;
+    let id = create_initial_deployment(deployment_name, port, environment_variables, input_values)
+        .await?;
     let client = local_dev_client(port);
     if let Some(existing) = find_named_local_deployment(&client, deployment_name).await? {
         if matches!(
@@ -1773,7 +1775,7 @@ mod tests {
         ] {
             *state.lock().unwrap() = (status.to_string(), requested, vec![]);
             assert_eq!(
-                prepare_dev_session_deployment("api", port, None)
+                prepare_dev_session_deployment("api", port, None, HashMap::new())
                     .await
                     .unwrap(),
                 "dep_selected"
@@ -1790,8 +1792,9 @@ mod tests {
         assert!(server.await.unwrap_err().is_cancelled());
     }
 
-    /// `alien dev deploy --input` reaches the dev manager with the create request; a rerun
-    /// reuses the existing deployment, whose inputs were fixed at creation.
+    /// `alien dev deploy --input` and `alien dev --input` reach the dev manager with the
+    /// create request; a rerun reuses the existing deployment, whose inputs were fixed at
+    /// creation.
     #[tokio::test]
     async fn create_initial_deployment_sends_inputs() {
         fn deployment(name: &str) -> serde_json::Value {
@@ -1878,11 +1881,22 @@ mod tests {
             .await
             .expect("a rerun reuses the existing deployment");
         assert_eq!(rerun, "dep_1");
-        let session = prepare_dev_session_deployment("api", port, None)
+        let session = prepare_dev_session_deployment("api", port, None, HashMap::new())
             .await
             .expect("the full dev session also reuses durable state");
         assert_eq!(session, "dep_1");
         assert_eq!(created.lock().unwrap().len(), 1);
+
+        // The full dev session creates its own deployment with the inputs too.
+        let secret = HashMap::from([("adminPassword".to_string(), serde_json::json!("value"))]);
+        prepare_dev_session_deployment("web", port, None, secret)
+            .await
+            .expect("the dev session deployment is created");
+        assert_eq!(created.lock().unwrap()[1]["name"], "web");
+        assert_eq!(
+            created.lock().unwrap()[1]["inputValues"],
+            serde_json::json!({ "adminPassword": "value" })
+        );
     }
 
     #[tokio::test]
