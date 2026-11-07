@@ -54,6 +54,19 @@ pub(crate) async fn prepare(
     let Some(resource) = registries.next() else {
         return Ok(None);
     };
+    // A registry created before setup owned a pull identity has none of its
+    // fields. Such a setup also keeps the stored pull until a setup update.
+    let saved_registry = resource
+        .internal_state
+        .clone()
+        .and_then(|state| serde_json::from_value::<AzureArtifactRegistryController>(state).ok());
+    if saved_registry.as_ref().is_some_and(|registry| {
+        registry.pull_identity_resource_id.is_none()
+            && registry.pull_principal_id.is_none()
+            && registry.pull_role_assignment_id.is_none()
+    }) {
+        return Ok(None);
+    }
     let WorkerCode::Image { image: source } = &worker.code else {
         return Err(invalid(
             worker,
@@ -115,13 +128,8 @@ pub(crate) async fn prepare(
             "Setup update required: one running setup-owned registry is required",
         ));
     }
-    let registry: AzureArtifactRegistryController = serde_json::from_value(
-        resource
-            .internal_state
-            .clone()
-            .ok_or_else(|| invalid(worker, "Setup registry state is missing"))?,
-    )
-    .map_err(|_| invalid(worker, "Setup registry state is invalid"))?;
+    let registry = saved_registry
+        .ok_or_else(|| invalid(worker, "Setup registry state is missing or invalid"))?;
     let setup = || {
         invalid(
             worker,
