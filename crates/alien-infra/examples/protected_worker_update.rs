@@ -9,8 +9,9 @@
 //!                                      verifier's policy setup renders, for `$ACCOUNT`/`$REGION`
 //!   protected_worker_update update     updates worker `api` from `$FROM_IMAGE` to `$TO_IMAGE`,
 //!                                      or creates it when `$FROM_IMAGE` is empty
-//!   protected_worker_update request    prints the `applyRelease` request for release `$SEQUENCE`
-//!                                      of the stack running `$TO_IMAGE`
+//!   protected_worker_update request    prints the `applyWrite` request the controller sends for
+//!                                      release `$SEQUENCE` of the stack running `$TO_IMAGE`: an
+//!                                      UpdateFunctionCode of `<prefix>-api` to that image
 //!
 //! Environment: `PREFIX`, `FROM_IMAGE`, `TO_IMAGE`, `SEQUENCE` (the release's, 1 when unset),
 //! `NOT_AFTER` (RFC 3339, when the signer list expires; the same value for every command so the
@@ -22,7 +23,7 @@
 //! `AZURE_TOKEN_FILE` (JSON with an ARM `accessToken`, `subscription` and `tenant`), `AZURE_LOCATION`,
 //! the install's resource group `<prefix>`, the workload environment setup created
 //! (`ENVIRONMENT_NAME`, `ENVIRONMENT_DOMAIN`), the runtime identity's `EXECUTION_SA_PRINCIPAL_ID`
-//! and `EXECUTION_SA_CLIENT_ID`, and `DEPLOYMENT_TOKEN`, the registry password the verifier
+//! and `EXECUTION_SA_CLIENT_ID`, and `DEPLOYMENT_TOKEN`, the registry password the controller
 //! hands Container Apps.
 
 use std::sync::Arc;
@@ -532,12 +533,19 @@ async fn main() -> Result<(), Error> {
         }
         Some("update") => update().await,
         Some("request") => {
-            let release = signed_release(&env("TO_IMAGE")?, env("SEQUENCE")?.parse()?)?;
+            // The UpdateFunctionCode the worker controller hands the verifier for this release.
+            let image = env("TO_IMAGE")?;
+            let release = signed_release(&image, env("SEQUENCE")?.parse()?)?;
             println!(
                 "{}",
-                serde_json::json!({"applyRelease": {
+                serde_json::json!({"applyWrite": {
                     "release": release.release,
                     "signerLists": release.signer_lists,
+                    "workload": WORKER,
+                    "write": {"updateFunctionCode": {
+                        "functionName": format!("{}-{WORKER}", env("PREFIX")?),
+                        "request": {"ImageUri": image, "Publish": true},
+                    }},
                 }})
             );
             Ok(())

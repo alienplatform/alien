@@ -16,7 +16,7 @@ use crate::cloud_write::{CloudWrite, Facts};
 use crate::container_apps::AppStore;
 use crate::error::{ErrorData, Result};
 use crate::function::StillNewest;
-use crate::plan::{FunctionSpec, Place};
+use crate::plan::Place;
 use crate::trust::InstallStore;
 use crate::verifier::Backend;
 
@@ -398,33 +398,6 @@ impl Backend for AzureBackend {
         crate::cloud_write::container_apps::forward(&self.0, facts, write, newest).await
     }
 
-    async fn apply(
-        &self,
-        place: &Place,
-        spec: &FunctionSpec,
-        newest: &dyn StillNewest,
-    ) -> Result<()> {
-        if spec.architecture != "x86_64" {
-            return Err(AlienError::new(ErrorData::Refused {
-                reason: "Container Apps runs only x86_64".to_string(),
-            }));
-        }
-        // One verifier replica serves the install, so nothing writes between this check and
-        // the write.
-        newest.check().await?;
-        let tags = alien_core::standard_resource_tags(&place.prefix, &spec.workload)
-            .into_iter()
-            .collect();
-        crate::container_apps::apply(&self.0, spec, &tags)
-            .await
-            .map(|_| ())
-    }
-
-    async fn check(&self, spec: &FunctionSpec) -> Result<()> {
-        let back = AppStore::get(&self.0, &spec.name).await?;
-        crate::container_apps::check_read_back(spec, &back)
-    }
-
     async fn resize(&self, target: &str, zone: Option<&str>, size: u32) -> Result<()> {
         if let Some(zone) = zone {
             return Err(AlienError::new(ErrorData::Refused {
@@ -513,17 +486,6 @@ impl AppStore for Azure {
         })
     }
 
-    async fn find(&self, name: &str) -> Result<Option<Value>> {
-        self.call(
-            reqwest::Method::GET,
-            &self.app_url(name),
-            ARM,
-            None,
-            &format!("containerApps get {name}"),
-        )
-        .await
-    }
-
     async fn create(&self, name: &str, app: &Value) -> Result<()> {
         self.call(
             reqwest::Method::PUT,
@@ -539,42 +501,6 @@ impl AppStore for Azure {
             })
         })?;
         Ok(())
-    }
-
-    /// The Container Apps environment setup named for the install's workloads, and its location.
-    /// The install's group also holds the verifier's own environment, so the verifier never
-    /// picks one itself; when setup named none, a workload has nowhere to run.
-    async fn environment(&self) -> Result<(String, String)> {
-        let id = self.environment.as_deref().ok_or_else(|| {
-            AlienError::new(ErrorData::Refused {
-                reason: "setup named no Container Apps environment for the install's workloads; rerun setup with this release".to_string(),
-            })
-        })?;
-        let environment = self
-            .call(
-                reqwest::Method::GET,
-                &format!("{ARM}{id}?api-version={CONTAINER_APPS_API}"),
-                ARM,
-                None,
-                "managedEnvironments get",
-            )
-            .await?
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::Refused {
-                    reason: format!(
-                        "the Container Apps environment {id} setup named does not exist; rerun setup"
-                    ),
-                })
-            })?;
-        let location = environment["location"]
-            .as_str()
-            .filter(|location| !location.is_empty())
-            .ok_or_else(|| {
-                AlienError::new(failed(format!(
-                    "managedEnvironments get {id}: the answer has no location"
-                )))
-            })?;
-        Ok((id.to_string(), location.to_string()))
     }
 
     async fn patch(&self, name: &str, app: &Value) -> Result<()> {

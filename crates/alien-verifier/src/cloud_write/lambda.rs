@@ -514,9 +514,18 @@ mod tests {
         config: Option<SignedStatement>,
         write: CloudWrite,
     ) -> std::result::Result<(), String> {
+        checked_reading(release, config, Reads::default(), write).await
+    }
+
+    /// [`checked`], with `reads` as what the verifier read from its own install.
+    async fn checked_reading(
+        release: SignedStatement,
+        config: Option<SignedStatement>,
+        reads: Reads,
+        write: CloudWrite,
+    ) -> std::result::Result<(), String> {
         let accepted = accepted(release, config).await;
         let place = place();
-        let reads = Reads::default();
         let workload = functions(&accepted.release.body).next().unwrap();
         let facts = Facts {
             place: &place,
@@ -601,7 +610,7 @@ mod tests {
                         .unwrap()
                         .remove("MODE");
                 }),
-                "differs from the signed one for {\"MODE\"}",
+                "differs from the signed one for [\"MODE\"]",
             ),
             (
                 Box::new(|r| r["Architectures"] = json!(["x86_64"])),
@@ -1030,5 +1039,282 @@ mod tests {
             error.contains("is not the install's secrets vault"),
             "{error}"
         );
+    }
+
+    /// The function's own binding (`ALIEN_<ID>_BINDING`) must describe this function, as the
+    /// controller writes it, and no other.
+    #[tokio::test]
+    async fn the_own_binding_names_this_function() {
+        let binding = |name: String| {
+            let mut request = create();
+            request["Environment"]["Variables"]["ALIEN_API_BINDING"] = json!(json!({
+                "service": "lambda",
+                "workerName": name,
+                "region": "us-east-1",
+            })
+            .to_string());
+            CloudWrite::CreateFunction(request)
+        };
+        checked(release(1, function_workload()), None, binding(own()))
+            .await
+            .unwrap();
+        let error = checked(
+            release(1, function_workload()),
+            None,
+            binding(format!("{PREFIX}-verifier")),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("env ALIEN_API_BINDING of workload 'api' doesn't describe the function acme-prod-api"),
+            "{error}"
+        );
+    }
+
+    /// CreateFunction for the signed `api` workload with `env` on top of the controller's.
+    fn create_with_env(env: &[(&str, &str)]) -> CloudWrite {
+        let mut request = create();
+        for (name, value) in env {
+            request["Environment"]["Variables"][*name] = json!(value);
+        }
+        CloudWrite::CreateFunction(request)
+    }
+
+    /// Names the release doesn't let the control plane set are refused, the loader's secrets
+    /// lists among them.
+    #[tokio::test]
+    async fn values_the_release_does_not_allow_are_refused() {
+        for (name, value, says) in [
+            (
+                "MODE",
+                "attacker",
+                "env MODE differs from its signed, configured or computed value",
+            ),
+            (
+                "NODE_OPTIONS",
+                "--require /tmp/x.js",
+                "env NODE_OPTIONS is not in the signed release",
+            ),
+            (
+                "LOG_LEVEL",
+                "trace",
+                "env LOG_LEVEL is configurable and only a signed config statement may set it",
+            ),
+            (
+                "WORKLOAD_SECRETS",
+                r#"{"keys":["LD_PRELOAD"],"hash":"x"}"#,
+                "env WORKLOAD_SECRETS of workload 'api' is not the signed secrets list",
+            ),
+            (
+                "ALIEN_SECRETS",
+                r#"{"keys":["LD_PRELOAD"],"hash":"x"}"#,
+                "env ALIEN_SECRETS is not in the signed release",
+            ),
+        ] {
+            let error = checked(
+                release(1, function_workload()),
+                None,
+                create_with_env(&[(name, value)]),
+            )
+            .await
+            .expect_err(name);
+            assert!(error.contains(says), "{name}: {error}");
+        }
+        // A configurable name takes the signed config's value, and only that.
+        let config = || {
+            Some(crate::fixtures::config(
+                1,
+                ConfigBody {
+                    env: BTreeMap::from([("LOG_LEVEL".to_string(), "debug".to_string())]),
+                    ..ConfigBody::default()
+                },
+            ))
+        };
+        checked(
+            release(1, function_workload()),
+            config(),
+            create_with_env(&[("LOG_LEVEL", "debug")]),
+        )
+        .await
+        .unwrap();
+        let error = checked(
+            release(1, function_workload()),
+            config(),
+            create_with_env(&[("LOG_LEVEL", "trace")]),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("env LOG_LEVEL differs"), "{error}");
+    }
+
+    /// Binding values come from the install's names, what the verifier read in its own
+    /// install, or the signed config; never from the control plane.
+    #[tokio::test]
+    async fn bindings_come_from_the_install_never_the_control_plane() {
+        let mut workload = function_workload();
+        workload.bindings = BTreeMap::from([
+            ("uploads".to_string(), "storage".to_string()),
+            ("db".to_string(), "postgres".to_string()),
+            ("search".to_string(), "worker".to_string()),
+        ]);
+        let reads = || Reads {
+            bindings: BTreeMap::from([(
+                "search".to_string(),
+                r#"{"service":"lambda","workerName":"acme-prod-search","region":"us-east-1"}"#
+                    .to_string(),
+            )]),
+            ..Reads::default()
+        };
+        let config = || {
+            Some(crate::fixtures::config(
+                3,
+                ConfigBody {
+                    bindings: BTreeMap::from([(
+                        "db".to_string(),
+                        json!({"service": "external", "host": "db.vendor.example"}),
+                    )]),
+                    ..ConfigBody::default()
+                },
+            ))
+        };
+        let honest = [
+            (
+                "ALIEN_UPLOADS_BINDING",
+                r#"{"service":"s3","bucketName":"acme-prod-uploads"}"#,
+            ),
+            (
+                "ALIEN_SEARCH_BINDING",
+                r#"{"region":"us-east-1","service":"lambda","workerName":"acme-prod-search"}"#,
+            ),
+            (
+                "ALIEN_DB_BINDING",
+                r#"{"host":"db.vendor.example","service":"external"}"#,
+            ),
+        ];
+        checked_reading(
+            release(10, workload.clone()),
+            config(),
+            reads(),
+            create_with_env(&honest),
+        )
+        .await
+        .unwrap();
+
+        // The control plane pointing each one elsewhere is refused.
+        for (env, value) in [
+            (
+                "ALIEN_UPLOADS_BINDING",
+                r#"{"service":"s3","bucketName":"other-customer"}"#,
+            ),
+            (
+                "ALIEN_SEARCH_BINDING",
+                r#"{"service":"lambda","workerName":"evil","region":"us-east-1"}"#,
+            ),
+            (
+                "ALIEN_DB_BINDING",
+                r#"{"service":"external","host":"evil.example"}"#,
+            ),
+        ] {
+            let mut attack = honest.to_vec();
+            attack.retain(|(name, _)| *name != env);
+            attack.push((env, value));
+            let error = checked_reading(
+                release(10, workload.clone()),
+                config(),
+                reads(),
+                create_with_env(&attack),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                error.contains(&format!("env {env} differs")),
+                "{env}: {error}"
+            );
+        }
+
+        // Without a config, the binding the install can't supply is refused.
+        let error = checked_reading(
+            release(10, workload),
+            None,
+            reads(),
+            create_with_env(&honest),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("binding 'db' (postgres) has no value"),
+            "{error}"
+        );
+    }
+
+    /// A workload with secrets loads exactly the signed list, under the release's digest.
+    #[tokio::test]
+    async fn the_secrets_list_is_the_signed_workloads() {
+        let mut workload = function_workload();
+        workload.secrets = vec![alien_signing::release::SecretBinding {
+            name: "DB_PASSWORD".into(),
+            env_name: Some("DB_PASSWORD".into()),
+            file_path: None,
+        }];
+        let signed = release(10, workload);
+        let digest = signed.open().unwrap().digest;
+        let list = json!({"keys": ["DB_PASSWORD"], "hash": digest}).to_string();
+        checked(
+            signed.clone(),
+            None,
+            create_with_env(&[("WORKLOAD_SECRETS", &list)]),
+        )
+        .await
+        .unwrap();
+        for sent in [
+            json!({"keys": ["DB_PASSWORD", "LD_PRELOAD"], "hash": digest}).to_string(),
+            json!({"keys": ["DB_PASSWORD"], "hash": "sha256:0"}).to_string(),
+        ] {
+            let error = checked(
+                signed.clone(),
+                None,
+                create_with_env(&[("WORKLOAD_SECRETS", &sent)]),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                error.contains("is not the signed secrets list"),
+                "{sent}: {error}"
+            );
+        }
+        let error = checked(signed, None, create_with_env(&[]))
+            .await
+            .unwrap_err();
+        assert!(error.contains("is not the signed secrets list"), "{error}");
+    }
+
+    /// A deployer input's value is what the verifier read from the customer's store.
+    #[tokio::test]
+    async fn deployer_inputs_come_from_the_install() {
+        let mut workload = function_workload();
+        workload
+            .deployer_env
+            .insert("REGION_LABEL".into(), "region".into());
+        let reads = || Reads {
+            deployer_inputs: BTreeMap::from([("region".into(), "eu".into())]),
+            ..Reads::default()
+        };
+        checked_reading(
+            release(10, workload.clone()),
+            None,
+            reads(),
+            create_with_env(&[("REGION_LABEL", "eu")]),
+        )
+        .await
+        .unwrap();
+        let error = checked_reading(
+            release(10, workload),
+            None,
+            reads(),
+            create_with_env(&[("REGION_LABEL", "attacker")]),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("[\"REGION_LABEL\"]"), "{error}");
     }
 }

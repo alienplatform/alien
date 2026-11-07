@@ -131,10 +131,16 @@ pub fn check_env(
     .context(ErrorData::Refused {
         reason: "the control plane's values don't fit the release".to_string(),
     })?;
-    if built.env != rest {
+    let differs: Vec<&String> = changed_env(&rest, &built.env)
+        .into_iter()
+        .filter(|key| match (rest.get(*key), built.env.get(*key)) {
+            (Some(sent), Some(signed)) => !same_json(signed, sent),
+            _ => true,
+        })
+        .collect();
+    if !differs.is_empty() {
         return Err(refused(format!(
-            "the env of workload '{name}' differs from the signed one for {:?}",
-            changed_env(&rest, &built.env)
+            "the env of workload '{name}' differs from the signed one for {differs:?}"
         )));
     }
 
@@ -155,14 +161,18 @@ pub fn check_env(
     }
 }
 
-/// Two env values that hold the same JSON, or the same text.
+/// Two env values that are the same text, or the same JSON object: binding values and lists are
+/// JSON whose key order the controller may not keep.
 fn same_json(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
     match (
         serde_json::from_str::<Value>(a),
         serde_json::from_str::<Value>(b),
     ) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
+        (Ok(a @ Value::Object(_)), Ok(b)) => a == b,
+        _ => false,
     }
 }
 
@@ -191,7 +201,7 @@ fn check_runtime_secrets(name: &str, value: &str) -> Result<()> {
 fn check_own_binding(name: &str, own_name: &str, key: &str, value: &str) -> Result<()> {
     let binding: Value = serde_json::from_str(value)
         .map_err(|_| refused(format!("env {key} of workload '{name}' is not a binding")))?;
-    let names_itself = ["functionName", "serviceName", "containerAppName", "name"]
+    let names_itself = ["workerName", "serviceName", "containerAppName"]
         .iter()
         .filter_map(|field| binding.get(*field))
         .any(|named| named.as_str() == Some(own_name));

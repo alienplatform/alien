@@ -18,7 +18,7 @@ use crate::cloud_write::{CloudWrite, Facts};
 use crate::error::{ErrorData, Result};
 use crate::function::StillNewest;
 use crate::machines;
-use crate::plan::{FunctionSpec, Place};
+use crate::plan::Place;
 use crate::trust::InstallStore;
 use crate::verifier::Backend;
 
@@ -580,28 +580,6 @@ impl Backend for GcpBackend {
         crate::cloud_write::cloud_run::forward(&self.0, facts, write, newest).await
     }
 
-    async fn apply(
-        &self,
-        _place: &Place,
-        spec: &FunctionSpec,
-        newest: &dyn StillNewest,
-    ) -> Result<()> {
-        if spec.architecture != "x86_64" {
-            return Err(AlienError::new(ErrorData::Refused {
-                reason: "Cloud Run runs only x86_64".to_string(),
-            }));
-        }
-        // One verifier instance serves the install, so nothing writes between this check and
-        // the write.
-        newest.check().await?;
-        crate::cloud_run::apply(&self.0, spec).await.map(|_| ())
-    }
-
-    async fn check(&self, spec: &FunctionSpec) -> Result<()> {
-        let back = ServiceStore::get(&self.0, &spec.name).await?;
-        crate::cloud_run::check_read_back(spec, &back)
-    }
-
     async fn resize(&self, target: &str, zone: Option<&str>, size: u32) -> Result<()> {
         self.0.resize_group(target, zone, size).await
     }
@@ -700,16 +678,6 @@ impl ServiceStore for Gcp {
                 reason: format!("service {name} does not exist; setup creates it"),
             })
         })
-    }
-
-    async fn find(&self, name: &str) -> Result<Option<Value>> {
-        self.call(
-            reqwest::Method::GET,
-            &self.service_url(name),
-            None,
-            &format!("run.services.get {name}"),
-        )
-        .await
     }
 
     async fn create(&self, name: &str, service: &Value) -> Result<()> {

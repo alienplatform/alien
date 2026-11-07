@@ -15,9 +15,9 @@ use serde_json::{json, Value};
 
 use crate::cloud_write::{CloudWrite, Facts};
 use crate::error::{ErrorData, Result};
-use crate::function::{FunctionStore, StillNewest};
+use crate::function::StillNewest;
 use crate::machines::{plan_roll, roll, MachineApi, RollMachines};
-use crate::plan::{FunctionSpec, Place};
+use crate::plan::Place;
 use crate::trust::InstallStore;
 use crate::verifier::Backend;
 
@@ -251,24 +251,6 @@ impl<L: LambdaApi, M: MachineApi> Backend for AwsBackend<L, M> {
         workload: &Workload,
     ) -> Result<BTreeMap<String, String>> {
         read_bindings(&self.lambda, &place.prefix, &self.region, workload).await
-    }
-
-    async fn apply(
-        &self,
-        place: &Place,
-        spec: &FunctionSpec,
-        newest: &dyn StillNewest,
-    ) -> Result<()> {
-        let mut tags = alien_core::standard_resource_tags(&place.prefix, &spec.workload);
-        tags.insert("Name".to_string(), spec.name.clone());
-        crate::function::apply(&self.lambda, spec, &tags, newest)
-            .await
-            .map(|_| ())
-    }
-
-    async fn check(&self, spec: &FunctionSpec) -> Result<()> {
-        let back = FunctionStore::get(&self.lambda, &spec.name).await?;
-        crate::function::check_read_back(spec, &back)
     }
 
     fn check_write(&self, facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {

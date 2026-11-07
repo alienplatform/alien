@@ -24,7 +24,7 @@ move `api` to image B, and checks with the caller's own credentials:
   2. protected: a release whose signer list isn't the one setup pinned is refused with the
      verifier's reason, and the function keeps running B;
   3. unprotected: the update succeeds by writing the function directly; no verifier exists.
-  4. protected: a burst of concurrent applyRelease calls for releases 4..11 (alternating
+  4. protected: a burst of concurrent applyWrite calls for releases 4..11 (alternating
      images) never leaves the install behind its newest accepted release: once release 11 has
      been applied (retrying it while it reports a failure, as the control plane does), the
      ledger is at 11 and the function runs 11's image, and stays there; every other call either

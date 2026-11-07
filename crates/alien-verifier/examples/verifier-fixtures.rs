@@ -4,7 +4,7 @@
 //! writes, under fresh keys: signer list version 1, the signing settings and
 //! the empty ledger setup writes for `prefix`, releases of one function
 //! workload `api`, and config statements for `install-id`. See
-//! `scripts/verifier-e2e/aws.py`.
+//! `scripts/verifier-e2e/machines.py`.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

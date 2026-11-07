@@ -2,16 +2,16 @@
 //!
 //! A protected install's management identity may not decide what a function runs: setup denies
 //! it every Lambda write (AWS), Cloud Run service write (GCP) and Container App write (Azure).
-//! The install's `<prefix>-verifier` makes them, from the signed release. A controller hands it
-//! the release, the project's signer list chain and the deployment's signed config exactly as
-//! the vendor signed them, plus the values the release lets the deployment provide; the
-//! verifier checks the statements against the install's own settings and ledger, so nothing
-//! here is trusted by it.
+//! The install's `<prefix>-verifier` makes them. A controller builds the same cloud request it
+//! sends on an unprotected install and hands it to the verifier with the release, the project's
+//! signer list chain and the deployment's signed config exactly as the vendor signed them; the
+//! verifier checks the statements against the install's own settings and ledger and every field
+//! of the request against the signed release, so nothing here is trusted by it.
 //!
 //! Request bodies follow the verifier's own types (alien-verifier `Request`, which refuses
 //! unknown fields). Unprotected installs never reach this module.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use alien_aws_clients::lambda::{InvocationType, InvokeRequest, LambdaApi};
@@ -47,6 +47,68 @@ pub fn protected_statements<'a>(
         })
 }
 
+/// Env var with the secrets a protected function loads at start: the signed workload's secret
+/// names and the release digest. Unprotected functions keep `ALIEN_SECRETS`, which the
+/// deployment writes from its own variables; the verifier refuses that one on a protected
+/// install, since it would let management pick which vault keys load.
+pub const WORKLOAD_SECRETS: &str = "WORKLOAD_SECRETS";
+
+/// Render into `env`, the environment a controller built for `workload`, what the signed
+/// statements decide on a protected install: the secrets list it loads at start
+/// (`WORKLOAD_SECRETS` from the signed workload, in place of the deployment's `ALIEN_SECRETS`)
+/// and the values the signed `config` sets for the names the release makes configurable.
+pub fn apply_signed_values(
+    statements: &ReleaseStatements,
+    config: Option<&SignedStatement>,
+    workload: &str,
+    env: &mut HashMap<String, String>,
+) -> Result<()> {
+    let refuse = |message: String| {
+        AlienError::new(ErrorData::ResourceConfigInvalid {
+            message,
+            resource_id: Some(workload.to_string()),
+        })
+    };
+    let opened = statements
+        .release
+        .open()
+        .map_err(|error| refuse(format!("The signed release can't be read: {error}")))?;
+    let body: ReleaseBody = opened
+        .body()
+        .map_err(|error| refuse(format!("The signed release can't be read: {error}")))?;
+    let signed = body
+        .workloads
+        .iter()
+        .find(|candidate| candidate.name == workload)
+        .ok_or_else(|| refuse(format!("The signed release has no workload '{workload}'")))?;
+
+    env.remove(alien_core::ENV_ALIEN_SECRETS);
+    if !signed.secrets.is_empty() {
+        let keys: Vec<&str> = signed
+            .secrets
+            .iter()
+            .map(|secret| secret.name.as_str())
+            .collect();
+        env.insert(
+            WORKLOAD_SECRETS.to_string(),
+            serde_json::json!({ "keys": keys, "hash": opened.digest }).to_string(),
+        );
+    }
+
+    if let Some(config) = config {
+        let config: alien_signing::ConfigBody = config
+            .open()
+            .and_then(|opened| opened.body())
+            .map_err(|error| refuse(format!("The signed config can't be read: {error}")))?;
+        for (name, value) in config.env {
+            if signed.configurable_env.contains(&name) {
+                env.insert(name, value);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The digest of the signed config the step carries, if any.
 pub fn config_digest(ctx: &ResourceControllerContext<'_>) -> Result<Option<String>> {
     ctx.deployment_config
@@ -74,160 +136,121 @@ pub fn config_changed(ctx: &ResourceControllerContext<'_>, applied: Option<&str>
     Ok(config_digest(ctx)?.is_some_and(|digest| Some(digest.as_str()) != applied))
 }
 
-/// `applyRelease` for one function workload of the signed release.
+/// One cloud write a controller hands the verifier, exactly as it would send it to the cloud
+/// on an unprotected install (alien-verifier `CloudWrite`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ApplyRelease {
+pub enum CloudWrite {
+    /// Lambda CreateFunction.
+    CreateFunction(serde_json::Value),
+    /// Lambda UpdateFunctionCode.
+    #[serde(rename_all = "camelCase")]
+    UpdateFunctionCode {
+        function_name: String,
+        request: serde_json::Value,
+    },
+    /// Lambda UpdateFunctionConfiguration.
+    #[serde(rename_all = "camelCase")]
+    UpdateFunctionConfiguration {
+        function_name: String,
+        request: serde_json::Value,
+    },
+    /// Lambda AddPermission.
+    #[serde(rename_all = "camelCase")]
+    AddPermission {
+        function_name: String,
+        request: serde_json::Value,
+    },
+    /// Lambda PutFunctionConcurrency.
+    #[serde(rename_all = "camelCase")]
+    PutFunctionConcurrency {
+        function_name: String,
+        reserved_concurrent_executions: u32,
+    },
+    /// Lambda DeleteFunctionConcurrency.
+    #[serde(rename_all = "camelCase")]
+    DeleteFunctionConcurrency { function_name: String },
+    /// Cloud Run services.create.
+    #[serde(rename_all = "camelCase")]
+    CreateService {
+        service_id: String,
+        service: serde_json::Value,
+    },
+    /// Cloud Run services.patch of the whole service.
+    #[serde(rename_all = "camelCase")]
+    ReplaceService {
+        name: String,
+        service: serde_json::Value,
+    },
+    /// Cloud Run services.setIamPolicy.
+    #[serde(rename_all = "camelCase")]
+    SetServicePolicy {
+        name: String,
+        policy: serde_json::Value,
+    },
+    /// Container Apps createOrUpdate.
+    #[serde(rename_all = "camelCase")]
+    CreateContainerApp {
+        name: String,
+        app: serde_json::Value,
+    },
+    /// Container Apps update.
+    #[serde(rename_all = "camelCase")]
+    UpdateContainerApp {
+        name: String,
+        app: serde_json::Value,
+    },
+}
+
+impl CloudWrite {
+    /// `request`, serialized as the cloud client sends it.
+    pub fn body<T: Serialize>(request: &T) -> Result<serde_json::Value> {
+        serde_json::to_value(request)
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "A cloud request can't be serialized for the verifier".to_string(),
+                resource_id: None,
+            })
+    }
+}
+
+/// `applyWrite`: one cloud write for one signed workload, with the statements it rests on.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyWrite {
     pub release: SignedStatement,
     pub signer_lists: Vec<SignedStatement>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<SignedStatement>,
-    /// Values of the names the signed workload lists as provided, by workload.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub provided_env: BTreeMap<String, BTreeMap<String, String>>,
-    /// Where this install's copy of the workload's image lives, when it isn't the signed
-    /// reference itself. The verifier refuses one whose digest isn't the signed one.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub images: BTreeMap<String, String>,
-    /// The one workload this request writes; the release's other functions keep what runs.
-    pub workloads: BTreeSet<String>,
-    /// Pull credentials for the image's registry, where the function needs them (Container
-    /// Apps). They can't change what runs: the image is pinned by the signed digest.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub registry: Option<RegistryCredentials>,
-    /// AWS: the API Gateway API in front of the workload, once created. The verifier lets it
-    /// invoke the function only if the signed stack gives the workload a public endpoint.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub apis: BTreeMap<String, String>,
+    pub workload: String,
+    pub write: CloudWrite,
 }
 
-/// A registry's pull credentials.
-#[derive(Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RegistryCredentials {
-    pub server: String,
-    pub username: String,
-    pub password: String,
-}
-
-impl std::fmt::Debug for RegistryCredentials {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RegistryCredentials")
-            .field("server", &self.server)
-            .field("username", &self.username)
-            .field("password", &"<redacted>")
-            .finish()
-    }
-}
-
-impl ApplyRelease {
-    /// The request that writes `workload` from `statements` and `config`. Of `env`, which the
-    /// controller rendered as it would for an unprotected install, only the names the signed
-    /// workload lists as provided are sent; the verifier computes everything else itself.
-    /// `image` is where the function pulls the image from in this install.
-    pub fn for_workload(
-        statements: &ReleaseStatements,
-        config: Option<&SignedStatement>,
-        workload: &str,
-        env: &HashMap<String, String>,
-        image: &str,
-    ) -> Result<Self> {
-        let refuse = |message: String| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message,
-                resource_id: Some(workload.to_string()),
-            })
-        };
-        let body: ReleaseBody = statements
-            .release
-            .open()
-            .and_then(|opened| opened.body())
-            .map_err(|error| refuse(format!("The signed release can't be read: {error}")))?;
-        let signed = body
-            .workloads
-            .iter()
-            .find(|candidate| candidate.name == workload)
-            .ok_or_else(|| {
-                refuse(format!(
-                    "The signed release has no workload '{workload}', so the verifier can't write it"
-                ))
-            })?;
-        let provided: BTreeMap<String, String> = env
-            .iter()
-            .filter(|(name, _)| signed.provided_env.contains(name))
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .collect();
-        Ok(Self {
-            release: statements.release.clone(),
-            signer_lists: statements.signer_lists.clone(),
-            config: config.cloned(),
-            provided_env: if provided.is_empty() {
-                BTreeMap::new()
-            } else {
-                BTreeMap::from([(workload.to_string(), provided)])
-            },
-            images: if image == signed.image {
-                BTreeMap::new()
-            } else {
-                BTreeMap::from([(workload.to_string(), image.to_string())])
-            },
-            workloads: BTreeSet::from([workload.to_string()]),
-            registry: None,
-            apis: BTreeMap::new(),
-        })
-    }
-
-    /// The same request naming `api` as the API Gateway API in front of the workload.
-    pub fn with_api(mut self, api: Option<&str>) -> Self {
-        self.apis = api
-            .into_iter()
-            .flat_map(|api| {
-                self.workloads
-                    .iter()
-                    .map(move |workload| (workload.clone(), api.to_string()))
-            })
-            .collect();
-        self
-    }
-
-    /// The same request with pull credentials for the image's registry.
-    pub fn with_registry(mut self, registry: RegistryCredentials) -> Self {
-        self.registry = Some(registry);
-        self
-    }
+/// What `applyWrite` did.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Written {
+    /// The sequence of the release the verifier accepted.
+    pub release: u64,
+    /// The function it wrote.
+    pub function: String,
+    /// What the cloud answered, where the controller needs it (a created function's ARN).
+    #[serde(default)]
+    pub answer: serde_json::Value,
 }
 
 /// One verifier request, as the verifier deserializes it: `{"<kind>": {...}}`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Request {
-    ApplyRelease(ApplyRelease),
-}
-
-/// One function the verifier wrote.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AppliedFunction {
-    /// The function's name in the cloud.
-    pub function: String,
-    /// The image it now runs.
-    pub image_uri: String,
-    /// The signed digest.
-    pub digest: String,
-}
-
-/// What `applyRelease` did.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct Applied {
-    /// The sequence of the release the verifier accepted.
-    pub release: u64,
-    /// The functions it wrote and read back.
-    pub functions: Vec<AppliedFunction>,
+    ApplyWrite(ApplyWrite),
 }
 
 /// The code the verifier gives a refusal: the request or its statements don't allow the write.
 /// Any other code is a failure applying again may get past.
 const REFUSED: &str = "VERIFIER_REFUSED";
+/// The code the verifier gives a cloud quota with no room for what the release asks: applying
+/// again gets the same answer until the quota is raised.
+const QUOTA_EXCEEDED: &str = "VERIFIER_QUOTA_EXCEEDED";
 
 /// Why a call to the verifier didn't produce an answer.
 #[derive(Debug)]
@@ -248,57 +271,77 @@ pub trait Verifier: Send + Sync {
     async fn call(&self, request: &Request) -> std::result::Result<serde_json::Value, CallError>;
 }
 
-/// Write the function of `request`'s one workload through `verifier`, and check that it wrote
-/// exactly `function`. A refusal is an error carrying the verifier's reason.
-pub async fn apply_release(
+/// The deployment's error for the verifier's answer `code`/`reason`: a refusal never changes
+/// on retry, nor does a quota with no room; anything else may get past on the next apply.
+fn answered(
     verifier: &dyn Verifier,
-    request: ApplyRelease,
     resource_id: &str,
+    code: String,
+    reason: String,
+) -> AlienError<ErrorData> {
+    if code == REFUSED {
+        return AlienError::new(ErrorData::ReleaseRefusedByVerifier {
+            resource_id: resource_id.to_string(),
+            verifier: verifier.name().to_string(),
+            reason,
+        });
+    }
+    let retryable = code != QUOTA_EXCEEDED;
+    let mut error = AlienError::new(ErrorData::VerifierFailed {
+        resource_id: resource_id.to_string(),
+        verifier: verifier.name().to_string(),
+        code,
+        reason,
+    });
+    error.retryable = retryable;
+    error
+}
+
+/// Hand `write`, the cloud request a controller built for `workload`'s function, to `verifier`,
+/// which checks it against the signed `statements` and `config`, sends it unchanged and reads
+/// it back. A refusal is an error carrying the verifier's reason.
+pub async fn apply_write(
+    verifier: &dyn Verifier,
+    statements: &ReleaseStatements,
+    config: Option<&SignedStatement>,
+    workload: &str,
+    write: CloudWrite,
     function: &str,
-) -> Result<Applied> {
-    let answer = match verifier.call(&Request::ApplyRelease(request)).await {
+) -> Result<Written> {
+    let request = Request::ApplyWrite(ApplyWrite {
+        release: statements.release.clone(),
+        signer_lists: statements.signer_lists.clone(),
+        config: config.cloned(),
+        workload: workload.to_string(),
+        write,
+    });
+    let answer = match verifier.call(&request).await {
         Ok(answer) => answer,
-        Err(CallError::Answered { code, reason }) if code == REFUSED => {
-            return Err(AlienError::new(ErrorData::ReleaseRefusedByVerifier {
-                resource_id: resource_id.to_string(),
-                verifier: verifier.name().to_string(),
-                reason,
-            }))
-        }
         Err(CallError::Answered { code, reason }) => {
-            return Err(AlienError::new(ErrorData::VerifierFailed {
-                resource_id: resource_id.to_string(),
-                verifier: verifier.name().to_string(),
-                code,
-                reason,
-            }))
+            return Err(answered(verifier, workload, code, reason))
         }
         Err(CallError::Failed(error)) => return Err(error),
     };
-    let applied: Applied = serde_json::from_value(answer).into_alien_error().context(
+    let written: Written = serde_json::from_value(answer).into_alien_error().context(
         ErrorData::CloudPlatformError {
             message: format!(
-                "The answer of verifier '{}' to applyRelease is not a list of written functions",
+                "The answer of verifier '{}' to applyWrite is not one written function",
                 verifier.name()
             ),
-            resource_id: Some(resource_id.to_string()),
+            resource_id: Some(workload.to_string()),
         },
     )?;
-    let written: Vec<&str> = applied
-        .functions
-        .iter()
-        .map(|applied| applied.function.as_str())
-        .collect();
-    if written != [function] {
+    if written.function != function {
         return Err(AlienError::new(ErrorData::CloudPlatformError {
             message: format!(
-                "Verifier '{}' wrote {written:?}, not the function '{function}'",
-                verifier.name()
+                "Verifier '{}' wrote '{}', not the function '{function}'",
+                verifier.name(),
+                written.function
             ),
-            resource_id: Some(resource_id.to_string()),
+            resource_id: Some(workload.to_string()),
         }));
     }
-    Ok(applied)
+    Ok(written)
 }
 
 /// The AWS verifier: Lambda `<prefix>-verifier`, invoked synchronously with the request as its
@@ -607,5 +650,61 @@ impl Verifier for HttpVerifier {
                 self.url
             )))
             .map_err(CallError::Failed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::verifier_test_support::{signed_config, signed_release_configuring};
+    use alien_core::{Platform, ResourceLifecycle, Stack, Worker, WorkerCode};
+
+    /// The deployment's own secrets list never reaches a protected function, and the signed
+    /// config sets only the names the release makes configurable.
+    #[test]
+    fn a_protected_env_takes_the_signed_values() {
+        let worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: format!("ghcr.io/shop/api@sha256:{}", "1".repeat(64)),
+            })
+            .permissions("execution".to_string())
+            .build();
+        let statements = signed_release_configuring(
+            Platform::Aws,
+            &Stack::new("shop".to_string())
+                .add(worker, ResourceLifecycle::Live)
+                .build(),
+            1,
+            &["LOG_LEVEL"],
+        );
+        let install = alien_signing::InstallId::Aws {
+            account: "123456789012".to_string(),
+            region: "us-east-1".to_string(),
+            prefix: "shop".to_string(),
+        };
+        let config = signed_config(&install, &[("LOG_LEVEL", "debug")], 1);
+        let mut env = HashMap::from([
+            (
+                alien_core::ENV_ALIEN_SECRETS.to_string(),
+                r#"{"keys":["LD_PRELOAD"],"hash":"x"}"#.to_string(),
+            ),
+            ("LOG_LEVEL".to_string(), "info".to_string()),
+            ("ALIEN_DEPLOYMENT_ID".to_string(), "dep_1".to_string()),
+        ]);
+
+        apply_signed_values(&statements, Some(&config), "api", &mut env).unwrap();
+
+        assert_eq!(
+            env,
+            HashMap::from([
+                ("LOG_LEVEL".to_string(), "debug".to_string()),
+                ("ALIEN_DEPLOYMENT_ID".to_string(), "dep_1".to_string()),
+            ])
+        );
+        let error = apply_signed_values(&statements, None, "jobs", &mut env).unwrap_err();
+        assert!(
+            error.to_string().contains("has no workload 'jobs'"),
+            "{error}"
+        );
     }
 }

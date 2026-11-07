@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use alien_error::AlienError;
 use alien_gcp_clients::cloudrun::Service;
+use alien_gcp_clients::iam::IamPolicy;
 use serde_json::Value;
 
 use super::env::check_env;
@@ -16,6 +17,9 @@ use crate::function::StillNewest;
 
 /// Check `write`, a Cloud Run write for `facts.workload`, against the table.
 pub fn check_write(facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
+    if let CloudWrite::SetServicePolicy { name, policy } = write {
+        return check_policy_write(facts, name, policy);
+    }
     let (operation, named, service) = match write {
         CloudWrite::CreateService {
             service_id,
@@ -32,6 +36,92 @@ pub fn check_write(facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
     parse_strict::<Service>(operation, service)?;
     check_target(facts, named, operation)?;
     check(operation, service, &service_rows(facts))
+}
+
+/// The role a private service's own account needs: Pub/Sub and Cloud Scheduler sign their
+/// requests as it.
+const INVOKER: &str = "roles/run.invoker";
+
+/// A policy write is only for a private worker, whose own account must be able to invoke it.
+/// What else it may change depends on the live policy, so [`forward`] checks the rest.
+fn check_policy_write(facts: &Facts<'_>, named: &str, policy: &Value) -> Result<()> {
+    let operation = "SetServicePolicy";
+    parse_strict::<IamPolicy>(operation, policy)?;
+    check_target(facts, named, operation)?;
+    if is_public(facts)? {
+        return Err(refused(format!(
+            "{operation} on {named}: the worker is public, so its service takes no invoker grant"
+        )));
+    }
+    Ok(())
+}
+
+/// The account the workload's service runs as, which setup created for its permission profile.
+fn own_account(facts: &Facts<'_>) -> std::result::Result<String, String> {
+    let profile = facts
+        .workload
+        .identity
+        .as_deref()
+        .ok_or_else(|| "the workload names no permission profile".to_string())?;
+    Ok(facts.place.run_as(profile))
+}
+
+/// Every (role, condition, member) a policy grants.
+fn grants(policy: &Value) -> std::collections::BTreeSet<(String, String, String)> {
+    policy["bindings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|binding| {
+            let role = binding["role"].as_str().unwrap_or_default().to_string();
+            let condition = binding["condition"].to_string();
+            binding["members"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(move |member| {
+                    (
+                        role.clone(),
+                        condition.clone(),
+                        member.as_str().unwrap_or_default().to_string(),
+                    )
+                })
+        })
+        .collect()
+}
+
+/// `sent` may differ from `live`, the policy as it is now, only by granting the workload's own
+/// account the invoker role without a condition; it carries the etag it was read at.
+fn check_policy(facts: &Facts<'_>, live: &Value, sent: &Value) -> Result<()> {
+    let account = own_account(facts).map_err(refused)?;
+    let mut allowed = grants(live);
+    allowed.insert((
+        INVOKER.to_string(),
+        Value::Null.to_string(),
+        format!("serviceAccount:{account}"),
+    ));
+    let sent_grants = grants(sent);
+    if let Some((role, condition, member)) = sent_grants.difference(&allowed).next() {
+        return Err(refused(format!(
+            "SetServicePolicy on {} grants {member} {role} (condition {condition}); it may only let the worker's own account {account} invoke it",
+            facts.own_name
+        )));
+    }
+    if let Some((role, _, member)) = grants(live).difference(&sent_grants).next() {
+        return Err(refused(format!(
+            "SetServicePolicy on {} drops {member} from {role}, which only setup changes",
+            facts.own_name
+        )));
+    }
+    for field in ["etag", "version", "auditConfigs"] {
+        if sent[field] != live[field] {
+            return Err(refused(format!(
+                "SetServicePolicy on {} has {field} {}, the policy has {}",
+                facts.own_name, sent[field], live[field]
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// The ingress the signed stack gives the workload.
@@ -90,12 +180,7 @@ fn service_rows<'a>(facts: &'a Facts<'a>) -> Vec<Row<'a>> {
                 .ok_or_else(|| format!("it is {value}"))
         }),
         signed("/template/serviceAccount", move |value| {
-            let profile = facts
-                .workload
-                .identity
-                .as_deref()
-                .ok_or_else(|| "the workload names no permission profile".to_string())?;
-            let account = facts.place.run_as(profile);
+            let account = own_account(facts)?;
             (value.as_str() == Some(account.as_str()))
                 .then_some(())
                 .ok_or_else(|| format!("it is {value}, not {account}"))
@@ -205,6 +290,13 @@ pub async fn forward(
             newest.check().await?;
             store.replace(&facts.own_name, service).await?;
             service
+        }
+        CloudWrite::SetServicePolicy { policy, .. } => {
+            let live = store.policy(&facts.own_name).await?;
+            check_policy(facts, &live, policy)?;
+            newest.check().await?;
+            store.set_policy(&facts.own_name, policy).await?;
+            return Ok(Value::Null);
         }
         other => {
             return Err(refused(format!(
@@ -492,5 +584,184 @@ mod tests {
         .await
         .unwrap_err();
         assert!(error.contains("names function acme-prod-other"), "{error}");
+    }
+
+    /// The service's IAM policy, as Cloud Run holds it; nothing else is called.
+    struct Policies {
+        policy: std::sync::Mutex<Value>,
+        set: std::sync::Mutex<Vec<Value>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ServiceStore for Policies {
+        async fn get(&self, name: &str) -> Result<Value> {
+            panic!("get {name}")
+        }
+        async fn replace(&self, name: &str, _service: &Value) -> Result<()> {
+            panic!("replace {name}")
+        }
+        async fn create(&self, name: &str, _service: &Value) -> Result<()> {
+            panic!("create {name}")
+        }
+        async fn policy(&self, name: &str) -> Result<Value> {
+            assert_eq!(name, own());
+            Ok(self.policy.lock().unwrap().clone())
+        }
+        async fn set_policy(&self, name: &str, policy: &Value) -> Result<()> {
+            assert_eq!(name, own());
+            self.set.lock().unwrap().push(policy.clone());
+            Ok(())
+        }
+    }
+
+    struct Newest;
+
+    #[async_trait::async_trait]
+    impl StillNewest for Newest {
+        async fn check(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Send a SetServicePolicy of `sent` against the live policy `live`; what was set, or the
+    /// refusal.
+    async fn set_policy(live: Value, sent: Value) -> std::result::Result<Vec<Value>, String> {
+        let accepted = accepted(gcp_release()).await;
+        let place = place();
+        let reads = Reads::default();
+        let workload = functions(&accepted.release.body).next().unwrap();
+        let facts = Facts {
+            place: &place,
+            accepted: &accepted,
+            workload,
+            reads: &reads,
+            own_name: own(),
+        };
+        let write = CloudWrite::SetServicePolicy {
+            name: own(),
+            policy: sent,
+        };
+        let store = Policies {
+            policy: std::sync::Mutex::new(live),
+            set: std::sync::Mutex::new(Vec::new()),
+        };
+        check_write(&facts, &write).map_err(|error| error.to_string())?;
+        forward(&store, &facts, &write, &Newest)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(store.set.into_inner().unwrap())
+    }
+
+    fn own_invoker() -> String {
+        format!("serviceAccount:{}", place().run_as("execution"))
+    }
+
+    /// The policy write may only let the worker's own account invoke its service, on top of the
+    /// policy as it is.
+    #[tokio::test]
+    async fn a_policy_write_only_admits_the_workers_own_account() {
+        let live = json!({
+            "version": 1,
+            "etag": "BwX1",
+            "bindings": [{"role": "roles/run.invoker", "members": ["serviceAccount:scheduler@acme-project.iam.gserviceaccount.com"]}],
+        });
+        let admitted = json!({
+            "version": 1,
+            "etag": "BwX1",
+            "bindings": [{"role": "roles/run.invoker", "members": [
+                "serviceAccount:scheduler@acme-project.iam.gserviceaccount.com",
+                own_invoker(),
+            ]}],
+        });
+        assert_eq!(
+            set_policy(live.clone(), admitted.clone()).await.unwrap(),
+            vec![admitted.clone()],
+            "Cloud Run got exactly the controller's policy"
+        );
+        // The same grant in a binding of its own.
+        let own_binding = json!({
+            "version": 1,
+            "etag": "BwX1",
+            "bindings": [
+                live["bindings"][0].clone(),
+                {"role": "roles/run.invoker", "members": [own_invoker()]},
+            ],
+        });
+        set_policy(live.clone(), own_binding).await.unwrap();
+
+        let with = |change: &dyn Fn(&mut Value)| {
+            let mut policy = admitted.clone();
+            change(&mut policy);
+            policy
+        };
+        let cases: Vec<(Value, &str)> = vec![
+            (
+                with(&|p| p["bindings"][0]["members"][1] = json!("allUsers")),
+                "grants allUsers roles/run.invoker",
+            ),
+            (
+                with(&|p| p["bindings"][0]["role"] = json!("roles/run.admin")),
+                "roles/run.admin",
+            ),
+            (
+                with(&|p| {
+                    p["bindings"][0]["condition"] =
+                        json!({"expression": "request.time < timestamp('2030-01-01T00:00:00Z')"})
+                }),
+                "grants serviceAccount:",
+            ),
+            (
+                with(&|p| p["bindings"][0]["members"] = json!([own_invoker()])),
+                "drops serviceAccount:scheduler@acme-project.iam.gserviceaccount.com",
+            ),
+            (with(&|p| p["etag"] = json!("BwX0")), "has etag \"BwX0\""),
+            (
+                with(&|p| p["auditConfigs"] = json!([{"service": "allServices"}])),
+                "field /auditConfigs, which the verifier doesn't know",
+            ),
+        ];
+        for (sent, says) in cases {
+            let error = set_policy(live.clone(), sent).await.expect_err(says);
+            assert!(error.contains(says), "{says}: {error}");
+        }
+    }
+
+    /// A public worker's service takes requests without the invoker check, so it gets no
+    /// policy write; nor does another function's.
+    #[tokio::test]
+    async fn a_policy_write_is_for_the_own_private_service_only() {
+        for (release, named, says) in [
+            (
+                crate::plan::tests::release_on(alien_core::Platform::Gcp, true),
+                own(),
+                "the worker is public, so its service takes no invoker grant",
+            ),
+            (
+                crate::plan::tests::release_on(alien_core::Platform::Gcp, false),
+                format!("{PREFIX}-other"),
+                "names function acme-prod-other",
+            ),
+        ] {
+            let accepted = accepted(release).await;
+            let place = place();
+            let reads = Reads::default();
+            let facts = Facts {
+                place: &place,
+                accepted: &accepted,
+                workload: functions(&accepted.release.body).next().unwrap(),
+                reads: &reads,
+                own_name: own(),
+            };
+            let error = check_write(
+                &facts,
+                &CloudWrite::SetServicePolicy {
+                    name: named,
+                    policy: json!({"bindings": [{"role": INVOKER, "members": [own_invoker()]}]}),
+                },
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains(says), "{says}: {error}");
+        }
     }
 }

@@ -1,17 +1,18 @@
 //! The verifier: on a protected install, the only principal that changes
 //! what runs.
 //!
-//! The control plane calls it with signed statements, never with a spec. It
-//! finds the install's signing settings and ledger itself, derives the
-//! install id from its own identity, verifies the statements, builds each
-//! function from the signed workload, applies it and reads it back. Any
-//! field it doesn't know, in the request or in what the cloud returns,
-//! refuses the write, so a new cloud field can't slip through. On machine
-//! clusters it writes the launch template and bounds (AWS) or resizes within
-//! the signed bounds (GCP, Azure).
+//! A worker controller hands it the cloud write it built, exactly as an
+//! unprotected install sends it, with the signed statements. It finds the
+//! install's signing settings and ledger itself, derives the install id from
+//! its own identity, verifies the statements, checks every field of the write
+//! against the cloud's table, sends it unchanged and reads back what decides
+//! what runs. A field no row names refuses the write, so a new cloud field
+//! can't slip through. On machine clusters it writes the launch template and
+//! bounds (AWS) or resizes within the signed bounds (GCP, Azure).
 //!
 //! - [`trust`]: finding the settings and ledger, and accepting statements;
-//! - [`plan`]: from an accepted release to the functions to write;
+//! - [`plan`]: the request, where the verifier runs, and signed invoke grants;
+//! - [`fields`] and [`cloud_write`]: the field tables and each cloud's writes;
 //! - [`function`] and [`aws`]: Lambda and the install's SSM parameters;
 //! - [`cloud_run`] and [`gcp`]: Cloud Run and Parameter Manager on GCP;
 //! - [`container_apps`] and [`azure`]: Container Apps and Key Vault on Azure;
@@ -42,7 +43,7 @@ pub mod trust;
 pub mod verifier;
 
 pub use error::{ErrorData, Result};
-pub use plan::{FunctionSpec, ReleaseRequest, Request, SECRETS_ENV};
+pub use plan::{Request, SECRETS_ENV};
 pub use verifier::{Backend, Verifier};
 
 /// The outer reason and what caused it, as one line.

@@ -80,6 +80,7 @@ pub fn binding_env(
             ("aws", "vault") => json!({ "service": "parameter-store", "vaultPrefix": name }),
             ("gcp", "storage") => json!({ "service": "gcs", "bucketName": name }),
             ("gcp", "vault") => json!({ "service": "secret-manager", "vaultPrefix": name }),
+            ("azure", "vault") => json!({ "service": "key-vault", "vaultName": name }),
             _ => {
                 derived.unresolved.insert(id.clone(), resource_type.clone());
                 continue;

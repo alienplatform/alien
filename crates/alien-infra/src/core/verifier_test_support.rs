@@ -1,8 +1,8 @@
 //! A protected install for controller tests: a signed release of a stack, and the real
-//! verifier with the install's settings and ledger in memory and a backend that records the
-//! functions it would write. A controller test sends the verifier request it captured through
-//! `run_verifier`, so it proves the verifier accepts what the controller sends, not only that
-//! the controller sent something.
+//! verifier with the install's settings and ledger in memory, its real field tables, and a
+//! backend that records the writes it would send. A controller test sends the verifier request
+//! it captured through `run_write`, so it proves the verifier accepts what the controller sends,
+//! not only that the controller sent something.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -14,10 +14,11 @@ use alien_signing::{
     fingerprint, InstallId, Kind, Ledger, Lookup, Role, SecretKey, SignedStatement, Signer,
     SignerKind, SignerListBody, SigningSettings, Workload,
 };
+use alien_verifier::cloud_write::{CloudWrite, Facts};
 use alien_verifier::function::StillNewest;
 use alien_verifier::plan::Place;
 use alien_verifier::trust::InstallStore;
-use alien_verifier::{Backend, FunctionSpec, Verifier};
+use alien_verifier::{Backend, Verifier};
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use serde::Serialize;
@@ -32,11 +33,21 @@ fn key() -> SecretKey {
 }
 
 fn statement<B: Serialize>(kind: Kind, sequence: u64, body: B) -> SignedStatement {
+    statement_for(None, kind, sequence, body)
+}
+
+/// A statement signed by the CI key, for `install` when it is install-bound.
+fn statement_for<B: Serialize>(
+    install: Option<&InstallId>,
+    kind: Kind,
+    sequence: u64,
+    body: B,
+) -> SignedStatement {
     SignedStatement::new(
         &Envelope {
             kind: kind.as_str().to_string(),
             project: PROJECT.to_string(),
-            install: None,
+            install: install.map(ToString::to_string),
             sequence,
             not_after: (kind == Kind::SignerList).then(|| Utc::now() + Duration::days(30)),
             signer_list_version: 1,
@@ -78,11 +89,22 @@ fn new_signer_list() -> SignedStatement {
 
 /// Release `sequence` of `stack` for `platform`, signed, with the signer list.
 pub fn signed_release(platform: Platform, stack: &Stack, sequence: u64) -> ReleaseStatements {
+    signed_release_configuring(platform, stack, sequence, &[])
+}
+
+/// [`signed_release`], letting the install's signed config set the env names `configurable`.
+pub fn signed_release_configuring(
+    platform: Platform,
+    stack: &Stack,
+    sequence: u64,
+    configurable: &[&str],
+) -> ReleaseStatements {
     let body = release_body(
         platform,
         stack,
         &ReleaseOptions {
             channel: CHANNEL.to_string(),
+            configurable_env: configurable.iter().map(|name| name.to_string()).collect(),
             ..Default::default()
         },
     )
@@ -93,9 +115,10 @@ pub fn signed_release(platform: Platform, stack: &Stack, sequence: u64) -> Relea
     }
 }
 
-/// The install's signed config with environment values `env`, at `sequence`.
-pub fn signed_config(env: &[(&str, &str)], sequence: u64) -> SignedStatement {
-    statement(
+/// The signed config of `install` with environment values `env`, at `sequence`.
+pub fn signed_config(install: &InstallId, env: &[(&str, &str)], sequence: u64) -> SignedStatement {
+    statement_for(
+        Some(install),
         Kind::Config,
         sequence,
         alien_signing::ConfigBody {
@@ -151,12 +174,16 @@ impl InstallStore for MemoryInstall {
     }
 }
 
-/// A backend that records each function the verifier writes.
-#[derive(Default)]
-struct Recorded(Mutex<Vec<FunctionSpec>>);
+/// A backend that checks each write with its cloud's table and records what it would send.
+struct Forwarded {
+    install: InstallId,
+    /// The Container Apps environment setup names (Azure).
+    environment: Option<String>,
+    writes: Mutex<Vec<CloudWrite>>,
+}
 
 #[async_trait]
-impl Backend for Recorded {
+impl Backend for Forwarded {
     async fn binding_reads(
         &self,
         _place: &Place,
@@ -165,31 +192,47 @@ impl Backend for Recorded {
         Ok(BTreeMap::new())
     }
 
-    async fn apply(
-        &self,
-        _place: &Place,
-        spec: &FunctionSpec,
-        newest: &dyn StillNewest,
-    ) -> alien_verifier::Result<()> {
-        newest.check().await?;
-        self.0.lock().unwrap().push(spec.clone());
-        Ok(())
+    fn check_write(&self, facts: &Facts<'_>, write: &CloudWrite) -> alien_verifier::Result<()> {
+        match self.install {
+            InstallId::Aws { .. } => alien_verifier::cloud_write::lambda::check_write(facts, write),
+            InstallId::Gcp { .. } => {
+                alien_verifier::cloud_write::cloud_run::check_write(facts, write)
+            }
+            _ => alien_verifier::cloud_write::container_apps::check_write(
+                facts,
+                write,
+                self.environment.as_deref(),
+            ),
+        }
     }
 
-    async fn check(&self, _spec: &FunctionSpec) -> alien_verifier::Result<()> {
-        unreachable!("applyRelease writes; it reads back through apply")
+    async fn forward(
+        &self,
+        _facts: &Facts<'_>,
+        write: &CloudWrite,
+        newest: &dyn StillNewest,
+    ) -> alien_verifier::Result<serde_json::Value> {
+        newest.check().await?;
+        self.writes.lock().unwrap().push(write.clone());
+        Ok(serde_json::Value::Null)
     }
 }
 
-/// Run the verifier of the install `install` with prefix `prefix` on the request `payload`,
-/// as the cloud would deliver it. Its answer, or its reason for refusing, and the functions
-/// it wrote.
-pub async fn run_verifier(
+/// Run the verifier of the install `install` with prefix `prefix` on the `applyWrite` request
+/// `payload`, as the cloud would deliver it, with the real field tables. Its answer, or its
+/// reason for refusing, and the writes it would send. `environment` is the Container Apps
+/// environment setup names (Azure).
+pub async fn run_write(
     install: InstallId,
     prefix: &str,
+    environment: Option<&str>,
     payload: &[u8],
-) -> (Result<serde_json::Value, String>, Vec<FunctionSpec>) {
-    let backend = Arc::new(Recorded::default());
+) -> (Result<serde_json::Value, String>, Vec<CloudWrite>) {
+    let backend = Arc::new(Forwarded {
+        install: install.clone(),
+        environment: environment.map(str::to_string),
+        writes: Mutex::new(Vec::new()),
+    });
     let verifier = Verifier {
         own_name: format!("{prefix}-verifier"),
         install_id: Arc::new(move |_| install.clone()),
@@ -206,8 +249,8 @@ pub async fn run_verifier(
         .handle(request)
         .await
         .map_err(|error| alien_verifier::describe(&error));
-    let written = backend.0.lock().unwrap().clone();
-    (answer, written)
+    let writes = backend.writes.lock().unwrap().clone();
+    (answer, writes)
 }
 
 /// What an HTTP verifier stub received: each request's bearer token and body.

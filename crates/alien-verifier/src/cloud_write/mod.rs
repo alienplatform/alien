@@ -77,6 +77,9 @@ pub enum CloudWrite {
     /// Cloud Run services.patch of the whole service.
     #[serde(rename_all = "camelCase")]
     ReplaceService { name: String, service: Value },
+    /// Cloud Run services.setIamPolicy, with the policy read just before and changed.
+    #[serde(rename_all = "camelCase")]
+    SetServicePolicy { name: String, policy: Value },
     /// Container Apps createOrUpdate.
     #[serde(rename_all = "camelCase")]
     CreateContainerApp { name: String, app: Value },
@@ -97,6 +100,7 @@ impl CloudWrite {
             CloudWrite::DeleteFunctionConcurrency { .. } => "DeleteFunctionConcurrency",
             CloudWrite::CreateService { .. } => "CreateService",
             CloudWrite::ReplaceService { .. } => "ReplaceService",
+            CloudWrite::SetServicePolicy { .. } => "SetServicePolicy",
             CloudWrite::CreateContainerApp { .. } => "CreateContainerApp",
             CloudWrite::UpdateContainerApp { .. } => "UpdateContainerApp",
         }

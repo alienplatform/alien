@@ -14,9 +14,7 @@ use crate::cloud_write::{own_workload, ApplyWrite, CloudWrite, Facts};
 use crate::error::{ErrorData, Result};
 use crate::function::StillNewest;
 use crate::machines::{self, RemoveMachines, RollMachines, Scale};
-use crate::plan::{
-    functions, plan_function, FunctionSpec, Place, Reads, ReleaseRequest, Request, SetupNetwork,
-};
+use crate::plan::{Place, Reads, Request, SetupNetwork};
 use crate::trust::{accept, find_install, store_ledger, Floor, Install, InstallStore};
 
 /// The cloud writes one verifier makes.
@@ -29,15 +27,6 @@ pub trait Backend: Send + Sync {
         place: &Place,
         workload: &Workload,
     ) -> Result<BTreeMap<String, String>>;
-    /// Write `spec` and read it back, checking `newest` before each write.
-    async fn apply(
-        &self,
-        place: &Place,
-        spec: &FunctionSpec,
-        newest: &dyn StillNewest,
-    ) -> Result<()>;
-    /// Read `spec` back.
-    async fn check(&self, spec: &FunctionSpec) -> Result<()>;
     /// Check every field of `write` against this cloud's table.
     fn check_write(&self, _facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
         Err(refused(format!(
@@ -138,86 +127,11 @@ impl Verifier {
             ))
         })?;
         match request {
-            Request::ApplyRelease(request) => self.release(&request, true).await,
-            Request::CheckRelease(request) => self.release(&request, false).await,
             Request::ApplyWrite(request) => self.write(&request).await,
             Request::RollMachines(request) => self.roll(&request).await,
             Request::Scale(request) => self.scale(&request).await,
             Request::RemoveMachines(request) => self.remove(&request).await,
         }
-    }
-
-    async fn release(&self, request: &ReleaseRequest, write: bool) -> Result<Value> {
-        let (install, place) = self.install().await?;
-        let accepted = accept(
-            &install,
-            &request.signer_lists,
-            &request.release,
-            request.config.as_ref(),
-            place.platform(),
-            Utc::now(),
-        )?;
-        let named = request.workloads.iter().flatten();
-        for name in request
-            .provided_env
-            .keys()
-            .chain(request.images.keys())
-            .chain(named)
-        {
-            if !functions(&accepted.release.body).any(|workload| &workload.name == name) {
-                return Err(refused(format!(
-                    "workload '{name}' is not a function of the signed release"
-                )));
-            }
-            if !request.selects(name) {
-                return Err(refused(format!(
-                    "workload '{name}' has values but is not one of the workloads to write"
-                )));
-            }
-        }
-        // Build every function before writing any, so a refusal changes nothing.
-        let mut specs = Vec::new();
-        for workload in functions(&accepted.release.body).filter(|w| request.selects(&w.name)) {
-            let mut reads = Reads {
-                bindings: self.backend.binding_reads(&place, workload).await?,
-                ..Reads::default()
-            };
-            for input in workload.deployer_env.values() {
-                if let Some(value) = self.store.input(&place.prefix, input).await? {
-                    reads.deployer_inputs.insert(input.clone(), value);
-                }
-            }
-            specs.push(plan_function(&place, &accepted, request, workload, &reads)?);
-        }
-        for spec in &specs {
-            own_name(&place, spec)?;
-        }
-        if write {
-            store_ledger(self.store.as_ref(), &place.prefix, &accepted.ledger).await?;
-        }
-        let floor = Floor {
-            store: self.store.as_ref(),
-            prefix: &place.prefix,
-            release: Entry {
-                sequence: accepted.release.sequence,
-                digest: accepted.release.digest.clone(),
-            },
-        };
-        for spec in &specs {
-            if write {
-                self.backend.apply(&place, spec, &floor).await?;
-                info!(function = %spec.name, digest = %spec.digest, "applied the signed function");
-            } else {
-                self.backend.check(spec).await?;
-            }
-        }
-        Ok(json!({
-            "release": accepted.release.sequence,
-            "functions": specs
-                .iter()
-                .map(|spec| json!({"function": spec.name, "imageUri": spec.image_uri, "digest": spec.digest}))
-                .collect::<Vec<_>>(),
-        }))
     }
 
     async fn write(&self, request: &ApplyWrite) -> Result<Value> {
@@ -361,20 +275,6 @@ impl Verifier {
     }
 }
 
-/// The verifier writes only `<prefix>-<workload>`: its own install's name for a function of the
-/// signed release. Its grants on Cloud Run reach every service in the project, so this check is
-/// the boundary: any other name is refused before the ledger or the cloud is written.
-fn own_name(place: &Place, spec: &FunctionSpec) -> Result<()> {
-    let own = place.function_name(&spec.workload)?;
-    if spec.name != own || !spec.name.starts_with(&format!("{}-", place.prefix)) {
-        return Err(refused(format!(
-            "function {} is not {own}, the name this install gives workload '{}'",
-            spec.name, spec.workload
-        )));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,46 +284,6 @@ mod tests {
     use alien_core::{CapacityGroup, ComputeCluster, Platform, ResourceLifecycle, Stack};
     use alien_signing::{Kind, Ledger};
     use std::sync::Mutex;
-
-    /// The verifier writes only its own install's name for a signed workload; a spec naming
-    /// another service is refused before anything is written, whatever built it.
-    #[test]
-    fn only_the_installs_own_names_are_written() {
-        let place = crate::plan::tests::place();
-        let spec = |name: &str| FunctionSpec {
-            workload: "api".into(),
-            name: name.into(),
-            image_uri: format!("{REGISTRY}/api@{DIGEST}"),
-            digest: DIGEST.into(),
-            env: Default::default(),
-            memory_mb: 512,
-            timeout_seconds: 30,
-            architecture: "arm64".into(),
-            run_as: "arn:aws:iam::111122223333:role/acme-prod-execution-sa".into(),
-            vpc: None,
-            public: false,
-            dapr: false,
-            registry: None,
-            reserved_concurrency: None,
-            invoke_grants: Vec::new(),
-        };
-        own_name(&place, &spec(&format!("{PREFIX}-api"))).unwrap();
-        for other in [
-            "other-install-api",
-            "acme-prod-other",
-            "acme-api",
-            "acme-prod-api-2",
-        ] {
-            let error = own_name(&place, &spec(other)).unwrap_err();
-            assert_eq!(error.code, "VERIFIER_REFUSED", "{other}");
-            assert!(
-                error
-                    .to_string()
-                    .contains(&format!("function {other} is not {PREFIX}-api")),
-                "{error}"
-            );
-        }
-    }
 
     /// A GCP backend that records each resize.
     #[derive(Default)]
@@ -437,17 +297,6 @@ mod tests {
             _workload: &Workload,
         ) -> Result<BTreeMap<String, String>> {
             Ok(BTreeMap::new())
-        }
-        async fn apply(
-            &self,
-            _place: &Place,
-            _spec: &FunctionSpec,
-            _newest: &dyn StillNewest,
-        ) -> Result<()> {
-            unreachable!("scale writes no function")
-        }
-        async fn check(&self, _spec: &FunctionSpec) -> Result<()> {
-            unreachable!("scale reads no function")
         }
         async fn resize(&self, target: &str, zone: Option<&str>, size: u32) -> Result<()> {
             self.0
@@ -583,59 +432,6 @@ mod tests {
         );
     }
 
-    /// An AWS backend that records the functions it writes.
-    #[derive(Default)]
-    struct Writes(Mutex<Vec<FunctionSpec>>);
-
-    #[async_trait]
-    impl Backend for Writes {
-        async fn binding_reads(
-            &self,
-            _place: &Place,
-            _workload: &Workload,
-        ) -> Result<BTreeMap<String, String>> {
-            Ok(BTreeMap::new())
-        }
-        async fn apply(
-            &self,
-            _place: &Place,
-            spec: &FunctionSpec,
-            newest: &dyn StillNewest,
-        ) -> Result<()> {
-            self.0.lock().unwrap().push(spec.clone());
-            Ok(())
-        }
-        async fn check(&self, _spec: &FunctionSpec) -> Result<()> {
-            unreachable!("applyRelease reads back through apply")
-        }
-    }
-
-    /// An AWS verifier and a release with two functions, `api` and `jobs`.
-    fn two_functions() -> (Verifier, Arc<Writes>, Value) {
-        let backend = Arc::new(Writes::default());
-        let verifier = Verifier {
-            own_name: format!("{PREFIX}-verifier"),
-            install_id: Arc::new(|prefix| crate::aws::install_id(ACCOUNT, REGION, prefix)),
-            store: Arc::new(MemoryStore::protected(&settings())),
-            backend: backend.clone(),
-            vpc: None,
-            machine_network: None,
-        };
-        let jobs = alien_signing::Workload {
-            name: "jobs".to_string(),
-            ..function_workload()
-        };
-        let release = signed_release(
-            1,
-            &crate::fixtures::release_body(vec![function_workload(), jobs]),
-        );
-        let request = json!({"applyRelease": {
-            "release": release,
-            "signerLists": [signer_list()],
-        }});
-        (verifier, backend, request)
-    }
-
     /// An AWS backend that checks writes with the Lambda table and records what it forwards.
     #[derive(Default)]
     struct Forwards(Mutex<Vec<CloudWrite>>);
@@ -648,17 +444,6 @@ mod tests {
             _workload: &Workload,
         ) -> Result<BTreeMap<String, String>> {
             Ok(BTreeMap::new())
-        }
-        async fn apply(
-            &self,
-            _place: &Place,
-            _spec: &FunctionSpec,
-            _newest: &dyn StillNewest,
-        ) -> Result<()> {
-            unreachable!("applyWrite forwards the controller's write")
-        }
-        async fn check(&self, _spec: &FunctionSpec) -> Result<()> {
-            unreachable!("applyWrite forwards the controller's write")
         }
         fn check_write(&self, facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
             crate::cloud_write::lambda::check_write(facts, write)
@@ -739,70 +524,9 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn apply_release_writes_only_the_workloads_it_names() {
-        let (verifier, backend, mut request) = two_functions();
-        request["applyRelease"]["workloads"] = json!(["jobs"]);
-        request["applyRelease"]["providedEnv"] = json!({"jobs": {"ALIEN_DEPLOYMENT_ID": "dep_1"}});
-        let answer = verifier.handle(request).await.unwrap();
-        assert_eq!(answer["release"], json!(1));
-        let written = backend.0.lock().unwrap().clone();
-        assert_eq!(
-            written
-                .iter()
-                .map(|spec| spec.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["acme-prod-jobs"]
-        );
-        assert_eq!(
-            written[0]
-                .env
-                .get("ALIEN_DEPLOYMENT_ID")
-                .map(String::as_str),
-            Some("dep_1")
-        );
-    }
-
-    #[tokio::test]
-    async fn apply_release_without_workloads_writes_every_function() {
-        let (verifier, backend, request) = two_functions();
-        verifier.handle(request).await.unwrap();
-        assert_eq!(
-            backend
-                .0
-                .lock()
-                .unwrap()
-                .iter()
-                .map(|spec| spec.name.clone())
-                .collect::<Vec<_>>(),
-            vec!["acme-prod-api", "acme-prod-jobs"]
-        );
-    }
-
-    #[tokio::test]
-    async fn values_for_a_workload_it_does_not_write_are_refused() {
-        // Values for `api` sent with a request that writes only `jobs` would be dropped
-        // silently; refuse them, and a name the release has no function for.
-        let (verifier, backend, mut request) = two_functions();
-        request["applyRelease"]["workloads"] = json!(["jobs"]);
-        request["applyRelease"]["providedEnv"] = json!({"api": {"ALIEN_DEPLOYMENT_ID": "dep_1"}});
-        let reason = refusal(verifier.handle(request.clone()).await);
-        assert!(
-            reason.contains("workload 'api' has values but is not one of the workloads to write"),
-            "{reason}"
-        );
-        request["applyRelease"]["providedEnv"] = json!({});
-        request["applyRelease"]["workloads"] = json!(["worker"]);
-        let reason = refusal(verifier.handle(request).await);
-        assert!(
-            reason.contains("workload 'worker' is not a function of the signed release"),
-            "{reason}"
-        );
-        assert!(backend.0.lock().unwrap().is_empty());
-    }
-
-    /// A backend whose write of `slow_image` pauses after reading the function, until told to
-    /// go on, the way a Lambda update waits for the function to settle.
+    /// A backend whose forward of an UpdateFunctionCode to `slow_image` pauses after reading
+    /// the function, until told to go on, the way a Lambda update waits for the function to
+    /// settle.
     struct Paused {
         slow_image: String,
         read: tokio::sync::Notify,
@@ -819,22 +543,26 @@ mod tests {
         ) -> Result<BTreeMap<String, String>> {
             Ok(BTreeMap::new())
         }
-        async fn apply(
+        fn check_write(&self, facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
+            crate::cloud_write::lambda::check_write(facts, write)
+        }
+        async fn forward(
             &self,
-            _place: &Place,
-            spec: &FunctionSpec,
+            _facts: &Facts<'_>,
+            write: &CloudWrite,
             newest: &dyn StillNewest,
-        ) -> Result<()> {
-            if spec.image_uri == self.slow_image {
+        ) -> Result<Value> {
+            let CloudWrite::UpdateFunctionCode { request, .. } = write else {
+                unreachable!("the test sends only UpdateFunctionCode")
+            };
+            let image = request["ImageUri"].as_str().unwrap().to_string();
+            if image == self.slow_image {
                 self.read.notify_one();
                 self.resume.notified().await;
             }
             newest.check().await?;
-            self.written.lock().unwrap().push(spec.image_uri.clone());
-            Ok(())
-        }
-        async fn check(&self, _spec: &FunctionSpec) -> Result<()> {
-            unreachable!("applyRelease reads back through apply")
+            self.written.lock().unwrap().push(image);
+            Ok(Value::Null)
         }
     }
 
@@ -849,9 +577,14 @@ mod tests {
                 image: image(digit),
                 ..function_workload()
             };
-            json!({"applyRelease": {
+            json!({"applyWrite": {
                 "release": signed_release(sequence, &crate::fixtures::release_body(vec![workload])),
                 "signerLists": [signer_list()],
+                "workload": "api",
+                "write": {"updateFunctionCode": {
+                    "functionName": format!("{PREFIX}-api"),
+                    "request": {"ImageUri": image(digit), "Publish": true},
+                }},
             }})
         };
         let backend = Arc::new(Paused {

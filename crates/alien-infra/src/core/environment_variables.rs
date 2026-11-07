@@ -1,4 +1,4 @@
-use crate::core::{state_utils::StackResourceStateExt, ResourceControllerContext};
+use crate::core::{state_utils::StackResourceStateExt, verifier, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 #[cfg(feature = "local")]
 use alien_bindings::{BindingsProviderApi as _, Vault};
@@ -780,6 +780,25 @@ impl EnvironmentVariableBuilder {
             self.env_vars.extend(binding_env_vars);
         }
 
+        Ok(self)
+    }
+
+    /// On a protected install, render what the signed statements decide for `workload`: its
+    /// secrets list and the values its signed config sets (see
+    /// [`verifier::apply_signed_values`]).
+    pub fn add_signed_values(
+        mut self,
+        ctx: &ResourceControllerContext<'_>,
+        workload: &str,
+    ) -> Result<Self> {
+        if let Some(statements) = verifier::protected_statements(ctx, workload)? {
+            verifier::apply_signed_values(
+                statements,
+                ctx.deployment_config.signed_config.as_ref(),
+                workload,
+                &mut self.env_vars,
+            )?;
+        }
         Ok(self)
     }
 

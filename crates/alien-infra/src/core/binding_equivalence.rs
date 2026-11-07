@@ -19,6 +19,7 @@ fn test_install(platform: Platform) -> BindingContext {
     let (platform, account, region) = match platform {
         Platform::Aws => ("aws", "123456789012", "us-east-1"),
         Platform::Gcp => ("gcp", "test-project-123", "us-central1"),
+        Platform::Azure => ("azure", "12345678-1234-1234-1234-123456789012", "eastus"),
         other => panic!("binding_env derives no bindings on {other:?}"),
     };
     BindingContext {

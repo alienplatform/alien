@@ -696,22 +696,27 @@ impl GcpWorkerController {
         self.region = Some(gcp_config.region.clone());
         let service_name = get_cloudrun_service_name(ctx.resource_prefix, &cfg.id);
 
-        // On a protected install no setup creates the service and management may not: the
-        // verifier creates it from the signed release.
+        // Build the Cloud Run service
+        let service = self
+            .build_cloud_run_service(&service_name, cfg, ctx)
+            .await?;
+
+        // On a protected install management may not create the service: the verifier checks
+        // this very request against the signed release, sends it and waits for it to serve.
         if let Some(statements) = verifier::protected_statements(ctx, &cfg.id)? {
-            self.apply_through_verifier(ctx, statements, cfg, &service_name)
+            let write = verifier::CloudWrite::CreateService {
+                service_id: service_name.clone(),
+                service: verifier::CloudWrite::body(&service)?,
+            };
+            self.write_through_verifier(ctx, statements, &cfg.id, &service_name, write)
                 .await?;
+            self.applied_config = verifier::config_digest(ctx)?;
             self.service_name = Some(service_name);
             return Ok(HandlerAction::Continue {
                 state: WaitingForServiceCreation,
                 suggested_delay: None,
             });
         }
-
-        // Build the Cloud Run service
-        let service = self
-            .build_cloud_run_service(&service_name, cfg, ctx)
-            .await?;
 
         // Create the service
         let operation = ctx
@@ -2567,26 +2572,11 @@ impl GcpWorkerController {
 
         let cfg = ctx.desired_resource_config::<Worker>()?;
         let previous_cfg = ctx.previous_resource_config::<Worker>()?;
-        // On a protected install the verifier writes the service from the signed release;
-        // management may not.
-        if let Some(statements) = verifier::protected_statements(ctx, &cfg.id)? {
-            let service_name = self.service_name.clone().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: cfg.id.clone(),
-                    message: "Service name not set in state".to_string(),
-                })
-            })?;
-            self.apply_through_verifier(ctx, statements, cfg, &service_name)
-                .await?;
-            return Ok(HandlerAction::Continue {
-                state: WaitingForServiceUpdate,
-                suggested_delay: None,
-            });
-        }
+        let protected = verifier::protected_statements(ctx, &cfg.id)?;
         // An update whose own configuration is unchanged was planned because a linked resource
         // was. It still re-renders the linked bindings: the resource it links may publish a new
         // binding.
-        if cfg == previous_cfg {
+        if cfg == previous_cfg && protected.is_none() {
             let links = cfg.runtime_binding_links();
             if !linked_bindings::links_settled(ctx, &links) {
                 // A linked resource is still in its own flow; wait for the value it settles on.
@@ -2664,6 +2654,22 @@ impl GcpWorkerController {
         // Preserve important fields from current service
         updated_service.name = current_service.name;
         updated_service.etag = current_service.etag;
+
+        // On a protected install management may not write the service: the verifier checks
+        // this very request against the signed release, sends it and waits for it to serve.
+        if let Some(statements) = protected {
+            let write = verifier::CloudWrite::ReplaceService {
+                name: service_name.clone(),
+                service: verifier::CloudWrite::body(&updated_service)?,
+            };
+            self.write_through_verifier(ctx, statements, &cfg.id, service_name, write)
+                .await?;
+            self.applied_config = verifier::config_digest(ctx)?;
+            return Ok(HandlerAction::Continue {
+                state: WaitingForServiceUpdate,
+                suggested_delay: None,
+            });
+        }
 
         // Patch the service
         let operation = ctx
@@ -5139,35 +5145,32 @@ impl GcpWorkerController {
         )
     }
 
-    /// Has the install's verifier write this worker's service from the signed release, with
-    /// the values the release lets the deployment provide, and waits for its answer.
-    async fn apply_through_verifier(
-        &mut self,
+    /// Hands `write`, a request this controller built for `service_name`, to the install's
+    /// verifier, which checks it against the signed release and sends it unchanged.
+    async fn write_through_verifier(
+        &self,
         ctx: &ResourceControllerContext<'_>,
         statements: &alien_core::ReleaseStatements,
-        cfg: &Worker,
+        worker: &str,
         service_name: &str,
-    ) -> Result<()> {
-        let environment = self
-            .prepare_environment_variables(&cfg.environment, &cfg.links, ctx, service_name)
-            .await?;
-        let request = verifier::ApplyRelease::for_workload(
+        write: verifier::CloudWrite,
+    ) -> Result<verifier::Written> {
+        let verifier = verifier::gcp_verifier(ctx)?;
+        let written = verifier::apply_write(
+            &verifier,
             statements,
             ctx.deployment_config.signed_config.as_ref(),
-            &cfg.id,
-            &environment,
-            &Self::service_image(ctx, cfg)?,
-        )?;
-        let verifier = verifier::gcp_verifier(ctx)?;
-        let applied = verifier::apply_release(&verifier, request, &cfg.id, service_name).await?;
+            worker,
+            write,
+            service_name,
+        )
+        .await?;
         info!(
-            worker = %cfg.id,
-            release = applied.release,
-            digest = %applied.functions[0].digest,
-            "The verifier applied the signed release to the worker"
+            worker = %worker,
+            release = written.release,
+            "The verifier applied the controller's write"
         );
-        self.applied_config = verifier::config_digest(ctx)?;
-        Ok(())
+        Ok(written)
     }
 
     async fn prepare_environment_variables(
@@ -5197,6 +5200,7 @@ impl GcpWorkerController {
             .add_linked_resources(&runtime_links, ctx, function_name_for_error_logging)
             .await?
             .add_self_worker_binding(&worker_config.id, self_binding_params.as_ref())?
+            .add_signed_values(ctx, &worker_config.id)?
             .build();
 
         Ok(env_vars)
@@ -5208,8 +5212,6 @@ impl GcpWorkerController {
         ctx: &ResourceControllerContext<'_>,
         service_name: &str,
     ) -> Result<()> {
-        use alien_gcp_clients::iam::Binding;
-
         let config = ctx.desired_resource_config::<Worker>()?;
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx.service_provider.get_gcp_cloudrun_client(gcp_config)?;
@@ -5241,35 +5243,16 @@ impl GcpWorkerController {
         // Pub/Sub and Cloud Scheduler mint their OIDC token for the worker's
         // execution service account. Private services keep the Cloud Run IAM
         // invoker check enabled, so grant that identity access to this service.
-        if config.public_endpoints.is_empty() {
-            let invoker_role = "roles/run.invoker".to_string();
-            let invoker_member = format!(
+        let invoker = if config.public_endpoints.is_empty() {
+            Some(format!(
                 "serviceAccount:{}",
                 self.get_service_account_email(ctx, &config)?
-            );
-
-            let binding_exists = policy.bindings.iter().any(|binding| {
-                binding.role == invoker_role && binding.members.contains(&invoker_member)
-            });
-
-            if !binding_exists {
-                if let Some(binding) = policy
-                    .bindings
-                    .iter_mut()
-                    .find(|binding| binding.role == invoker_role && binding.condition.is_none())
-                {
-                    if !binding.members.contains(&invoker_member) {
-                        binding.members.push(invoker_member);
-                    }
-                } else {
-                    policy.bindings.push(
-                        Binding::builder()
-                            .role(invoker_role)
-                            .members(vec![invoker_member])
-                            .build(),
-                    );
-                }
-            }
+            ))
+        } else {
+            None
+        };
+        if let Some(member) = &invoker {
+            admit_invoker(&mut policy, member);
         }
 
         // Add generated resource-scoped bindings.
@@ -5282,20 +5265,34 @@ impl GcpWorkerController {
             policy.bindings.extend(resource_bindings);
         }
 
-        // On a protected install management may not set the service's IAM policy: what the
-        // worker needs must already be there.
-        if protected {
-            let missing = grants_missing(&original, &policy);
-            if missing.is_empty() {
+        // On a protected install management may not set the service's IAM policy. The verifier
+        // lets the worker's own account invoke its service; what else the worker needs, setup
+        // must have granted.
+        if let Some(statements) = verifier::protected_statements(ctx, &config.id)? {
+            let mut admitted = original.clone();
+            if let Some(member) = &invoker {
+                admit_invoker(&mut admitted, member);
+            }
+            let missing = grants_missing(&admitted, &policy);
+            if !missing.is_empty() {
+                return Err(AlienError::new(ErrorData::SetupRerunRequired {
+                    resource_id: config.id.clone(),
+                    message: format!(
+                        "on a protected install setup sets the IAM policy of Cloud Run service '{service_name}', and it doesn't grant {}; rerun setup with this release",
+                        missing.join(", ")
+                    ),
+                }));
+            }
+            if grants_missing(&original, &admitted).is_empty() {
                 return Ok(());
             }
-            return Err(AlienError::new(ErrorData::SetupRerunRequired {
-                resource_id: config.id.clone(),
-                message: format!(
-                    "on a protected install setup sets the IAM policy of Cloud Run service '{service_name}', and it doesn't grant {}; rerun setup with this release",
-                    missing.join(", ")
-                ),
-            }));
+            let write = verifier::CloudWrite::SetServicePolicy {
+                name: service_name.to_string(),
+                policy: verifier::CloudWrite::body(&admitted)?,
+            };
+            self.write_through_verifier(ctx, statements, &config.id, service_name, write)
+                .await?;
+            return Ok(());
         }
 
         // Apply the consolidated policy in one operation.
@@ -6240,6 +6237,30 @@ fn live_service_env(service: &Service) -> Option<HashMap<String, String>> {
 
 /// The grants of `desired`, as `role to member` (with the condition's title when it has one),
 /// that `current` doesn't hold.
+/// Grant `member` the Cloud Run invoker role without a condition, unless `policy` already does.
+fn admit_invoker(policy: &mut alien_gcp_clients::iam::IamPolicy, member: &str) {
+    const INVOKER: &str = "roles/run.invoker";
+    let admitted = policy.bindings.iter().any(|binding| {
+        binding.role == INVOKER && binding.members.iter().any(|existing| existing == member)
+    });
+    if admitted {
+        return;
+    }
+    match policy
+        .bindings
+        .iter_mut()
+        .find(|binding| binding.role == INVOKER && binding.condition.is_none())
+    {
+        Some(binding) => binding.members.push(member.to_string()),
+        None => policy.bindings.push(
+            alien_gcp_clients::iam::Binding::builder()
+                .role(INVOKER.to_string())
+                .members(vec![member.to_string()])
+                .build(),
+        ),
+    }
+}
+
 fn grants_missing(
     current: &alien_gcp_clients::iam::IamPolicy,
     desired: &alien_gcp_clients::iam::IamPolicy,
@@ -6319,7 +6340,7 @@ mod tests {
     };
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::verifier_test_support::{
-        http_verifier_stub, run_verifier, signed_release, CHANNEL,
+        http_verifier_stub, run_write, signed_release, CHANNEL,
     };
     use crate::core::MockPlatformServiceProvider;
     use crate::worker::readiness_probe::test_utils::create_readiness_probe_mock;
@@ -9313,46 +9334,153 @@ mod tests {
         Arc::new(provider)
     }
 
+    /// The install's GCP identity in these tests.
+    fn gcp_install() -> alien_signing::InstallId {
+        alien_signing::InstallId::Gcp {
+            project: "test-project-123".to_string(),
+            prefix: "test".to_string(),
+        }
+    }
+
+    /// The account setup creates for the worker's permission profile.
+    fn own_account() -> String {
+        format!(
+            "{}@test-project-123.iam.gserviceaccount.com",
+            alien_core::gcp_naming::gcp_service_account_id("test", "default-profile-sa")
+        )
+    }
+
+    fn setup_account() -> alien_core::ServiceAccount {
+        alien_core::ServiceAccount::new("default-profile-sa".to_string()).build()
+    }
+
+    fn setup_account_controller() -> crate::service_account::GcpServiceAccountController {
+        let mut controller =
+            crate::service_account::GcpServiceAccountController::mock_ready("default-profile-sa");
+        controller.service_account_email = Some(own_account());
+        controller
+    }
+
+    /// The install's `secrets` vault as setup creates it: `<prefix>-secrets`.
+    fn setup_vault() -> alien_core::Vault {
+        alien_core::Vault::new("secrets".to_string()).build()
+    }
+
+    fn setup_vault_controller() -> crate::vault::GcpVaultController {
+        crate::vault::GcpVaultController {
+            state: crate::vault::GcpVaultState::Ready,
+            project_id: Some("test-project-123".to_string()),
+            location: Some("us-central1".to_string()),
+            vault_prefix: Some("test-secrets".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// The verifier's answer to an `applyWrite` of release `release` for the protected worker.
+    fn written(release: u64) -> serde_json::Value {
+        serde_json::json!({
+            "release": release,
+            "function": PROTECTED_SERVICE,
+            "operation": "write",
+            "answer": null,
+        })
+    }
+
+    /// The `applyWrite` requests the verifier got, by operation, each accepted by the
+    /// verifier's own tables.
+    async fn checked_writes(requests: &[(Option<String>, Vec<u8>)]) -> Vec<serde_json::Value> {
+        let mut writes = Vec::new();
+        for (bearer, payload) in requests {
+            assert_eq!(bearer.as_deref(), Some("Bearer management-id-token"));
+            let (answer, forwarded) = run_write(gcp_install(), "test", None, payload).await;
+            answer.expect("the verifier's tables accept the controller's request");
+            assert_eq!(forwarded.len(), 1);
+            let request: serde_json::Value = serde_json::from_slice(payload).unwrap();
+            writes.push(request["applyWrite"]["write"].clone());
+        }
+        writes
+    }
+
+    fn operations(writes: &[serde_json::Value]) -> Vec<String> {
+        writes
+            .iter()
+            .map(|write| write.as_object().unwrap().keys().next().unwrap().clone())
+            .collect()
+    }
+
     /// The IAM policy setup gave the worker's service: its own account may invoke it, which
     /// Pub/Sub and Cloud Scheduler need for a private worker.
     fn setup_policy() -> IamPolicy {
         IamPolicy::builder()
             .bindings(vec![alien_gcp_clients::iam::Binding::builder()
                 .role("roles/run.invoker".to_string())
-                .members(vec![
-                    "serviceAccount:default-profile-sa@mock-project.iam.gserviceaccount.com"
-                        .to_string(),
-                ])
+                .members(vec![format!("serviceAccount:{}", own_account())])
                 .build()])
             .build()
     }
 
-    /// On a protected install management may not set the service's IAM policy; when setup's
-    /// policy lacks a grant the worker needs, the update says setup must run again, and
-    /// writes nothing.
+    /// On a protected install management may not set the service's IAM policy; when the
+    /// worker needs a grant on its service that setup didn't make (here one management's
+    /// permissions name for this worker), the update says setup must run again, and sets no
+    /// policy.
     #[tokio::test]
     async fn a_protected_update_needs_setup_for_a_grant_setup_did_not_make() {
-        let answer = serde_json::json!({"release": 2, "functions": [{
-            "function": PROTECTED_SERVICE,
-            "imageUri": pinned_image('2'),
-            "digest": format!("sha256:{}", "2".repeat(64)),
-        }]});
-        let (result, requests, _) = protected_update(
+        let (result, requests, _) = protected_update_with(
             axum::http::StatusCode::OK,
-            answer,
-            IamPolicy::builder().bindings(Vec::new()).build(),
+            written(2),
+            setup_policy(),
+            alien_core::ManagementPermissions::Extend(
+                alien_core::PermissionProfile::new()
+                    .resource(PROTECTED_WORKER, ["worker/heartbeat"]),
+            ),
         )
         .await;
 
-        let error = result.expect_err("setup must grant the invoker role");
-        assert_eq!(requests.len(), 1, "the verifier applied the release first");
+        let error = result.expect_err("setup must make the grant");
+        assert_eq!(
+            operations(&checked_writes(&requests).await),
+            ["replaceService"],
+            "the verifier wrote the service first, and no policy"
+        );
         assert_eq!(error.code, "SETUP_RERUN_REQUIRED", "{error:?}");
         assert!(
-            error.message.contains(
-                "doesn't grant roles/run.invoker to serviceAccount:default-profile-sa@mock-project.iam.gserviceaccount.com"
-            ),
+            error
+                .message
+                .contains("doesn't grant roles/run.viewer to serviceAccount:management@"),
             "{}",
             error.message
+        );
+    }
+
+    /// A private worker's own account must be able to invoke its service. When the policy
+    /// lacks that grant, the controller hands the verifier the policy with it added, which is
+    /// the one policy change the verifier makes.
+    #[tokio::test]
+    async fn a_private_workers_own_invoker_grant_goes_through_the_verifier() {
+        let (result, requests, _) = protected_update(
+            axum::http::StatusCode::OK,
+            written(2),
+            IamPolicy::builder()
+                .version(1)
+                .etag("BwX1".to_string())
+                .bindings(Vec::new())
+                .build(),
+        )
+        .await;
+
+        result.expect("the verifier admits the worker's own account");
+        let writes = checked_writes(&requests).await;
+        assert_eq!(operations(&writes), ["replaceService", "setServicePolicy"]);
+        assert_eq!(
+            writes[1]["setServicePolicy"],
+            serde_json::json!({
+                "name": PROTECTED_SERVICE,
+                "policy": {
+                    "version": 1,
+                    "etag": "BwX1",
+                    "bindings": [{"role": "roles/run.invoker", "members": [format!("serviceAccount:{}", own_account())]}],
+                },
+            })
         );
     }
 
@@ -9400,6 +9528,8 @@ mod tests {
             .client_config(management_client_config(&url))
             .service_provider(protected_provider(&url, setup_policy))
             .with_test_dependencies()
+            .with_dependency(setup_account(), setup_account_controller())
+            .with_dependency(setup_vault(), setup_vault_controller())
             .stack_settings(protected_settings())
             .management_config(alien_core::ManagementConfig::Gcp(
                 alien_core::GcpManagementConfig {
@@ -9425,14 +9555,9 @@ mod tests {
     /// service the verifier created needs no copy of them on its own policy.
     #[tokio::test]
     async fn a_protected_update_needs_no_service_grant_setup_makes_for_every_worker() {
-        let answer = serde_json::json!({"release": 2, "functions": [{
-            "function": PROTECTED_SERVICE,
-            "imageUri": pinned_image('2'),
-            "digest": format!("sha256:{}", "2".repeat(64)),
-        }]});
         let (result, requests, _) = protected_update_with(
             axum::http::StatusCode::OK,
-            answer,
+            written(2),
             setup_policy(),
             alien_core::ManagementPermissions::Extend(
                 alien_core::PermissionProfile::new().resource("*", ["worker/heartbeat"]),
@@ -9441,7 +9566,11 @@ mod tests {
         .await;
 
         result.expect("management's project grants cover the service");
-        assert_eq!(requests.len(), 1, "one verifier call for the update");
+        assert_eq!(
+            operations(&checked_writes(&requests).await),
+            ["replaceService"],
+            "one verifier call for the update, and no policy"
+        );
     }
 
     /// A signed config isn't part of the worker's own configuration, so a new one updates a
@@ -9450,20 +9579,17 @@ mod tests {
     #[tokio::test]
     async fn a_new_signed_config_updates_a_protected_worker_through_the_verifier() {
         let worker = pinned_worker('2', 512);
-        let release = signed_release(
+        let release = crate::core::verifier_test_support::signed_release_configuring(
             Platform::Gcp,
             &Stack::new("test".to_string())
                 .add(worker.clone(), ResourceLifecycle::Live)
                 .build(),
             2,
+            &["PROBE"],
         );
-        let config = crate::core::verifier_test_support::signed_config(&[("PROBE", "1")], 1);
-        let answer = serde_json::json!({"release": 2, "functions": [{
-            "function": PROTECTED_SERVICE,
-            "imageUri": pinned_image('2'),
-            "digest": format!("sha256:{}", "2".repeat(64)),
-        }]});
-        let (url, requests) = http_verifier_stub(axum::http::StatusCode::OK, answer).await;
+        let config =
+            crate::core::verifier_test_support::signed_config(&gcp_install(), &[("PROBE", "1")], 1);
+        let (url, requests) = http_verifier_stub(axum::http::StatusCode::OK, written(2)).await;
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker.clone())
             .controller(GcpWorkerController::mock_ready(PROTECTED_SERVICE))
@@ -9471,6 +9597,8 @@ mod tests {
             .client_config(management_client_config(&url))
             .service_provider(protected_provider(&url, setup_policy()))
             .with_test_dependencies()
+            .with_dependency(setup_account(), setup_account_controller())
+            .with_dependency(setup_vault(), setup_vault_controller())
             .stack_settings(protected_settings())
             .management_config(alien_core::ManagementConfig::Gcp(
                 alien_core::GcpManagementConfig {
@@ -9497,8 +9625,12 @@ mod tests {
         assert_eq!(requests.len(), 1, "one verifier call");
         let request: serde_json::Value = serde_json::from_slice(&requests[0].1).unwrap();
         assert_eq!(
-            request["applyRelease"]["config"],
+            request["applyWrite"]["config"],
             serde_json::to_value(&config).unwrap()
+        );
+        assert_eq!(
+            operations(&checked_writes(&requests).await),
+            ["replaceService"]
         );
         assert!(
             !executor.needs_update().unwrap(),
@@ -9511,55 +9643,43 @@ mod tests {
     /// accepts what it is sent.
     #[tokio::test]
     async fn a_protected_update_goes_through_the_verifier_and_never_patches_the_service() {
-        let answer = serde_json::json!({"release": 2, "functions": [{
-            "function": PROTECTED_SERVICE,
-            "imageUri": pinned_image('2'),
-            "digest": format!("sha256:{}", "2".repeat(64)),
-        }]});
         let (result, requests, release) =
-            protected_update(axum::http::StatusCode::OK, answer, setup_policy()).await;
+            protected_update(axum::http::StatusCode::OK, written(2), setup_policy()).await;
 
         result.expect("the update completes through the verifier");
-        assert_eq!(requests.len(), 1, "one verifier call for the update");
-        let (bearer, payload) = &requests[0];
-        assert_eq!(bearer.as_deref(), Some("Bearer management-id-token"));
-        let request: serde_json::Value = serde_json::from_slice(payload).unwrap();
+        let request: serde_json::Value = serde_json::from_slice(&requests[0].1).unwrap();
         assert_eq!(
-            request["applyRelease"]["release"],
+            request["applyWrite"]["release"],
             serde_json::json!(release.release)
         );
         assert_eq!(
-            request["applyRelease"]["workloads"],
-            serde_json::json!([PROTECTED_WORKER])
+            request["applyWrite"]["workload"],
+            serde_json::json!(PROTECTED_WORKER)
         );
-
-        let (answer, written) = run_verifier(
-            alien_signing::InstallId::Gcp {
-                project: "test-project-123".to_string(),
-                prefix: "test".to_string(),
-            },
-            "test",
-            payload,
-        )
-        .await;
-        answer.expect("the verifier accepts the controller's request");
-        assert_eq!(written.len(), 1);
-        assert_eq!(written[0].name, PROTECTED_SERVICE);
-        assert_eq!(written[0].image_uri, pinned_image('2'));
-        assert_eq!(written[0].memory_mb, 512);
+        let writes = checked_writes(&requests).await;
+        assert_eq!(operations(&writes), ["replaceService"]);
+        let replace = &writes[0]["replaceService"];
+        assert_eq!(replace["name"], serde_json::json!(PROTECTED_SERVICE));
+        let container = &replace["service"]["template"]["containers"][0];
+        assert_eq!(container["image"], serde_json::json!(pinned_image('2')));
         assert_eq!(
-            written[0]
-                .env
-                .get("ALIEN_WORKER_TIMEOUT_SECONDS")
-                .map(String::as_str),
-            Some("180")
+            container["resources"]["limits"]["memory"],
+            serde_json::json!("512Mi")
+        );
+        assert!(
+            container["env"].as_array().unwrap().contains(
+                &serde_json::json!({"name": "ALIEN_WORKER_TIMEOUT_SECONDS", "value": "180"})
+            ),
+            "{}",
+            container["env"]
         );
     }
 
     /// On a protected install no setup creates the service and management may not: the
-    /// worker's first deployment has the verifier create it.
+    /// worker's first deployment hands the verifier the very request an unprotected install
+    /// sends Cloud Run.
     #[tokio::test]
-    async fn a_protected_worker_is_created_by_the_verifier() {
+    async fn a_protected_create_hands_the_verifier_the_unprotected_request() {
         let worker = pinned_worker('2', 512);
         let release = signed_release(
             Platform::Gcp,
@@ -9568,43 +9688,81 @@ mod tests {
                 .build(),
             1,
         );
-        let answer = serde_json::json!({"release": 1, "functions": [{
-            "function": PROTECTED_SERVICE,
-            "imageUri": pinned_image('2'),
-            "digest": format!("sha256:{}", "2".repeat(64)),
-        }]});
-        let (url, requests) = http_verifier_stub(axum::http::StatusCode::OK, answer).await;
-        let mut executor = SingleControllerExecutor::builder()
+
+        // Unprotected: the request goes to Cloud Run.
+        let sent = Arc::new(Mutex::new(None));
+        let mut cloudrun = MockCloudRunApi::new();
+        let recorded = sent.clone();
+        cloudrun
+            .expect_create_service()
+            .times(1)
+            .returning(move |_, service_id, service, _| {
+                *recorded.lock().unwrap() =
+                    Some((service_id, serde_json::to_value(&service).unwrap()));
+                Ok(create_successful_operation_response("create"))
+            });
+        cloudrun
+            .expect_get_operation()
+            .returning(|_, _| Ok(create_completed_operation_response("create")));
+        cloudrun
+            .expect_get_service()
+            .returning(|_, _| Ok(create_successful_service_response(PROTECTED_SERVICE)));
+        cloudrun
+            .expect_get_service_iam_policy()
+            .returning(|_, _| Ok(setup_policy()));
+        cloudrun
+            .expect_set_service_iam_policy()
+            .returning(|_, _, policy| Ok(policy));
+        let mut unprotected = SingleControllerExecutor::builder()
+            .resource(worker.clone())
+            .controller(GcpWorkerController::default())
+            .platform(Platform::Gcp)
+            .service_provider(setup_mock_service_provider(Arc::new(cloudrun), None))
+            .with_test_dependencies()
+            .with_dependency(setup_account(), setup_account_controller())
+            .with_dependency(setup_vault(), setup_vault_controller())
+            .build()
+            .await
+            .unwrap();
+        unprotected.run_until_terminal().await.unwrap();
+        let (service_id, unprotected_service) = sent
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("Cloud Run got the create");
+
+        // Protected: the same request goes to the verifier, which alone may send it.
+        let (url, requests) = http_verifier_stub(axum::http::StatusCode::OK, written(1)).await;
+        let mut protected = SingleControllerExecutor::builder()
             .resource(worker)
             .controller(GcpWorkerController::default())
             .platform(Platform::Gcp)
             .client_config(management_client_config(&url))
             .service_provider(protected_provider(&url, setup_policy()))
             .with_test_dependencies()
+            .with_dependency(setup_account(), setup_account_controller())
+            .with_dependency(setup_vault(), setup_vault_controller())
             .stack_settings(protected_settings())
             .signed_release(release, None)
             .build()
             .await
             .unwrap();
-        executor.run_until_terminal().await.unwrap();
+        protected.run_until_terminal().await.unwrap();
 
-        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(protected.status(), ResourceStatus::Running);
         let requests = requests.lock().unwrap().clone();
-        assert_eq!(requests.len(), 1, "one verifier call creates the service");
-        let (answer, written) = run_verifier(
-            alien_signing::InstallId::Gcp {
-                project: "test-project-123".to_string(),
-                prefix: "test".to_string(),
-            },
-            "test",
-            &requests[0].1,
-        )
-        .await;
-        answer.expect("the verifier accepts the controller's request");
-        assert_eq!(written.len(), 1);
-        assert_eq!(written[0].name, PROTECTED_SERVICE);
-        assert!(
-            !written[0].public,
+        let writes = checked_writes(&requests).await;
+        assert_eq!(
+            writes,
+            [serde_json::json!({"createService": {
+                "serviceId": service_id,
+                "service": unprotected_service,
+            }})],
+            "the verifier gets the unprotected request, and nothing else"
+        );
+        assert_eq!(
+            writes[0]["createService"]["service"]["ingress"],
+            serde_json::json!("INGRESS_TRAFFIC_INTERNAL_ONLY"),
             "a private worker's service takes no internet requests"
         );
     }
