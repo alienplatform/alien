@@ -22,7 +22,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use sandbox::{
-    CommandFrame, CommandStreamHandle, JobResult, Preview, ResolvedSandbox, SandboxHandle,
+    CommandFrame, CommandStreamHandle, InteractiveCommandHandle, JobResult, Preview, ResolvedSandbox, SandboxHandle,
     SandboxInfo,
 };
 use std::collections::{BTreeMap, HashMap};
@@ -719,6 +719,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<VaultHandle>()?;
     module.add_class::<SandboxHandle>()?;
     module.add_class::<CommandStreamHandle>()?;
+    module.add_class::<InteractiveCommandHandle>()?;
     module.add_class::<PostgresHandle>()?;
     module.add_class::<ContainerHandle>()?;
     module.add_class::<AiHandle>()?;
