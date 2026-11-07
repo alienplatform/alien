@@ -15,6 +15,7 @@ pub use operations_config::*;
 
 mod deployer_secrets;
 pub use deployer_secrets::*;
+pub mod aws_naming;
 pub mod gcp_naming;
 pub mod vault_naming;
 

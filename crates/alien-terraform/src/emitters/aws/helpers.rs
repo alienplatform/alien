@@ -928,3 +928,32 @@ pub fn nested_block(name: &str, body: Vec<Structure>) -> Structure {
 #[cfg(test)]
 #[path = "helpers_policy_tests.rs"]
 mod policy_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::evaluate_with_prefix;
+    use alien_core::aws_naming::aws_iam_role_name;
+
+    /// The verifier derives a function's role from `aws_iam_role_name`, so it
+    /// must name the role setup creates, at IAM's 64-character limit and over it.
+    #[test]
+    fn setup_names_a_role_as_aws_iam_role_name_does() {
+        for (resource_prefix, suffix) in [
+            ("acme-prod", "execution-sa"),
+            (
+                "acme-production-eu-west-1-tenant-customer42",
+                "background-processor-sa",
+            ),
+            (&"p".repeat(51)[..], "execution-sa"),
+            (&"p".repeat(52)[..], "execution-sa"),
+            ("acme-prod", "management"),
+        ] {
+            assert_eq!(
+                evaluate_with_prefix(resource_prefix, &iam_role_name_template(suffix)),
+                aws_iam_role_name(resource_prefix, suffix),
+                "{resource_prefix} {suffix}"
+            );
+        }
+    }
+}

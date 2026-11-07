@@ -507,41 +507,8 @@ fn escape_template_string_body(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::evaluate_with_prefix as evaluate;
     use alien_core::gcp_naming::gcp_service_account_id;
-    use std::io::Write;
-    use std::process::{Command, Stdio};
-
-    /// What `terraform console` evaluates `expression` to with `resource_prefix` set.
-    fn evaluate(resource_prefix: &str, expression: &Expression) -> String {
-        let dir = tempfile::tempdir().unwrap();
-        let expression = hcl::format::to_string(expression).unwrap();
-        std::fs::write(
-            dir.path().join("main.tf"),
-            format!("locals {{\n  resource_prefix = \"{resource_prefix}\"\n  value = {expression}\n}}\n"),
-        )
-        .unwrap();
-        let mut console = Command::new("terraform")
-            .arg("console")
-            .current_dir(dir.path())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("terraform should be on PATH");
-        console
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(b"local.value\n")
-            .unwrap();
-        let output = console.wait_with_output().unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        serde_json::from_slice(&output.stdout).unwrap()
-    }
 
     /// The verifier derives a function's account from `gcp_service_account_id`, so it must
     /// name the account setup creates, short prefix or long.

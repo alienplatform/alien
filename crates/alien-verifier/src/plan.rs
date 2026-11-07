@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use alien_core::gcp_naming::gcp_service_account_id;
+use alien_core::{aws_naming::aws_iam_role_name, gcp_naming::gcp_service_account_id};
 use alien_error::{AlienError, Context};
 use alien_signing::release::{is_sha256_digest, Runtime, WorkloadKind};
 use alien_signing::{
@@ -197,7 +197,10 @@ impl Place {
     pub fn run_as(&self, profile: &str) -> String {
         let name = format!("{}-{profile}-sa", self.prefix);
         match &self.install {
-            InstallId::Aws { account, .. } => format!("arn:aws:iam::{account}:role/{name}"),
+            InstallId::Aws { account, .. } => format!(
+                "arn:aws:iam::{account}:role/{}",
+                aws_iam_role_name(&self.prefix, &format!("{profile}-sa"))
+            ),
             InstallId::Gcp { project, .. } => format!(
                 "{}@{project}.iam.gserviceaccount.com",
                 gcp_service_account_id(&self.prefix, &format!("{profile}-sa"))
@@ -599,6 +602,33 @@ pub(crate) mod tests {
             assert_eq!(
                 place.run_as("execution"),
                 format!("{account}@shop-prod.iam.gserviceaccount.com")
+            );
+        }
+    }
+
+    #[test]
+    fn an_aws_function_runs_as_the_role_setup_creates_for_its_profile() {
+        for (prefix, profile, role) in [
+            ("acme-prod", "execution", "acme-prod-execution-sa"),
+            // Over IAM's 64 characters: setup shortens the name and appends a hash.
+            (
+                "acme-production-eu-west-1-tenant-customer42",
+                "background-processor",
+                "acme-production-eu-west-1-tenant-customer42-background--894db55f",
+            ),
+        ] {
+            let place = Place {
+                install: alien_signing::InstallId::parse(&format!(
+                    "aws:111122223333:us-east-1:{prefix}"
+                ))
+                .unwrap(),
+                prefix: prefix.to_string(),
+                vpc: None,
+                machine_network: None,
+            };
+            assert_eq!(
+                place.run_as(profile),
+                format!("arn:aws:iam::111122223333:role/{role}")
             );
         }
     }
