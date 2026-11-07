@@ -1035,6 +1035,9 @@ async fn sign_release(
     signing: &mut SigningState,
     pushed: Vec<(Platform, Stack)>,
 ) -> Result<Vec<(Platform, alien_core::SignedStatement, SetupUpload)>> {
+    // What's signed and the touch or PIN prompt stay on screen while the
+    // device waits.
+    let _progress = crate::ui::pause_progress();
     let mut bodies = Vec::new();
     let mut uploads: HashMap<Platform, SetupUpload> = HashMap::new();
     if let Some(signer) = signing.signing() {

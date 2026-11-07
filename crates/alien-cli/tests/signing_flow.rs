@@ -332,6 +332,18 @@ impl World {
     }
 }
 
+/// Whether the terminal output erases a line between `from` and `to`.
+fn erases_between(output: &str, from: &str, to: &str) -> bool {
+    let start = output
+        .find(from)
+        .unwrap_or_else(|| panic!("no '{from}' in {output:?}"));
+    let end = start
+        + output[start..]
+            .find(to)
+            .unwrap_or_else(|| panic!("no '{to}' after '{from}' in {output:?}"));
+    output[start..end].contains("\u{1b}[2K")
+}
+
 fn shell_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
@@ -554,6 +566,16 @@ async fn signing_from_first_release_to_recovery() {
         "{output}"
     );
     let recovery_code = line_after(&output, "Recovery code (shown once");
+    // Progress redraws by erasing its last lines; while the code waits to be
+    // saved, nothing may take it off the screen.
+    assert!(
+        !erases_between(
+            &output,
+            "Recovery code (shown once",
+            "Wrote .alien/signing.json"
+        ),
+        "{output:?}"
+    );
     assert!(
         output.contains("Wrote .alien/signing.json — commit it."),
         "{output}"

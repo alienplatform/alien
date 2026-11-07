@@ -232,6 +232,8 @@ async fn turn_on(
         Backend::SecureEnclave => "this Mac",
         Backend::Tpm | Backend::Yubikey => "this machine",
     };
+    // The recovery code is shown once: nothing may draw over it.
+    let _progress = crate::ui::pause_progress();
     println!();
     println!(
         "  Signing is now on for {project}. {} is its first trusted device.",
