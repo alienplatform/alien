@@ -9,14 +9,14 @@ use crate::{
         AwsKubernetesClusterEmitter, AwsKvEmitter, AwsNetworkEmitter, AwsOpenSearchEmitter,
         AwsQueueEmitter, AwsRemoteBindingsEmitter, AwsRemoteStackManagementEmitter,
         AwsSandboxEmitter, AwsServiceAccountEmitter, AwsStorageEmitter, AwsVaultEmitter,
-        AwsWorkerEmitter,
+        AwsVerifierEmitter, AwsWorkerEmitter,
     },
     registry::CfRegistry,
 };
 use alien_core::{
     Ai, ArtifactRegistry, AwsOpenSearch, Build, Email, Key, KubernetesCluster, Kv, Network,
     Platform, Queue, RemoteBindings, RemoteStackManagement, ResourceType, Sandbox, ServiceAccount,
-    Storage, Vault, Worker,
+    SigningVerifier, Storage, Vault, Worker,
 };
 
 pub(crate) fn register_aws(registry: &mut CfRegistry) {
@@ -62,6 +62,7 @@ pub(crate) fn register_aws(registry: &mut CfRegistry) {
         RemoteBindings::RESOURCE_TYPE,
         AwsRemoteBindingsEmitter,
     );
+    aws(registry, SigningVerifier::RESOURCE_TYPE, AwsVerifierEmitter);
     aws(
         registry,
         KubernetesCluster::RESOURCE_TYPE,

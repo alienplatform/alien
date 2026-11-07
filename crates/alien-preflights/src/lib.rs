@@ -497,6 +497,7 @@ impl PreflightRegistry {
         registry.add_mutation(Box::new(mutations::SandboxGatewayMutation));
         registry.add_mutation(Box::new(mutations::ComputeClusterMutation));
         registry.add_mutation(Box::new(mutations::RemoteStackManagementMutation));
+        registry.add_mutation(Box::new(mutations::SigningVerifierMutation));
         registry.add_mutation(Box::new(mutations::SecretsVaultMutation));
         registry.add_mutation(Box::new(mutations::DeployerSecretsVaultMutation));
         registry.add_mutation(Box::new(mutations::SandboxBundleStorageMutation));

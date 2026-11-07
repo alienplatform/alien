@@ -3886,6 +3886,8 @@ impl ChartAnalysis {
                 targets_kubernetes: true,
                 stack_settings: &stack_settings,
                 names: &names,
+                // The chart runs no verifier: Kubernetes installs have none.
+                pins: &alien_core::SetupPins::default(),
             };
             let HelmFragment {
                 infrastructure,

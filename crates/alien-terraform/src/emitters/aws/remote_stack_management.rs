@@ -521,6 +521,7 @@ mod tests {
             targets_kubernetes: true,
             stack_settings: &StackSettings::default(),
             names: &Default::default(),
+            pins: &alien_core::SetupPins::default(),
         };
         let emitted = boundary_document(&ctx).unwrap();
         let Expression::FuncCall(call) = emitted else {

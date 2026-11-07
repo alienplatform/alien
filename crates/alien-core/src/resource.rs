@@ -268,6 +268,10 @@ impl<'de> Deserialize<'de> for Resource {
                 serde_json::from_value::<crate::resources::RemoteBindings>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
+            "verifier" => Box::new(
+                serde_json::from_value::<crate::resources::SigningVerifier>(value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
             "azure_resource_group" => Box::new(
                 serde_json::from_value::<crate::resources::AzureResourceGroup>(value)
                     .map_err(serde::de::Error::custom)?,
@@ -317,6 +321,7 @@ impl<'de> Deserialize<'de> for Resource {
                         "service_activation",
                         "remote-stack-management",
                         "resource-access",
+                        "verifier",
                         "azure_resource_group",
                         "gcp_agent_platform_engine",
                         "azure_storage_account",
@@ -654,6 +659,10 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
                 serde_json::from_value::<crate::resources::RemoteBindingsOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
+            "verifier" => Box::new(
+                serde_json::from_value::<crate::resources::SigningVerifierOutputs>(value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
             "kubernetes-cluster" => Box::new(
                 serde_json::from_value::<crate::resources::KubernetesClusterOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
@@ -704,6 +713,7 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
                         "service_activation",
                         "remote-stack-management",
                         "resource-access",
+                        "verifier",
                         "kubernetes-cluster",
                         "azure_resource_group",
                         "azure_storage_account",

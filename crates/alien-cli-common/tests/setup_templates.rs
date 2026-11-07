@@ -36,6 +36,8 @@ fn hosting() -> SetupHostingOptions {
     .expect("hosting options parse")
 }
 
+/// A stack with storage only: protected, it gets the signing settings and management's limits,
+/// and no verifier, since nothing it runs is the verifier's to write.
 fn stack() -> Stack {
     serde_json::from_value(serde_json::json!({
         "id": "minimal",
@@ -53,8 +55,37 @@ fn stack() -> Stack {
     .expect("fixture stack parses")
 }
 
+/// [`stack`] with a function, which a protected install's verifier writes.
+fn stack_with_function() -> Stack {
+    let mut stack = stack();
+    stack.resources.insert(
+        "api".to_string(),
+        serde_json::from_value(serde_json::json!({
+            "config": {
+                "code": {
+                    "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/app/api@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "type": "image"
+                },
+                "id": "api", "memoryMb": 512, "permissions": "execution",
+                "timeoutSeconds": 180, "type": "worker", "links": [], "triggers": [],
+                "environment": {}, "commandsEnabled": false
+            },
+            "lifecycle": "live", "dependencies": [], "remoteAccess": false
+        }))
+        .expect("fixture function parses"),
+    );
+    stack
+}
+
 async fn render(
     fingerprint: &str,
+) -> std::collections::BTreeMap<String, alien_cli_common::setup_templates::RenderedSetupTemplate> {
+    render_stack(fingerprint, &stack_with_function()).await
+}
+
+async fn render_stack(
+    fingerprint: &str,
+    stack: &Stack,
 ) -> std::collections::BTreeMap<String, alien_cli_common::setup_templates::RenderedSetupTemplate> {
     let signing = StackSigning {
         fingerprint: fingerprint.to_string(),
@@ -64,7 +95,7 @@ async fn render(
     let terraform = TfRegistry::built_in();
     let helm = HelmRegistry::built_in();
     let rendered = render_setup_templates(
-        &stack(),
+        stack,
         SetupRenderOptions::builder()
             .signing(&signing)
             .cloudformation_registry(&cloudformation)
@@ -204,7 +235,7 @@ async fn a_build_without_pins_refuses_to_render_protected_aws_setup() {
     let terraform = TfRegistry::built_in();
     let helm = HelmRegistry::built_in();
     let error = render_setup_templates(
-        &stack(),
+        &stack_with_function(),
         SetupRenderOptions::builder()
             .signing(&signing)
             .cloudformation_registry(&cloudformation)
@@ -246,15 +277,20 @@ async fn a_build_without_the_azure_verifier_image_refuses_protected_azure_setup(
         signing: Some(signing.clone()),
         ..Default::default()
     };
-    let error = render_setup_template("terraform-azure", &stack(), &settings, &options)
-        .await
-        .expect_err("no Azure verifier image, no protected Azure setup");
+    let error = render_setup_template(
+        "terraform-azure",
+        &stack_with_function(),
+        &settings,
+        &options,
+    )
+    .await
+    .expect_err("no Azure verifier image, no protected Azure setup");
     let text = format!("{error:?}");
     assert!(
         text.contains("no Azure verifier image pinned by digest"),
         "{text}"
     );
-    render_setup_template("terraform-aws", &stack(), &settings, &options)
+    render_setup_template("terraform-aws", &stack_with_function(), &settings, &options)
         .await
         .expect("protected AWS setup needs no Azure pin");
 }
@@ -336,7 +372,7 @@ async fn hosting_options_cannot_weaken_the_protected_locks() {
             HelmRegistry::built_in(),
         );
         let rendered = render_setup_templates(
-            &stack(),
+            &stack_with_function(),
             SetupRenderOptions::builder()
                 .signing(&signing)
                 .cloudformation_registry(&cloudformation)
@@ -436,7 +472,7 @@ fn terraform_resources(template: &[u8]) -> std::collections::BTreeSet<String> {
 /// network the unprotected module offers included, and only adds the signing resources.
 #[tokio::test]
 async fn a_protected_module_keeps_every_resource_of_the_unprotected_one() {
-    let rendered = render(FINGERPRINT).await;
+    let rendered = render_stack(FINGERPRINT, &stack()).await;
     let terraform = TfRegistry::built_in();
     let cloudformation = CfRegistry::built_in();
     let helm = HelmRegistry::built_in();
@@ -517,7 +553,7 @@ async fn the_verifier_runs_functions_in_the_subnets_setup_reports_for_the_networ
     ] {
         let files: std::collections::BTreeMap<String, String> =
             serde_json::from_slice(&rendered[name].bytes).expect("a module is a JSON file map");
-        let signing = files["signing.tf"]
+        let signing = files["verifier.tf"]
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
@@ -731,7 +767,7 @@ async fn custom_resource_template(pins: SetupPins) -> String {
     let terraform = TfRegistry::built_in();
     let helm = HelmRegistry::built_in();
     let rendered = render_setup_templates(
-        &stack(),
+        &stack_with_function(),
         SetupRenderOptions::builder()
             .signing(&signing)
             .cloudformation_registry(&cloudformation)
@@ -787,4 +823,29 @@ async fn every_protected_setup_update_runs_the_registration_again() {
             hex::encode(<sha2::Sha256 as sha2::Digest>::digest(without.as_bytes()))
         )
     );
+}
+
+/// A protected stack whose workloads are none of the verifier's (here, storage only) gets the
+/// signing settings and management's limits, and no verifier.
+#[tokio::test]
+async fn a_protected_stack_without_functions_or_machines_gets_no_verifier() {
+    let rendered = render_stack(FINGERPRINT, &stack()).await;
+    let template: serde_yaml::Value =
+        serde_yaml::from_slice(&rendered["cloudformation"].bytes).expect("template is YAML");
+    let resources = template["Resources"].as_mapping().expect("resources");
+    assert!(resources.contains_key("ManagementLimits"));
+    assert!(!resources.contains_key("SigningVerifier"));
+    assert!(!resources.contains_key("SigningVerifierRole"));
+    for name in ["terraform-aws", "terraform-gcp", "terraform-azure"] {
+        let files: std::collections::BTreeMap<String, String> =
+            serde_json::from_slice(&rendered[name].bytes).expect("a module is a JSON file map");
+        assert!(!files.contains_key("verifier.tf"), "{name}");
+        assert!(
+            !files
+                .values()
+                .any(|file| file.contains("\"signing_verifier\"")),
+            "{name}: no verifier block"
+        );
+        assert!(files.contains_key("signing.tf"), "{name}");
+    }
 }

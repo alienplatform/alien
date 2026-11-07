@@ -25,6 +25,7 @@ pub(crate) mod sandbox_gateway_permissions;
 pub mod secrets_vault;
 pub mod service_account;
 pub mod service_account_dependencies;
+pub mod signing_verifier;
 
 use alien_core::{DeploymentConfig, Platform, StackState};
 
@@ -60,3 +61,4 @@ pub use sandbox_gateway_links::SandboxGatewayLinksMutation;
 pub use secrets_vault::{DeployerSecretsVaultMutation, SecretsVaultMutation};
 pub use service_account::ServiceAccountMutation;
 pub use service_account_dependencies::ServiceAccountDependenciesMutation;
+pub use signing_verifier::SigningVerifierMutation;

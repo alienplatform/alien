@@ -1271,3 +1271,25 @@ pub(crate) fn prefixed_permission_refs(
     }
     refs
 }
+
+/// A JSON value as a CloudFormation expression whose strings with `${...}` are `Fn::Sub`.
+pub fn sub_json(value: JsonValue) -> CfExpression {
+    match value {
+        JsonValue::String(text) if text.contains("${") => CfExpression::sub(text),
+        JsonValue::String(text) => CfExpression::from(text),
+        JsonValue::Array(values) => CfExpression::list(values.into_iter().map(sub_json)),
+        JsonValue::Object(values) => CfExpression::Object(
+            values
+                .into_iter()
+                .map(|(key, value)| (key, sub_json(value)))
+                .collect(),
+        ),
+        JsonValue::Bool(value) => CfExpression::from(value),
+        JsonValue::Number(number) => match (number.as_i64(), number.as_f64()) {
+            (Some(integer), _) => CfExpression::Integer(integer),
+            (None, Some(float)) => CfExpression::Number(float),
+            (None, None) => CfExpression::String(number.to_string()),
+        },
+        JsonValue::Null => CfExpression::Null,
+    }
+}

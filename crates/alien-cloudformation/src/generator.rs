@@ -576,6 +576,7 @@ pub fn generate_cloudformation_template_with_profile(
             targets_kubernetes: options.target.is_kubernetes(),
             stack_settings: &stack_settings,
             names: &names,
+            pins: &options.pins,
         };
 
         let enabled_when = resource.enabled_when.as_deref();
@@ -700,30 +701,7 @@ pub fn generate_cloudformation_template_with_profile(
     add_signing_settings(&mut template, &stack_settings_value, options.target)?;
     consolidate_role_inline_policies(&mut template)?;
     // After consolidation, so the count of managed policies on the management role is final.
-    let verifier_networks = if stack_settings_value.signing.is_some() {
-        VerifierNetworks {
-            functions: verifier_function_network(
-                stack,
-                &stack_settings_value,
-                &names,
-                options.target,
-            ),
-            machines: verifier_machine_network(
-                stack,
-                &stack_settings_value,
-                &names,
-                options.target,
-            )?,
-        }
-    } else {
-        VerifierNetworks::default()
-    };
-    add_verifier_and_limits(
-        &mut template,
-        &stack_settings_value,
-        &options.pins,
-        verifier_networks,
-    )?;
+    add_management_limits(&mut template, &stack_settings_value)?;
     if stack_settings_value.signing.is_some() {
         refuse_unverifiable_code(&template)?;
     }
@@ -2061,142 +2039,20 @@ fn add_signing_settings(
     Ok(())
 }
 
-/// Logical IDs of the verifier and the management limits on a protected install.
-const VERIFIER_FUNCTION_ID: &str = "SigningVerifier";
-const VERIFIER_ROLE_ID: &str = "SigningVerifierRole";
+/// Logical ID of the limits on a protected install's management role.
 const MANAGEMENT_LIMITS_ID: &str = "ManagementLimits";
 
-/// Adds a protected install's verifier, `<prefix>-verifier`, and the limits on its management
-/// role, `<prefix>-management-limits`. The verifier alone changes functions and launches
-/// machines; its image and the machine-image publisher are literals from the CLI build.
-fn add_verifier_and_limits(
-    template: &mut CfTemplate,
-    settings: &StackSettings,
-    pins: &alien_core::SetupPins,
-    networks: VerifierNetworks,
-) -> Result<()> {
+/// Adds the limits on a protected install's management role, `<prefix>-management-limits`:
+/// only the stack changes what the install trusts, only its verifier changes what runs, and
+/// machines boot only the publisher's images.
+fn add_management_limits(template: &mut CfTemplate, settings: &StackSettings) -> Result<()> {
     if settings.signing.is_none() {
         return Ok(());
     }
-    let missing = |what: &str| {
-        AlienError::new(ErrorData::OperationNotSupported {
-            operation: "render a protected AWS setup".to_string(),
-            reason: format!(
-                "this CLI build has no {what}; protected setups come from released CLI builds"
-            ),
-        })
-    };
-    let publisher = pins
-        .aws_publisher
-        .as_deref()
-        .ok_or_else(|| missing("machine-image publisher"))?;
-    let image = pins
-        .aws_verifier_image
-        .as_deref()
-        .filter(|image| alien_core::is_pinned_image(image))
-        .ok_or_else(|| missing("verifier image pinned by digest"))?;
     let prefix = "${AWS::StackName}";
     let account = "${AWS::AccountId}";
     let region = "${AWS::Region}";
     let verifier_name = alien_permissions::generators::signing_limits::aws_verifier_name(prefix);
-
-    let mut role = CfResource::new(VERIFIER_ROLE_ID.to_string(), "AWS::IAM::Role".to_string());
-    role.properties
-        .insert("RoleName".to_string(), CfExpression::sub(&verifier_name));
-    role.properties.insert(
-        "Description".to_string(),
-        CfExpression::from("The verifier's role. Only setup changes it."),
-    );
-    role.properties.insert(
-        "AssumeRolePolicyDocument".to_string(),
-        CfExpression::object([
-            ("Version", CfExpression::from("2012-10-17")),
-            (
-                "Statement",
-                CfExpression::list([CfExpression::object([
-                    ("Effect", CfExpression::from("Allow")),
-                    (
-                        "Principal",
-                        CfExpression::object([(
-                            "Service",
-                            CfExpression::from("lambda.amazonaws.com"),
-                        )]),
-                    ),
-                    ("Action", CfExpression::from("sts:AssumeRole")),
-                ])]),
-            ),
-        ]),
-    );
-    role.properties.insert(
-        "Policies".to_string(),
-        CfExpression::list([CfExpression::object([
-            ("PolicyName", CfExpression::from("verifier")),
-            (
-                "PolicyDocument",
-                sub_json(
-                    alien_permissions::generators::signing_limits::aws_verifier_policy(
-                        prefix, account, region, publisher,
-                    ),
-                ),
-            ),
-        ])]),
-    );
-    role.properties
-        .insert("Tags".to_string(), setup_tags(&verifier_name));
-    insert_resource(template, role)?;
-
-    let mut function = CfResource::new(
-        VERIFIER_FUNCTION_ID.to_string(),
-        "AWS::Lambda::Function".to_string(),
-    );
-    function.properties.insert(
-        "FunctionName".to_string(),
-        CfExpression::sub(&verifier_name),
-    );
-    function.properties.insert(
-        "Description".to_string(),
-        CfExpression::from(
-            "Applies only releases the vendor signed. The management role can't change what runs here.",
-        ),
-    );
-    function
-        .properties
-        .insert("PackageType".to_string(), CfExpression::from("Image"));
-    function.properties.insert(
-        "Code".to_string(),
-        CfExpression::object([(
-            "ImageUri",
-            CfExpression::sub(format!(
-                "{publisher}.dkr.ecr.${{AWS::Region}}.amazonaws.com/{image}"
-            )),
-        )]),
-    );
-    function.properties.insert(
-        "Role".to_string(),
-        CfExpression::get_att(VERIFIER_ROLE_ID, "Arn"),
-    );
-    function
-        .properties
-        .insert("Timeout".to_string(), CfExpression::from(300u32));
-    function
-        .properties
-        .insert("MemorySize".to_string(), CfExpression::from(512u32));
-    let mut environment = vec![("VERIFIER_CLOUD", CfExpression::from("aws"))];
-    if let Some(network) = networks.functions {
-        environment.push(("VERIFIER_FUNCTION_VPC", network));
-    }
-    if let Some(network) = networks.machines {
-        environment.push(("VERIFIER_MACHINE_NETWORK", network));
-    }
-    function.properties.insert(
-        "Environment".to_string(),
-        CfExpression::object([("Variables", CfExpression::object(environment))]),
-    );
-    function
-        .properties
-        .insert("Tags".to_string(), setup_tags(&verifier_name));
-    insert_resource(template, function)?;
-
     let Some(management_role) = management_role_id(template) else {
         return Ok(());
     };
@@ -2238,7 +2094,7 @@ fn add_verifier_and_limits(
     );
     limits.properties.insert(
         "PolicyDocument".to_string(),
-        sub_json(
+        crate::emitters::aws::helpers::sub_json(
             alien_permissions::generators::signing_limits::aws_management_limits(
                 prefix, account, region,
             ),
@@ -2299,111 +2155,6 @@ fn refuse_unverifiable_code(template: &CfTemplate) -> Result<()> {
     Ok(())
 }
 
-/// The networks setup gives the verifier, as JSON `{"subnetIds": [..], "securityGroupIds": [..]}`.
-#[derive(Default)]
-struct VerifierNetworks {
-    /// Where it runs functions: `VERIFIER_FUNCTION_VPC`.
-    functions: Option<CfExpression>,
-    /// Where it launches machines: `VERIFIER_MACHINE_NETWORK`.
-    machines: Option<CfExpression>,
-}
-
-/// Where the verifier runs functions, when the stack has a network functions join: the
-/// private subnets and workload security group the worker controller puts an unprotected
-/// install's functions in. Functions stay out of the default VPC, so it gives none for that.
-fn verifier_function_network(
-    stack: &Stack,
-    settings: &StackSettings,
-    names: &IndexMap<String, String>,
-    target: CloudFormationTarget,
-) -> Option<CfExpression> {
-    let (network_id, entry) = stack
-        .resources()
-        .find(|(_, entry)| entry.config.downcast_ref::<Network>().is_some())?;
-    if matches!(
-        entry.config.downcast_ref::<Network>()?.settings,
-        NetworkSettings::UseDefault
-    ) {
-        return None;
-    }
-    let ctx = EmitContext {
-        stack,
-        resource: entry,
-        resource_id: network_id,
-        platform: target.cloud_platform(),
-        targets_kubernetes: target.is_kubernetes(),
-        stack_settings: settings,
-        names,
-    };
-    Some(subnets_and_groups(&ctx))
-}
-
-/// JSON `{"subnetIds": [..], "securityGroupIds": [..]}` of the private subnets and security
-/// group of the network `ctx` names.
-fn subnets_and_groups(ctx: &EmitContext<'_>) -> CfExpression {
-    CfExpression::sub_with(
-        r#"{"subnetIds":["${Subnets}"],"securityGroupIds":["${Groups}"]}"#,
-        [
-            (
-                "Subnets",
-                CfExpression::join(
-                    "\",\"",
-                    crate::emitters::aws::helpers::private_subnet_ids_expr(ctx),
-                ),
-            ),
-            (
-                "Groups",
-                CfExpression::join(
-                    "\",\"",
-                    crate::emitters::aws::helpers::security_group_ids_expr(ctx),
-                ),
-            ),
-        ],
-    )
-}
-
-/// Where the verifier launches machines, when the stack has any: the private subnets and
-/// security group setup created, or the ones the customer named. JSON
-/// `{"subnetIds": [..], "securityGroupIds": [..]}` in the verifier's `VERIFIER_MACHINE_NETWORK`.
-/// Machines in the default VPC have no subnets setup fixes, so a protected stack refuses them.
-fn verifier_machine_network(
-    stack: &Stack,
-    settings: &StackSettings,
-    names: &IndexMap<String, String>,
-    target: CloudFormationTarget,
-) -> Result<Option<CfExpression>> {
-    if !stack
-        .resources()
-        .any(|(_, entry)| entry.config.resource_type() == ComputeCluster::RESOURCE_TYPE)
-    {
-        return Ok(None);
-    }
-    let refuse = || {
-        AlienError::new(ErrorData::OperationNotSupported {
-            operation: "protect machines in the default VPC".to_string(),
-            reason: "the verifier launches machines only into subnets setup fixes; create a network or name existing subnets".to_string(),
-        })
-    };
-    let (network_id, entry) = stack
-        .resources()
-        .find(|(_, entry)| entry.config.downcast_ref::<Network>().is_some())
-        .ok_or_else(refuse)?;
-    let network = entry.config.downcast_ref::<Network>().ok_or_else(refuse)?;
-    if matches!(network.settings, NetworkSettings::UseDefault) {
-        return Err(refuse());
-    }
-    let ctx = EmitContext {
-        stack,
-        resource: entry,
-        resource_id: network_id,
-        platform: target.cloud_platform(),
-        targets_kubernetes: target.is_kubernetes(),
-        stack_settings: settings,
-        names,
-    };
-    Ok(Some(subnets_and_groups(&ctx)))
-}
-
 /// The logical ID of the role named `<prefix>-management`, if the template creates it.
 fn management_role_id(template: &CfTemplate) -> Option<String> {
     template
@@ -2415,41 +2166,6 @@ fn management_role_id(template: &CfTemplate) -> Option<String> {
                     == Some(&CfExpression::sub("${AWS::StackName}-management"))
         })
         .map(|(id, _)| id.clone())
-}
-
-fn setup_tags(name: &str) -> CfExpression {
-    CfExpression::list([
-        CfExpression::object([
-            ("Key", CfExpression::from("managed-by")),
-            ("Value", CfExpression::from("setup")),
-        ]),
-        CfExpression::object([
-            ("Key", CfExpression::from("Name")),
-            ("Value", CfExpression::sub(name)),
-        ]),
-    ])
-}
-
-/// A JSON value as a CloudFormation expression whose strings with `${...}` are `Fn::Sub`.
-fn sub_json(value: Value) -> CfExpression {
-    match value {
-        Value::String(text) if text.contains("${") => CfExpression::sub(text),
-        Value::String(text) => CfExpression::from(text),
-        Value::Array(values) => CfExpression::list(values.into_iter().map(sub_json)),
-        Value::Object(values) => CfExpression::Object(
-            values
-                .into_iter()
-                .map(|(key, value)| (key, sub_json(value)))
-                .collect(),
-        ),
-        Value::Bool(value) => CfExpression::from(value),
-        Value::Number(number) => match (number.as_i64(), number.as_f64()) {
-            (Some(integer), _) => CfExpression::Integer(integer),
-            (None, Some(float)) => CfExpression::Number(float),
-            (None, None) => CfExpression::String(number.to_string()),
-        },
-        Value::Null => CfExpression::Null,
-    }
 }
 
 fn add_network_parameters(
@@ -2981,10 +2697,15 @@ fn add_standard_conditions(
             && has_created_network
             && stack.resources().any(|(_id, entry)| {
                 entry.lifecycle == alien_core::ResourceLifecycle::Frozen
-                    && entry
+                    && (entry
                         .config
                         .downcast_ref::<alien_core::Postgres>()
                         .is_some()
+                        // The verifier names the subnets functions and machines join.
+                        || entry
+                            .config
+                            .downcast_ref::<alien_core::SigningVerifier>()
+                            .is_some())
             })
         {
             template.conditions.insert(

@@ -125,6 +125,8 @@ pub fn ownership_policy_for_resource_type(resource_type: &str) -> ResourceOwners
         | "network"
         | "remote-stack-management"
         | "resource-access"
+        // Only setup changes what the install trusts to change what runs.
+        | "verifier"
         | "service-account"
         | "service_activation"
         | "service-activation"
@@ -294,6 +296,7 @@ mod tests {
             "network",
             "remote-stack-management",
             "resource-access",
+            "verifier",
             "service-account",
             "service_activation",
             "service-activation",
@@ -374,6 +377,7 @@ mod tests {
             "network",
             "remote-stack-management",
             "resource-access",
+            "verifier",
             "service-account",
             "service_activation",
             "azure_resource_group",

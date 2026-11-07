@@ -269,6 +269,7 @@ fn aws_open_search_import_ref_matches_import_data_contract() {
         targets_kubernetes: false,
         stack_settings: &StackSettings::default(),
         names: &names,
+        pins: &alien_core::SetupPins::default(),
     };
 
     let registry = CfRegistry::built_in();

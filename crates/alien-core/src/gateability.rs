@@ -40,6 +40,7 @@ const STACK_DERIVED_TYPES: &[&str] = &[
     "network",
     "remote-stack-management",
     "resource-access",
+    "verifier",
     "service_activation",
     "service-activation",
     "azure_resource_group",

@@ -1029,6 +1029,7 @@ async fn a_vault_writes_no_copy_of_the_stack_level_policy() {
             targets_kubernetes: false,
             stack_settings: &settings,
             names: &names,
+            pins: &alien_core::SetupPins::default(),
         };
         let profile = &stack.permissions.profiles["execution"];
         // As the vault emitter selects them: sets named for the vault, then `"*"` ones.

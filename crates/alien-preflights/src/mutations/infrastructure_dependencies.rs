@@ -483,6 +483,8 @@ impl InfrastructureDependenciesMutation {
                     | "service_activation"
                     | "remote-stack-management"
                     | "resource-access"
+                    // Setup's verifier: what it names, it references.
+                    | "verifier"
                     | "permission-profile"
                     | "service-account"
             ) {

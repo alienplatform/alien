@@ -239,6 +239,37 @@ fn kubernetes_cluster_handoff_imports_as_running() {
     assert_eq!(outputs.cloud_metadata_ready, Some(true));
 }
 
+/// The verifier setup created imports Ready on every cloud, its outputs naming it, from the
+/// same payload setup's registration sends.
+#[test]
+fn the_verifier_imports_on_every_cloud() {
+    let entry = frozen_entry(alien_core::SigningVerifier::new("verifier".to_string()).build());
+    for (platform, region, management) in [
+        (Platform::Aws, "us-east-1", aws_management_config()),
+        (Platform::Gcp, "us-central1", gcp_management_config()),
+        (Platform::Azure, "eastus", azure_management_config()),
+    ] {
+        let state = run_through_registry(
+            &alien_core::SigningVerifier::RESOURCE_TYPE,
+            platform,
+            json!({"name": "acme-prod-verifier"}),
+            &entry,
+            region,
+            &management,
+        );
+        assert_running_with_internal_state(&state);
+        assert_eq!(
+            state.outputs,
+            Some(alien_core::ResourceOutputs::new(
+                alien_core::SigningVerifierOutputs {
+                    name: "acme-prod-verifier".to_string(),
+                }
+            )),
+            "{platform:?}"
+        );
+    }
+}
+
 #[test]
 fn aws_storage_round_trip() {
     let entry = entry(Storage::new("my-bucket".to_string()).build());
