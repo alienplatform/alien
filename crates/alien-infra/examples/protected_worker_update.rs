@@ -12,25 +12,31 @@
 //!   protected_worker_update request    prints the `applyRelease` request for release `$SEQUENCE`
 //!                                      of the stack running `$TO_IMAGE`
 //!
-//! Environment: `PREFIX`, `FROM_IMAGE`, `TO_IMAGE`, `NOT_AFTER` (RFC 3339, when the signer list
-//! expires; the same value for both commands so the fingerprint matches), `PROTECTED` (`1` signs
-//! the release and sets the stack's signing), and the AWS credentials to run as, normally the
-//! install's management role.
+//! Environment: `PREFIX`, `FROM_IMAGE`, `TO_IMAGE`, `SEQUENCE` (the release's, 1 when unset),
+//! `NOT_AFTER` (RFC 3339, when the signer list expires; the same value for every command so the
+//! fingerprint matches), `PROTECTED` (`1` signs the release and sets the stack's signing) and
+//! `CLOUD` (`aws`, the default, or `gcp`). On AWS, the credentials to run as, normally the
+//! install's management role. On GCP, `GCP_PROJECT`, `GCP_PROJECT_NUMBER`, `GCP_REGION`,
+//! `GCP_TOKEN_FILE` (an access token allowed to impersonate it) and `MANAGEMENT_SA`, the
+//! management service account to run as, and `EXECUTION_SA_UNIQUE_ID`.
 
 use std::sync::Arc;
 
 use alien_aws_clients::AwsClientConfigExt as _;
 use alien_core::import::data::aws::{AwsServiceAccountImportData, AwsWorkerImportData};
+use alien_core::import::data::gcp::{GcpServiceAccountImportData, GcpWorkerImportData};
 use alien_core::import::ImportContext;
 use alien_core::release_statement::{release_body, ReleaseOptions};
 use alien_core::{
-    ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot, Platform, ReleaseStatements,
-    ResourceLifecycle, ResourceRef, ResourceStatus, ServiceAccount, Stack, StackSettings,
-    StackSigning, StackState, Worker, WorkerCode,
+    ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot, GcpClientConfig, GcpCredentials,
+    GcpImpersonationConfig, Platform, ReleaseStatements, ResourceLifecycle, ResourceRef,
+    ResourceStatus, ServiceAccount, Stack, StackSettings, StackSigning, StackState, Worker,
+    WorkerCode,
 };
 use alien_infra::{
-    AwsServiceAccountImporter, AwsWorkerImporter, DefaultPlatformServiceProvider, ResourceImporter,
-    RunningResourcePolicy, StackExecutor,
+    AwsServiceAccountImporter, AwsWorkerImporter, DefaultPlatformServiceProvider,
+    GcpServiceAccountImporter, GcpWorkerImporter, ResourceImporter, RunningResourcePolicy,
+    StackExecutor,
 };
 use alien_permissions::generators::signing_limits;
 use alien_signing::envelope::Envelope;
@@ -49,6 +55,15 @@ type Error = Box<dyn std::error::Error>;
 
 fn env(name: &str) -> Result<String, Error> {
     std::env::var(name).map_err(|_| format!("{name} is not set").into())
+}
+
+/// The cloud the install is on.
+fn platform() -> Result<Platform, Error> {
+    match std::env::var("CLOUD").as_deref() {
+        Err(_) | Ok("aws") => Ok(Platform::Aws),
+        Ok("gcp") => Ok(Platform::Gcp),
+        Ok(other) => Err(format!("CLOUD '{other}' is not aws or gcp").into()),
+    }
 }
 
 fn key() -> Result<SecretKey, Error> {
@@ -127,6 +142,7 @@ fn stack(image: &str) -> Stack {
 }
 
 /// The worker and its role as setup created them, imported the way management adopts them.
+/// `account` is the AWS account or the GCP project.
 fn imported_state(
     prefix: &str,
     account: &str,
@@ -135,9 +151,10 @@ fn imported_state(
     worker_installed: bool,
     settings: &StackSettings,
 ) -> Result<StackState, Error> {
-    let mut state = StackState::new(Platform::Aws);
+    let platform = platform()?;
+    let mut state = StackState::new(platform);
     state.resource_prefix = prefix.to_string();
-    let role_name = format!("{prefix}-{PROFILE}-sa");
+    let account_name = format!("{prefix}-{PROFILE}-sa");
     let function_name = format!("{prefix}-{WORKER}");
     for (id, entry) in installed.resources() {
         if id == WORKER && !worker_installed {
@@ -145,14 +162,14 @@ fn imported_state(
         }
         let ctx = ImportContext {
             resource_id: id,
-            platform: Platform::Aws,
+            platform,
             region,
             stack_settings: settings,
             management_config: None,
             resource: entry,
         };
-        let imported = if id == WORKER {
-            AwsWorkerImporter.import(
+        let imported = match (platform, id == WORKER) {
+            (Platform::Aws, true) => AwsWorkerImporter.import(
                 AwsWorkerImportData {
                     function_name: function_name.clone(),
                     function_arn: format!(
@@ -171,26 +188,79 @@ fn imported_state(
                     s3_permission_statement_ids: Vec::new(),
                 },
                 &ctx,
-            )?
-        } else {
-            AwsServiceAccountImporter.import(
+            )?,
+            (Platform::Aws, false) => AwsServiceAccountImporter.import(
                 AwsServiceAccountImportData {
-                    role_name: role_name.clone(),
-                    role_arn: format!("arn:aws:iam::{account}:role/{role_name}"),
+                    role_name: account_name.clone(),
+                    role_arn: format!("arn:aws:iam::{account}:role/{account_name}"),
                     stack_permissions_applied: true,
                 },
                 &ctx,
-            )?
+            )?,
+            (_, true) => GcpWorkerImporter.import(
+                GcpWorkerImportData {
+                    project_id: account.to_string(),
+                    region: region.to_string(),
+                    service_name: function_name.clone(),
+                    url: None,
+                    pubsub_subscription_names: Vec::new(),
+                    scheduler_job_names: Vec::new(),
+                    eventarc_trigger_names: Vec::new(),
+                    commands_topic_name: None,
+                    commands_subscription_name: None,
+                },
+                &ctx,
+            )?,
+            (_, false) => GcpServiceAccountImporter.import(
+                GcpServiceAccountImportData {
+                    project_id: account.to_string(),
+                    service_account_email: format!(
+                        "{account_name}@{account}.iam.gserviceaccount.com"
+                    ),
+                    service_account_unique_id: env("EXECUTION_SA_UNIQUE_ID")?,
+                    stack_permissions_applied: true,
+                },
+                &ctx,
+            )?,
         };
         state.resources.insert(id.clone(), imported);
     }
     Ok(state)
 }
 
+/// The management identity's GCP credentials: the access token in `GCP_TOKEN_FILE`
+/// impersonating `MANAGEMENT_SA`.
+fn gcp_management() -> Result<GcpClientConfig, Error> {
+    let token = std::fs::read_to_string(env("GCP_TOKEN_FILE")?)?
+        .trim()
+        .to_string();
+    let source = GcpClientConfig {
+        project_id: env("GCP_PROJECT")?,
+        region: env("GCP_REGION")?,
+        credentials: GcpCredentials::AccessToken { token },
+        service_overrides: None,
+        project_number: Some(env("GCP_PROJECT_NUMBER")?),
+    };
+    Ok(GcpClientConfig {
+        credentials: GcpCredentials::ImpersonatedServiceAccount {
+            source: Box::new(source.clone()),
+            config: GcpImpersonationConfig {
+                service_account_email: env("MANAGEMENT_SA")?,
+                scopes: vec!["https://www.googleapis.com/auth/cloud-platform".to_string()],
+                delegates: None,
+                lifetime: None,
+                target_project_id: None,
+                target_region: None,
+            },
+        },
+        ..source
+    })
+}
+
 /// Release `sequence` of the stack running `image`, signed.
 fn signed_release(image: &str, sequence: u64) -> Result<ReleaseStatements, Error> {
     let body = release_body(
-        Platform::Aws,
+        platform()?,
         &stack(image),
         &ReleaseOptions {
             channel: CHANNEL.to_string(),
@@ -214,14 +284,26 @@ async fn update() -> Result<(), Error> {
             fingerprint: settings(&prefix)?.fingerprint,
             channel: CHANNEL.to_string(),
         });
-        statements = Some(signed_release(&env("TO_IMAGE")?, 1)?);
+        let sequence = std::env::var("SEQUENCE").unwrap_or_else(|_| "1".to_string());
+        statements = Some(signed_release(&env("TO_IMAGE")?, sequence.parse()?)?);
     }
 
-    let aws = alien_aws_clients::AwsClientConfig::from_std_env().await?;
+    let (client_config, account, region) = match platform()? {
+        Platform::Aws => {
+            let aws = alien_aws_clients::AwsClientConfig::from_std_env().await?;
+            let (account, region) = (aws.account_id.clone(), aws.region.clone());
+            (ClientConfig::Aws(Box::new(aws)), account, region)
+        }
+        _ => {
+            let gcp = gcp_management()?;
+            let (project, region) = (gcp.project_id.clone(), gcp.region.clone());
+            (ClientConfig::Gcp(Box::new(gcp)), project, region)
+        }
+    };
     let state = imported_state(
         &prefix,
-        &aws.account_id,
-        &aws.region,
+        &account,
+        &region,
         &stack(&env("FROM_IMAGE")?),
         !env("FROM_IMAGE")?.is_empty(),
         &stack_settings,
@@ -238,7 +320,7 @@ async fn update() -> Result<(), Error> {
         .allow_frozen_changes(false)
         .build();
     // The executor of a deployment's update step, as the runner builds it.
-    let executor = StackExecutor::builder(&target, ClientConfig::Aws(Box::new(aws)))
+    let executor = StackExecutor::builder(&target, client_config)
         .deployment_config(&config)
         .resume_unchanged_failed_resources(true)
         .running_resource_policy(RunningResourcePolicy::OptIn)
@@ -254,9 +336,8 @@ async fn update() -> Result<(), Error> {
         let worker = &state.resources[WORKER];
         match worker.status {
             ResourceStatus::Running
-                if worker.previous_config.is_none()
-                    && serde_json::to_value(&worker.config)?
-                        == serde_json::to_value(&target.resources[WORKER].config)? =>
+                if serde_json::to_value(&worker.config)?
+                    == serde_json::to_value(&target.resources[WORKER].config)? =>
             {
                 println!(
                     "{}",

@@ -24,10 +24,10 @@ move `api` to image B, and checks with the caller's own credentials:
   2. protected: a release whose signer list isn't the one setup pinned is refused with the
      verifier's reason, and the function keeps running B;
   3. unprotected: the update succeeds by writing the function directly; no verifier exists.
-  4. protected: a burst of concurrent applyRelease calls for releases 2..9 (alternating
-     images) never leaves the install behind its newest accepted release: once release 9 has
+  4. protected: a burst of concurrent applyRelease calls for releases 4..11 (alternating
+     images) never leaves the install behind its newest accepted release: once release 11 has
      been applied (retrying it while it reports a failure, as the control plane does), the
-     ledger is at 9 and the function runs 9's image, and stays there; every other call either
+     ledger is at 11 and the function runs 11's image, and stays there; every other call either
      applied or was refused as older or superseded, or failed and may be retried.
 
 Everything is named `<p>-...`, tagged with --tag, deleted at the end, and the run fails if
@@ -237,7 +237,8 @@ class Run:
                     and readable.returncode == 0,
                     f"driver={outcome} image={function.get('Code', {}).get('ImageUri', '')[-19:]} tags={tags} "
                     f"management-reads={readable.returncode == 0}")
-        update = {**management, "FROM_IMAGE": self.images["a"], "TO_IMAGE": self.images["b"], "PROTECTED": "1"}
+        update = {**management, "FROM_IMAGE": self.images["a"], "TO_IMAGE": self.images["b"], "PROTECTED": "1",
+                  "SEQUENCE": "2"}
         result = self.driver("update", install, update, check=False)
         outcome = json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {}
         image = self.image(install)
@@ -253,7 +254,7 @@ class Run:
                     direct.returncode != 0 and "AccessDenied" in direct.stderr and "explicit deny" in direct.stderr,
                     direct.stderr.strip()[:300])
 
-        foreign = {**update, "FROM_IMAGE": self.images["b"], "TO_IMAGE": self.images["a"],
+        foreign = {**update, "FROM_IMAGE": self.images["b"], "TO_IMAGE": self.images["a"], "SEQUENCE": "3",
                    "NOT_AFTER": (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=20))
                    .replace(microsecond=0).isoformat()}
         result = self.driver("update", install, foreign, check=False)
@@ -276,7 +277,7 @@ class Run:
     def burst(self):
         install = f"{self.prefix}-p"
         requests = {}
-        for sequence in range(2, 10):
+        for sequence in range(4, 12):
             image = self.images["a" if sequence % 2 else "b"]
             requests[sequence] = json.loads(self.driver(
                 "request", install, {"TO_IMAGE": image, "SEQUENCE": str(sequence)}).stdout)
@@ -287,10 +288,10 @@ class Run:
         outcomes = {sequence: ("applied" if error is None else body.get("errorType", error))
                     for sequence, (error, body) in answers.items()}
         retries = 0
-        while answers[9][0] is not None and answers[9][1].get("errorType") != "VERIFIER_REFUSED" and retries < 5:
+        while answers[11][0] is not None and answers[11][1].get("errorType") != "VERIFIER_REFUSED" and retries < 5:
             retries += 1
-            answers[9] = self.invoke(install, requests[9])
-        newest_applied = answers[9][0] is None
+            answers[11] = self.invoke(install, requests[11])
+        newest_applied = answers[11][0] is None
         allowed = {"applied", "VERIFIER_REFUSED", "VERIFIER_CLOUD_CALL_FAILED"}
         ledger = json.loads(aws_json("ssm", "get-parameter", "--name", f"/signed/{install}/state")
                             ["Parameter"]["Value"])
@@ -298,10 +299,10 @@ class Run:
         time.sleep(20)
         later = self.image(install)
         self.record("4 protected: concurrent releases never leave the install behind its newest",
-                    newest_applied and ledger.get("release", {}).get("sequence") == 9
+                    newest_applied and ledger.get("release", {}).get("sequence") == 11
                     and image == self.images["a"] and later == image
                     and set(outcomes.values()) <= allowed,
-                    f"outcomes={outcomes} retries-of-9={retries} ledger-release={ledger.get('release')} "
+                    f"outcomes={outcomes} retries-of-11={retries} ledger-release={ledger.get('release')} "
                     f"image={image.rsplit('@', 1)[-1][:19]} 20s-later={later.rsplit('@', 1)[-1][:19]}")
 
     def unprotected(self):
