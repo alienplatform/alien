@@ -14,6 +14,12 @@ use tokio::{io::AsyncReadExt, sync::Mutex};
 
 use crate::{ErrorData, Result};
 
+/// How far apart this process's clock and the manager's clock may be when we
+/// check the lifetime of a credential the manager issued. Without it, a
+/// manager clock one second ahead makes a one hour credential look too long
+/// and locks the caller out. AWS uses the same 5 minute tolerance for SigV4.
+pub const ALLOWED_CLOCK_SKEW: chrono::TimeDelta = chrono::TimeDelta::minutes(5);
+
 /// Supplies fresh identity evidence. Implementations must not return a runtime
 /// capability as proof or fall back to an unrelated stored credential.
 #[async_trait]
@@ -235,7 +241,7 @@ impl RuntimeCredentials {
             let remaining = capability.expires_at - (self.clock)();
             if !capability.token.starts_with("ax_cap_v1_")
                 || remaining <= chrono::Duration::zero()
-                || remaining > chrono::Duration::hours(1)
+                || remaining > chrono::Duration::hours(1) + ALLOWED_CLOCK_SKEW
             {
                 return Err(invalid("invalid capability file lifetime"));
             }
@@ -317,7 +323,7 @@ impl RuntimeCredentials {
         let remaining = credential.expires_at - now;
         if credential.token.is_empty()
             || remaining <= chrono::Duration::zero()
-            || remaining > chrono::Duration::hours(1)
+            || remaining > chrono::Duration::hours(1) + ALLOWED_CLOCK_SKEW
         {
             return Err(invalid(
                 "identity exchange returned an invalid credential lifetime",
@@ -745,10 +751,19 @@ mod tests {
     async fn refuses_expired_and_overlong_responses() {
         let (client, _, _, server) = fixture(vec![
             (200, credential("expired", 0)),
-            (200, credential("overlong", 3601)),
+            (200, credential("overlong", 3600 + 301)),
         ]);
         assert!(client.token().await.is_err());
         assert!(client.token().await.is_err());
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn credential_from_a_manager_clock_two_minutes_ahead_is_accepted() {
+        // The manager issued a one hour credential by its own clock, which
+        // runs two minutes ahead of ours.
+        let (client, _, _, server) = fixture(vec![(200, credential("ahead", 3600 + 120))]);
+        assert_eq!(client.token().await.unwrap(), "ahead");
         server.join().unwrap();
     }
     #[cfg(unix)]

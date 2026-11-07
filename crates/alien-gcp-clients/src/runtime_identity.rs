@@ -17,6 +17,10 @@ use serde::{Deserialize, Serialize};
 
 const GOOGLE_CERTS: &str = "https://www.googleapis.com/oauth2/v3/certs";
 const MAX_TOKEN_BYTES: usize = 16 * 1024;
+/// How far ahead of our clock a token's `iat` and `nbf` may be, so a caller
+/// whose clock runs a little fast is not locked out. This matches the 5 minute
+/// tolerance AWS applies to SigV4 timestamps. Expiry is still checked exactly.
+pub const ALLOWED_CLOCK_SKEW_SECONDS: u64 = 300;
 
 /// A Google service account proven by a token for this audience. This is
 /// cloud identity only; callers must check recorded resource membership.
@@ -185,7 +189,11 @@ fn decode(
                     "accounts.google.com".to_owned(),
                 ])),
                 allowed_audiences: Some(HashSet::from([audience.to_owned()])),
-                time_tolerance: Some(jwt_simple::prelude::Duration::from_secs(0)),
+                // The library applies this to `nbf` and `exp`. Expiry is
+                // checked again below without any tolerance.
+                time_tolerance: Some(jwt_simple::prelude::Duration::from_secs(
+                    ALLOWED_CLOCK_SKEW_SECONDS,
+                )),
                 artificial_time: Some(jwt_simple::prelude::Duration::from_secs(now_secs)),
                 max_token_length: Some(MAX_TOKEN_BYTES),
                 max_header_length: Some(2048),
@@ -202,7 +210,10 @@ fn decode(
     let issued = claims.issued_at.ok_or_else(refused)?.as_secs();
     let expiry = claims.expires_at.ok_or_else(refused)?.as_secs();
     let deadline = expiry.min(issued.checked_add(3600).ok_or_else(refused)?);
-    if issued > now_secs || now_secs >= deadline || expiry <= issued {
+    if issued > now_secs.saturating_add(ALLOWED_CLOCK_SKEW_SECONDS)
+        || now_secs >= deadline
+        || expiry <= issued
+    {
         return Err(refused());
     }
     let unique_id = claims.subject.ok_or_else(refused)?;
@@ -287,7 +298,7 @@ mod tests {
                 &token,
                 AUDIENCE,
                 &key.public_key(),
-                now - chrono::Duration::seconds(1),
+                now - chrono::Duration::seconds(ALLOWED_CLOCK_SKEW_SECONDS as i64 + 1),
             ),
         ] {
             assert!(result.is_err());
@@ -309,6 +320,40 @@ mod tests {
             let signed = key.sign(invalid).unwrap();
             assert!(decode(&signed, AUDIENCE, &key.public_key(), now).is_err());
         }
+    }
+
+    #[test]
+    fn token_from_a_fast_clock_is_accepted_within_five_minutes() {
+        let key = RS256KeyPair::generate(2048).unwrap();
+        let issued = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+        let token = key.sign(claims(issued)).unwrap();
+        // The caller's clock runs ahead of ours, so the token looks issued in
+        // the future.
+        let two_minutes_ahead = decode(
+            &token,
+            AUDIENCE,
+            &key.public_key(),
+            issued - chrono::Duration::minutes(2),
+        );
+        assert_eq!(
+            two_minutes_ahead.unwrap().authority_deadline,
+            issued + chrono::Duration::hours(1)
+        );
+        assert!(decode(
+            &token,
+            AUDIENCE,
+            &key.public_key(),
+            issued - chrono::Duration::minutes(6),
+        )
+        .is_err());
+        // The tolerance never extends the token past its expiry.
+        assert!(decode(
+            &token,
+            AUDIENCE,
+            &key.public_key(),
+            issued + chrono::Duration::hours(1),
+        )
+        .is_err());
     }
 
     #[test]
