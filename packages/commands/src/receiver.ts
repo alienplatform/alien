@@ -466,7 +466,12 @@ class PullCommandReceiver implements CommandReceiver {
       throw new AlienError({
         code: definition.metadata.code,
         message: definition.metadata.message(context),
-        retryable: response.status === 408 || response.status === 429 || response.status >= 500,
+        retryable:
+          response.status === 408 ||
+          response.status === 429 ||
+          response.status >= 500 ||
+          // An expired file credential is replaced by the host; keep polling.
+          (response.status === 401 && this.connectionProvider.credentialRotates === true),
         internal: definition.metadata.internal,
         httpStatusCode: definition.metadata.httpStatusCode,
         context,
