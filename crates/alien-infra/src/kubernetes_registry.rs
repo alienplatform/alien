@@ -74,7 +74,10 @@ pub(crate) async fn pull_credential(
     let now = chrono::Utc::now();
     if credential.token.is_empty()
         || credential.expires_at <= now
-        || credential.expires_at > now + chrono::Duration::hours(1)
+        || credential.expires_at
+            > now
+                + chrono::Duration::hours(1)
+                + alien_client_core::runtime_credentials::ALLOWED_CLOCK_SKEW
     {
         return Err(invalid());
     }

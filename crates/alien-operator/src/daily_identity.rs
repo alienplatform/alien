@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use alien_client_core::runtime_credentials::RuntimeProofProvider;
+use alien_client_core::runtime_credentials::{RuntimeProofProvider, ALLOWED_CLOCK_SKEW};
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -262,7 +262,7 @@ impl DailyIdentity {
                     .get("token")
                     .and_then(Value::as_str)
                     .is_none_or(str::is_empty)
-                    || expires_at > Utc::now() + chrono::Duration::hours(1)
+                    || expires_at > Utc::now() + chrono::Duration::hours(1) + ALLOWED_CLOCK_SKEW
                 {
                     return Err(failed("Pending key did not obtain bounded authority"));
                 }
@@ -373,7 +373,9 @@ fn response_expiry(response: &Value) -> Result<DateTime<Utc>> {
     let expiry = DateTime::parse_from_rfc3339(expiry)
         .map_err(|_| failed("Invalid component identity deadline"))?
         .with_timezone(&Utc);
-    if expiry <= Utc::now() || expiry > Utc::now() + chrono::Duration::hours(24) {
+    if expiry <= Utc::now()
+        || expiry > Utc::now() + chrono::Duration::hours(24) + ALLOWED_CLOCK_SKEW
+    {
         return Err(failed("Component identity deadline is out of bounds"));
     }
     Ok(expiry)
@@ -430,7 +432,7 @@ impl alien_infra::RuntimeRegistryCredentialProvider for OperatorRegistryCredenti
         let now = Utc::now();
         if credential.token.is_empty()
             || credential.expires_at <= now
-            || credential.expires_at > now + chrono::Duration::hours(1)
+            || credential.expires_at > now + chrono::Duration::hours(1) + ALLOWED_CLOCK_SKEW
         {
             return Err(AlienError::new(invalid()));
         }
