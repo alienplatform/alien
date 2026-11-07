@@ -27,6 +27,19 @@ pub(crate) struct ImportedImage {
     pub applied: bool,
 }
 
+/// Azure resource IDs are case-insensitive, and ARM does not keep the casing
+/// it was given. A managed identity read back says `resourcegroups`.
+fn same_id(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
+}
+
+/// The rest of `id` after `prefix`, ignoring case like Azure does.
+fn strip_id_prefix<'a>(id: &'a str, prefix: &str) -> Option<&'a str> {
+    id.get(..prefix.len())
+        .filter(|start| same_id(start, prefix))
+        .map(|_| &id[prefix.len()..])
+}
+
 fn invalid(worker: &Worker, message: &str) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::ResourceConfigInvalid {
         message: message.into(),
@@ -163,14 +176,12 @@ pub(crate) async fn prepare(
         "/subscriptions/{}/resourceGroups/{group}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/",
         azure.subscription_id
     );
-    let identity_name = identity_id
-        .strip_prefix(&identity_prefix)
+    let identity_name = strip_id_prefix(identity_id, &identity_prefix)
         .filter(|s| !s.is_empty() && !s.contains('/'))
         .ok_or_else(setup)?;
     let assignment_prefix =
         format!("{registry_id}/providers/Microsoft.Authorization/roleAssignments/");
-    if !assignment_id
-        .strip_prefix(&assignment_prefix)
+    if !strip_id_prefix(assignment_id, &assignment_prefix)
         .is_some_and(|s| uuid::Uuid::parse_str(s).is_ok())
     {
         return Err(setup());
@@ -181,11 +192,14 @@ pub(crate) async fn prepare(
     let current_identity = identities.get_user_assigned_identity(group, identity_name).await.context(ErrorData::ResourceConfigInvalid {
         message: "Cannot verify setup-owned registry pull identity; update setup permissions if access is refused".into(), resource_id: Some(worker.id.clone()),
     })?;
-    if current_identity.id.as_deref() != Some(identity_id)
+    if !current_identity
+        .id
+        .as_deref()
+        .is_some_and(|id| same_id(id, identity_id))
         || current_identity
             .properties
             .and_then(|p| p.principal_id)
-            .is_none_or(|id| id.to_string() != principal)
+            .is_none_or(|id| !same_id(&id.to_string(), principal))
     {
         return Err(setup());
     }
@@ -194,12 +208,19 @@ pub(crate) async fn prepare(
         message: "Cannot verify setup registry pull grant; update setup permissions if access is refused".into(), resource_id: Some(worker.id.clone()),
     })?;
     let properties = assignment.properties.ok_or_else(setup)?;
-    if assignment.id.as_deref() != Some(assignment_id)
-        || properties.principal_id != principal
-        || properties.scope.as_deref() != Some(registry_id.as_str())
+    if !assignment
+        .id
+        .as_deref()
+        .is_some_and(|id| same_id(id, assignment_id))
+        || !same_id(&properties.principal_id, principal)
+        || !properties
+            .scope
+            .as_deref()
+            .is_some_and(|scope| same_id(scope, &registry_id))
         || !properties
             .role_definition_id
-            .ends_with("/roleDefinitions/7f951dda-4ed3-4680-a7ca-43fe172d538d")
+            .to_ascii_lowercase()
+            .ends_with("/roledefinitions/7f951dda-4ed3-4680-a7ca-43fe172d538d")
         || properties.condition.is_some()
     {
         return Err(setup());
@@ -220,15 +241,18 @@ pub(crate) async fn prepare(
         .properties
         .and_then(|p| p.login_server)
         .ok_or_else(setup)?;
-    if live.id.as_deref() != Some(registry_id.as_str())
+    if !live
+        .id
+        .as_deref()
+        .is_some_and(|id| same_id(id, &registry_id))
         || registry.login_server.as_deref() != Some(login_server.as_str())
     {
         return Err(setup());
     }
     if let Some(current) = saved {
         if current.source != *source
-            || current.registry_id != registry_id
-            || current.identity_id != identity_id
+            || !same_id(&current.registry_id, &registry_id)
+            || !same_id(&current.identity_id, identity_id)
         {
             if !current.complete {
                 return Err(invalid(
@@ -330,4 +354,230 @@ pub(crate) async fn prepare(
         applied: false,
     });
     Ok(Some(Duration::from_secs(5)))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use alien_azure_clients::authorization::MockAuthorizationApi;
+    use alien_azure_clients::containerregistry::MockContainerRegistryApi;
+    use alien_azure_clients::managed_identity::MockManagedIdentityApi;
+    use alien_client_core::runtime_credentials::RuntimeCapability;
+    use alien_core::{
+        EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform,
+        Resource, StackResourceState,
+    };
+    use futures::executor::block_on;
+    use serde_json::json;
+
+    use super::*;
+    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+    use crate::worker::AzureWorkerController;
+
+    const SUBSCRIPTION: &str = "12345678-1234-1234-1234-123456789012";
+    const PRINCIPAL: &str = "0b5c1f7e-9d2a-4c1b-8e3f-2a6d4c8b1e90";
+    const ASSIGNMENT: &str = "549f763a-e3d3-5825-a080-26402d449982";
+    const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn registry_id() -> String {
+        format!("/subscriptions/{SUBSCRIPTION}/resourceGroups/setup-rg/providers/Microsoft.ContainerRegistry/registries/setupacr")
+    }
+
+    fn assignment_id() -> String {
+        format!(
+            "{}/providers/Microsoft.Authorization/roleAssignments/{ASSIGNMENT}",
+            registry_id()
+        )
+    }
+
+    fn identity_id(resource_groups: &str) -> String {
+        format!("/subscriptions/{SUBSCRIPTION}/{resource_groups}/setup-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/artifacts-pull")
+    }
+
+    /// Imports one image with the setup pull identity saved as `stored`,
+    /// while ARM reports the identity as `live`, the way the real API does.
+    fn import(stored: &str, live: &str) -> (Result<Option<Duration>>, Option<ImportedImage>) {
+        let live = live.to_string();
+        let mut identities = MockManagedIdentityApi::new();
+        identities
+            .expect_get_user_assigned_identity()
+            .withf(|group, name| group == "setup-rg" && name == "artifacts-pull")
+            .returning(move |_, _| {
+                Ok(serde_json::from_value(json!({
+                    "id": live,
+                    "location": "eastus",
+                    "properties": {"principalId": PRINCIPAL}
+                }))
+                .unwrap())
+            });
+        let mut authorization = MockAuthorizationApi::new();
+        authorization
+            .expect_get_role_assignment_by_id()
+            .returning(|_| {
+                Ok(serde_json::from_value(json!({
+                    "id": assignment_id(),
+                    "properties": {
+                        "principalId": PRINCIPAL,
+                        "scope": registry_id(),
+                        "roleDefinitionId": format!("/subscriptions/{SUBSCRIPTION}/providers/Microsoft.Authorization/roleDefinitions/7f951dda-4ed3-4680-a7ca-43fe172d538d")
+                    }
+                }))
+                .unwrap())
+            });
+        let imports = Arc::new(Mutex::new(Vec::new()));
+        let seen = imports.clone();
+        let mut registries = MockContainerRegistryApi::new();
+        registries.expect_get_registry().returning(|_, _| {
+            Ok(serde_json::from_value(json!({
+                "id": registry_id(),
+                "location": "eastus",
+                "sku": {"name": "Basic"},
+                "properties": {"loginServer": "setupacr.azurecr.io"}
+            }))
+            .unwrap())
+        });
+        registries
+            .expect_import_image()
+            .returning(move |group, name, parameters| {
+                seen.lock().unwrap().push((
+                    group.to_string(),
+                    name.to_string(),
+                    serde_json::to_value(parameters).unwrap(),
+                ));
+                Ok(OperationResult::Completed(()))
+            });
+        let identities = Arc::new(identities);
+        let authorization = Arc::new(authorization);
+        let registries = Arc::new(registries);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_azure_managed_identity_client()
+            .returning(move |_| Ok(identities.clone()));
+        provider
+            .expect_get_azure_authorization_client()
+            .returning(move |_| Ok(authorization.clone()));
+        provider
+            .expect_get_azure_container_registry_client()
+            .returning(move |_| Ok(registries.clone()));
+        provider
+            .expect_runtime_registry_pull_credential()
+            .returning(|_| {
+                Ok(Some(RuntimeCapability {
+                    token: "pull-token".into(),
+                    expires_at: chrono::Utc::now() + chrono::Duration::minutes(30),
+                }))
+            });
+        let worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: format!("test-manager.alien.dev/app@sha256:{DIGEST}"),
+            })
+            .permissions("default-profile".to_string())
+            .build();
+        let mut executor = block_on(
+            SingleControllerExecutor::builder()
+                .resource(worker.clone())
+                .controller(AzureWorkerController::default())
+                .platform(Platform::Azure)
+                .service_provider(Arc::new(provider))
+                .runtime_identity_audience("manager-one".into())
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: vec![EnvironmentVariable {
+                        name: alien_core::ENV_ALIEN_DEPLOYMENT_ID.into(),
+                        value: "dep-1".into(),
+                        var_type: EnvironmentVariableType::Plain,
+                        target_resources: None,
+                    }],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .build(),
+        )
+        .unwrap();
+        let mut registry = StackResourceState::new_pending(
+            ArtifactRegistry::RESOURCE_TYPE.to_string(),
+            Resource::new(ArtifactRegistry::new("registry".to_string()).build()),
+            Some(ResourceLifecycle::Frozen),
+            vec![],
+        );
+        registry.status = ResourceStatus::Running;
+        registry.internal_state = Some(
+            serde_json::to_value(AzureArtifactRegistryController {
+                registry_name: Some("setupacr".into()),
+                resource_group_name: Some("setup-rg".into()),
+                login_server: Some("setupacr.azurecr.io".into()),
+                subscription_id: Some(SUBSCRIPTION.into()),
+                pull_identity_resource_id: Some(stored.into()),
+                pull_principal_id: Some(PRINCIPAL.into()),
+                pull_role_assignment_id: Some(assignment_id()),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        executor.insert_saved_resource("registry", registry);
+        let mut saved = None;
+        let result = executor.with_context(|ctx| block_on(prepare(&mut saved, &worker, ctx)));
+        let imports = imports.lock().unwrap();
+        if result.is_ok() {
+            assert_eq!(imports.len(), 1);
+            let (group, name, parameters) = &imports[0];
+            assert_eq!((group.as_str(), name.as_str()), ("setup-rg", "setupacr"));
+            assert_eq!(
+                parameters["source"]["registryUri"],
+                "test-manager.alien.dev"
+            );
+            assert_eq!(
+                parameters["source"]["sourceImage"],
+                format!("app@sha256:{DIGEST}")
+            );
+            assert_eq!(
+                parameters["source"]["credentials"]["password"],
+                "pull-token"
+            );
+            assert_eq!(
+                parameters["untaggedTargetRepositories"],
+                json!(["runtime/api"])
+            );
+        } else {
+            assert!(imports.is_empty());
+        }
+        (result, saved)
+    }
+
+    /// Terraform saves `resourceGroups`; ARM reads the identity back with
+    /// `resourcegroups`. Both name the same identity, so the import runs.
+    #[test]
+    fn import_accepts_the_identity_id_in_the_casing_azure_returns() {
+        for (stored, live) in [
+            (identity_id("resourceGroups"), identity_id("resourcegroups")),
+            (identity_id("resourcegroups"), identity_id("resourcegroups")),
+        ] {
+            let (result, saved) = import(&stored, &live);
+            assert_eq!(
+                result.unwrap(),
+                Some(Duration::from_secs(5)),
+                "stored {stored}, live {live}"
+            );
+            let saved = saved.unwrap();
+            assert!(saved.complete);
+            assert_eq!(
+                saved.image,
+                format!("setupacr.azurecr.io/runtime/api@sha256:{DIGEST}")
+            );
+            assert_eq!(saved.registry_id, registry_id());
+        }
+    }
+
+    /// Ignoring case must not accept a different identity.
+    #[test]
+    fn import_refuses_a_different_identity() {
+        let other = identity_id("resourcegroups").replace("artifacts-pull", "other-pull");
+        let (result, saved) = import(&identity_id("resourceGroups"), &other);
+        let error = result.unwrap_err();
+        assert!(
+            error.to_string().contains("Setup update required"),
+            "{error}"
+        );
+        assert!(saved.is_none());
+    }
 }
