@@ -883,6 +883,31 @@ impl AwsWorkerController {
             }));
         }
 
+        // On a protected install no setup creates the function and management may not: the
+        // verifier creates it from the signed release.
+        if let Some(statements) = verifier::protected_statements(ctx, &cfg.id)? {
+            let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &cfg.id);
+            self.ensure_log_group(ctx, aws_cfg, &aws_worker_name, &cfg.id)
+                .await?;
+            self.apply_through_verifier(ctx, statements, &cfg).await?;
+            let created = client
+                .get_function_configuration(&aws_worker_name, None)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to read Lambda function '{aws_worker_name}' the verifier created"
+                    ),
+                    resource_id: Some(cfg.id.clone()),
+                })?;
+            self.arn = created.function_arn;
+            self.worker_name = Some(aws_worker_name);
+            self.wait_for_lambda_started_at = None;
+            return Ok(HandlerAction::Continue {
+                state: CreateWaitForActive,
+                suggested_delay: None,
+            });
+        }
+
         // Get the ServiceAccount for this worker's permission profile
         let service_account_id = format!("{}-sa", cfg.get_permissions());
         let service_account_ref = ResourceRef::new(
@@ -12166,6 +12191,69 @@ mod tests {
             message.contains("the release is older than one this install accepted"),
             "{message}"
         );
+    }
+
+    /// On a protected install no setup creates the function and management may not: the
+    /// worker's first deployment has the verifier create it, and never calls CreateFunction.
+    #[tokio::test]
+    async fn a_protected_worker_is_created_by_the_verifier() {
+        let worker = pinned_worker('2', 512);
+        let release = signed_release(
+            Platform::Aws,
+            &Stack::new("test".to_string())
+                .add(worker.clone(), ResourceLifecycle::Live)
+                .build(),
+            1,
+        );
+        let invocations = Arc::new(Mutex::new(Vec::new()));
+        let answer = serde_json::json!({"release": 1, "functions": [{
+            "function": PROTECTED_WORKER_NAME,
+            "imageUri": pinned_image('2'),
+            "digest": format!("sha256:{}", "2".repeat(64)),
+        }]});
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(AwsWorkerController::default())
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(
+                protected_lambda(invocations.clone(), invoke_answer(None, answer)),
+                None,
+                None,
+            ))
+            .with_test_dependencies()
+            .stack_settings(protected_settings())
+            .signed_release(release.clone(), None)
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        let invocations = invocations.lock().unwrap().clone();
+        assert_eq!(
+            invocations.len(),
+            1,
+            "one verifier call creates the function"
+        );
+        assert_eq!(invocations[0].0, "test-verifier");
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(
+            state.arn.as_deref(),
+            Some("arn:aws:lambda:us-east-1:123456789012:function:test-api")
+        );
+        let (answer, written) = run_verifier(
+            alien_signing::InstallId::Aws {
+                account: "123456789012".to_string(),
+                region: "us-east-1".to_string(),
+                prefix: "test".to_string(),
+            },
+            "test",
+            &invocations[0].1,
+        )
+        .await;
+        answer.expect("the verifier accepts the controller's request");
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].image_uri, pinned_image('2'));
     }
 
     /// A verifier failure that isn't a refusal (a cloud call, a write that raced another) is
