@@ -812,23 +812,15 @@ async fn signed_by(
     key: &PublicKey,
 ) -> Result<Vec<String>> {
     let query = api::project_query(ctx, project).await?;
-    let releases = whole_page(
-        api::get_json(ctx, "/v1/releases", &query).await?,
-        "releases",
-    )?;
     let mut statements = Vec::new();
-    for release in releases["items"].as_array().into_iter().flatten() {
+    for release in all_items(ctx, "/v1/releases", &query).await? {
         for (_, statement) in release["signedStacks"].as_object().into_iter().flatten() {
             if let Ok(statement) = serde_json::from_value::<SignedStatement>(statement.clone()) {
                 statements.push(statement);
             }
         }
     }
-    let deployments = whole_page(
-        api::get_json(ctx, "/v1/deployments", &query).await?,
-        "deployments",
-    )?;
-    for deployment in deployments["items"].as_array().into_iter().flatten() {
+    for deployment in all_items(ctx, "/v1/deployments", &query).await? {
         let id = deployment["id"].as_str().ok_or_else(|| {
             AlienError::new(ErrorData::SigningFailed {
                 message: "The server listed a deployment without an id".to_string(),
@@ -839,17 +831,27 @@ async fn signed_by(
     Ok(digests_signed_by(&statements, project, signer, key))
 }
 
-/// `page` if it holds every item: revoking from part of a list would leave
-/// the rest accepted.
-fn whole_page(page: serde_json::Value, what: &str) -> Result<serde_json::Value> {
-    if page["nextCursor"].is_null() {
-        Ok(page)
-    } else {
-        Err(AlienError::new(ErrorData::SigningFailed {
-            message: format!(
-                "The server returned the project's {what} in pages; revoking needs all of them, so nothing was changed"
-            ),
-        }))
+/// Every item of the list at `path`, following the server's pages to the end:
+/// revoking from part of a list would leave the rest accepted.
+async fn all_items(
+    ctx: &ExecutionMode,
+    path: &str,
+    query: &[(String, String)],
+) -> Result<Vec<serde_json::Value>> {
+    let mut items = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut page_query = query.to_vec();
+        page_query.push(("limit".to_string(), "100".to_string()));
+        if let Some(cursor) = &cursor {
+            page_query.push(("cursor".to_string(), cursor.clone()));
+        }
+        let page = api::get_json(ctx, path, &page_query).await?;
+        items.extend(page["items"].as_array().into_iter().flatten().cloned());
+        cursor = page["nextCursor"].as_str().map(str::to_string);
+        if cursor.is_none() {
+            return Ok(items);
+        }
     }
 }
 
@@ -1778,16 +1780,46 @@ mod tests {
             digests_signed_by(&statements, "prj", "ci", &old),
             [digest(&release), digest(&config)]
         );
-        assert!(whole_page(
-            serde_json::json!({"items": [], "nextCursor": null}),
-            "deployments"
-        )
-        .is_ok());
-        whole_page(
-            serde_json::json!({"items": [], "nextCursor": "c2"}),
-            "deployments",
-        )
-        .expect_err("a partial list is refused");
+    }
+
+    /// Revoking reads every release and deployment, so it follows the server's
+    /// pages to the end instead of stopping at the first.
+    #[tokio::test]
+    async fn every_page_of_a_list_is_read() {
+        let server = httpmock::MockServer::start_async().await;
+        // The page after `c2` is registered first, so a request with that cursor never
+        // matches the first page.
+        let second = server
+            .mock_async(|when, then| {
+                when.method("GET")
+                    .path("/v1/releases")
+                    .query_param("limit", "100")
+                    .query_param("cursor", "c2");
+                then.status(200)
+                    .json_body(serde_json::json!({"items": [{"id": "rel_3"}], "nextCursor": null}));
+            })
+            .await;
+        let first = server
+            .mock_async(|when, then| {
+                when.method("GET")
+                    .path("/v1/releases")
+                    .query_param("limit", "100");
+                then.status(200)
+                    .json_body(serde_json::json!({"items": [{"id": "rel_1"}, {"id": "rel_2"}], "nextCursor": "c2"}));
+            })
+            .await;
+        let ctx = ExecutionMode::Standalone {
+            server_url: server.base_url(),
+            api_key: "test".to_string(),
+        };
+        let items = all_items(&ctx, "/v1/releases", &[]).await.unwrap();
+        let ids: Vec<&str> = items
+            .iter()
+            .filter_map(|item| item["id"].as_str())
+            .collect();
+        assert_eq!(ids, ["rel_1", "rel_2", "rel_3"]);
+        first.assert_hits_async(1).await;
+        second.assert_hits_async(1).await;
     }
 
     #[test]
