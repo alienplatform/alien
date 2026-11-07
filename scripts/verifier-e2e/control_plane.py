@@ -21,6 +21,11 @@ move `api` to image B, and checks with the caller's own credentials:
   2. protected: a release whose signer list isn't the one setup pinned is refused with the
      verifier's reason, and the function keeps running B;
   3. unprotected: the update succeeds by writing the function directly; no verifier exists.
+  4. protected: a burst of concurrent applyRelease calls for releases 2..9 (alternating
+     images) never leaves the install behind its newest accepted release: once release 9 has
+     been applied (retrying it while it reports a failure, as the control plane does), the
+     ledger is at 9 and the function runs 9's image, and stays there; every other call either
+     applied or was refused as older or superseded, or failed and may be retried.
 
 Everything is named `<p>-...`, tagged with --tag, deleted at the end, and the run fails if
 anything named `<p>` is left.
@@ -35,6 +40,7 @@ CLI and Docker.
 """
 
 import argparse
+import concurrent.futures
 import datetime
 import io
 import json
@@ -240,6 +246,45 @@ class Run:
                     and image == self.images["b"],
                     f"driver={json.dumps(outcome)[:400]} image={image.rsplit('@', 1)[-1][:19]}")
 
+    def invoke(self, install, payload):
+        out = self.work / f"out-{uuid.uuid4().hex[:6]}.json"
+        response = aws_json("lambda", "invoke", "--function-name", f"{install}-verifier",
+                            "--cli-binary-format", "raw-in-base64-out", "--cli-read-timeout", "320",
+                            "--payload", json.dumps(payload), str(out))
+        body = json.loads(out.read_text() or "null")
+        return response.get("FunctionError"), body
+
+    def burst(self):
+        install = f"{self.prefix}-p"
+        requests = {}
+        for sequence in range(2, 10):
+            image = self.images["a" if sequence % 2 else "b"]
+            requests[sequence] = json.loads(self.driver(
+                "request", install, {"TO_IMAGE": image, "SEQUENCE": str(sequence)}).stdout)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            answers = dict(zip(requests, pool.map(lambda sequence: self.invoke(install, requests[sequence]),
+                                                  requests)))
+        (self.evidence / "burst-answers.json").write_text(json.dumps(answers, indent=2))
+        outcomes = {sequence: ("applied" if error is None else body.get("errorType", error))
+                    for sequence, (error, body) in answers.items()}
+        retries = 0
+        while answers[9][0] is not None and answers[9][1].get("errorType") != "VERIFIER_REFUSED" and retries < 5:
+            retries += 1
+            answers[9] = self.invoke(install, requests[9])
+        newest_applied = answers[9][0] is None
+        allowed = {"applied", "VERIFIER_REFUSED", "VERIFIER_CLOUD_CALL_FAILED"}
+        ledger = json.loads(aws_json("ssm", "get-parameter", "--name", f"/signed/{install}/state")
+                            ["Parameter"]["Value"])
+        image = self.image(install)
+        time.sleep(20)
+        later = self.image(install)
+        self.record("4 protected: concurrent releases never leave the install behind its newest",
+                    newest_applied and ledger.get("release", {}).get("sequence") == 9
+                    and image == self.images["a"] and later == image
+                    and set(outcomes.values()) <= allowed,
+                    f"outcomes={outcomes} retries-of-9={retries} ledger-release={ledger.get('release')} "
+                    f"image={image.rsplit('@', 1)[-1][:19]} 20s-later={later.rsplit('@', 1)[-1][:19]}")
+
     def unprotected(self):
         install = f"{self.prefix}-u"
         update = {**self.management_env(install), "FROM_IMAGE": self.images["a"], "TO_IMAGE": self.images["b"],
@@ -301,6 +346,7 @@ class Run:
             self.install(f"{self.prefix}-p", protected=True)
             self.install(f"{self.prefix}-u", protected=False)
             self.protected()
+            self.burst()
             self.unprotected()
         finally:
             for install in (f"{self.prefix}-p",):

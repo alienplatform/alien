@@ -8,6 +8,8 @@
 //!   protected_worker_update policies   prints the `<prefix>-management-limits` policy and the
 //!                                      verifier's policy setup renders, for `$ACCOUNT`/`$REGION`
 //!   protected_worker_update update     updates worker `api` from `$FROM_IMAGE` to `$TO_IMAGE`
+//!   protected_worker_update request    prints the `applyRelease` request for release `$SEQUENCE`
+//!                                      of the stack running `$TO_IMAGE`
 //!
 //! Environment: `PREFIX`, `FROM_IMAGE`, `TO_IMAGE`, `NOT_AFTER` (RFC 3339, when the signer list
 //! expires; the same value for both commands so the fingerprint matches), `PROTECTED` (`1` signs
@@ -180,6 +182,22 @@ fn imported_state(
     Ok(state)
 }
 
+/// Release `sequence` of the stack running `image`, signed.
+fn signed_release(image: &str, sequence: u64) -> Result<ReleaseStatements, Error> {
+    let body = release_body(
+        Platform::Aws,
+        &stack(image),
+        &ReleaseOptions {
+            channel: CHANNEL.to_string(),
+            ..Default::default()
+        },
+    )?;
+    Ok(ReleaseStatements {
+        release: statement(Kind::Release, sequence, body)?,
+        signer_lists: vec![signer_list()?],
+    })
+}
+
 async fn update() -> Result<(), Error> {
     let prefix = env("PREFIX")?;
     let protected = env("PROTECTED")? == "1";
@@ -191,18 +209,7 @@ async fn update() -> Result<(), Error> {
             fingerprint: settings(&prefix)?.fingerprint,
             channel: CHANNEL.to_string(),
         });
-        let body = release_body(
-            Platform::Aws,
-            &target,
-            &ReleaseOptions {
-                channel: CHANNEL.to_string(),
-                ..Default::default()
-            },
-        )?;
-        statements = Some(ReleaseStatements {
-            release: statement(Kind::Release, 1, body)?,
-            signer_lists: vec![signer_list()?],
-        });
+        statements = Some(signed_release(&env("TO_IMAGE")?, 1)?);
     }
 
     let aws = alien_aws_clients::AwsClientConfig::from_std_env().await?;
@@ -306,6 +313,17 @@ async fn main() -> Result<(), Error> {
             Ok(())
         }
         Some("update") => update().await,
-        _ => Err("usage: protected_worker_update fixtures|policies|update".into()),
+        Some("request") => {
+            let release = signed_release(&env("TO_IMAGE")?, env("SEQUENCE")?.parse()?)?;
+            println!(
+                "{}",
+                serde_json::json!({"applyRelease": {
+                    "release": release.release,
+                    "signerLists": release.signer_lists,
+                }})
+            );
+            Ok(())
+        }
+        _ => Err("usage: protected_worker_update fixtures|policies|update|request".into()),
     }
 }
