@@ -755,3 +755,29 @@ async fn packing_ignores_generation_order() {
             .unwrap()
     );
 }
+
+/// The Deny statements all go into `-0`, so a grant whose Deny statements need more than one
+/// policy is refused, as is a statement too large for any policy. Neither changes on a retry.
+#[test]
+fn deny_statements_needing_two_policies_or_an_oversized_statement_are_refused_and_not_retried() {
+    let controller = AwsRemoteStackManagementController::default();
+    let statement = |index: usize, effect: &str, size: usize| AwsIamStatement {
+        sid: format!("Grant{index}"),
+        effect: effect.to_string(),
+        action: vec!["s3:GetObject".to_string()],
+        resource: vec![format!("arn:aws:s3:::bucket-{index}/{}", "x".repeat(size))],
+        not_resource: Vec::new(),
+        condition: None,
+    };
+
+    for statements in [
+        vec![statement(0, "Deny", 4_000), statement(1, "Deny", 4_000)],
+        vec![statement(0, "Allow", 7_000)],
+    ] {
+        let error = controller
+            .chunk_management_policy_documents("management", statements)
+            .expect_err("refused");
+        assert_eq!(error.code, "RESOURCE_CONFIG_INVALID", "{error:?}");
+        assert!(!error.retryable);
+    }
+}

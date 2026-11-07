@@ -998,12 +998,12 @@ impl AwsRemoteStackManagementController {
         };
         let deny_chunks = pack(denies)?;
         if deny_chunks.len() > 1 {
-            return Err(AlienError::new(ErrorData::InfrastructureError {
+            // Not retryable: the grant is the same on every attempt.
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: format!(
                     "The management grant's Deny statements need {} managed policies; they must fit in one, so an update never leaves the role without them",
                     deny_chunks.len()
                 ),
-                operation: Some("chunk_management_policy_documents".to_string()),
                 resource_id: Some(resource_id.to_string()),
             }));
         }
@@ -1013,12 +1013,11 @@ impl AwsRemoteStackManagementController {
         for chunk in &chunks {
             if let [statement] = chunk.as_slice() {
                 if self.management_policy_document_size(chunk)? > MAX_MANAGED_POLICY_BYTES {
-                    return Err(AlienError::new(ErrorData::InfrastructureError {
+                    return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
                         message: format!(
                             "AWS IAM statement '{}' is too large for a managed policy",
                             statement.sid
                         ),
-                        operation: Some("chunk_management_policy_documents".to_string()),
                         resource_id: Some(resource_id.to_string()),
                     }));
                 }
