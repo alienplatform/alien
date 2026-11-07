@@ -488,6 +488,10 @@ fn gone_unless_failed<T>(
 
 #[controller]
 pub struct AzureWorkerController {
+    /// On a protected install, the digest of the signed config the verifier last applied to
+    /// this worker; a step carrying another one updates the worker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) applied_config: Option<String>,
     // ─────────── Persisted fields ───────────
     /// Azure Container App name. Filled on *create* and reused for update/delete.
     pub(crate) container_app_name: Option<String>,
@@ -3709,6 +3713,10 @@ impl AzureWorkerController {
     }
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        verifier::config_changed(ctx, self.applied_config.as_deref())
+    }
+
     // Implementation of get_outputs trait method
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         self.resource_id.as_ref().map(|id| {
@@ -4315,7 +4323,7 @@ impl AzureWorkerController {
     /// Has the install's verifier write this worker's Container App from the signed release,
     /// with the values the release lets the deployment provide, and waits for its answer.
     async fn apply_through_verifier(
-        &self,
+        &mut self,
         ctx: &ResourceControllerContext<'_>,
         statements: &alien_core::ReleaseStatements,
         func: &Worker,
@@ -4372,6 +4380,7 @@ impl AzureWorkerController {
             digest = %applied.functions[0].digest,
             "The verifier applied the signed release to the worker"
         );
+        self.applied_config = verifier::config_digest(ctx)?;
         Ok(())
     }
 
@@ -5571,6 +5580,7 @@ impl AzureWorkerController {
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(function_name: &str) -> Self {
         Self {
+            applied_config: None,
             state: AzureWorkerState::Ready,
             container_app_name: Some(function_name.to_string()),
             resource_id: Some(format!(
@@ -7827,6 +7837,7 @@ mod tests {
             ready_rbac_wait_until_epoch_secs: None,
             update_rbac_wait_required: false,
             update_dapr_components_deleted: false,
+            applied_config: None,
             _internal_stay_count: None,
         };
 

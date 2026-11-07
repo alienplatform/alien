@@ -644,6 +644,10 @@ impl AwsWorkerController {
 
 #[controller]
 pub struct AwsWorkerController {
+    /// On a protected install, the digest of the signed config the verifier last applied to
+    /// this worker; a step carrying another one updates the worker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) applied_config: Option<String>,
     pub(crate) arn: Option<String>,
     pub(crate) url: Option<String>,
     /// The logical AWS Lambda worker name (stack prefix + id). Stored to expose in outputs.
@@ -5266,6 +5270,10 @@ impl AwsWorkerController {
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        verifier::config_changed(ctx, self.applied_config.as_deref())
+    }
+
     #[handler(
         state = RefreshFailed,
         on_failure = RefreshFailed,
@@ -5954,7 +5962,7 @@ impl AwsWorkerController {
     /// Has the install's verifier write this worker's function from the signed release, with
     /// the values the release lets the deployment provide, and waits for its answer.
     async fn apply_through_verifier(
-        &self,
+        &mut self,
         ctx: &ResourceControllerContext<'_>,
         statements: &alien_core::ReleaseStatements,
         config: &Worker,
@@ -5988,6 +5996,7 @@ impl AwsWorkerController {
             digest = %applied.functions[0].digest,
             "The verifier applied the signed release to the worker"
         );
+        self.applied_config = verifier::config_digest(ctx)?;
         Ok(())
     }
 
@@ -6026,6 +6035,7 @@ impl AwsWorkerController {
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(worker_name: &str) -> Self {
         Self {
+            applied_config: None,
             state: AwsWorkerState::Ready,
             arn: Some(format!(
                 "arn:aws:lambda:us-east-1:123456789012:function:{}",

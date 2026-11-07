@@ -93,6 +93,21 @@ pub fn signed_release(platform: Platform, stack: &Stack, sequence: u64) -> Relea
     }
 }
 
+/// The install's signed config with environment values `env`, at `sequence`.
+pub fn signed_config(env: &[(&str, &str)], sequence: u64) -> SignedStatement {
+    statement(
+        Kind::Config,
+        sequence,
+        alien_signing::ConfigBody {
+            env: env
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect(),
+            ..Default::default()
+        },
+    )
+}
+
 /// The settings setup writes for `prefix`, pinning the signer list's fingerprint.
 pub fn settings(prefix: &str) -> SigningSettings {
     SigningSettings {

@@ -312,6 +312,10 @@ fn gone_unless_failed<T>(
 
 #[controller]
 pub struct GcpWorkerController {
+    /// On a protected install, the digest of the signed config the verifier last applied to
+    /// this worker; a step carrying another one updates the worker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) applied_config: Option<String>,
     /// The Cloud Run service name
     pub(crate) service_name: Option<String>,
     /// The invocation URL of the worker, available after creation.
@@ -4571,6 +4575,10 @@ impl GcpWorkerController {
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        verifier::config_changed(ctx, self.applied_config.as_deref())
+    }
+
     #[handler(
         state = RefreshFailed,
         on_failure = RefreshFailed,
@@ -5134,7 +5142,7 @@ impl GcpWorkerController {
     /// Has the install's verifier write this worker's service from the signed release, with
     /// the values the release lets the deployment provide, and waits for its answer.
     async fn apply_through_verifier(
-        &self,
+        &mut self,
         ctx: &ResourceControllerContext<'_>,
         statements: &alien_core::ReleaseStatements,
         cfg: &Worker,
@@ -5158,6 +5166,7 @@ impl GcpWorkerController {
             digest = %applied.functions[0].digest,
             "The verifier applied the signed release to the worker"
         );
+        self.applied_config = verifier::config_digest(ctx)?;
         Ok(())
     }
 
@@ -6175,6 +6184,7 @@ impl GcpWorkerController {
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(function_name: &str) -> Self {
         Self {
+            applied_config: None,
             state: GcpWorkerState::Ready,
             service_name: Some(function_name.to_string()),
             url: Some(format!("https://{}-abcd1234-uc.a.run.app", function_name)),
@@ -8807,6 +8817,7 @@ mod tests {
             scheduler_job_names: Vec::new(),
             project_id: None,
             region: None,
+            applied_config: None,
             _internal_stay_count: None,
         };
 
@@ -9431,6 +9442,68 @@ mod tests {
 
         result.expect("management's project grants cover the service");
         assert_eq!(requests.len(), 1, "one verifier call for the update");
+    }
+
+    /// A signed config isn't part of the worker's own configuration, so a new one updates a
+    /// protected worker by itself: the update goes to the verifier carrying it, and once it is
+    /// applied the worker asks for no further update.
+    #[tokio::test]
+    async fn a_new_signed_config_updates_a_protected_worker_through_the_verifier() {
+        let worker = pinned_worker('2', 512);
+        let release = signed_release(
+            Platform::Gcp,
+            &Stack::new("test".to_string())
+                .add(worker.clone(), ResourceLifecycle::Live)
+                .build(),
+            2,
+        );
+        let config = crate::core::verifier_test_support::signed_config(&[("PROBE", "1")], 1);
+        let answer = serde_json::json!({"release": 2, "functions": [{
+            "function": PROTECTED_SERVICE,
+            "imageUri": pinned_image('2'),
+            "digest": format!("sha256:{}", "2".repeat(64)),
+        }]});
+        let (url, requests) = http_verifier_stub(axum::http::StatusCode::OK, answer).await;
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker.clone())
+            .controller(GcpWorkerController::mock_ready(PROTECTED_SERVICE))
+            .platform(Platform::Gcp)
+            .client_config(management_client_config(&url))
+            .service_provider(protected_provider(&url, setup_policy()))
+            .with_test_dependencies()
+            .stack_settings(protected_settings())
+            .management_config(alien_core::ManagementConfig::Gcp(
+                alien_core::GcpManagementConfig {
+                    service_account_email: MANAGEMENT_SA.to_string(),
+                    federation_trust: None,
+                },
+            ))
+            .signed_release(release, Some(config.clone()))
+            .build()
+            .await
+            .unwrap();
+
+        assert!(
+            executor.needs_update().unwrap(),
+            "the worker never had this config"
+        );
+        executor.update(worker).unwrap();
+        executor
+            .run_until_terminal()
+            .await
+            .expect("the update completes through the verifier");
+
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 1, "one verifier call");
+        let request: serde_json::Value = serde_json::from_slice(&requests[0].1).unwrap();
+        assert_eq!(
+            request["applyRelease"]["config"],
+            serde_json::to_value(&config).unwrap()
+        );
+        assert!(
+            !executor.needs_update().unwrap(),
+            "the config is applied, nothing else is due"
+        );
     }
 
     /// On a protected install management may not write the Cloud Run service, so an update

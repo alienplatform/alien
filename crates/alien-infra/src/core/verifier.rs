@@ -47,6 +47,33 @@ pub fn protected_statements<'a>(
         })
 }
 
+/// The digest of the signed config the step carries, if any.
+pub fn config_digest(ctx: &ResourceControllerContext<'_>) -> Result<Option<String>> {
+    ctx.deployment_config
+        .signed_config
+        .as_ref()
+        .map(|statement| {
+            statement
+                .open()
+                .map(|opened| opened.digest)
+                .context(ErrorData::ResourceConfigInvalid {
+                    message: "The install's signed config can't be read".to_string(),
+                    resource_id: None,
+                })
+        })
+        .transpose()
+}
+
+/// Whether a protected worker that last had the signed config `applied` applied must go to the
+/// verifier again: the step carries another one. The config isn't part of the worker's own
+/// configuration, so nothing else would update it.
+pub fn config_changed(ctx: &ResourceControllerContext<'_>, applied: Option<&str>) -> Result<bool> {
+    if ctx.deployment_config.stack_settings.signing.is_none() {
+        return Ok(false);
+    }
+    Ok(config_digest(ctx)?.is_some_and(|digest| Some(digest.as_str()) != applied))
+}
+
 /// `applyRelease` for one function workload of the signed release.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

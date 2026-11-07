@@ -56,6 +56,7 @@ impl ResourceImporter for AzureWorkerImporter {
             ready_rbac_wait_until_epoch_secs: None,
             update_rbac_wait_required: false,
             update_dapr_components_deleted: false,
+            applied_config: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)
