@@ -60,6 +60,19 @@ use alien_permissions::aws_resource_policies::aws_prefixed_resource_name;
 use chrono::Utc;
 use uuid::Uuid;
 
+/// The verifier write that gives function `name` the reserved concurrency `limit`, or none.
+fn concurrency_write(name: &str, limit: Option<u32>) -> verifier::CloudWrite {
+    match limit {
+        Some(limit) => verifier::CloudWrite::PutFunctionConcurrency {
+            function_name: name.to_string(),
+            reserved_concurrent_executions: limit,
+        },
+        None => verifier::CloudWrite::DeleteFunctionConcurrency {
+            function_name: name.to_string(),
+        },
+    }
+}
+
 /// A reservation race has the same quota identity as the early account check.
 fn lambda_concurrency_error(error: AlienError<CloudClientErrorData>, region: &str) -> AlienError {
     if let Some(CloudClientErrorData::InvalidInput { message, .. }) = &error.error {
@@ -1022,10 +1035,12 @@ impl AwsWorkerController {
         if let Some(statements) = verifier::protected_statements(ctx, &cfg.id)? {
             let write = verifier::CloudWrite::CreateFunction(verifier::CloudWrite::body(&request)?);
             self.arn = match self
-                .write_through_verifier(ctx, statements, &cfg.id, &aws_worker_name, write)
+                .write_through_verifier(ctx, statements, &cfg.id, &aws_worker_name, vec![write])
                 .await
             {
-                Ok(written) => written.answer["functionArn"].as_str().map(str::to_string),
+                Ok(written) => written.answers[0]["functionArn"]
+                    .as_str()
+                    .map(str::to_string),
                 // Our own earlier call may have created it before its answer was lost: that
                 // function carries this create's token.
                 Err(error) => match client.get_function(&aws_worker_name).await {
@@ -2300,7 +2315,7 @@ impl AwsWorkerController {
                 statements,
                 &worker_config.id,
                 &aws_worker_name,
-                write,
+                vec![write],
             )
             .await?;
         } else {
@@ -2546,7 +2561,7 @@ impl AwsWorkerController {
                 function_name: aws_worker_name.clone(),
                 request: verifier::CloudWrite::body(&request)?,
             };
-            self.write_through_verifier(ctx, statements, &config.id, &aws_worker_name, write)
+            self.write_through_verifier(ctx, statements, &config.id, &aws_worker_name, vec![write])
                 .await?;
         } else {
             client
@@ -2647,8 +2662,14 @@ impl AwsWorkerController {
                         function_name: worker_name.to_string(),
                         request: verifier::CloudWrite::body(&permission_request)?,
                     };
-                    self.write_through_verifier(ctx, statements, &config.id, worker_name, write)
-                        .await?;
+                    self.write_through_verifier(
+                        ctx,
+                        statements,
+                        &config.id,
+                        worker_name,
+                        vec![write],
+                    )
+                    .await?;
                 } else {
                     let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
 
@@ -2819,8 +2840,14 @@ impl AwsWorkerController {
                         function_name: worker_name.to_string(),
                         request: verifier::CloudWrite::body(&permission_request)?,
                     };
-                    self.write_through_verifier(ctx, statements, &config.id, worker_name, write)
-                        .await?;
+                    self.write_through_verifier(
+                        ctx,
+                        statements,
+                        &config.id,
+                        worker_name,
+                        vec![write],
+                    )
+                    .await?;
                 } else {
                     let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
 
@@ -2911,7 +2938,7 @@ impl AwsWorkerController {
                 function_name: aws_worker_name.clone(),
                 reserved_concurrent_executions: limit,
             };
-            self.write_through_verifier(ctx, statements, &config.id, &aws_worker_name, write)
+            self.write_through_verifier(ctx, statements, &config.id, &aws_worker_name, vec![write])
                 .await?;
         } else if let Some(limit) = config.concurrency_limit {
             info!(worker=%config.id, limit=%limit, "Setting reserved concurrency on worker");
@@ -3182,10 +3209,13 @@ impl AwsWorkerController {
         let previous_config = ctx.previous_resource_config::<Worker>()?;
         self.ensure_batch_queue_visibility(ctx, &current_config, false)
             .await?;
+        // On a protected install the code goes to the verifier with the rest of the update, in
+        // one request (UpdateConfigStart).
+        let protected = verifier::protected_statements(ctx, &current_config.id)?.is_some();
         let code_changed = current_config.code != previous_config.code;
 
         // UpdateCodeStart only handles code updates if needed
-        if code_changed {
+        if code_changed && !protected {
             let aws_cfg = ctx.get_aws_config()?;
             let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
             let image_uri = Self::function_image_uri(ctx, &current_config)?;
@@ -3202,29 +3232,12 @@ impl AwsWorkerController {
                 })
             })?;
 
-            // On a protected install the verifier checks this very request and sends it.
-            if let Some(statements) = verifier::protected_statements(ctx, &current_config.id)? {
-                let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &current_config.id);
-                let write = verifier::CloudWrite::UpdateFunctionCode {
-                    function_name: aws_worker_name.clone(),
-                    request: verifier::CloudWrite::body(&request)?,
-                };
-                self.write_through_verifier(
-                    ctx,
-                    statements,
-                    &current_config.id,
-                    &aws_worker_name,
-                    write,
-                )
-                .await?;
-            } else {
-                client.update_function_code(arn, request).await.context(
-                    ErrorData::CloudPlatformError {
-                        message: "Failed to update Lambda worker code".to_string(),
-                        resource_id: Some(current_config.id.clone()),
-                    },
-                )?;
-            }
+            client.update_function_code(arn, request).await.context(
+                ErrorData::CloudPlatformError {
+                    message: "Failed to update Lambda worker code".to_string(),
+                    resource_id: Some(current_config.id.clone()),
+                },
+            )?;
         }
 
         // Always transition to wait for code update (even if no code change) - linear flow
@@ -3302,7 +3315,7 @@ impl AwsWorkerController {
 
         // An update whose own configuration is unchanged (new code, or a dependency's update)
         // still re-renders the linked bindings: they may have moved since this worker rendered.
-        if !config_changed {
+        let needs_configuration = if !config_changed {
             let bindings_drifted = match self
                 .linked_binding_environment(ctx, &current_config)
                 .await?
@@ -3332,93 +3345,73 @@ impl AwsWorkerController {
                     }))
                 }
             };
-            if !bindings_drifted {
-                self.wait_for_lambda_started_at = None;
-                return Ok(HandlerAction::Continue {
-                    state: UpdateConfigWaitForActive,
-                    suggested_delay: None,
-                });
+            if bindings_drifted {
+                info!(
+                    worker = %current_config.id,
+                    reason = "linked binding drift",
+                    "Re-rendering the worker's linked bindings during its update"
+                );
             }
-            info!(
-                worker = %current_config.id,
-                reason = "linked binding drift",
-                "Re-rendering the worker's linked bindings during its update"
-            );
-        }
-
-        // Get the ServiceAccount for this worker's permission profile
-        let service_account_id = format!("{}-sa", current_config.get_permissions());
-        let service_account_ref = ResourceRef::new(
-            alien_core::ServiceAccount::RESOURCE_TYPE,
-            service_account_id.to_string(),
-        );
-
-        // Get the ServiceAccount's role ARN
-        let service_account_state = ctx
-            .require_dependency::<crate::service_account::AwsServiceAccountController>(
-                &service_account_ref,
-            )?;
-
-        let role_arn = service_account_state
-            .role_arn
-            .as_deref()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::DependencyNotReady {
-                    resource_id: current_config.id().to_string(),
-                    dependency_id: service_account_id.to_string(),
-                })
-            })?
-            .to_string();
-
-        let final_env_vars = self
-            .prepare_environment_variables(
-                &current_config.environment,
-                &current_config.links,
-                ctx,
-                &aws_worker_name,
+            bindings_drifted
+        } else {
+            true
+        };
+        let request = if needs_configuration {
+            Some(
+                self.configuration_update(ctx, &current_config, &aws_worker_name)
+                    .await?,
             )
-            .await?;
-
-        let lambda_environment = if !final_env_vars.is_empty() {
-            Some(Environment::builder().variables(final_env_vars).build())
         } else {
             None
         };
 
-        // Get VPC configuration if a Network resource exists
-        let vpc_config = linked_containers::vpc_config(ctx, self.get_vpc_config(ctx)?).await?;
-
-        let request = UpdateFunctionConfigurationRequest::builder()
-            .role(role_arn)
-            .timeout(current_config.timeout_seconds as i32)
-            .memory_size(current_config.memory_mb as i32)
-            .maybe_environment(lambda_environment)
-            .maybe_vpc_config(vpc_config)
-            .build();
-
-        let arn = self.arn.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Worker ARN not available for config update".to_string(),
-                resource_id: Some(current_config.id.clone()),
-            })
-        })?;
-
-        // On a protected install the verifier checks this very request and sends it.
+        // On a protected install all of the update's writes go to the verifier in one request,
+        // which it checks in full before it sends any: a refusal leaves the function on the
+        // previous release's code and configuration alike.
         if let Some(statements) = verifier::protected_statements(ctx, &current_config.id)? {
-            let write = verifier::CloudWrite::UpdateFunctionConfiguration {
-                function_name: aws_worker_name.clone(),
-                request: verifier::CloudWrite::body(&request)?,
-            };
-            self.write_through_verifier(
-                ctx,
-                statements,
-                &current_config.id,
-                &aws_worker_name,
-                write,
-            )
-            .await?;
-            self.applied_config = verifier::config_digest(ctx)?;
-        } else {
+            let mut writes = Vec::new();
+            if current_config.code != previous_config.code {
+                let code = UpdateFunctionCodeRequest::builder()
+                    .image_uri(Self::function_image_uri(ctx, &current_config)?)
+                    .publish(true)
+                    .build();
+                writes.push(verifier::CloudWrite::UpdateFunctionCode {
+                    function_name: aws_worker_name.clone(),
+                    request: verifier::CloudWrite::body(&code)?,
+                });
+            }
+            if let Some(request) = &request {
+                writes.push(verifier::CloudWrite::UpdateFunctionConfiguration {
+                    function_name: aws_worker_name.clone(),
+                    request: verifier::CloudWrite::body(request)?,
+                });
+            }
+            if current_config.concurrency_limit != previous_config.concurrency_limit {
+                writes.push(concurrency_write(
+                    &aws_worker_name,
+                    current_config.concurrency_limit,
+                ));
+            }
+            if !writes.is_empty() {
+                self.write_through_verifier(
+                    ctx,
+                    statements,
+                    &current_config.id,
+                    &aws_worker_name,
+                    writes,
+                )
+                .await?;
+            }
+            if request.is_some() {
+                self.applied_config = verifier::config_digest(ctx)?;
+            }
+        } else if let Some(request) = request {
+            let arn = self.arn.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "Worker ARN not available for config update".to_string(),
+                    resource_id: Some(current_config.id.clone()),
+                })
+            })?;
             client
                 .update_function_configuration(arn, request)
                 .await
@@ -3432,7 +3425,7 @@ impl AwsWorkerController {
         self.wait_for_lambda_started_at = None;
         Ok(HandlerAction::Continue {
             state: UpdateConfigWaitForActive,
-            suggested_delay: Some(Duration::from_secs(3)),
+            suggested_delay: needs_configuration.then(|| Duration::from_secs(3)),
         })
     }
 
@@ -4394,7 +4387,7 @@ impl AwsWorkerController {
                             statements,
                             &current_config.id,
                             worker_name,
-                            write,
+                            vec![write],
                         )
                         .await?;
                     } else {
@@ -4535,7 +4528,7 @@ impl AwsWorkerController {
                             statements,
                             &current_config.id,
                             worker_name,
-                            write,
+                            vec![write],
                         )
                         .await?;
                     } else {
@@ -4616,22 +4609,10 @@ impl AwsWorkerController {
         let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &config.id);
 
-        let protected = verifier::protected_statements(ctx, &config.id)?;
-        if let (true, Some(statements)) = (
-            config.concurrency_limit != prev_config.concurrency_limit,
-            protected,
-        ) {
-            let write = match config.concurrency_limit {
-                Some(limit) => verifier::CloudWrite::PutFunctionConcurrency {
-                    function_name: aws_worker_name.clone(),
-                    reserved_concurrent_executions: limit,
-                },
-                None => verifier::CloudWrite::DeleteFunctionConcurrency {
-                    function_name: aws_worker_name.clone(),
-                },
-            };
-            self.write_through_verifier(ctx, statements, &config.id, &aws_worker_name, write)
-                .await?;
+        // On a protected install the concurrency went to the verifier with the code and
+        // configuration (UpdateConfigStart).
+        if verifier::protected_statements(ctx, &config.id)?.is_some() {
+            debug!(worker=%config.id, "Concurrency was part of the verifier's update");
         } else if config.concurrency_limit != prev_config.concurrency_limit {
             match config.concurrency_limit {
                 Some(limit) => {
@@ -6090,16 +6071,75 @@ impl AwsWorkerController {
         ))
     }
 
-    /// Hands `write`, the Lambda request this controller built for `worker`'s function
-    /// `function`, to the install's verifier, which checks it against the signed release and
-    /// sends it unchanged.
+    /// The UpdateFunctionConfiguration an update of `current_config` sends for its function
+    /// `aws_worker_name`.
+    async fn configuration_update(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        current_config: &Worker,
+        aws_worker_name: &str,
+    ) -> Result<UpdateFunctionConfigurationRequest> {
+        // Get the ServiceAccount for this worker's permission profile
+        let service_account_id = format!("{}-sa", current_config.get_permissions());
+        let service_account_ref = ResourceRef::new(
+            alien_core::ServiceAccount::RESOURCE_TYPE,
+            service_account_id.to_string(),
+        );
+
+        // Get the ServiceAccount's role ARN
+        let service_account_state = ctx
+            .require_dependency::<crate::service_account::AwsServiceAccountController>(
+                &service_account_ref,
+            )?;
+
+        let role_arn = service_account_state
+            .role_arn
+            .as_deref()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: current_config.id().to_string(),
+                    dependency_id: service_account_id.to_string(),
+                })
+            })?
+            .to_string();
+
+        let final_env_vars = self
+            .prepare_environment_variables(
+                &current_config.environment,
+                &current_config.links,
+                ctx,
+                aws_worker_name,
+            )
+            .await?;
+
+        let lambda_environment = if !final_env_vars.is_empty() {
+            Some(Environment::builder().variables(final_env_vars).build())
+        } else {
+            None
+        };
+
+        // Get VPC configuration if a Network resource exists
+        let vpc_config = linked_containers::vpc_config(ctx, self.get_vpc_config(ctx)?).await?;
+
+        Ok(UpdateFunctionConfigurationRequest::builder()
+            .role(role_arn)
+            .timeout(current_config.timeout_seconds as i32)
+            .memory_size(current_config.memory_mb as i32)
+            .maybe_environment(lambda_environment)
+            .maybe_vpc_config(vpc_config)
+            .build())
+    }
+
+    /// Hands `writes`, the Lambda requests this controller built for `worker`'s function
+    /// `function` for one release, to the install's verifier, which checks them all against
+    /// the signed release before it sends any, and sends them unchanged, in order.
     async fn write_through_verifier(
         &self,
         ctx: &ResourceControllerContext<'_>,
         statements: &alien_core::ReleaseStatements,
         worker: &str,
         function: &str,
-        write: verifier::CloudWrite,
+        writes: Vec<verifier::CloudWrite>,
     ) -> Result<verifier::Written> {
         let lambda = ctx
             .service_provider
@@ -6111,7 +6151,7 @@ impl AwsWorkerController {
             statements,
             ctx.deployment_config.signed_config.as_ref(),
             worker,
-            write,
+            writes,
             function,
         )
         .await?;
@@ -12180,7 +12220,8 @@ mod tests {
     }
 
     /// Lambda on a protected install: reads succeed, and invoking the verifier records the
-    /// request and answers with `answer`. No write has an expectation, so a write fails the test.
+    /// request and answers with `answer` (see [`answer_to`]). No write has an expectation, so a
+    /// write fails the test.
     fn protected_lambda(
         invocations: Arc<Mutex<Vec<(String, Vec<u8>)>>>,
         answer: InvokeResponse,
@@ -12194,9 +12235,26 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((request.function_name.clone(), request.payload.clone()));
-            Ok(answer.clone())
+            Ok(answer_to(&answer, &request.payload))
         });
         Arc::new(lambda)
+    }
+
+    /// `answer` to the `applyWrite` in `payload`: a refusal as it is; a written answer
+    /// (see [`written`]) with its one `answer` given for each of the request's writes.
+    fn answer_to(answer: &InvokeResponse, payload: &[u8]) -> InvokeResponse {
+        if answer.function_error.is_some() {
+            return answer.clone();
+        }
+        let request: serde_json::Value = serde_json::from_slice(payload).unwrap();
+        let writes = request["applyWrite"]["writes"].as_array().unwrap().len();
+        let mut body: serde_json::Value = serde_json::from_slice(&answer.payload).unwrap();
+        let one = body.as_object_mut().unwrap().remove("answer").unwrap();
+        body["answers"] = serde_json::json!(vec![one; writes]);
+        InvokeResponse {
+            payload: serde_json::to_vec(&body).unwrap(),
+            ..answer.clone()
+        }
     }
 
     fn invoke_answer(function_error: Option<&str>, payload: serde_json::Value) -> InvokeResponse {
@@ -12267,56 +12325,61 @@ mod tests {
     }
 
     /// On a protected install management may not write the function: the update hands the
-    /// verifier the UpdateFunctionCode and UpdateFunctionConfiguration it built, with the signed
-    /// release, and the verifier's tables accept both.
+    /// verifier the UpdateFunctionCode, UpdateFunctionConfiguration and concurrency it built,
+    /// with the signed release, in one request, so a refusal of any leaves the function on the
+    /// previous release's code and configuration alike. The verifier's tables accept them all.
     #[tokio::test]
     async fn a_protected_update_goes_through_the_verifier_and_never_writes_the_function() {
-        let (executor, result, invocations, release) = protected_update(written("Update")).await;
+        let mut to = pinned_worker('2', 512);
+        to.concurrency_limit = Some(5);
+        let (executor, result, invocations, release) =
+            protected_update_to(to.clone(), to, None, written("Update")).await;
 
         result.expect("the update completes through the verifier");
         assert_eq!(executor.status(), ResourceStatus::Running);
-        let writes: Vec<serde_json::Value> = invocations
-            .iter()
-            .map(|(function, payload)| {
-                assert_eq!(function, "test-verifier");
-                serde_json::from_slice(payload).unwrap()
-            })
-            .collect();
+        assert_eq!(
+            invocations.len(),
+            1,
+            "one verifier call updates the function"
+        );
+        let (function, payload) = &invocations[0];
+        assert_eq!(function, "test-verifier");
+        let request: serde_json::Value = serde_json::from_slice(payload).unwrap();
+        let writes = request["applyWrite"]["writes"].as_array().unwrap();
         assert_eq!(
             writes
                 .iter()
-                .map(|request| request["applyWrite"]["write"]
-                    .as_object()
-                    .unwrap()
-                    .keys()
-                    .next()
-                    .unwrap()
-                    .clone())
+                .map(|write| write.as_object().unwrap().keys().next().unwrap().as_str())
                 .collect::<Vec<_>>(),
-            ["updateFunctionCode", "updateFunctionConfiguration"]
+            [
+                "updateFunctionCode",
+                "updateFunctionConfiguration",
+                "putFunctionConcurrency"
+            ]
         );
-        for (request, (_, payload)) in writes.iter().zip(&invocations) {
-            assert_eq!(
-                request["applyWrite"]["release"],
-                serde_json::json!(release.release)
-            );
-            assert_eq!(
-                request["applyWrite"]["signerLists"],
-                serde_json::json!(release.signer_lists)
-            );
-            let (answer, forwarded) = run_write(aws_install(), "test", None, payload).await;
-            answer.expect("the verifier's tables accept the controller's request");
-            assert_eq!(forwarded.len(), 1);
-        }
         assert_eq!(
-            writes[0]["applyWrite"]["write"]["updateFunctionCode"]["request"]["ImageUri"],
+            request["applyWrite"]["release"],
+            serde_json::json!(release.release)
+        );
+        assert_eq!(
+            request["applyWrite"]["signerLists"],
+            serde_json::json!(release.signer_lists)
+        );
+        assert_eq!(
+            writes[0]["updateFunctionCode"]["request"]["ImageUri"],
             serde_json::json!(pinned_image('2'))
         );
         assert_eq!(
-            writes[1]["applyWrite"]["write"]["updateFunctionConfiguration"]["request"]
-                ["MemorySize"],
+            writes[1]["updateFunctionConfiguration"]["request"]["MemorySize"],
             serde_json::json!(512)
         );
+        assert_eq!(
+            writes[2]["putFunctionConcurrency"]["reservedConcurrentExecutions"],
+            serde_json::json!(5)
+        );
+        let (answer, forwarded) = run_write(aws_install(), "test", None, payload).await;
+        answer.expect("the verifier's tables accept the controller's request");
+        assert_eq!(forwarded.len(), 3);
     }
 
     /// The deployment injects its own telemetry env into every worker (its monitoring
@@ -12367,9 +12430,9 @@ mod tests {
             .await;
 
             result.expect("the update completes through the verifier");
-            assert_eq!(invocations.len(), 2);
-            let request: serde_json::Value = serde_json::from_slice(&invocations[1].1).unwrap();
-            let env = request["applyWrite"]["write"]["updateFunctionConfiguration"]["request"]
+            assert_eq!(invocations.len(), 1);
+            let request: serde_json::Value = serde_json::from_slice(&invocations[0].1).unwrap();
+            let env = request["applyWrite"]["writes"][1]["updateFunctionConfiguration"]["request"]
                 ["Environment"]["Variables"]
                 .as_object()
                 .expect("the configuration update carries the env")
@@ -12392,11 +12455,10 @@ mod tests {
                 );
             }
             assert!(!env.contains_key("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"));
-            for (_, payload) in &invocations {
-                let (answer, forwarded) = run_write(aws_install(), "test", None, payload).await;
-                answer.expect("the verifier's tables accept the controller's request");
-                assert_eq!(forwarded.len(), 1);
-            }
+            let (answer, forwarded) =
+                run_write(aws_install(), "test", None, &invocations[0].1).await;
+            answer.expect("the verifier's tables accept the controller's request");
+            assert_eq!(forwarded.len(), 2);
         }
     }
 
@@ -12558,7 +12620,7 @@ mod tests {
             serde_json::json!(PROTECTED_WORKER)
         );
         assert_eq!(
-            without_create_token(payload["applyWrite"]["write"]["createFunction"].clone()),
+            without_create_token(payload["applyWrite"]["writes"][0]["createFunction"].clone()),
             without_create_token(unprotected_request),
             "the verifier gets the unprotected request"
         );
@@ -12641,8 +12703,14 @@ mod tests {
             .iter()
             .map(|(function, payload)| {
                 assert_eq!(function, "test-verifier");
-                serde_json::from_slice::<serde_json::Value>(payload).unwrap()["applyWrite"]["write"]
-                    .clone()
+                let request = serde_json::from_slice::<serde_json::Value>(payload).unwrap();
+                let writes = request["applyWrite"]["writes"].as_array().unwrap().clone();
+                assert_eq!(
+                    writes.len(),
+                    1,
+                    "a create's writes wait on what management makes"
+                );
+                writes[0].clone()
             })
             .collect();
         assert_eq!(

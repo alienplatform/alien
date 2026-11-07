@@ -388,8 +388,8 @@ fn merge_into(
     })
 }
 
-/// The release a request is applying, which must still be the install's newest when each of
-/// its functions is written.
+/// The release a request is applying: no newer one may have been accepted when each of its
+/// writes is sent. The install records it only once every write is in place.
 pub struct Floor<'a> {
     /// Where the ledger lives.
     pub store: &'a dyn InstallStore,
@@ -409,16 +409,20 @@ impl crate::function::StillNewest for Floor<'_> {
         )
         .await?;
         match &ledger.release {
-            Some(newest) if *newest == self.release => Ok(()),
-            Some(newest) => Err(refused(format!(
+            Some(newest) if newest.sequence > self.release.sequence => Err(refused(format!(
                 "release {} was accepted while release {} was being applied",
                 newest.sequence, self.release.sequence
             ))),
-            None => Err(refused(format!(
-                "the ledger at {} no longer records release {}",
-                self.store.ledger_name(self.prefix),
-                self.release.sequence
-            ))),
+            Some(newest)
+                if newest.sequence == self.release.sequence
+                    && newest.digest != self.release.digest =>
+            {
+                Err(refused(format!(
+                    "the install accepted another release {} while this one was being applied",
+                    newest.sequence
+                )))
+            }
+            _ => Ok(()),
         }
     }
 }

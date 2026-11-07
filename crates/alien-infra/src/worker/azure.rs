@@ -676,7 +676,7 @@ impl AzureWorkerController {
                     statements,
                     &func_cfg.id,
                     container_app_name,
-                    write,
+                    vec![write],
                 )
                 .await?;
             } else {
@@ -1061,8 +1061,14 @@ impl AzureWorkerController {
                 name: container_app_name.clone(),
                 app: verifier::CloudWrite::body(&container_app)?,
             };
-            self.write_through_verifier(ctx, statements, &func_cfg.id, &container_app_name, write)
-                .await?;
+            self.write_through_verifier(
+                ctx,
+                statements,
+                &func_cfg.id,
+                &container_app_name,
+                vec![write],
+            )
+            .await?;
             self.applied_config = verifier::config_digest(ctx)?;
             return Ok(HandlerAction::Continue {
                 state: CreatingContainerApp,
@@ -1545,7 +1551,7 @@ impl AzureWorkerController {
                 statements,
                 &worker_config.id,
                 container_app_name,
-                write,
+                vec![write],
             )
             .await?;
         } else {
@@ -2715,8 +2721,14 @@ impl AzureWorkerController {
                 name: container_app_name.clone(),
                 app: verifier::CloudWrite::body(&desired_app)?,
             };
-            self.write_through_verifier(ctx, statements, &func_cfg.id, &container_app_name, write)
-                .await?;
+            self.write_through_verifier(
+                ctx,
+                statements,
+                &func_cfg.id,
+                &container_app_name,
+                vec![write],
+            )
+            .await?;
             self.applied_config = verifier::config_digest(ctx)?;
             return Ok(HandlerAction::Continue {
                 state: UpdatingContainerApp,
@@ -4358,15 +4370,16 @@ impl AzureWorkerController {
         }
     }
 
-    /// Hands `write`, a request this controller built for `container_app_name`, to the
-    /// install's verifier, which checks it against the signed release and sends it unchanged.
+    /// Hands `writes`, the requests this controller built for `container_app_name` for one
+    /// release, to the install's verifier, which checks them all against the signed release
+    /// before it sends any, and sends them unchanged, in order.
     async fn write_through_verifier(
         &self,
         ctx: &ResourceControllerContext<'_>,
         statements: &alien_core::ReleaseStatements,
         worker: &str,
         container_app_name: &str,
-        write: verifier::CloudWrite,
+        writes: Vec<verifier::CloudWrite>,
     ) -> Result<verifier::Written> {
         let verifier = verifier::azure_verifier(ctx).await?;
         let written = verifier::apply_write(
@@ -4374,7 +4387,7 @@ impl AzureWorkerController {
             statements,
             ctx.deployment_config.signed_config.as_ref(),
             worker,
-            write,
+            writes,
             container_app_name,
         )
         .await?;
@@ -8431,8 +8444,8 @@ mod tests {
         serde_json::json!({
             "release": release,
             "function": PROTECTED_APP,
-            "operation": "write",
-            "answer": {"fqdn": null},
+            "operations": ["write"],
+            "answers": [{"fqdn": null}],
         })
     }
 
@@ -8462,7 +8475,9 @@ mod tests {
             answer.expect("the verifier's tables accept the controller's request");
             assert_eq!(forwarded.len(), 1);
             let request: serde_json::Value = serde_json::from_slice(payload).unwrap();
-            writes.push(request["applyWrite"]["write"].clone());
+            let sent = request["applyWrite"]["writes"].as_array().unwrap();
+            assert_eq!(sent.len(), 1, "each of these requests carries one write");
+            writes.push(sent[0].clone());
         }
         writes
     }

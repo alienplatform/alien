@@ -257,7 +257,8 @@ impl CloudWrite {
     }
 }
 
-/// `applyWrite`: one cloud write for one signed workload, with the statements it rests on.
+/// `applyWrite`: the cloud writes for one signed workload, in order, with the statements they
+/// rest on. The verifier checks every write before it sends any.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplyWrite {
@@ -266,7 +267,7 @@ pub struct ApplyWrite {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<SignedStatement>,
     pub workload: String,
-    pub write: CloudWrite,
+    pub writes: Vec<CloudWrite>,
 }
 
 /// What `applyWrite` did.
@@ -276,9 +277,9 @@ pub struct Written {
     pub release: u64,
     /// The function it wrote.
     pub function: String,
-    /// What the cloud answered, where the controller needs it (a created function's ARN).
-    #[serde(default)]
-    pub answer: serde_json::Value,
+    /// What the cloud answered to each write, in order, where the controller needs it (a
+    /// created function's ARN).
+    pub answers: Vec<serde_json::Value>,
 }
 
 /// One verifier request, as the verifier deserializes it: `{"<kind>": {...}}`.
@@ -340,23 +341,25 @@ fn answered(
     error
 }
 
-/// Hand `write`, the cloud request a controller built for `workload`'s function, to `verifier`,
-/// which checks it against the signed `statements` and `config`, sends it unchanged and reads
-/// it back. A refusal is an error carrying the verifier's reason.
+/// Hand `writes`, the cloud requests a controller built for `workload`'s function for one
+/// release, in order, to `verifier`, which checks every one against the signed `statements`
+/// and `config` before it sends any, sends them unchanged and reads them back. A refusal is an
+/// error carrying the verifier's reason, and nothing was written.
 pub async fn apply_write(
     verifier: &dyn Verifier,
     statements: &ReleaseStatements,
     config: Option<&SignedStatement>,
     workload: &str,
-    write: CloudWrite,
+    writes: Vec<CloudWrite>,
     function: &str,
 ) -> Result<Written> {
+    let count = writes.len();
     let request = Request::ApplyWrite(ApplyWrite {
         release: statements.release.clone(),
         signer_lists: statements.signer_lists.clone(),
         config: config.cloned(),
         workload: workload.to_string(),
-        write,
+        writes,
     });
     let answer = match verifier.call(&request).await {
         Ok(answer) => answer,
@@ -368,12 +371,22 @@ pub async fn apply_write(
     let written: Written = serde_json::from_value(answer).into_alien_error().context(
         ErrorData::CloudPlatformError {
             message: format!(
-                "The answer of verifier '{}' to applyWrite is not one written function",
+                "The answer of verifier '{}' to applyWrite is not the writes to one function",
                 verifier.name()
             ),
             resource_id: Some(workload.to_string()),
         },
     )?;
+    if written.answers.len() != count {
+        return Err(AlienError::new(ErrorData::CloudPlatformError {
+            message: format!(
+                "Verifier '{}' answered {} of the {count} writes it was sent",
+                verifier.name(),
+                written.answers.len()
+            ),
+            resource_id: Some(workload.to_string()),
+        }));
+    }
     if written.function != function {
         return Err(AlienError::new(ErrorData::CloudPlatformError {
             message: format!(

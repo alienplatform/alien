@@ -542,10 +542,10 @@ async fn main() -> Result<(), Error> {
                     "release": release.release,
                     "signerLists": release.signer_lists,
                     "workload": WORKER,
-                    "write": {"updateFunctionCode": {
+                    "writes": [{"updateFunctionCode": {
                         "functionName": format!("{}-{WORKER}", env("PREFIX")?),
                         "request": {"ImageUri": image, "Publish": true},
-                    }},
+                    }}],
                 }})
             );
             Ok(())

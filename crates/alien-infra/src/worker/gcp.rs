@@ -708,7 +708,7 @@ impl GcpWorkerController {
                 service_id: service_name.clone(),
                 service: verifier::CloudWrite::body(&service)?,
             };
-            self.write_through_verifier(ctx, statements, &cfg.id, &service_name, write)
+            self.write_through_verifier(ctx, statements, &cfg.id, &service_name, vec![write])
                 .await?;
             self.applied_config = verifier::config_digest(ctx)?;
             self.service_name = Some(service_name);
@@ -2662,7 +2662,7 @@ impl GcpWorkerController {
                 name: service_name.clone(),
                 service: verifier::CloudWrite::body(&updated_service)?,
             };
-            self.write_through_verifier(ctx, statements, &cfg.id, service_name, write)
+            self.write_through_verifier(ctx, statements, &cfg.id, service_name, vec![write])
                 .await?;
             self.applied_config = verifier::config_digest(ctx)?;
             return Ok(HandlerAction::Continue {
@@ -5145,15 +5145,16 @@ impl GcpWorkerController {
         )
     }
 
-    /// Hands `write`, a request this controller built for `service_name`, to the install's
-    /// verifier, which checks it against the signed release and sends it unchanged.
+    /// Hands `writes`, the requests this controller built for `service_name` for one release,
+    /// to the install's verifier, which checks them all against the signed release before it
+    /// sends any, and sends them unchanged, in order.
     async fn write_through_verifier(
         &self,
         ctx: &ResourceControllerContext<'_>,
         statements: &alien_core::ReleaseStatements,
         worker: &str,
         service_name: &str,
-        write: verifier::CloudWrite,
+        writes: Vec<verifier::CloudWrite>,
     ) -> Result<verifier::Written> {
         let verifier = verifier::gcp_verifier(ctx)?;
         let written = verifier::apply_write(
@@ -5161,7 +5162,7 @@ impl GcpWorkerController {
             statements,
             ctx.deployment_config.signed_config.as_ref(),
             worker,
-            write,
+            writes,
             service_name,
         )
         .await?;
@@ -5290,7 +5291,7 @@ impl GcpWorkerController {
                 name: service_name.to_string(),
                 policy: verifier::CloudWrite::body(&admitted)?,
             };
-            self.write_through_verifier(ctx, statements, &config.id, service_name, write)
+            self.write_through_verifier(ctx, statements, &config.id, service_name, vec![write])
                 .await?;
             return Ok(());
         }
@@ -9381,8 +9382,8 @@ mod tests {
         serde_json::json!({
             "release": release,
             "function": PROTECTED_SERVICE,
-            "operation": "write",
-            "answer": null,
+            "operations": ["write"],
+            "answers": [null],
         })
     }
 
@@ -9396,7 +9397,9 @@ mod tests {
             answer.expect("the verifier's tables accept the controller's request");
             assert_eq!(forwarded.len(), 1);
             let request: serde_json::Value = serde_json::from_slice(payload).unwrap();
-            writes.push(request["applyWrite"]["write"].clone());
+            let sent = request["applyWrite"]["writes"].as_array().unwrap();
+            assert_eq!(sent.len(), 1, "each of these requests carries one write");
+            writes.push(sent[0].clone());
         }
         writes
     }

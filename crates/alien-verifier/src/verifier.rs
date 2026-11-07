@@ -161,9 +161,25 @@ impl Verifier {
             reads: &reads,
             own_name,
         };
-        // Every field is checked before anything is written.
-        self.backend.check_write(&facts, &request.write)?;
-        store_ledger(self.store.as_ref(), &place.prefix, &accepted.ledger).await?;
+        if request.writes.is_empty() {
+            return Err(refused(format!(
+                "the request for workload '{}' carries no write",
+                request.workload
+            )));
+        }
+        // Every field of every write is checked before anything is written.
+        for (index, write) in request.writes.iter().enumerate() {
+            self.backend
+                .check_write(&facts, write)
+                .context(ErrorData::Refused {
+                    reason: format!(
+                        "write {} of {} ({}) was refused, so none was applied",
+                        index + 1,
+                        request.writes.len(),
+                        write.operation()
+                    ),
+                })?;
+        }
         let floor = Floor {
             store: self.store.as_ref(),
             prefix: &place.prefix,
@@ -172,17 +188,22 @@ impl Verifier {
                 digest: accepted.release.digest.clone(),
             },
         };
-        let answer = self.backend.forward(&facts, &request.write, &floor).await?;
-        info!(
-            function = %facts.own_name,
-            operation = request.write.operation(),
-            "applied the controller's checked write"
-        );
+        let mut answers = Vec::with_capacity(request.writes.len());
+        for write in &request.writes {
+            answers.push(self.backend.forward(&facts, write, &floor).await?);
+            info!(
+                function = %facts.own_name,
+                operation = write.operation(),
+                "applied the controller's checked write"
+            );
+        }
+        // The install accepts the release once every write is in place.
+        store_ledger(self.store.as_ref(), &place.prefix, &accepted.ledger).await?;
         Ok(json!({
             "release": accepted.release.sequence,
             "function": facts.own_name,
-            "operation": request.write.operation(),
-            "answer": answer,
+            "operations": request.writes.iter().map(CloudWrite::operation).collect::<Vec<_>>(),
+            "answers": answers,
         }))
     }
 
@@ -432,9 +453,12 @@ mod tests {
         );
     }
 
-    /// An AWS backend that checks writes with the Lambda table and records what it forwards.
-    #[derive(Default)]
-    struct Forwards(Mutex<Vec<CloudWrite>>);
+    /// An AWS backend that checks writes with the Lambda table and records what it forwards,
+    /// with the release the install's ledger recorded when it did.
+    struct Forwards {
+        store: Arc<MemoryStore>,
+        forwarded: Mutex<Vec<(String, Option<u64>)>>,
+    }
 
     #[async_trait]
     impl Backend for Forwards {
@@ -455,17 +479,35 @@ mod tests {
             newest: &dyn StillNewest,
         ) -> Result<Value> {
             newest.check().await?;
-            self.0.lock().unwrap().push(write.clone());
-            Ok(Value::Null)
+            let recorded = recorded_release(&self.store);
+            self.forwarded
+                .lock()
+                .unwrap()
+                .push((write.operation().to_string(), recorded));
+            Ok(json!({"operation": write.operation()}))
         }
     }
 
-    /// The statements are accepted and recorded before the controller's write goes out; a write
-    /// a row refuses goes nowhere and records nothing.
+    /// The release the install's ledger records, if any.
+    fn recorded_release(store: &MemoryStore) -> Option<u64> {
+        Ledger::parse(&store.ledgers.lock().unwrap()[PREFIX], PREFIX)
+            .unwrap()
+            .floor(Kind::Release)
+            .unwrap()
+            .map(|entry| entry.sequence)
+    }
+
+    /// All of a workload's writes for one release come in one request. Every write is checked
+    /// before any goes out, so one that breaks a row sends none and records nothing; a request
+    /// whose writes all pass sends them in order, and the install records the release only
+    /// after the last.
     #[tokio::test]
-    async fn a_checked_write_is_forwarded_after_the_ledger_and_a_refused_one_is_not() {
-        let backend = Arc::new(Forwards::default());
+    async fn a_request_whose_second_write_breaks_a_row_sends_none() {
         let store = Arc::new(MemoryStore::protected(&settings()));
+        let backend = Arc::new(Forwards {
+            store: store.clone(),
+            forwarded: Mutex::new(Vec::new()),
+        });
         let verifier = Verifier {
             own_name: format!("{PREFIX}-verifier"),
             install_id: Arc::new(|prefix| crate::aws::install_id(ACCOUNT, REGION, prefix)),
@@ -474,54 +516,77 @@ mod tests {
             vpc: None,
             machine_network: None,
         };
-        let write = |role: &str| {
+        let role = crate::plan::tests::place().run_as("execution");
+        let request = |code_image: &str| {
             json!({"applyWrite": {
                 "release": release(1, function_workload()),
                 "signerLists": [signer_list()],
                 "workload": "api",
-                "write": {"createFunction": {
-                    "FunctionName": format!("{PREFIX}-api"),
-                    "Role": role,
-                    "Code": {"ImageUri": format!("{REGISTRY}/api@{DIGEST}")},
-                    "PackageType": "Image",
-                    "Environment": {"Variables": {"MODE": "signed"}},
-                    "Architectures": ["arm64"],
-                }},
+                "writes": [
+                    {"createFunction": {
+                        "FunctionName": format!("{PREFIX}-api"),
+                        "Role": role,
+                        "Code": {"ImageUri": format!("{REGISTRY}/api@{DIGEST}")},
+                        "PackageType": "Image",
+                        "Environment": {"Variables": {"MODE": "signed"}},
+                        "Architectures": ["arm64"],
+                    }},
+                    {"updateFunctionCode": {
+                        "functionName": format!("{PREFIX}-api"),
+                        "request": {"ImageUri": code_image, "Publish": true},
+                    }},
+                    {"putFunctionConcurrency": {
+                        "functionName": format!("{PREFIX}-api"),
+                        "reservedConcurrentExecutions": 5,
+                    }},
+                ],
             }})
         };
-        let ledger = |store: &MemoryStore| {
-            Ledger::parse(&store.ledgers.lock().unwrap()[PREFIX], PREFIX).unwrap()
-        };
 
-        let refused = verifier
-            .handle(write(&format!("arn:aws:iam::{ACCOUNT}:role/admin")))
+        let unsigned = format!("{REGISTRY}/api@sha256:{}", "e".repeat(64));
+        let reason = refusal(verifier.handle(request(&unsigned)).await);
+        assert!(
+            reason.contains("write 2 of 3 (UpdateFunctionCode) was refused, so none was applied"),
+            "{reason}"
+        );
+        assert!(
+            backend.forwarded.lock().unwrap().is_empty(),
+            "nothing went out"
+        );
+        assert_eq!(recorded_release(&store), None, "nothing recorded");
+
+        let answer = verifier
+            .handle(request(&format!("{REGISTRY}/api@{DIGEST}")))
             .await
-            .unwrap_err();
-        assert!(
-            refused.to_string().contains("field /Role must match"),
-            "{refused}"
-        );
-        assert!(backend.0.lock().unwrap().is_empty(), "nothing went out");
-        assert!(
-            ledger(&store).floor(Kind::Release).unwrap().is_none(),
-            "nothing recorded"
-        );
-
-        let role = crate::plan::tests::place().run_as("execution");
-        let answer = verifier.handle(write(&role)).await.unwrap();
+            .unwrap();
         assert_eq!(
             answer,
-            json!({"release": 1, "function": format!("{PREFIX}-api"), "operation": "CreateFunction", "answer": null})
+            json!({
+                "release": 1,
+                "function": format!("{PREFIX}-api"),
+                "operations": ["CreateFunction", "UpdateFunctionCode", "PutFunctionConcurrency"],
+                "answers": [
+                    {"operation": "CreateFunction"},
+                    {"operation": "UpdateFunctionCode"},
+                    {"operation": "PutFunctionConcurrency"},
+                ],
+            })
         );
-        assert_eq!(backend.0.lock().unwrap().len(), 1);
         assert_eq!(
-            ledger(&store)
-                .floor(Kind::Release)
-                .unwrap()
-                .unwrap()
-                .sequence,
-            1
+            *backend.forwarded.lock().unwrap(),
+            vec![
+                ("CreateFunction".to_string(), None),
+                ("UpdateFunctionCode".to_string(), None),
+                ("PutFunctionConcurrency".to_string(), None),
+            ],
+            "the writes go out in order, before the release is recorded"
         );
+        assert_eq!(recorded_release(&store), Some(1));
+
+        let mut empty = request("");
+        empty["applyWrite"]["writes"] = json!([]);
+        let reason = refusal(verifier.handle(empty).await);
+        assert!(reason.contains("carries no write"), "{reason}");
     }
 
     /// A backend whose forward of an UpdateFunctionCode to `slow_image` pauses after reading
@@ -581,10 +646,10 @@ mod tests {
                 "release": signed_release(sequence, &crate::fixtures::release_body(vec![workload])),
                 "signerLists": [signer_list()],
                 "workload": "api",
-                "write": {"updateFunctionCode": {
+                "writes": [{"updateFunctionCode": {
                     "functionName": format!("{PREFIX}-api"),
                     "request": {"ImageUri": image(digit), "Publish": true},
-                }},
+                }}],
             }})
         };
         let backend = Arc::new(Paused {

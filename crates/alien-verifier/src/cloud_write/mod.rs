@@ -21,7 +21,8 @@ use crate::error::{ErrorData, Result};
 use crate::plan::{functions, Place, Reads};
 use crate::trust::Accepted;
 
-/// Apply one cloud write a controller built for a signed workload.
+/// Apply the cloud writes a controller built for a signed workload, in order. Every write is
+/// checked before any is sent, so a refusal sends none.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ApplyWrite {
@@ -32,10 +33,11 @@ pub struct ApplyWrite {
     /// This install's config, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<SignedStatement>,
-    /// The signed workload the write is for.
+    /// The signed workload the writes are for.
     pub workload: String,
-    /// The write, exactly as the controller would send it to the cloud.
-    pub write: CloudWrite,
+    /// The writes, each exactly as the controller would send it to the cloud, in the order
+    /// it would send them.
+    pub writes: Vec<CloudWrite>,
 }
 
 /// One cloud write, with the request body as the cloud client serialises it.
