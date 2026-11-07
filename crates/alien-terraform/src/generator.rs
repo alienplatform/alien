@@ -17,6 +17,7 @@
 use crate::{
     block::{attr, block, data_block, nested, resource_block},
     emitter::TfFragment,
+    emitters::azure::helpers as azure_helpers,
     expr,
     naming::resource_labels,
     registry::TfRegistry,
@@ -24,7 +25,7 @@ use crate::{
 };
 use alien_core::{
     import::{setup_import_format_version_for_platform, EmitContext},
-    ComputeCluster, DeploymentModel, ErrorData, HeartbeatsMode, KubernetesCertificateMode,
+    AzureContainerAppsEnvironment, ComputeCluster, DeploymentModel, ErrorData, HeartbeatsMode, KubernetesCertificateMode,
     KubernetesExposureSettings, KubernetesSettings, Kv, Network, NetworkSettings, RemoteBindings,
     RemoteStackManagement, ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue,
     StackInputDefinition, StackInputKind, StackInputProvider, StackInputValidation, StackSettings,
@@ -606,6 +607,7 @@ pub(crate) fn render_terraform_module(
             target,
             options.registry,
         )?,
+        environment: verifier_workload_environment(stack, &stack_settings, &labels, target)?,
     };
     let mut signing = signing_blocks(
         &stack_settings,
@@ -2036,7 +2038,7 @@ fn signing_blocks(
         }
         TerraformTarget::Azure => Ok([
             vec![fingerprint_variable],
-            azure_verifier_blocks(pins, management_label, networks.machines)?,
+            azure_verifier_blocks(pins, management_label, networks)?,
         ]
         .concat()),
         TerraformTarget::Eks | TerraformTarget::Gke | TerraformTarget::Aks => {
@@ -2223,7 +2225,7 @@ fn aws_verifier_blocks(
 fn azure_verifier_blocks(
     pins: &alien_core::SetupPins,
     management_label: Option<&str>,
-    machine_network: Option<Expression>,
+    networks: VerifierNetworks,
 ) -> Result<Vec<Block>> {
     let image = pins
         .azure_verifier_image
@@ -2325,10 +2327,7 @@ fn azure_verifier_blocks(
                                 ),
                             ]
                             .into_iter()
-                            .chain(
-                                machine_network
-                                    .map(|network| env("VERIFIER_MACHINE_NETWORK", network)),
-                            ),
+                            .chain(networks.env().map(|(name, value)| env(name, value))),
                         )),
                     ],
                 )),
@@ -2745,12 +2744,15 @@ fn gcp_verifier_blocks(
     Ok(blocks)
 }
 
-/// The networks setup gives a protected install's verifier, as JSON expressions.
+/// Where setup lets a protected install's verifier run what it writes.
 struct VerifierNetworks {
-    /// Where it runs functions: `VERIFIER_FUNCTION_VPC`.
+    /// Where it runs functions on AWS and GCP: `VERIFIER_FUNCTION_VPC`, JSON.
     functions: Option<Expression>,
-    /// Where it launches machines: `VERIFIER_MACHINE_NETWORK`.
+    /// Where it launches machines: `VERIFIER_MACHINE_NETWORK`, JSON.
     machines: Option<Expression>,
+    /// Where it runs functions on Azure: `VERIFIER_AZURE_ENVIRONMENT`, the resource id of the
+    /// Container Apps environment.
+    environment: Option<Expression>,
 }
 
 impl VerifierNetworks {
@@ -2759,6 +2761,7 @@ impl VerifierNetworks {
         [
             ("VERIFIER_FUNCTION_VPC", self.functions),
             ("VERIFIER_MACHINE_NETWORK", self.machines),
+            ("VERIFIER_AZURE_ENVIRONMENT", self.environment),
         ]
         .into_iter()
         .filter_map(|(name, network)| network.map(|network| (name, network)))
@@ -2823,6 +2826,63 @@ fn verifier_function_network(
         },
         _ => None,
     }
+}
+
+/// The Container Apps environment a protected Azure install's workloads run in, when the stack
+/// has one: the one setup creates, or the one the stack is bound to. The install's group also
+/// holds the verifier's own environment, so the verifier takes this one from setup instead of
+/// choosing. A stack with several is refused: its workers' environment would be a guess.
+fn verifier_workload_environment(
+    stack: &Stack,
+    settings: &StackSettings,
+    labels: &IndexMap<String, String>,
+    target: TerraformTarget,
+) -> Result<Option<Expression>> {
+    if settings.signing.is_none() || target != TerraformTarget::Azure {
+        return Ok(None);
+    }
+    let environments: Vec<_> = stack
+        .resources()
+        .filter(|(_, entry)| {
+            entry.config.resource_type() == AzureContainerAppsEnvironment::RESOURCE_TYPE
+        })
+        .collect();
+    let (environment_id, entry) = match environments.as_slice() {
+        [] => return Ok(None),
+        [environment] => *environment,
+        _ => {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "render a protected Azure setup".to_string(),
+                reason: format!(
+                    "the stack has {} Container Apps environments; the verifier runs a protected install's workers in exactly one",
+                    environments.len()
+                ),
+            }))
+        }
+    };
+    let ctx = EmitContext {
+        stack,
+        resource: entry,
+        resource_id: environment_id,
+        platform: target.cloud_platform(),
+        targets_kubernetes: false,
+        stack_settings: settings,
+        names: labels,
+    };
+    if let Some(binding) = azure_helpers::container_apps_environment_binding(&ctx, environment_id)?
+    {
+        return azure_helpers::binding_string_expr(
+            environment_id,
+            "resource_id",
+            &binding.resource_id,
+        )
+        .map(Some);
+    }
+    Ok(Some(expr::traversal([
+        "azurerm_container_app_environment",
+        azure_helpers::required_label(&ctx)?,
+        "id",
+    ])))
 }
 
 /// Where a protected install's verifier launches machines, when the stack has any: JSON

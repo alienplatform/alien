@@ -39,6 +39,9 @@ pub struct Azure {
     pub vault: String,
     /// Client id of the verifier's user-assigned identity, if it has several.
     pub client_id: Option<String>,
+    /// Resource id of the Container Apps environment the install's workloads run in, as setup
+    /// names it. None when the install has none.
+    pub environment: Option<String>,
 }
 
 impl Azure {
@@ -49,6 +52,15 @@ impl Azure {
             resource_group,
             vault: vault.trim_end_matches('/').to_string(),
             client_id,
+            environment: None,
+        }
+    }
+
+    /// The same client, creating workloads in Container Apps environment `environment`.
+    pub fn with_environment(self, environment: Option<String>) -> Self {
+        Self {
+            environment,
+            ..self
         }
     }
 
@@ -515,36 +527,40 @@ impl AppStore for Azure {
         Ok(())
     }
 
-    /// The one Container Apps environment in the verifier's resource group. None, or more than
-    /// one, refuses: the verifier never guesses where a workload runs.
+    /// The Container Apps environment setup named for the install's workloads, and its location.
+    /// The install's group also holds the verifier's own environment, so the verifier never
+    /// picks one itself; when setup named none, a workload has nowhere to run.
     async fn environment(&self) -> Result<(String, String)> {
-        let url = format!(
-            "{ARM}{}/providers/Microsoft.App/managedEnvironments?api-version={CONTAINER_APPS_API}",
-            self.resource_group
-        );
-        let listed = self
+        let id = self.environment.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::Refused {
+                reason: "setup named no Container Apps environment for the install's workloads; rerun setup with this release".to_string(),
+            })
+        })?;
+        let environment = self
             .call(
                 reqwest::Method::GET,
-                &url,
+                &format!("{ARM}{id}?api-version={CONTAINER_APPS_API}"),
                 ARM,
                 None,
-                "managedEnvironments list",
+                "managedEnvironments get",
             )
             .await?
-            .unwrap_or(Value::Null);
-        let environments = listed["value"].as_array().cloned().unwrap_or_default();
-        match environments.as_slice() {
-            [environment] => Ok((
-                environment["id"].as_str().unwrap_or_default().to_string(),
-                environment["location"].as_str().unwrap_or_default().to_string(),
-            )),
-            others => Err(AlienError::new(ErrorData::Refused {
-                reason: format!(
-                    "the install's resource group has {} Container Apps environments; a workload runs in exactly one",
-                    others.len()
-                ),
-            })),
-        }
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::Refused {
+                    reason: format!(
+                        "the Container Apps environment {id} setup named does not exist; rerun setup"
+                    ),
+                })
+            })?;
+        let location = environment["location"]
+            .as_str()
+            .filter(|location| !location.is_empty())
+            .ok_or_else(|| {
+                AlienError::new(failed(format!(
+                    "managedEnvironments get {id}: the answer has no location"
+                )))
+            })?;
+        Ok((id.to_string(), location.to_string()))
     }
 
     async fn patch(&self, name: &str, app: &Value) -> Result<()> {

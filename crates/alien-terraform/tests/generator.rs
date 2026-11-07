@@ -29,6 +29,7 @@ mod generator {
     pub mod azure_identity_tests;
     pub mod azure_kv_upgrade_tests;
     pub mod azure_profile_grant_tests;
+    pub mod azure_protected_verifier_tests;
     pub mod azure_queue_grant_tests;
     pub mod azure_shared_grant_tests;
     pub mod azure_storage_settings_tests;

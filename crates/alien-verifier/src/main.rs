@@ -16,8 +16,9 @@
 //! - on Azure, `VERIFIER_AZURE_RESOURCE_GROUP`
 //!   (`/subscriptions/<id>/resourceGroups/<name>`), `VERIFIER_AZURE_VAULT`
 //!   (`https://<vault>.vault.azure.net`, the install's inputs vault) and, when
-//!   the verifier has several identities, `VERIFIER_AZURE_CLIENT_ID`; the name
-//!   comes from Container Apps' `CONTAINER_APP_NAME`.
+//!   the verifier has several identities, `VERIFIER_AZURE_CLIENT_ID`, and when the install
+//!   runs workers, `VERIFIER_AZURE_ENVIRONMENT`, the resource id of the Container Apps
+//!   environment they run in; the name comes from Container Apps' `CONTAINER_APP_NAME`.
 //!
 //! On GCP and Azure the verifier serves `POST /` on `$PORT`; the platform's
 //! own authentication decides who may call it.
@@ -205,7 +206,8 @@ fn azure_verifier() -> Result<Verifier> {
         resource_group,
         env("VERIFIER_AZURE_VAULT")?,
         optional_env("VERIFIER_AZURE_CLIENT_ID")?,
-    );
+    )
+    .with_environment(optional_env("VERIFIER_AZURE_ENVIRONMENT")?);
     Ok(Verifier {
         own_name: env("CONTAINER_APP_NAME")?,
         install_id: Arc::new(move |_prefix: &str| InstallId::Azure {
