@@ -229,19 +229,22 @@ impl SandboxRoute {
     ///
     /// Hosts where that gateway cannot be bound, such as Docker Desktop, reach the host's
     /// loopback through `host.docker.internal` natively and need no forward.
-    pub async fn forward_to_containers(base_url: &str) -> Result<()> {
+    pub async fn forward_to_containers(sandbox: &str, base_url: &str) -> Result<()> {
+        // The sandbox's own route, not whatever this process serves at that address: a port a
+        // deleted sandbox held can since belong to another sandbox's route.
         let serving = ROUTES.get().is_some_and(|routes| {
             routes
                 .lock()
                 .expect("no panic holds this lock")
-                .values()
-                .any(|route| route.base_url == base_url)
+                .get(sandbox)
+                .is_some_and(|route| route.base_url == base_url)
         });
         if !serving {
             return Err(AlienError::new(ErrorData::SandboxSessionFailed {
                 session_id: base_url.to_string(),
-                operation: "forward the route to containers: this process serves no route there"
-                    .to_string(),
+                operation: format!(
+                    "forward the route to containers: this process serves no route of sandbox '{sandbox}' there"
+                ),
             }));
         }
         let address: SocketAddr = base_url
@@ -328,7 +331,6 @@ impl SandboxRoute {
         tokio::sync::oneshot::Sender<()>,
         tokio::task::JoinHandle<()>,
     )> {
-        let token = generate_token();
         let token_path = manager.state_dir().join(token_file_name(sandbox));
 
         if let Some(parent) = token_path.parent() {
@@ -343,7 +345,37 @@ impl SandboxRoute {
                 })?;
         }
 
-        write_token_file(&token_path, &token).await?;
+        let listener = bind_listener(sandbox, previous).await.map_err(|error| {
+            AlienError::new(ErrorData::SandboxSessionFailed {
+                session_id: sandbox.to_string(),
+                operation: format!("bind loopback route: {error}"),
+            })
+        })?;
+
+        let address = listener.local_addr().into_alien_error().map_err(|error| {
+            AlienError::new(ErrorData::SandboxSessionFailed {
+                session_id: sandbox.to_string(),
+                operation: format!("read route address: {error}"),
+            })
+        })?;
+
+        // Serving at the previous address continues the route an earlier process served, and
+        // workloads that outlived that process authenticate with the token they read then. A
+        // new token would answer them 401 at the address that was kept for them.
+        let continued = previous == Some(format!("http://{address}").as_str());
+        let kept = if continued {
+            read_token_file(&token_path).await
+        } else {
+            None
+        };
+        let token = match kept {
+            Some(token) => token,
+            None => {
+                let token = generate_token();
+                write_token_file(&token_path, &token).await?;
+                token
+            }
+        };
 
         let template = Arc::new(Mutex::new(template));
         let state = RouteState {
@@ -366,20 +398,6 @@ impl SandboxRoute {
             )
             .route("/v1/sessions/{session_id}/preview", get(preview))
             .with_state(state);
-
-        let listener = bind_listener(sandbox, previous).await.map_err(|error| {
-            AlienError::new(ErrorData::SandboxSessionFailed {
-                session_id: sandbox.to_string(),
-                operation: format!("bind loopback route: {error}"),
-            })
-        })?;
-
-        let address = listener.local_addr().into_alien_error().map_err(|error| {
-            AlienError::new(ErrorData::SandboxSessionFailed {
-                session_id: sandbox.to_string(),
-                operation: format!("read route address: {error}"),
-            })
-        })?;
 
         let (shutdown, stop) = tokio::sync::oneshot::channel::<()>();
         let serving = tokio::spawn(async move {
@@ -447,6 +465,16 @@ async fn write_token_file(path: &std::path::Path, token: &str) -> Result<()> {
     options.mode(0o600);
 
     let mut file = options.open(path).await.map_err(failed)?;
+    // The mode above applies only to a file this call creates; one left with a looser mode is
+    // restricted before the token goes in. Written in place, not renamed over: a container
+    // mounts this one file, which pins its inode.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .await
+            .map_err(failed)?;
+    }
     tokio::io::AsyncWriteExt::write_all(&mut file, token.as_bytes())
         .await
         .map_err(failed)?;
@@ -455,6 +483,40 @@ async fn write_token_file(path: &std::path::Path, token: &str) -> Result<()> {
         .map_err(failed)?;
 
     Ok(())
+}
+
+/// Reads a token an earlier process wrote, if it is still one this process would have written:
+/// the generated shape, in a regular file this user owns and no one else can read, opened without
+/// following a link and checked on the handle it is read from. Anything else is replaced, not
+/// trusted.
+async fn read_token_file(path: &std::path::Path) -> Option<String> {
+    let mut options = tokio::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW);
+    let mut file = options.open(path).await.ok()?;
+    let metadata = file.metadata().await.ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: geteuid is a side-effect-free process identity query.
+        let me = unsafe { libc::geteuid() };
+        if metadata.uid() != me || metadata.mode() & 0o077 != 0 {
+            return None;
+        }
+    }
+    let mut token = String::new();
+    tokio::io::AsyncReadExt::read_to_string(&mut file, &mut token)
+        .await
+        .ok()?;
+    (token.len() == 64
+        && token
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))
+    .then_some(token)
 }
 
 fn generate_token() -> String {

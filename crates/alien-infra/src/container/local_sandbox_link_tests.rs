@@ -19,9 +19,15 @@ wget -q -T 5 -O /tmp/web/sessions --header "Authorization: Bearer $bearer" "$url
 echo ok >/tmp/web/health
 exec busybox httpd -f -p 8080 -h /tmp/web"#;
 
+/// The same call again, from inside the running container.
+const AGAIN_AFTER_RESTART: &str = r#"set -eu
+url=$(printf '%s' "$__SANDBOX_BINDING__" | sed -E 's/.*"managerUrl":"([^"]*)".*/\1/')
+token=$(printf '%s' "$__SANDBOX_BINDING__" | sed -E 's/.*"tokenPath":"([^"]*)".*/\1/')
+wget -q -T 5 -O /dev/null --header "Authorization: Bearer $(cat "$token")" "$url/v1/sessions""#;
+
 #[tokio::test]
 #[ignore = "requires Docker and registry access"]
-async fn a_container_reaches_the_sandbox_it_links_with_its_binding() {
+async fn a_container_reaches_the_sandbox_it_links_with_its_binding_across_a_manager_restart() {
     let directory = tempfile::tempdir().unwrap();
     let id = format!("sandbox-link-{}", std::process::id());
     let sandbox_id = format!("code-{}", std::process::id());
@@ -33,17 +39,20 @@ async fn a_container_reaches_the_sandbox_it_links_with_its_binding() {
     let client = alien_core::ClientConfig::Local {
         state_directory: directory.path().to_string_lossy().into_owned(),
     };
-    let sandbox = alien_core::Sandbox::new(sandbox_id.clone())
-        .egress(alien_core::SandboxEgress::None)
-        .lifecycle(alien_core::SandboxLifecyclePolicy {
-            max_lifetime_seconds: Some(300),
-            idle_pause_seconds: None,
-        })
-        .code(alien_core::SandboxCode::Image {
-            image: "busybox:1.37.0".to_string(),
-            bundled_from: None,
-        })
-        .build();
+    let sandbox_with = |egress| {
+        alien_core::Sandbox::new(sandbox_id.clone())
+            .egress(egress)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: Some(300),
+                idle_pause_seconds: None,
+            })
+            .code(alien_core::SandboxCode::Image {
+                image: "busybox:1.37.0".to_string(),
+                bundled_from: None,
+            })
+            .build()
+    };
+    let sandbox = sandbox_with(alien_core::SandboxEgress::None);
 
     // The sandbox serves its route first, as it does when a deployment links one
     let mut sandbox_executor = SingleControllerExecutor::builder()
@@ -133,6 +142,57 @@ async fn a_container_reaches_the_sandbox_it_links_with_its_binding() {
             matches!(outcome, Ok(Ok(()))) && executor.status() == ResourceStatus::Running,
             "the container never reached its linked sandbox ({:?}): {logs}",
             executor.status(),
+        );
+
+        // A manager restart: the route and its gateway forward go, the token file stays, and the
+        // container keeps running. The sandbox's update resumes in the new process, then the
+        // container's next health tick runs.
+        let token_path = sandbox_executor
+            .internal_state::<LocalSandboxController>()
+            .unwrap()
+            .token_path
+            .clone()
+            .unwrap();
+        let token = std::fs::read(&token_path).unwrap();
+        alien_local::SandboxRoute::remove(&sandbox_id).await;
+        {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&token_path)
+                .unwrap()
+                .write_all(&token)
+                .unwrap();
+        }
+        sandbox_executor
+            .update(sandbox_with(alien_core::SandboxEgress::Internet))
+            .unwrap();
+        sandbox_executor.step().await.unwrap();
+        executor.step().await.unwrap();
+
+        // The same container, with the binding and token it read before the restart
+        let after_restart = Command::new("docker")
+            .args([
+                "exec",
+                &format!("alien-{id}"),
+                "sh",
+                "-c",
+                &AGAIN_AFTER_RESTART.replace(
+                    "__SANDBOX_BINDING__",
+                    &alien_core::bindings::binding_env_var_name(&sandbox_id),
+                ),
+            ])
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            after_restart.status.success(),
+            "the container lost its linked sandbox across a manager restart: {}{}",
+            String::from_utf8_lossy(&after_restart.stdout),
+            String::from_utf8_lossy(&after_restart.stderr)
         );
         executor.delete().unwrap();
         executor.run_until_terminal().await.unwrap();
