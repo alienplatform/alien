@@ -391,6 +391,12 @@ pub struct SyncInput {
     /// Absent for older Operators. An empty report means no containers remain.
     #[serde(skip_serializing_if = "Option::is_none")]
     dynamic_containers: Option<Vec<DynamicContainerReport>>,
+    /// Set when the Operator runs a settled release but holds no config for
+    /// it, for example after it moved from a token to an enrollment code.
+    /// The manager then sends the current release again so the Operator can
+    /// rebuild its config. Older managers ignore it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    installed_config_missing: bool,
 }
 
 impl SyncInput {
@@ -402,6 +408,7 @@ impl SyncInput {
             operator_image: None,
             application: None,
             dynamic_containers: None,
+            installed_config_missing: false,
         }
     }
 }
@@ -413,6 +420,7 @@ pub struct SyncInputBuilder {
     operator_image: Option<OperatorImageReport>,
     application: Option<ObservedApplicationReport>,
     dynamic_containers: Option<Vec<DynamicContainerReport>>,
+    installed_config_missing: bool,
 }
 
 impl SyncInputBuilder {
@@ -433,6 +441,12 @@ impl SyncInputBuilder {
         self
     }
 
+    /// Ask the manager for the installed release because its config is gone.
+    pub fn installed_config_missing(mut self, missing: bool) -> Self {
+        self.installed_config_missing = missing;
+        self
+    }
+
     /// Finish the serializable sync payload.
     pub fn build(self) -> SyncInput {
         SyncInput {
@@ -442,6 +456,7 @@ impl SyncInputBuilder {
             operator_image: self.operator_image,
             application: self.application,
             dynamic_containers: self.dynamic_containers,
+            installed_config_missing: self.installed_config_missing,
         }
     }
 }
