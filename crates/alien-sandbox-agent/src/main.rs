@@ -412,6 +412,7 @@ fn load_state() -> Result<AgentState> {
         exec_identity,
         output_cap,
         jobs: JobRegistry::new(),
+        interactive: Default::default(),
         #[cfg(target_os = "linux")]
         gateway_egress,
         agent_binary,

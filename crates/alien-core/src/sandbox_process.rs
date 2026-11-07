@@ -131,15 +131,40 @@ pub fn spawn_sandboxed(
     Ok(command)
 }
 
+/// How output is cut into frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Framing {
+    /// One frame per line, so a log reads naturally frame by frame
+    Lines,
+    /// One frame per read, whatever it holds. An interactive program waits at a prompt with no
+    /// newline after it, and line framing would hold that prompt back until the program exits.
+    Chunks,
+}
+
 /// Streams a spawned child's output, sending frames as they are produced.
 ///
 /// `output_cap` bounds how many bytes of each stream are kept. Beyond it the process still runs
 /// to completion, because killing a command over a chatty log would be a surprising failure, but
 /// the extra output is dropped and the terminal frame says so.
 pub async fn stream(
+    child: Child,
+    timeout: Duration,
+    output_cap: usize,
+    frames: mpsc::Sender<ProcessFrame>,
+) {
+    stream_framed(child, timeout, output_cap, Framing::Lines, frames).await
+}
+
+/// [`stream`], with the framing chosen by the caller.
+///
+/// The child's stdin is the caller's: take it before calling to write to the process, or leave it
+/// null. Every other rule is the same, so the deadline and the departed-caller kill hold whatever
+/// the caller does with stdin.
+pub async fn stream_framed(
     mut child: Child,
     timeout: Duration,
     output_cap: usize,
+    framing: Framing,
     frames: mpsc::Sender<ProcessFrame>,
 ) {
     let stdout = child.stdout.take();
@@ -154,6 +179,7 @@ pub async fn stream(
             drain(
                 stdout,
                 ProcessStream::Stdout,
+                framing,
                 output_cap,
                 &seq,
                 &truncated,
@@ -163,6 +189,7 @@ pub async fn stream(
             drain(
                 stderr,
                 ProcessStream::Stderr,
+                framing,
                 output_cap,
                 &seq,
                 &truncated,
@@ -247,13 +274,14 @@ pub async fn run(child: Child, timeout: Duration, output_cap: usize) -> Vec<Proc
     frames
 }
 
-/// Reads one stream to EOF, framing each line. Returns false if the caller went away.
+/// Reads one stream to EOF, framing each line or each read. Returns false if the caller went away.
 ///
-/// A truncated line still consumes a sequence number, so a gap tells the caller output was
+/// A truncated frame still consumes a sequence number, so a gap tells the caller output was
 /// dropped rather than hiding it.
 async fn drain<R>(
     stream: Option<R>,
     which: ProcessStream,
+    framing: Framing,
     output_cap: usize,
     seq: &AtomicU64,
     truncated: &AtomicBool,
@@ -275,11 +303,17 @@ where
         // Bounded per read: `output_cap` is checked only after a read returns, so an unbounded
         // `read_until` on output that never contains a newline grows this buffer until the
         // process is killed. A longer line is split, which the sequence numbers already express.
-        match (&mut reader)
-            .take(MAX_FRAME_BYTES)
-            .read_until(b'\n', &mut line)
-            .await
-        {
+        let mut bounded = (&mut reader).take(MAX_FRAME_BYTES);
+        let read = match framing {
+            Framing::Lines => bounded.read_until(b'\n', &mut line).await,
+            Framing::Chunks => {
+                line.resize(MAX_FRAME_BYTES as usize, 0);
+                let read = bounded.read(&mut line).await;
+                line.truncate(*read.as_ref().unwrap_or(&0));
+                read
+            }
+        };
+        match read {
             Ok(0) => return true,
             Err(error) => {
                 read_error
@@ -608,5 +642,89 @@ mod tests {
         assert!(matches!(first, ProcessFrame::Output { .. }));
 
         produce.abort();
+    }
+
+    fn interactive_child(script: &str) -> Child {
+        spawn("/bin/sh", &["-c".to_string(), script.to_string()])
+            .expect("command builds")
+            .stdin(Stdio::piped())
+            .spawn()
+            .expect("command spawns")
+    }
+
+    /// The property chunk framing exists for: a program waiting at a prompt has written no
+    /// newline, and the prompt has to reach the caller while the program still waits. Line framing
+    /// fails this by holding the prompt until the program exits.
+    #[tokio::test]
+    async fn a_prompt_without_a_newline_arrives_while_the_program_waits() {
+        let mut child = interactive_child("printf '>>> '; read line; echo \"got $line\"");
+        let mut stdin = child.stdin.take().expect("stdin is piped");
+        let (sender, mut receiver) = mpsc::channel(FRAME_CHANNEL_DEPTH);
+        let produce = tokio::spawn(stream_framed(
+            child,
+            Duration::from_secs(30),
+            1 << 20,
+            Framing::Chunks,
+            sender,
+        ));
+
+        let prompt = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .expect("the prompt must arrive while the program is still reading")
+            .expect("a frame");
+        assert!(
+            matches!(&prompt, ProcessFrame::Output { data, .. } if data == b">>> "),
+            "the prompt is delivered as written: {prompt:?}"
+        );
+
+        use tokio::io::AsyncWriteExt;
+        stdin.write_all(b"ping\n").await.expect("stdin accepts");
+        let mut frames = vec![prompt];
+        while let Some(frame) = receiver.recv().await {
+            frames.push(frame);
+        }
+        produce.await.expect("the producer does not panic");
+
+        assert_eq!(stdout_of(&frames), ">>> got ping\n");
+        assert!(matches!(
+            terminal(&frames),
+            ProcessFrame::Exit { code: 0, .. }
+        ));
+    }
+
+    /// Closing stdin is how a caller says "no more input", and a program reading to EOF must see
+    /// it and finish. A stdin left open would hold the command until its deadline.
+    #[tokio::test]
+    async fn closing_stdin_ends_a_program_that_reads_to_eof() {
+        let mut child = interactive_child("cat");
+        let mut stdin = child.stdin.take().expect("stdin is piped");
+        let consume = tokio::spawn(run_framed(child, Duration::from_secs(30), Framing::Chunks));
+
+        use tokio::io::AsyncWriteExt;
+        stdin.write_all(b"one\ntwo").await.expect("stdin accepts");
+        drop(stdin);
+
+        let frames = tokio::time::timeout(Duration::from_secs(10), consume)
+            .await
+            .expect("EOF on stdin must end cat")
+            .expect("no panic");
+        assert_eq!(stdout_of(&frames), "one\ntwo");
+        assert!(matches!(
+            terminal(&frames),
+            ProcessFrame::Exit { code: 0, .. }
+        ));
+    }
+
+    async fn run_framed(child: Child, timeout: Duration, framing: Framing) -> Vec<ProcessFrame> {
+        let (sender, mut receiver) = mpsc::channel(FRAME_CHANNEL_DEPTH);
+        let produce = stream_framed(child, timeout, 1 << 20, framing, sender);
+        let consume = async {
+            let mut frames = Vec::new();
+            while let Some(frame) = receiver.recv().await {
+                frames.push(frame);
+            }
+            frames
+        };
+        tokio::join!(produce, consume).1
     }
 }
