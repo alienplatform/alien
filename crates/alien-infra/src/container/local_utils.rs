@@ -361,7 +361,7 @@ const SANDBOX_TOKEN_DIR: &str = "/run/alien/sandbox";
 ///
 /// The binding points at the manager's route on loopback and at a token file on the host; neither
 /// exists inside the container. Its URL moves to `host.docker.internal` (the caller forwards the
-/// route there, and gets the loopback URLs to forward back), and the one token file is mounted
+/// route there), and the one token file is mounted
 /// read-only (not its directory, which holds other sandboxes' tokens), with the binding pointed
 /// at the mount. The mount is shared with the host operator's identity because the file is
 /// readable by it alone, as Storage, KV and Vault mounts already are.
@@ -372,8 +372,7 @@ const SANDBOX_TOKEN_DIR: &str = "/run/alien/sandbox";
 pub(super) fn mount_local_sandboxes_for_container(
     env_vars: &mut std::collections::HashMap<String, String>,
     bind_mounts: &mut Vec<alien_local::BindMount>,
-) -> Result<Vec<String>> {
-    let mut routes = Vec::new();
+) -> Result<()> {
     let mut binding_keys: Vec<String> = env_vars
         .keys()
         .filter(|k| k.starts_with("ALIEN_") && k.ends_with("_BINDING"))
@@ -409,7 +408,6 @@ pub(super) fn mount_local_sandboxes_for_container(
                         .parse::<std::net::IpAddr>()
                         .is_ok_and(|ip| ip.is_loopback())
             }) {
-                routes.push(url.clone());
                 endpoint
                     .set_host(Some("host.docker.internal"))
                     .into_alien_error()
@@ -450,7 +448,7 @@ pub(super) fn mount_local_sandboxes_for_container(
         debug!(resource = %binding_key, "Pointed the Local sandbox binding at the container's view");
     }
 
-    Ok(routes)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -505,12 +503,7 @@ mod tests {
         std::fs::write(&token, "t").unwrap();
         let mut env = serialize_binding_as_env_var("code", &local_sandbox_binding(&token)).unwrap();
         let mut mounts = Vec::new();
-        let routes = mount_local_sandboxes_for_container(&mut env, &mut mounts).unwrap();
-        assert_eq!(
-            routes,
-            vec!["http://127.0.0.1:40205".to_string()],
-            "the route to forward"
-        );
+        mount_local_sandboxes_for_container(&mut env, &mut mounts).unwrap();
 
         let SandboxBinding::Local(actual) =
             serde_json::from_str(&env[&binding_env_var_name("code")]).unwrap()

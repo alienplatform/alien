@@ -137,6 +137,25 @@ fn local_health_check_port(config: &Container, ports: &[u16]) -> Result<Option<u
 /// Manages containerized workloads on the Local platform using Docker.
 /// Unlike cloud platforms, containers run directly
 /// via the Docker daemon.
+/// The Local sandboxes this container links, with the loopback route each one serves, read from
+/// the sandboxes' own state so a route is only ever forwarded for the sandbox that serves it.
+fn linked_sandbox_routes(
+    ctx: &ResourceControllerContext<'_>,
+    config: &Container,
+) -> Vec<(String, String)> {
+    config
+        .links
+        .iter()
+        .filter(|link| link.resource_type == alien_core::Sandbox::RESOURCE_TYPE)
+        .filter_map(|link| {
+            let sandbox = ctx
+                .require_dependency::<crate::sandbox::LocalSandboxController>(link)
+                .ok()?;
+            Some((link.id.clone(), sandbox.route_url?))
+        })
+        .collect()
+}
+
 #[controller]
 pub struct LocalContainerController {
     /// Container info after starting
@@ -320,10 +339,9 @@ impl LocalContainerController {
         }
 
         // A linked Local sandbox is reached over the host gateway with a mounted token file
-        for route in
-            local_utils::mount_local_sandboxes_for_container(&mut env_vars, &mut bind_mounts)?
-        {
-            alien_local::SandboxRoute::forward_to_containers(&route)
+        local_utils::mount_local_sandboxes_for_container(&mut env_vars, &mut bind_mounts)?;
+        for (sandbox, route) in linked_sandbox_routes(ctx, config) {
+            alien_local::SandboxRoute::forward_to_containers(&sandbox, &route)
                 .await
                 .context(ErrorData::ResourceControllerConfigError {
                     resource_id: config.id.clone(),
@@ -533,6 +551,18 @@ impl LocalContainerController {
                 state: StartingContainer,
                 suggested_delay: None,
             });
+        }
+
+        // A manager restart drops the gateway forwards while this container keeps running, and
+        // its health may depend on reaching the sandbox, so they are restored before the check.
+        // Each tick re-asserts them (a no-op while they stand); a route its sandbox has not served
+        // again yet is retried on the next tick rather than failing the container.
+        for (sandbox, route) in linked_sandbox_routes(ctx, config) {
+            if let Err(error) =
+                alien_local::SandboxRoute::forward_to_containers(&sandbox, &route).await
+            {
+                debug!(container_id = %config.id, %sandbox, %route, %error, "linked sandbox route not forwarded yet");
+            }
         }
 
         let health_result = if let Some(health) = &config.health_check {
