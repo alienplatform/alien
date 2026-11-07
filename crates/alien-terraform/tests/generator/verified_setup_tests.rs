@@ -236,8 +236,8 @@ run "verified_setup_without_token" {{
     error_message = "The observer must activate the reservation."
   }}
   assert {{
-    condition     = !contains(keys(terraform_data.setup_observe[0].input), "token") && !contains(keys(terraform_data.setup_observe[0].input), "enrollment_code")
-    error_message = "The observer carries no token and no code."
+    condition     = !contains(keys(terraform_data.setup_observe[0].input), "token") && nonsensitive(terraform_data.setup_observe[0].input.enrollment_code == "{ENROLLMENT_CODE}")
+    error_message = "The observer carries no token. It carries the code, which the manager uses only when it activates the install."
   }}
   assert {{
     condition     = nonsensitive(jsondecode({record}[0].content).installId) == "{scheme}://acme-setup-record/setup/dep_test/intent.json" && {record}[0].{key} == "setup/dep_test/intent.json"
