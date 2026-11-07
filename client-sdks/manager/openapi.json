@@ -2656,6 +2656,10 @@
                 },
                 "description": "Absent for older Operators. This report has no secret values."
               },
+              "installedConfigMissing": {
+                "type": "boolean",
+                "description": "The Operator runs a settled release but lost its config (it cleared\nit in token mode, then enrolled). Answered with the current release."
+              },
               "maxSupportedDeploymentProtocolVersion": {
                 "type": [
                   "integer",
