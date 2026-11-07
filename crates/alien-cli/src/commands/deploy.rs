@@ -511,15 +511,6 @@ fn collect_raw_input_values(
     Ok(values)
 }
 
-/// Stack input values from `--input` and `--secret-input` flags alone, for commands
-/// that take no deployment config file.
-pub(crate) fn collect_flag_input_values(
-    input_values: &[String],
-    secret_input_values: &[String],
-) -> Result<HashMap<String, serde_json::Value>> {
-    collect_raw_input_values(None, input_values, secret_input_values)
-}
-
 pub(crate) fn parse_raw_stack_input_value(value: &str) -> serde_json::Value {
     match serde_json::from_str::<Vec<String>>(value) {
         Ok(values) => {

@@ -38,8 +38,8 @@ use crate::commands::{
     CustomersArgs, DomainsArgs, ExamplesArgs, UsageArgs,
 };
 use crate::commands::{
-    build_and_post_release_simple, build_command, build_dev_status, collect_flag_input_values,
-    commands_task, commands_task_dev, debug_task, debug_task_dev, deploy_task, deployments_task,
+    build_and_post_release_simple, build_command, build_dev_status, commands_task,
+    commands_task_dev, debug_task, debug_task_dev, deploy_task, deployments_task,
     destroy_local_deployment, destroy_task, ensure_server_running_for_dev_session,
     fetch_all_dev_deployment_live_states, init_task, local_operations_task, logs_task,
     onboard_task, operations_task, prepare_dev_session_deployment, release_command, releases_task,
@@ -578,15 +578,24 @@ fn parse_secret_env_var_with(
 }
 
 /// Stack input values for the deployment an `alien dev` session creates. Secret
-/// inputs can come from argv, a file or stdin, or the CLI environment; an input
-/// given by more than one secret source is refused.
+/// inputs can come from argv, a file or stdin, or the CLI environment. An input
+/// given more than once, by any of the flags, is refused.
 fn dev_session_input_values(
     dev_cmd: &DevCommand,
     read_env: impl Fn(&str) -> std::result::Result<String, std::env::VarError>,
 ) -> Result<HashMap<String, serde_json::Value>> {
-    let mut values =
-        collect_flag_input_values(&dev_cmd.input_values, &dev_cmd.secret_input_values)?;
-    let mut secrets = commands::read_secret_input_files(&dev_cmd.secret_input_files)?;
+    let mut given = Vec::new();
+    for input in &dev_cmd.input_values {
+        let (id, value) = commands::parse_stack_input_arg(input, "--input")?;
+        given.push((id, commands::parse_raw_stack_input_value(&value)));
+    }
+    for input in &dev_cmd.secret_input_values {
+        let (id, value) = commands::parse_stack_input_arg(input, "--secret-input")?;
+        given.push((id, serde_json::Value::String(value)));
+    }
+    for (id, value) in commands::read_secret_input_files(&dev_cmd.secret_input_files)? {
+        given.push((id, serde_json::Value::String(value)));
+    }
     for input in &dev_cmd.secret_input_env_vars {
         let (id, source_env) = commands::parse_stack_input_arg(input, "--secret-input-env")?;
         let value = read_env(&source_env).map_err(|_| {
@@ -596,15 +605,14 @@ fn dev_session_input_values(
                 ),
             })
         })?;
-        secrets.push((id, value));
+        given.push((id, serde_json::Value::String(value)));
     }
-    for (id, value) in secrets {
-        if values
-            .insert(id.clone(), serde_json::Value::String(value))
-            .is_some()
-        {
+
+    let mut values = HashMap::new();
+    for (id, value) in given {
+        if values.insert(id.clone(), value).is_some() {
             return Err(AlienError::new(ErrorData::ValidationError {
-                field: "secret-input".to_string(),
+                field: "input".to_string(),
                 message: format!("Input '{id}' was given twice."),
             }));
         }
@@ -1036,6 +1044,10 @@ mod tests {
         .expect_err("same input from a file and the environment")
         .to_string();
         assert!(twice.contains("'adminPassword' was given twice"), "{twice}");
+        let twice = dev_session_input_values(&parse(&["--input", "apiToken=plain"]), read_env)
+            .expect_err("same input as plain and secret")
+            .to_string();
+        assert!(twice.contains("'apiToken' was given twice"), "{twice}");
         let missing = dev_session_input_values(
             &parse(&["--secret-input-env", "other=UNSET_VARIABLE"]),
             read_env,
