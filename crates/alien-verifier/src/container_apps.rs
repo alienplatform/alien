@@ -233,6 +233,7 @@ mod tests {
             timeout_seconds: 30,
             architecture: "x86_64".into(),
             run_as: IDENTITY.into(),
+            public: false,
         }
     }
 

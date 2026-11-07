@@ -2379,6 +2379,9 @@ const GCP_VERIFIER_OWN_RESOURCE_PERMISSIONS: &[&str] = &[
     "run.services.update",
     "run.services.delete",
     "run.services.get",
+    // A service it creates for a private worker admits the worker's own account as invoker.
+    "run.services.getIamPolicy",
+    "run.services.setIamPolicy",
     "run.jobs.create",
     "run.jobs.update",
     "run.jobs.delete",

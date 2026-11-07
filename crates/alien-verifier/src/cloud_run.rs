@@ -23,7 +23,19 @@ pub trait ServiceStore: Send + Sync {
     async fn get(&self, name: &str) -> Result<Value>;
     /// PATCH the service with `service`, replacing its template.
     async fn replace(&self, name: &str, service: &Value) -> Result<()>;
+    /// GET the service, or `None` when it doesn't exist.
+    async fn find(&self, name: &str) -> Result<Option<Value>>;
+    /// Create service `name` from `service`.
+    async fn create(&self, name: &str, service: &Value) -> Result<()>;
+    /// The service's IAM policy.
+    async fn policy(&self, name: &str) -> Result<Value>;
+    /// Replace the service's IAM policy with `policy`, which carries the etag it was read at.
+    async fn set_policy(&self, name: &str, policy: &Value) -> Result<()>;
 }
+
+/// The role a private service's own account needs: Pub/Sub and Cloud Scheduler sign their
+/// requests as it.
+const INVOKER: &str = "roles/run.invoker";
 
 /// The service body the verifier writes for `spec`.
 pub fn service_body(spec: &FunctionSpec) -> Value {
@@ -56,10 +68,53 @@ pub fn service_body(spec: &FunctionSpec) -> Value {
 const UPDATE_WAIT: Duration = Duration::from_secs(300);
 const POLL: Duration = Duration::from_secs(3);
 
-/// Write `spec` and read it back. The service must already exist: setup
-/// creates the services the verifier owns.
+/// Write `spec` and read it back, creating the service when it doesn't exist: setup renders
+/// no workload, and management may not create one on a protected install. A service the
+/// verifier creates takes requests from the internet only when the signed stack gives the
+/// workload a public endpoint; a private one admits its own account as invoker.
 pub async fn apply(store: &dyn ServiceStore, spec: &FunctionSpec) -> Result<Value> {
-    store.replace(&spec.name, &service_body(spec)).await?;
+    if store.find(&spec.name).await?.is_none() {
+        let mut service = service_body(spec);
+        if spec.public {
+            service["ingress"] = json!("INGRESS_TRAFFIC_ALL");
+            service["invokerIamDisabled"] = json!(true);
+        } else {
+            service["ingress"] = json!("INGRESS_TRAFFIC_INTERNAL_ONLY");
+        }
+        store.create(&spec.name, &service).await?;
+    } else {
+        store.replace(&spec.name, &service_body(spec)).await?;
+    }
+    let service = settled(store, spec).await?;
+    if !spec.public {
+        admit_own_account(store, spec).await?;
+    }
+    Ok(service)
+}
+
+/// Grant the service's own account the invoker role, unless the policy holds it already.
+async fn admit_own_account(store: &dyn ServiceStore, spec: &FunctionSpec) -> Result<()> {
+    let member = format!("serviceAccount:{}", spec.run_as);
+    let mut policy = store.policy(&spec.name).await?;
+    let bindings = policy["bindings"].as_array().cloned().unwrap_or_default();
+    let admitted = bindings.iter().any(|binding| {
+        binding["role"] == INVOKER
+            && binding.get("condition").is_none()
+            && binding["members"]
+                .as_array()
+                .is_some_and(|members| members.iter().any(|existing| existing == &json!(member)))
+    });
+    if admitted {
+        return Ok(());
+    }
+    let mut bindings = bindings;
+    bindings.push(json!({"role": INVOKER, "members": [member]}));
+    policy["bindings"] = Value::Array(bindings);
+    store.set_policy(&spec.name, &policy).await
+}
+
+/// Wait for the service to finish reconciling, then check it reads back as `spec`.
+async fn settled(store: &dyn ServiceStore, spec: &FunctionSpec) -> Result<Value> {
     let deadline = tokio::time::Instant::now() + UPDATE_WAIT;
     loop {
         let service = store.get(&spec.name).await?;
@@ -276,6 +331,7 @@ mod tests {
             timeout_seconds: 30,
             architecture: "x86_64".into(),
             run_as: "acme-execution@p.iam.gserviceaccount.com".into(),
+            public: false,
         }
     }
 
@@ -431,24 +487,80 @@ mod tests {
     }
 
     struct FakeRun {
-        service: Mutex<Value>,
+        service: Mutex<Option<Value>>,
+        policy: Mutex<Value>,
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl FakeRun {
+        fn holding(service: Value, policy: Value) -> Self {
+            Self {
+                service: Mutex::new(Some(service)),
+                policy: Mutex::new(policy),
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn empty() -> Self {
+            Self {
+                service: Mutex::new(None),
+                policy: Mutex::new(json!({"etag": "e1"})),
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn serving(&self, body: &Value) {
+            let mut held = self.service.lock().unwrap();
+            let current = held.get_or_insert_with(|| {
+                let mut created = service(&spec());
+                created["ingress"] = body["ingress"].clone();
+                created
+            });
+            current["template"] = body["template"].clone();
+            current["trafficStatuses"] = json!([{
+                "type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST",
+                "revision": "acme-fn-api-00002-x7k",
+                "percent": 100,
+            }]);
+        }
     }
 
     #[async_trait]
     impl ServiceStore for FakeRun {
         async fn get(&self, _name: &str) -> Result<Value> {
+            Ok(self.service.lock().unwrap().clone().unwrap())
+        }
+        async fn find(&self, _name: &str) -> Result<Option<Value>> {
             Ok(self.service.lock().unwrap().clone())
         }
-        async fn replace(&self, _name: &str, body: &Value) -> Result<()> {
-            let mut service = self.service.lock().unwrap();
-            service["template"] = body["template"].clone();
-            service["trafficStatuses"] = json!([{
-                "type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST",
-                "revision": "acme-fn-api-00002-x7k",
-                "percent": 100,
-            }]);
+        async fn create(&self, name: &str, body: &Value) -> Result<()> {
+            self.calls.lock().unwrap().push(format!(
+                "create {name} ingress={} invokerIamDisabled={}",
+                body["ingress"], body["invokerIamDisabled"]
+            ));
+            self.serving(body);
             Ok(())
         }
+        async fn replace(&self, name: &str, body: &Value) -> Result<()> {
+            self.calls.lock().unwrap().push(format!("replace {name}"));
+            self.serving(body);
+            Ok(())
+        }
+        async fn policy(&self, _name: &str) -> Result<Value> {
+            Ok(self.policy.lock().unwrap().clone())
+        }
+        async fn set_policy(&self, name: &str, policy: &Value) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("setIamPolicy {name} {}", policy["bindings"]));
+            *self.policy.lock().unwrap() = policy.clone();
+            Ok(())
+        }
+    }
+
+    fn invoker() -> Value {
+        json!({"role": "roles/run.invoker", "members": [format!("serviceAccount:{}", spec().run_as)]})
     }
 
     #[tokio::test]
@@ -460,10 +572,48 @@ mod tests {
         drifted["trafficStatuses"] = json!([
             {"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION", "revision": "acme-fn-api-00001-old", "percent": 100},
         ]);
-        let run = FakeRun {
-            service: Mutex::new(drifted),
-        };
+        let run = FakeRun::holding(drifted, json!({"etag": "e1", "bindings": [invoker()]}));
         apply(&run, &spec()).await.unwrap();
-        check_read_back(&spec(), &run.service.lock().unwrap()).unwrap();
+        check_read_back(&spec(), run.service.lock().unwrap().as_ref().unwrap()).unwrap();
+        assert_eq!(
+            *run.calls.lock().unwrap(),
+            ["replace acme-fn-api"],
+            "the invoker already holds the role"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_private_service_is_created_internal_and_its_account_may_invoke_it() {
+        // Setup renders no workload, and management may not create one on a protected install.
+        let run = FakeRun::empty();
+        apply(&run, &spec()).await.unwrap();
+        check_read_back(&spec(), run.service.lock().unwrap().as_ref().unwrap()).unwrap();
+        assert_eq!(
+            *run.calls.lock().unwrap(),
+            [
+                "create acme-fn-api ingress=\"INGRESS_TRAFFIC_INTERNAL_ONLY\" invokerIamDisabled=null"
+                    .to_string(),
+                format!("setIamPolicy acme-fn-api {}", json!([invoker()])),
+            ]
+        );
+        assert_eq!(
+            run.policy.lock().unwrap()["etag"],
+            json!("e1"),
+            "written at the etag read"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_public_service_is_created_open_without_invoker_grants() {
+        let public = FunctionSpec {
+            public: true,
+            ..spec()
+        };
+        let run = FakeRun::empty();
+        apply(&run, &public).await.unwrap();
+        assert_eq!(
+            *run.calls.lock().unwrap(),
+            ["create acme-fn-api ingress=\"INGRESS_TRAFFIC_ALL\" invokerIamDisabled=true"]
+        );
     }
 }

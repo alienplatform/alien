@@ -505,6 +505,7 @@ mod tests {
             architecture: "arm64".into(),
             run_as: "arn:aws:iam::111122223333:role/acme-prod-execution-sa".into(),
             vpc: None,
+            public: false,
         }
     }
 

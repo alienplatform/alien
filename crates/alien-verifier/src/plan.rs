@@ -212,6 +212,9 @@ pub struct FunctionSpec {
     pub run_as: String,
     /// The VPC setup fixed for functions, if any.
     pub vpc: Option<SetupNetwork>,
+    /// Whether the signed stack gives the workload a public endpoint. A function the verifier
+    /// creates takes requests from the internet only then.
+    pub public: bool,
 }
 
 /// What the verifier read from its own install for one workload.
@@ -355,6 +358,7 @@ pub fn plan_function(
         Some(other) => return Err(refused(format!("architecture '{other}' is not known"))),
     };
 
+    let public = signed_public_endpoint(&accepted.release.body, place, name)?;
     Ok(FunctionSpec {
         workload: name.clone(),
         name: place.function_name(name)?,
@@ -366,7 +370,30 @@ pub fn plan_function(
         architecture: architecture.to_string(),
         run_as: place.run_as(profile),
         vpc: place.vpc.clone(),
+        public,
     })
+}
+
+/// Whether the release's signed stack gives worker `name` a public endpoint. A release without
+/// the stack gives none.
+fn signed_public_endpoint(release: &ReleaseBody, place: &Place, name: &str) -> Result<bool> {
+    if release.stack.is_none() {
+        return Ok(false);
+    }
+    let platform: alien_core::Platform = place
+        .platform()
+        .parse()
+        .map_err(|error: String| refused(error))?;
+    let stack = alien_core::release_statement::signed_stack(release, platform).context(
+        ErrorData::Refused {
+            reason: "the signed stack does not match the signed workloads".to_string(),
+        },
+    )?;
+    Ok(stack
+        .resources
+        .get(name)
+        .and_then(|entry| entry.config.downcast_ref::<alien_core::Worker>())
+        .is_some_and(|worker| !worker.public_endpoints.is_empty()))
 }
 
 #[cfg(test)]
@@ -450,6 +477,7 @@ pub(crate) mod tests {
                 architecture: "arm64".into(),
                 run_as: "arn:aws:iam::111122223333:role/acme-prod-execution-sa".into(),
                 vpc: None,
+                public: false,
             }
         );
     }

@@ -688,6 +688,59 @@ impl ServiceStore for Gcp {
         })
     }
 
+    async fn find(&self, name: &str) -> Result<Option<Value>> {
+        self.call(
+            reqwest::Method::GET,
+            &self.service_url(name),
+            None,
+            &format!("run.services.get {name}"),
+        )
+        .await
+    }
+
+    async fn create(&self, name: &str, service: &Value) -> Result<()> {
+        let url = format!(
+            "https://run.googleapis.com/v2/projects/{}/locations/{}/services?serviceId={name}",
+            self.project, self.region
+        );
+        self.call(
+            reqwest::Method::POST,
+            &url,
+            Some(service),
+            &format!("run.services.create {name}"),
+        )
+        .await?
+        .ok_or_else(|| {
+            AlienError::new(failed(format!(
+                "run.services.create {name}: the location does not exist"
+            )))
+        })?;
+        Ok(())
+    }
+
+    async fn policy(&self, name: &str) -> Result<Value> {
+        self.call(
+            reqwest::Method::GET,
+            &format!("{}:getIamPolicy", self.service_url(name)),
+            None,
+            &format!("run.services.getIamPolicy {name}"),
+        )
+        .await?
+        .ok_or_else(|| AlienError::new(failed(format!("service {name} does not exist"))))
+    }
+
+    async fn set_policy(&self, name: &str, policy: &Value) -> Result<()> {
+        self.call(
+            reqwest::Method::POST,
+            &format!("{}:setIamPolicy", self.service_url(name)),
+            Some(&json!({ "policy": policy })),
+            &format!("run.services.setIamPolicy {name}"),
+        )
+        .await?
+        .ok_or_else(|| AlienError::new(failed(format!("service {name} does not exist"))))?;
+        Ok(())
+    }
+
     async fn replace(&self, name: &str, service: &Value) -> Result<()> {
         self.call(
             reqwest::Method::PATCH,
