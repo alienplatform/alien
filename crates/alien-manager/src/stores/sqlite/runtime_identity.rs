@@ -8,6 +8,8 @@ use std::sync::Arc;
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use chrono::{DateTime, Duration, Utc};
 
+use turso::transaction::TransactionBehavior;
+
 use super::database::{RowParser, SqliteDatabase};
 use crate::ids::{generate_token, sha256_hash};
 
@@ -101,53 +103,85 @@ impl SqliteRuntimeIdentityStore {
 
     /// Consume a code and install the operator's first key. A retry with the
     /// same code and key hash, after a lost response, gets the same answer.
+    /// One transaction consumes the code, installs the key and retires every
+    /// other unused code of the deployment, so a crash cannot leave a used
+    /// code without its key, and a leftover code cannot replace the key later.
     pub async fn enroll(
         &self,
         code: &str,
         initial_key_hash: &str,
         now: DateTime<Utc>,
     ) -> Result<Option<DailyKeyState>, AlienError> {
-        let code_hash = sha256_hash(code);
-        let used = self
-            .run(
-                "UPDATE runtime_enrollment_codes SET initial_key_hash = ?2 \
-                 WHERE code_hash = ?1 AND initial_key_hash IS NULL AND expires_at > ?3",
-                (
-                    code_hash.clone(),
-                    initial_key_hash.to_owned(),
-                    now.timestamp(),
-                ),
-            )
-            .await?;
-        let Some(row) = self
-            .row(
-                "SELECT deployment_id, initial_key_hash FROM runtime_enrollment_codes WHERE code_hash = ?1",
-                [code_hash],
-            )
-            .await?
-        else {
-            return Ok(None);
+        let failed = || GenericError {
+            message: "Runtime identity enrollment failed".to_string(),
         };
-        let p = RowParser::new(&row);
-        let deployment_id = p.string(0, "deployment_id")?;
-        if p.optional_string(1, "initial_key_hash")?.as_deref() != Some(initial_key_hash) {
-            return Ok(None);
-        }
-        if used == 1 {
-            // A new code replaces any earlier operator of this deployment.
-            self.run(
-                "INSERT INTO runtime_daily_keys (deployment_id, key_hash, expires_at, revision) \
-                 VALUES (?1, ?2, ?3, 1) ON CONFLICT(deployment_id) DO UPDATE SET \
-                 key_hash = excluded.key_hash, expires_at = excluded.expires_at, \
-                 revision = runtime_daily_keys.revision + 1",
-                (
-                    deployment_id.clone(),
-                    initial_key_hash.to_owned(),
-                    (now + KEY_LIFETIME).timestamp(),
-                ),
-            )
-            .await?;
-        }
+        let code_hash = sha256_hash(code);
+        let deployment_id = {
+            let mut conn = self.db.conn().lock().await;
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .await
+                .into_alien_error()
+                .context(failed())?;
+            let used = tx
+                .execute(
+                    "UPDATE runtime_enrollment_codes SET initial_key_hash = ?2 \
+                     WHERE code_hash = ?1 AND initial_key_hash IS NULL AND expires_at > ?3",
+                    (
+                        code_hash.clone(),
+                        initial_key_hash.to_owned(),
+                        now.timestamp(),
+                    ),
+                )
+                .await
+                .into_alien_error()
+                .context(failed())?;
+            let mut rows = tx
+                .query(
+                    "SELECT deployment_id, initial_key_hash FROM runtime_enrollment_codes WHERE code_hash = ?1",
+                    [code_hash.clone()],
+                )
+                .await
+                .into_alien_error()
+                .context(failed())?;
+            let Some(row) = rows.next().await.into_alien_error().context(failed())? else {
+                return Ok(None);
+            };
+            let p = RowParser::new(&row);
+            let deployment_id = p.string(0, "deployment_id")?;
+            let owner = p.optional_string(1, "initial_key_hash")?;
+            drop(rows);
+            if owner.as_deref() != Some(initial_key_hash) {
+                return Ok(None);
+            }
+            if used == 1 {
+                // A new code replaces any earlier operator of this deployment.
+                tx.execute(
+                    "INSERT INTO runtime_daily_keys (deployment_id, key_hash, expires_at, revision) \
+                     VALUES (?1, ?2, ?3, 1) ON CONFLICT(deployment_id) DO UPDATE SET \
+                     key_hash = excluded.key_hash, expires_at = excluded.expires_at, \
+                     revision = runtime_daily_keys.revision + 1",
+                    (
+                        deployment_id.clone(),
+                        initial_key_hash.to_owned(),
+                        (now + KEY_LIFETIME).timestamp(),
+                    ),
+                )
+                .await
+                .into_alien_error()
+                .context(failed())?;
+                tx.execute(
+                    "DELETE FROM runtime_enrollment_codes \
+                     WHERE deployment_id = ?1 AND initial_key_hash IS NULL",
+                    [deployment_id.clone()],
+                )
+                .await
+                .into_alien_error()
+                .context(failed())?;
+            }
+            tx.commit().await.into_alien_error().context(failed())?;
+            deployment_id
+        };
         Ok(self
             .key_state(&deployment_id)
             .await?
@@ -332,6 +366,73 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn enrolling_retires_every_other_unused_code_of_the_deployment() {
+        let (store, _directory) = store().await;
+        let (first, _) = store.issue_enrollment_code("dep-1", at(0)).await.unwrap();
+        let (leftover, _) = store.issue_enrollment_code("dep-1", at(1)).await.unwrap();
+        let (other, _) = store.issue_enrollment_code("dep-2", at(1)).await.unwrap();
+        let key_hash = sha256_hash("ax_day_v1_first");
+        store
+            .enroll(&first, &key_hash, at(10))
+            .await
+            .unwrap()
+            .unwrap();
+        // A code left in a release Secret cannot replace the running key.
+        assert!(store
+            .enroll(&leftover, &sha256_hash("ax_day_v1_thief"), at(20))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(store
+            .verify_key("dep-1", "ax_day_v1_first", at(21))
+            .await
+            .unwrap()
+            .is_some());
+        // A retry of the winning enrollment still gets its answer.
+        assert!(store
+            .enroll(&first, &key_hash, at(22))
+            .await
+            .unwrap()
+            .is_some());
+        // Codes of other deployments are untouched.
+        assert!(store
+            .enroll(&other, &sha256_hash("ax_day_v1_other"), at(23))
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    /// The manager fails between consuming the code and installing the key.
+    /// The operator's retry with the same code and key must still enroll.
+    #[tokio::test]
+    async fn a_failed_key_install_leaves_the_code_unused() {
+        let (store, _directory) = store().await;
+        let (code, _) = store.issue_enrollment_code("dep-1", at(0)).await.unwrap();
+        let key_hash = sha256_hash("ax_day_v1_first");
+        let rename = |from: &'static str, to: &'static str| {
+            let db = store.db.clone();
+            async move {
+                db.conn()
+                    .lock()
+                    .await
+                    .execute(&format!("ALTER TABLE {from} RENAME TO {to}"), ())
+                    .await
+                    .unwrap();
+            }
+        };
+        rename("runtime_daily_keys", "runtime_daily_keys_away").await;
+        assert!(store.enroll(&code, &key_hash, at(10)).await.is_err());
+        rename("runtime_daily_keys_away", "runtime_daily_keys").await;
+
+        let enrolled = store
+            .enroll(&code, &key_hash, at(20))
+            .await
+            .unwrap()
+            .expect("the retry enrolls");
+        assert_eq!(enrolled.expires_at, at(20) + KEY_LIFETIME);
     }
 
     #[tokio::test]
