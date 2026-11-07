@@ -183,16 +183,18 @@ fn assert_both_paths(target: TerraformTarget) {
     test_utils::terraform_fmt_check(&linter_files(&module))
         .assert_ok(format!("{} fmt", target.name()));
     let mut files = stand_in_files(&module);
-    let (mocks, record, bucket, scheme, grant_check) = match target {
+    let (mocks, account, record, bucket, scheme, grant_check) = match target {
         TerraformTarget::Gcp => (
             "mock_provider \"google\" {}\nmock_provider \"random\" {}",
+            "acme-project",
             "google_storage_bucket_object.setup_record",
             "google_storage_bucket.setup_record",
             "gs",
             r#"google_storage_bucket_iam_member.setup_record_objects[0].member == "serviceAccount:manager@managing-project.iam.gserviceaccount.com" && google_storage_bucket_iam_member.setup_record_objects[0].bucket == "acme-setup-record""#,
         ),
         _ => (
-            "mock_provider \"aws\" {}\nmock_provider \"random\" {}",
+            "mock_provider \"aws\" {\n  override_data {\n    target = data.aws_caller_identity.current\n    values = { account_id = \"123456789012\" }\n  }\n}\nmock_provider \"random\" {}",
+            "123456789012",
             "aws_s3_object.setup_record",
             "aws_s3_bucket.setup_record",
             "s3",
@@ -224,6 +226,10 @@ run "verified_setup_without_token" {{
   assert {{
     condition     = nonsensitive(terraform_data.this.input.enrollment_code == "{ENROLLMENT_CODE}")
     error_message = "The enrollment code must reach the reservation."
+  }}
+  assert {{
+    condition     = terraform_data.this.input.setup_account_id == "{account}" && terraform_data.setup_observe[0].input.setup_account_id == "{account}"
+    error_message = "The reservation and the observer must report the account the cloud provider runs in."
   }}
   assert {{
     condition     = length(terraform_data.setup_observe) == 1 && terraform_data.setup_observe[0].input.setup_stage == "observe" && terraform_data.setup_observe[0].input.setup_reservation_id == "dep_test"
@@ -265,7 +271,7 @@ run "token_registration_is_unchanged" {{
     error_message = "A token module must still pass its token."
   }}
   assert {{
-    condition     = terraform_data.this.input.setup_reservation_id == null && terraform_data.this.input.setup_stage == null && nonsensitive(terraform_data.this.input.enrollment_code == null)
+    condition     = terraform_data.this.input.setup_reservation_id == null && terraform_data.this.input.setup_stage == null && nonsensitive(terraform_data.this.input.enrollment_code == null) && terraform_data.this.input.setup_account_id == null
     error_message = "A token module must not reach the verified path."
   }}
   assert {{
