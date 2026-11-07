@@ -416,6 +416,86 @@ impl LocalSandboxManager {
         Ok(SandboxExecResult { output, exit_code })
     }
 
+    /// Starts a command with stdin attached, for an interactive command.
+    ///
+    /// Returns the attached stdin, the output stream, and a handle to read the exit code once
+    /// the output ends. `cwd` resolves against the session root as file paths do; `env` is added
+    /// to the container's own, as Docker's exec does.
+    pub async fn exec_interactive(
+        &self,
+        container_id: &str,
+        command: &[String],
+        cwd: Option<&str>,
+        env: &std::collections::BTreeMap<String, String>,
+    ) -> Result<InteractiveExec> {
+        let working_dir = match cwd {
+            Some(path) => resolve_dir_in_root(path)?,
+            None => SESSION_ROOT.to_string(),
+        };
+        let exec = self
+            .docker
+            .create_exec(
+                container_id,
+                CreateExecOptions {
+                    cmd: Some(command.to_vec()),
+                    attach_stdin: Some(true),
+                    attach_stdout: Some(true),
+                    attach_stderr: Some(true),
+                    env: Some(
+                        env.iter()
+                            .map(|(name, value)| format!("{name}={value}"))
+                            .collect(),
+                    ),
+                    user: None,
+                    working_dir: Some(working_dir),
+                    ..Default::default()
+                },
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::SandboxSessionFailed {
+                session_id: container_id.to_string(),
+                operation: "create interactive exec".to_string(),
+            })?;
+
+        let started = self
+            .docker
+            .start_exec(&exec.id, None)
+            .await
+            .into_alien_error()
+            .context(ErrorData::SandboxSessionFailed {
+                session_id: container_id.to_string(),
+                operation: "start interactive exec".to_string(),
+            })?;
+
+        let StartExecResults::Attached { input, output } = started else {
+            return Err(AlienError::new(ErrorData::SandboxSessionFailed {
+                session_id: container_id.to_string(),
+                operation: "start interactive exec: Docker did not attach".to_string(),
+            }));
+        };
+
+        Ok(InteractiveExec {
+            exec_id: exec.id,
+            input,
+            output,
+        })
+    }
+
+    /// The exit code of a finished exec, or `None` if Docker has none for it.
+    pub async fn exec_exit_code(&self, exec_id: &str) -> Result<Option<i64>> {
+        let inspect = self
+            .docker
+            .inspect_exec(exec_id)
+            .await
+            .into_alien_error()
+            .context(ErrorData::SandboxSessionFailed {
+                session_id: exec_id.to_string(),
+                operation: "inspect interactive exec".to_string(),
+            })?;
+        Ok(inspect.exit_code)
+    }
+
     /// Writes one file into a session.
     ///
     /// Streamed through an exec's stdin rather than Docker's archive-upload API: that API
@@ -677,6 +757,36 @@ impl LocalSandboxManager {
 /// same rule the in-sandbox agent applies on the cloud backends. Reading it as host-absolute
 /// would let a caller name any file in the image, and the session root is the only writable
 /// area anyway.
+/// A command started by [`LocalSandboxManager::exec_interactive`].
+pub struct InteractiveExec {
+    /// Docker's id for the exec, to read its exit code once output ends
+    pub exec_id: String,
+    /// The command's stdin
+    pub input: std::pin::Pin<Box<dyn tokio::io::AsyncWrite + Send>>,
+    /// stdout and stderr, as Docker frames them
+    pub output: std::pin::Pin<
+        Box<
+            dyn futures::Stream<
+                    Item = std::result::Result<
+                        bollard::container::LogOutput,
+                        bollard::errors::Error,
+                    >,
+                > + Send,
+        >,
+    >,
+}
+
+/// Resolves a working directory against the session root. The root itself is allowed, unlike for
+/// a file path.
+fn resolve_dir_in_root(path: &str) -> Result<String> {
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() || trimmed == SESSION_ROOT || trimmed == "." {
+        return Ok(SESSION_ROOT.to_string());
+    }
+    let relative = trimmed.strip_prefix(SESSION_ROOT).unwrap_or(trimmed);
+    resolve_in_root(relative)
+}
+
 fn resolve_in_root(path: &str) -> Result<String> {
     let refused = |reason: &str| {
         AlienError::new(ErrorData::SandboxSessionFailed {

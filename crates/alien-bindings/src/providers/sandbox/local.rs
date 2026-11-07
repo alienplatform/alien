@@ -252,6 +252,35 @@ impl LocalSandbox {
     }
 }
 
+/// One local session, reached through the manager's route, which serves the agent's interactive
+/// wire under the session's path.
+#[derive(Debug)]
+struct LocalBoundAgent {
+    client: reqwest::Client,
+    session_url: String,
+    token: String,
+}
+
+#[async_trait]
+impl super::interactive::BoundAgent for LocalBoundAgent {
+    async fn request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+    ) -> Result<reqwest::RequestBuilder> {
+        // The agent's paths sit at its root; the route serves the same ones under the session.
+        let path = path.strip_prefix("/v1").unwrap_or(path);
+        Ok(self
+            .client
+            .request(method, format!("{}{path}", self.session_url))
+            .bearer_auth(&self.token))
+    }
+
+    fn provider(&self) -> &'static str {
+        "local-sandbox"
+    }
+}
+
 impl Binding for LocalSandbox {}
 
 /// Refused rather than dropped: Docker has no wall-clock ceiling, so accepting one would report a
@@ -473,6 +502,26 @@ impl Sandbox for LocalSandbox {
         }
 
         Ok(Box::pin(stream::iter(frames)))
+    }
+
+    async fn run_interactive(
+        &self,
+        sandbox_id: &str,
+        mut request: RunCommandRequest,
+    ) -> Result<crate::traits::InteractiveCommand> {
+        // Resolved here as `run_command` resolves it, so one cwd means the same directory on both.
+        if let Some(cwd) = request.cwd.take() {
+            request.cwd = Some(sandbox_dir(&cwd)?);
+        }
+        for name in request.env.keys() {
+            checked_env_name("sandbox.runInteractive", name)?;
+        }
+        let agent = std::sync::Arc::new(LocalBoundAgent {
+            client: self.client.clone(),
+            session_url: self.url(&format!("/v1/sessions/{sandbox_id}")),
+            token: self.token.clone(),
+        });
+        super::interactive::run_interactive(agent, request).await
     }
 
     async fn read_file(&self, sandbox_id: &str, path: &str) -> Result<Vec<u8>> {
