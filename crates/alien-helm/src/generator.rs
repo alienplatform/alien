@@ -5926,6 +5926,9 @@ stringData:
   {{- if $createManagementSecret }}
   {{- if .Values.management.enrollmentCode }}
   enrollment-code: {{ .Values.management.enrollmentCode | quote }}
+  {{- /* Blank the token an earlier install stored. On upgrade Helm drops the
+  old stringData key, but the Secret keeps its stored value. */}}
+  sync-token: ""
   {{- else }}
   sync-token: {{ .Values.management.token | quote }}
   {{- end }}
@@ -9683,7 +9686,8 @@ mod tests {
             secret["stringData"]["enrollment-code"].as_str(),
             Some("ax_enroll_example")
         );
-        assert!(secret["stringData"]["sync-token"].is_null());
+        // An upgrade from a token install must not leave the token stored.
+        assert_eq!(secret["stringData"]["sync-token"].as_str(), Some(""));
         let operator = docs_by_kind(&docs, "Deployment")
             .into_iter()
             .find(|deployment| {
