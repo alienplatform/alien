@@ -628,7 +628,7 @@ fn without_signer(current: &SignerListBody, name: &str) -> Result<SignerListBody
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "name".to_string(),
             message: format!(
-                "'{name}' is the last admin device; only the recovery code could change the devices after. Add another admin first (`alien devices pair`)"
+                "'{name}' is the last admin device; only the recovery code could change the devices after. To move admin to another device, run `alien devices recover` there with the recovery code"
             ),
         }));
     }
@@ -1653,6 +1653,7 @@ mod tests {
             "{}",
             error.message
         );
+        assert_commands_exist(&error.message);
 
         // With another admin device, alice may go; the recovery key stays.
         let bob = signer("bob", 3, vec![Role::Admin]);
@@ -1664,6 +1665,26 @@ mod tests {
             next.admin_threshold, 2,
             "bob and the recovery key still make two"
         );
+    }
+
+    /// Every `` `alien ...` `` command `message` names is a command of the CLI.
+    fn assert_commands_exist(message: &str) {
+        let commands: Vec<&str> = message
+            .split('`')
+            .skip(1)
+            .step_by(2)
+            .filter(|quoted| quoted.starts_with("alien "))
+            .collect();
+        assert!(!commands.is_empty(), "the hint names a command: {message}");
+        for quoted in commands {
+            let mut command = <crate::Cli as clap::CommandFactory>::command();
+            for word in quoted.split_whitespace().skip(1) {
+                command = command
+                    .find_subcommand(word)
+                    .unwrap_or_else(|| panic!("`{quoted}` is not a command of the CLI"))
+                    .clone();
+            }
+        }
     }
 
     fn body(signers: Vec<Signer>) -> SignerListBody {
