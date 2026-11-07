@@ -152,7 +152,7 @@ pub async fn stream(
     output_cap: usize,
     frames: mpsc::Sender<ProcessFrame>,
 ) {
-    stream_framed(child, timeout, output_cap, Framing::Lines, frames).await
+    stream_framed(child, timeout, output_cap, Framing::Lines, frames, || {}).await
 }
 
 /// [`stream`], with the framing chosen by the caller.
@@ -160,12 +160,18 @@ pub async fn stream(
 /// The child's stdin is the caller's: take it before calling to write to the process, or leave it
 /// null. Every other rule is the same, so the deadline and the departed-caller kill hold whatever
 /// the caller does with stdin.
+///
+/// `reaped` runs once the child has been reaped, before the terminal frame is sent. A caller that
+/// signals the child's process group by number must stop doing so there: from that moment the
+/// kernel may hand the number to another process, and the terminal frame can wait indefinitely on
+/// a slow reader.
 pub async fn stream_framed(
     mut child: Child,
     timeout: Duration,
     output_cap: usize,
     framing: Framing,
     frames: mpsc::Sender<ProcessFrame>,
+    reaped: impl FnOnce() + Send,
 ) {
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -174,28 +180,16 @@ pub async fn stream_framed(
     let truncated = AtomicBool::new(false);
     let read_error: Mutex<Option<String>> = Mutex::new(None);
 
+    let sink = Sink {
+        seq: &seq,
+        truncated: &truncated,
+        read_error: &read_error,
+        frames: &frames,
+    };
     let pump = async {
         let (stdout_connected, stderr_connected) = tokio::join!(
-            drain(
-                stdout,
-                ProcessStream::Stdout,
-                framing,
-                output_cap,
-                &seq,
-                &truncated,
-                &read_error,
-                &frames
-            ),
-            drain(
-                stderr,
-                ProcessStream::Stderr,
-                framing,
-                output_cap,
-                &seq,
-                &truncated,
-                &read_error,
-                &frames
-            ),
+            drain(stdout, ProcessStream::Stdout, framing, output_cap, &sink),
+            drain(stderr, ProcessStream::Stderr, framing, output_cap, &sink),
         );
         stdout_connected && stderr_connected
     };
@@ -223,6 +217,7 @@ pub async fn stream_framed(
     // The caller went away, so there is nobody to report to and no reason to keep running.
     if !connected {
         kill_all(&mut child).await;
+        reaped();
         return;
     }
 
@@ -251,7 +246,16 @@ pub async fn stream_framed(
         }
     };
 
+    reaped();
     let _ = frames.send(terminal).await;
+}
+
+/// Where both streams' frames go, and the state they share.
+struct Sink<'a> {
+    seq: &'a AtomicU64,
+    truncated: &'a AtomicBool,
+    read_error: &'a Mutex<Option<String>>,
+    frames: &'a mpsc::Sender<ProcessFrame>,
 }
 
 /// Runs a child to completion and collects every frame.
@@ -283,14 +287,17 @@ async fn drain<R>(
     which: ProcessStream,
     framing: Framing,
     output_cap: usize,
-    seq: &AtomicU64,
-    truncated: &AtomicBool,
-    read_error: &Mutex<Option<String>>,
-    frames: &mpsc::Sender<ProcessFrame>,
+    sink: &Sink<'_>,
 ) -> bool
 where
     R: tokio::io::AsyncRead + Unpin,
 {
+    let Sink {
+        seq,
+        truncated,
+        read_error,
+        frames,
+    } = sink;
     let Some(stream) = stream else {
         return true;
     };
@@ -666,6 +673,7 @@ mod tests {
             1 << 20,
             Framing::Chunks,
             sender,
+            || {},
         ));
 
         let prompt = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
@@ -717,7 +725,7 @@ mod tests {
 
     async fn run_framed(child: Child, timeout: Duration, framing: Framing) -> Vec<ProcessFrame> {
         let (sender, mut receiver) = mpsc::channel(FRAME_CHANNEL_DEPTH);
-        let produce = stream_framed(child, timeout, 1 << 20, framing, sender);
+        let produce = stream_framed(child, timeout, 1 << 20, framing, sender, || {});
         let consume = async {
             let mut frames = Vec::new();
             while let Some(frame) = receiver.recv().await {
@@ -726,5 +734,47 @@ mod tests {
             frames
         };
         tokio::join!(produce, consume).1
+    }
+
+    /// The hook a caller uses to stop signalling a process group by number runs at the reap, not
+    /// when the terminal frame is delivered: a reader that has stopped reading would otherwise
+    /// keep that number live long after the kernel may have reused it.
+    #[tokio::test]
+    async fn reaped_runs_before_the_terminal_frame_reaches_a_stalled_reader() {
+        let (sender, mut receiver) = mpsc::channel(1);
+        let reaped = std::sync::Arc::new(AtomicBool::new(false));
+        let flag = std::sync::Arc::clone(&reaped);
+        let produce = tokio::spawn(stream_framed(
+            child(&["/bin/sh", "-c", "echo x"]),
+            Duration::from_secs(30),
+            1 << 20,
+            Framing::Chunks,
+            sender,
+            move || flag.store(true, Ordering::SeqCst),
+        ));
+
+        // The output frame fills the channel, so the terminal frame cannot be sent until this
+        // test reads; the reap must already have been reported by then.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while !reaped.load(Ordering::SeqCst) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the reap was not reported while the terminal frame waited on the reader"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            !produce.is_finished(),
+            "the terminal frame is still waiting"
+        );
+
+        let mut frames = Vec::new();
+        while let Some(frame) = receiver.recv().await {
+            frames.push(frame);
+        }
+        assert!(matches!(
+            terminal(&frames),
+            ProcessFrame::Exit { code: 0, .. }
+        ));
     }
 }

@@ -74,7 +74,10 @@ pub async fn run_interactive(
         input: Arc::new(AgentInput {
             agent,
             id,
-            offset: tokio::sync::Mutex::new(0),
+            state: tokio::sync::Mutex::new(InputState {
+                offset: 0,
+                interrupted: false,
+            }),
         }),
         output,
     })
@@ -87,7 +90,31 @@ struct AgentInput {
     id: String,
     /// Locked for a whole write, so concurrent writers never interleave and the offset each sends
     /// is the one the agent expects.
-    offset: tokio::sync::Mutex<u64>,
+    state: tokio::sync::Mutex<InputState>,
+}
+
+#[derive(Debug)]
+struct InputState {
+    /// Bytes of input the agent has acknowledged
+    offset: u64,
+    /// Set while a write is in flight and left set if it ends without its last acknowledgement,
+    /// because it was cancelled or failed. The agent may then have taken bytes this client never
+    /// heard about, and the next write at the old offset would be deduplicated against them.
+    interrupted: bool,
+}
+
+/// What the agent's refusal names, read from the code its body starts with. A status alone is
+/// not enough: a proxy answers 404 for a sandbox that is gone, and that is not a finished command.
+fn named_failure(body: &str) -> Option<&'static str> {
+    [
+        ("COMMAND_NOT_RUNNING", "commandNotRunning"),
+        ("STDIN_CLOSED", "stdinClosed"),
+        ("STDIN_OFFSET_MISMATCH", "stdinOffsetMismatch"),
+        ("INTERACTIVE_LIMIT_REACHED", "interactiveLimitReached"),
+    ]
+    .into_iter()
+    .find(|(code, _)| body.starts_with(code))
+    .map(|(_, failure)| failure)
 }
 
 impl AgentInput {
@@ -107,76 +134,115 @@ impl AgentInput {
         )
         .await?;
 
-        let failure = match response.status().as_u16() {
-            404 => "commandNotRunning",
-            409 => "stdinClosed",
-            _ => return agent_protocol::check_response(response, operation).await,
-        };
-        let reason = agent_protocol::error_body(response, operation).await?;
+        if response.status().is_success() {
+            return Ok(response);
+        }
+        let status = response.status();
+        let body = agent_protocol::error_body(response, operation).await?;
+        if let Some(failure) = named_failure(&body) {
+            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: failure.to_string(),
+                reason: format!("{operation}: {body}"),
+            }));
+        }
+        // Anything else is classified as every other agent request is: a 5xx never proves the
+        // agent answered, and a 4xx it did not name is a refusal.
+        if status.is_server_error() {
+            return Err(AlienError::new(agent_protocol::unanswered(
+                operation,
+                &format!("the sandbox host returned {status}: {body}"),
+            )));
+        }
         Err(AlienError::new(ErrorData::SandboxCommandFailed {
-            failure: failure.to_string(),
-            reason: format!("{operation}: {reason}"),
+            failure: "agentRefused".to_string(),
+            reason: format!("{operation} returned {status}: {body}"),
         }))
+    }
+
+    /// Sends one piece of input at `offset` and returns the agent's total, retrying only a request
+    /// that went unanswered.
+    async fn send_piece(&self, offset: u64, piece: &[u8]) -> Result<u64> {
+        let body = json!({ "id": self.id, "offset": offset, "data": BASE64.encode(piece) });
+        let mut attempt = 0;
+        let response = loop {
+            attempt += 1;
+            match self
+                .control("/v1/interactive/stdin", body.clone(), WRITE_STDIN)
+                .await
+            {
+                Ok(response) => break response,
+                // Unanswered, so the agent may or may not have taken the bytes. The offset makes
+                // sending them again apply them once either way.
+                Err(error) if error.retryable && attempt < WRITE_ATTEMPTS => continue,
+                Err(error) => return Err(error),
+            }
+        };
+        let taken: StdinResponse = response.json().await.into_alien_error().context(
+            ErrorData::UnexpectedResponseFormat {
+                provider: self.agent.provider().to_string(),
+                binding_name: WRITE_STDIN.to_string(),
+                field: "accepted".to_string(),
+                response_json: "the agent returned a body this provider cannot parse".to_string(),
+            },
+        )?;
+        Ok(taken.accepted)
     }
 }
 
 #[async_trait]
 impl CommandInput for AgentInput {
     async fn write(&self, data: &[u8]) -> Result<()> {
-        let mut offset = self.offset.lock().await;
-        let end = *offset + data.len() as u64;
-        let start = *offset;
+        let mut state = self.state.lock().await;
 
-        while *offset < end {
-            let from = usize::try_from(*offset - start).expect("within data");
+        // An earlier write ended without its last acknowledgement. Ask where the input stands
+        // before sending anything: an empty write at the known offset answers with the agent's
+        // total and applies nothing.
+        if state.interrupted {
+            let taken = self.send_piece(state.offset, &[]).await?;
+            state.interrupted = false;
+            if taken != state.offset {
+                let lost = taken.saturating_sub(state.offset);
+                state.offset = taken.max(state.offset);
+                return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "stdinInterrupted".to_string(),
+                    reason: format!(
+                        "an earlier write was cancelled or failed after the program took {lost} of \
+                         its bytes; this write was not sent, and the next one continues after them"
+                    ),
+                }));
+            }
+        }
+
+        let start = state.offset;
+        let end = start + data.len() as u64;
+        state.interrupted = true;
+        while state.offset < end {
+            let from = usize::try_from(state.offset - start).expect("within data");
             let piece = &data[from..(from + MAX_WRITE_BYTES).min(data.len())];
-            let body = json!({ "id": self.id, "offset": *offset, "data": BASE64.encode(piece) });
-
-            let mut attempt = 0;
-            let response = loop {
-                attempt += 1;
-                match self
-                    .control("/v1/interactive/stdin", body.clone(), WRITE_STDIN)
-                    .await
-                {
-                    Ok(response) => break response,
-                    // Unanswered, so the agent may or may not have taken the bytes. The offset
-                    // makes sending them again apply them once either way.
-                    Err(error) if error.retryable && attempt < WRITE_ATTEMPTS => continue,
-                    Err(error) => return Err(error),
-                }
-            };
-
-            let taken: StdinResponse = response.json().await.into_alien_error().context(
-                ErrorData::UnexpectedResponseFormat {
-                    provider: self.agent.provider().to_string(),
-                    binding_name: WRITE_STDIN.to_string(),
-                    field: "accepted".to_string(),
-                    response_json: "the agent returned a body this provider cannot parse"
-                        .to_string(),
-                },
-            )?;
+            let taken = self.send_piece(state.offset, piece).await?;
             // Never backwards, and never past what was sent: either would mean this client and
             // the agent disagree about the stream, and continuing would corrupt it silently.
-            if taken.accepted < *offset || taken.accepted > end {
+            if taken < state.offset || taken > end {
                 return Err(AlienError::new(ErrorData::SandboxCommandFailed {
                     failure: "stdinOffsetMismatch".to_string(),
                     reason: format!(
-                        "the agent reports {} bytes of input taken after a write of bytes {}..{}",
-                        taken.accepted, *offset, end
+                        "the agent reports {taken} bytes of input taken after a write of bytes \
+                         {}..{end}",
+                        state.offset
                     ),
                 }));
             }
             // Short of the piece means the command stopped reading for a while: send the rest.
-            *offset = taken.accepted;
+            state.offset = taken;
         }
+        state.interrupted = false;
 
         Ok(())
     }
 
     async fn close_stdin(&self) -> Result<()> {
         // Behind the write lock, so a close never overtakes bytes a concurrent writer is sending.
-        let _offset = self.offset.lock().await;
+        let _state = self.state.lock().await;
         match self
             .control(
                 "/v1/interactive/close-stdin",
@@ -490,5 +556,61 @@ mod tests {
             CommandOutput::Exit { code: 130, .. }
         ));
         assert!(String::from_utf8_lossy(&stdout).ends_with("stopped\n"));
+    }
+
+    /// A write the caller cancels part-way may already have reached the program. The next write
+    /// must say so rather than be deduplicated against those bytes, which would silently drop its
+    /// own start while reporting success; the write after continues the stream exactly.
+    #[tokio::test]
+    async fn a_write_after_a_cancelled_one_reports_the_interruption_instead_of_losing_bytes() {
+        let agent = agent(0).await;
+        // Counts only the second write's bytes, so a lost start shows as a short count.
+        let command = run_interactive(
+            agent,
+            command("/bin/sh", &["-c", "sleep 0.5; tr -cd y | wc -c"]),
+        )
+        .await
+        .expect("starts");
+
+        // Cancelled while the program is not reading: the pipe has taken some of it.
+        let cancelled = tokio::time::timeout(
+            Duration::from_millis(100),
+            command.input.write(&vec![b'x'; 2 * MAX_WRITE_BYTES]),
+        )
+        .await;
+        assert!(
+            cancelled.is_err(),
+            "the write was still waiting on the reader"
+        );
+
+        // Longer than anything the cancelled write can have delivered, which is the case a
+        // deduplicating agent would accept in silence.
+        let second = vec![b'y'; 3 * MAX_WRITE_BYTES];
+        let error = command
+            .input
+            .write(&second)
+            .await
+            .expect_err("the interruption is reported, not hidden");
+        assert!(
+            matches!(&error.error, Some(ErrorData::SandboxCommandFailed { failure, .. }) if failure == "stdinInterrupted"),
+            "{error:?}"
+        );
+
+        command
+            .input
+            .write(&second)
+            .await
+            .expect("the stream continues");
+        command.input.close_stdin().await.expect("closes");
+        let mut stdout = Vec::new();
+        assert!(matches!(
+            finish(command, &mut stdout).await,
+            CommandOutput::Exit { code: 0, .. }
+        ));
+        assert_eq!(
+            String::from_utf8_lossy(&stdout).trim(),
+            second.len().to_string(),
+            "the write after the report arrives whole"
+        );
     }
 }

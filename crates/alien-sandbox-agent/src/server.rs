@@ -319,7 +319,12 @@ pub fn router(state: Arc<AgentState>) -> Router {
         .route("/v1/jobs/poll", post(job_poll))
         .route("/v1/jobs/cancel", post(job_cancel))
         .route("/v1/interactive", post(interactive_start))
-        .route("/v1/interactive/stdin", post(interactive_stdin))
+        // A write is at most 256 KiB from the client, so the file-transfer ceiling the rest of the
+        // router allows would only let a hostile caller make the agent hold more per request.
+        .route(
+            "/v1/interactive/stdin",
+            post(interactive_stdin).layer(axum::extract::DefaultBodyLimit::max(1 << 20)),
+        )
         .route("/v1/interactive/close-stdin", post(interactive_close_stdin))
         .route("/v1/interactive/signal", post(interactive_signal))
         // The GCP Agent Platform proxies `:execute` to `POST /` with the body verbatim and can set
@@ -641,7 +646,7 @@ async fn interactive_start(
                     },
                 )));
             };
-            reservation.attach(child.stdin.take(), group);
+            reservation.attach(child.stdin.take(), group).await;
 
             let timeout = std::time::Duration::from_millis(body.request.timeout_ms);
             let output_cap = state.output_cap;
@@ -652,10 +657,11 @@ async fn interactive_start(
                     output_cap,
                     alien_core::sandbox_process::Framing::Chunks,
                     sender,
+                    // The group is forgotten at the reap itself, not when the terminal frame is
+                    // delivered, which a slow reader can hold off indefinitely.
+                    || reservation.reaped(),
                 )
                 .await;
-                // Released only once the command is reaped, in this order: the id stops naming
-                // the group before the reaper may hand the pid to anything else.
                 drop(reservation);
                 drop(registration);
             });

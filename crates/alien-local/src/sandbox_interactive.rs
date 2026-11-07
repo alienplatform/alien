@@ -10,11 +10,16 @@
 //! started under a one-line shell that writes its own pid to stderr and then `exec`s the command,
 //! so that pid is the command's. A `docker exec` process already leads its own process group and
 //! session, so the pid is also the group. The line is written before the command exists, which
-//! makes it the first bytes on stderr with nothing able to race it, and it is removed before any
+//! makes it the first bytes on stderr with nothing able to race it. The start waits for it, so a
+//! command is never running without a group the manager can signal, and it is removed before any
 //! output reaches the caller.
+//!
+//! Two things differ from the agent and are stated rather than hidden: an acknowledged write has
+//! reached Docker's attach socket rather than provably the program's pipe, and output is not
+//! capped, because the caller is the developer's own machine.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -26,7 +31,7 @@ use tokio::sync::mpsc;
 
 use crate::sandbox_manager::{InteractiveExec, LocalSandboxManager};
 
-/// The most interactive commands one sandbox runs at once, matching the agent.
+/// The most interactive commands one session runs at once, matching the agent.
 const MAX_INTERACTIVE: usize = 16;
 
 /// How long one write may wait for the command to read before answering with a short count,
@@ -40,8 +45,19 @@ const FRAME_CHANNEL_DEPTH: usize = 16;
 /// wrapper did not run as written, and the command is refused rather than guessed at.
 const MAX_ANNOUNCEMENT: usize = 32;
 
-/// How long to wait for the output to end after the group was killed at its deadline.
+/// How long the start waits for the wrapper to announce the pid.
+const ANNOUNCEMENT_WAIT: Duration = Duration::from_secs(10);
+
+/// How long to wait for the output to end after the group was killed.
 const KILL_SETTLE: Duration = Duration::from_secs(10);
+
+type Output = std::pin::Pin<
+    Box<
+        dyn futures::Stream<
+                Item = std::result::Result<bollard::container::LogOutput, bollard::errors::Error>,
+            > + Send,
+    >,
+>;
 
 /// One frame, serialized exactly as the agent writes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -53,31 +69,69 @@ pub enum Frame {
     Error { code: String, message: String },
 }
 
-/// Why a control request was refused, and the status it answers with.
+/// Why a request was refused. Each carries the code the agent would put first in its body, which
+/// is what the binding reads.
 #[derive(Debug)]
 pub enum ControlError {
-    /// No command by that id is running: 404
+    /// No command by that id is running in this session: 404 `COMMAND_NOT_RUNNING`
     NotRunning,
-    /// stdin is closed, or a write would leave a gap: 409
-    Conflict(String),
-    /// The request itself is malformed: 400
+    /// stdin is closed: 409 `STDIN_CLOSED`
+    StdinClosed,
+    /// A write would leave a gap: 409 `STDIN_OFFSET_MISMATCH`
+    OffsetMismatch { accepted: u64, offset: u64 },
+    /// The request itself is malformed: 400 `REQUEST_INVALID`
     Invalid(String),
-    /// Every slot is taken: 429
+    /// Every slot in the session is taken: 429 `INTERACTIVE_LIMIT_REACHED`
     Full,
     /// Docker failed: 502
     Failed(String),
 }
 
-/// The interactive commands one local sandbox is running.
+impl ControlError {
+    /// The status and body the route answers with.
+    pub fn response(self) -> (u16, String) {
+        match self {
+            Self::NotRunning => (
+                404,
+                "COMMAND_NOT_RUNNING: no such interactive command is running in this session"
+                    .to_string(),
+            ),
+            Self::StdinClosed => (
+                409,
+                "STDIN_CLOSED: the command no longer reads its input".to_string(),
+            ),
+            Self::OffsetMismatch { accepted, offset } => (
+                409,
+                format!(
+                    "STDIN_OFFSET_MISMATCH: the command has taken {accepted} bytes of input; a \
+                     write at offset {offset} would leave a gap"
+                ),
+            ),
+            Self::Invalid(reason) => (400, format!("REQUEST_INVALID: {reason}")),
+            Self::Full => (
+                429,
+                format!(
+                    "INTERACTIVE_LIMIT_REACHED: the session is running its maximum of \
+                     {MAX_INTERACTIVE} interactive commands"
+                ),
+            ),
+            Self::Failed(reason) => (502, reason),
+        }
+    }
+}
+
+/// The interactive commands one local sandbox is running, keyed by session and id.
 #[derive(Default)]
 pub struct InteractiveRegistry {
-    commands: Mutex<HashMap<String, Arc<Command>>>,
+    commands: Mutex<HashMap<(String, String), Arc<Command>>>,
 }
 
 struct Command {
     container_id: String,
     stdin: tokio::sync::Mutex<Stdin>,
-    process_group: OnceLock<i64>,
+    /// Set before the start answers; never changes. Docker reaps the exec inside the container,
+    /// and the id is released only once the exec's output has ended.
+    process_group: i64,
 }
 
 struct Stdin {
@@ -85,19 +139,19 @@ struct Stdin {
     accepted: u64,
 }
 
-/// A held id, released when dropped: after that no signal can name the command.
+/// A held id, released when dropped: after that no request can name the command.
 struct Reservation {
     registry: Arc<InteractiveRegistry>,
-    id: String,
+    key: (String, String),
 }
 
 impl Drop for Reservation {
     fn drop(&mut self) {
-        self.registry.lock().remove(&self.id);
+        self.registry.lock().remove(&self.key);
     }
 }
 
-/// What a start needs besides the id.
+/// What a start needs besides the session.
 pub struct StartRequest {
     pub id: String,
     pub command: Vec<String>,
@@ -107,52 +161,49 @@ pub struct StartRequest {
 }
 
 impl InteractiveRegistry {
-    fn lock(&self) -> MutexGuard<'_, HashMap<String, Arc<Command>>> {
+    fn lock(&self) -> MutexGuard<'_, HashMap<(String, String), Arc<Command>>> {
         self.commands
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn get(&self, id: &str) -> Result<Arc<Command>, ControlError> {
-        self.lock().get(id).cloned().ok_or(ControlError::NotRunning)
+    fn get(&self, session: &str, id: &str) -> Result<Arc<Command>, ControlError> {
+        self.lock()
+            .get(&(session.to_string(), id.to_string()))
+            .cloned()
+            .ok_or(ControlError::NotRunning)
     }
 
     /// Starts a command and returns the receiver its frames arrive on.
     ///
-    /// The id is registered before this returns, so the caller's first write cannot race it.
+    /// Returns only once the command is running and its process group is known, so the caller's
+    /// first write or signal cannot race it.
     pub async fn start(
         self: &Arc<Self>,
         manager: Arc<LocalSandboxManager>,
+        session: &str,
         container_id: String,
         request: StartRequest,
     ) -> Result<mpsc::Receiver<Frame>, ControlError> {
         validate(&request)?;
-
-        let command = Arc::new(Command {
-            container_id: container_id.clone(),
-            stdin: tokio::sync::Mutex::new(Stdin {
-                pipe: None,
-                accepted: 0,
-            }),
-            process_group: OnceLock::new(),
-        });
+        let key = (session.to_string(), request.id.clone());
         {
-            let mut commands = self.lock();
-            if commands.contains_key(&request.id) {
+            let commands = self.lock();
+            if commands.contains_key(&key) {
                 return Err(ControlError::Invalid(format!(
                     "interactive command '{}' is already running",
                     request.id
                 )));
             }
-            if commands.len() >= MAX_INTERACTIVE {
+            if commands
+                .keys()
+                .filter(|(other, _)| other == session)
+                .count()
+                >= MAX_INTERACTIVE
+            {
                 return Err(ControlError::Full);
             }
-            commands.insert(request.id.clone(), Arc::clone(&command));
         }
-        let reservation = Reservation {
-            registry: Arc::clone(self),
-            id: request.id.clone(),
-        };
 
         let mut argv = vec![
             "sh".to_string(),
@@ -165,16 +216,53 @@ impl InteractiveRegistry {
         let InteractiveExec {
             exec_id,
             input,
-            output,
+            mut output,
         } = manager
             .exec_interactive(&container_id, &argv, request.cwd.as_deref(), &request.env)
             .await
             .map_err(|error| ControlError::Failed(error.to_string()))?;
-        command
-            .stdin
-            .try_lock()
-            .expect("nothing can reach a command before it is started")
-            .pipe = Some(input);
+        let deadline = tokio::time::Instant::now() + request.timeout;
+
+        let (process_group, pending) = match announcement(&mut output).await {
+            Ok(announced) => announced,
+            Err(reason) => {
+                // Without the pid there is nothing to signal, so end the input and the attach and
+                // report the start as failed; a wrapper that never ran has started nothing.
+                drop(input);
+                drop(output);
+                return Err(ControlError::Failed(reason));
+            }
+        };
+
+        let command = Arc::new(Command {
+            container_id,
+            stdin: tokio::sync::Mutex::new(Stdin {
+                pipe: Some(input),
+                accepted: 0,
+            }),
+            process_group,
+        });
+        // Checked again: another start for the same id may have raced this one.
+        let raced = {
+            let mut commands = self.lock();
+            if commands.contains_key(&key) {
+                true
+            } else {
+                commands.insert(key.clone(), Arc::clone(&command));
+                false
+            }
+        };
+        if raced {
+            let _ = kill_group(&manager, &command.container_id, process_group, "KILL").await;
+            return Err(ControlError::Invalid(format!(
+                "interactive command '{}' is already running",
+                request.id
+            )));
+        }
+        let reservation = Reservation {
+            registry: Arc::clone(self),
+            key,
+        };
 
         let (frames, receiver) = mpsc::channel(FRAME_CHANNEL_DEPTH);
         tokio::spawn(pump(
@@ -183,6 +271,8 @@ impl InteractiveRegistry {
             reservation,
             exec_id,
             output,
+            pending,
+            deadline,
             request.timeout,
             frames,
         ));
@@ -190,24 +280,29 @@ impl InteractiveRegistry {
     }
 
     /// Writes input starting at `offset`, returning how many bytes the command has taken in all.
-    pub async fn write(&self, id: &str, offset: u64, data: &[u8]) -> Result<u64, ControlError> {
-        let command = self.get(id)?;
+    pub async fn write(
+        &self,
+        session: &str,
+        id: &str,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<u64, ControlError> {
+        let command = self.get(session, id)?;
         let mut stdin = command.stdin.lock().await;
         let Stdin { pipe, accepted } = &mut *stdin;
 
         if offset > *accepted {
-            return Err(ControlError::Conflict(format!(
-                "the command has taken {accepted} bytes of input; a write at offset {offset} would leave a gap"
-            )));
+            return Err(ControlError::OffsetMismatch {
+                accepted: *accepted,
+                offset,
+            });
         }
         let already = usize::try_from(*accepted - offset).unwrap_or(usize::MAX);
         if already >= data.len() {
             return Ok(*accepted);
         }
         let Some(writer) = pipe.as_mut() else {
-            return Err(ControlError::Conflict(format!(
-                "interactive command '{id}' no longer reads its input"
-            )));
+            return Err(ControlError::StdinClosed);
         };
 
         let deadline = tokio::time::Instant::now() + STDIN_WRITE_WAIT;
@@ -217,9 +312,7 @@ impl InteractiveRegistry {
                 Err(_) => break,
                 Ok(Ok(0)) | Ok(Err(_)) => {
                     *pipe = None;
-                    return Err(ControlError::Conflict(format!(
-                        "interactive command '{id}' no longer reads its input"
-                    )));
+                    return Err(ControlError::StdinClosed);
                 }
                 Ok(Ok(written)) => {
                     *accepted += written as u64;
@@ -227,16 +320,18 @@ impl InteractiveRegistry {
                 }
             }
         }
-        // Flushed so the bytes leave this process now rather than when a buffer fills.
-        if writer.flush().await.is_err() {
-            *pipe = None;
+        // Flushed so the bytes leave this process now rather than when a buffer fills, and under
+        // the same wait, so a stalled socket cannot hold the request open.
+        match tokio::time::timeout_at(deadline, writer.flush()).await {
+            Ok(Ok(())) | Err(_) => {}
+            Ok(Err(_)) => *pipe = None,
         }
         Ok(*accepted)
     }
 
     /// Closes stdin. Closing twice is not an error.
-    pub async fn close_stdin(&self, id: &str) -> Result<(), ControlError> {
-        let command = self.get(id)?;
+    pub async fn close_stdin(&self, session: &str, id: &str) -> Result<(), ControlError> {
+        let command = self.get(session, id)?;
         let mut stdin = command.stdin.lock().await;
         if let Some(mut pipe) = stdin.pipe.take() {
             // Docker passes a half-close on to the command as end of input.
@@ -250,27 +345,18 @@ impl InteractiveRegistry {
     pub async fn signal(
         &self,
         manager: &LocalSandboxManager,
+        session: &str,
         id: &str,
         signal: alien_core::sandbox_signal::CommandSignal,
     ) -> Result<(), ControlError> {
-        let command = self.get(id)?;
-        let Some(group) = command.process_group.get().copied() else {
-            return Err(ControlError::Conflict(
-                "the command has not reported its process group yet".to_string(),
-            ));
-        };
-        kill_group(manager, &command.container_id, group, signal.posix_name()).await
-    }
-
-    /// How many commands are running.
-    #[cfg(test)]
-    pub fn len(&self) -> usize {
-        self.lock().len()
-    }
-
-    #[cfg(test)]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        let command = self.get(session, id)?;
+        kill_group(
+            manager,
+            &command.container_id,
+            command.process_group,
+            signal.posix_name(),
+        )
+        .await
     }
 }
 
@@ -304,19 +390,71 @@ fn validate(request: &StartRequest) -> Result<(), ControlError> {
     Ok(())
 }
 
+/// Output read before the pid line, in the order Docker delivered it.
+type Early = Vec<(bool, Vec<u8>)>;
+
+/// Reads the wrapper's pid line off the front of stderr, returning the pid and whatever output
+/// arrived around it. The line is the first thing on stderr, but Docker does not order stdout
+/// against stderr, so the program's first stdout can arrive before it and is kept, not refused.
+async fn announcement(output: &mut Output) -> Result<(i64, Early), String> {
+    let read = async {
+        let mut stderr = Vec::new();
+        let mut early: Early = Vec::new();
+        loop {
+            match output.next().await {
+                None => return Err("the command wrapper ended before reporting a pid".to_string()),
+                Some(Err(error)) => return Err(format!("reading the command wrapper: {error}")),
+                Some(Ok(bollard::container::LogOutput::StdOut { message })) => {
+                    early.push((true, message.to_vec()));
+                }
+                Some(Ok(bollard::container::LogOutput::StdErr { message })) => {
+                    stderr.extend_from_slice(&message);
+                    if let Some(end) = stderr.iter().position(|byte| *byte == b'\n') {
+                        let line = String::from_utf8_lossy(&stderr[..end]).into_owned();
+                        let pid = line.trim().parse::<i64>().map_err(|_| {
+                            format!("the command wrapper did not report a pid: {line:?}")
+                        })?;
+                        let rest = stderr[end + 1..].to_vec();
+                        if !rest.is_empty() {
+                            early.push((false, rest));
+                        }
+                        return Ok((pid, early));
+                    }
+                    if stderr.len() > MAX_ANNOUNCEMENT {
+                        return Err("the command wrapper did not report a pid".to_string());
+                    }
+                }
+                Some(Ok(_)) => {}
+            }
+        }
+    };
+    tokio::time::timeout(ANNOUNCEMENT_WAIT, read)
+        .await
+        .map_err(|_| {
+            format!(
+                "the command wrapper did not report a pid within {}s",
+                ANNOUNCEMENT_WAIT.as_secs()
+            )
+        })?
+}
+
 async fn kill_group(
     manager: &LocalSandboxManager,
     container_id: &str,
     group: i64,
     signal: &str,
 ) -> Result<(), ControlError> {
+    // Exit 3 means the group no longer exists; any other failure is the signal failing, which is
+    // not the same answer.
     let result = manager
         .exec(
             container_id,
             &[
                 "sh".to_string(),
                 "-c".to_string(),
-                "kill -s \"$1\" -- \"-$2\"".to_string(),
+                "kill -s \"$1\" -- \"-$2\" 2>/dev/null && exit 0; \
+                 kill -0 -- \"-$2\" 2>/dev/null && exit 2; exit 3"
+                    .to_string(),
                 "sh".to_string(),
                 signal.to_string(),
                 group.to_string(),
@@ -326,33 +464,28 @@ async fn kill_group(
         .map_err(|error| ControlError::Failed(error.to_string()))?;
     match result.exit_code {
         0 => Ok(()),
-        // `kill` found no such group: everything in it has exited.
-        _ => Err(ControlError::NotRunning),
+        3 => Err(ControlError::NotRunning),
+        code => Err(ControlError::Failed(format!(
+            "signalling the command's process group exited with {code}"
+        ))),
     }
 }
 
-/// Moves Docker's output to the caller until the command ends, enforcing its deadline.
+/// Moves Docker's output to the caller until the command ends, enforcing its deadline whether or
+/// not the caller is reading.
+#[allow(clippy::too_many_arguments)] // One task's whole state, handed over once.
 async fn pump(
     manager: Arc<LocalSandboxManager>,
     command: Arc<Command>,
     reservation: Reservation,
     exec_id: String,
-    mut output: std::pin::Pin<
-        Box<
-            dyn futures::Stream<
-                    Item = std::result::Result<
-                        bollard::container::LogOutput,
-                        bollard::errors::Error,
-                    >,
-                > + Send,
-        >,
-    >,
+    mut output: Output,
+    early: Early,
+    deadline: tokio::time::Instant,
     timeout: Duration,
     frames: mpsc::Sender<Frame>,
 ) {
     let mut seq = 0u64;
-    let mut announcement: Option<Vec<u8>> = Some(Vec::new());
-    let deadline = tokio::time::Instant::now() + timeout;
 
     enum Ending {
         Exited,
@@ -361,64 +494,69 @@ async fn pump(
         Failed(String),
     }
 
-    let ending = loop {
-        let item = tokio::select! {
+    // Sends one frame, giving up at the deadline or when the caller leaves: a caller that keeps
+    // the stream open without reading must not hold the command past its timeout.
+    async fn deliver(
+        frames: &mpsc::Sender<Frame>,
+        frame: Frame,
+        deadline: tokio::time::Instant,
+    ) -> Option<Ending> {
+        tokio::select! {
             biased;
-            () = frames.closed() => break Ending::Departed,
-            () = tokio::time::sleep_until(deadline) => break Ending::TimedOut,
-            item = output.next() => item,
-        };
-        let (stream_is_stdout, mut bytes) = match item {
-            None => break Ending::Exited,
-            Some(Err(error)) => break Ending::Failed(error.to_string()),
-            Some(Ok(bollard::container::LogOutput::StdOut { message })) => (true, message.to_vec()),
-            Some(Ok(bollard::container::LogOutput::StdErr { message })) => {
-                (false, message.to_vec())
-            }
-            Some(Ok(_)) => continue,
-        };
-
-        // The first stderr line is the wrapper's, naming the command's pid. Held back until whole.
-        if !stream_is_stdout {
-            if let Some(mut pending) = announcement.take() {
-                pending.extend_from_slice(&bytes);
-                match pending.iter().position(|byte| *byte == b'\n') {
-                    Some(end) => {
-                        let line = String::from_utf8_lossy(&pending[..end]).into_owned();
-                        let Ok(group) = line.trim().parse::<i64>() else {
-                            break Ending::Failed(format!(
-                                "the command wrapper did not report a pid: {line:?}"
-                            ));
-                        };
-                        let _ = command.process_group.set(group);
-                        bytes = pending[end + 1..].to_vec();
-                    }
-                    None if pending.len() > MAX_ANNOUNCEMENT => {
-                        break Ending::Failed(
-                            "the command wrapper did not report a pid".to_string(),
-                        );
-                    }
-                    None => {
-                        announcement = Some(pending);
-                        continue;
-                    }
-                }
-            }
+            () = tokio::time::sleep_until(deadline) => Some(Ending::TimedOut),
+            sent = frames.send(frame) => sent.err().map(|_| Ending::Departed),
         }
-        if bytes.is_empty() {
-            continue;
-        }
+    }
 
+    let mut ending = None;
+    for (is_stdout, bytes) in early {
         let data = BASE64.encode(&bytes);
-        let frame = if stream_is_stdout {
+        let frame = if is_stdout {
             Frame::Stdout { seq, data }
         } else {
             Frame::Stderr { seq, data }
         };
         seq += 1;
-        if frames.send(frame).await.is_err() {
-            break Ending::Departed;
+        ending = deliver(&frames, frame, deadline).await;
+        if ending.is_some() {
+            break;
         }
+    }
+
+    let ending = match ending {
+        Some(ending) => ending,
+        None => loop {
+            let item = tokio::select! {
+                biased;
+                () = frames.closed() => break Ending::Departed,
+                () = tokio::time::sleep_until(deadline) => break Ending::TimedOut,
+                item = output.next() => item,
+            };
+            let (stream_is_stdout, bytes) = match item {
+                None => break Ending::Exited,
+                Some(Err(error)) => break Ending::Failed(error.to_string()),
+                Some(Ok(bollard::container::LogOutput::StdOut { message })) => {
+                    (true, message.to_vec())
+                }
+                Some(Ok(bollard::container::LogOutput::StdErr { message })) => {
+                    (false, message.to_vec())
+                }
+                Some(Ok(_)) => continue,
+            };
+            if bytes.is_empty() {
+                continue;
+            }
+            let data = BASE64.encode(&bytes);
+            let frame = if stream_is_stdout {
+                Frame::Stdout { seq, data }
+            } else {
+                Frame::Stderr { seq, data }
+            };
+            seq += 1;
+            if let Some(ending) = deliver(&frames, frame, deadline).await {
+                break ending;
+            }
+        },
     };
 
     let terminal = match ending {
@@ -466,31 +604,22 @@ async fn pump(
         }
     };
 
-    let _ = frames.send(terminal).await;
+    // The output has ended, so Docker has reaped the exec: release the id before the terminal
+    // frame, which a slow reader can hold off indefinitely.
     drop(reservation);
+    let _ = frames.send(terminal).await;
 }
 
 /// Kills the command's group and waits for its output to end, which is Docker saying the exec's
 /// process is gone. Returns whether that was confirmed.
-async fn stop(
-    manager: &LocalSandboxManager,
-    command: &Command,
-    output: &mut std::pin::Pin<
-        Box<
-            dyn futures::Stream<
-                    Item = std::result::Result<
-                        bollard::container::LogOutput,
-                        bollard::errors::Error,
-                    >,
-                > + Send,
-        >,
-    >,
-) -> bool {
-    let Some(group) = command.process_group.get().copied() else {
-        // No pid yet means the wrapper has not run; closing stdin and the stream is all there is.
-        return false;
-    };
-    let _ = kill_group(manager, &command.container_id, group, "KILL").await;
+async fn stop(manager: &LocalSandboxManager, command: &Command, output: &mut Output) -> bool {
+    let _ = kill_group(
+        manager,
+        &command.container_id,
+        command.process_group,
+        "KILL",
+    )
+    .await;
     tokio::time::timeout(KILL_SETTLE, async {
         while output.next().await.is_some() {}
     })

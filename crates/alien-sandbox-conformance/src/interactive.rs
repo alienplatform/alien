@@ -87,6 +87,14 @@ pub async fn run_cases(sandbox: Arc<dyn Sandbox>, sandbox_id: &str) -> Vec<CaseR
         "droppedOutputKillsCommand",
         dropped_output_kills(&*sandbox, sandbox_id)
     );
+    case!(
+        "signalRightAfterStart",
+        signal_right_after_start(&*sandbox, sandbox_id)
+    );
+    case!(
+        "deadlineHoldsWhileNotReading",
+        deadline_without_reader(&*sandbox, sandbox_id)
+    );
 
     let started = Instant::now();
     let repl = python_repl(&*sandbox, sandbox_id).await;
@@ -394,6 +402,65 @@ async fn dropped_output_kills(sandbox: &dyn Sandbox, id: &str) -> Outcome {
             return Err("the command outlived its dropped output by 20s".to_string());
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// A signal sent the moment the start returns reaches the command: the start answers only once
+/// the command is running and can be signalled.
+async fn signal_right_after_start(sandbox: &dyn Sandbox, id: &str) -> Outcome {
+    let mut driven = Driven::start(sandbox, id, sh("exec sleep 300")).await?;
+    driven
+        .command
+        .input
+        .signal(CommandSignal::Kill)
+        .await
+        .map_err(|error| format!("signal: {error}"))?;
+    let code = driven.finish().await?;
+    Ok(format!("signalled immediately; ended with exit {code}"))
+}
+
+/// A caller that holds the output open without reading must not hold the command past its
+/// timeout: checked from a second command while the first one's output is still unread.
+async fn deadline_without_reader(sandbox: &dyn Sandbox, id: &str) -> Outcome {
+    let marker = format!("interactive-deadline-{}", std::process::id());
+    let mut request = sh(&format!(
+        "echo $$ > {marker}; exec yes interactive-deadline"
+    ));
+    request.timeout = Duration::from_secs(3);
+    let mut driven = Driven::start(sandbox, id, request).await?;
+
+    // Not reading: `yes` fills every buffer between it and this caller within the timeout.
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    let check = run(
+        sandbox,
+        id,
+        sh(&format!(
+            "kill -0 \"$(cat {marker})\" 2>/dev/null && echo alive || echo gone; rm -f {marker}"
+        )),
+    )
+    .await?;
+    if check.trim() != "gone" {
+        return Err("the command was still running 5s past its timeout while unread".to_string());
+    }
+
+    // Draining now must end in the timeout, not in an exit.
+    let deadline = tokio::time::Instant::now() + OUTPUT_WAIT;
+    loop {
+        match tokio::time::timeout_at(deadline, driven.command.output.next()).await {
+            Err(_) => return Err("the stream did not end after the deadline".to_string()),
+            Ok(None) => return Err("the stream ended without a terminal item".to_string()),
+            Ok(Some(Ok(CommandOutput::Exit { code, .. }))) => {
+                return Err(format!("ended with exit {code}, not the timeout"))
+            }
+            Ok(Some(Ok(_))) => continue,
+            Ok(Some(Err(error))) => {
+                return if error.to_string().contains("timeoutExceeded") {
+                    Ok("gone 5s past its timeout while unread; the stream ends with timeoutExceeded".to_string())
+                } else {
+                    Err(format!("ended with {error}"))
+                }
+            }
+        }
     }
 }
 
