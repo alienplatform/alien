@@ -387,6 +387,7 @@ async fn sync_with_manager(
     {
         deployment_state.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
     }
+    let installed_config_missing = installed_config_missing(state, &deployment_state).await?;
     let sync_request = SyncRequest {
         deployment_id: deployment_id.clone(),
         session: sync_session.clone(),
@@ -401,7 +402,8 @@ async fn sync_with_manager(
         operations_report,
         operations_config: Some(reported_operations_config(state.config.operations.as_ref())),
     };
-    let mut sync_input = SyncInput::builder(sync_request);
+    let mut sync_input =
+        SyncInput::builder(sync_request).installed_config_missing(installed_config_missing);
     if let Some(operator_image) = operator_image.cloned() {
         sync_input = sync_input.operator_image(operator_image);
     }
@@ -587,12 +589,14 @@ async fn sync_with_manager(
             // Platform claims maintenance on the operation whose apply this
             // Operator completed last (its applied operation). Any other
             // claim is new work: an update, a corrective target or a retry.
+            // A target with no claim that answers a missing config is the
+            // installed release sent again: refresh it in place.
             let maintenance = match sync_response.execution_claim.as_ref() {
                 Some(claim) => {
                     state.db.get_applied_operation_id().await?.as_deref()
                         == Some(claim.operation_id.as_str())
                 }
-                None => false,
+                None => installed_config_missing,
             };
             let repeated_failed_target = if sync_response.execution_claim == durable_execution.claim
             {
@@ -632,6 +636,27 @@ async fn sync_with_manager(
 
     secret_refresh?;
     Ok(has_update || state_hydrated)
+}
+
+/// Whether an enrolled Operator runs a settled release without its config. A
+/// token-mode Operator cleared the config after each apply; once it enrolls,
+/// it needs the config to keep workload credentials fresh.
+async fn installed_config_missing(
+    state: &OperatorState,
+    deployment_state: &alien_core::DeploymentState,
+) -> crate::error::Result<bool> {
+    let settled = deployment_state.target_release.is_none()
+        && matches!(
+            deployment_state.status,
+            DeploymentStatus::Running | DeploymentStatus::RefreshFailed
+        )
+        && deployment_state
+            .current_release
+            .as_ref()
+            .is_some_and(|release| release.release_id.is_some());
+    Ok(settled
+        && crate::daily_identity::has_runtime_identity(&state.db).await?
+        && state.db.get_deployment_config().await?.is_none())
 }
 
 /// Make `target_deployment` the Operator's target: record the release as the
@@ -1970,6 +1995,156 @@ mod tests {
             }
         }
         panic!("the deployment loop kept stepping");
+    }
+
+    /// A token-mode Operator clears its config after each apply. Once it enrolls
+    /// with a code it needs that config to refresh workload credentials, so it
+    /// asks for it, and refreshes the release the manager sends again in place.
+    #[tokio::test]
+    async fn an_operator_that_enrolled_after_a_token_install_gets_its_config_back() {
+        type Shared = (Arc<Mutex<Value>>, Arc<Mutex<Vec<Value>>>);
+        async fn serve(State((response, requests)): State<Shared>, Json(body): Json<Value>) -> Json<Value> {
+            requests.lock().unwrap().push(body);
+            Json(response.lock().unwrap().clone())
+        }
+
+        let vault_dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_VAULT_DATA_DIR", vault_dir.path());
+        let response = Arc::new(Mutex::new(json!({})));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/v1/sync", post(serve))
+            .route(
+                "/v1/identity/exchange",
+                post(|| async {
+                    Json(json!({
+                        "token": "ax_cap_v1_fixture",
+                        "expiresAt": chrono::Utc::now() + chrono::Duration::minutes(30),
+                    }))
+                }),
+            )
+            .with_state((response.clone(), requests.clone()));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let data_dir = tempfile::tempdir().unwrap();
+        let directory = data_dir.path().to_str().unwrap();
+        let db = OperatorDb::new(directory, TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_enrolled").await.unwrap();
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Test)
+                .data_dir(directory)
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .sync(SyncConfig {
+                    url: format!("http://{address}").parse().unwrap(),
+                    token: String::new(),
+                })
+                .build(),
+            db: Arc::new(db),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+        let url = format!("http://{address}");
+        let release = ReleaseInfo {
+            release_id: Some("rel_installed".to_string()),
+            version: Some("1.0.0".to_string()),
+            description: None,
+            stack: Stack::new("enrolled".to_string())
+                .add(
+                    alien_core::Storage::new("files".to_string()).build(),
+                    alien_core::ResourceLifecycle::Frozen,
+                )
+                .build(),
+        };
+        let mut config = alien_core::DeploymentConfig::builder()
+            .stack_settings(Default::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(Default::default())
+            .build();
+        let claim = json!({ "operationId": "duop_install", "attemptId": "att_1" });
+
+        // Token install: the applied config is cleared.
+        *response.lock().unwrap() = json!({
+            "executionClaim": claim,
+            "target": { "releaseInfo": release, "config": config },
+        });
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        run_deployment_until_idle(&state).await;
+        assert!(state.db.get_deployment_config().await.unwrap().is_none());
+        let installed = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(installed.status, DeploymentStatus::Running);
+        let ready_before = storage_ready_checks(&installed);
+
+        // helm upgrade to a code: the Operator enrolls. Without its config it
+        // cannot refresh the workloads.
+        state
+            .db
+            .write_daily_identity(&crate::daily_identity::DailyIdentityState {
+                manager_url: url.clone(),
+                audience: url.clone(),
+                deployment_id: "dep_enrolled".into(),
+                current: "ax_day_v1_fixture".into(),
+                pending: None,
+                pending_started_at: None,
+                expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
+                enrolled_code_hash: None,
+                pending_enrollment: None,
+            })
+            .await
+            .unwrap();
+        assert!(super::super::deployment::run_deployment_continuously(&state)
+            .await
+            .is_err());
+
+        // The Operator says its config is missing; the manager sends the
+        // running release again, with no claim.
+        config.runtime_identity_audience = Some(url.clone());
+        *response.lock().unwrap() = json!({
+            "target": { "releaseInfo": release, "config": config },
+        });
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        let asked = requests.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(asked["installedConfigMissing"], json!(true), "{asked}");
+        let accepted = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(accepted.status, DeploymentStatus::Running);
+        run_deployment_until_idle(&state).await;
+        let refreshed = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(refreshed.status, DeploymentStatus::Running);
+        assert!(refreshed.target_release.is_none());
+        assert!(storage_ready_checks(&refreshed) > ready_before);
+        assert!(state.db.get_deployment_config().await.unwrap().is_some());
+
+        // Idle passes now refresh with the kept config, and stop asking.
+        *response.lock().unwrap() = json!({});
+        super::super::deployment::run_deployment_continuously(&state)
+            .await
+            .expect("the installed config is back");
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
+        let later = requests.lock().unwrap().last().cloned().unwrap();
+        assert!(later.get("installedConfigMissing").is_none(), "{later}");
+
+        server.abort();
+        std::env::remove_var("TEST_VAULT_DATA_DIR");
     }
 
     /// A pull Operator never ran Ready on a settled deployment: every maintenance
