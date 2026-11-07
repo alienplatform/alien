@@ -157,9 +157,14 @@ class Run:
         self.exec_id = self.gcloud_json("iam", "service-accounts", "describe", self.sa["execution-sa"])["uniqueId"]
         verifier = f"serviceAccount:{self.sa['verifier']}"
         mgmt = f"serviceAccount:{self.sa['mgmt']}"
-        # The verifier writes the install's Cloud Run services (setup's custom role is narrower;
-        # its IAM is checked by the setup lock tests, not here).
-        self.bind_project(verifier, "roles/run.admin")
+        # The verifier's Cloud Run grants as setup renders them: one custom role, bound without a
+        # condition (Cloud Run doesn't evaluate resource.name conditions).
+        role_id = self.prefix.replace("-", "_") + "_cloud_run"
+        self.gcloud("iam", "roles", "create", role_id, f"--title={self.prefix} cloud run",
+                    "--permissions=run.services.create,run.services.update,run.services.delete,"
+                    "run.services.get,run.services.getIamPolicy,run.services.setIamPolicy")
+        self.created.append(("role", role_id))
+        self.bind_project(verifier, f"projects/{self.project}/roles/{role_id}")
         self.bind_project(verifier, "roles/parametermanager.parameterViewer")
         self.bind_project(verifier, "roles/artifactregistry.reader")
         ledger = f"projects/{self.project}/locations/global/parameters/signed-{self.prefix}-state"
@@ -285,6 +290,8 @@ class Run:
         for kind, name in reversed(self.created):
             if kind == "account":
                 self.gcloud("iam", "service-accounts", "delete", name, check=False)
+            elif kind == "role":
+                self.gcloud("iam", "roles", "delete", name, check=False)
 
     def audit(self):
         time.sleep(20)  # account deletion settles before it disappears from the list
@@ -297,6 +304,8 @@ class Run:
                  "--location=global") if f"signed-{self.prefix}-" in p["name"]]
         left += [r["name"] for r in self.gcloud_json("artifacts", "repositories", "list",
                  f"--location={self.region}") if r["name"].endswith(f"/{self.prefix}")]
+        left += [r["name"] for r in self.gcloud_json("iam", "roles", "list")
+                 if self.prefix.replace("-", "_") in r["name"] and not r.get("deleted")]
         policy = self.gcloud_json("projects", "get-iam-policy", self.project)
         left += [f"{b['role']} {m}" for b in policy.get("bindings", []) for m in b.get("members", [])
                  if self.prefix in m]
