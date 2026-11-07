@@ -3891,6 +3891,8 @@ async fn create_deployment_task(
 
     let stack_settings = alien_platform_api::types::NewDeploymentRequestStackSettings {
         airgapped: None,
+        // Setup reports signing settings; a deployment created here has none.
+        signing: None,
         quota_warning_overrides: Vec::new(),
         endpoint_access: network_args
             .endpoint_access

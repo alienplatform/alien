@@ -54,6 +54,7 @@ fn deployment_keeps_every_deployer_secret_report_field() {
         "purpose": "application",
         "stackSettings": {},
         "releaseChannel": "stable",
+        "protected": false,
         "retryRequested": false,
         "createdAt": "2026-10-06T00:00:00Z",
         "updatedAt": "2026-10-06T00:00:00Z",
