@@ -20,6 +20,21 @@ use crate::{ErrorData, Result};
 /// and locks the caller out. AWS uses the same 5 minute tolerance for SigV4.
 pub const ALLOWED_CLOCK_SKEW: chrono::TimeDelta = chrono::TimeDelta::minutes(5);
 
+/// Longest lifetime of a registry pull credential. Pods pull images with it
+/// from a Kubernetes Secret that the operator refreshes, so it may last as
+/// long as the operator's daily key. Pods then still start while the operator
+/// is down. The manager caps it at the key's own expiry.
+pub const REGISTRY_PULL_LIFETIME: chrono::TimeDelta = chrono::TimeDelta::hours(24);
+
+/// Every purpose other than registry pull lasts at most one hour.
+fn max_lifetime(purpose: &Value) -> chrono::TimeDelta {
+    if purpose.get("type").and_then(Value::as_str) == Some("registryPull") {
+        REGISTRY_PULL_LIFETIME
+    } else {
+        chrono::TimeDelta::hours(1)
+    }
+}
+
 /// Supplies fresh identity evidence. Implementations must not return a runtime
 /// capability as proof or fall back to an unrelated stored credential.
 #[async_trait]
@@ -241,7 +256,7 @@ impl RuntimeCredentials {
             let remaining = capability.expires_at - (self.clock)();
             if !capability.token.starts_with("ax_cap_v1_")
                 || remaining <= chrono::Duration::zero()
-                || remaining > chrono::Duration::hours(1) + ALLOWED_CLOCK_SKEW
+                || remaining > max_lifetime(&self.purpose) + ALLOWED_CLOCK_SKEW
             {
                 return Err(invalid("invalid capability file lifetime"));
             }
@@ -323,7 +338,7 @@ impl RuntimeCredentials {
         let remaining = credential.expires_at - now;
         if credential.token.is_empty()
             || remaining <= chrono::Duration::zero()
-            || remaining > chrono::Duration::hours(1) + ALLOWED_CLOCK_SKEW
+            || remaining > max_lifetime(&self.purpose) + ALLOWED_CLOCK_SKEW
         {
             return Err(invalid(
                 "identity exchange returned an invalid credential lifetime",
@@ -384,7 +399,7 @@ mod tests {
         Arc<Proof>,
         thread::JoinHandle<()>,
     ) {
-        fixture_for_receiver(replies, None)
+        fixture_for(replies, None, json!({"type":"telemetry"}))
     }
 
     fn fixture_for_receiver(
@@ -396,6 +411,20 @@ mod tests {
         Arc<Proof>,
         thread::JoinHandle<()>,
     ) {
+        fixture_for(replies, receiver, json!({"type":"telemetry"}))
+    }
+
+    fn fixture_for(
+        replies: Vec<(u16, Value)>,
+        receiver: Option<&str>,
+        purpose: Value,
+    ) -> (
+        RuntimeCredentials,
+        Arc<AtomicI64>,
+        Arc<Proof>,
+        thread::JoinHandle<()>,
+    ) {
+        let expected_purpose = purpose.clone();
         let exchange_path = if receiver.is_some() {
             "/v1/identity/scoped"
         } else {
@@ -434,7 +463,7 @@ mod tests {
                             let request: Value =
                                 serde_json::from_slice(&request[header_end + 4..]).unwrap();
                             assert_eq!(request["deploymentId"], "deployment-one");
-                            assert_eq!(request["purpose"], json!({"type":"telemetry"}));
+                            assert_eq!(request["purpose"], expected_purpose);
                             assert_eq!(request["proof"]["token"], "fixture-proof");
                             break;
                         }
@@ -451,7 +480,7 @@ mod tests {
             manager_url: url,
             audience: "manager-identity".into(),
             deployment_id: "deployment-one".into(),
-            purpose: json!({"type":"telemetry"}),
+            purpose,
         };
         let client = match receiver {
             Some(receiver) => {
@@ -766,6 +795,31 @@ mod tests {
         assert_eq!(client.token().await.unwrap(), "ahead");
         server.join().unwrap();
     }
+    /// The operator writes the pull credential into a Secret that pods read
+    /// while the operator may be down. It accepts one that lasts as long as
+    /// the daily key, and still refuses longer ones or long credentials for
+    /// any other purpose.
+    #[tokio::test]
+    async fn registry_pull_credential_may_last_as_long_as_the_daily_key() {
+        let day = 24 * 3600;
+        let (client, _, _, server) = fixture_for(
+            vec![
+                (200, credential("pull-day", day)),
+                (200, credential("pull-overlong", day + 301)),
+            ],
+            None,
+            json!({"type":"registryPull"}),
+        );
+        assert_eq!(client.token().await.unwrap(), "pull-day");
+        client.reject("pull-day").await;
+        assert!(client.token().await.is_err());
+        server.join().unwrap();
+
+        let (client, _, _, server) = fixture(vec![(200, credential("telemetry-day", day))]);
+        assert!(client.token().await.is_err());
+        server.join().unwrap();
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn capability_file_reopens_replacement_and_refuses_exact_expiry() {

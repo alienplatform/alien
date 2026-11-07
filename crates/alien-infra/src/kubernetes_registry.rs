@@ -76,7 +76,7 @@ pub(crate) async fn pull_credential(
         || credential.expires_at <= now
         || credential.expires_at
             > now
-                + chrono::Duration::hours(1)
+                + alien_client_core::runtime_credentials::REGISTRY_PULL_LIFETIME
                 + alien_client_core::runtime_credentials::ALLOWED_CLOCK_SKEW
     {
         return Err(invalid());
