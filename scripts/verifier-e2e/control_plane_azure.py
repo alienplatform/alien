@@ -13,7 +13,9 @@ install in a new resource group `<p>` (every name starts with `<p>`, everything 
     group, the verifier's own environment `<p>-verifier`, as setup renders both;
   - a registry `<p>acr` with two worker images and the verifier's, and a pull-only registry token
     named `deployment`, standing in for the manager's registry proxy and the deployment token;
-  - the verifier as Container App `<p>-verifier`, with public ingress.
+  - the verifier as Container App `<p>-verifier`, with public ingress behind Container Apps
+    authentication as setup renders it: Microsoft provider, Resource Manager audience, the caller
+    (standing in for management) the only allowed principal.
 No setup creates the worker's app. `protected_worker_update update` (alien-infra example,
 CLOUD=azure) runs the real stack executor and Azure worker controller with the caller's ARM token
 as management, and the script checks:
@@ -22,7 +24,10 @@ as management, and the script checks:
   1. an update moves it to the second image through the verifier;
   2. a release under a signer list setup didn't pin is refused with the verifier's reason, and the
      app keeps the second image;
-  3. Azure's activity log names the verifier's identity as the only writer of `<p>-api`.
+  3. Azure's activity log names the verifier's identity as the only writer of `<p>-api`;
+  4. before the cases: a request with no token gets 401, management's token reaches the verifier
+     (its own answer), and with another principal allowed instead, management's token gets 403
+     from Container Apps.
 Everything is deleted at the end (the vault purged) and the run fails if anything is left.
 
     scripts/verifier-e2e/control_plane_azure.py \\
@@ -36,6 +41,7 @@ on a disposable subscription. Requires Docker and crane.
 """
 
 import argparse
+import base64
 import datetime
 import json
 import os
@@ -301,8 +307,53 @@ class Run:
                     "scale": {"minReplicas": 0, "maxReplicas": 1},
                 },
             }})
-        log(f"verifier at {app['properties']['configuration']['ingress']['fqdn']}; waiting 60s for RBAC")
+        self.verifier_url = f"https://{app['properties']['configuration']['ingress']['fqdn']}/"
+        log(f"verifier at {self.verifier_url}; waiting 60s for RBAC")
         time.sleep(60)
+
+    def claims(self):
+        payload = self.token().split(".")[1]
+        return json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+
+    def allow(self, principal):
+        """Container Apps authentication on the verifier, as setup renders it, letting `principal` in."""
+        claims = self.claims()
+        self.arm("PUT", f"{self.verifier_app}/authConfigs/current", version=APPS_API, body={"properties": {
+            "platform": {"enabled": True},
+            "globalValidation": {"unauthenticatedClientAction": "Return401"},
+            "identityProviders": {"azureActiveDirectory": {
+                "enabled": True,
+                "registration": {"clientId": claims.get("appid", claims["oid"]),
+                                 "openIdIssuer": f"https://sts.windows.net/{claims['tid']}/"},
+                "validation": {"allowedAudiences": [ARM, ARM + "/"],
+                               "defaultAuthorizationPolicy": {"allowedPrincipals": {"identities": [principal]}}}}}}})
+        time.sleep(45)  # authentication settings reach the ingress
+
+    def call_verifier(self, token):
+        request = urllib.request.Request(self.verifier_url, method="POST", data=b"{}",
+                                         headers={"content-type": "application/json",
+                                                  **({"Authorization": f"Bearer {token}"} if token else {})})
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return response.status, response.read().decode()
+        except urllib.error.HTTPError as error:
+            return error.code, error.read().decode()
+
+    def authentication(self):
+        management = self.claims()["oid"]
+        self.allow(management)
+        anonymous = self.call_verifier(None)
+        allowed = self.call_verifier(self.token())
+        self.allow(str(uuid.uuid4()))
+        other = self.call_verifier(self.token())
+        self.allow(management)
+        reached = '"errorType"' in allowed[1]
+        self.record("4 the verifier answers only management: no token 401, management reaches it, "
+                    "another principal 403",
+                    anonymous[0] == 401 and reached and allowed[0] != 401 and other[0] == 403
+                    and '"errorType"' not in other[1],
+                    f"no-token={anonymous[0]} management={allowed[0]} {allowed[1][:200]} "
+                    f"other-principal={other[0]} {other[1][:100]}")
 
     # --- cases ------------------------------------------------------------------
 
@@ -439,6 +490,7 @@ class Run:
             self.images()
             self.environments()
             self.verifier()
+            self.authentication()
             self.cases()
             self.writers()
         except Exception as error:

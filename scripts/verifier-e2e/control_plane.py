@@ -29,10 +29,18 @@ move `api` to image B, and checks with the caller's own credentials:
      been applied (retrying it while it reports a failure, as the control plane does), the
      ledger is at 11 and the function runs 11's image, and stays there; every other call either
      applied or was refused as older or superseded, or failed and may be retried.
-  5. protected: release 12 gives the worker a schedule and a reserved concurrency of 2. The
-     update lands; management creates the schedule's rule, the verifier sets the concurrency and
-     lets that rule (and nothing else) invoke the function, and management itself is denied
-     AddPermission and PutFunctionConcurrency.
+  5. protected: release 13 gives the worker a schedule and a reserved concurrency (2, or 0
+     on an account with no room to reserve). The update lands; management creates the
+     schedule's rule, the verifier sets the concurrency and lets that rule (and nothing else)
+     invoke the function, and management itself is denied AddPermission and
+     PutFunctionConcurrency.
+
+  6. protected: tampered requests for release 12 are refused, each naming the field it
+     broke, and change nothing: an UpdateFunctionConfiguration with a layer, another role, a
+     changed env value or a field the verifier doesn't know (each after a valid
+     UpdateFunctionCode in the same request), and an UpdateFunctionCode to an image the release
+     doesn't sign. The function's RevisionId and image stay where they were. The untampered
+     request, built from the function's own configuration, is applied.
 
 Everything is named `<p>-...`, tagged with --tag, deleted at the end, and the run fails if
 anything named `<p>` is left.
@@ -251,7 +259,7 @@ class Run:
         image = self.image(install)
         time.sleep(10)
         events = aws_json("logs", "filter-log-events", "--log-group-name", f"/aws/lambda/{install}-verifier",
-                          "--filter-pattern", '"applied the signed function"', check=False).get("events", [])
+                          "--filter-pattern", '"applied the controller\'s checked write"', check=False).get("events", [])
         self.record("1 protected: the update goes through the verifier and lands",
                     result.returncode == 0 and outcome.get("outcome") == "synced" and image == self.images["b"] and events,
                     f"driver={outcome} image={image.rsplit('@', 1)[-1][:19]} verifier-log-lines={len(events)}")
@@ -312,13 +320,68 @@ class Run:
                     f"outcomes={outcomes} retries-of-11={retries} ledger-release={ledger.get('release')} "
                     f"image={image.rsplit('@', 1)[-1][:19]} 20s-later={later.rsplit('@', 1)[-1][:19]}")
 
+    def tamper(self):
+        install = f"{self.prefix}-p"
+        function = f"{install}-api"
+        signed = json.loads(self.driver("request", install, {"TO_IMAGE": self.images["a"],
+                                                              "SEQUENCE": "12"}).stdout)
+        live = aws_json("lambda", "get-function-configuration", "--function-name", function)
+        variables = live.get("Environment", {}).get("Variables", {})
+        configuration = {"Role": live["Role"], "Timeout": live["Timeout"], "MemorySize": live["MemorySize"],
+                         "Environment": {"Variables": variables}}
+        code = signed["applyWrite"]["writes"][0]
+
+        def request(writes):
+            return {"applyWrite": {**signed["applyWrite"], "writes": writes}}
+
+        def config_write(change):
+            body = json.loads(json.dumps(configuration))
+            change(body)
+            return {"updateFunctionConfiguration": {"functionName": function, "request": body}}
+
+        changed = "SIGNED_MODE"
+        cases = [
+            ("an extra layer", [code, config_write(lambda body: body.update(
+                Layers=[f"arn:aws:lambda:{REGION}:{self.account}:layer:{install}-x:1"]))], "/Layers"),
+            ("another role", [code, config_write(lambda body: body.update(
+                Role=f"arn:aws:iam::{self.account}:role/{install}-management"))], "/Role"),
+            (f"a changed env value ({changed})", [code, config_write(lambda body: body["Environment"]["Variables"]
+                                                                       .update({changed: "tampered"}))], changed),
+            ("an unknown field", [code, config_write(lambda body: body.update(Unknown="x"))], "/Unknown"),
+            ("an image the release doesn't sign", [{"updateFunctionCode": {
+                "functionName": function, "request": {"ImageUri": self.images["b"], "Publish": True}}}],
+             "/ImageUri"),
+        ]
+        answers = {}
+        for name, writes, row in cases:
+            before = aws_json("lambda", "get-function", "--function-name", function)
+            error, body = self.invoke(install, request(writes))
+            after = aws_json("lambda", "get-function", "--function-name", function)
+            reason = body.get("errorMessage", "") if isinstance(body, dict) else ""
+            answers[name] = body
+            unchanged = (after["Configuration"]["RevisionId"] == before["Configuration"]["RevisionId"]
+                         and after["Code"]["ImageUri"] == before["Code"]["ImageUri"])
+            self.record(f"6 protected: a request with {name} is refused naming {row}, and nothing is written",
+                        error is not None and body.get("errorType") == "VERIFIER_REFUSED" and row in reason
+                        and unchanged,
+                        f"reason={reason[:300]} revision-unchanged={unchanged}")
+        error, body = self.invoke(install, request([code, config_write(lambda body: None)]))
+        answers["untampered"] = body
+        (self.evidence / "tamper-answers.json").write_text(json.dumps(answers, indent=2))
+        self.record("6 protected: the same request untampered is applied",
+                    error is None and body.get("operations") == ["UpdateFunctionCode", "UpdateFunctionConfiguration"],
+                    f"answer={json.dumps(body)[:300]}")
+
     def access(self):
         install = f"{self.prefix}-p"
         management = self.management_env(install)
         rule = f"{install}-api-cron-0"
         self.created.append(("rule", rule))
+        # Lambda keeps 10 executions unreserved; an account with no room above that reserves 0.
+        room = aws_json("lambda", "get-account-settings")["AccountLimit"]["UnreservedConcurrentExecutions"] - 10
+        reservation = 2 if room >= 2 else 0
         update = {**management, "FROM_IMAGE": self.images["a"], "TO_IMAGE": self.images["a"], "PROTECTED": "1",
-                  "SEQUENCE": "12", "ACCESS": "1"}
+                  "SEQUENCE": "13", "ACCESS": "1", "ACCESS_CONCURRENCY": str(reservation)}
         result = self.driver("update", install, update, check=False)
         outcome = json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {}
         function = aws_json("lambda", "get-function", "--function-name", f"{install}-api", check=False)
@@ -332,7 +395,7 @@ class Run:
         granted = [{key: statement.get(key) for key in ("Sid", "Principal", "Condition")} for statement in statements]
         rule_exists = aws("events", "describe-rule", "--name", rule, check=False).returncode == 0
         self.record("5 protected: the verifier sets the signed concurrency and lets only the schedule's rule invoke",
-                    result.returncode == 0 and outcome.get("outcome") == "synced" and reserved == 2
+                    result.returncode == 0 and outcome.get("outcome") == "synced" and reserved == reservation
                     and granted == expected and rule_exists,
                     f"driver={json.dumps(outcome)[:300]} reserved={reserved} granted={granted} rule={rule_exists}")
         grant = aws("lambda", "add-permission", "--function-name", f"{install}-api", "--statement-id", "anyone",
@@ -411,6 +474,7 @@ class Run:
             self.install(f"{self.prefix}-u", protected=False)
             self.protected()
             self.burst()
+            self.tamper()
             self.access()
             self.unprotected()
         finally:

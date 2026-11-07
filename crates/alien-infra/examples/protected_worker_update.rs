@@ -15,9 +15,10 @@
 //!
 //! Environment: `PREFIX`, `FROM_IMAGE`, `TO_IMAGE`, `SEQUENCE` (the release's, 1 when unset),
 //! `NOT_AFTER` (RFC 3339, when the signer list expires; the same value for every command so the
-//! fingerprint matches), `ACCESS` (`1` gives the worker a schedule and a reserved concurrency), `PROTECTED` (`1` signs the release and sets the stack's signing) and
-//! `CLOUD` (`aws`, the default, `gcp` or `azure`). On AWS, the credentials to run as, normally the
-//! install's management role. On GCP, `GCP_PROJECT`, `GCP_PROJECT_NUMBER`, `GCP_REGION`,
+//! fingerprint matches), `ACCESS` (`1` gives the worker a schedule and a reserved concurrency of
+//! `ACCESS_CONCURRENCY`, 2 when unset), `PROTECTED` (`1` signs the release and sets the stack's
+//! signing) and `CLOUD` (`aws`, the default, `gcp` or `azure`). On AWS, the credentials to run
+//! as, normally the install's management role. On GCP, `GCP_PROJECT`, `GCP_PROJECT_NUMBER`, `GCP_REGION`,
 //! `GCP_TOKEN_FILE` (an access token allowed to impersonate it) and `MANAGEMENT_SA`, the
 //! management service account to run as, and `EXECUTION_SA_UNIQUE_ID`. On Azure,
 //! `AZURE_TOKEN_FILE` (JSON with an ARM `accessToken`, `subscription` and `tenant`), `AZURE_LOCATION`,
@@ -135,18 +136,33 @@ fn settings(prefix: &str) -> Result<SigningSettings, Error> {
 }
 
 /// The stack running `image`: as the vendor authors and signs it, or `deployed` with what
-/// preflights add for the platform.
-fn stack(image: &str, deployed: bool) -> Stack {
+/// preflights add for the platform. `access` gives the worker a schedule and a reserved limit.
+fn stack(image: &str, deployed: bool, access: bool) -> Stack {
     let mut worker = Worker::new(WORKER.to_string())
         .code(WorkerCode::Image {
             image: image.to_string(),
         })
         .permissions(PROFILE.to_string())
-        .memory_mb(256)
+        // Cloud Run gen2 takes 512 MiB at least; the WorkerMemoryCheck preflight, which this
+        // driver doesn't run, holds stacks to that.
+        .memory_mb(if matches!(platform(), Ok(Platform::Gcp)) {
+            512
+        } else {
+            256
+        })
         .build();
+    // A value the release signs, which a request may not change.
+    worker
+        .environment
+        .insert("SIGNED_MODE".to_string(), "signed".to_string());
     // Who may invoke the worker and how often: a schedule (once a year) and a reserved limit.
-    if std::env::var("ACCESS").as_deref() == Ok("1") {
-        worker.concurrency_limit = Some(2);
+    if access {
+        worker.concurrency_limit = Some(
+            std::env::var("ACCESS_CONCURRENCY")
+                .ok()
+                .and_then(|limit| limit.parse().ok())
+                .unwrap_or(2),
+        );
         worker.triggers = vec![WorkerTrigger::schedule("0 0 1 1 *")];
     }
     let mut stack = Stack::new("control-plane-e2e".to_string()).add(
@@ -354,6 +370,12 @@ fn azure_management() -> Result<AzureClientConfig, Error> {
     })
 }
 
+/// Whether the release being deployed gives the worker a schedule and a reserved limit; the
+/// install it updates runs the worker without them.
+fn access() -> bool {
+    std::env::var("ACCESS").as_deref() == Ok("1")
+}
+
 /// The management identity's GCP credentials: the access token in `GCP_TOKEN_FILE`
 /// impersonating `MANAGEMENT_SA`.
 fn gcp_management() -> Result<GcpClientConfig, Error> {
@@ -387,7 +409,7 @@ fn gcp_management() -> Result<GcpClientConfig, Error> {
 fn signed_release(image: &str, sequence: u64) -> Result<ReleaseStatements, Error> {
     let body = release_body(
         platform()?,
-        &stack(image, false),
+        &stack(image, false, access()),
         &ReleaseOptions {
             channel: CHANNEL.to_string(),
             ..Default::default()
@@ -402,7 +424,7 @@ fn signed_release(image: &str, sequence: u64) -> Result<ReleaseStatements, Error
 async fn update() -> Result<(), Error> {
     let prefix = env("PREFIX")?;
     let protected = env("PROTECTED")? == "1";
-    let target = stack(&env("TO_IMAGE")?, true);
+    let target = stack(&env("TO_IMAGE")?, true, access());
     let mut stack_settings = StackSettings::default();
     let mut statements = None;
     if protected {
@@ -435,7 +457,7 @@ async fn update() -> Result<(), Error> {
         &prefix,
         &account,
         &region,
-        &stack(&env("FROM_IMAGE")?, true),
+        &stack(&env("FROM_IMAGE")?, true, false),
         !env("FROM_IMAGE")?.is_empty(),
         &stack_settings,
     )?;

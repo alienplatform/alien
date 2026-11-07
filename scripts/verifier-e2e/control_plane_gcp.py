@@ -10,19 +10,26 @@ The GCP counterpart of `control_plane.py`. Sets up, as protected setup would, an
   - the signing settings and ledger in Parameter Manager (`signed-<p>-fingerprint`,
     `signed-<p>-state`), the verifier allowed to list and read them (parameterViewer) and to add
     ledger versions;
-  - the network protected setup creates by default: VPC `<p>-net` with subnet `<p>-workload`,
-    given to the verifier in VERIFIER_FUNCTION_VPC, and the verifier's shared compute role;
+  - a VPC `<p>-net` with subnet `<p>-workload`, which this install's setup doesn't name (the
+    driver's stack has no network, so the verifier gets no VERIFIER_FUNCTION_VPC), and the
+    verifier's shared compute role;
   - the verifier as Cloud Run service `<p>-verifier`.
 No setup creates the worker's service. As the management stand-in (the caller impersonates it),
 `protected_worker_update update` (alien-infra example, CLOUD=gcp) runs the real stack executor and
 GCP worker controller, which call the verifier with an ID token, and the script checks with the
 caller's credentials:
   0. the first deployment creates `<p>-api` through the verifier: the signed image, internal
-     ingress (the worker has no public endpoint), and the worker's account may invoke it;
+     ingress (the worker has no public endpoint), no network, and the worker's account may
+     invoke it;
   1. an update moves it to the second image through the verifier, and management's own
      run.services.update is denied;
   2. a release under a signer list setup didn't pin is refused with the verifier's reason, and the
-     service keeps the second image.
+     service keeps the second image;
+  3. tampered replaceService requests for release 4, sent to the verifier as management, are
+     refused, each naming the field it broke, and leave the service's generation unchanged: an
+     extra container, an image the release doesn't sign, another service account, a changed env
+     value, ingress opened to all, and a network setup didn't name. The untampered request,
+     built from the fields the controller sets on the live service, is applied.
 Everything is deleted at the end and the run fails if anything named `<p>` is left.
 
     scripts/verifier-e2e/control_plane_gcp.py \\
@@ -82,7 +89,7 @@ class Run:
 
     def gcloud(self, *args, check=True, token_file=None):
         command = ["gcloud", *args, "--project", self.project, "--quiet", "--format=json",
-                   f"--access-token-file={token_file or self.args.token_file}"]
+                   f"--access-token-file={token_file or self.token_copy()}"]
         result = subprocess.run(command, capture_output=True, text=True)
         if check and result.returncode != 0:
             raise RuntimeError(f"gcloud {' '.join(args[:3])} failed: {result.stderr.strip()[-1500:]}")
@@ -97,7 +104,25 @@ class Run:
         log(f"{name}: {'PASS' if ok else 'FAIL'} — {detail}")
 
     def token(self):
-        return pathlib.Path(self.args.token_file).read_text().strip()
+        # The token file is rewritten as it is refreshed; a read can land mid-rewrite, so take
+        # a value only once two reads a second apart agree.
+        previous = None
+        for _ in range(60):
+            try:
+                token = pathlib.Path(self.args.token_file).read_text().strip()
+            except OSError:
+                token = None
+            if token and token == previous:
+                return token
+            previous = token
+            time.sleep(1)
+        raise RuntimeError(f"could not read {self.args.token_file}")
+
+    def token_copy(self):
+        """The caller's token in a file of the run's own, which no refresh replaces mid-read."""
+        path = self.work / "caller-token"
+        path.write_text(self.token())
+        return str(path)
 
     def management_token_file(self):
         """An access token for the management stand-in, minted with the caller's token."""
@@ -114,7 +139,7 @@ class Run:
     def driver(self, command, env=None, check=True):
         variables = {**os.environ, "PREFIX": self.prefix, "NOT_AFTER": self.not_after, "CLOUD": "gcp",
                      "GCP_PROJECT": self.project, "GCP_REGION": self.region,
-                     "GCP_PROJECT_NUMBER": self.project_number, "GCP_TOKEN_FILE": self.args.token_file,
+                     "GCP_PROJECT_NUMBER": self.project_number, "GCP_TOKEN_FILE": self.token_copy(),
                      "MANAGEMENT_SA": self.sa["mgmt"], "EXECUTION_SA_UNIQUE_ID": getattr(self, "exec_id", ""),
                      **(env or {})}
         result = subprocess.run([self.args.driver, command], capture_output=True, text=True, env=variables)
@@ -228,8 +253,6 @@ class Run:
         env = self.work / "verifier-env.yaml"
         env.write_text(json.dumps({
             "VERIFIER_CLOUD": "gcp", "RUST_LOG": "info",
-            "VERIFIER_FUNCTION_VPC": json.dumps({"subnetIds": [self.subnet], "securityGroupIds": [],
-                                                 "egress": "ALL_TRAFFIC"}),
         }))
         self.gcloud("run", "deploy", f"{self.prefix}-verifier", f"--image={self.verifier_image}",
                     f"--region={self.region}", f"--service-account={self.sa['verifier']}",
@@ -278,10 +301,10 @@ class Run:
                       and f"serviceAccount:{self.sa['execution-sa']}" in binding.get("members", [])
                       for binding in policy.get("bindings", []))
         egress = self.egress()
-        self.record("0 the first deployment creates the worker's service through the verifier, in the network",
+        self.record("0 the first deployment creates the worker's service through the verifier, with no network",
                     result.returncode == 0 and outcome.get("outcome") == "synced"
                     and self.image() == self.images["a"] and ingress == "internal" and invoker
-                    and egress == (f"{self.prefix}-workload", "all-traffic"),
+                    and egress == ("", ""),
                     f"driver={outcome} image={self.image()[-19:]} ingress={ingress} invoker={invoker} "
                     f"egress={egress}")
 
@@ -294,10 +317,10 @@ class Run:
                              token_file=self.management_token_file())
         egress = self.egress()
         ingress = self.service().get("metadata", {}).get("annotations", {}).get("run.googleapis.com/ingress")
-        self.record("1 an update goes through the verifier and keeps the network and internal ingress; "
+        self.record("1 an update goes through the verifier and keeps internal ingress and no network; "
                     "management can't update the service itself",
                     result.returncode == 0 and outcome.get("outcome") == "synced" and image == self.images["b"]
-                    and egress == (f"{self.prefix}-workload", "all-traffic") and ingress == "internal"
+                    and egress == ("", "") and ingress == "internal"
                     and direct.returncode != 0 and "'run.services.update' denied" in direct.stderr,
                     f"driver={outcome} image={image[-19:]} egress={egress} ingress={ingress} "
                     f"direct={direct.stderr.strip()[-300:]}")
@@ -313,6 +336,95 @@ class Run:
                     and "does not match the pinned fingerprint" in json.dumps(outcome)
                     and self.image() == self.images["b"],
                     f"driver={json.dumps(outcome)[:400]} image={self.image()[-19:]}")
+
+    def call_verifier(self, payload):
+        """POST `payload` to the verifier as management, with its ID token: (status, body)."""
+        url = self.gcloud_json("run", "services", "describe", f"{self.prefix}-verifier",
+                               f"--region={self.region}")["status"]["url"]
+        minted = subprocess.run(
+            ["curl", "-s", "-X", "POST", "-H", f"Authorization: Bearer {self.token()}",
+             "-H", "Content-Type: application/json", "-d", json.dumps({"audience": url, "includeEmail": True}),
+             "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/"
+             f"{self.sa['mgmt']}:generateIdToken"], capture_output=True, text=True, check=True).stdout
+        headers = self.work / "verifier-headers"
+        headers.write_text(f"Authorization: Bearer {json.loads(minted)['token']}\n"
+                           "Content-Type: application/json\n")
+        body = self.work / "verifier-body.json"
+        body.write_text(json.dumps(payload))
+        result = subprocess.run(["curl", "-s", "-o", "-", "-w", "\n%{http_code}", "-X", "POST", "-H",
+                                 f"@{headers}", "--data-binary", f"@{body}", "--max-time", "600", url],
+                                capture_output=True, text=True, check=True).stdout
+        text, status = result.rsplit("\n", 1)
+        try:
+            return int(status), json.loads(text)
+        except json.JSONDecodeError:
+            return int(status), {"raw": text[:500]}
+
+    def live_service(self):
+        """The worker's service as Cloud Run's v2 API answers it."""
+        url = (f"https://run.googleapis.com/v2/projects/{self.project}/locations/{self.region}"
+               f"/services/{self.prefix}-api")
+        return json.loads(subprocess.run(["curl", "-s", "-H", f"Authorization: Bearer {self.token()}", url],
+                                         capture_output=True, text=True, check=True).stdout)
+
+    def tamper(self):
+        signed = json.loads(self.driver("request", {"TO_IMAGE": self.images["b"], "SEQUENCE": "4"}).stdout)
+        live = self.live_service()
+        (self.evidence / "tamper-live-service.json").write_text(json.dumps(live, indent=2))
+        # The fields the controller sets (build_cloud_run_service), as Cloud Run keeps them.
+        pick = lambda value, keys: {key: value[key] for key in keys if key in value}
+        service = pick(live, ["name", "description", "labels", "ingress", "invokerIamDisabled", "traffic"])
+        service["template"] = pick(live["template"], ["labels", "scaling", "timeout", "serviceAccount",
+                                                      "executionEnvironment", "maxInstanceRequestConcurrency",
+                                                      "vpcAccess"])
+        service["template"]["containers"] = [pick(container, ["name", "image", "env", "resources", "ports"])
+                                             for container in live["template"]["containers"]]
+
+        def request(change):
+            body = json.loads(json.dumps(service))
+            change(body)
+            return {"applyWrite": {**signed["applyWrite"], "writes": [
+                {"replaceService": {"name": f"{self.prefix}-api", "service": body}}]}}
+
+        env = service["template"]["containers"][0].get("env", [])
+        changed = "SIGNED_MODE"
+
+        def change_env(body):
+            for item in body["template"]["containers"][0]["env"]:
+                if item["name"] == changed:
+                    item["value"] = "tampered"
+
+        cases = [
+            ("an extra container", lambda body: body["template"]["containers"].append(
+                {"name": "extra", "image": self.images["a"]}), "/template/containers"),
+            ("an image the release doesn't sign", lambda body: body["template"]["containers"][0].update(
+                image=self.images["a"]), "/image"),
+            ("another service account", lambda body: body["template"].update(
+                serviceAccount=self.sa["verifier"]), "/template/serviceAccount"),
+            (f"a changed env value ({changed})", change_env, changed),
+            ("ingress opened to all", lambda body: body.update(ingress="INGRESS_TRAFFIC_ALL"), "/ingress"),
+            ("a network setup didn't name", lambda body: body["template"].update(vpcAccess={
+                "networkInterfaces": [{"subnetwork": "projects/" + self.subnet.split("/projects/", 1)[1]}],
+                "egress": "ALL_TRAFFIC"}), "/template/vpcAccess"),
+        ]
+        answers = {}
+        for name, change, row in cases:
+            generation = self.live_service().get("generation")
+            status, body = self.call_verifier(request(change))
+            answers[name] = {"status": status, "body": body}
+            now = self.live_service().get("generation")
+            reason = body.get("errorMessage", "")
+            self.record(f"3 a request with {name} is refused naming {row}, and nothing is written",
+                        status == 403 and body.get("errorType") == "VERIFIER_REFUSED" and row in reason
+                        and now == generation,
+                        f"status={status} reason={reason[:300]} generation={generation}->{now}")
+        status, body = self.call_verifier(request(lambda body: None))
+        answers["untampered"] = {"status": status, "body": body}
+        (self.evidence / "tamper-answers.json").write_text(json.dumps(answers, indent=2))
+        self.record("3 the same request untampered is applied",
+                    status == 200 and body.get("operations") == ["ReplaceService"]
+                    and self.image() == self.images["b"],
+                    f"status={status} answer={json.dumps(body)[:300]}")
 
     # --- cleanup ----------------------------------------------------------------
 
@@ -385,6 +497,7 @@ class Run:
             self.network()
             self.verifier()
             self.cases()
+            self.tamper()
         finally:
             self.cleanup()
             self.audit()
