@@ -25,7 +25,7 @@ alien login
 alien init && cd alien
 alien dev        # run the app locally, no cloud account needed
 alien release    # build and publish a release
-alien onboard acme --platforms kubernetes
+alien onboard acme --allow @acme.com --platforms kubernetes
 ```
 
 The [Quickstart](https://alien.dev/docs/quickstart) walks through it.

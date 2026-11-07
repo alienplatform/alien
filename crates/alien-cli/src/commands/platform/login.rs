@@ -70,7 +70,7 @@ pub async fn login_task(_args: LoginArgs, ctx: ExecutionMode) -> Result<()> {
     println!("  {}  Link a project directory", command("alien link"));
     println!(
         "  {}  Set up customer models",
-        command("alien --project <name> onboard <customer> --setup-items models")
+        command("alien --project <name> onboard <customer-name> --allow <email|@domain> --setup-items models")
     );
     println!(
         "  {}  Publish an application",

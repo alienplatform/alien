@@ -8,6 +8,13 @@
       "when": 1768147524220,
       "tag": "0000_initial_schema",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1793381925853,
+      "tag": "0001_deployment_token_expiry",
+      "breakpoints": true
     }
   ]
 }

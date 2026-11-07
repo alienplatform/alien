@@ -1252,7 +1252,7 @@ async fn get_project_task(
     println!(
         "{} {}",
         dim_label("Next"),
-        command("alien onboard <customer-name>")
+        command("alien onboard <customer-name> --allow <email|@domain>")
     );
 
     Ok(())
@@ -1313,7 +1313,7 @@ async fn create_project_task(
             "{} {}",
             dim_label("Next"),
             command(&format!(
-                "alien --project {} onboard <customer-name>",
+                "alien --project {} onboard <customer-name> --allow <email|@domain>",
                 project.name.as_str()
             ))
         );
