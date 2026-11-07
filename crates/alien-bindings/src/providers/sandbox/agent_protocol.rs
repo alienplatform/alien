@@ -420,8 +420,18 @@ pub(super) async fn send_raw(
 
 /// Read an error without letting a proxy's response consume unbounded memory or time.
 /// An incomplete body cannot establish whether a command was executed.
-pub(super) async fn error_body(mut response: reqwest::Response, operation: &str) -> Result<String> {
-    const MAX_ERROR_BODY: usize = 4096;
+pub(super) async fn error_body(response: reqwest::Response, operation: &str) -> Result<String> {
+    let body = bounded_body(response, operation).await?;
+    Ok(String::from_utf8_lossy(&body).into_owned())
+}
+
+/// Reads a short answer's whole body within the response deadline, refusing one larger than any
+/// the agent sends. A body that stalls or overflows reads as the agent not having answered.
+pub(super) async fn bounded_body(
+    mut response: reqwest::Response,
+    operation: &str,
+) -> Result<Vec<u8>> {
+    const MAX_BODY: usize = 4096;
     let status = response.status();
     let read = async {
         let mut body = Vec::new();
@@ -434,17 +444,17 @@ pub(super) async fn error_body(mut response: reqwest::Response, operation: &str)
                 &format!("{operation} returned {status} and its body could not be read"),
             ))?
         {
-            if chunk.len() > MAX_ERROR_BODY - body.len() {
+            if chunk.len() > MAX_BODY - body.len() {
                 return Err(AlienError::new(unanswered(
                     operation,
                     &format!(
-                        "{operation} returned {status} and its body exceeded {MAX_ERROR_BODY} bytes"
+                        "{operation} returned {status} and its body exceeded {MAX_BODY} bytes"
                     ),
                 )));
             }
             body.extend_from_slice(&chunk);
         }
-        Ok(String::from_utf8_lossy(&body).into_owned())
+        Ok(body)
     };
     tokio::time::timeout(AGENT_RESPONSE_TIMEOUT, read)
         .await
