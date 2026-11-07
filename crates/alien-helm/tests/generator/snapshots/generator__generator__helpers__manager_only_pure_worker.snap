@@ -1297,18 +1297,37 @@ stringData:
 {{- end }}
 
 === templates/registry-secret.yaml ===
-{{- if and (dig "pullWithManagementToken" false .Values.runtime.image) .Values.management.token }}
+{{- $pull := dig "pullWithManagementToken" false .Values.runtime.image }}
+{{- if and $pull (or .Values.management.token .Values.management.enrollmentCode) }}
 {{- $registry := first (splitList "/" .Values.runtime.image.repository) }}
-{{- $auth := printf "%s:%s" (default "deployment" .Values.management.name) .Values.management.token | b64enc }}
+{{- $name := printf "%s-registry" (include "deployment.fullname" .) }}
+{{- $user := default "deployment" .Values.management.name }}
+{{- $codeHash := "" }}
+{{- $config := "" }}
+{{- if .Values.management.token }}
+{{- $config = dict "auths" (dict $registry (dict "auth" (printf "%s:%s" $user .Values.management.token | b64enc))) | toJson | b64enc }}
+{{- else }}
+{{- $codeHash = .Values.management.enrollmentCode | sha256sum }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+{{- if and $existing (eq (dig "metadata" "annotations" "alien.dev/enrollment-code-sha256" "" $existing) $codeHash) (hasKey (default dict $existing.data) ".dockerconfigjson") }}
+{{- $config = index $existing.data ".dockerconfigjson" }}
+{{- else }}
+{{- $config = dict "auths" (dict $registry (dict "auth" (printf "%s:%s" $user .Values.management.enrollmentCode | b64enc))) | toJson | b64enc }}
+{{- end }}
+{{- end }}
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ include "deployment.fullname" . }}-registry
+  name: {{ $name }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
+  {{- if $codeHash }}
+  annotations:
+    alien.dev/enrollment-code-sha256: {{ $codeHash | quote }}
+  {{- end }}
 type: kubernetes.io/dockerconfigjson
 data:
-  .dockerconfigjson: {{ dict "auths" (dict $registry (dict "auth" $auth)) | toJson | b64enc }}
+  .dockerconfigjson: {{ $config }}
 {{- end }}
 
 === templates/configmap.yaml ===
@@ -1381,7 +1400,7 @@ spec:
       automountServiceAccountToken: {{ .Values.runtime.automountServiceAccountToken }}
       securityContext:
         {{- toYaml .Values.runtime.security.podSecurityContext | nindent 8 }}
-      {{- $pullWithToken := and (dig "pullWithManagementToken" false .Values.runtime.image) .Values.management.token }}
+      {{- $pullWithToken := and (dig "pullWithManagementToken" false .Values.runtime.image) (or .Values.management.token .Values.management.enrollmentCode) }}
       {{- if or .Values.runtime.imagePullSecrets $pullWithToken }}
       imagePullSecrets:
         {{- with .Values.runtime.imagePullSecrets }}
@@ -1498,6 +1517,10 @@ spec:
               value: /etc/deployment/secrets/enrollment-code
             - name: ALIEN_MANAGER_AUDIENCE
               value: {{ .Values.management.audience | quote }}
+            {{- if dig "pullWithManagementToken" false .Values.runtime.image }}
+            - name: OPERATOR_REGISTRY_SECRET
+              value: {{ printf "%s-registry" (include "deployment.fullname" .) | quote }}
+            {{- end }}
             {{- else }}
             - name: SYNC_TOKEN_FILE
               value: /etc/deployment/secrets/sync-token

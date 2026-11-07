@@ -217,6 +217,17 @@ impl SqliteRuntimeIdentityStore {
         Ok(self.key_state(deployment_id).await?.map(|(_, state)| state))
     }
 
+    /// Whether `code` is an unexpired enrollment code, used or not.
+    pub async fn code_is_live(&self, code: &str, now: DateTime<Utc>) -> Result<bool, AlienError> {
+        Ok(self
+            .row(
+                "SELECT 1 FROM runtime_enrollment_codes WHERE code_hash = ?1 AND expires_at > ?2",
+                (sha256_hash(code), now.timestamp()),
+            )
+            .await?
+            .is_some())
+    }
+
     /// The deployment's key state when `key` is its current, unexpired key.
     pub async fn verify_key(
         &self,

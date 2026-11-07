@@ -136,6 +136,13 @@ pub trait RuntimeIdentityVerifier: Send + Sync {
         audience: &str,
     ) -> Result<VerifiedRuntimeIdentity, AlienError>;
 
+    /// Whether `code` is an unexpired enrollment code. Before it enrolls, an
+    /// operator pulls its own image from this manager with the code. This
+    /// never consumes the code. Implementations without codes refuse.
+    async fn enrollment_code_is_live(&self, _code: &str) -> Result<bool, AlienError> {
+        Ok(false)
+    }
+
     /// Issue a one-hour, one-use enrollment code for this deployment's operator.
     /// The caller is already authorized to update the deployment.
     async fn issue_enrollment_code(

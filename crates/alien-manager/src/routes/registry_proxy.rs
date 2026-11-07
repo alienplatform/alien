@@ -849,11 +849,6 @@ async fn proxy_pull(
     method: axum::http::Method,
     Path(path): Path<String>,
 ) -> Response {
-    let subject = match super::auth::require_auth(&state, &headers).await {
-        Ok(s) => s,
-        Err(e) => return oci_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", e.to_string()),
-    };
-
     if let Err(refused) = require_literal_oci_path(&path) {
         return refused;
     }
@@ -863,6 +858,25 @@ async fn proxy_pull(
     let oci = match parse_oci_path(oci_path_str) {
         Ok(oci) => oci,
         Err(refused) => return refused,
+    };
+    let subject = match super::auth::require_auth(&state, &headers).await {
+        Ok(s) => s,
+        Err(e) => {
+            // An operator that has not enrolled yet pulls its own image with
+            // its enrollment code. That code opens nothing else.
+            if oci.repo == super::operator_image::OPERATOR_REPOSITORY
+                && super::operator_image::enrollment_code_pull(&state, &headers).await
+            {
+                return super::operator_image::relay_upstream(
+                    &state,
+                    &method,
+                    oci_path_str,
+                    &headers,
+                )
+                .await;
+            }
+            return oci_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", e.to_string());
+        }
     };
     // Capability credentials pull nothing, charts and the Operator image
     // included, so they are refused before the pull is routed.

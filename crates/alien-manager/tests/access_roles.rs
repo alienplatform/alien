@@ -343,6 +343,94 @@ async fn capability_credentials_cannot_pull_charts_or_the_operator_image() {
     }
 }
 
+/// Before it enrolls, an operator pulls its own image from the manager with
+/// its one-hour code, the only credential its chart holds. The code pulls the
+/// Operator image and nothing else, and stops working when it expires.
+#[tokio::test]
+async fn an_enrollment_code_pulls_only_the_operator_image() {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let (mut state, deployment_id, _directory) = state().await;
+    let upstream = MockServer::start_async().await;
+    let manifest = upstream
+        .mock_async(|when, then| {
+            when.method(GET).path("/v2/ops/alien-operator/manifests/v1");
+            then.status(200)
+                .header("content-type", "application/vnd.oci.image.manifest.v1+json")
+                .body("{\"schemaVersion\":2}");
+        })
+        .await;
+    let identity_directory = tempfile::tempdir().unwrap();
+    let store = Arc::new(
+        alien_manager::stores::sqlite::SqliteRuntimeIdentityStore::new(Arc::new(
+            SqliteDatabase::new(&identity_directory.path().join("id.db").to_string_lossy())
+                .await
+                .unwrap(),
+        )),
+    );
+    let now = Arc::new(std::sync::Mutex::new(chrono::Utc::now()));
+    let clock = now.clone();
+    let verifier = alien_manager::auth::standalone_identity::StandaloneRuntimeIdentity::with_clock(
+        store.clone(),
+        state.deployment_store.clone(),
+        Arc::new(NoCredentials),
+        Arc::new(move || *clock.lock().unwrap()),
+    )
+    .unwrap();
+    let mut charts = alien_manager::routes::charts::ChartSettings::new(
+        Some(format!("{}/ops/alien-operator:v1", upstream.address())),
+        true,
+    );
+    charts.enrollment_codes = Some(Arc::new(verifier));
+    state.charts = Some(Arc::new(charts));
+    let (code, _) = store
+        .issue_enrollment_code(&deployment_id, *now.lock().unwrap())
+        .await
+        .unwrap();
+
+    let basic_pull = |password: String, path: &'static str| {
+        let state = state.clone();
+        async move {
+            let request = Request::builder()
+                .uri(format!("/v2/{path}"))
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Basic {}", STANDARD.encode(format!("prod:{password}"))),
+                )
+                .body(Body::empty())
+                .unwrap();
+            let response = alien_manager::routes::registry_proxy::router()
+                .with_state(state)
+                .oneshot(request)
+                .await
+                .unwrap();
+            let status = response.status();
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            (status, String::from_utf8_lossy(&body).into_owned())
+        }
+    };
+
+    let (status, body) = basic_pull(code.clone(), "alien-operator/manifests/v1").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body, "{\"schemaVersion\":2}");
+    manifest.assert_hits_async(1).await;
+
+    // The code opens no other repository.
+    let (status, _) = basic_pull(code.clone(), "artifacts/default/manifests/v1").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // An unknown code pulls nothing.
+    let (status, _) = basic_pull(
+        "ax_enroll_unknown".to_string(),
+        "alien-operator/manifests/v1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // After its hour the code pulls nothing.
+    *now.lock().unwrap() += chrono::Duration::hours(1);
+    let (status, _) = basic_pull(code, "alien-operator/manifests/v1").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    manifest.assert_hits_async(1).await;
+}
+
 struct LocalVaultCredentials(String);
 
 #[async_trait]

@@ -206,6 +206,11 @@ pub struct Args {
     #[arg(long, env = "OPERATOR_SELF_UPDATE_DEPLOYMENT")]
     pub self_update_deployment: Option<String>,
 
+    /// Pull Secret of this Operator's own pod. Once enrolled, the Operator
+    /// keeps it filled with its registry pull credential.
+    #[arg(long, env = "OPERATOR_REGISTRY_SECRET")]
+    pub registry_secret: Option<String>,
+
     /// Air-gapped: Secret that bundles write deployment targets into.
     #[arg(long, env = "AIRGAP_TARGET_SECRET")]
     pub airgap_target_secret: Option<String>,
@@ -814,6 +819,7 @@ async fn run_operator_cli(
         .local_debug_enabled(args.enable_local_debug)
         .tunnel_enabled(args.tunnel_enabled)
         .maybe_self_update_deployment(args.self_update_deployment)
+        .maybe_registry_secret(args.registry_secret)
         .maybe_resource_prefix(args.operator_resource_prefix.clone())
         .maybe_airgap_target_secret(args.airgap_target_secret)
         .maybe_airgap_status_secret(args.airgap_status_secret)
