@@ -94,26 +94,21 @@ impl Stack {
     /// `target_resources` so every var reaches only its own resource.
     ///
     /// Workers receive platform pushes; Containers and Daemons run the pull
-    /// receiver, which reads this fixed environment contract:
+    /// receiver, which reads this environment:
     ///   - `ALIEN_COMMANDS_URL` (Plain) — base receiver URL
-    ///   - `ALIEN_COMMANDS_TOKEN` (Secret, only if a token is present)
+    ///   - the credential, chosen per target by `credential`
     ///   - `ALIEN_COMMANDS_TARGET_RESOURCE_ID` (Plain) — this resource's id
     ///   - `ALIEN_COMMANDS_TARGET_RESOURCE_TYPE` (Plain) — `container`/`daemon`
     ///
     /// `ALIEN_DEPLOYMENT_ID` is intentionally NOT emitted here: the manager and
-    /// operator already inject it deployment-wide (`target_resources: None`), so
-    /// it reaches every Container/Daemon via that path — re-scoping it per
-    /// resource would be redundant. This mirrors the worker helper, which also
-    /// relies on the deployment-wide `ALIEN_DEPLOYMENT_ID`.
+    /// operator already inject it deployment-wide (`target_resources: None`).
     ///
-    /// Workers are excluded here, and a
-    /// commands-disabled Container/Daemon is never a `command_targets()` entry,
-    /// so it receives nothing — the receiver fail-fasts on a partial config, so
-    /// a deployment-wide flag would crash it at startup.
+    /// Workers are excluded here, and a commands-disabled Container/Daemon is
+    /// never a `command_targets()` entry, so it receives nothing.
     pub fn receiver_command_env_vars(
         &self,
         commands_url: &str,
-        commands_token: Option<&str>,
+        credential: impl Fn(&str) -> ReceiverCommandCredential,
     ) -> Result<Vec<EnvironmentVariable>> {
         use crate::commands_types::CommandTargetType;
 
@@ -126,23 +121,37 @@ impl Stack {
         }) {
             let resource_type = target.resource_type.as_str();
             let id = target.resource_id;
-            // Four of the five receiver vars without the token would make
-            // `Receiver::from_env` crash-loop the workload at startup; fail
-            // the deploy here instead, where the cause is nameable.
-            let token = require_command_token(commands_token, &id)?;
-            vars.extend([
-                scoped(
-                    crate::ENV_ALIEN_COMMANDS_URL,
-                    commands_url,
-                    EnvironmentVariableType::Plain,
-                    &id,
-                ),
-                scoped(
+            vars.push(scoped(
+                crate::ENV_ALIEN_COMMANDS_URL,
+                commands_url,
+                EnvironmentVariableType::Plain,
+                &id,
+            ));
+            match credential(&id) {
+                // Without a credential the receiver cannot start; fail the
+                // deploy here, where the cause is nameable.
+                ReceiverCommandCredential::Token(token) => vars.push(scoped(
                     crate::ENV_ALIEN_COMMANDS_TOKEN,
-                    token,
+                    require_command_token(token.as_deref(), &id)?,
                     EnvironmentVariableType::Secret,
                     &id,
-                ),
+                )),
+                ReceiverCommandCredential::HostFiles => vars.extend([
+                    scoped(
+                        crate::ENV_ALIEN_COMMANDS_CAPABILITY_FILE,
+                        crate::HOST_COMMANDS_CAPABILITY_FILE,
+                        EnvironmentVariableType::Plain,
+                        &id,
+                    ),
+                    scoped(
+                        crate::ENV_ALIEN_COMMANDS_TOKEN_FILE,
+                        crate::HOST_COMMANDS_TOKEN_FILE,
+                        EnvironmentVariableType::Plain,
+                        &id,
+                    ),
+                ]),
+            }
+            vars.extend([
                 scoped(
                     crate::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE,
                     resource_type,
@@ -161,6 +170,17 @@ impl Stack {
     }
 }
 
+/// How a Container or Daemon command receiver gets its credential.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReceiverCommandCredential {
+    /// A bearer token in `ALIEN_COMMANDS_TOKEN`. `None` fails the deploy.
+    Token(Option<String>),
+    /// The machine that runs the workload writes a short-lived credential to
+    /// `HOST_COMMANDS_CAPABILITY_FILE` and `HOST_COMMANDS_TOKEN_FILE` and
+    /// refreshes it. No token is put into the workload's environment.
+    HostFiles,
+}
+
 /// The deployment token, or a deploy-time error naming the command-enabled
 /// resource that needs it — a runtime crash-loop on a missing env var is the
 /// only alternative.
@@ -177,6 +197,7 @@ fn require_command_token<'a>(token: Option<&'a str>, resource_id: &str) -> Resul
 
 #[cfg(test)]
 mod tests {
+    use super::ReceiverCommandCredential;
     use crate::resource::ResourceLifecycle;
     use crate::{
         Container, ContainerCode, Daemon, DaemonCode, ResourceSpec, Stack, Storage, Worker,
@@ -452,7 +473,9 @@ mod tests {
             .build();
 
         let vars = stack
-            .receiver_command_env_vars("https://cmd.example.test/v1", Some("tok"))
+            .receiver_command_env_vars("https://cmd.example.test/v1", |_| {
+                ReceiverCommandCredential::Token(Some("tok".into()))
+            })
             .expect("token present");
 
         // Every var is scoped to exactly one command-enabled Container/Daemon —
@@ -535,7 +558,9 @@ mod tests {
         // Receiver::from_env crash-loop at startup; the deploy must fail.
         for token in [None, Some(""), Some("   \n")] {
             let error = stack
-                .receiver_command_env_vars("https://cmd.example.test/v1", token)
+                .receiver_command_env_vars("https://cmd.example.test/v1", |_| {
+                    ReceiverCommandCredential::Token(token.map(str::to_string))
+                })
                 .expect_err("missing or blank token must fail the env build");
             assert_eq!(error.code, "COMMAND_TOKEN_MISSING");
             assert!(error.to_string().contains("container-a"));
@@ -543,7 +568,9 @@ mod tests {
 
         let original = "  nonempty-token  ";
         let vars = stack
-            .receiver_command_env_vars("https://cmd.example.test/v1", Some(original))
+            .receiver_command_env_vars("https://cmd.example.test/v1", |_| {
+                ReceiverCommandCredential::Token(Some(original.into()))
+            })
             .expect("non-empty token");
         assert!(vars
             .iter()
@@ -567,7 +594,9 @@ mod tests {
 
         // Only a Worker target exists → receiver helper yields nothing.
         assert!(stack
-            .receiver_command_env_vars("https://cmd.example.test/v1", Some("tok"))
+            .receiver_command_env_vars("https://cmd.example.test/v1", |_| {
+                ReceiverCommandCredential::Token(Some("tok".into()))
+            })
             .expect("no command targets")
             .is_empty());
     }
