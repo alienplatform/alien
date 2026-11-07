@@ -256,13 +256,25 @@ impl AutomaticSetup {
             if state["status"] == "running" && state["currentReleaseId"] == release {
                 bail!("The release went running without setup");
             }
-            if state["status"] == "preflights-failed" {
-                anyhow::ensure!(
-                    state["error"]["code"] == "DEPLOYMENT_SETUP_REQUIRED",
-                    "Expected the release to stop for setup: {}",
+            if state["status"] == "update-failed" {
+                // Preflight failures wrap the setup request, so look through the sources.
+                let setup_required =
+                    std::iter::successors(Some(&state["error"]), |error| error.get("source"))
+                        .find(|error| error["code"] == "DEPLOYMENT_SETUP_REQUIRED");
+                let Some(setup_required) = setup_required else {
+                    bail!("Expected the release to stop for setup: {}", state["error"]);
+                };
+                return Ok(setup_required["message"].to_string());
+            }
+            if state["status"]
+                .as_str()
+                .is_some_and(|status| status.ends_with("-failed"))
+            {
+                bail!(
+                    "The release failed without asking for setup: {} {}",
+                    state["status"],
                     state["error"]
                 );
-                return Ok(state["error"]["message"].to_string());
             }
             anyhow::ensure!(
                 tokio::time::Instant::now() < deadline,

@@ -603,6 +603,11 @@ impl PreflightRunner {
                 && direct_setup
                 && !config.setup_run
                 && !imported_setup_authorized
+                && crate::mutations::remote_stack_management::stack_renders_management_identity(
+                    platform,
+                    config.base_platform,
+                    &config.stack_settings,
+                )
                 && crate::compatibility::PermissionProfilesUnchangedCheck.management_needs_setup(
                     old_stack,
                     &mutated_stack,
@@ -610,7 +615,8 @@ impl PreflightRunner {
                 )
             {
                 // A direct setup's runtime applies the other changes itself, but never
-                // rewrites its own management identity: only a setup run does. Without
+                // rewrites its own management identity: only a setup run does. Local has
+                // no management identity, so `alien dev` updates are not stopped. Without
                 // this, the update would run on the old grants, and the setup run that
                 // applies the new ones would find nothing pending.
                 return Err(AlienError::new(ErrorData::SetupRequired {
@@ -1562,8 +1568,6 @@ mod setup_update_authorization_tests {
     #[cfg(feature = "runtime-checks")]
     #[tokio::test]
     async fn permission_updates_require_exact_setup_authority() {
-        use alien_core::permissions::{ManagementPermissions, PermissionProfile};
-
         let baseline = empty_stack();
         let mut target = baseline.clone();
         target.permissions.management = ManagementPermissions::Extend(
@@ -1651,7 +1655,7 @@ mod setup_update_authorization_tests {
         installed: Option<&Stack>,
         state: &StackState,
         config: &DeploymentConfig,
-        authorization: Option<&alien_core::SetupUpdateAuthorization>,
+        authorization: Option<&SetupUpdateAuthorization>,
     ) -> Result<(Stack, PreflightSummary, bool)> {
         runner
             .run_deployment_time_preflights(
@@ -1671,12 +1675,10 @@ mod setup_update_authorization_tests {
     /// A direct setup's runtime never rewrites its own management identity, so an update
     /// that needs a wider management grant must stop for setup instead of running on the
     /// installed grants. A setup run applies it; narrowing keeps running on the wider
-    /// installed grants until the next setup run.
+    /// installed grants until the next setup run. Local has no management identity.
     #[cfg(feature = "runtime-checks")]
     #[tokio::test]
     async fn direct_setup_runtime_requires_setup_for_a_wider_management_grant() {
-        use alien_core::permissions::{ManagementPermissions, PermissionProfile};
-
         let with_management = |grants: &[&str]| {
             let mut stack = empty_stack();
             stack.permissions.management = ManagementPermissions::Extend(
@@ -1720,6 +1722,18 @@ mod setup_update_authorization_tests {
                 .await
                 .expect("unchanged management permissions need no setup");
         }
+
+        // `alien dev` has no management identity, so a Local update is never stopped for it.
+        let (prepared, _, _) = direct_setup_preflight(
+            &runner,
+            &widened,
+            Some(&installed),
+            &StackState::new(Platform::Local),
+            &runtime,
+        )
+        .await
+        .expect("a local update has no management grant to wait for");
+        assert_eq!(prepared.permissions, widened.permissions);
     }
 
     /// Automatic AWS setup installs provision grants for every resource type, so a release
@@ -1727,8 +1741,6 @@ mod setup_update_authorization_tests {
     #[cfg(feature = "runtime-checks")]
     #[tokio::test]
     async fn automatic_aws_runtime_adds_resources_but_stops_for_a_wider_management_grant() {
-        use alien_core::permissions::{ManagementPermissions, PermissionProfile};
-
         let runner = PreflightRunner::with_registry({
             let mut registry = PreflightRegistry::new();
             registry.add_mutation(Box::new(
@@ -1795,8 +1807,6 @@ mod setup_update_authorization_tests {
     #[cfg(feature = "runtime-checks")]
     #[tokio::test]
     async fn direct_setup_runtime_accepts_a_rerun_authorization_for_a_wider_management_grant() {
-        use alien_core::permissions::{ManagementPermissions, PermissionProfile};
-
         let with_management = |grants: &[&str]| {
             let mut stack = empty_stack();
             stack.permissions.management = ManagementPermissions::Extend(
@@ -1807,7 +1817,7 @@ mod setup_update_authorization_tests {
         let installed = with_management(&["storage/provision"]);
         let widened = with_management(&["storage/provision", "storage/data-read"]);
         let other = with_management(&["storage/provision", "storage/data-write"]);
-        let authorization = |target: &Stack| alien_core::SetupUpdateAuthorization {
+        let authorization = |target: &Stack| SetupUpdateAuthorization {
             nonce: "nonce".to_string(),
             baseline_frozen_digest: installed.setup_update_digest(),
             target_frozen_digest: target.setup_update_digest(),
