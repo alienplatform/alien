@@ -1702,6 +1702,45 @@ impl RunnerConfigSources<'_> {
     }
 }
 
+/// The deployment's own environment variables plus those its stack inputs map
+/// to, resolved against `stack` (the target release's stack). Both the push loop
+/// and pull targets deliver this set.
+pub(crate) fn resolve_input_environment(
+    stack: &alien_core::Stack,
+    deployment: &DeploymentRecord,
+) -> alien_core::Result<Vec<EnvironmentVariable>> {
+    let mut env_vars: Vec<EnvironmentVariable> = deployment
+        .user_environment_variables
+        .clone()
+        .unwrap_or_default();
+    // Inputs mapped to environment variables resolve against the
+    // target release, so a release that adds a mapped input takes
+    // effect without re-onboarding. Variables the deployment already
+    // carries win: embedders that resolve inputs themselves (into the
+    // deployment's variables) keep their values, and those mappings aren't
+    // resolved a second time. An input's other mappings still apply.
+    let unresolved_inputs: Vec<_> = stack
+        .inputs
+        .iter()
+        .map(|input| {
+            let mut input = input.clone();
+            input.env.retain(|mapping| {
+                !env_vars
+                    .iter()
+                    .any(|existing| existing.name == mapping.name)
+            });
+            input
+        })
+        .collect();
+    let input_env = alien_core::resolve_stack_input_environment_variables(
+        &unresolved_inputs,
+        &deployment.input_values,
+        deployment.platform,
+    )?;
+    env_vars.extend(input_env);
+    Ok(env_vars)
+}
+
 /// The environment variables snapshot injected into the deployment's
 /// workloads: `ALIEN_DEPLOYMENT_ID`, `ALIEN_DEPLOYMENT_NAME`, command delivery
 /// configuration, and the deployment's own variables.
@@ -1758,8 +1797,18 @@ fn deployment_environment_variables(
         );
     }
 
-    if let Some(ref user_vars) = deployment.user_environment_variables {
-        vars.extend(user_vars.iter().cloned());
+    match deployment_stack {
+        Some(deployment_stack) => vars.extend(
+            resolve_input_environment(deployment_stack, deployment)
+                .map_err(|e| e.into_generic())?,
+        ),
+        None => vars.extend(
+            deployment
+                .user_environment_variables
+                .iter()
+                .flatten()
+                .cloned(),
+        ),
     }
 
     // Build deterministic hash from variable contents so the infra executor
@@ -2018,11 +2067,12 @@ fn supplied_release_stacks(deployment: &DeploymentRecord) -> (Option<Stack>, Opt
 mod tests {
     use super::{
         active_work_statuses, build_monitoring_config, commands_receiver_env_vars,
-        credential_error_retry_remaining, get_or_create_local_bindings_provider,
-        has_remote_stack_management_outputs, manager_candidate_statuses,
-        needs_provision_capability, parse_status, resolve_deployment_management_config,
-        retryable_failed_statuses, should_wait_for_credential_handoff, supplied_release_stacks,
-        worker_commands_push_env_vars, DeploymentLoop, ManagementIdentityUse,
+        credential_error_retry_remaining, deployment_environment_variables,
+        get_or_create_local_bindings_provider, has_remote_stack_management_outputs,
+        manager_candidate_statuses, needs_provision_capability, parse_status,
+        resolve_deployment_management_config, retryable_failed_statuses,
+        should_wait_for_credential_handoff, supplied_release_stacks, worker_commands_push_env_vars,
+        DeploymentLoop, ManagementIdentityUse,
         ManagementIdentityUse::{Refresh, RendersSetup, Unused},
         ManagementRenderer, ProcessOptions, RunnerConfigSources, CREDENTIAL_ERROR_GRACE_PERIOD,
     };
@@ -5548,6 +5598,44 @@ mod tests {
             tenant(config.management_config),
             Some(serde_json::json!("supplied-tenant"))
         );
+    }
+
+    /// Stack inputs that map to environment variables reach pushed workloads,
+    /// as they reach pull targets: a generated secret input lands in the
+    /// snapshot for the resources its mapping targets.
+    #[test]
+    fn push_snapshot_includes_input_environment_mappings() {
+        let input = serde_json::from_value(serde_json::json!({
+            "id": "databasePassword", "kind": "secret", "providedBy": ["developer"],
+            "required": true, "label": "Database password", "description": "Generated",
+            "generate": {"length": 32},
+            "env": [{"name": "DATABASE_PASSWORD", "targetResources": ["api"]}]
+        }))
+        .unwrap();
+        let stack = Stack::new("inputs-stack".to_string())
+            .inputs(vec![input])
+            .build();
+        let mut deployment = deployment_record(DeploymentStatus::Provisioning, None);
+        deployment.input_values.insert(
+            "databasePassword".to_string(),
+            serde_json::json!("generated-value"),
+        );
+
+        let snapshot = deployment_environment_variables(
+            &crate::config::ManagerConfig::default(),
+            &deployment,
+            Some(&stack),
+        )
+        .expect("snapshot");
+
+        let variable = snapshot
+            .variables
+            .iter()
+            .find(|variable| variable.name == "DATABASE_PASSWORD")
+            .expect("the input's mapping is in the snapshot");
+        assert_eq!(variable.value, "generated-value");
+        assert_eq!(variable.var_type, EnvironmentVariableType::Secret);
+        assert_eq!(variable.target_resources, Some(vec!["api".to_string()]));
     }
 
     /// A control plane's config carries its own copy of the deployment's

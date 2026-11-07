@@ -38,8 +38,8 @@ use crate::commands::{
     CustomersArgs, DomainsArgs, ExamplesArgs, UsageArgs,
 };
 use crate::commands::{
-    build_and_post_release_simple, build_command, build_dev_status, commands_task,
-    commands_task_dev, debug_task, debug_task_dev, deploy_task, deployments_task,
+    build_and_post_release_simple, build_command, build_dev_status, collect_flag_input_values,
+    commands_task, commands_task_dev, debug_task, debug_task_dev, deploy_task, deployments_task,
     destroy_local_deployment, destroy_task, ensure_server_running_for_dev_session,
     fetch_all_dev_deployment_live_states, init_task, local_operations_task, logs_task,
     onboard_task, operations_task, prepare_dev_session_deployment, release_command, releases_task,
@@ -60,6 +60,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager::AlienManager;
 use alien_manager_api::{Client as AlienManagerClient, SdkResultExt as _};
 use clap::{CommandFactory, Parser, Subcommand};
+use std::collections::HashMap;
 use std::env;
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -331,6 +332,25 @@ pub struct DevCommand {
     #[arg(long = "secret-env")]
     pub secret_env_vars: Vec<String>,
 
+    /// Stack input value for the deployment this session creates (id=value)
+    #[arg(long = "input")]
+    pub input_values: Vec<String>,
+
+    /// Secret stack input value for the deployment this session creates (id=value).
+    /// The value is visible in the process list; prefer --secret-input-file or
+    /// --secret-input-env
+    #[arg(long = "secret-input")]
+    pub secret_input_values: Vec<String>,
+
+    /// Secret stack input read from a file (ID=PATH), or from piped stdin with ID=-.
+    /// The contents are used byte for byte, including any trailing newline
+    #[arg(long = "secret-input-file", value_name = "ID=PATH")]
+    pub secret_input_files: Vec<String>,
+
+    /// Secret stack input inherited from the CLI environment (ID=SOURCE_ENV)
+    #[arg(long = "secret-input-env", value_name = "ID=SOURCE_ENV")]
+    pub secret_input_env_vars: Vec<String>,
+
     #[command(subcommand)]
     pub subcommand: Option<DevSubcommand>,
 }
@@ -555,6 +575,41 @@ fn parse_secret_env_var_with(
         is_secret: true,
         target_resources,
     })
+}
+
+/// Stack input values for the deployment an `alien dev` session creates. Secret
+/// inputs can come from argv, a file or stdin, or the CLI environment; an input
+/// given by more than one secret source is refused.
+fn dev_session_input_values(
+    dev_cmd: &DevCommand,
+    read_env: impl Fn(&str) -> std::result::Result<String, std::env::VarError>,
+) -> Result<HashMap<String, serde_json::Value>> {
+    let mut values =
+        collect_flag_input_values(&dev_cmd.input_values, &dev_cmd.secret_input_values)?;
+    let mut secrets = commands::read_secret_input_files(&dev_cmd.secret_input_files)?;
+    for input in &dev_cmd.secret_input_env_vars {
+        let (id, source_env) = commands::parse_stack_input_arg(input, "--secret-input-env")?;
+        let value = read_env(&source_env).map_err(|_| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: format!(
+                    "Could not load secret input '{id}' from environment variable '{source_env}'"
+                ),
+            })
+        })?;
+        secrets.push((id, value));
+    }
+    for (id, value) in secrets {
+        if values
+            .insert(id.clone(), serde_json::Value::String(value))
+            .is_some()
+        {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "secret-input".to_string(),
+                message: format!("Input '{id}' was given twice."),
+            }));
+        }
+    }
+    Ok(values)
 }
 
 pub(crate) fn parse_single_env_var(input: &str, is_secret: bool) -> Result<CliEnvVar> {
@@ -933,6 +988,62 @@ mod tests {
                 "demo",
             ])
             .expect("release --version should parse");
+    }
+
+    /// `alien dev` creates its deployment with stack inputs, and a secret input
+    /// can stay out of argv: it can come from a file or the CLI environment.
+    #[test]
+    fn dev_session_collects_stack_inputs_from_flags_files_and_env() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let password = dir.path().join("password");
+        std::fs::write(&password, "from-file").expect("write secret");
+        let parse = |extra: &[&str]| {
+            let mut args = vec![
+                "alien".to_string(),
+                "dev".to_string(),
+                "--input".to_string(),
+                "organizationName=Example".to_string(),
+                "--secret-input".to_string(),
+                "apiToken=from-argv".to_string(),
+                "--secret-input-file".to_string(),
+                format!("adminPassword={}", password.display()),
+                "--secret-input-env".to_string(),
+                "signingKey=SIGNING_KEY".to_string(),
+            ];
+            args.extend(extra.iter().map(|arg| arg.to_string()));
+            let cli = Cli::try_parse_from(args).expect("dev input flags should parse");
+            let Some(Commands::Dev(dev)) = cli.command else {
+                panic!("expected the dev command");
+            };
+            dev
+        };
+        let read_env = |name: &str| match name {
+            "SIGNING_KEY" => Ok("from-env".to_string()),
+            _ => Err(std::env::VarError::NotPresent),
+        };
+
+        let values = dev_session_input_values(&parse(&[]), read_env).expect("inputs collected");
+        assert_eq!(values.len(), 4);
+        assert_eq!(values["organizationName"], serde_json::json!("Example"));
+        assert_eq!(values["apiToken"], serde_json::json!("from-argv"));
+        assert_eq!(values["adminPassword"], serde_json::json!("from-file"));
+        assert_eq!(values["signingKey"], serde_json::json!("from-env"));
+
+        let twice = dev_session_input_values(
+            &parse(&["--secret-input-env", "adminPassword=SIGNING_KEY"]),
+            read_env,
+        )
+        .expect_err("same input from a file and the environment")
+        .to_string();
+        assert!(twice.contains("'adminPassword' was given twice"), "{twice}");
+        let missing = dev_session_input_values(
+            &parse(&["--secret-input-env", "other=UNSET_VARIABLE"]),
+            read_env,
+        )
+        .expect_err("unset source variable")
+        .to_string();
+        assert!(missing.contains("UNSET_VARIABLE"), "{missing}");
+        assert!(!missing.contains("from-env"), "{missing}");
     }
 
     #[test]
@@ -1360,12 +1471,14 @@ async fn handle_dev_command(dev_cmd: DevCommand) -> Result<()> {
 
     match dev_cmd.subcommand {
         None => {
+            let input_values = dev_session_input_values(&dev_cmd, |source| std::env::var(source))?;
             run_dev_session(
                 port,
                 dev_cmd.skip_build,
                 dev_cmd.status_file,
                 dev_cmd.deployment_name,
                 parsed_env_vars,
+                input_values,
                 dev_cmd.config,
             )
             .await?;
@@ -1396,6 +1509,7 @@ async fn run_dev_session(
     status_file: Option<PathBuf>,
     deployment_name: String,
     user_env_vars: Vec<CliEnvVar>,
+    input_values: HashMap<String, serde_json::Value>,
     config_file: Option<PathBuf>,
 ) -> Result<()> {
     #[cfg(unix)]
@@ -1504,7 +1618,8 @@ async fn run_dev_session(
         if !is_tty {
             eprint!("Starting... ");
         }
-        prepare_dev_session_deployment(&deployment_name, port, core_env_vars.clone()).await?;
+        prepare_dev_session_deployment(&deployment_name, port, core_env_vars.clone(), input_values)
+            .await?;
 
         let screen = DevCardScreen::new(steps.live_region());
         let watch = watch_dev_deployments_until_ctrl_c(

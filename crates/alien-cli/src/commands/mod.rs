@@ -61,7 +61,9 @@ pub use commands::{commands_task, commands_task_dev, CommandsArgs};
 #[cfg(feature = "platform")]
 pub use customers::{customers_task, CustomersArgs};
 pub use debug::{debug_task, debug_task_dev, DebugArgs};
+pub(crate) use deploy::{collect_flag_input_values, parse_stack_input_arg};
 pub use deploy::{deploy_task, validate_deploy_config, DeployArgs};
+pub(crate) use deployment_actions::read_secret_input_files;
 pub use deployments::{deployments_task, DeploymentsArgs};
 pub use destroy::{destroy_task, DestroyArgs};
 pub use dev_helpers::{
