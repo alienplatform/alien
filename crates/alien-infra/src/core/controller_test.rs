@@ -334,6 +334,8 @@ pub struct SingleControllerExecutor {
     client_config: ClientConfig,
     // User-provided stack settings
     stack_settings: StackSettings,
+    release_statements: Option<alien_core::ReleaseStatements>,
+    signed_config: Option<alien_core::SignedStatement>,
     setup_run: bool,
     setup_run_id: Option<String>,
     // Platform management configuration
@@ -412,6 +414,8 @@ impl SingleControllerExecutor {
             service_provider: &self.service_provider,
             deployment_config: &DeploymentConfig::builder()
                 .stack_settings(self.stack_settings.clone())
+                .maybe_release_statements(self.release_statements.clone())
+                .maybe_signed_config(self.signed_config.clone())
                 .setup_run(self.setup_run)
                 .maybe_setup_run_id(self.setup_run_id.clone())
                 .maybe_management_config(self.management_config.clone())
@@ -676,6 +680,8 @@ impl SingleControllerExecutor {
             .expect("the resource is in the desired stack");
         let deployment_config = DeploymentConfig::builder()
             .stack_settings(self.stack_settings.clone())
+            .maybe_release_statements(self.release_statements.clone())
+            .maybe_signed_config(self.signed_config.clone())
             .setup_run(self.setup_run)
             .maybe_setup_run_id(self.setup_run_id.clone())
             .maybe_management_config(self.management_config.clone())
@@ -779,6 +785,8 @@ pub struct SingleControllerExecutorBuilder {
     controller: Option<Box<dyn ResourceController>>,
     platform: Option<Platform>,
     stack_settings: StackSettings,
+    release_statements: Option<alien_core::ReleaseStatements>,
+    signed_config: Option<alien_core::SignedStatement>,
     setup_run: bool,
     management_config: Option<ManagementConfig>,
     gcp_federation_scope: Option<alien_core::GcpFederationScope>,
@@ -814,6 +822,8 @@ impl SingleControllerExecutorBuilder {
             controller: None,
             platform: None,
             stack_settings: StackSettings::default(),
+            release_statements: None,
+            signed_config: None,
             setup_run: true,
             management_config: None,
             gcp_federation_scope: None,
@@ -891,6 +901,18 @@ impl SingleControllerExecutorBuilder {
 
     pub fn stack_settings(mut self, settings: StackSettings) -> Self {
         self.stack_settings = settings;
+        self
+    }
+
+    /// Sets the signed release, signer lists and signed config the runner hands a protected
+    /// install's controllers.
+    pub fn signed_release(
+        mut self,
+        statements: alien_core::ReleaseStatements,
+        config: Option<alien_core::SignedStatement>,
+    ) -> Self {
+        self.release_statements = Some(statements);
+        self.signed_config = config;
         self
     }
 
@@ -1527,6 +1549,8 @@ impl SingleControllerExecutorBuilder {
             platform,
             client_config,
             stack_settings: self.stack_settings,
+            release_statements: self.release_statements,
+            signed_config: self.signed_config,
             setup_run: self.setup_run,
             setup_run_id,
             management_config,

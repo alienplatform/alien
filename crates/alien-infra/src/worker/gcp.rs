@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-use crate::core::{linked_bindings, EnvironmentVariableBuilder, ResourcePermissionsHelper};
+use crate::core::{
+    linked_bindings, verifier, EnvironmentVariableBuilder, ResourcePermissionsHelper,
+};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -2352,7 +2354,11 @@ impl GcpWorkerController {
         // updated, such as a Cloud SQL server CA rotation the Postgres binding picks up on its
         // own Ready. Compare the bindings rendered now with the ones the service runs, from the
         // read the heartbeat already made, and refresh only when they differ.
-        if let Some(live) = live_service_env(&service) {
+        // On a protected install the verifier renders the bindings; what it wrote is checked
+        // against the signed release, not against management's rendering.
+        let live = live_service_env(&service)
+            .filter(|_| ctx.deployment_config.stack_settings.signing.is_none());
+        if let Some(live) = live {
             let drifted = linked_bindings::linked_binding_drift(
                 ctx,
                 &worker_config.runtime_binding_links(),
@@ -2545,6 +2551,22 @@ impl GcpWorkerController {
 
         let cfg = ctx.desired_resource_config::<Worker>()?;
         let previous_cfg = ctx.previous_resource_config::<Worker>()?;
+        // On a protected install the verifier writes the service from the signed release;
+        // management may not.
+        if let Some(statements) = verifier::protected_statements(ctx, &cfg.id)? {
+            let service_name = self.service_name.clone().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: cfg.id.clone(),
+                    message: "Service name not set in state".to_string(),
+                })
+            })?;
+            self.apply_through_verifier(ctx, statements, cfg, &service_name)
+                .await?;
+            return Ok(HandlerAction::Continue {
+                state: WaitingForServiceUpdate,
+                suggested_delay: None,
+            });
+        }
         // An update whose own configuration is unchanged was planned because a linked resource
         // was. It still re-renders the linked bindings: the resource it links may publish a new
         // binding.
@@ -4869,27 +4891,7 @@ impl GcpWorkerController {
             .to_string();
         let service_account = Some(service_account);
 
-        // Extract container image
-        let image = match &cfg.code {
-            alien_core::WorkerCode::Image { image } => image.clone(),
-            alien_core::WorkerCode::Source { .. } => {
-                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: format!(
-                        "Worker '{}' is configured with source code, but only pre-built images are supported in alien-infra.",
-                        cfg.id
-                    ),
-                    resource_id: Some(cfg.id.clone()),
-                }));
-            }
-        };
-
-        // Resolve proxy URIs to native GAR URIs. Cloud Run can only pull from GAR.
-        let image = if let Some(ref native_host) = ctx.deployment_config.native_image_host {
-            alien_core::image_rewrite::resolve_native_image_uri(&image, native_host)
-                .unwrap_or(image)
-        } else {
-            image
-        };
+        let image = Self::service_image(ctx, cfg)?;
 
         // Prepare environment variables
         let env_vars = self
@@ -5090,6 +5092,61 @@ impl GcpWorkerController {
                 false
             }
         })
+    }
+
+    /// The image the service pulls: the configured image, with a proxy URI resolved to the
+    /// native Artifact Registry one, since Cloud Run pulls only from there.
+    fn service_image(ctx: &ResourceControllerContext<'_>, cfg: &Worker) -> Result<String> {
+        let image = match &cfg.code {
+            alien_core::WorkerCode::Image { image } => image.clone(),
+            alien_core::WorkerCode::Source { .. } => {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "Worker '{}' is configured with source code, but only pre-built images are supported in alien-infra.",
+                        cfg.id
+                    ),
+                    resource_id: Some(cfg.id.clone()),
+                }));
+            }
+        };
+        Ok(
+            if let Some(ref native_host) = ctx.deployment_config.native_image_host {
+                alien_core::image_rewrite::resolve_native_image_uri(&image, native_host)
+                    .unwrap_or(image)
+            } else {
+                image
+            },
+        )
+    }
+
+    /// Has the install's verifier write this worker's service from the signed release, with
+    /// the values the release lets the deployment provide, and waits for its answer.
+    async fn apply_through_verifier(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        statements: &alien_core::ReleaseStatements,
+        cfg: &Worker,
+        service_name: &str,
+    ) -> Result<()> {
+        let environment = self
+            .prepare_environment_variables(&cfg.environment, &cfg.links, ctx, service_name)
+            .await?;
+        let request = verifier::ApplyRelease::for_workload(
+            statements,
+            ctx.deployment_config.signed_config.as_ref(),
+            &cfg.id,
+            &environment,
+            &Self::service_image(ctx, cfg)?,
+        )?;
+        let verifier = verifier::gcp_verifier(ctx)?;
+        let applied = verifier::apply_release(&verifier, request, &cfg.id, service_name).await?;
+        info!(
+            worker = %cfg.id,
+            release = applied.release,
+            digest = %applied.functions[0].digest,
+            "The verifier applied the signed release to the worker"
+        );
+        Ok(())
     }
 
     async fn prepare_environment_variables(
@@ -6170,10 +6227,19 @@ mod tests {
         CLOUD_RUN_SERVICE_NAME_MAX_LEN, GCP_RESOURCE_NAME_MAX_LEN,
     };
     use crate::core::controller_test::SingleControllerExecutor;
+    use crate::core::verifier_test_support::{
+        http_verifier_stub, run_verifier, signed_release, CHANNEL,
+    };
     use crate::core::MockPlatformServiceProvider;
     use crate::worker::readiness_probe::test_utils::create_readiness_probe_mock;
     use crate::worker::{fixtures::*, GcpWorkerController};
     use crate::GcpWorkerState;
+    use alien_core::{
+        ClientConfig, GcpClientConfig, GcpCredentials, GcpImpersonationConfig, GcpServiceOverrides,
+        ResourceLifecycle, Stack, StackSettings, StackSigning, WorkerCode,
+    };
+    use alien_gcp_clients::iam::GenerateIdTokenResponse;
+    use alien_gcp_clients::GcpClientConfigExt as _;
 
     #[test]
     fn cloudrun_service_name_preserves_valid_short_names() {
@@ -9060,5 +9126,202 @@ mod tests {
                 GcpWorkerState::UpdateEnsuringPublicExposure
             );
         }
+    }
+
+    // ─────────────── PROTECTED INSTALL TESTS ───────────────────────
+
+    const PROTECTED_WORKER: &str = "api";
+    const PROTECTED_SERVICE: &str = "test-api";
+    const MANAGEMENT_SA: &str = "test-management@test-project-123.iam.gserviceaccount.com";
+
+    fn pinned_image(digest_byte: char) -> String {
+        format!(
+            "us-central1-docker.pkg.dev/test-project-123/app/api@sha256:{}",
+            digest_byte.to_string().repeat(64)
+        )
+    }
+
+    fn pinned_worker(digest_byte: char, memory_mb: u32) -> Worker {
+        Worker::new(PROTECTED_WORKER.to_string())
+            .code(WorkerCode::Image {
+                image: pinned_image(digest_byte),
+            })
+            .permissions("default-profile".to_string())
+            .memory_mb(memory_mb)
+            .build()
+    }
+
+    fn protected_settings() -> StackSettings {
+        StackSettings {
+            signing: Some(StackSigning {
+                fingerprint: crate::core::verifier_test_support::settings("test").fingerprint,
+                channel: CHANNEL.to_string(),
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// Management's GCP credentials, with the verifier at `verifier_url`.
+    fn management_client_config(verifier_url: &str) -> ClientConfig {
+        let mut config = GcpClientConfig::mock();
+        config.credentials = GcpCredentials::ImpersonatedServiceAccount {
+            source: Box::new(GcpClientConfig::mock()),
+            config: GcpImpersonationConfig {
+                service_account_email: MANAGEMENT_SA.to_string(),
+                scopes: Vec::new(),
+                delegates: None,
+                lifetime: None,
+                target_project_id: None,
+                target_region: None,
+            },
+        };
+        config.service_overrides = Some(GcpServiceOverrides {
+            endpoints: HashMap::from([("verifier".to_string(), verifier_url.to_string())]),
+        });
+        ClientConfig::Gcp(Box::new(config))
+    }
+
+    /// Cloud Run on a protected install: reads succeed and nothing may patch the service.
+    fn protected_provider(verifier_url: &str) -> Arc<MockPlatformServiceProvider> {
+        let mut cloudrun = MockCloudRunApi::new();
+        cloudrun
+            .expect_get_service()
+            .returning(|_, _| Ok(create_successful_service_response(PROTECTED_SERVICE)));
+        cloudrun
+            .expect_get_service_iam_policy()
+            .returning(|_, _| Ok(create_empty_iam_policy()));
+        cloudrun
+            .expect_set_service_iam_policy()
+            .returning(|_, _, _| Ok(create_empty_iam_policy()));
+        cloudrun.expect_patch_service().never();
+        let cloudrun = Arc::new(cloudrun);
+        let mut iam = MockIamApi::new();
+        let audience = verifier_url.to_string();
+        iam.expect_generate_id_token()
+            .withf(move |account, request| account == MANAGEMENT_SA && request.audience == audience)
+            .returning(|_, _| {
+                Ok(GenerateIdTokenResponse {
+                    token: "management-id-token".to_string(),
+                })
+            });
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_cloudrun_client()
+            .returning(move |_| Ok(cloudrun.clone()));
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_gcp_pubsub_client()
+            .returning(|_| Ok(Arc::new(MockPubSubApi::new())));
+        Arc::new(provider)
+    }
+
+    async fn protected_update(
+        status: axum::http::StatusCode,
+        answer: serde_json::Value,
+    ) -> (
+        Result<(), AlienError<crate::error::ErrorData>>,
+        Vec<(Option<String>, Vec<u8>)>,
+        alien_core::ReleaseStatements,
+    ) {
+        let to = pinned_worker('2', 512);
+        let release = signed_release(
+            Platform::Gcp,
+            &Stack::new("test".to_string())
+                .add(to.clone(), ResourceLifecycle::Live)
+                .build(),
+            2,
+        );
+        let (url, requests) = http_verifier_stub(status, answer).await;
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(pinned_worker('1', 256))
+            .controller(GcpWorkerController::mock_ready(PROTECTED_SERVICE))
+            .platform(Platform::Gcp)
+            .client_config(management_client_config(&url))
+            .service_provider(protected_provider(&url))
+            .with_test_dependencies()
+            .stack_settings(protected_settings())
+            .signed_release(release.clone(), None)
+            .build()
+            .await
+            .unwrap();
+        executor.update(to).unwrap();
+        let result = executor.run_until_terminal().await;
+        if result.is_ok() {
+            assert_eq!(executor.status(), ResourceStatus::Running);
+        }
+        let requests = requests.lock().unwrap().clone();
+        (result, requests, release)
+    }
+
+    /// On a protected install management may not write the Cloud Run service, so an update
+    /// goes to the install's verifier with the signed release, as management, and the verifier
+    /// accepts what it is sent.
+    #[tokio::test]
+    async fn a_protected_update_goes_through_the_verifier_and_never_patches_the_service() {
+        let answer = serde_json::json!({"release": 2, "functions": [{
+            "function": PROTECTED_SERVICE,
+            "imageUri": pinned_image('2'),
+            "digest": format!("sha256:{}", "2".repeat(64)),
+        }]});
+        let (result, requests, release) =
+            protected_update(axum::http::StatusCode::OK, answer).await;
+
+        result.expect("the update completes through the verifier");
+        assert_eq!(requests.len(), 1, "one verifier call for the update");
+        let (bearer, payload) = &requests[0];
+        assert_eq!(bearer.as_deref(), Some("Bearer management-id-token"));
+        let request: serde_json::Value = serde_json::from_slice(payload).unwrap();
+        assert_eq!(
+            request["applyRelease"]["release"],
+            serde_json::json!(release.release)
+        );
+        assert_eq!(
+            request["applyRelease"]["workloads"],
+            serde_json::json!([PROTECTED_WORKER])
+        );
+
+        let (answer, written) = run_verifier(
+            alien_signing::InstallId::Gcp {
+                project: "test-project-123".to_string(),
+                prefix: "test".to_string(),
+            },
+            "test",
+            payload,
+        )
+        .await;
+        answer.expect("the verifier accepts the controller's request");
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].name, PROTECTED_SERVICE);
+        assert_eq!(written[0].image_uri, pinned_image('2'));
+        assert_eq!(written[0].memory_mb, 512);
+        assert_eq!(
+            written[0]
+                .env
+                .get("ALIEN_WORKER_TIMEOUT_SECONDS")
+                .map(String::as_str),
+            Some("180")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_protected_update_fails_with_the_verifiers_reason() {
+        let (result, requests, _) = protected_update(
+            axum::http::StatusCode::FORBIDDEN,
+            serde_json::json!({"errorMessage": "Refused: the release was refused: SIGNING_WRONG_CHANNEL: The release is for channel 'dev', but this install follows 'production'"}),
+        )
+        .await;
+
+        let error = result.expect_err("the verifier refused");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(error.code, "RELEASE_REFUSED_BY_VERIFIER", "{error:?}");
+        assert!(!error.retryable);
+        assert!(
+            error.message.contains("this install follows 'production'"),
+            "{}",
+            error.message
+        );
     }
 }

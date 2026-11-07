@@ -115,6 +115,8 @@ alien-k8s-clients = { path = "crates/alien-k8s-clients", version = "3.3.54" }
 alien-error = { path = "crates/alien-error", version = "3.3.54", features = ["anyhow"] }
 alien-error-derive = { path = "crates/alien-error-derive", version = "3.3.54" }
 alien-signing = { path = "crates/alien-signing", version = "3.3.54" }
+# Test-only: controller tests run the real verifier on the requests they send it.
+alien-verifier = { path = "crates/alien-verifier" }
 alien-permissions = { path = "crates/alien-permissions", version = "3.3.54" }
 alien-permission-types = { path = "crates/alien-permission-types", version = "3.3.54" }
 alien-operations-sdk = { path = "crates/alien-operations-sdk", version = "3.3.54" }

@@ -59,6 +59,20 @@ pub struct ReleaseRequest {
     /// workload. The digest must be the signed one.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub images: BTreeMap<String, String>,
+    /// The function workloads to write or read back, when not every one: a
+    /// control plane that renders each function on its own sends that
+    /// function's provided values alone, and the others keep theirs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workloads: Option<BTreeSet<String>>,
+}
+
+impl ReleaseRequest {
+    /// Whether this request writes or reads back `workload`.
+    pub fn selects(&self, workload: &str) -> bool {
+        self.workloads
+            .as_ref()
+            .is_none_or(|selected| selected.contains(workload))
+    }
 }
 
 /// Where the verifier runs, as it learned from its own identity: what it
@@ -383,6 +397,7 @@ pub(crate) mod tests {
                 BTreeMap::from([("ALIEN_DEPLOYMENT_ID".to_string(), "dep_1".to_string())]),
             )]),
             images: BTreeMap::from([("api".to_string(), format!("{REGISTRY}/api@{DIGEST}"))]),
+            workloads: None,
         }
     }
 

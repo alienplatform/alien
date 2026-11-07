@@ -940,6 +940,7 @@ dependencies = [
  "alien-permissions",
  "alien-preflights",
  "alien-signing",
+ "alien-verifier",
  "anyhow",
  "async-trait",
  "axum 0.8.9",

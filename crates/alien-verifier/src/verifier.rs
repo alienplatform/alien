@@ -129,16 +129,27 @@ impl Verifier {
             place.platform(),
             Utc::now(),
         )?;
-        for name in request.provided_env.keys().chain(request.images.keys()) {
+        let named = request.workloads.iter().flatten();
+        for name in request
+            .provided_env
+            .keys()
+            .chain(request.images.keys())
+            .chain(named)
+        {
             if !functions(&accepted.release.body).any(|workload| &workload.name == name) {
                 return Err(refused(format!(
                     "workload '{name}' is not a function of the signed release"
                 )));
             }
+            if !request.selects(name) {
+                return Err(refused(format!(
+                    "workload '{name}' has values but is not one of the workloads to write"
+                )));
+            }
         }
         // Build every function before writing any, so a refusal changes nothing.
         let mut specs = Vec::new();
-        for workload in functions(&accepted.release.body) {
+        for workload in functions(&accepted.release.body).filter(|w| request.selects(&w.name)) {
             let mut reads = Reads {
                 bindings: self.backend.binding_reads(&place, workload).await?,
                 ..Reads::default()
@@ -419,6 +430,116 @@ mod tests {
             1,
             "refused removals reach no cloud"
         );
+    }
+
+    /// An AWS backend that records the functions it writes.
+    #[derive(Default)]
+    struct Writes(Mutex<Vec<FunctionSpec>>);
+
+    #[async_trait]
+    impl Backend for Writes {
+        async fn binding_reads(
+            &self,
+            _place: &Place,
+            _workload: &Workload,
+        ) -> Result<BTreeMap<String, String>> {
+            Ok(BTreeMap::new())
+        }
+        async fn apply(&self, spec: &FunctionSpec) -> Result<()> {
+            self.0.lock().unwrap().push(spec.clone());
+            Ok(())
+        }
+        async fn check(&self, _spec: &FunctionSpec) -> Result<()> {
+            unreachable!("applyRelease reads back through apply")
+        }
+    }
+
+    /// An AWS verifier and a release with two functions, `api` and `jobs`.
+    fn two_functions() -> (Verifier, Arc<Writes>, Value) {
+        let backend = Arc::new(Writes::default());
+        let verifier = Verifier {
+            own_name: format!("{PREFIX}-verifier"),
+            install_id: Arc::new(|prefix| crate::aws::install_id(ACCOUNT, REGION, prefix)),
+            store: Arc::new(MemoryStore::protected(&settings())),
+            backend: backend.clone(),
+            vpc: None,
+            machine_network: None,
+        };
+        let jobs = alien_signing::Workload {
+            name: "jobs".to_string(),
+            ..function_workload()
+        };
+        let release = signed_release(
+            1,
+            &crate::fixtures::release_body(vec![function_workload(), jobs]),
+        );
+        let request = json!({"applyRelease": {
+            "release": release,
+            "signerLists": [signer_list()],
+        }});
+        (verifier, backend, request)
+    }
+
+    #[tokio::test]
+    async fn apply_release_writes_only_the_workloads_it_names() {
+        let (verifier, backend, mut request) = two_functions();
+        request["applyRelease"]["workloads"] = json!(["jobs"]);
+        request["applyRelease"]["providedEnv"] = json!({"jobs": {"ALIEN_DEPLOYMENT_ID": "dep_1"}});
+        let answer = verifier.handle(request).await.unwrap();
+        assert_eq!(answer["release"], json!(1));
+        let written = backend.0.lock().unwrap().clone();
+        assert_eq!(
+            written
+                .iter()
+                .map(|spec| spec.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["acme-prod-jobs"]
+        );
+        assert_eq!(
+            written[0]
+                .env
+                .get("ALIEN_DEPLOYMENT_ID")
+                .map(String::as_str),
+            Some("dep_1")
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_release_without_workloads_writes_every_function() {
+        let (verifier, backend, request) = two_functions();
+        verifier.handle(request).await.unwrap();
+        assert_eq!(
+            backend
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|spec| spec.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["acme-prod-api", "acme-prod-jobs"]
+        );
+    }
+
+    #[tokio::test]
+    async fn values_for_a_workload_it_does_not_write_are_refused() {
+        // Values for `api` sent with a request that writes only `jobs` would be dropped
+        // silently; refuse them, and a name the release has no function for.
+        let (verifier, backend, mut request) = two_functions();
+        request["applyRelease"]["workloads"] = json!(["jobs"]);
+        request["applyRelease"]["providedEnv"] = json!({"api": {"ALIEN_DEPLOYMENT_ID": "dep_1"}});
+        let reason = refusal(verifier.handle(request.clone()).await);
+        assert!(
+            reason.contains("workload 'api' has values but is not one of the workloads to write"),
+            "{reason}"
+        );
+        request["applyRelease"]["providedEnv"] = json!({});
+        request["applyRelease"]["workloads"] = json!(["worker"]);
+        let reason = refusal(verifier.handle(request).await);
+        assert!(
+            reason.contains("workload 'worker' is not a function of the signed release"),
+            "{reason}"
+        );
+        assert!(backend.0.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

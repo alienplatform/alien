@@ -37,6 +37,10 @@ pub use environment_variables::*;
 
 pub mod linked_bindings;
 
+pub mod verifier;
+#[cfg(test)]
+pub(crate) mod verifier_test_support;
+
 pub mod k8s_secret_bindings;
 pub use k8s_secret_bindings::*;
 

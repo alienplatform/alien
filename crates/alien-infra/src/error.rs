@@ -85,6 +85,23 @@ pub enum ErrorData {
         settings_location: String,
     },
 
+    /// A protected install's verifier refused to apply the release to a resource.
+    #[error(
+        code = "RELEASE_REFUSED_BY_VERIFIER",
+        message = "The install's verifier '{verifier}' refused to apply the release to '{resource_id}': {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 403
+    )]
+    ReleaseRefusedByVerifier {
+        /// The resource the release was applied to
+        resource_id: String,
+        /// The verifier that refused, `<prefix>-verifier`
+        verifier: String,
+        /// The verifier's reason, as it gave it
+        reason: String,
+    },
+
     /// A required vault-native deployer secret is not in the deployment's
     /// secrets vault, so the workload does not start.
     #[error(

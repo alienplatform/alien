@@ -8,6 +8,7 @@ use std::{collections::HashMap, time::Duration};
 use tracing::{debug, info, warn};
 
 use crate::core::linked_bindings;
+use crate::core::verifier;
 use crate::core::EnvironmentVariableBuilder;
 
 use crate::core::aws_tag_scoped::{
@@ -2422,8 +2423,11 @@ impl AwsWorkerController {
 
         // Skip this step if the worker doesn't have public ingress
         // For private workers, the initial env vars already have complete self-binding
-        // (no URL to add later)
-        if config.public_endpoints.is_empty() {
+        // (no URL to add later). On a protected install the verifier renders the bindings,
+        // its own URL included, and management may not write the function.
+        if config.public_endpoints.is_empty()
+            || verifier::protected_statements(ctx, &config.id)?.is_some()
+        {
             info!(worker=%config.id, "Skipping env var update - no public URL to add");
             return Ok(HandlerAction::Continue {
                 state: CreatingEventSourceMappings,
@@ -2904,7 +2908,11 @@ impl AwsWorkerController {
         // updated: a sandbox promoting a rebuilt image version after this worker rendered, or a
         // re-registration. Compare the bindings rendered now with the ones Lambda runs, and
         // refresh only when they differ.
-        if binding_check_due(&aws_worker_name, Utc::now()) {
+        // On a protected install the verifier renders the bindings; what it wrote is checked
+        // against the signed release, not against management's rendering.
+        if ctx.deployment_config.stack_settings.signing.is_none()
+            && binding_check_due(&aws_worker_name, Utc::now())
+        {
             if let Some(expected) = self.linked_binding_environment(ctx, &worker_config).await? {
                 // The comparison is optional to the heartbeat: a throttled or failed read skips
                 // it until the next window instead of failing a healthy worker.
@@ -3087,32 +3095,25 @@ impl AwsWorkerController {
         let previous_config = ctx.previous_resource_config::<Worker>()?;
         self.ensure_batch_queue_visibility(ctx, &current_config, false)
             .await?;
+        // On a protected install the verifier writes the function's code and configuration
+        // together, from the signed release; management may write neither.
+        if let Some(statements) = verifier::protected_statements(ctx, &current_config.id)? {
+            self.apply_through_verifier(ctx, statements, &current_config)
+                .await?;
+            self.wait_for_lambda_started_at = None;
+            return Ok(HandlerAction::Continue {
+                state: UpdateCodeWaitForActive,
+                suggested_delay: None,
+            });
+        }
+
         let code_changed = current_config.code != previous_config.code;
 
         // UpdateCodeStart only handles code updates if needed
         if code_changed {
             let aws_cfg = ctx.get_aws_config()?;
             let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
-
-            let image_uri = match &current_config.code {
-                alien_core::WorkerCode::Image { image } => image.clone(),
-                alien_core::WorkerCode::Source { .. } => {
-                    return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: "Worker is configured with source code for update, but only pre-built images are supported".to_string(),
-                        resource_id: Some(current_config.id.clone()),
-                    }));
-                }
-            };
-
-            // Resolve proxy URIs to native ECR URIs.
-            let image_uri = if let Some(ref native_host) = ctx.deployment_config.native_image_host {
-                alien_core::image_rewrite::resolve_native_image_uri(&image_uri, native_host)
-                    .unwrap_or(image_uri)
-            } else {
-                image_uri
-            };
-
-            let image_uri = Self::rewrite_ecr_region_if_needed(&image_uri, &aws_cfg.region);
+            let image_uri = Self::function_image_uri(ctx, &current_config)?;
 
             let request = UpdateFunctionCodeRequest::builder()
                 .image_uri(image_uri)
@@ -3193,6 +3194,14 @@ impl AwsWorkerController {
         let previous_config = ctx.previous_resource_config::<Worker>()?;
         self.ensure_batch_queue_visibility(ctx, &current_config, false)
             .await?;
+        // The verifier wrote the configuration with the code in UpdateCodeStart.
+        if verifier::protected_statements(ctx, &current_config.id)?.is_some() {
+            self.wait_for_lambda_started_at = None;
+            return Ok(HandlerAction::Continue {
+                state: UpdateConfigWaitForActive,
+                suggested_delay: None,
+            });
+        }
         let config_changed = current_config.permissions != previous_config.permissions
             || current_config.memory_mb != previous_config.memory_mb
             || current_config.timeout_seconds != previous_config.timeout_seconds
@@ -5893,6 +5902,70 @@ impl AwsWorkerController {
         .map(|rendered| rendered.variables))
     }
 
+    /// The image the function pulls in this install: the configured image, with a proxy URI
+    /// resolved to the native ECR one and the ECR region matched to the function's.
+    fn function_image_uri(ctx: &ResourceControllerContext<'_>, config: &Worker) -> Result<String> {
+        let image_uri = match &config.code {
+            alien_core::WorkerCode::Image { image } => image.clone(),
+            alien_core::WorkerCode::Source { .. } => {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "Worker is configured with source code for update, but only pre-built images are supported".to_string(),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
+        };
+        let image_uri = if let Some(ref native_host) = ctx.deployment_config.native_image_host {
+            alien_core::image_rewrite::resolve_native_image_uri(&image_uri, native_host)
+                .unwrap_or(image_uri)
+        } else {
+            image_uri
+        };
+        Ok(Self::rewrite_ecr_region_if_needed(
+            &image_uri,
+            &ctx.get_aws_config()?.region,
+        ))
+    }
+
+    /// Has the install's verifier write this worker's function from the signed release, with
+    /// the values the release lets the deployment provide, and waits for its answer.
+    async fn apply_through_verifier(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        statements: &alien_core::ReleaseStatements,
+        config: &Worker,
+    ) -> Result<()> {
+        let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &config.id);
+        let environment = self
+            .prepare_environment_variables(
+                &config.environment,
+                &config.links,
+                ctx,
+                &aws_worker_name,
+            )
+            .await?;
+        let request = verifier::ApplyRelease::for_workload(
+            statements,
+            ctx.deployment_config.signed_config.as_ref(),
+            &config.id,
+            &environment,
+            &Self::function_image_uri(ctx, config)?,
+        )?;
+        let lambda = ctx
+            .service_provider
+            .get_aws_lambda_client(ctx.get_aws_config()?)
+            .await?;
+        let verifier = verifier::LambdaVerifier::new(lambda, ctx.resource_prefix);
+        let applied =
+            verifier::apply_release(&verifier, request, &config.id, &aws_worker_name).await?;
+        info!(
+            worker = %config.id,
+            release = applied.release,
+            digest = %applied.functions[0].digest,
+            "The verifier applied the signed release to the worker"
+        );
+        Ok(())
+    }
+
     async fn prepare_environment_variables(
         &self,
         initial_env: &HashMap<String, String>,
@@ -6067,6 +6140,7 @@ mod tests {
 
     use crate::core::aws_tag_scoped::logs_access_denied;
     use crate::core::controller_test::SingleControllerExecutor;
+    use crate::core::verifier_test_support::{run_verifier, signed_release, CHANNEL};
     use crate::core::{
         serialize_controller, MockPlatformServiceProvider, ResourceController, StackExecutor,
     };
@@ -6076,7 +6150,9 @@ mod tests {
         fixtures::*, readiness_probe::test_utils::create_readiness_probe_mock, AwsWorkerController,
         AwsWorkerState,
     };
+    use alien_aws_clients::lambda::InvokeResponse;
     use alien_core::standard_resource_tags;
+    use alien_core::StackSigning;
 
     #[tokio::test]
     async fn queue_rollout_updates_private_runtime_environment_on_batch_only_changes() {
@@ -11908,5 +11984,239 @@ mod tests {
                 ]
             );
         }
+    }
+
+    // ─────────────── PROTECTED INSTALL TESTS ───────────────────────
+
+    const PROTECTED_WORKER: &str = "api";
+    const PROTECTED_WORKER_NAME: &str = "test-api";
+
+    fn pinned_image(digest_byte: char) -> String {
+        format!(
+            "123456789012.dkr.ecr.us-east-1.amazonaws.com/api@sha256:{}",
+            digest_byte.to_string().repeat(64)
+        )
+    }
+
+    fn pinned_worker(digest_byte: char, memory_mb: u32) -> Worker {
+        Worker::new(PROTECTED_WORKER.to_string())
+            .code(WorkerCode::Image {
+                image: pinned_image(digest_byte),
+            })
+            .permissions("default-profile".to_string())
+            .memory_mb(memory_mb)
+            .build()
+    }
+
+    fn protected_settings() -> StackSettings {
+        StackSettings {
+            signing: Some(StackSigning {
+                fingerprint: crate::core::verifier_test_support::settings("test").fingerprint,
+                channel: CHANNEL.to_string(),
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// Lambda on a protected install: reads succeed, and invoking the verifier records the
+    /// request and answers with `answer`. No write has an expectation, so a write fails the test.
+    fn protected_lambda(
+        invocations: Arc<Mutex<Vec<(String, Vec<u8>)>>>,
+        answer: InvokeResponse,
+    ) -> Arc<MockLambdaApi> {
+        let mut lambda = MockLambdaApi::new();
+        lambda
+            .expect_get_function_configuration()
+            .returning(|_, _| Ok(create_successful_function_response(PROTECTED_WORKER_NAME)));
+        lambda.expect_invoke().returning(move |request| {
+            invocations
+                .lock()
+                .unwrap()
+                .push((request.function_name.clone(), request.payload.clone()));
+            Ok(answer.clone())
+        });
+        Arc::new(lambda)
+    }
+
+    fn invoke_answer(function_error: Option<&str>, payload: serde_json::Value) -> InvokeResponse {
+        InvokeResponse {
+            status_code: 200,
+            function_error: function_error.map(str::to_string),
+            log_result: None,
+            payload: serde_json::to_vec(&payload).unwrap(),
+            executed_version: None,
+        }
+    }
+
+    async fn protected_update(
+        answer: InvokeResponse,
+    ) -> (
+        SingleControllerExecutor,
+        Result<(), AlienError<crate::error::ErrorData>>,
+        Vec<(String, Vec<u8>)>,
+        alien_core::ReleaseStatements,
+    ) {
+        let from = pinned_worker('1', 256);
+        let to = pinned_worker('2', 512);
+        let release = signed_release(
+            Platform::Aws,
+            &Stack::new("test".to_string())
+                .add(to.clone(), ResourceLifecycle::Live)
+                .build(),
+            2,
+        );
+        let invocations = Arc::new(Mutex::new(Vec::new()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(from)
+            .controller(AwsWorkerController::mock_ready(PROTECTED_WORKER_NAME))
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(
+                protected_lambda(invocations.clone(), answer),
+                None,
+                None,
+            ))
+            .with_test_dependencies()
+            .stack_settings(protected_settings())
+            .signed_release(release.clone(), None)
+            .build()
+            .await
+            .unwrap();
+        executor.update(to).unwrap();
+        let result = executor.run_until_terminal().await;
+        let invocations = invocations.lock().unwrap().clone();
+        (executor, result, invocations, release)
+    }
+
+    /// On a protected install management may not write the function, so an update goes to the
+    /// install's verifier with the signed release, and the verifier accepts what it is sent.
+    #[tokio::test]
+    async fn a_protected_update_goes_through_the_verifier_and_never_writes_the_function() {
+        let answer = serde_json::json!({"release": 2, "functions": [{
+            "function": PROTECTED_WORKER_NAME,
+            "imageUri": pinned_image('2'),
+            "digest": format!("sha256:{}", "2".repeat(64)),
+        }]});
+        let (executor, result, invocations, release) =
+            protected_update(invoke_answer(None, answer)).await;
+
+        result.expect("the update completes through the verifier");
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(invocations.len(), 1, "one verifier call for the update");
+        let (function, payload) = &invocations[0];
+        assert_eq!(function, "test-verifier");
+        let request: serde_json::Value = serde_json::from_slice(payload).unwrap();
+        assert_eq!(
+            request["applyRelease"]["release"],
+            serde_json::json!(release.release)
+        );
+        assert_eq!(
+            request["applyRelease"]["signerLists"],
+            serde_json::json!(release.signer_lists)
+        );
+        assert_eq!(
+            request["applyRelease"]["workloads"],
+            serde_json::json!([PROTECTED_WORKER])
+        );
+
+        let (answer, written) = run_verifier(
+            alien_signing::InstallId::Aws {
+                account: "123456789012".to_string(),
+                region: "us-east-1".to_string(),
+                prefix: "test".to_string(),
+            },
+            "test",
+            payload,
+        )
+        .await;
+        let answer = answer.expect("the verifier accepts the controller's request");
+        assert_eq!(answer["release"], serde_json::json!(2));
+        assert_eq!(written.len(), 1);
+        let spec = &written[0];
+        assert_eq!(spec.name, PROTECTED_WORKER_NAME);
+        assert_eq!(spec.image_uri, pinned_image('2'));
+        assert_eq!(spec.memory_mb, 512);
+        assert_eq!(
+            spec.env
+                .get("ALIEN_WORKER_TIMEOUT_SECONDS")
+                .map(String::as_str),
+            Some("180"),
+            "values the release lets the deployment provide reach the function"
+        );
+    }
+
+    /// A refusal is the deployment's error, with the verifier's reason; nothing else writes.
+    #[tokio::test]
+    async fn a_refused_protected_update_fails_with_the_verifiers_reason() {
+        let refusal = serde_json::json!({
+            "errorType": "&alloc::string::String",
+            "errorMessage": "Refused: the release was refused: SIGNING_RELEASE_OLDER: the release is older than one this install accepted",
+        });
+        let (_, result, invocations, _) =
+            protected_update(invoke_answer(Some("Unhandled"), refusal)).await;
+
+        let error = result.expect_err("the verifier refused");
+        assert_eq!(invocations.len(), 1);
+        assert!(
+            error_chain_codes(&error).contains(&"RELEASE_REFUSED_BY_VERIFIER".to_string()),
+            "{error:?}"
+        );
+        assert!(!error.retryable, "a refusal does not change on retry");
+        let message = format!("{error}");
+        assert!(
+            message.contains("the release is older than one this install accepted"),
+            "{message}"
+        );
+    }
+
+    /// Without signing the update writes Lambda itself, exactly as before.
+    #[tokio::test]
+    async fn an_unprotected_update_writes_the_function_and_calls_no_verifier() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut lambda = MockLambdaApi::new();
+        lambda
+            .expect_get_function_configuration()
+            .returning(|_, _| Ok(create_successful_function_response(PROTECTED_WORKER_NAME)));
+        let code_calls = calls.clone();
+        lambda
+            .expect_update_function_code()
+            .times(1)
+            .returning(move |_, request| {
+                code_calls
+                    .lock()
+                    .unwrap()
+                    .push(format!("UpdateFunctionCode {}", request.image_uri));
+                Ok(create_successful_function_response(PROTECTED_WORKER_NAME))
+            });
+        let config_calls = calls.clone();
+        lambda
+            .expect_update_function_configuration()
+            .times(1)
+            .returning(move |_, request| {
+                config_calls.lock().unwrap().push(format!(
+                    "UpdateFunctionConfiguration {}",
+                    request.memory_size.unwrap_or_default()
+                ));
+                Ok(create_successful_function_response(PROTECTED_WORKER_NAME))
+            });
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(pinned_worker('1', 256))
+            .controller(AwsWorkerController::mock_ready(PROTECTED_WORKER_NAME))
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(Arc::new(lambda), None, None))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.update(pinned_worker('2', 512)).unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                format!("UpdateFunctionCode {}", pinned_image('2')),
+                "UpdateFunctionConfiguration 512".to_string(),
+            ]
+        );
     }
 }
