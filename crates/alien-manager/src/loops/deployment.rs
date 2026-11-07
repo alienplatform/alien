@@ -1761,10 +1761,10 @@ fn push_input_environment(
             ),
         }
     }
-    for (input_id, variables) in &resolved {
+    for (position, (input_id, variables)) in resolved.iter().enumerate() {
         let conflict = variables.iter().find(|variable| {
-            resolved.iter().any(|(other_id, others)| {
-                other_id != input_id && others.iter().any(|other| other.name == variable.name)
+            resolved.iter().enumerate().any(|(other, (_, others))| {
+                other != position && others.iter().any(|other| other.name == variable.name)
             })
         });
         match conflict {
@@ -5752,15 +5752,66 @@ mod tests {
 
         let with_inputs =
             deployment_environment_variables(&config, &deployment, Some(&stack)).unwrap();
-        // The old push path: the snapshot from the deployment's own variables.
-        let mut old = deployment.clone();
-        let mut old_stack = stack.clone();
-        old_stack.inputs.clear();
-        old.input_values.clear();
-        let before = deployment_environment_variables(&config, &old, Some(&old_stack)).unwrap();
+        // The old push path: the deployment's identity, then its own variables
+        // as carried, hashed name=value per line.
+        let mut expected = vec![
+            user_variable(ENV_ALIEN_DEPLOYMENT_ID, &deployment.id),
+            user_variable(ENV_ALIEN_DEPLOYMENT_NAME, &deployment.name),
+        ];
+        expected.extend(deployment.user_environment_variables.clone().unwrap());
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        for variable in &expected {
+            hasher.update(format!("{}={}\n", variable.name, variable.value));
+        }
+        assert_eq!(with_inputs.variables, expected);
+        assert_eq!(with_inputs.hash, format!("env-{:x}", hasher.finalize()));
+    }
 
-        assert_eq!(with_inputs.hash, before.hash);
-        assert_eq!(with_inputs.variables, before.variables);
+    /// Skipping one input leaves the others as the strict resolver has them:
+    /// an input that maps one name twice is skipped on its own, and an input
+    /// gated by another input's answer still sees that answer.
+    #[test]
+    fn push_snapshot_skips_only_the_input_that_does_not_resolve() {
+        let mut twice = plain_input("twice", "TWICE");
+        twice.env.push(twice.env[0].clone());
+        let enabled = alien_core::StackInputDefinition::deployer_boolean(
+            "enabled",
+            "Enabled",
+            "Gates the next input",
+            Some(false),
+        );
+        let mut gated = plain_input("gated", "GATED");
+        gated.when = Some(alien_core::StackInputCondition {
+            input: "enabled".to_string(),
+            equals: true,
+        });
+        let stack = Stack::new("inputs-stack".to_string())
+            .inputs(vec![twice, enabled, gated])
+            .build();
+        let mut deployment = deployment_record(DeploymentStatus::Running, None);
+        for (id, value) in [
+            ("twice", serde_json::json!("x")),
+            ("enabled", serde_json::json!(true)),
+            ("gated", serde_json::json!("on")),
+        ] {
+            deployment.input_values.insert(id.to_string(), value);
+        }
+
+        let snapshot = deployment_environment_variables(
+            &crate::config::ManagerConfig::default(),
+            &deployment,
+            Some(&stack),
+        )
+        .unwrap();
+
+        assert!(!snapshot.variables.iter().any(|v| v.name == "TWICE"));
+        let gated = snapshot
+            .variables
+            .iter()
+            .find(|v| v.name == "GATED")
+            .expect("the gate's answer still applies");
+        assert_eq!(gated.value, "on");
     }
 
     /// A target release that maps two inputs to one variable the deployment
