@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use alien_signing::settings::names;
 use alien_signing::{Ledger, Lookup, Workload};
 
+use crate::cloud_write::{CloudWrite, Facts};
 use crate::container_apps::AppStore;
 use crate::error::{ErrorData, Result};
 use crate::function::StillNewest;
@@ -382,6 +383,19 @@ impl Backend for AzureBackend {
         _workload: &Workload,
     ) -> Result<BTreeMap<String, String>> {
         Ok(BTreeMap::new())
+    }
+
+    fn check_write(&self, facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
+        crate::cloud_write::container_apps::check_write(facts, write, self.0.environment.as_deref())
+    }
+
+    async fn forward(
+        &self,
+        facts: &Facts<'_>,
+        write: &CloudWrite,
+        newest: &dyn StillNewest,
+    ) -> Result<Value> {
+        crate::cloud_write::container_apps::forward(&self.0, facts, write, newest).await
     }
 
     async fn apply(

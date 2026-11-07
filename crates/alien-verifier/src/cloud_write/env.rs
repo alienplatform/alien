@@ -1,0 +1,204 @@
+//! The env a controller's request must carry: what the signed release, its config and the
+//! install decide, plus the values the release lets the deployment provide, exactly.
+
+use std::collections::BTreeMap;
+
+use alien_error::{AlienError, Context};
+use alien_signing::{
+    binding_env, binding_env_name, build_workload, resolve_bindings, LocalValues, Workload,
+    WorkloadRequest,
+};
+use serde_json::Value;
+
+use crate::error::{ErrorData, Result};
+use crate::plan::{changed_env, Place, Reads, SECRETS_ENV};
+use crate::trust::Accepted;
+
+/// Where telemetry goes. Only the signed config's `telemetryEndpoint` may be it.
+pub const OTLP_LOGS_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT";
+/// Telemetry names that follow the endpoint: allowed only when the config signs one.
+const TELEMETRY_FOLLOWERS: &[&str] = &["OTEL_SERVICE_NAME", "OTEL_RESOURCE_ATTRIBUTES"];
+/// The runtime's pointer to its own telemetry credentials, keys in the install's `secrets`
+/// vault.
+const RUNTIME_SECRETS: &str = "ALIEN_RUNTIME_SECRETS";
+/// Whether the runtime ships telemetry at all: on or off, it can't send it anywhere else.
+const RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";
+/// The install's `secrets` vault, which the runtime reads its credentials from.
+const SECRETS_VAULT: &str = "secrets";
+
+fn refused(reason: String) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::Refused { reason })
+}
+
+/// Check `env`, the environment of `workload`'s function in a controller's request, against
+/// the accepted release, its config and what the verifier read from its install. `own_name` is
+/// the function's name, which its own binding must describe.
+pub fn check_env(
+    place: &Place,
+    accepted: &Accepted,
+    workload: &Workload,
+    reads: &Reads,
+    own_name: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<()> {
+    let name = &workload.name;
+    let config = accepted.config_body();
+    let mut rest = env.clone();
+
+    // Telemetry goes only where the signed config says.
+    let endpoint = rest.remove(OTLP_LOGS_ENDPOINT);
+    match (&config.telemetry_endpoint, &endpoint) {
+        (Some(signed), Some(sent)) if signed == sent => {}
+        (Some(signed), Some(sent)) => {
+            return Err(refused(format!(
+                "env {OTLP_LOGS_ENDPOINT} of workload '{name}' is {sent}, not the signed telemetry endpoint {signed}"
+            )))
+        }
+        (None, Some(sent)) => {
+            return Err(refused(format!(
+                "workload '{name}' sends telemetry to {sent}, but the signed config names no telemetry endpoint"
+            )))
+        }
+        (_, None) => {}
+    }
+    for follower in TELEMETRY_FOLLOWERS.iter().chain([&RUNTIME_SECRETS]) {
+        if let Some(value) = rest.remove(*follower) {
+            if endpoint.is_none() {
+                return Err(refused(format!(
+                    "env {follower} of workload '{name}' is telemetry, and the request sends none to the signed endpoint"
+                )));
+            }
+            if *follower == RUNTIME_SECRETS {
+                check_runtime_secrets(name, &value)?;
+            }
+        }
+    }
+    rest.remove(RUNTIME_SEND_OTLP);
+
+    // The secrets vault is the install's own.
+    let vault_key = binding_env_name(SECRETS_VAULT);
+    if let Some(value) = rest.remove(&vault_key) {
+        let derived = binding_env(
+            &BTreeMap::from([(SECRETS_VAULT.to_string(), "vault".to_string())]),
+            &place.binding_context(),
+        )
+        .context(ErrorData::Refused {
+            reason: "the install's secrets vault binding can't be derived".to_string(),
+        })?;
+        let expected = derived.values.get(&vault_key).ok_or_else(|| {
+            refused(format!(
+                "the install's secrets vault binding ({vault_key}) can't be derived here"
+            ))
+        })?;
+        if !same_json(expected, &value) {
+            return Err(refused(format!(
+                "env {vault_key} of workload '{name}' is not the install's secrets vault"
+            )));
+        }
+    }
+
+    // The function's own binding describes this function and nothing else.
+    let own_key = binding_env_name(name);
+    if let Some(value) = rest.remove(&own_key) {
+        check_own_binding(name, own_name, &own_key, &value)?;
+    }
+
+    // The secrets the function loads at start are the signed list.
+    let secrets_list = rest.remove(SECRETS_ENV);
+
+    let derived =
+        binding_env(&workload.bindings, &place.binding_context()).context(ErrorData::Refused {
+            reason: format!("the bindings of workload '{name}' were refused"),
+        })?;
+    let bindings = resolve_bindings(derived, &reads.bindings, &config.bindings).context(
+        ErrorData::Refused {
+            reason: format!("the bindings of workload '{name}' have no value"),
+        },
+    )?;
+    let built = build_workload(
+        &accepted.release.body,
+        name,
+        &config.env,
+        &LocalValues {
+            deployer_inputs: reads.deployer_inputs.clone(),
+            bindings,
+        },
+        &WorkloadRequest {
+            env: rest.clone(),
+            ..Default::default()
+        },
+    )
+    .context(ErrorData::Refused {
+        reason: "the control plane's values don't fit the release".to_string(),
+    })?;
+    if built.env != rest {
+        return Err(refused(format!(
+            "the env of workload '{name}' differs from the signed one for {:?}",
+            changed_env(&rest, &built.env)
+        )));
+    }
+
+    let signed_secrets = (!workload.secrets.is_empty()).then(|| {
+        let keys: Vec<&str> = workload
+            .secrets
+            .iter()
+            .map(|secret| secret.name.as_str())
+            .collect();
+        serde_json::json!({ "keys": keys, "hash": accepted.release.digest }).to_string()
+    });
+    match (&signed_secrets, &secrets_list) {
+        (None, None) => Ok(()),
+        (Some(signed), Some(sent)) if same_json(signed, sent) => Ok(()),
+        _ => Err(refused(format!(
+            "env {SECRETS_ENV} of workload '{name}' is not the signed secrets list"
+        ))),
+    }
+}
+
+/// Two env values that hold the same JSON, or the same text.
+fn same_json(a: &str, b: &str) -> bool {
+    match (
+        serde_json::from_str::<Value>(a),
+        serde_json::from_str::<Value>(b),
+    ) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+/// The runtime secrets pointer names keys in the install's `secrets` vault and nothing else.
+fn check_runtime_secrets(name: &str, value: &str) -> Result<()> {
+    let pointer: serde_json::Map<String, Value> = serde_json::from_str(value).map_err(|_| {
+        refused(format!(
+            "env {RUNTIME_SECRETS} of workload '{name}' is not a runtime secrets pointer"
+        ))
+    })?;
+    for (key, value) in &pointer {
+        let known = matches!(
+            key.as_str(),
+            "otlpLogsAuthHeader" | "otlpMetricsAuthHeader" | "hash"
+        );
+        if !known || !(value.is_string() || value.is_null()) {
+            return Err(refused(format!(
+                "env {RUNTIME_SECRETS} of workload '{name}' has field {key}: it may only name keys in the install's secrets vault"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The function's own binding names the function itself.
+fn check_own_binding(name: &str, own_name: &str, key: &str, value: &str) -> Result<()> {
+    let binding: Value = serde_json::from_str(value)
+        .map_err(|_| refused(format!("env {key} of workload '{name}' is not a binding")))?;
+    let names_itself = ["functionName", "serviceName", "containerAppName", "name"]
+        .iter()
+        .filter_map(|field| binding.get(*field))
+        .any(|named| named.as_str() == Some(own_name));
+    if !names_itself {
+        return Err(refused(format!(
+            "env {key} of workload '{name}' doesn't describe the function {own_name}"
+        )));
+    }
+    Ok(())
+}

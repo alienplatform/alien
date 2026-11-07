@@ -1592,9 +1592,11 @@ name = "alien-verifier"
 version = "3.3.54"
 dependencies = [
  "alien-aws-clients",
+ "alien-azure-clients",
  "alien-client-core",
  "alien-core",
  "alien-error",
+ "alien-gcp-clients",
  "alien-signing",
  "async-trait",
  "axum 0.8.9",

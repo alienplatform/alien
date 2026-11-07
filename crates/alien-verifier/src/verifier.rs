@@ -10,6 +10,7 @@ use chrono::Utc;
 use serde_json::{json, Value};
 use tracing::info;
 
+use crate::cloud_write::{own_workload, ApplyWrite, CloudWrite, Facts};
 use crate::error::{ErrorData, Result};
 use crate::function::StillNewest;
 use crate::machines::{self, RemoveMachines, RollMachines, Scale};
@@ -37,6 +38,26 @@ pub trait Backend: Send + Sync {
     ) -> Result<()>;
     /// Read `spec` back.
     async fn check(&self, spec: &FunctionSpec) -> Result<()>;
+    /// Check every field of `write` against this cloud's table.
+    fn check_write(&self, _facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
+        Err(refused(format!(
+            "this cloud takes no {} write",
+            write.operation()
+        )))
+    }
+    /// Send `write`, already checked, to the cloud unchanged, checking `newest` right before,
+    /// and read back what decides what runs. Answers what the cloud answered.
+    async fn forward(
+        &self,
+        _facts: &Facts<'_>,
+        write: &CloudWrite,
+        _newest: &dyn StillNewest,
+    ) -> Result<Value> {
+        Err(refused(format!(
+            "this cloud takes no {} write",
+            write.operation()
+        )))
+    }
     /// Roll a machine group to the signed release.
     async fn roll(
         &self,
@@ -119,6 +140,7 @@ impl Verifier {
         match request {
             Request::ApplyRelease(request) => self.release(&request, true).await,
             Request::CheckRelease(request) => self.release(&request, false).await,
+            Request::ApplyWrite(request) => self.write(&request).await,
             Request::RollMachines(request) => self.roll(&request).await,
             Request::Scale(request) => self.scale(&request).await,
             Request::RemoveMachines(request) => self.remove(&request).await,
@@ -195,6 +217,58 @@ impl Verifier {
                 .iter()
                 .map(|spec| json!({"function": spec.name, "imageUri": spec.image_uri, "digest": spec.digest}))
                 .collect::<Vec<_>>(),
+        }))
+    }
+
+    async fn write(&self, request: &ApplyWrite) -> Result<Value> {
+        let (install, place) = self.install().await?;
+        let accepted = accept(
+            &install,
+            &request.signer_lists,
+            &request.release,
+            request.config.as_ref(),
+            place.platform(),
+            Utc::now(),
+        )?;
+        let (workload, own_name) = own_workload(&place, &accepted.release.body, &request.workload)?;
+        let mut reads = Reads {
+            bindings: self.backend.binding_reads(&place, workload).await?,
+            ..Reads::default()
+        };
+        for input in workload.deployer_env.values() {
+            if let Some(value) = self.store.input(&place.prefix, input).await? {
+                reads.deployer_inputs.insert(input.clone(), value);
+            }
+        }
+        let facts = Facts {
+            place: &place,
+            accepted: &accepted,
+            workload,
+            reads: &reads,
+            own_name,
+        };
+        // Every field is checked before anything is written.
+        self.backend.check_write(&facts, &request.write)?;
+        store_ledger(self.store.as_ref(), &place.prefix, &accepted.ledger).await?;
+        let floor = Floor {
+            store: self.store.as_ref(),
+            prefix: &place.prefix,
+            release: Entry {
+                sequence: accepted.release.sequence,
+                digest: accepted.release.digest.clone(),
+            },
+        };
+        let answer = self.backend.forward(&facts, &request.write, &floor).await?;
+        info!(
+            function = %facts.own_name,
+            operation = request.write.operation(),
+            "applied the controller's checked write"
+        );
+        Ok(json!({
+            "release": accepted.release.sequence,
+            "function": facts.own_name,
+            "operation": request.write.operation(),
+            "answer": answer,
         }))
     }
 
@@ -308,6 +382,7 @@ mod tests {
     use crate::trust::tests::MemoryStore;
     use alien_core::release_statement::{release_body, ReleaseOptions};
     use alien_core::{CapacityGroup, ComputeCluster, Platform, ResourceLifecycle, Stack};
+    use alien_signing::{Kind, Ledger};
     use std::sync::Mutex;
 
     /// The verifier writes only its own install's name for a signed workload; a spec naming
@@ -559,6 +634,109 @@ mod tests {
             "signerLists": [signer_list()],
         }});
         (verifier, backend, request)
+    }
+
+    /// An AWS backend that checks writes with the Lambda table and records what it forwards.
+    #[derive(Default)]
+    struct Forwards(Mutex<Vec<CloudWrite>>);
+
+    #[async_trait]
+    impl Backend for Forwards {
+        async fn binding_reads(
+            &self,
+            _place: &Place,
+            _workload: &Workload,
+        ) -> Result<BTreeMap<String, String>> {
+            Ok(BTreeMap::new())
+        }
+        async fn apply(
+            &self,
+            _place: &Place,
+            _spec: &FunctionSpec,
+            _newest: &dyn StillNewest,
+        ) -> Result<()> {
+            unreachable!("applyWrite forwards the controller's write")
+        }
+        async fn check(&self, _spec: &FunctionSpec) -> Result<()> {
+            unreachable!("applyWrite forwards the controller's write")
+        }
+        fn check_write(&self, facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
+            crate::cloud_write::lambda::check_write(facts, write)
+        }
+        async fn forward(
+            &self,
+            _facts: &Facts<'_>,
+            write: &CloudWrite,
+            newest: &dyn StillNewest,
+        ) -> Result<Value> {
+            newest.check().await?;
+            self.0.lock().unwrap().push(write.clone());
+            Ok(Value::Null)
+        }
+    }
+
+    /// The statements are accepted and recorded before the controller's write goes out; a write
+    /// a row refuses goes nowhere and records nothing.
+    #[tokio::test]
+    async fn a_checked_write_is_forwarded_after_the_ledger_and_a_refused_one_is_not() {
+        let backend = Arc::new(Forwards::default());
+        let store = Arc::new(MemoryStore::protected(&settings()));
+        let verifier = Verifier {
+            own_name: format!("{PREFIX}-verifier"),
+            install_id: Arc::new(|prefix| crate::aws::install_id(ACCOUNT, REGION, prefix)),
+            store: store.clone(),
+            backend: backend.clone(),
+            vpc: None,
+            machine_network: None,
+        };
+        let write = |role: &str| {
+            json!({"applyWrite": {
+                "release": release(1, function_workload()),
+                "signerLists": [signer_list()],
+                "workload": "api",
+                "write": {"createFunction": {
+                    "FunctionName": format!("{PREFIX}-api"),
+                    "Role": role,
+                    "Code": {"ImageUri": format!("{REGISTRY}/api@{DIGEST}")},
+                    "PackageType": "Image",
+                    "Environment": {"Variables": {"MODE": "signed"}},
+                    "Architectures": ["arm64"],
+                }},
+            }})
+        };
+        let ledger = |store: &MemoryStore| {
+            Ledger::parse(&store.ledgers.lock().unwrap()[PREFIX], PREFIX).unwrap()
+        };
+
+        let refused = verifier
+            .handle(write(&format!("arn:aws:iam::{ACCOUNT}:role/admin")))
+            .await
+            .unwrap_err();
+        assert!(
+            refused.to_string().contains("field /Role must match"),
+            "{refused}"
+        );
+        assert!(backend.0.lock().unwrap().is_empty(), "nothing went out");
+        assert!(
+            ledger(&store).floor(Kind::Release).unwrap().is_none(),
+            "nothing recorded"
+        );
+
+        let role = crate::plan::tests::place().run_as("execution");
+        let answer = verifier.handle(write(&role)).await.unwrap();
+        assert_eq!(
+            answer,
+            json!({"release": 1, "function": format!("{PREFIX}-api"), "operation": "CreateFunction", "answer": null})
+        );
+        assert_eq!(backend.0.lock().unwrap().len(), 1);
+        assert_eq!(
+            ledger(&store)
+                .floor(Kind::Release)
+                .unwrap()
+                .unwrap()
+                .sequence,
+            1
+        );
     }
 
     #[tokio::test]

@@ -27,8 +27,10 @@ pub mod aws;
 pub mod azure;
 pub mod azure_machines;
 pub mod cloud_run;
+pub mod cloud_write;
 pub mod container_apps;
 pub mod error;
+pub mod fields;
 #[cfg(test)]
 pub mod fixtures;
 pub mod function;

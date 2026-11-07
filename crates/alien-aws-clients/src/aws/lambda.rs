@@ -994,7 +994,7 @@ struct LambdaErrorDetails {
 // Request / response payloads (subset required by infra/tests)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct CreateFunctionRequest {
     pub function_name: String,
@@ -1027,13 +1027,13 @@ pub struct CreateFunctionRequest {
     pub vpc_config: Option<VpcConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct FunctionCode {
     pub image_uri: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct Environment {
     pub variables: Option<std::collections::HashMap<String, String>>,
@@ -1094,7 +1094,7 @@ pub struct FunctionUrlConfig {
     pub cors: Option<Cors>,
 }
 
-#[derive(Debug, Serialize, Builder)]
+#[derive(Debug, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct AddPermissionRequest {
     pub statement_id: String,
@@ -1114,7 +1114,7 @@ pub struct AddPermissionResponse {
     pub statement: Option<String>,
 }
 
-#[derive(Debug, Serialize, Builder)]
+#[derive(Debug, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct UpdateFunctionCodeRequest {
     pub image_uri: String,
@@ -1128,7 +1128,7 @@ pub struct UpdateFunctionCodeRequest {
     pub revision_id: Option<String>,
 }
 
-#[derive(Debug, Serialize, Builder)]
+#[derive(Debug, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct UpdateFunctionConfigurationRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1178,13 +1178,13 @@ pub struct GetPolicyResponse {
 // Supporting structs newly added for test compilation
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct TracingConfig {
     pub mode: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct EphemeralStorage {
     pub size: i32,

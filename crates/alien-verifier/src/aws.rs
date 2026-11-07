@@ -13,6 +13,7 @@ use alien_signing::{InstallId, Ledger, Lookup, ReleaseBody, Workload};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
+use crate::cloud_write::{CloudWrite, Facts};
 use crate::error::{ErrorData, Result};
 use crate::function::{FunctionStore, StillNewest};
 use crate::machines::{plan_roll, roll, MachineApi, RollMachines};
@@ -268,6 +269,19 @@ impl<L: LambdaApi, M: MachineApi> Backend for AwsBackend<L, M> {
     async fn check(&self, spec: &FunctionSpec) -> Result<()> {
         let back = FunctionStore::get(&self.lambda, &spec.name).await?;
         crate::function::check_read_back(spec, &back)
+    }
+
+    fn check_write(&self, facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
+        crate::cloud_write::lambda::check_write(facts, write)
+    }
+
+    async fn forward(
+        &self,
+        facts: &Facts<'_>,
+        write: &CloudWrite,
+        newest: &dyn StillNewest,
+    ) -> Result<Value> {
+        crate::cloud_write::lambda::forward(&self.lambda, facts, write, newest).await
     }
 
     async fn roll(

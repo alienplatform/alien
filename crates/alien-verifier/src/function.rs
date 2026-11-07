@@ -404,7 +404,7 @@ fn revision<'a>(function: &'a Value, name: &str) -> Result<&'a str> {
         })
 }
 
-async fn wait_until_idle(store: &dyn FunctionStore, name: &str) -> Result<Value> {
+pub(crate) async fn wait_until_idle(store: &dyn FunctionStore, name: &str) -> Result<Value> {
     let deadline = tokio::time::Instant::now() + UPDATE_WAIT;
     loop {
         let function = store.get(name).await?;

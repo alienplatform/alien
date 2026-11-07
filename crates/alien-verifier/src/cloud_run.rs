@@ -84,7 +84,7 @@ fn ingress(spec: &FunctionSpec) -> &'static str {
 }
 
 /// Direct VPC egress through the subnet setup gives functions.
-fn vpc_access(vpc: &SetupNetwork) -> Value {
+pub(crate) fn vpc_access(vpc: &SetupNetwork) -> Value {
     let interfaces: Vec<Value> = vpc
         .subnet_ids
         .iter()
@@ -109,7 +109,7 @@ fn vpc_access(vpc: &SetupNetwork) -> Value {
 
 /// The subnets (by name), network tags and egress of a template's `vpcAccess`, as setup's
 /// network and what Cloud Run reads back compare.
-fn network_of(vpc_access: &Value) -> Option<(Vec<String>, Vec<String>, String)> {
+pub(crate) fn network_of(vpc_access: &Value) -> Option<(Vec<String>, Vec<String>, String)> {
     let interfaces = vpc_access["networkInterfaces"].as_array()?;
     if interfaces.is_empty() {
         return None;
@@ -358,7 +358,7 @@ fn short_name(name: &str) -> &str {
 /// Refuse a service that doesn't serve all traffic from the revision its
 /// template created, or whose revision isn't ready: the template reading
 /// back right says nothing about what answers requests.
-fn check_serving(service: &Value) -> std::result::Result<(), String> {
+pub(crate) fn check_serving(service: &Value) -> std::result::Result<(), String> {
     let created = service["latestCreatedRevision"]
         .as_str()
         .filter(|name| !name.is_empty())

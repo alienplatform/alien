@@ -33,6 +33,8 @@ pub enum Request {
     ApplyRelease(ReleaseRequest),
     /// Only read every function back and report whether it matches.
     CheckRelease(ReleaseRequest),
+    /// Check a cloud write a controller built for one signed workload, then send it unchanged.
+    ApplyWrite(crate::cloud_write::ApplyWrite),
     /// Roll a machine cluster to the release's launch template (AWS).
     RollMachines(crate::machines::RollMachines),
     /// Resize a machine cluster within its signed bounds (GCP, Azure).
@@ -222,7 +224,7 @@ impl Place {
 
     /// The architecture of a function that names none: what the engine
     /// creates on this platform.
-    fn default_architecture(&self) -> &'static str {
+    pub(crate) fn default_architecture(&self) -> &'static str {
         match self.install {
             InstallId::Aws { .. } => "arm64",
             _ => "x86_64",
@@ -465,7 +467,7 @@ pub fn plan_function(
 /// `api` when the worker has a public endpoint, each bucket a storage trigger names and each
 /// schedule's EventBridge rule, every source pinned to this account and region. The statement
 /// ids and the rule names are the worker controller's. Other clouds take none.
-fn invoke_grants(
+pub(crate) fn invoke_grants(
     place: &Place,
     worker: Option<&alien_core::Worker>,
     function: &str,
@@ -549,7 +551,7 @@ fn registry_for(request: &ReleaseRequest, image: &str) -> Result<Option<Registry
 }
 
 /// Worker `name` as the release's signed stack declares it, if the release carries the stack.
-fn signed_worker(
+pub(crate) fn signed_worker(
     release: &ReleaseBody,
     place: &Place,
     name: &str,
@@ -667,7 +669,7 @@ pub(crate) mod tests {
 
     /// Release 1 of a stack whose worker `api` reserves 5, is fronted by a public endpoint when
     /// `public`, and is triggered by bucket `uploads`, a queue and a schedule.
-    fn release_with_access(public: bool) -> SignedStatement {
+    pub(crate) fn release_with_access(public: bool) -> SignedStatement {
         let uploads = alien_core::Storage::new("uploads".to_string()).build();
         let jobs = alien_core::Queue::new("jobs".to_string()).build();
         let mut worker = alien_core::Worker::new("api".to_string())
