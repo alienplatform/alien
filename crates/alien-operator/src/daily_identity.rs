@@ -238,13 +238,23 @@ impl DailyIdentity {
     /// is expired or refused, enroll again with a configured code this
     /// operator has not used yet. So `helm upgrade` with a new code recovers
     /// an operator whose key expired while it was down, or was replaced.
+    ///
+    /// A working key also uses up a new configured code. Left unused in the
+    /// release Secret, the code would let anyone who reads that Secret within
+    /// its hour replace this operator's key. A code that no longer works is
+    /// ignored, so it never stops a working operator.
     pub(crate) async fn connect(
         self: Arc<Self>,
         request: EnrollmentRequest<'_>,
     ) -> Result<(String, String)> {
         let deployment_id = self.enroll(request).await?;
         let error = match self.clone().sync_token(&request, &deployment_id).await {
-            Ok(token) => return Ok((deployment_id, token)),
+            Ok(token) => {
+                if let Err(error) = self.recover(request).await {
+                    warn!(error = %error, "Configured enrollment code was not used; keeping the current key");
+                }
+                return Ok((deployment_id, token));
+            }
             Err(error) => error,
         };
         let Some(deployment_id) = self.recover(request).await? else {
@@ -1066,19 +1076,45 @@ mod persistence_tests {
         assert_eq!(key_hash(&saved.current), *manager.current.lock().await);
     }
 
+    /// `helm upgrade` put a new code in the release Secret while the key
+    /// still works. The operator uses the code up, so a reader of the Secret
+    /// cannot enroll with it. A code that does not work changes nothing.
     #[tokio::test]
-    async fn a_working_key_ignores_a_new_code() {
+    async fn a_working_key_uses_up_a_new_code() {
         let (db, state, manager, _directory) =
             recovery_fixture(Utc::now() + chrono::Duration::hours(20)).await;
         *manager.current.lock().await = key_hash(&state.current);
         let identity = Arc::new(DailyIdentity::new(db.clone()).unwrap());
         identity
+            .clone()
             .connect(request(&state, "ax_enroll_new"))
             .await
             .unwrap();
-        assert_eq!(manager.enrolls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(manager.enrolls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let saved = db.read_daily_identity().await.unwrap().unwrap();
+        assert!(saved.current != state.current);
+        assert_eq!(key_hash(&saved.current), *manager.current.lock().await);
+        assert!(manager.codes.lock().await["ax_enroll_new"].is_some());
+        // Restarts do not send the spent code again.
+        identity
+            .clone()
+            .connect(request(&state, "ax_enroll_new"))
+            .await
+            .unwrap();
+        assert_eq!(manager.enrolls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // A code the manager refuses leaves the working key in place.
+        let (db, state, manager, _directory) =
+            recovery_fixture(Utc::now() + chrono::Duration::hours(20)).await;
+        *manager.current.lock().await = key_hash(&state.current);
+        let identity = Arc::new(DailyIdentity::new(db.clone()).unwrap());
+        identity
+            .connect(request(&state, "ax_enroll_expired"))
+            .await
+            .unwrap();
         let saved = db.read_daily_identity().await.unwrap().unwrap();
         assert!(saved.current == state.current);
+        assert_eq!(key_hash(&saved.current), *manager.current.lock().await);
     }
 
     #[derive(Clone)]
