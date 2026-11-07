@@ -696,6 +696,7 @@ async fn reconcile(
         .state(&mut final_state)
         .proxy_url(&state.config.base_url())
         .supported_aws_regions(&state.config.supported_aws_regions)
+        .protected(is_protected(&deployment))
         .call()
         .await
         .err();
@@ -2916,6 +2917,7 @@ async fn agent_sync(
                             .state(&mut agent_state)
                             .proxy_url(&state.config.base_url())
                             .supported_aws_regions(&state.config.supported_aws_regions)
+                            .protected(is_protected(&deployment))
                             .call()
                             .await
                     {

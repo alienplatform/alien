@@ -92,6 +92,7 @@ impl DeploymentLoopTransport for ManagerTransport {
             .state(&mut granted_state)
             .maybe_proxy_url(config.manager_url.as_deref())
             .supported_aws_regions(&self.supported_aws_regions)
+            .protected(config.stack_settings.signing.is_some())
             .call()
             .await
             .err();

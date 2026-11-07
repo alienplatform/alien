@@ -45,6 +45,7 @@ async fn ensure_registry_access(
     environment_info: &EnvironmentInfo,
     stack_state: Option<&StackState>,
     declared: DeclaredCompute,
+    verifier: Option<&str>,
 ) -> GrantOutcome {
     let rsm_access = extract_rsm_management_identity(stack_state);
     // The project number is what names the compute agents, and an import predating that field
@@ -56,7 +57,8 @@ async fn ensure_registry_access(
     );
     let has_management_sa = rsm_access.is_some();
 
-    let access = match build_cross_account_access(environment_info, stack_state, declared) {
+    let access = match build_cross_account_access(environment_info, stack_state, declared, verifier)
+    {
         Some(a) => a,
         None => {
             return GrantOutcome {
@@ -116,12 +118,17 @@ async fn revoke_registry_access(
     repo_id: &str,
     environment_info: &EnvironmentInfo,
     stack_state: Option<&StackState>,
+    verifier: Option<&str>,
     deployment_store: &dyn DeploymentStore,
     deployment_id: &str,
     project_id: &str,
 ) -> Result<()> {
     if let EnvironmentInfo::Gcp(GcpEnvironmentInfo { project_number, .. }) = environment_info {
-        if let Some(service_account_email) = extract_rsm_management_identity(stack_state) {
+        let service_account_emails: Vec<String> = extract_rsm_management_identity(stack_state)
+            .into_iter()
+            .chain(verifier.map(str::to_string))
+            .collect();
+        if !service_account_emails.is_empty() {
             remove_registry_access(
                 artifact_registry,
                 repo_id,
@@ -129,7 +136,7 @@ async fn revoke_registry_access(
                 CrossAccountAccess::Gcp(GcpCrossAccountAccess {
                     project_numbers: Vec::new(),
                     allowed_service_types: Vec::new(),
-                    service_account_emails: vec![service_account_email],
+                    service_account_emails,
                 }),
                 "deployment-owned registry access",
                 deployment_id,
@@ -190,9 +197,12 @@ async fn revoke_registry_access(
     // Everything a grant could have named, not what this release declares: a release that dropped
     // its workers would otherwise leave the regions an earlier grant wrote unvisited. Removal is a
     // `retain` on this deployment's principals, so naming more removes nothing else.
-    let Some(access) =
-        build_cross_account_access(environment_info, stack_state, DeclaredCompute::ALL)
-    else {
+    let Some(access) = build_cross_account_access(
+        environment_info,
+        stack_state,
+        DeclaredCompute::ALL,
+        verifier,
+    ) else {
         return Ok(());
     };
     remove_registry_access(
@@ -311,6 +321,9 @@ pub async fn reconcile_registry_access_with_proxy(
     state: &mut DeploymentState,
     proxy_url: Option<&str>,
     #[builder(default)] supported_aws_regions: &[String],
+    /// Whether the deployment is a protected install, whose verifier deploys its functions.
+    #[builder(default)]
+    protected: bool,
 ) -> Result<()> {
     let environment_info = match &state.environment_info {
         Some(env_info) => env_info,
@@ -377,9 +390,15 @@ pub async fn reconcile_registry_access_with_proxy(
         return Ok(());
     }
     let declared = DeclaredCompute::of(state);
+    // A protected install's verifier deploys its functions, so it reads their images too. Its
+    // identity is known once setup has reported the install's prefix.
+    let verifier = protected
+        .then(|| verifier_identity(environment_info, state.stack_state.as_ref()))
+        .flatten();
     let needed = RegistryAccess {
         repositories: repo_ids.clone(),
         service_types: service_type_names(environment_info, declared),
+        verifier: verifier.clone(),
     };
 
     // What the policy already says, not merely that something was once written: a deployment that
@@ -408,7 +427,7 @@ pub async fn reconcile_registry_access_with_proxy(
     // Each repository joins the record as it is proved, so a grant that fails halfway still names
     // what it opened. Assembling the whole list first would leave a live grant unrecorded.
     let mut opened: Vec<String> = Vec::new();
-    let mut all_complete = true;
+    let mut all_complete = !protected || verifier.is_some();
     let mut replica_pending = None;
     for repo_id in &repo_ids {
         let outcome = ensure_registry_access(
@@ -417,6 +436,7 @@ pub async fn reconcile_registry_access_with_proxy(
             environment_info,
             state.stack_state.as_ref(),
             declared,
+            verifier.as_deref(),
         )
         .await;
         if outcome.written {
@@ -453,6 +473,7 @@ pub async fn reconcile_registry_access_with_proxy(
     rm.registry_access = Some(RegistryAccess {
         repositories: opened,
         service_types: needed.service_types,
+        verifier: needed.verifier,
     });
     rm.registry_access_granted = granted_everything;
 
@@ -521,6 +542,7 @@ fn needs_regrant(
     };
     !complete
         || recorded.service_types != needed.service_types
+        || recorded.verifier != needed.verifier
         || !needed
             .repositories
             .iter()
@@ -595,20 +617,20 @@ fn service_type_names(
     environment_info: &EnvironmentInfo,
     declared: DeclaredCompute,
 ) -> Vec<String> {
-    let mut names: Vec<String> = match build_cross_account_access(environment_info, None, declared)
-    {
-        Some(CrossAccountAccess::Aws(access)) => access
-            .allowed_service_types
-            .iter()
-            .map(service_type_name)
-            .collect(),
-        Some(CrossAccountAccess::Gcp(access)) => access
-            .allowed_service_types
-            .iter()
-            .map(service_type_name)
-            .collect(),
-        _ => Vec::new(),
-    };
+    let mut names: Vec<String> =
+        match build_cross_account_access(environment_info, None, declared, None) {
+            Some(CrossAccountAccess::Aws(access)) => access
+                .allowed_service_types
+                .iter()
+                .map(service_type_name)
+                .collect(),
+            Some(CrossAccountAccess::Gcp(access)) => access
+                .allowed_service_types
+                .iter()
+                .map(service_type_name)
+                .collect(),
+            _ => Vec::new(),
+        };
     names.sort();
     names
 }
@@ -792,12 +814,18 @@ pub async fn cleanup_deleted_registry_access(
         }
         return Ok(());
     }
+    let verifier = state
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.registry_access.as_ref())
+        .and_then(|access| access.verifier.as_deref());
     for repo_id in repo_ids {
         revoke_registry_access(
             artifact_registry.as_ref(),
             &repo_id,
             environment_info,
             state.stack_state.as_ref(),
+            verifier,
             deployment_store,
             deployment_id,
             project_id,
@@ -1357,10 +1385,36 @@ fn extract_rsm_management_identity(stack_state: Option<&StackState>) -> Option<S
     None
 }
 
+/// The identity a protected install's verifier runs as, named as setup names it: the role
+/// `<prefix>-verifier` on AWS, the service account setup creates for `verifier` on GCP. `None`
+/// before setup has reported the install's prefix.
+fn verifier_identity(
+    environment_info: &EnvironmentInfo,
+    stack_state: Option<&StackState>,
+) -> Option<String> {
+    let prefix = stack_state
+        .map(|stack_state| stack_state.resource_prefix.as_str())
+        .filter(|prefix| !prefix.is_empty())?;
+    match environment_info {
+        EnvironmentInfo::Aws(AwsEnvironmentInfo { account_id, .. }) => Some(format!(
+            "arn:aws:iam::{account_id}:role/{}",
+            alien_permissions::generators::signing_limits::aws_verifier_name(prefix)
+        )),
+        EnvironmentInfo::Gcp(GcpEnvironmentInfo { project_id, .. }) => Some(format!(
+            "{}@{project_id}.iam.gserviceaccount.com",
+            alien_core::gcp_naming::gcp_service_account_id(prefix, "verifier")
+        )),
+        _ => None,
+    }
+}
+
+/// The access a grant writes: the deployment's compute services and management identity, and
+/// a protected install's `verifier`.
 fn build_cross_account_access(
     environment_info: &EnvironmentInfo,
     stack_state: Option<&StackState>,
     declared: DeclaredCompute,
+    verifier: Option<&str>,
 ) -> Option<CrossAccountAccess> {
     let rsm_access = extract_rsm_management_identity(stack_state);
 
@@ -1368,7 +1422,10 @@ fn build_cross_account_access(
         EnvironmentInfo::Aws(AwsEnvironmentInfo {
             account_id, region, ..
         }) => {
-            let role_arns = rsm_access.into_iter().collect();
+            let role_arns = rsm_access
+                .into_iter()
+                .chain(verifier.map(str::to_string))
+                .collect();
             // Lambda takes an image only from its own region, so a worker's grant names that
             // region and the binding waits for the repository's replica there. Nothing else reads
             // a replica: containers pull through the manager's proxy and a MicroVM image builds
@@ -1387,7 +1444,10 @@ fn build_cross_account_access(
             }))
         }
         EnvironmentInfo::Gcp(GcpEnvironmentInfo { project_number, .. }) => {
-            let service_account_emails = rsm_access.into_iter().collect();
+            let service_account_emails = rsm_access
+                .into_iter()
+                .chain(verifier.map(str::to_string))
+                .collect();
             let project_numbers = if project_number.is_empty() {
                 Vec::new()
             } else {
@@ -1933,6 +1993,7 @@ mod tests {
         metadata.registry_access = Some(RegistryAccess {
             repositories: vec!["alien-artifacts-prj_test".to_string()],
             service_types: vec!["worker".to_string()],
+            verifier: None,
         });
 
         for _ in 0..3 {
@@ -2116,6 +2177,7 @@ mod tests {
         metadata.registry_access = Some(RegistryAccess {
             repositories: vec!["alien-artifacts-other".to_string()],
             service_types: vec!["worker".to_string()],
+            verifier: None,
         });
         reconcile_registry_access(
             &recording_provider(registry.clone()),
@@ -2831,6 +2893,7 @@ mod tests {
             "vendor-project/alien-artifacts-default",
             &gcp_environment(),
             None,
+            None,
             store,
             "dep_deleted",
             "default",
@@ -2900,6 +2963,7 @@ mod tests {
                 &gcp_environment(),
                 Some(&stack_state),
                 DeclaredCompute::default(),
+                None,
             )
             .expect("GCP cross-account access should be configured");
             let CrossAccountAccess::Gcp(access) = access else {
@@ -2931,6 +2995,7 @@ mod tests {
                 "vendor-project/alien-artifacts-default",
                 &gcp_environment(),
                 Some(&stack_state),
+                None,
                 &store,
                 "dep_deleted",
                 "default",
@@ -3086,8 +3151,9 @@ mod tests {
             account_id: "123456789012".to_string(),
             region: "us-east-2".to_string(),
         });
-        let access = build_cross_account_access(&environment_info, None, DeclaredCompute::ALL)
-            .expect("AWS registry access should be configured");
+        let access =
+            build_cross_account_access(&environment_info, None, DeclaredCompute::ALL, None)
+                .expect("AWS registry access should be configured");
 
         let error = remove_registry_access(
             &registry,
@@ -3183,6 +3249,7 @@ mod tests {
             state.environment_info.as_ref().expect("AWS environment"),
             state.stack_state.as_ref(),
             DeclaredCompute::of(&state),
+            None,
         )
         .expect("AWS cross-account access should be configured");
         let CrossAccountAccess::Aws(aws_access) = access else {
@@ -3241,6 +3308,7 @@ mod tests {
                 worker: true,
                 ..DeclaredCompute::default()
             },
+            None,
         )
         .expect("AWS cross-account access should be configured");
         let CrossAccountAccess::Aws(aws_access) = access else {
@@ -3662,6 +3730,7 @@ mod tests {
         let needed = RegistryAccess {
             repositories: vec!["alien-artifacts-prj_test".to_string()],
             service_types: vec!["worker".to_string()],
+            verifier: None,
         };
 
         assert!(needs_regrant(None, &needed, false));
@@ -3696,8 +3765,9 @@ mod tests {
             account_id: "123456789012".to_string(),
             region: "us-east-2".to_string(),
         });
-        let access = build_cross_account_access(&environment_info, None, DeclaredCompute::ALL)
-            .expect("AWS registry access should be configured");
+        let access =
+            build_cross_account_access(&environment_info, None, DeclaredCompute::ALL, None)
+                .expect("AWS registry access should be configured");
 
         remove_registry_access(
             &registry,
@@ -3721,6 +3791,7 @@ mod tests {
                 "alien-artifacts-prj_test/api".to_string(),
             ],
             service_types: vec!["worker".to_string()],
+            verifier: None,
         };
 
         assert_eq!(
@@ -3739,6 +3810,7 @@ mod tests {
         let granted_for_workers = RegistryAccess {
             repositories: vec!["test-project/alien-artifacts".to_string()],
             service_types: vec!["worker".to_string()],
+            verifier: None,
         };
         let gcp = EnvironmentInfo::Gcp(GcpEnvironmentInfo {
             project_number: "123456789012".to_string(),
@@ -3748,6 +3820,7 @@ mod tests {
         let needed = RegistryAccess {
             repositories: granted_for_workers.repositories.clone(),
             service_types: service_type_names(&gcp, SANDBOX_ONLY),
+            verifier: None,
         };
 
         assert_eq!(needed.service_types, vec!["sandbox", "worker"]);
@@ -3760,6 +3833,7 @@ mod tests {
             RegistryAccess {
                 repositories: needed.repositories.clone(),
                 service_types: service_type_names(&gcp, SANDBOX_ONLY),
+                verifier: None,
             },
             "and an unchanged one compares equal, so the policy is not rewritten every tick"
         );
@@ -3863,6 +3937,7 @@ mod tests {
                     sandbox: declares_sandbox,
                     worker: false,
                 },
+                None,
             )
             .expect("a GCP environment builds a cross-account access");
             let CrossAccountAccess::Gcp(gcp) = access else {
@@ -3904,6 +3979,7 @@ mod tests {
         let needed = RegistryAccess {
             repositories: vec!["alien-artifacts-prj_test".to_string()],
             service_types: vec!["worker".to_string()],
+            verifier: None,
         };
         let with_dropped = RegistryAccess {
             repositories: vec![
@@ -3911,6 +3987,7 @@ mod tests {
                 "alien-artifacts-prj_test".to_string(),
             ],
             service_types: needed.service_types.clone(),
+            verifier: None,
         };
 
         assert!(!needs_regrant(Some(&with_dropped), &needed, true));
@@ -3922,6 +3999,7 @@ mod tests {
         let missing_one = RegistryAccess {
             repositories: vec!["alien-artifacts-prj_gone".to_string()],
             service_types: needed.service_types.clone(),
+            verifier: None,
         };
         assert!(
             needs_regrant(Some(&missing_one), &needed, true),
@@ -3931,6 +4009,7 @@ mod tests {
         let other_principals = RegistryAccess {
             repositories: with_dropped.repositories.clone(),
             service_types: vec!["sandbox".to_string(), "worker".to_string()],
+            verifier: None,
         };
         assert!(
             needs_regrant(Some(&other_principals), &needed, true),
@@ -4192,6 +4271,7 @@ mod tests {
                             registry_access: Some(RegistryAccess {
                                 repositories: vec![format!("{GCP_PREFIX}-prj-test")],
                                 service_types: vec!["worker".to_string()],
+                                verifier: None,
                             }),
                             ..RuntimeMetadata::default()
                         });
@@ -4465,6 +4545,7 @@ mod tests {
                 registry_access: Some(RegistryAccess {
                     repositories: vec!["vendor/alien-artifacts".to_string()],
                     service_types: vec!["worker".to_string()],
+                    verifier: None,
                 }),
                 registry_access_granted: true,
                 ..Default::default()
@@ -4696,6 +4777,7 @@ mod tests {
             registry_access: Some(RegistryAccess {
                 repositories: vec!["vendor/alien-artifacts-prj-test".to_string()],
                 service_types: vec!["worker".to_string()],
+                verifier: None,
             }),
             ..Default::default()
         });
@@ -4733,6 +4815,137 @@ mod tests {
             vec!["alien-artifacts", "alien-artifacts-prj-test"],
             "both the project repository and the shared one lose the service agent"
         );
+    }
+
+    /// A protected install's verifier creates and updates its Cloud Run services, and Cloud Run
+    /// lets it deploy an image only if it may read it: the grant names the verifier beside the
+    /// management account, and the delete takes both off again.
+    #[tokio::test]
+    async fn a_protected_installs_verifier_may_read_its_images_until_the_delete() {
+        use alien_bindings::providers::artifact_registry::GarArtifactRegistry;
+        use alien_core::bindings::{
+            ArtifactRegistryBinding, BindingValue, GarArtifactRegistryBinding,
+        };
+        use alien_core::gcp_naming::gcp_service_account_id;
+        use alien_core::{GcpClientConfig, GcpCredentials, GcpServiceOverrides};
+        use axum::{extract::State, http::Uri, Json, Router};
+
+        const AGENT: &str =
+            "serviceAccount:service-123456789012@serverless-robot-prod.iam.gserviceaccount.com";
+        type Policy = Arc<Mutex<serde_json::Value>>;
+        async fn gar(
+            State(policy): State<Policy>,
+            uri: Uri,
+            body: String,
+        ) -> Json<serde_json::Value> {
+            if uri.path().ends_with(":setIamPolicy") {
+                let input: serde_json::Value = serde_json::from_str(&body).unwrap();
+                *policy.lock().unwrap() = input["policy"].clone();
+            }
+            Json(policy.lock().unwrap().clone())
+        }
+        let readers = |policy: &Policy| -> Vec<String> {
+            let mut members: Vec<String> = policy.lock().unwrap()["bindings"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|binding| binding["role"] == "roles/artifactregistry.reader")
+                .flat_map(|binding| binding["members"].as_array().cloned().unwrap_or_default())
+                .map(|member| member.as_str().unwrap().to_string())
+                .collect();
+            members.sort();
+            members
+        };
+
+        let policy: Policy = Arc::new(Mutex::new(serde_json::json!({"etag": "e1", "bindings": [
+            {"role": "roles/artifactregistry.reader", "members": [AGENT]}
+        ]})));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new().fallback(gar).with_state(policy.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let config = GcpClientConfig {
+            project_id: "vendor".to_string(),
+            region: "us-central1".to_string(),
+            project_number: None,
+            credentials: GcpCredentials::AccessToken {
+                token: "local".to_string(),
+            },
+            service_overrides: Some(GcpServiceOverrides {
+                endpoints: HashMap::from([("artifactregistry".to_string(), endpoint)]),
+            }),
+        };
+        let registry = GarArtifactRegistry::new(
+            "artifact-registry".to_string(),
+            ArtifactRegistryBinding::Gar(GarArtifactRegistryBinding {
+                repository_name: BindingValue::Value("alien-artifacts".to_string()),
+                pull_service_account_email: None,
+                push_service_account_email: None,
+            }),
+            &config,
+        )
+        .await
+        .unwrap();
+        let provider: Arc<dyn BindingsProviderApi> = Arc::new(TestBindingsProvider {
+            binding_name: "artifact-registry",
+            registry: Arc::new(registry),
+        });
+        let providers = Some(provider);
+        let mut state = gcp_state_with_stack(worker_stack(
+            "us-central1-docker.pkg.dev/vendor/alien-artifacts-prj-test/prj_test/worker:v1",
+        ));
+        state.status = DeploymentStatus::Running;
+        let [(_, outputs), _] = gcp_management_outputs();
+        state.stack_state = Some(gcp_stack_state(outputs));
+        // The account setup creates for the verifier of the install with prefix `test-prefix`.
+        let verifier = format!(
+            "{}@test-project.iam.gserviceaccount.com",
+            gcp_service_account_id("test-prefix", "verifier")
+        );
+
+        reconcile_registry_access_with_proxy()
+            .bindings_provider(&providers)
+            .target_bindings_providers(&HashMap::new())
+            .deployment_id("dep_protected")
+            .project_id(PROJECT)
+            .state(&mut state)
+            .protected(true)
+            .call()
+            .await
+            .expect("no replica is pending");
+        let mut granted = vec![
+            AGENT.to_string(),
+            format!("serviceAccount:{GCP_MANAGEMENT_EMAIL}"),
+            format!("serviceAccount:{verifier}"),
+        ];
+        granted.sort();
+        assert_eq!(readers(&policy), granted);
+        let metadata = state.runtime_metadata.clone().expect("metadata");
+        assert!(metadata.registry_access_granted);
+        assert_eq!(
+            metadata.registry_access.expect("record").verifier,
+            Some(verifier.clone()),
+            "the record names the verifier, so the delete revokes it"
+        );
+
+        state.status = DeploymentStatus::Deleted;
+        // Another deployment still uses the GCP project: only this deployment's members go.
+        let mut store = MockDeploymentStore::new();
+        store
+            .expect_has_other_gcp_project_deployment()
+            .returning(|_, _, _, _| Ok(true));
+        let result = revoke_after_persisting(
+            &store,
+            &providers,
+            &HashMap::new(),
+            "dep_protected",
+            PROJECT,
+            &state,
+        )
+        .await;
+        server.abort();
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(readers(&policy), vec![AGENT.to_string()]);
     }
 
     #[test]
