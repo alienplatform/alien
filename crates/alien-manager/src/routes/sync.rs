@@ -1680,6 +1680,136 @@ mod tests {
         assert!(state.error.is_none());
     }
 
+    /// After an Operator moves from a deployment token to an enrollment code,
+    /// the token keeps working until the first rollout the enrolled Operator
+    /// finishes. Then every workload uses capability files and it is revoked.
+    #[tokio::test]
+    async fn the_deployment_token_is_revoked_after_the_first_enrolled_rollout() {
+        use crate::auth::runtime_capability::{
+            RuntimeAuthValidator, RuntimeCredentials, RuntimeGrant, RuntimePurpose,
+        };
+        use crate::providers::token_db_validator::TokenDbValidator;
+        use crate::traits::token_store::{CreateTokenParams, TokenStore, TokenType};
+
+        let temp = tempfile::tempdir().expect("test directory");
+        let db = Arc::new(
+            SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
+                .await
+                .expect("database"),
+        );
+        let tokens = Arc::new(SqliteTokenStore::new(db.clone()));
+        let old_token = "ax_deploy_before_enrollment";
+        tokens
+            .create_token(CreateTokenParams {
+                token_type: TokenType::Deployment,
+                key_prefix: "ax_deploy_bef".into(),
+                key_hash: crate::ids::sha256_hash(old_token),
+                deployment_group_id: Some("dg_test".into()),
+                deployment_id: Some("dep_test".into()),
+            })
+            .await
+            .expect("deployment token");
+
+        let stored = Arc::new(Mutex::new(deployment_record_with_state("running", None)));
+        let mut store = MockDeploymentStore::new();
+        store.expect_requires_execution_claims().return_const(false);
+        let current = stored.clone();
+        store
+            .expect_get_deployment()
+            .returning(move |_, _| Ok(Some(current.lock().unwrap().clone())));
+        let current = stored.clone();
+        store.expect_reconcile().returning(move |_, data| {
+            let mut record = current.lock().unwrap().clone();
+            record.status = serde_json::to_value(data.state.status)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_owned();
+            *current.lock().unwrap() = record.clone();
+            Ok(ReconcileOutcome {
+                record,
+                target_operations_bundle_set: None,
+                target_dynamic_containers: None,
+            })
+        });
+        let mut state = test_app_state(
+            temp.path(),
+            Arc::new(store),
+            Arc::new(SqliteReleaseStore::new(db.clone())),
+            Arc::new(LocalCredentialResolver::new(temp.path().to_path_buf())),
+            db,
+        )
+        .await;
+        let credentials =
+            Arc::new(RuntimeCredentials::new("https://manager.test".into(), [9; 32]).unwrap());
+        state.token_store = tokens.clone();
+        state.auth_validator = Arc::new(RuntimeAuthValidator::new(
+            credentials.clone(),
+            Arc::new(TokenDbValidator::new(tokens.clone())),
+        ));
+        let operator = credentials
+            .issue(
+                RuntimeGrant {
+                    workspace_id: "default".into(),
+                    project_id: "default".into(),
+                    deployment_id: "dep_test".into(),
+                    component_id: "operator".into(),
+                    purpose: RuntimePurpose::OperatorSync,
+                },
+                Utc::now() + chrono::Duration::hours(1),
+            )
+            .unwrap()
+            .token;
+
+        let sync = |bearer: String| {
+            let state = state.clone();
+            async move {
+                let body = json!({
+                    "deploymentId": "dep_test",
+                    "maxSupportedDeploymentProtocolVersion":
+                        alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION,
+                    "currentState": {
+                        "platform": "kubernetes",
+                        "status": "running",
+                        "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    },
+                });
+                let response = super::router()
+                    .with_state(state)
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri("/v1/sync")
+                            .header("authorization", format!("Bearer {bearer}"))
+                            .header("content-type", "application/json")
+                            .body(Body::from(body.to_string()))
+                            .expect("request"),
+                    )
+                    .await
+                    .expect("sync response");
+                let status = response.status();
+                if status == StatusCode::BAD_REQUEST {
+                    let body = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+                    panic!("{}", String::from_utf8_lossy(&body));
+                }
+                status
+            }
+        };
+
+        // Enrolled, but the workloads still run the revision from before.
+        // Health refreshes do not end the token.
+        assert_eq!(sync(operator.clone()).await, StatusCode::OK);
+        stored.lock().unwrap().status = "refresh-failed".into();
+        assert_eq!(sync(operator.clone()).await, StatusCode::OK);
+        assert_eq!(sync(old_token.into()).await, StatusCode::OK);
+
+        // The enrolled Operator finishes a rollout.
+        stored.lock().unwrap().status = "update-pending".into();
+        assert_eq!(sync(operator.clone()).await, StatusCode::OK);
+        assert_eq!(sync(old_token.into()).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(sync(operator).await, StatusCode::OK);
+    }
+
     /// An Operator that cleared its config in token mode and then enrolled
     /// asks for it. The manager sends the running release again, and only then.
     #[tokio::test]
@@ -3051,6 +3181,13 @@ async fn agent_sync(
                             tracing::warn!(deployment_id = %req.deployment_id, error = %e, "Failed to reconcile agent-reported state");
                         }
                         Ok(outcome) => {
+                            if rollout_by_enrolled_operator_finished(
+                                &subject,
+                                &deployment,
+                                &outcome.record,
+                            ) {
+                                revoke_deployment_tokens(&state, &req.deployment_id).await;
+                            }
                             target_operations_bundle_set = outcome.target_operations_bundle_set;
                             target_dynamic_containers = outcome.target_dynamic_containers;
                             if let Err(error) =
@@ -3937,6 +4074,48 @@ fn deployment_needs_target(deployment: &DeploymentRecord) -> bool {
         deployment_status_from_record(&deployment.status),
         Some(DeploymentStatus::Running)
     )
+}
+
+/// An enrolled Operator reported the end of a rollout. Every workload now
+/// runs a revision it built with capability files, so nothing needs the
+/// deployment token any more. A refresh (from Running or RefreshFailed) is
+/// not a rollout: workloads deployed before enrollment may still use it.
+fn rollout_by_enrolled_operator_finished(
+    subject: &crate::auth::Subject,
+    before: &DeploymentRecord,
+    after: &DeploymentRecord,
+) -> bool {
+    matches!(subject.role, crate::auth::Role::OperatorSync)
+        && crate::auth::runtime_capability::is_runtime_capability(&subject.bearer_token)
+        && !matches!(before.status.as_str(), "running" | "refresh-failed")
+        && after.status == "running"
+}
+
+/// Delete the deployment's long-lived tokens. A failure is logged and retried
+/// on the next rollout; it never fails the sync.
+async fn revoke_deployment_tokens(state: &AppState, deployment_id: &str) {
+    let tokens = match state.token_store.list_tokens().await {
+        Ok(tokens) => tokens,
+        Err(error) => {
+            tracing::warn!(%deployment_id, %error, "Cannot list deployment tokens to revoke");
+            return;
+        }
+    };
+    for token in tokens.into_iter().filter(|token| {
+        token.token_type == crate::traits::token_store::TokenType::Deployment
+            && token.deployment_id.as_deref() == Some(deployment_id)
+    }) {
+        match state.token_store.delete_token(&token.id).await {
+            Ok(()) => tracing::info!(
+                %deployment_id,
+                key_prefix = %token.key_prefix,
+                "Revoked the deployment token after the first rollout of the enrolled Operator"
+            ),
+            Err(error) => {
+                tracing::warn!(%deployment_id, %error, "Cannot revoke a deployment token")
+            }
+        }
+    }
 }
 
 /// The release a settled deployment runs, when no other work is pending.
