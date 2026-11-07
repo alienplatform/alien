@@ -1,5 +1,6 @@
 //! Real-cloud updates with a single initial setup and the installed management identity.
 
+use alien_aws_clients::iam::{IamApi, IamClient};
 use alien_core::permissions::{ManagementPermissions, PermissionProfile};
 use alien_core::{Platform, ResourceLifecycle, Stack, Storage};
 use alien_test::{TestConfig, TestDeployment, TestManager};
@@ -94,6 +95,11 @@ impl AutomaticSetup {
     pub async fn run_management_change(&mut self) -> anyhow::Result<()> {
         self.install().await?;
         let installed_revision = self.management_revision().await?;
+        let stuck = if self.platform == Platform::Aws {
+            Some(self.leave_role_at_the_quota().await?)
+        } else {
+            None
+        };
 
         let wider = publish(&self.manager, self.platform, &management_stack(true)).await?;
         let error = self.wait_for_setup_required(&wider).await?;
@@ -111,6 +117,9 @@ impl AutomaticSetup {
             "The setup run must apply the wider management grant"
         );
         tracing::info!("Setup run applied the wider management grant");
+        if let Some(stuck) = &stuck {
+            stuck.verify_repaired().await?;
+        }
 
         let narrower = publish(&self.manager, self.platform, &management_stack(false)).await?;
         self.wait_until_running_release(&narrower).await?;
@@ -181,6 +190,63 @@ impl AutomaticSetup {
             .as_str()
             .map(str::to_owned)
             .with_context(|| format!("No applied management revision: {management}"))
+    }
+
+    /// Leaves the management role as a setup that hit the AWS quota of 20 attached
+    /// managed policies did: 22 numbered policies exist and the first 20 are attached,
+    /// so the policies that hold the role's Deny statements past index 19 are not.
+    async fn leave_role_at_the_quota(&self) -> anyhow::Result<StuckRole> {
+        let state = self.deployment_state().await?;
+        let management = &state["stackState"]["resources"]["management"]["_internal"];
+        let role = management["roleName"]
+            .as_str()
+            .context("The management role name is required")?
+            .to_owned();
+        let prefix = state["stackState"]["resourcePrefix"]
+            .as_str()
+            .context("The resource prefix is required")?
+            .to_owned();
+        let account = management["roleArn"]
+            .as_str()
+            .and_then(|arn| arn.split(':').nth(4))
+            .context("The management role ARN names the account")?
+            .to_owned();
+        let stuck = StuckRole {
+            iam: super::sandbox::target_iam().await?,
+            role,
+            prefix,
+            account,
+        };
+        let packed = stuck.attached().await?.len();
+        let filler = r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"iam:GetRole","Resource":"*"}]}"#;
+        for index in packed..22 {
+            let name = stuck.numbered(index);
+            stuck
+                .iam
+                .create_policy(&name, filler, None, None)
+                .await
+                .with_context(|| format!("create {name}"))?;
+            if index < 20 {
+                stuck
+                    .iam
+                    .attach_role_policy(&stuck.role, &stuck.arn(&name))
+                    .await
+                    .with_context(|| format!("attach {name}"))?;
+            }
+        }
+        anyhow::ensure!(
+            stuck.attached().await?
+                == (0..20)
+                    .map(|index| stuck.numbered(index))
+                    .collect::<Vec<_>>(),
+            "The role must be left at the quota"
+        );
+        tracing::info!(
+            role = %stuck.role,
+            packed,
+            "Seeded 22 numbered management policies with 20 attached"
+        );
+        Ok(stuck)
     }
 
     async fn wait_for_setup_required(&self, release: &str) -> anyhow::Result<String> {
@@ -320,6 +386,72 @@ pub async fn verify_updates(
         }
     }
     Ok(())
+}
+
+/// A management role left at the AWS attached-policy quota.
+struct StuckRole {
+    iam: IamClient,
+    role: String,
+    prefix: String,
+    account: String,
+}
+
+impl StuckRole {
+    fn numbered(&self, index: usize) -> String {
+        format!("{}-deployment-management-{index}", self.prefix)
+    }
+
+    fn arn(&self, name: &str) -> String {
+        format!("arn:aws:iam::{}:policy/{name}", self.account)
+    }
+
+    /// Names of the managed policies attached to the role, in index order.
+    async fn attached(&self) -> anyhow::Result<Vec<String>> {
+        let mut names: Vec<String> = self
+            .iam
+            .list_attached_role_policies(&self.role)
+            .await?
+            .list_attached_role_policies_result
+            .attached_policies
+            .map(|attached| attached.member)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|policy| policy.policy_name)
+            .collect();
+        names.sort_by_key(|name| {
+            name.rsplit('-')
+                .next()
+                .and_then(|index| index.parse::<usize>().ok())
+        });
+        Ok(names)
+    }
+
+    /// The setup run packed the grant again: a contiguous run of numbered policies from 0,
+    /// all attached, with nothing numbered left above it.
+    async fn verify_repaired(&self) -> anyhow::Result<()> {
+        let attached = self.attached().await?;
+        let packed = attached.len();
+        anyhow::ensure!(
+            (1..20).contains(&packed),
+            "The repaired role holds {packed} managed policies"
+        );
+        anyhow::ensure!(
+            attached
+                == (0..packed)
+                    .map(|index| self.numbered(index))
+                    .collect::<Vec<_>>(),
+            "The repaired role must attach policies 0..{packed}: {attached:?}"
+        );
+        for index in packed..22 {
+            match self.iam.get_policy(&self.arn(&self.numbered(index))).await {
+                Err(error) if error.code == "REMOTE_RESOURCE_NOT_FOUND" => {}
+                Ok(_) => bail!("Stale management policy {index} was left behind"),
+                Err(error) => bail!("GetPolicy {index} failed: {error}"),
+            }
+        }
+        tracing::info!(role = %self.role, packed, "Setup run repaired the role left at the quota");
+        Ok(())
+    }
 }
 
 /// An empty stack whose management grant either adds reading application buckets or not.
