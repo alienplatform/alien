@@ -27,7 +27,7 @@ use alien_aws_clients::ec2::{
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::release_statement::signed_stack;
-use alien_core::{CapacityGroup, ComputeCluster, Platform};
+use alien_core::{CapacityGroup, ComputeCluster, Platform, ALIEN_STACK_TAG_KEY};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_signing::{Kind, ReleaseBody, SignedStatement};
 use async_trait::async_trait;
@@ -298,6 +298,9 @@ pub struct RollPlan {
     pub max_size: i32,
     /// Subnets, for a group the verifier creates.
     pub subnet_ids: Vec<String>,
+    /// The install's `deployment` tag value, its prefix. The template and every machine carry
+    /// it: setup lets the verifier create launch templates and tag at launch only with it.
+    pub deployment: String,
 }
 
 /// What the verifier learned about the image from the cloud: its owner,
@@ -565,6 +568,7 @@ pub fn plan_roll(
             resource_type: "instance".to_string(),
             tags: tags
                 .into_iter()
+                .chain([(ALIEN_STACK_TAG_KEY.to_string(), place.prefix.clone())])
                 .map(|(key, value)| Tag { key, value })
                 .collect(),
         }])
@@ -590,6 +594,7 @@ pub fn plan_roll(
         min_size: aws_size(group.min_size)?,
         max_size: aws_size(group.max_size)?,
         subnet_ids: network.subnet_ids.clone(),
+        deployment: place.prefix.clone(),
     })
 }
 
@@ -606,8 +611,13 @@ pub trait MachineApi: Send + Sync {
     /// The id of launch template `name`, if it exists.
     async fn template(&self, name: &str) -> Result<Option<String>>;
     /// Create launch template `name` with `data` as version 1; its id.
-    async fn create_template(&self, name: &str, data: &RequestLaunchTemplateData)
-        -> Result<String>;
+    /// Create launch template `name` from `data`, tagged as the install's (`deployment`).
+    async fn create_template(
+        &self,
+        name: &str,
+        deployment: &str,
+        data: &RequestLaunchTemplateData,
+    ) -> Result<String>;
     /// Add a version to template `id`; its number.
     async fn create_version(&self, id: &str, data: &RequestLaunchTemplateData) -> Result<i64>;
     /// Whether Auto Scaling group `name` exists.
@@ -640,7 +650,8 @@ pub async fn roll(api: &dyn MachineApi, plan: &RollPlan) -> Result<Rolled> {
             (id, version)
         }
         None => (
-            api.create_template(&plan.template_name, &plan.data).await?,
+            api.create_template(&plan.template_name, &plan.deployment, &plan.data)
+                .await?,
             1,
         ),
     };
@@ -794,6 +805,7 @@ impl<E: Ec2Api, A: AutoScalingApi> MachineApi for AwsMachines<E, A> {
     async fn create_template(
         &self,
         name: &str,
+        deployment: &str,
         data: &RequestLaunchTemplateData,
     ) -> Result<String> {
         let response = self
@@ -802,6 +814,13 @@ impl<E: Ec2Api, A: AutoScalingApi> MachineApi for AwsMachines<E, A> {
                 CreateLaunchTemplateRequest::builder()
                     .launch_template_name(name.to_string())
                     .launch_template_data(data.clone())
+                    .tag_specifications(vec![TagSpecification {
+                        resource_type: "launch-template".to_string(),
+                        tags: vec![Tag {
+                            key: ALIEN_STACK_TAG_KEY.to_string(),
+                            value: deployment.to_string(),
+                        }],
+                    }])
                     .build(),
             )
             .await
@@ -895,7 +914,7 @@ mod tests {
     use alien_core::release_statement::{release_body, ReleaseOptions};
     use alien_core::{ResourceLifecycle, Stack};
     use alien_signing::InstallId;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     const PUBLISHER: &str = "345678901234";
     const SUBNET: &str = "subnet-0123456789abcdef0";
@@ -1108,8 +1127,112 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 ("HorizonCapacityGroup", "general"),
-                ("HorizonApiUrl", "https://machines.example.com")
+                ("HorizonApiUrl", "https://machines.example.com"),
+                ("deployment", PREFIX),
             ]
+        );
+    }
+
+    /// Whether an Allow in `policy` lets `action` through for a request carrying `tags`: every
+    /// condition the statement has is `StringEquals` on `aws:RequestTag/<key>`, met by the
+    /// tags. No Deny names the action.
+    fn allows_with_tags(policy: &serde_json::Value, action: &str, tags: &[Tag]) -> bool {
+        let statements = policy["Statement"].as_array().unwrap();
+        let names = |statement: &serde_json::Value| match &statement["Action"] {
+            serde_json::Value::String(one) => vec![one.clone()],
+            many => many
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|action| action.as_str().unwrap().to_string())
+                .collect(),
+        };
+        let denied = statements.iter().any(|statement| {
+            statement["Effect"] == "Deny" && names(statement).contains(&action.to_string())
+        });
+        !denied
+            && statements.iter().any(|statement| {
+                statement["Effect"] == "Allow"
+                    && names(statement).contains(&action.to_string())
+                    && statement["Condition"]
+                        .as_object()
+                        .into_iter()
+                        .flatten()
+                        .all(|(operator, conditions)| {
+                            operator == "StringEquals"
+                                && conditions.as_object().unwrap().iter().all(|(key, value)| {
+                                    key.strip_prefix("aws:RequestTag/").is_some_and(|tag| {
+                                        tags.iter().any(|candidate| {
+                                            candidate.key == tag && value == &candidate.value
+                                        })
+                                    })
+                                })
+                        })
+            })
+    }
+
+    /// Setup's verifier role lets the roll create what it creates: the launch template, tagged
+    /// on create, and the machines Auto Scaling launches from it, whose instance tags RunInstances
+    /// writes as the verifier.
+    #[tokio::test]
+    async fn setup_lets_the_verifier_tag_what_a_roll_creates() {
+        let policy = alien_permissions::generators::signing_limits::aws_verifier_policy(
+            PREFIX, ACCOUNT, REGION, PUBLISHER,
+        );
+        let plan = plan_roll(
+            &place(),
+            &release(),
+            &request(),
+            &pins(),
+            &arm_image(PUBLISHER),
+        )
+        .unwrap();
+        let sent = Arc::new(Mutex::new(None));
+        let mut ec2 = alien_aws_clients::ec2::MockEc2Api::new();
+        let recorded = sent.clone();
+        ec2.expect_create_launch_template()
+            .returning(move |request| {
+                *recorded.lock().unwrap() = Some(request);
+                Ok(serde_json::from_value(serde_json::json!({
+                    "launchTemplate": {"launchTemplateId": "lt-0aaaaaaaaaaaaaaaa"}
+                }))
+                .unwrap())
+            });
+        let machines = AwsMachines {
+            ec2,
+            autoscaling: alien_aws_clients::autoscaling::MockAutoScalingApi::new(),
+        };
+        machines
+            .create_template(&plan.template_name, &plan.deployment, &plan.data)
+            .await
+            .unwrap();
+        let request = sent
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the template was created");
+        let template_tags = request
+            .tag_specifications
+            .as_ref()
+            .and_then(|specifications| {
+                specifications
+                    .iter()
+                    .find(|specification| specification.resource_type == "launch-template")
+            })
+            .map(|specification| specification.tags.clone())
+            .unwrap_or_default();
+        assert!(
+            allows_with_tags(&policy, "ec2:CreateLaunchTemplate", &template_tags),
+            "setup denies CreateLaunchTemplate with tags {template_tags:?}"
+        );
+        assert!(
+            allows_with_tags(&policy, "ec2:CreateTags", &template_tags),
+            "setup denies tagging the template on create"
+        );
+        let instance_tags = &plan.data.tag_specifications.as_ref().unwrap()[0].tags;
+        assert!(
+            allows_with_tags(&policy, "ec2:CreateTags", instance_tags),
+            "setup denies the instance tags RunInstances writes: {instance_tags:?}"
         );
     }
 
@@ -1310,10 +1433,11 @@ mod tests {
         async fn create_template(
             &self,
             name: &str,
+            deployment: &str,
             data: &RequestLaunchTemplateData,
         ) -> Result<String> {
             self.call(format!(
-                "CreateLaunchTemplate {name} {}",
+                "CreateLaunchTemplate {name} {} deployment={deployment}",
                 data.image_id.clone().unwrap()
             ));
             Ok("lt-0aaaaaaaaaaaaaaaa".to_string())
@@ -1397,7 +1521,7 @@ mod tests {
         let calls = api.calls.into_inner().unwrap();
         assert_eq!(
             calls[0],
-            "CreateLaunchTemplate acme-prod-compute-general-lt ami-0123456789abcdef0"
+            "CreateLaunchTemplate acme-prod-compute-general-lt ami-0123456789abcdef0 deployment=acme-prod"
         );
         assert_eq!(
             calls[1],

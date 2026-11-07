@@ -33,4 +33,5 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [dev-dependencies]
 alien-aws-clients = { workspace = true, features = ["test-utils"] }
+alien-permissions = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
