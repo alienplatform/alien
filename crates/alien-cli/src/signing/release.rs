@@ -73,6 +73,13 @@ pub async fn plan(
         if ci.is_some() || !interactive {
             return Ok(unsigned(format!("this repo has no {REPO_SIGNING_FILE}")));
         }
+        // Before the hardware key asks for a PIN: a control plane that can't store signer lists
+        // makes the release unsigned whatever the device does.
+        let Some(lists) = api.signer_lists_if_supported(project).await? else {
+            return Ok(unsigned(
+                "the control plane doesn't support signed releases yet",
+            ));
+        };
         let Some((record, key)) = home.device_or_create()? else {
             return Ok(unsigned("this device has no hardware key to sign with"));
         };
@@ -80,7 +87,7 @@ pub async fn plan(
             id: record.signer_id.clone(),
             key,
         };
-        return turn_on(api, dir, project, &record, device).await;
+        return turn_on(api, dir, project, &lists, &record, device).await;
     };
     let chain = match verified_chain(api, &repo).await {
         Ok(chain) => chain,
@@ -160,16 +167,12 @@ async fn turn_on(
     api: &SigningApi,
     dir: &Path,
     project: &str,
+    lists: &[SignedStatement],
     record: &super::DeviceRecord,
     device: StatementSigner,
 ) -> Result<SigningPlan> {
     // Someone already turned signing on: say who (the first admin of
     // version 1) without showing a code that would never be used.
-    let Some(lists) = api.signer_lists_if_supported(project).await? else {
-        return Ok(unsigned(
-            "the control plane doesn't support signed releases yet",
-        ));
-    };
     if let Some(first) = lists.first() {
         return Ok(already_on(project, &first_admin(first)));
     }
@@ -790,10 +793,12 @@ mod tests {
     }
 
     /// A control plane from before signed releases has no signer list route.
-    /// The first release on a device with a hardware key goes out unsigned
-    /// with the reason instead of failing, and writes no repository pin.
+    /// The first release goes out unsigned with the reason instead of failing,
+    /// writes no repository pin, and is decided before the device is touched,
+    /// so nobody is asked for a hardware key's PIN for a release that can't be
+    /// signed. (This test reaches no hardware: the decision comes first.)
     #[tokio::test]
-    async fn a_control_plane_without_signing_gets_an_unsigned_release() {
+    async fn a_control_plane_without_signing_gets_an_unsigned_release_before_any_pin() {
         let server = httpmock::MockServer::start_async().await;
         let lists = server
             .mock_async(|when, then| {
@@ -804,22 +809,11 @@ mod tests {
             .await;
         let api = SigningApi::new(reqwest::Client::new(), server.base_url());
         let dir = tempfile::tempdir().unwrap();
-        let record = super::super::DeviceRecord {
-            backend: Backend::Tpm,
-            signer_id: "laptop".to_string(),
-            label: None,
-        };
-        let device = StatementSigner::Key {
-            id: "laptop".to_string(),
-            key: alien_signing::SecretKey::generate().unwrap(),
-        };
 
-        let plan = turn_on(&api, dir.path(), "shop", &record, device)
-            .await
-            .unwrap();
+        let decided = plan(&api, dir.path(), "shop", true).await.unwrap();
 
         lists.assert_async().await;
-        match plan {
+        match decided {
             SigningPlan::Unsigned(reason) => {
                 assert_eq!(
                     reason,
@@ -839,12 +833,6 @@ mod tests {
             })
             .await;
         let api = SigningApi::new(reqwest::Client::new(), server.base_url());
-        let device = StatementSigner::Key {
-            id: "laptop".to_string(),
-            key: alien_signing::SecretKey::generate().unwrap(),
-        };
-        assert!(turn_on(&api, dir.path(), "shop", &record, device)
-            .await
-            .is_err());
+        assert!(plan(&api, dir.path(), "shop", true).await.is_err());
     }
 }
