@@ -203,6 +203,7 @@ impl LocalContainerController {
             container_path: "/tmp".to_string(),
             resource_id: "tmp".to_string(),
             shared_with_host_workloads: false,
+            read_only: false,
         });
 
         for link in &config.links {
@@ -220,6 +221,7 @@ impl LocalContainerController {
                                 container_path: format!("/mnt/storage/{}", linked_resource_id),
                                 resource_id: linked_resource_id.to_string(),
                                 shared_with_host_workloads: true,
+                                read_only: false,
                             });
                         }
                     }
@@ -233,6 +235,7 @@ impl LocalContainerController {
                                 container_path: format!("/mnt/kv/{}", linked_resource_id),
                                 resource_id: linked_resource_id.to_string(),
                                 shared_with_host_workloads: true,
+                                read_only: false,
                             });
                         }
                     }
@@ -246,6 +249,7 @@ impl LocalContainerController {
                                 container_path: format!("/mnt/vault/{}", linked_resource_id),
                                 resource_id: linked_resource_id.to_string(),
                                 shared_with_host_workloads: true,
+                                read_only: false,
                             });
                         }
                     }
@@ -314,6 +318,9 @@ impl LocalContainerController {
                 })?;
             env_vars.extend(entry);
         }
+
+        // A linked Local sandbox is reached over the host gateway with a mounted token file
+        local_utils::mount_local_sandboxes_for_container(&mut env_vars, &mut bind_mounts)?;
 
         // Rewrite binding env vars to use container paths instead of host paths
         // This uses typed deserialization for type safety

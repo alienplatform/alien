@@ -328,6 +328,8 @@ pub struct BindMount {
     /// When true, local containers must create files as the host operator user
     /// so native workloads can reopen them.
     pub shared_with_host_workloads: bool,
+    /// Mounted read-only, for a file the workload is given but must not change
+    pub read_only: bool,
 }
 
 /// Result of starting a container.
@@ -1075,9 +1077,10 @@ impl LocalContainerManager {
         // Add bind mounts for linked resources (Storage, KV, Vault directories)
         for bind_mount in &config.bind_mounts {
             let bind = format!(
-                "{}:{}",
+                "{}:{}{}",
                 bind_mount.host_path.display(),
-                bind_mount.container_path
+                bind_mount.container_path,
+                if bind_mount.read_only { ":ro" } else { "" }
             );
             binds.push(bind);
 
@@ -1922,6 +1925,7 @@ mod tests {
             container_path: "/mnt/test".to_string(),
             resource_id: "test".to_string(),
             shared_with_host_workloads,
+            read_only: false,
         }
     }
 

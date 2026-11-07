@@ -48,6 +48,7 @@ fn config(shared_dir: &Path) -> ContainerConfig {
             container_path: "/shared".to_string(),
             resource_id: "shared-data".to_string(),
             shared_with_host_workloads: true,
+            read_only: false,
         }],
         proxy_token: None,
     }
