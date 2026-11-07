@@ -4,7 +4,7 @@
 //! policies attached to a role.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     sync::{Arc, Mutex},
 };
 
@@ -37,6 +37,42 @@ struct Account {
     attached: Vec<String>,
     /// The most policies the role ever had attached.
     most_attached: usize,
+    /// Grants (see [`grants`]) the attached policies must hold after every change.
+    required: Vec<(String, String)>,
+    /// Grants that join `required` once `-0` has been written.
+    required_after_first_write: Vec<(String, String)>,
+    /// How many times `required` was checked.
+    checks: usize,
+}
+
+impl Account {
+    /// Panics if a required grant is in no attached policy.
+    fn check_required(&mut self) {
+        if self.required.is_empty() {
+            return;
+        }
+        let statements: Vec<serde_json::Value> = self
+            .attached
+            .iter()
+            .flat_map(|arn| {
+                let document: serde_json::Value =
+                    serde_json::from_str(&self.policies[arn]).unwrap();
+                document["Statement"].as_array().unwrap().clone()
+            })
+            .collect();
+        let held: HashSet<(String, String)> = grants(&statements).into_iter().collect();
+        let missing: Vec<&(String, String)> = self
+            .required
+            .iter()
+            .filter(|grant| !held.contains(*grant))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "after change {}, the role is missing {missing:#?}",
+            self.checks
+        );
+        self.checks += 1;
+    }
 }
 
 fn arn(name: &str) -> String {
@@ -154,6 +190,11 @@ fn fake_iam(account: Arc<Mutex<Account>>) -> MockIamApi {
                 return Err(not_found(arn));
             };
             *current = document.to_string();
+            if arn.ends_with("-0") {
+                let later = std::mem::take(&mut account.required_after_first_write);
+                account.required.extend(later);
+            }
+            account.check_required();
             Ok(CreatePolicyVersionResponse {
                 create_policy_version_result: CreatePolicyVersionResult {
                     policy_version: version("v2"),
@@ -178,6 +219,7 @@ fn fake_iam(account: Arc<Mutex<Account>>) -> MockIamApi {
         }
         account.attached.push(arn.to_string());
         account.most_attached = account.most_attached.max(account.attached.len());
+        account.check_required();
         Ok(())
     });
     let state = account.clone();
@@ -189,6 +231,7 @@ fn fake_iam(account: Arc<Mutex<Account>>) -> MockIamApi {
         if account.attached.len() == before {
             return Err(not_found(arn));
         }
+        account.check_required();
         Ok(())
     });
     let state = account.clone();
@@ -479,7 +522,7 @@ fn a_grant_needing_more_than_the_limit_is_refused_and_not_retried() {
         .collect();
 
     let error = controller
-        .chunk_management_policy_documents(statements)
+        .chunk_management_policy_documents("management", statements)
         .expect_err("19 policies don't fit");
     assert!(
         matches!(
@@ -559,4 +602,156 @@ async fn teardown_deletes_policies_the_role_no_longer_lists() {
     let account = account.lock().unwrap();
     assert!(account.attached.is_empty(), "{:?}", account.attached);
     assert!(account.policies.is_empty(), "{:?}", account.policies.keys());
+}
+
+/// The statements of the automatic grant, before packing.
+async fn automatic_statements() -> Vec<AwsIamStatement> {
+    let executor = automatic_setup(Arc::new(Mutex::new(Account::default()))).await;
+    executor.with_context(|ctx| {
+        AwsRemoteStackManagementController::default()
+            .management_policy_statements(
+                ctx,
+                ROLE,
+                &arn("test-prefix-deployment-management-boundary"),
+            )
+            .expect("the grant generates")
+    })
+}
+
+/// The layout earlier releases wrote: statements in generation order, each policy filled
+/// until the next statement no longer fits, as pretty-printed JSON.
+fn earlier_release_layout(statements: Vec<AwsIamStatement>) -> Vec<String> {
+    let document = |statements: Vec<AwsIamStatement>| {
+        serde_json::to_string_pretty(&AwsIamPolicy {
+            version: "2012-10-17".to_string(),
+            statement: statements,
+        })
+        .unwrap()
+    };
+    let mut documents = Vec::new();
+    let mut current: Vec<AwsIamStatement> = Vec::new();
+    for statement in statements {
+        let mut candidate = current.clone();
+        candidate.push(statement.clone());
+        if document(candidate.clone()).len() <= MAX_MANAGED_POLICY_BYTES {
+            current = candidate;
+        } else {
+            documents.push(document(std::mem::take(&mut current)));
+            current = vec![statement];
+        }
+    }
+    documents.push(document(current));
+    documents
+}
+
+/// Writing the new documents moves statements between policies, and a statement is missing
+/// from the role between its old policy's rewrite and its new one's. Starting from the layout
+/// earlier releases left on a role that hit the quota, no Deny statement (the role's
+/// protection of itself and of the deployer's secrets) that the role holds is ever dropped,
+/// and from the first write on the role holds them all.
+#[tokio::test]
+async fn an_update_from_the_earlier_layout_never_drops_a_deny() {
+    let statements = automatic_statements().await;
+    let deny_statements: Vec<serde_json::Value> = statements
+        .iter()
+        .filter(|statement| statement.effect == "Deny")
+        .map(|statement| serde_json::to_value(statement).unwrap())
+        .collect();
+    assert!(!deny_statements.is_empty(), "the grant has Deny statements");
+    let old = earlier_release_layout(statements);
+    assert_eq!(old.len(), 22, "earlier releases needed 22 policies");
+
+    let account = Arc::new(Mutex::new(Account::default()));
+    {
+        let mut account = account.lock().unwrap();
+        for (index, document) in old.iter().enumerate() {
+            let arn = arn(&numbered(index));
+            account.policies.insert(arn.clone(), document.clone());
+            if index < AWS_ATTACHED_POLICIES_PER_ROLE {
+                account.attached.push(arn);
+            }
+        }
+        account.most_attached = AWS_ATTACHED_POLICIES_PER_ROLE;
+        // Earlier releases filled policies in generation order, so a role that hit the quota
+        // never got the Deny statements that landed in -20 and -21.
+        let attached_statements: Vec<serde_json::Value> = account
+            .attached
+            .iter()
+            .flat_map(|arn| {
+                let document: serde_json::Value =
+                    serde_json::from_str(&account.policies[arn]).unwrap();
+                document["Statement"].as_array().unwrap().clone()
+            })
+            .collect();
+        let held: HashSet<(String, String)> = grants(&attached_statements).into_iter().collect();
+        let (attached_denies, missing_denies): (Vec<_>, Vec<_>) = grants(&deny_statements)
+            .into_iter()
+            .partition(|grant| held.contains(grant));
+        println!(
+            "earlier layout: {} Deny grants attached, {} only in -20/-21",
+            attached_denies.len(),
+            missing_denies.len()
+        );
+        assert!(
+            !missing_denies.is_empty(),
+            "the earlier layout leaves some Deny statements unattached"
+        );
+        account.required = attached_denies;
+        account.required_after_first_write = missing_denies;
+    }
+    let executor = automatic_setup(account.clone()).await;
+    let mut controller = AwsRemoteStackManagementController::default();
+    controller.role_name = Some(ROLE.to_string());
+    let documents = executor
+        .with_context(|ctx| controller.planned_management_policy_documents(ctx, ROLE))
+        .expect("the automatic grant fits");
+    let first: serde_json::Value = serde_json::from_str(&documents[0]).unwrap();
+    assert!(
+        first["Statement"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|statement| statement["Effect"] == "Deny"),
+        "-0 holds only the Deny statements"
+    );
+
+    executor
+        .with_context(|ctx| {
+            block_on(controller.apply_management_policy_documents(
+                ctx,
+                &fake_iam(account.clone()),
+                ROLE,
+                &documents,
+            ))
+        })
+        .expect("the update applies");
+
+    let account = account.lock().unwrap();
+    assert!(
+        account.required_after_first_write.is_empty(),
+        "-0 was written"
+    );
+    assert_eq!(account.required.len(), grants(&deny_statements).len());
+    // Checked after each of the `documents.len()` writes and each detach of the other old
+    // policies; the desired ones were already attached.
+    assert_eq!(account.checks, AWS_ATTACHED_POLICIES_PER_ROLE);
+    let expected: Vec<String> = (0..documents.len()).map(|i| arn(&numbered(i))).collect();
+    assert_eq!(account.attached, expected);
+}
+
+/// Where a statement lands doesn't depend on the order the permission sets were generated in.
+#[tokio::test]
+async fn packing_ignores_generation_order() {
+    let statements = automatic_statements().await;
+    let mut reversed = statements.clone();
+    reversed.reverse();
+    let controller = AwsRemoteStackManagementController::default();
+    assert_eq!(
+        controller
+            .chunk_management_policy_documents("management", statements)
+            .unwrap(),
+        controller
+            .chunk_management_policy_documents("management", reversed)
+            .unwrap()
+    );
 }
