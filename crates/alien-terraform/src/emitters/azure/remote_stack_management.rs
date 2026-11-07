@@ -408,6 +408,8 @@ const AZURE_VERIFIER_ACTIONS: &[&str] = &[
     "Microsoft.App/jobs/write",
     "Microsoft.App/jobs/delete",
     "Microsoft.App/jobs/start/action",
+    // It finds the one Container Apps environment of the group to create a workload's app in.
+    "Microsoft.App/managedEnvironments/read",
     "Microsoft.App/managedEnvironments/join/action",
     "Microsoft.Compute/virtualMachineScaleSets/read",
     "Microsoft.Compute/virtualMachineScaleSets/write",

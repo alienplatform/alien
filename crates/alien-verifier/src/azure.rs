@@ -374,7 +374,7 @@ impl Backend for AzureBackend {
 
     async fn apply(
         &self,
-        _place: &Place,
+        place: &Place,
         spec: &FunctionSpec,
         newest: &dyn StillNewest,
     ) -> Result<()> {
@@ -386,7 +386,10 @@ impl Backend for AzureBackend {
         // One verifier replica serves the install, so nothing writes between this check and
         // the write.
         newest.check().await?;
-        crate::container_apps::apply(&self.0, spec)
+        let tags = alien_core::standard_resource_tags(&place.prefix, &spec.workload)
+            .into_iter()
+            .collect();
+        crate::container_apps::apply(&self.0, spec, &tags)
             .await
             .map(|_| ())
     }
@@ -482,6 +485,66 @@ impl AppStore for Azure {
                 reason: format!("container app {name} does not exist; setup creates it"),
             })
         })
+    }
+
+    async fn find(&self, name: &str) -> Result<Option<Value>> {
+        self.call(
+            reqwest::Method::GET,
+            &self.app_url(name),
+            ARM,
+            None,
+            &format!("containerApps get {name}"),
+        )
+        .await
+    }
+
+    async fn create(&self, name: &str, app: &Value) -> Result<()> {
+        self.call(
+            reqwest::Method::PUT,
+            &self.app_url(name),
+            ARM,
+            Some(app),
+            &format!("containerApps create {name}"),
+        )
+        .await?
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::CloudCallFailed {
+                operation: format!("containerApps create {name}: the resource group is gone"),
+            })
+        })?;
+        Ok(())
+    }
+
+    /// The one Container Apps environment in the verifier's resource group. None, or more than
+    /// one, refuses: the verifier never guesses where a workload runs.
+    async fn environment(&self) -> Result<(String, String)> {
+        let url = format!(
+            "{ARM}{}/providers/Microsoft.App/managedEnvironments?api-version={CONTAINER_APPS_API}",
+            self.resource_group
+        );
+        let listed = self
+            .call(
+                reqwest::Method::GET,
+                &url,
+                ARM,
+                None,
+                "managedEnvironments list",
+            )
+            .await?
+            .unwrap_or(Value::Null);
+        let environments = listed["value"].as_array().cloned().unwrap_or_default();
+        match environments.as_slice() {
+            [environment] => Ok((
+                environment["id"].as_str().unwrap_or_default().to_string(),
+                environment["location"].as_str().unwrap_or_default().to_string(),
+            )),
+            others => Err(AlienError::new(ErrorData::Refused {
+                reason: format!(
+                    "the install's resource group has {} Container Apps environments; a workload runs in exactly one",
+                    others.len()
+                ),
+            })),
+        }
     }
 
     async fn patch(&self, name: &str, app: &Value) -> Result<()> {

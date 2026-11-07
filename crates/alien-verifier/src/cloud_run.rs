@@ -332,6 +332,8 @@ mod tests {
             architecture: "x86_64".into(),
             run_as: "acme-execution@p.iam.gserviceaccount.com".into(),
             public: false,
+            dapr: false,
+            registry: None,
         }
     }
 

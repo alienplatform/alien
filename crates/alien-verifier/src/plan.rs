@@ -64,6 +64,33 @@ pub struct ReleaseRequest {
     /// function's provided values alone, and the others keep theirs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workloads: Option<BTreeSet<String>>,
+    /// Credentials for the registry the images are pulled from, where the cloud needs them on
+    /// the function (Azure Container Apps). They can't change what runs: the image is pinned by
+    /// the signed digest. Only for the registry the images name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<RegistryCredentials>,
+}
+
+/// A registry's pull credentials.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RegistryCredentials {
+    /// Registry host, as the image references name it.
+    pub server: String,
+    /// User name.
+    pub username: String,
+    /// Password or token.
+    pub password: String,
+}
+
+impl std::fmt::Debug for RegistryCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegistryCredentials")
+            .field("server", &self.server)
+            .field("username", &self.username)
+            .field("password", &"<redacted>")
+            .finish()
+    }
 }
 
 impl ReleaseRequest {
@@ -215,6 +242,12 @@ pub struct FunctionSpec {
     /// Whether the signed stack gives the workload a public endpoint. A function the verifier
     /// creates takes requests from the internet only then.
     pub public: bool,
+    /// Whether the signed stack gives the workload triggers or commands, which reach a Container
+    /// App through Dapr.
+    pub dapr: bool,
+    /// Credentials for the registry the image is pulled from, when the request carried them.
+    #[serde(skip)]
+    pub registry: Option<RegistryCredentials>,
 }
 
 /// What the verifier read from its own install for one workload.
@@ -358,7 +391,14 @@ pub fn plan_function(
         Some(other) => return Err(refused(format!("architecture '{other}' is not known"))),
     };
 
-    let public = signed_public_endpoint(&accepted.release.body, place, name)?;
+    let signed = signed_worker(&accepted.release.body, place, name)?;
+    let public = signed
+        .as_ref()
+        .is_some_and(|worker| !worker.public_endpoints.is_empty());
+    let dapr = signed
+        .as_ref()
+        .is_some_and(|worker| worker.commands_enabled || !worker.triggers.is_empty());
+    let registry = registry_for(request, &image_uri)?;
     Ok(FunctionSpec {
         workload: name.clone(),
         name: place.function_name(name)?,
@@ -371,14 +411,35 @@ pub fn plan_function(
         run_as: place.run_as(profile),
         vpc: place.vpc.clone(),
         public,
+        dapr,
+        registry,
     })
 }
 
-/// Whether the release's signed stack gives worker `name` a public endpoint. A release without
-/// the stack gives none.
-fn signed_public_endpoint(release: &ReleaseBody, place: &Place, name: &str) -> Result<bool> {
+/// The request's registry credentials, if it carried any, for the registry `image` names. Ones
+/// for another registry are refused, so they never go anywhere the image doesn't come from.
+fn registry_for(request: &ReleaseRequest, image: &str) -> Result<Option<RegistryCredentials>> {
+    let Some(registry) = &request.registry else {
+        return Ok(None);
+    };
+    let host = image.split('/').next().unwrap_or_default();
+    if registry.server != host {
+        return Err(refused(format!(
+            "registry credentials are for '{}', but the image comes from '{host}'",
+            registry.server
+        )));
+    }
+    Ok(Some(registry.clone()))
+}
+
+/// Worker `name` as the release's signed stack declares it, if the release carries the stack.
+fn signed_worker(
+    release: &ReleaseBody,
+    place: &Place,
+    name: &str,
+) -> Result<Option<alien_core::Worker>> {
     if release.stack.is_none() {
-        return Ok(false);
+        return Ok(None);
     }
     let platform: alien_core::Platform = place
         .platform()
@@ -393,7 +454,7 @@ fn signed_public_endpoint(release: &ReleaseBody, place: &Place, name: &str) -> R
         .resources
         .get(name)
         .and_then(|entry| entry.config.downcast_ref::<alien_core::Worker>())
-        .is_some_and(|worker| !worker.public_endpoints.is_empty()))
+        .cloned())
 }
 
 #[cfg(test)]
@@ -425,6 +486,7 @@ pub(crate) mod tests {
             )]),
             images: BTreeMap::from([("api".to_string(), format!("{REGISTRY}/api@{DIGEST}"))]),
             workloads: None,
+            registry: None,
         }
     }
 
@@ -478,7 +540,38 @@ pub(crate) mod tests {
                 run_as: "arn:aws:iam::111122223333:role/acme-prod-execution-sa".into(),
                 vpc: None,
                 public: false,
+                dapr: false,
+                registry: None,
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn registry_credentials_go_only_to_the_registry_the_image_comes_from() {
+        let mut request = request(release(10, function_workload()));
+        let host = REGISTRY.split('/').next().unwrap().to_string();
+        request.registry = Some(RegistryCredentials {
+            server: host.clone(),
+            username: "deployment".to_string(),
+            password: "token".to_string(),
+        });
+        let spec = planned(&request, &Reads::default()).await.unwrap();
+        assert_eq!(
+            spec.registry
+                .as_ref()
+                .map(|registry| registry.server.as_str()),
+            Some(host.as_str())
+        );
+        assert!(
+            !format!("{spec:?}").contains("token"),
+            "the password never prints"
+        );
+
+        request.registry.as_mut().unwrap().server = "attacker.example.com".to_string();
+        let reason = refused(&request).await;
+        assert!(
+            reason.contains("registry credentials are for 'attacker.example.com'"),
+            "{reason}"
         );
     }
 

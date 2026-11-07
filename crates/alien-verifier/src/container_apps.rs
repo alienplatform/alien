@@ -23,6 +23,59 @@ pub trait AppStore: Send + Sync {
     async fn get(&self, name: &str) -> Result<Value>;
     /// PATCH the container app with `app`.
     async fn patch(&self, name: &str, app: &Value) -> Result<()>;
+    /// GET the container app, or `None` when it doesn't exist.
+    async fn find(&self, name: &str) -> Result<Option<Value>>;
+    /// PUT a new container app `app`.
+    async fn create(&self, name: &str, app: &Value) -> Result<()>;
+    /// The install's Container Apps environment: its resource id and location.
+    async fn environment(&self) -> Result<(String, String)>;
+}
+
+/// The Container App secret holding the registry password.
+const REGISTRY_SECRET: &str = "registry-password";
+
+/// The container app the verifier creates for `spec` in `environment` at `location`: its
+/// signed template and identity, ingress only when the signed stack gives the workload a public
+/// endpoint, Dapr when it has triggers or commands, and the image's registry credentials when
+/// the request carried them.
+pub fn create_body(
+    spec: &FunctionSpec,
+    environment: &str,
+    location: &str,
+    tags: &BTreeMap<String, String>,
+) -> Value {
+    let mut app = app_body(spec, "main");
+    app["location"] = json!(location);
+    app["tags"] = json!(tags);
+    let properties = &mut app["properties"];
+    properties["managedEnvironmentId"] = json!(environment);
+    let mut configuration = json!({"activeRevisionsMode": "Single"});
+    if spec.public {
+        configuration["ingress"] = json!({
+            "external": true,
+            "targetPort": 8080,
+            "transport": "auto",
+            "traffic": [{"latestRevision": true, "weight": 100}],
+        });
+    }
+    if spec.dapr {
+        configuration["dapr"] = json!({
+            "enabled": true,
+            "appId": spec.name,
+            "appPort": 8080,
+            "appProtocol": "http",
+        });
+    }
+    if let Some(registry) = &spec.registry {
+        configuration["secrets"] = json!([{"name": REGISTRY_SECRET, "value": registry.password}]);
+        configuration["registries"] = json!([{
+            "server": registry.server,
+            "username": registry.username,
+            "passwordSecretRef": REGISTRY_SECRET,
+        }]);
+    }
+    properties["configuration"] = configuration;
+    app
 }
 
 /// The CPU (cores) and memory a Container App gets for `memory_mb`:
@@ -66,10 +119,25 @@ pub fn app_body(spec: &FunctionSpec, container_name: &str) -> Value {
 const UPDATE_WAIT: Duration = Duration::from_secs(300);
 const POLL: Duration = Duration::from_secs(3);
 
-/// Write `spec` and read it back. The app must already exist: setup creates
-/// the apps the verifier owns.
-pub async fn apply(store: &dyn AppStore, spec: &FunctionSpec) -> Result<Value> {
-    store.patch(&spec.name, &app_body(spec, "main")).await?;
+/// Write `spec` and read it back, creating the app with `tags` in the install's environment when
+/// it doesn't exist: setup renders no workload, and management may not create one on a protected
+/// install.
+pub async fn apply(
+    store: &dyn AppStore,
+    spec: &FunctionSpec,
+    tags: &BTreeMap<String, String>,
+) -> Result<Value> {
+    if store.find(&spec.name).await?.is_none() {
+        let (environment, location) = store.environment().await?;
+        store
+            .create(
+                &spec.name,
+                &create_body(spec, &environment, &location, tags),
+            )
+            .await?;
+    } else {
+        store.patch(&spec.name, &app_body(spec, "main")).await?;
+    }
     let deadline = tokio::time::Instant::now() + UPDATE_WAIT;
     loop {
         let app = store.get(&spec.name).await?;
@@ -234,6 +302,8 @@ mod tests {
             architecture: "x86_64".into(),
             run_as: IDENTITY.into(),
             public: false,
+            dapr: false,
+            registry: None,
         }
     }
 
@@ -323,20 +393,58 @@ mod tests {
     }
 
     struct FakeApps {
-        app: Mutex<Value>,
+        app: Mutex<Option<Value>>,
+        created: Mutex<Option<Value>>,
+    }
+
+    impl FakeApps {
+        fn holding(app: Value) -> Self {
+            Self {
+                app: Mutex::new(Some(app)),
+                created: Mutex::new(None),
+            }
+        }
+
+        fn empty() -> Self {
+            Self {
+                app: Mutex::new(None),
+                created: Mutex::new(None),
+            }
+        }
     }
 
     #[async_trait]
     impl AppStore for FakeApps {
         async fn get(&self, _name: &str) -> Result<Value> {
-            Ok(self.app.lock().unwrap().clone())
+            Ok(self.app.lock().unwrap().clone().unwrap())
         }
         async fn patch(&self, _name: &str, body: &Value) -> Result<()> {
-            let mut app = self.app.lock().unwrap();
+            let mut held = self.app.lock().unwrap();
+            let app = held.as_mut().unwrap();
             app["identity"] = body["identity"].clone();
             app["properties"]["template"] = body["properties"]["template"].clone();
             Ok(())
         }
+        async fn find(&self, _name: &str) -> Result<Option<Value>> {
+            Ok(self.app.lock().unwrap().clone())
+        }
+        async fn create(&self, _name: &str, body: &Value) -> Result<()> {
+            *self.created.lock().unwrap() = Some(body.clone());
+            let mut created = app(&spec());
+            created["identity"] = body["identity"].clone();
+            created["properties"]["template"] = body["properties"]["template"].clone();
+            *self.app.lock().unwrap() = Some(created);
+            Ok(())
+        }
+        async fn environment(&self) -> Result<(String, String)> {
+            Ok((ENVIRONMENT.to_string(), "eastus".to_string()))
+        }
+    }
+
+    const ENVIRONMENT: &str = "/subscriptions/s/resourceGroups/acme-prod/providers/Microsoft.App/managedEnvironments/acme-prod-env";
+
+    fn tags() -> BTreeMap<String, String> {
+        BTreeMap::from([("deployment".to_string(), "acme-prod".to_string())])
     }
 
     #[tokio::test]
@@ -345,10 +453,67 @@ mod tests {
         drifted["properties"]["template"]["initContainers"] =
             json!([{"name": "x", "image": "evil"}]);
         drifted["identity"]["type"] = json!("SystemAssigned,UserAssigned");
-        let apps = FakeApps {
-            app: Mutex::new(drifted),
+        let apps = FakeApps::holding(drifted);
+        apply(&apps, &spec(), &tags()).await.unwrap();
+        check_read_back(&spec(), apps.app.lock().unwrap().as_ref().unwrap()).unwrap();
+        assert!(
+            apps.created.lock().unwrap().is_none(),
+            "an existing app is patched"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_private_app_is_created_in_the_install_environment_without_ingress() {
+        // Setup renders no workload, and management may not create one on a protected install.
+        let private = FunctionSpec {
+            registry: Some(crate::plan::RegistryCredentials {
+                server: "manager.example.com".to_string(),
+                username: "deployment".to_string(),
+                password: "token".to_string(),
+            }),
+            ..spec()
         };
-        apply(&apps, &spec()).await.unwrap();
-        check_read_back(&spec(), &apps.app.lock().unwrap()).unwrap();
+        let apps = FakeApps::empty();
+        apply(&apps, &private, &tags()).await.unwrap();
+        let created = apps.created.lock().unwrap().clone().unwrap();
+        assert_eq!(created["location"], json!("eastus"));
+        assert_eq!(created["tags"], json!({"deployment": "acme-prod"}));
+        assert_eq!(
+            created["properties"]["managedEnvironmentId"],
+            json!(ENVIRONMENT)
+        );
+        let configuration = &created["properties"]["configuration"];
+        assert!(configuration.get("ingress").is_none(), "{configuration}");
+        assert!(configuration.get("dapr").is_none(), "{configuration}");
+        assert_eq!(
+            configuration["registries"],
+            json!([{"server": "manager.example.com", "username": "deployment", "passwordSecretRef": "registry-password"}])
+        );
+        assert_eq!(
+            configuration["secrets"],
+            json!([{"name": "registry-password", "value": "token"}])
+        );
+        assert_eq!(created["identity"], app_body(&private, "main")["identity"]);
+        check_read_back(&private, apps.app.lock().unwrap().as_ref().unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_missing_public_app_with_triggers_gets_ingress_and_dapr() {
+        let public = FunctionSpec {
+            public: true,
+            dapr: true,
+            ..spec()
+        };
+        let apps = FakeApps::empty();
+        apply(&apps, &public, &tags()).await.unwrap();
+        let created = apps.created.lock().unwrap().clone().unwrap();
+        let configuration = &created["properties"]["configuration"];
+        assert_eq!(configuration["ingress"]["external"], json!(true));
+        assert_eq!(configuration["ingress"]["targetPort"], json!(8080));
+        assert_eq!(
+            configuration["dapr"],
+            json!({"enabled": true, "appId": public.name, "appPort": 8080, "appProtocol": "http"})
+        );
+        assert!(configuration.get("registries").is_none());
     }
 }
