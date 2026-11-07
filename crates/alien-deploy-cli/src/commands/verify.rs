@@ -949,8 +949,9 @@ struct ReleasePage {
 #[serde(rename_all = "camelCase")]
 struct ReleaseItem {
     id: String,
+    /// `null` for a release made unsigned, before or after signing was on.
     #[serde(default)]
-    signed_stacks: BTreeMap<String, SignedStatement>,
+    signed_stacks: Option<BTreeMap<String, SignedStatement>>,
 }
 
 #[derive(Deserialize)]
@@ -1009,7 +1010,11 @@ pub(crate) async fn signed_releases(
                     reason: "the release list".to_string(),
                 })?;
         for item in page.items {
-            if let Some(statement) = item.signed_stacks.get(platform) {
+            if let Some(statement) = item
+                .signed_stacks
+                .as_ref()
+                .and_then(|stacks| stacks.get(platform))
+            {
                 releases.push((item.id, statement.clone()));
             }
         }

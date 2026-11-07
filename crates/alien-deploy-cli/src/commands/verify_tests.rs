@@ -684,3 +684,53 @@ async fn verify_reads_a_real_stack_and_catches_a_changed_template() {
     }
     outcome.expect("the verify run passed");
 }
+
+/// A project that turned signing on after unsigned releases lists those
+/// releases with `signedStacks: null`; verify reads past them to the signed
+/// ones.
+#[tokio::test]
+async fn releases_from_before_signing_are_skipped() {
+    let server = httpmock::MockServer::start_async().await;
+    let statement = signed(
+        Kind::Release,
+        2,
+        1,
+        None,
+        serde_json::json!({}),
+        &[("alice-mbp", 1)],
+    );
+    let page = serde_json::json!({
+        "items": [
+            {"id": "rel_signed", "signedStacks": {"gcp": statement}},
+            {"id": "rel_unsigned", "signedStacks": null},
+        ],
+        "nextCursor": null,
+    });
+    server
+        .mock_async(|when, then| {
+            when.method(httpmock::Method::GET).path("/v1/releases");
+            then.status(200).json_body(page);
+        })
+        .await;
+    server
+        .mock_async(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path(format!("/v1/projects/{PROJECT}/signer-lists"));
+            then.status(200)
+                .json_body(serde_json::json!({ "items": [genesis()] }));
+        })
+        .await;
+
+    let (lists, releases) = signed_releases(&server.base_url(), Some("token"), "gcp")
+        .await
+        .unwrap();
+
+    assert_eq!(lists.len(), 1);
+    assert_eq!(
+        releases
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["rel_signed"]
+    );
+}
