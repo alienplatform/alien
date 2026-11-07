@@ -251,7 +251,8 @@ fn referenced(manifest: &[u8]) -> (Vec<String>, Vec<String>) {
 }
 
 /// Copy `images`, each pulled with its own registry access, into an OCI image
-/// layout at `layout`. Blobs in `skip_blobs` are left out and returned.
+/// layout at `layout`. A blob is left out (and returned) when `skip_blobs`
+/// holds its [`inventory_key`] for the image's repository.
 pub async fn export_images(
     layout: &Path,
     images: &[(String, RegistryAccess)],
@@ -449,7 +450,7 @@ async fn write_manifest_tree(
         .await?;
     }
     for blob in blobs {
-        if skip_blobs.contains(&blob) {
+        if skip_blobs.contains(&inventory_key(reference.repository(), &blob)) {
             omitted.insert(blob);
             continue;
         }
@@ -625,27 +626,40 @@ async fn push_manifest_tree(
         .into_alien_error()
         .context(copy_failed(
             &image,
-            "pushing the manifest (if the registry is missing layers this bundle left out, sync again with --full)",
+            "pushing the manifest (if the registry is missing layers this bundle left out, download the update again on the online machine with sync --full)",
         ))?;
     Ok(())
 }
 
-/// Every blob the bundle's images reference, whether carried or left out:
-/// what the site's registry holds once the bundle is installed.
+/// How the inventory names a blob: `<repository>@<digest>`. Registries keep
+/// blobs per repository, so a layer pushed under one image's repository can't
+/// be referenced from another's.
+pub fn inventory_key(repository: &str, digest: &str) -> String {
+    format!("{repository}@{digest}")
+}
+
+/// Every blob the bundle's images reference, whether carried or left out,
+/// keyed by the image's repository ([`inventory_key`]): what the site's
+/// registry holds once the bundle is installed.
 pub async fn blob_inventory(layout: &Path, images: &[BundleImage]) -> Result<BTreeSet<String>> {
     let mut inventory = BTreeSet::new();
-    let mut pending: Vec<String> = images.iter().map(|image| image.digest.clone()).collect();
-    while let Some(digest) = pending.pop() {
-        let manifest = tokio::fs::read(blob_path(layout, &digest)?)
-            .await
-            .into_alien_error()
-            .context(ErrorData::BundleInvalid {
-                message: format!("missing manifest {digest}"),
-            })?;
-        let (children, blobs) = referenced(&manifest);
-        inventory.insert(digest);
-        pending.extend(children);
-        inventory.extend(blobs);
+    for image in images {
+        let mut pending = vec![image.digest.clone()];
+        while let Some(digest) = pending.pop() {
+            let manifest = tokio::fs::read(blob_path(layout, &digest)?)
+                .await
+                .into_alien_error()
+                .context(ErrorData::BundleInvalid {
+                    message: format!("missing manifest {digest}"),
+                })?;
+            let (children, blobs) = referenced(&manifest);
+            pending.extend(children);
+            inventory.extend(
+                std::iter::once(digest)
+                    .chain(blobs)
+                    .map(|blob| inventory_key(&image.repository, &blob)),
+            );
+        }
     }
     Ok(inventory)
 }
@@ -1195,6 +1209,124 @@ mod tests {
         layer_requests[1]
             .assert_hits_async(1 + usize::from(multiple_variants))
             .await;
+    }
+
+    /// Serves `repository:latest` as one image with its own config and the
+    /// given layer, counting layer downloads.
+    async fn serve_image<'a>(
+        registry: &'a MockServer,
+        repository: &str,
+        layer: &[u8],
+    ) -> (String, String, httpmock::Mock<'a>) {
+        let config = serde_json::to_vec(&serde_json::json!({ "repository": repository })).unwrap();
+        let config_digest = format!("sha256:{}", sha256_hex(&config));
+        let layer_digest = format!("sha256:{}", sha256_hex(layer));
+        registry
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path(format!("/v2/{repository}/blobs/{config_digest}"));
+                then.status(200).body(&config);
+            })
+            .await;
+        let layer_requests = registry
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path(format!("/v2/{repository}/blobs/{layer_digest}"));
+                then.status(200).body(layer);
+            })
+            .await;
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2, "mediaType": OCI_IMAGE_MEDIA_TYPE,
+            "config": {"mediaType": "application/vnd.oci.image.config.v1+json", "digest": config_digest, "size": config.len()},
+            "layers": [{"mediaType": "application/vnd.oci.image.layer.v1.tar", "digest": layer_digest, "size": layer.len()}],
+        }))
+        .unwrap();
+        let digest = format!("sha256:{}", sha256_hex(&manifest));
+        registry
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path(format!("/v2/{repository}/manifests/latest"));
+                then.status(200)
+                    .header("Content-Type", OCI_IMAGE_MEDIA_TYPE)
+                    .header("Docker-Content-Digest", &digest)
+                    .body(&manifest);
+            })
+            .await;
+        (
+            format!("{}/{repository}:latest", registry.address()),
+            layer_digest,
+            layer_requests,
+        )
+    }
+
+    /// A site registry keeps layers per repository. A layer the site holds
+    /// under one image must still travel for another image that needs it.
+    #[tokio::test]
+    async fn left_out_layers_are_matched_per_repository() {
+        let registry = MockServer::start_async().await;
+        registry
+            .mock_async(|when, then| {
+                when.method(GET).path("/v2/");
+                then.status(200);
+            })
+            .await;
+        let shared = b"base layer both images use";
+        let (operator, layer, operator_layer) =
+            serve_image(&registry, "vendor/operator", shared).await;
+        let (setup, _, setup_layer) = serve_image(&registry, "vendor/app", shared).await;
+        let access = || RegistryAccess {
+            auth: RegistryAuth::Anonymous,
+            insecure: true,
+        };
+
+        // The site installed the Operator image only.
+        let installed = tempfile::tempdir().unwrap();
+        let (installed_images, _) = export_images(
+            installed.path(),
+            &[(operator.clone(), access())],
+            &BTreeSet::new(),
+        )
+        .await
+        .unwrap();
+        let site_has = blob_inventory(installed.path(), &installed_images)
+            .await
+            .unwrap();
+        assert!(site_has.contains(&inventory_key("vendor/operator", &layer)));
+        assert!(!site_has.contains(&inventory_key("vendor/app", &layer)));
+        assert!(
+            !site_has.contains(&layer),
+            "inventory keys name the repository"
+        );
+        operator_layer.assert_hits_async(1).await;
+
+        // The next update adds an image in another repository with the same layer.
+        let update = tempfile::tempdir().unwrap();
+        let (images, omitted) = export_images(
+            update.path(),
+            &[(operator.clone(), access()), (setup, access())],
+            &site_has,
+        )
+        .await
+        .unwrap();
+        assert!(
+            blob_path(update.path(), &layer).unwrap().exists(),
+            "the layer travels for vendor/app"
+        );
+        setup_layer.assert_hits_async(1).await;
+        operator_layer.assert_hits_async(1).await;
+        assert!(omitted.contains(&layer), "left out for vendor/operator");
+        let after = blob_inventory(update.path(), &images).await.unwrap();
+        assert!(after.contains(&inventory_key("vendor/operator", &layer)));
+        assert!(after.contains(&inventory_key("vendor/app", &layer)));
+
+        // A report from an older site lists bare digests: nothing is left out.
+        let legacy: BTreeSet<String> = [layer.clone()].into();
+        let full = tempfile::tempdir().unwrap();
+        let (_, omitted) = export_images(full.path(), &[(operator, access())], &legacy)
+            .await
+            .unwrap();
+        assert!(omitted.is_empty());
+        operator_layer.assert_hits_async(2).await;
     }
 
     #[cfg(target_os = "linux")]
