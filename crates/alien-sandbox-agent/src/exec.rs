@@ -152,23 +152,25 @@ pub async fn stream(
         output_cap,
         sandbox_process::Framing::Lines,
         frames,
+        || {},
     )
     .await;
 }
 
 /// Streams a spawned child's frames to `frames` until the terminal one, killing the child if the
-/// receiver goes away.
+/// receiver goes away. `reaped` runs as soon as the child is reaped, before the terminal frame.
 pub(crate) async fn pump(
     child: tokio::process::Child,
     timeout: Duration,
     output_cap: usize,
     framing: sandbox_process::Framing,
     frames: mpsc::Sender<Frame>,
+    reaped: impl FnOnce() + Send,
 ) {
     // The framing itself is shared with the GCP binding, which runs commands through a launcher
     // CLI rather than in-guest. Only the wire type differs, and it differs here.
     let (raw, mut incoming) = mpsc::channel(FRAME_CHANNEL_DEPTH);
-    let produce = sandbox_process::stream_framed(child, timeout, output_cap, framing, raw);
+    let produce = sandbox_process::stream_framed(child, timeout, output_cap, framing, raw, reaped);
 
     // `incoming` is moved in so it is dropped the moment forwarding stops. Holding it would
     // leave the producer writing into a channel nobody reads, which is exactly the runaway a
@@ -211,15 +213,12 @@ pub(crate) fn spawn(
         message: error.to_string(),
     })?;
 
-    let mut command = sandbox_process::spawn_sandboxed(
-        &request.command[0],
-        &request.command[1..].to_vec(),
-        &request.env,
-    )
-    .map_err(|_| Frame::Error {
-        code: "spawnFailed".to_string(),
-        message: "command could not be prepared".to_string(),
-    })?;
+    let mut command =
+        sandbox_process::spawn_sandboxed(&request.command[0], &request.command[1..], &request.env)
+            .map_err(|_| Frame::Error {
+                code: "spawnFailed".to_string(),
+                message: "command could not be prepared".to_string(),
+            })?;
     if piped_stdin {
         command.stdin(std::process::Stdio::piped());
     }

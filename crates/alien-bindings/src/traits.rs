@@ -1315,15 +1315,19 @@ pub trait CommandInput: Send + Sync + std::fmt::Debug {
     /// Returns once the sandbox has handed every byte to the command's stdin pipe, which is the
     /// backpressure: a command that is not reading holds the write rather than the bytes piling up
     /// in between. A lost answer is retried without writing anything twice.
+    ///
+    /// A write that is cancelled, or fails, may already have delivered part of its bytes. The next
+    /// write then fails with `stdinInterrupted`, sending nothing, and the one after continues the
+    /// stream from what the command actually took. Nothing is ever skipped or sent twice.
     async fn write(&self, data: &[u8]) -> Result<()>;
 
     /// Closes stdin, so a program reading to end of input sees it and finishes. Closing again, or
     /// after the command has ended, is not an error.
     async fn close_stdin(&self) -> Result<()>;
 
-    /// Sends a signal to the command's process group. Once the command has ended this fails with
-    /// the command named as not running: a signal never reaches a process that is not the
-    /// command.
+    /// Sends a signal to the command's process group. Once the command has been reaped this fails
+    /// with `commandNotRunning`, even before its terminal frame has been read: a signal never
+    /// reaches a process that is not the command.
     async fn signal(&self, signal: CommandSignal) -> Result<()>;
 }
 

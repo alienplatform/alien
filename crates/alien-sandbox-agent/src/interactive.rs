@@ -14,12 +14,14 @@
 //!   not reading answers with how far it got rather than holding the request open past a proxy's
 //!   timeout, and a retry of the same bytes is applied once. A gap is refused: bytes a caller
 //!   thinks it sent that never arrived would otherwise be silently skipped.
-//! - **A signal reaches the process group, and only while the command runs.** Once the command
-//!   has been reaped its id names nothing, so a late signal cannot reach a process that later
-//!   took the same pid.
+//! - **A signal reaches the process group, and only while the command runs.** The group is
+//!   forgotten the moment the command is reaped, before its terminal frame is delivered, so a
+//!   late signal cannot reach a process that later took the same number, however slowly the
+//!   caller reads.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use alien_core::sandbox_signal::CommandSignal;
@@ -53,8 +55,9 @@ pub struct Interactive {
     /// Serializes writers, so offsets apply in order and a retry cannot interleave with the write
     /// it repeats.
     stdin: tokio::sync::Mutex<Stdin>,
-    /// The command's process group. Set once, after spawn and before the stream answers.
-    process_group: OnceLock<i32>,
+    /// The command's process group: set after spawn and before the stream answers, and cleared
+    /// to 0 when the command is reaped.
+    process_group: AtomicI32,
 }
 
 struct Stdin {
@@ -73,13 +76,19 @@ pub struct Reservation {
 }
 
 impl Reservation {
-    /// Hands the command's stdin and process group to the slot.
-    pub fn attach(&self, stdin: Option<ChildStdin>, process_group: i32) {
-        let _ = self.command.process_group.set(process_group);
-        // Never contended: nothing can reach this command until the stream has answered.
-        if let Ok(mut state) = self.command.stdin.try_lock() {
-            state.pipe = stdin;
-        }
+    /// Hands the command's stdin and process group to the slot. Awaits the stdin lock rather than
+    /// trying it: a request naming the id early holds it only briefly, and skipping it would close
+    /// the command's input before anyone wrote to it.
+    pub async fn attach(&self, stdin: Option<ChildStdin>, process_group: i32) {
+        self.command.stdin.lock().await.pipe = stdin;
+        self.command
+            .process_group
+            .store(process_group, Ordering::SeqCst);
+    }
+
+    /// Forgets the process group. Called once the command has been reaped.
+    pub fn reaped(&self) {
+        self.command.process_group.store(0, Ordering::SeqCst);
     }
 }
 
@@ -122,7 +131,7 @@ impl InteractiveRegistry {
                 pipe: None,
                 accepted: 0,
             }),
-            process_group: OnceLock::new(),
+            process_group: AtomicI32::new(0),
         });
 
         let mut commands = self.lock();
@@ -224,11 +233,14 @@ impl InteractiveRegistry {
     /// Sends `signal` to the command's process group.
     pub fn signal(&self, id: &str, signal: CommandSignal) -> Result<()> {
         let command = self.get(id)?;
-        let Some(&group) = command.process_group.get() else {
+        // Read once and used as read: the group is cleared at the reap, so a 0 here is a command
+        // that has ended even if its terminal frame has not reached the caller yet.
+        let group = command.process_group.load(Ordering::SeqCst);
+        if group <= 0 {
             return Err(AlienError::new(ErrorData::CommandNotRunning {
                 id: id.to_string(),
             }));
-        };
+        }
 
         #[cfg(unix)]
         {
@@ -315,7 +327,9 @@ mod tests {
         let registry = Arc::new(InteractiveRegistry::new());
         let mut child = reading_nothing();
         let reservation = registry.reserve("slow").expect("reserves");
-        reservation.attach(child.stdin.take(), child.id().unwrap() as i32);
+        reservation
+            .attach(child.stdin.take(), child.id().unwrap() as i32)
+            .await;
 
         let data = vec![0u8; 4 << 20];
         let started = std::time::Instant::now();

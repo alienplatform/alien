@@ -292,9 +292,10 @@ impl SandboxRoute {
                 "/v1/sessions/{session_id}/interactive",
                 post(interactive_start),
             )
+            // A write is at most 256 KiB from the client; nothing larger is a write.
             .route(
                 "/v1/sessions/{session_id}/interactive/stdin",
-                post(interactive_stdin),
+                post(interactive_stdin).layer(axum::extract::DefaultBodyLimit::max(1 << 20)),
             )
             .route(
                 "/v1/sessions/{session_id}/interactive/close-stdin",
@@ -546,20 +547,11 @@ struct InteractiveSignalBody {
 }
 
 fn control_failed(error: crate::sandbox_interactive::ControlError) -> (StatusCode, String) {
-    use crate::sandbox_interactive::ControlError;
-    match error {
-        ControlError::NotRunning => (
-            StatusCode::NOT_FOUND,
-            "COMMAND_NOT_RUNNING: no such interactive command is running".to_string(),
-        ),
-        ControlError::Conflict(reason) => (StatusCode::CONFLICT, reason),
-        ControlError::Invalid(reason) => (StatusCode::BAD_REQUEST, reason),
-        ControlError::Full => (
-            StatusCode::TOO_MANY_REQUESTS,
-            "the sandbox is running its maximum of interactive commands".to_string(),
-        ),
-        ControlError::Failed(reason) => (StatusCode::BAD_GATEWAY, reason),
-    }
+    let (status, body) = error.response();
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
+        body,
+    )
 }
 
 /// Starts an interactive command and streams its frames as NDJSON, as the agent does.
@@ -576,6 +568,7 @@ async fn interactive_start(
         .interactive
         .start(
             Arc::clone(&state.manager),
+            &session_id,
             container_id,
             crate::sandbox_interactive::StartRequest {
                 id: body.id,
@@ -606,7 +599,7 @@ async fn interactive_start(
 
 async fn interactive_stdin(
     State(state): State<RouteState>,
-    Path(_session_id): Path<String>,
+    Path(session_id): Path<String>,
     headers: HeaderMap,
     Json(body): Json<InteractiveStdinBody>,
 ) -> std::result::Result<Json<serde_json::Value>, (StatusCode, String)> {
@@ -619,7 +612,7 @@ async fn interactive_stdin(
     })?;
     let accepted = state
         .interactive
-        .write(&body.id, body.offset, &data)
+        .write(&session_id, &body.id, body.offset, &data)
         .await
         .map_err(control_failed)?;
     Ok(Json(serde_json::json!({ "accepted": accepted })))
@@ -627,14 +620,14 @@ async fn interactive_stdin(
 
 async fn interactive_close_stdin(
     State(state): State<RouteState>,
-    Path(_session_id): Path<String>,
+    Path(session_id): Path<String>,
     headers: HeaderMap,
     Json(body): Json<InteractiveIdBody>,
 ) -> std::result::Result<StatusCode, (StatusCode, String)> {
     authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
     state
         .interactive
-        .close_stdin(&body.id)
+        .close_stdin(&session_id, &body.id)
         .await
         .map_err(control_failed)?;
     Ok(StatusCode::NO_CONTENT)
@@ -642,14 +635,14 @@ async fn interactive_close_stdin(
 
 async fn interactive_signal(
     State(state): State<RouteState>,
-    Path(_session_id): Path<String>,
+    Path(session_id): Path<String>,
     headers: HeaderMap,
     Json(body): Json<InteractiveSignalBody>,
 ) -> std::result::Result<StatusCode, (StatusCode, String)> {
     authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
     state
         .interactive
-        .signal(&state.manager, &body.id, body.signal)
+        .signal(&state.manager, &session_id, &body.id, body.signal)
         .await
         .map_err(control_failed)?;
     Ok(StatusCode::NO_CONTENT)
