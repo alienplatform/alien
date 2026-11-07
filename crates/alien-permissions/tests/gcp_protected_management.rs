@@ -102,8 +102,6 @@ fn verifier_only(permission: &str) -> bool {
             "compute.instanceGroupManagers.create",
             "compute.instanceGroupManagers.update",
             "compute.instanceTemplates.useReadOnly",
-            "compute.regionInstanceTemplates.create",
-            "compute.regionInstanceTemplates.useReadOnly",
             "compute.instances.create",
             "compute.instances.setMetadata",
             "compute.instances.setServiceAccount",

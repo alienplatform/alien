@@ -102,8 +102,6 @@ const GCP_VERIFIER_OWNED: &[&str] = &[
     // `useReadOnly` would let a group point at an older or another install's template.
     "compute.instanceTemplates.create",
     "compute.instanceTemplates.useReadOnly",
-    "compute.regionInstanceTemplates.create",
-    "compute.regionInstanceTemplates.useReadOnly",
     "compute.instanceGroupManagers.create",
     "compute.instanceGroupManagers.update",
     "compute.instances.create",
