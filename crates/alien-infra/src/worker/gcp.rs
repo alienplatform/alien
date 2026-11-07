@@ -692,6 +692,18 @@ impl GcpWorkerController {
         self.region = Some(gcp_config.region.clone());
         let service_name = get_cloudrun_service_name(ctx.resource_prefix, &cfg.id);
 
+        // On a protected install no setup creates the service and management may not: the
+        // verifier creates it from the signed release.
+        if let Some(statements) = verifier::protected_statements(ctx, &cfg.id)? {
+            self.apply_through_verifier(ctx, statements, cfg, &service_name)
+                .await?;
+            self.service_name = Some(service_name);
+            return Ok(HandlerAction::Continue {
+                state: WaitingForServiceCreation,
+                suggested_delay: None,
+            });
+        }
+
         // Build the Cloud Run service
         let service = self
             .build_cloud_run_service(&service_name, cfg, ctx)
@@ -9253,6 +9265,7 @@ mod tests {
         // Setup sets the service's IAM policy on a protected install; management may not.
         cloudrun.expect_set_service_iam_policy().never();
         cloudrun.expect_patch_service().never();
+        cloudrun.expect_create_service().never();
         let cloudrun = Arc::new(cloudrun);
         let mut iam = MockIamApi::new();
         let audience = verifier_url.to_string();
@@ -9406,6 +9419,59 @@ mod tests {
                 .get("ALIEN_WORKER_TIMEOUT_SECONDS")
                 .map(String::as_str),
             Some("180")
+        );
+    }
+
+    /// On a protected install no setup creates the service and management may not: the
+    /// worker's first deployment has the verifier create it.
+    #[tokio::test]
+    async fn a_protected_worker_is_created_by_the_verifier() {
+        let worker = pinned_worker('2', 512);
+        let release = signed_release(
+            Platform::Gcp,
+            &Stack::new("test".to_string())
+                .add(worker.clone(), ResourceLifecycle::Live)
+                .build(),
+            1,
+        );
+        let answer = serde_json::json!({"release": 1, "functions": [{
+            "function": PROTECTED_SERVICE,
+            "imageUri": pinned_image('2'),
+            "digest": format!("sha256:{}", "2".repeat(64)),
+        }]});
+        let (url, requests) = http_verifier_stub(axum::http::StatusCode::OK, answer).await;
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(GcpWorkerController::default())
+            .platform(Platform::Gcp)
+            .client_config(management_client_config(&url))
+            .service_provider(protected_provider(&url, setup_policy()))
+            .with_test_dependencies()
+            .stack_settings(protected_settings())
+            .signed_release(release, None)
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 1, "one verifier call creates the service");
+        let (answer, written) = run_verifier(
+            alien_signing::InstallId::Gcp {
+                project: "test-project-123".to_string(),
+                prefix: "test".to_string(),
+            },
+            "test",
+            &requests[0].1,
+        )
+        .await;
+        answer.expect("the verifier accepts the controller's request");
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].name, PROTECTED_SERVICE);
+        assert!(
+            !written[0].public,
+            "a private worker's service takes no internet requests"
         );
     }
 
