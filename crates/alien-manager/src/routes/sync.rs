@@ -205,6 +205,10 @@ struct AgentSyncWireRequest {
     /// setting values. Opaque to OSS beyond forwarding it.
     #[serde(default)]
     operations_config: Option<alien_core::OperationsConfig>,
+    /// The Operator runs a settled release but lost its config (it cleared
+    /// it in token mode, then enrolled). Answered with the current release.
+    #[serde(default)]
+    installed_config_missing: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -520,7 +524,19 @@ async fn acquire(
     };
     let mut deployments = Vec::with_capacity(acquire_result.deployments.len());
     for acquired in &acquire_result.deployments {
-        match acquired_deployment_response(state.release_store.as_ref(), &sources, acquired).await {
+        let response =
+            acquired_deployment_response(state.release_store.as_ref(), &sources, acquired)
+                .await
+                .and_then(|mut deployment| {
+                    if subject.role == crate::auth::Role::OperatorSync {
+                        deployment.deployment["deploymentToken"] = serde_json::Value::Null;
+                        if let Some(config) = deployment.deployment.get_mut("deploymentConfig") {
+                            remove_legacy_runtime_credentials(config, &state.config.base_url())?;
+                        }
+                    }
+                    Ok(deployment)
+                });
+        match response {
             Ok(deployment) => deployments.push(deployment),
             Err(error) => {
                 // The caller never learns it holds these leases, so give them
@@ -548,6 +564,53 @@ async fn acquire(
         not_acquired: acquire_result.not_acquired,
     })
     .into_response()
+}
+
+/// Bounded operators receive endpoints and external monitoring configuration, never
+/// a legacy deployment bearer or a manager monitoring bearer to persist.
+fn remove_legacy_runtime_credentials(
+    config: &mut serde_json::Value,
+    audience: &str,
+) -> Result<(), AlienError> {
+    if config
+        .pointer("/computeBackend/clusters")
+        .is_some_and(|clusters| {
+            !clusters.is_null()
+                && clusters
+                    .as_object()
+                    .is_none_or(|clusters| !clusters.is_empty())
+        })
+    {
+        return Err(ErrorData::forbidden(
+            "Bounded operators do not support external compute clusters",
+        )
+        .into_generic());
+    }
+    let Some(config) = config.as_object_mut() else {
+        return Ok(());
+    };
+    config.insert("deploymentToken".into(), serde_json::Value::Null);
+    config.insert("runtimeIdentityAudience".into(), audience.into());
+    let manager_origin = reqwest::Url::parse(audience).ok().map(|url| url.origin());
+    if let Some(monitoring) = config
+        .get_mut("monitoring")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for (endpoint, authorization) in [
+            ("logsEndpoint", "logsAuthHeader"),
+            ("metricsEndpoint", "metricsAuthHeader"),
+        ] {
+            let same_origin = monitoring
+                .get(endpoint)
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| reqwest::Url::parse(value).ok())
+                .is_some_and(|url| Some(url.origin()) == manager_origin);
+            if same_origin {
+                monitoring.insert(authorization.into(), "".into());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// An acquired deployment as the runner that acquired it receives it.
@@ -1041,6 +1104,13 @@ mod tests {
     ///
     /// Returns the response and every reconcile the store received.
     async fn sync_operator_without_claim(record: DeploymentRecord) -> (Value, Vec<ReconcileData>) {
+        sync_operator_without_claim_reporting(record, false).await
+    }
+
+    async fn sync_operator_without_claim_reporting(
+        record: DeploymentRecord,
+        installed_config_missing: bool,
+    ) -> (Value, Vec<ReconcileData>) {
         let temp = tempfile::tempdir().expect("test directory");
         let db = Arc::new(
             SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
@@ -1114,6 +1184,9 @@ mod tests {
             "currentRelease": { "releaseId": "rel_target", "stack": { "id": "app", "resources": {} } },
             "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
         });
+        if installed_config_missing {
+            body["installedConfigMissing"] = json!(true);
+        }
         let response = super::router()
             .with_state(state)
             .oneshot(
@@ -1604,6 +1677,162 @@ mod tests {
             DeploymentStatus::Running,
         );
         assert!(state.error.is_none());
+    }
+
+    /// After an Operator moves from a deployment token to an enrollment code,
+    /// the token keeps working until the first rollout the enrolled Operator
+    /// finishes. Then every workload uses capability files and it is revoked.
+    #[tokio::test]
+    async fn the_deployment_token_is_revoked_after_the_first_enrolled_rollout() {
+        use crate::auth::runtime_capability::{
+            RuntimeAuthValidator, RuntimeCredentials, RuntimeGrant, RuntimePurpose,
+        };
+        use crate::providers::token_db_validator::TokenDbValidator;
+        use crate::traits::token_store::{CreateTokenParams, TokenStore, TokenType};
+
+        let temp = tempfile::tempdir().expect("test directory");
+        let db = Arc::new(
+            SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
+                .await
+                .expect("database"),
+        );
+        let tokens = Arc::new(SqliteTokenStore::new(db.clone()));
+        let old_token = "ax_deploy_before_enrollment";
+        tokens
+            .create_token(CreateTokenParams {
+                token_type: TokenType::Deployment,
+                key_prefix: "ax_deploy_bef".into(),
+                key_hash: crate::ids::sha256_hash(old_token),
+                deployment_group_id: Some("dg_test".into()),
+                deployment_id: Some("dep_test".into()),
+            })
+            .await
+            .expect("deployment token");
+
+        let stored = Arc::new(Mutex::new(deployment_record_with_state("running", None)));
+        let mut store = MockDeploymentStore::new();
+        store.expect_requires_execution_claims().return_const(false);
+        let current = stored.clone();
+        store
+            .expect_get_deployment()
+            .returning(move |_, _| Ok(Some(current.lock().unwrap().clone())));
+        let current = stored.clone();
+        store.expect_reconcile().returning(move |_, data| {
+            let mut record = current.lock().unwrap().clone();
+            record.status = serde_json::to_value(data.state.status)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_owned();
+            *current.lock().unwrap() = record.clone();
+            Ok(ReconcileOutcome {
+                record,
+                target_operations_bundle_set: None,
+                target_dynamic_containers: None,
+            })
+        });
+        let mut state = test_app_state(
+            temp.path(),
+            Arc::new(store),
+            Arc::new(SqliteReleaseStore::new(db.clone())),
+            Arc::new(LocalCredentialResolver::new(temp.path().to_path_buf())),
+            db,
+        )
+        .await;
+        let credentials =
+            Arc::new(RuntimeCredentials::new("https://manager.test".into(), [9; 32]).unwrap());
+        state.token_store = tokens.clone();
+        state.auth_validator = Arc::new(RuntimeAuthValidator::new(
+            credentials.clone(),
+            Arc::new(TokenDbValidator::new(tokens.clone())),
+        ));
+        let operator = credentials
+            .issue(
+                RuntimeGrant {
+                    workspace_id: "default".into(),
+                    project_id: "default".into(),
+                    deployment_id: "dep_test".into(),
+                    component_id: "operator".into(),
+                    purpose: RuntimePurpose::OperatorSync,
+                },
+                Utc::now() + chrono::Duration::hours(1),
+            )
+            .unwrap()
+            .token;
+
+        let sync = |bearer: String| {
+            let state = state.clone();
+            async move {
+                let body = json!({
+                    "deploymentId": "dep_test",
+                    "maxSupportedDeploymentProtocolVersion":
+                        alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION,
+                    "currentState": {
+                        "platform": "kubernetes",
+                        "status": "running",
+                        "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    },
+                });
+                let response = super::router()
+                    .with_state(state)
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri("/v1/sync")
+                            .header("authorization", format!("Bearer {bearer}"))
+                            .header("content-type", "application/json")
+                            .body(Body::from(body.to_string()))
+                            .expect("request"),
+                    )
+                    .await
+                    .expect("sync response");
+                let status = response.status();
+                if status == StatusCode::BAD_REQUEST {
+                    let body = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+                    panic!("{}", String::from_utf8_lossy(&body));
+                }
+                status
+            }
+        };
+
+        // Enrolled, but the workloads still run the revision from before.
+        // Health refreshes do not end the token.
+        assert_eq!(sync(operator.clone()).await, StatusCode::OK);
+        stored.lock().unwrap().status = "refresh-failed".into();
+        assert_eq!(sync(operator.clone()).await, StatusCode::OK);
+        assert_eq!(sync(old_token.into()).await, StatusCode::OK);
+
+        // The enrolled Operator finishes a rollout.
+        stored.lock().unwrap().status = "update-pending".into();
+        assert_eq!(sync(operator.clone()).await, StatusCode::OK);
+        assert_eq!(sync(old_token.into()).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(sync(operator).await, StatusCode::OK);
+    }
+
+    /// An Operator that cleared its config in token mode and then enrolled
+    /// asks for it. The manager sends the running release again, and only then.
+    #[tokio::test]
+    async fn an_operator_without_its_installed_config_gets_the_running_release() {
+        let record = pull_record_in_cluster(
+            "running",
+            alien_core::KubernetesClusterOwnership::Existing,
+        );
+        let (response, _) = sync_operator_without_claim_reporting(record.clone(), false).await;
+        assert!(response.get("target").is_none(), "{response}");
+
+        let (response, _) = sync_operator_without_claim_reporting(record, true).await;
+        let target = response.get("target").expect("the running release again");
+        let current = response["currentState"]["currentRelease"]["releaseId"].clone();
+        assert!(current.is_string(), "{response}");
+        assert_eq!(target["releaseInfo"]["releaseId"], current, "{response}");
+
+        let mut updating = pull_record_in_cluster(
+            "update-failed",
+            alien_core::KubernetesClusterOwnership::Existing,
+        );
+        updating.desired_release_id = Some("rel_target".to_string());
+        let (response, _) = sync_operator_without_claim_reporting(updating, true).await;
+        assert!(response.get("target").is_none(), "{response}");
     }
 
     #[tokio::test]
@@ -2408,6 +2637,7 @@ mod tests {
 
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            runtime_identity_audience: None,
             gcp_federation_scope: None,
             stored_secret_input_ids: None,
             input_values: Default::default(),
@@ -2750,6 +2980,7 @@ async fn agent_sync(
         application,
         dynamic_containers,
         operations_config,
+        installed_config_missing,
     }): Json<AgentSyncWireRequest>,
 ) -> Response {
     let subject = match auth::require_auth(&state, &headers).await {
@@ -2950,6 +3181,13 @@ async fn agent_sync(
                             tracing::warn!(deployment_id = %req.deployment_id, error = %e, "Failed to reconcile agent-reported state");
                         }
                         Ok(outcome) => {
+                            if rollout_by_enrolled_operator_finished(
+                                &subject,
+                                &deployment,
+                                &outcome.record,
+                            ) {
+                                revoke_deployment_tokens(&state, &req.deployment_id).await;
+                            }
                             target_operations_bundle_set = outcome.target_operations_bundle_set;
                             target_dynamic_containers = outcome.target_dynamic_containers;
                             if let Err(error) =
@@ -3080,8 +3318,18 @@ async fn agent_sync(
         requires_execution_claims,
         execution_claim.is_some() && (!report_has_claim || reported_claim_is_terminal),
     );
-    let target = if may_deliver_target {
-        let release = if let Some(release_id) = deployment_target_release_id(&deployment) {
+    // An Operator that lost the config of its settled release gets that
+    // release again. It refreshes in place and keeps the config this time.
+    let resend_installed = !may_deliver_target
+        && installed_config_missing
+        && settled_release_to_resend(&deployment).is_some();
+    let target = if may_deliver_target || resend_installed {
+        let release_id = if resend_installed {
+            settled_release_to_resend(&deployment)
+        } else {
+            deployment_target_release_id(&deployment)
+        };
+        let release = if let Some(release_id) = release_id {
             let system = crate::auth::Subject::system();
             match state.release_store.get_release(&system, release_id).await {
                 Ok(Some(r)) => Some(r),
@@ -3257,7 +3505,19 @@ async fn agent_sync(
         execution_claim,
         current_state,
         target: match target.map(|t| serde_json::to_value(&t)).transpose() {
-            Ok(v) => v,
+            Ok(mut value) => {
+                if subject.role == crate::auth::Role::OperatorSync {
+                    if let Some(config) = value.as_mut().and_then(|target| target.get_mut("config"))
+                    {
+                        if let Err(error) =
+                            remove_legacy_runtime_credentials(config, &state.config.base_url())
+                        {
+                            return error.into_response();
+                        }
+                    }
+                }
+                value
+            }
             Err(e) => {
                 tracing::warn!("Failed to serialize target deployment: {e}");
                 return ErrorData::internal("Failed to serialize target deployment")
@@ -3778,6 +4038,62 @@ fn deployment_needs_target(deployment: &DeploymentRecord) -> bool {
         deployment_status_from_record(&deployment.status),
         Some(DeploymentStatus::Running)
     )
+}
+
+/// An enrolled Operator reported the end of a rollout. Every workload now
+/// runs a revision it built with capability files, so nothing needs the
+/// deployment token any more. A refresh (from Running or RefreshFailed) is
+/// not a rollout: workloads deployed before enrollment may still use it.
+fn rollout_by_enrolled_operator_finished(
+    subject: &crate::auth::Subject,
+    before: &DeploymentRecord,
+    after: &DeploymentRecord,
+) -> bool {
+    matches!(subject.role, crate::auth::Role::OperatorSync)
+        && crate::auth::runtime_capability::is_runtime_capability(&subject.bearer_token)
+        && !matches!(before.status.as_str(), "running" | "refresh-failed")
+        && after.status == "running"
+}
+
+/// Delete the deployment's long-lived tokens. A failure is logged and retried
+/// on the next rollout; it never fails the sync.
+async fn revoke_deployment_tokens(state: &AppState, deployment_id: &str) {
+    let tokens = match state.token_store.list_tokens().await {
+        Ok(tokens) => tokens,
+        Err(error) => {
+            tracing::warn!(%deployment_id, %error, "Cannot list deployment tokens to revoke");
+            return;
+        }
+    };
+    for token in tokens.into_iter().filter(|token| {
+        token.token_type == crate::traits::token_store::TokenType::Deployment
+            && token.deployment_id.as_deref() == Some(deployment_id)
+    }) {
+        match state.token_store.delete_token(&token.id).await {
+            Ok(()) => tracing::info!(
+                %deployment_id,
+                key_prefix = %token.key_prefix,
+                "Revoked the deployment token after the first rollout of the enrolled Operator"
+            ),
+            Err(error) => {
+                tracing::warn!(%deployment_id, %error, "Cannot revoke a deployment token")
+            }
+        }
+    }
+}
+
+/// The release a settled deployment runs, when no other work is pending.
+fn settled_release_to_resend(deployment: &DeploymentRecord) -> Option<&str> {
+    let current = deployment.current_release_id.as_deref()?;
+    let settled = matches!(
+        deployment_status_from_record(&deployment.status),
+        Some(DeploymentStatus::Running | DeploymentStatus::RefreshFailed)
+    );
+    let no_other_target = deployment
+        .desired_release_id
+        .as_deref()
+        .is_none_or(|desired| desired == current);
+    (settled && no_other_target).then_some(current)
 }
 
 fn may_deliver_agent_target(

@@ -4,6 +4,9 @@
 {{- if and $credentialConfigured (not .Values.management.deploymentId) (not $storage.enabled) -}}
   {{- fail "A bootstrap installation requires persistent runtime storage. Set runtime.data.persistence.enabled=true; ephemeral storage requires an existing deployment ID and its deployment credential." -}}
 {{- end -}}
+{{- if and .Values.management.enrollmentCode (not $storage.enabled) -}}
+  {{- fail "Enrollment keeps the Operator's daily key in runtime storage. Set runtime.data.persistence.enabled=true." -}}
+{{- end -}}
 {{- $name := include "deployment.fullname" . -}}
 {{- $installed := lookup "apps/v1" "Deployment" .Release.Namespace $name -}}
 {{- if $installed -}}

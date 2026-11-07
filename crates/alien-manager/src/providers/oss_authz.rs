@@ -59,12 +59,19 @@ impl OssAuthz {
     }
 
     /// Capability roles share the project scope without its reads. A deny-list so every other
-    /// project-scoped subject keeps the reads it has today.
+    /// project-scoped subject keeps the reads it has today. Runtime capabilities read nothing,
+    /// while a legacy telemetry-writer key keeps its reads.
     fn project_reader(s: &Subject) -> bool {
         !matches!(
             s.role,
-            Role::ImageRepositoryProvisioner | Role::SandboxImagePusher | Role::TunnelCaller
-        )
+            Role::OperatorSync
+                | Role::RegistryPull
+                | Role::OperatorTunnel
+                | Role::ImageRepositoryProvisioner
+                | Role::VerifiedSetupImporter
+                | Role::SandboxImagePusher
+                | Role::TunnelCaller
+        ) && !crate::auth::runtime_capability::is_runtime_capability(&s.bearer_token)
     }
 
     /// Group-scoped reads and sync belong to the group's own tokens, not to
@@ -163,6 +170,11 @@ impl Authz for OssAuthz {
                 | Role::DeploymentGroupDeployer
                 | Role::DeploymentManager
         )
+    }
+
+    fn can_import_setup(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
+        crate::auth::verified_setup::permits_import(s, deployment)
+            || self.can_update_deployment(s, deployment)
     }
 
     fn can_resolve_remote_binding(
@@ -310,7 +322,8 @@ impl Authz for OssAuthz {
     fn can_sync_deployment(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
         match &s.scope {
             Scope::Deployment { deployment_id, .. } => {
-                deployment_id == &deployment.id && s.role == Role::DeploymentManager
+                deployment_id == &deployment.id
+                    && matches!(s.role, Role::DeploymentManager | Role::OperatorSync)
             }
             Scope::DeploymentGroup {
                 deployment_group_id,
@@ -356,7 +369,9 @@ impl Authz for OssAuthz {
             Scope::Project { project_id } => {
                 project_id == &project.id && Self::is_project_writer(s)
             }
-            Scope::Deployment { .. } => s.role == Role::DeploymentManager,
+            Scope::Deployment { .. } => {
+                matches!(s.role, Role::DeploymentManager | Role::RegistryPull)
+            }
             _ => false,
         }
     }
@@ -545,6 +560,30 @@ mod tests {
             git_commit_message: None,
             created_at: Utc::now(),
         }
+    }
+
+    #[test]
+    fn verified_setup_only_imports_its_exact_reserved_deployment() {
+        let dep = deployment("d1", "group1");
+        let mut caller = deployment_token("d1");
+        caller.role = Role::VerifiedSetupImporter;
+        caller.bearer_token.clear();
+        assert!(OssAuthz.can_import_setup(&caller, &dep));
+        assert!(!OssAuthz.can_import_setup(&caller, &deployment("d2", "group1")));
+        assert!(!OssAuthz.can_read_deployment(&caller, &dep));
+        assert!(!OssAuthz.can_update_deployment(&caller, &dep));
+        assert!(!OssAuthz.can_delete_deployment(&caller, &dep));
+        assert!(!OssAuthz.can_sync_deployment(&caller, &dep));
+        assert!(!OssAuthz.can_acquire_deployments(&caller, &[dep.clone()]));
+        assert!(!OssAuthz.can_dispatch_command(&caller, &dep));
+        assert!(!OssAuthz.can_call_tunnel(&caller, &dep));
+        assert!(!OssAuthz.can_read_release(&caller, &release()));
+        assert!(!OssAuthz.can_export_release(&caller, &release()));
+        caller.workspace_id = "other".into();
+        assert!(!OssAuthz.can_import_setup(&caller, &dep));
+        caller.workspace_id = "default".into();
+        caller.bearer_token = "not-a-local-verification".into();
+        assert!(!OssAuthz.can_import_setup(&caller, &dep));
     }
 
     #[test]
@@ -880,6 +919,18 @@ mod tests {
         let dep = deployment("d1", "dg-a");
         assert!(!OssAuthz.can_sync_deployment(&s, &dep));
         assert!(!OssAuthz.can_read_deployment(&s, &dep));
+    }
+
+    #[test]
+    fn legacy_telemetry_writer_keeps_release_reads_but_runtime_telemetry_does_not() {
+        let mut legacy = deployment_token("d1");
+        legacy.role = Role::DeploymentTelemetryWriter;
+        assert!(OssAuthz.can_read_release(&legacy, &release()));
+
+        let mut runtime = legacy.clone();
+        runtime.bearer_token = "ax_cap_v1_payload.signature".to_string();
+        assert!(OssAuthz.can_ingest_telemetry(&runtime, TelemetrySignal::Logs));
+        assert!(!OssAuthz.can_read_release(&runtime, &release()));
     }
 
     #[test]

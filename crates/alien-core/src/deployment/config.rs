@@ -142,6 +142,11 @@ pub struct DeploymentConfig {
     /// When None (e.g., `alien dev`), controllers use image URIs as-is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manager_url: Option<String>,
+    /// Exact audience for bounded runtime identity exchange. When present,
+    /// runtimes must use identity exchange and cannot fall back to stored tokens.
+    /// Absence preserves the legacy mode for installs awaiting migration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_identity_audience: Option<String>,
     /// Deployment token for pull authentication with the manager's registry.
     ///
     /// Used by controllers to configure registry credentials so cloud platforms
@@ -372,6 +377,7 @@ mod input_values_tests {
                     crate::HorizonClusterConfig {
                         cluster_id: "cluster-1".to_string(),
                         management_token: "hm_test".to_string(),
+                        runtime_identity: None,
                         horizon_machine_image: cluster_image
                             .map(|image| serde_json::from_value(image).unwrap()),
                     },

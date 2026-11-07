@@ -1,10 +1,11 @@
+use crate::kubernetes_runtime_credentials::delete_environment_secret;
 use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::core::kubernetes_errors::is_remote_resource_conflict;
 use crate::core::{
-    delete_environment_secret, direct_monitoring_auth_headers, kubernetes_branded_resource_labels,
+    direct_monitoring_auth_headers, kubernetes_branded_resource_labels,
     kubernetes_cleanup_resource_labels, kubernetes_runtime_pod_labels, linked_bindings,
     pod_template_annotations, projected_env_vars,
     reconcile_environment_secret_with_additional_secrets, EnvSecretRotationTracker,
@@ -136,13 +137,25 @@ impl KubernetesDaemonController {
             }
         };
 
-        let image_pull_secret_name = if let DaemonCode::Image { image } = &config.code {
-            let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })
-            })?;
+        crate::kubernetes_runtime_credentials::reconcile(
+            ctx,
+            &namespace,
+            &daemon_set_name,
+            &config.id,
+            alien_core::commands_types::CommandTargetType::Daemon,
+        )
+        .await?;
+        let proxy_image = match &config.code {
+            DaemonCode::Image { image }
+                if ctx.deployment_config.runtime_identity_audience.is_none()
+                    || crate::kubernetes_registry::uses_manager_proxy(ctx, image) =>
+            {
+                Some(image)
+            }
+            _ => None,
+        };
+        let image_pull_secret_name = if let Some(image) = proxy_image {
+            let token = crate::kubernetes_registry::pull_credential(ctx, &config.id).await?;
             let secret_name = registry_secret_name.clone();
             let secrets_client = ctx
                 .service_provider
@@ -153,7 +166,7 @@ impl KubernetesDaemonController {
                 &namespace,
                 &secret_name,
                 image,
-                token,
+                &token,
                 &config.id,
                 ctx,
                 legacy_registry_owner_proven,
@@ -298,6 +311,24 @@ impl KubernetesDaemonController {
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let live = self.read_daemonset(ctx).await?;
+        if let (Some(name), Some(namespace)) = (&self.daemon_set_name, &self.namespace) {
+            let config = ctx.desired_resource_config::<Daemon>()?;
+            crate::kubernetes_runtime_credentials::reconcile(
+                ctx,
+                namespace,
+                name,
+                &config.id,
+                alien_core::commands_types::CommandTargetType::Daemon,
+            )
+            .await?;
+            if let DaemonCode::Image { image } = &config.code {
+                crate::kubernetes_registry::refresh_pull_secret(
+                    ctx, namespace, name, &config.id, image,
+                )
+                .await?;
+            }
+        }
+
         // A linked resource can change what its binding publishes without this daemon being
         // updated, such as a sandbox reading its broker address again on its own Ready. Compare
         // before readiness: a stale binding can be why a pod is not ready.
@@ -507,13 +538,25 @@ impl KubernetesDaemonController {
         let service_account_name = config
             .get_permissions()
             .map(|profile| kubernetes_service_account_name(&ctx.resource_prefix, profile));
-        let image_pull_secret_name = if let DaemonCode::Image { image } = &config.code {
-            let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })
-            })?;
+        crate::kubernetes_runtime_credentials::reconcile(
+            ctx,
+            &namespace,
+            &daemon_set_name,
+            &config.id,
+            alien_core::commands_types::CommandTargetType::Daemon,
+        )
+        .await?;
+        let proxy_image = match &config.code {
+            DaemonCode::Image { image }
+                if ctx.deployment_config.runtime_identity_audience.is_none()
+                    || crate::kubernetes_registry::uses_manager_proxy(ctx, image) =>
+            {
+                Some(image)
+            }
+            _ => None,
+        };
+        let image_pull_secret_name = if let Some(image) = proxy_image {
+            let token = crate::kubernetes_registry::pull_credential(ctx, &config.id).await?;
             let secret_name = registry_secret_name.clone();
             let secrets_client = ctx
                 .service_provider
@@ -524,7 +567,7 @@ impl KubernetesDaemonController {
                 namespace,
                 &secret_name,
                 image,
-                token,
+                &token,
                 &config.id,
                 ctx,
                 legacy_registry_owner_proven,
@@ -1144,7 +1187,7 @@ impl KubernetesDaemonController {
                 message,
             })
         })?;
-        let pod_spec = PodSpec {
+        let mut pod_spec = PodSpec {
             node_selector,
             service_account_name: service_account_name.map(str::to_owned),
             automount_service_account_token: service_account_name.is_none().then_some(false),
@@ -1157,6 +1200,13 @@ impl KubernetesDaemonController {
             ..Default::default()
         };
 
+        if ctx.deployment_config.runtime_identity_audience.is_some() {
+            crate::kubernetes_runtime_credentials::mount(
+                &mut pod_spec,
+                DAEMON_CONTAINER_NAME,
+                daemon_set_name,
+            )?;
+        }
         let pod_labels = kubernetes_runtime_pod_labels(ctx, labels.clone());
         // Roll pods when the env Secret changes (e.g. token rotation) by stamping
         // its checksum onto the pod template — matches the container controller.

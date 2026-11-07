@@ -15,9 +15,10 @@ use crate::config::OperatorConfig;
 use crate::db::{AutomaticRetry, OperatorDb};
 use crate::OperatorState;
 use alien_core::{
-    ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
-    EnvironmentVariableType, KubernetesClientConfig, ObservedInventoryBatch, Platform,
-    ResourceHeartbeat, ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
+    commands_types::CommandTargetType, ClientConfig, DeploymentConfig, DeploymentState,
+    DeploymentStatus, EnvironmentVariable, EnvironmentVariableType, KubernetesClientConfig,
+    ObservedInventoryBatch, Platform, ReceiverCommandCredential, ResourceHeartbeat,
+    ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
 };
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
@@ -222,7 +223,12 @@ pub(crate) async fn run_deployment_continuously(
     // Check if there's a target to deploy
     let target_release = match &current.target_release {
         Some(r) => r,
-        None => return Ok((0, Duration::ZERO)),
+        None => {
+            if crate::daily_identity::has_runtime_identity(&state.db).await? {
+                refresh_installed_deployment(state).await?;
+            }
+            return Ok((0, Duration::ZERO));
+        }
     };
     // A pushed target always carries an Alien release id (observe deployments never
     // receive a target), so an empty fallback is unreachable in practice.
@@ -237,6 +243,7 @@ pub(crate) async fn run_deployment_continuously(
         {
             Some(crate::db::ApprovalStatus::Pending) => {
                 debug!("Target release pending approval, skipping deployment");
+                renew_installed_credentials_or_warn(state).await;
                 return Ok((0, Duration::ZERO));
             }
             Some(crate::db::ApprovalStatus::Rejected) => {
@@ -302,6 +309,7 @@ pub(crate) async fn run_deployment_continuously(
             } => {
                 info!(release_id = %target_release_id, attempt, delay_seconds,
                     "Scheduled automatic retry of failed deployment");
+                renew_installed_credentials_or_warn(state).await;
                 return Ok((0, Duration::ZERO));
             }
             AutomaticRetry::Requested { attempt } => {
@@ -309,7 +317,10 @@ pub(crate) async fn run_deployment_continuously(
                 info!(release_id = %target_release_id, attempt,
                     "Resuming failed deployment from saved checkpoints");
             }
-            AutomaticRetry::Idle => return Ok((0, Duration::ZERO)),
+            AutomaticRetry::Idle => {
+                renew_installed_credentials_or_warn(state).await;
+                return Ok((0, Duration::ZERO));
+            }
         }
     }
     let mut enriched_config = enrich_config(
@@ -433,7 +444,8 @@ pub(crate) async fn run_deployment_continuously(
                 }
             }
             // A disconnected Operator needs the installed config for health refreshes.
-            if state.config.airgap_target_secret.is_none()
+            if (state.config.airgap_target_secret.is_none()
+                && enriched_config.runtime_identity_audience.is_none())
                 || loop_result.final_status != DeploymentStatus::Running
             {
                 debug!("Deployment synced, clearing deployment config");
@@ -464,8 +476,8 @@ pub(crate) async fn run_deployment_continuously(
     Ok((steps_executed, delay))
 }
 
-/// Refresh an installed disconnected deployment before exporting its status.
-pub(super) async fn refresh_airgap_deployment(state: &OperatorState) -> Result<()> {
+/// Refresh an installed deployment for health reporting and bounded credential renewal.
+pub(super) async fn refresh_installed_deployment(state: &OperatorState) -> Result<()> {
     let Some(mut current) = state.db.get_deployment_state().await? else {
         return Ok(());
     };
@@ -475,7 +487,7 @@ pub(super) async fn refresh_airgap_deployment(state: &OperatorState) -> Result<(
             DeploymentStatus::Running | DeploymentStatus::RefreshFailed
         )
     {
-        return Ok(());
+        return renew_installed_credentials(state).await;
     }
     let Some(release) = current.current_release.as_ref() else {
         return Ok(());
@@ -543,6 +555,66 @@ pub(super) async fn refresh_airgap_deployment(state: &OperatorState) -> Result<(
     }
 }
 
+/// Renew the credential Secrets of the installed workloads when the installed
+/// release cannot be refreshed: an update waits for approval, waits to retry,
+/// or failed. Workloads keep running on their old revision, so their
+/// credentials must not expire meanwhile.
+async fn renew_installed_credentials(state: &OperatorState) -> Result<()> {
+    if !crate::daily_identity::has_runtime_identity(&state.db).await? {
+        return Ok(());
+    }
+    let Some(current) = state.db.get_deployment_state().await? else {
+        return Ok(());
+    };
+    let (Some(stack_state), Some(release)) = (&current.stack_state, &current.current_release)
+    else {
+        return Ok(());
+    };
+    // The stored config belongs to the target. The fields used here (manager
+    // audience, deployment id, cluster) do not change between releases.
+    let Some(config) = state.db.get_deployment_config().await? else {
+        return Ok(());
+    };
+    let config = enrich_config(
+        config,
+        &state.config,
+        current.platform,
+        &state.db,
+        Some(&release.stack),
+    )
+    .await?;
+    let client_config = resolve_client_config(
+        current.platform,
+        config.base_platform.or(state.config.base_platform),
+        &state.config.data_dir,
+        state.config.namespace.clone(),
+        state.config.sync.as_ref(),
+    )
+    .await?;
+    let service_provider = state
+        .service_provider
+        .clone()
+        .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));
+    alien_infra::refresh_installed_credentials(
+        stack_state,
+        &release.stack,
+        &config,
+        client_config,
+        &service_provider,
+    )
+    .await
+    .context(ErrorData::DeploymentFailed {
+        message: "Cannot renew installed workload credentials".to_string(),
+    })
+}
+
+/// A renewal failure never blocks the update work that follows.
+async fn renew_installed_credentials_or_warn(state: &OperatorState) {
+    if let Err(error) = renew_installed_credentials(state).await {
+        tracing::warn!(error = %error, "Cannot renew installed workload credentials");
+    }
+}
+
 /// One Running refresh pass over the installed release.
 async fn run_maintenance_refresh(
     state: &OperatorState,
@@ -601,7 +673,7 @@ async fn finish_maintenance_refresh(
 /// Applies public_endpoints and stack_settings from operator config,
 /// and injects command delivery env vars for K8s/Local platforms.
 /// External bindings also populate DeploymentConfig for executor preflights.
-async fn enrich_config(
+pub(super) async fn enrich_config(
     mut config: DeploymentConfig,
     operator_config: &OperatorConfig,
     platform: Platform,
@@ -680,30 +752,99 @@ async fn enrich_config(
 
             let mut vars = config.environment_variables.variables.clone();
 
-            // The Manager authenticates command delivery with the deployment's
-            // sync token. The Worker runtime keeps it out of the application
-            // child environment; Container/Daemon receivers necessarily read it.
-            if let Some(stack) = stack {
-                vars.extend(
-                    stack
-                        .worker_command_push_env_vars(Some(&sync_config.token))
-                        .context(ErrorData::ConfigurationError {
-                            message: "Failed to build Worker command push auth env".to_string(),
-                        })?,
-                );
-                // Container/Daemon command receiver env (ALIEN_COMMANDS_URL/TOKEN/
-                // TARGET_RESOURCE_ID/TARGET_RESOURCE_TYPE), scoped per resource.
-                // Container/Daemon always deliver via Pull; the operator
-                // only ever manages K8s/Local, so this block already covers every
-                // platform it serves. It uses the same deployment-token auth
-                // contract as Worker push handling above.
-                vars.extend(
-                    stack
-                        .receiver_command_env_vars(&commands_url, Some(&sync_config.token))
-                        .context(ErrorData::ConfigurationError {
-                            message: "Failed to build command receiver env".to_string(),
-                        })?,
-                );
+            if let (Some(stack), Some(audience)) =
+                (stack, config.runtime_identity_audience.as_deref())
+            {
+                if platform == Platform::Local
+                    && stack.resources().any(|(_, resource)| {
+                        resource
+                            .config
+                            .downcast_ref::<alien_core::Container>()
+                            .is_some()
+                    })
+                {
+                    return Err(AlienError::new(ErrorData::ConfigurationError {
+                        message: "Local container credential file access is not configured".into(),
+                    }));
+                }
+                vars.retain(|variable| variable.name != "ALIEN_COMMANDS_TOKEN");
+                // Worker runtimes built before capability files accept a push
+                // only with `ALIEN_COMMANDS_TOKEN`. Give them the Operator's
+                // own push secret, which grants nothing at the manager. Newer
+                // runtimes use the capability file and ignore it.
+                let targets = stack.command_targets();
+                let push_secret = if targets
+                    .iter()
+                    .any(|target| target.resource_type == CommandTargetType::Worker)
+                {
+                    Some(db.worker_push_secret().await?)
+                } else {
+                    None
+                };
+                for target in targets {
+                    if let (CommandTargetType::Worker, Some(secret)) =
+                        (target.resource_type, push_secret.as_ref())
+                    {
+                        vars.push(EnvironmentVariable {
+                            name: alien_core::ENV_ALIEN_COMMANDS_TOKEN.into(),
+                            value: secret.clone(),
+                            var_type: EnvironmentVariableType::Secret,
+                            target_resources: Some(vec![target.resource_id.clone()]),
+                        });
+                    }
+                    let values = [
+                        ("ALIEN_IDENTITY_PROVIDER", "capabilityFile".to_owned()),
+                        ("ALIEN_MANAGER_URL", sync_config.url.to_string()),
+                        ("ALIEN_MANAGER_AUDIENCE", audience.to_owned()),
+                        (
+                            "ALIEN_COMMANDS_CAPABILITY_FILE",
+                            "/var/run/alien-runtime/commands.json".to_owned(),
+                        ),
+                        ("ALIEN_COMMANDS_URL", commands_url.clone()),
+                        (
+                            "ALIEN_COMMANDS_TARGET_RESOURCE_ID",
+                            target.resource_id.clone(),
+                        ),
+                        (
+                            "ALIEN_COMMANDS_TARGET_RESOURCE_TYPE",
+                            target.resource_type.as_str().to_owned(),
+                        ),
+                    ];
+                    vars.extend(values.into_iter().map(|(name, value)| EnvironmentVariable {
+                        name: name.into(),
+                        value,
+                        var_type: EnvironmentVariableType::Plain,
+                        target_resources: Some(vec![target.resource_id.clone()]),
+                    }));
+                }
+            } else {
+                // The Manager authenticates command delivery with the deployment's
+                // sync token. The Worker runtime keeps it out of the application
+                // child environment; Container/Daemon receivers necessarily read it.
+                if let Some(stack) = stack {
+                    vars.extend(
+                        stack
+                            .worker_command_push_env_vars(Some(&sync_config.token))
+                            .context(ErrorData::ConfigurationError {
+                                message: "Failed to build Worker command push auth env".to_string(),
+                            })?,
+                    );
+                    // Container/Daemon command receiver env (ALIEN_COMMANDS_URL/TOKEN/
+                    // TARGET_RESOURCE_ID/TARGET_RESOURCE_TYPE), scoped per resource.
+                    // Container/Daemon always deliver via Pull; the operator
+                    // only ever manages K8s/Local, so this block already covers every
+                    // platform it serves. It uses the same deployment-token auth
+                    // contract as Worker push handling above.
+                    vars.extend(
+                        stack
+                            .receiver_command_env_vars(&commands_url, |_| {
+                                ReceiverCommandCredential::Token(Some(sync_config.token.clone()))
+                            })
+                            .context(ErrorData::ConfigurationError {
+                                message: "Failed to build command receiver env".to_string(),
+                            })?,
+                    );
+                }
             }
 
             // Ensure ALIEN_DEPLOYMENT_ID is present (should come from manager config,
@@ -837,6 +978,7 @@ mod tests {
             domain_metadata: None,
             monitoring: None,
             manager_url: None,
+            runtime_identity_audience: None,
             deployment_token: None,
             native_image_host: None,
             volume_restores: Vec::new(),
@@ -1543,8 +1685,8 @@ mod tests {
                 || v.name == alien_core::ENV_ALIEN_COMMANDS_URL));
     }
 
-    #[tokio::test]
-    async fn disconnected_health_refresh_observes_failure_and_recovery() {
+    /// An installed Test deployment whose `worker` fails its first health refresh.
+    async fn installed_refresh_fixture() -> (OperatorState, tempfile::TempDir) {
         let directory = tempfile::tempdir().unwrap();
         let key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let db = OperatorDb::new(directory.path().to_str().unwrap(), key)
@@ -1629,8 +1771,15 @@ mod tests {
         }
         let installed = state.db.get_deployment_state().await.unwrap().unwrap();
         assert_eq!(installed.status, DeploymentStatus::Running);
+        (state, directory)
+    }
+
+    #[tokio::test]
+    async fn disconnected_health_refresh_observes_failure_and_recovery() {
+        let (state, _directory) = installed_refresh_fixture().await;
+        let installed = state.db.get_deployment_state().await.unwrap().unwrap();
         assert!(state.db.get_deployment_config().await.unwrap().is_some());
-        refresh_airgap_deployment(&state).await.unwrap();
+        refresh_installed_deployment(&state).await.unwrap();
         let failed = state.db.get_deployment_state().await.unwrap().unwrap();
         assert_eq!(failed.status, DeploymentStatus::RefreshFailed);
         assert_eq!(
@@ -1638,7 +1787,7 @@ mod tests {
             alien_core::ResourceStatus::RefreshFailed
         );
         assert_eq!(failed.current_release, installed.current_release);
-        refresh_airgap_deployment(&state).await.unwrap();
+        refresh_installed_deployment(&state).await.unwrap();
         let recovered = state.db.get_deployment_state().await.unwrap().unwrap();
         assert_eq!(recovered.status, DeploymentStatus::Running);
         let resources = &recovered.stack_state.as_ref().unwrap().resources;
@@ -1656,6 +1805,60 @@ mod tests {
         assert_eq!(recovered.current_release, installed.current_release);
         assert!(recovered.target_release.is_none());
         assert!(state.db.get_deployment_config().await.unwrap().is_some());
+    }
+
+    /// An enrolled Operator refreshes its installed deployment on every idle
+    /// pass. That pass runs each workload's ready handler, which rewrites the
+    /// workload's credential Secret before the previous leaf expires.
+    #[tokio::test]
+    async fn enrolled_operator_refreshes_installed_workloads_on_every_idle_pass() {
+        let (state, _directory) = installed_refresh_fixture().await;
+        // A legacy Operator leaves an idle installed deployment alone.
+        run_deployment_continuously(&state).await.unwrap();
+        assert_eq!(
+            state
+                .db
+                .get_deployment_state()
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            DeploymentStatus::Running
+        );
+
+        state
+            .db
+            .write_daily_identity(&crate::daily_identity::DailyIdentityState {
+                manager_url: "https://manager.example".into(),
+                audience: "https://manager.example".into(),
+                deployment_id: "dep_site".into(),
+                current: "ax_day_v1_fixture".into(),
+                pending: None,
+                pending_started_at: None,
+                expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
+                enrolled_code_hash: None,
+                pending_enrollment: None,
+            })
+            .await
+            .unwrap();
+        run_deployment_continuously(&state).await.unwrap();
+        let refreshed = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(refreshed.status, DeploymentStatus::RefreshFailed);
+        assert_eq!(
+            refreshed.stack_state.as_ref().unwrap().resources["worker"].status,
+            alien_core::ResourceStatus::RefreshFailed
+        );
+        run_deployment_continuously(&state).await.unwrap();
+        assert_eq!(
+            state
+                .db
+                .get_deployment_state()
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            DeploymentStatus::Running
+        );
     }
 
     /// A resource wait's poll budget is `max_times` steps, one per requested

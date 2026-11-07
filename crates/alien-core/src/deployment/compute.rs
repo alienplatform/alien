@@ -19,11 +19,26 @@ pub struct HorizonClusterConfig {
     /// Used by alien-deployment controllers to create/update containers
     pub management_token: String,
 
+    /// Nonsecret configuration for bounded machine identity. Existing clusters
+    /// remain on their prior authentication until explicitly migrated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_identity: Option<MachineRuntimeIdentity>,
+
     /// Machine image this cluster's machines run. When set, it replaces
     /// [`HorizonConfig::horizon_machine_image`] for this cluster only, so one
     /// cluster can stay on the image it runs while others move to a newer one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub horizon_machine_image: Option<HorizonMachineImage>,
+}
+
+/// Trusted manager endpoint and audience used by a machine to obtain leaf capabilities.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MachineRuntimeIdentity {
+    pub exchange_url: String,
+    pub deployment_id: String,
+    pub audience: String,
 }
 
 /// Machine image architecture.
@@ -379,6 +394,7 @@ mod tests {
                 HorizonClusterConfig {
                     cluster_id: "cluster-1".to_string(),
                     management_token: "hm_test".to_string(),
+                    runtime_identity: None,
                     horizon_machine_image: Some(
                         serde_json::from_value(catalog_version("1")).unwrap(),
                     ),

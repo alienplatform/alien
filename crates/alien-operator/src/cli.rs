@@ -78,6 +78,14 @@ pub struct Args {
     #[arg(long, env = "SYNC_TOKEN_FILE")]
     pub sync_token_file: Option<PathBuf>,
 
+    /// One-use component enrollment code; stored daily keys replace it after enrollment.
+    #[arg(long, env = "OPERATOR_ENROLLMENT_CODE_FILE")]
+    pub identity_enrollment_code_file: Option<PathBuf>,
+
+    /// Exact manager audience supplied by installation configuration.
+    #[arg(long, env = "ALIEN_MANAGER_AUDIENCE")]
+    pub manager_audience: Option<String>,
+
     /// Explicit credential replacement revision; zero preserves the stored credential.
     #[arg(long, env = "SYNC_TOKEN_REVISION", default_value_t = 0)]
     pub sync_token_revision: u64,
@@ -197,6 +205,11 @@ pub struct Args {
     /// the image the manager targets.
     #[arg(long, env = "OPERATOR_SELF_UPDATE_DEPLOYMENT")]
     pub self_update_deployment: Option<String>,
+
+    /// Pull Secret of this Operator's own pod. Once enrolled, the Operator
+    /// keeps it filled with its registry pull credential.
+    #[arg(long, env = "OPERATOR_REGISTRY_SECRET")]
+    pub registry_secret: Option<String>,
 
     /// Air-gapped: Secret that bundles write deployment targets into.
     #[arg(long, env = "AIRGAP_TARGET_SECRET")]
@@ -472,7 +485,7 @@ async fn run_operator_cli(
     info!("   Data directory: {}", data_dir);
 
     let encryption_key = load_encryption_key(args.encryption_key_file.as_deref()).await?;
-    let db = crate::db::OperatorDb::new(&data_dir, &encryption_key).await?;
+    let db = std::sync::Arc::new(crate::db::OperatorDb::new(&data_dir, &encryption_key).await?);
 
     let cli_sync_token = load_sync_token(args.sync_token_file.as_deref()).await?;
     let collector_token = load_collector_token(args.collector_token_file.as_deref()).await?;
@@ -521,144 +534,204 @@ async fn run_operator_cli(
         })
         .transpose()?;
 
-    let sync_config = match (effective_sync_url, effective_sync_token) {
-        (Some(sync_url_str), Some(mut sync_token)) => {
-            let sync_url = sync_url_str
-                .parse::<url::Url>()
+    let stored_identity = db.read_daily_identity().await?;
+    let sync_config = if args.identity_enrollment_code_file.is_some()
+        || stored_identity.is_some()
+        || args.manager_audience.is_some()
+    {
+        let manager_url = effective_sync_url
+            .or_else(|| {
+                stored_identity
+                    .as_ref()
+                    .map(|identity| identity.manager_url.clone())
+            })
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: "Component enrollment requires a manager URL".into(),
+                })
+            })?;
+        let audience = args
+            .manager_audience
+            .or_else(|| {
+                stored_identity
+                    .as_ref()
+                    .map(|identity| identity.audience.clone())
+            })
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: "Component enrollment requires the configured manager audience".into(),
+                })
+            })?;
+        let code = load_sync_token(args.identity_enrollment_code_file.as_deref())
+            .await?
+            .unwrap_or_default();
+        let (deployment_id, token) =
+            std::sync::Arc::new(crate::daily_identity::DailyIdentity::new(db.clone())?)
+                .connect(crate::daily_identity::EnrollmentRequest {
+                    manager_url: &manager_url,
+                    audience: &audience,
+                    code: &code,
+                    deployment_id: configured_deployment_id.as_deref(),
+                })
+                .await?;
+        if configured_deployment_id
+            .as_ref()
+            .is_some_and(|expected| expected != &deployment_id)
+        {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: "Enrolled component belongs to another deployment".into(),
+            }));
+        }
+        Some(crate::SyncConfig {
+            url: manager_url
+                .parse()
                 .into_alien_error()
                 .context(ErrorData::ConfigurationError {
-                    message: "Invalid sync URL".to_string(),
-                })?;
+                    message: "Invalid manager URL".into(),
+                })?,
+            token,
+        })
+    } else {
+        match (effective_sync_url, effective_sync_token) {
+            (Some(sync_url_str), Some(mut sync_token)) => {
+                let sync_url = sync_url_str
+                    .parse::<url::Url>()
+                    .into_alien_error()
+                    .context(ErrorData::ConfigurationError {
+                        message: "Invalid sync URL".to_string(),
+                    })?;
 
-            info!("   Sync URL: {}", sync_url);
+                info!("   Sync URL: {}", sync_url);
 
-            match select_startup_deployment_id(
-                db.get_deployment_id().await?,
-                configured_deployment_id,
-                &data_dir,
-            )? {
-                StartupDeploymentId::Stored(stored_deployment_id) => {
-                    info!("   Using stored deployment ID: {}", stored_deployment_id);
-                    if args.sync_token_revision > db.get_sync_token_revision().await? {
-                        // Never consume a registration token as a rotation: initialize would
-                        // otherwise create a new identity before we could reject the response.
-                        if !has_deployment_token_prefix(&sync_token) {
-                            return Err(AlienError::new(ErrorData::ConfigurationError {
+                match select_startup_deployment_id(
+                    db.get_deployment_id().await?,
+                    configured_deployment_id,
+                    &data_dir,
+                )? {
+                    StartupDeploymentId::Stored(stored_deployment_id) => {
+                        info!("   Using stored deployment ID: {}", stored_deployment_id);
+                        if args.sync_token_revision > db.get_sync_token_revision().await? {
+                            // Never consume a registration token as a rotation: initialize would
+                            // otherwise create a new identity before we could reject the response.
+                            if !has_deployment_token_prefix(&sync_token) {
+                                return Err(AlienError::new(ErrorData::ConfigurationError {
                                 message: "Credential rotation requires a deployment-scoped token, not a setup token".to_string(),
                             }));
+                            }
+                            let (verified_id, replacement) = initialize_with_manager(
+                                &sync_url,
+                                &sync_token,
+                                args.platform,
+                                args.base_platform,
+                                args.operator_name.as_deref(),
+                                args.operator_resource_prefix.as_deref(),
+                                args.operator_setup_item.as_deref(),
+                                operator_scope.as_deref(),
+                                operator_permission.as_deref(),
+                                operator_setup_method.as_deref(),
+                                helm_release.as_ref(),
+                                InitialDesiredReleaseArg::None,
+                                &stack_input_values,
+                            )
+                            .await?;
+                            if verified_id != stored_deployment_id || replacement.is_some() {
+                                return Err(AlienError::new(ErrorData::ConfigurationError {
+                                message: "Replacement credential does not belong to the stored deployment; local credentials were not changed".to_string(),
+                            }));
+                            }
+                            db.rotate_sync_token(&sync_token, args.sync_token_revision)
+                                .await?;
+                            info!(
+                                revision = args.sync_token_revision,
+                                "Stored replacement deployment credential"
+                            );
                         }
-                        let (verified_id, replacement) = initialize_with_manager(
-                            &sync_url,
+                        if let Some(stored_sync_token) = db.get_sync_token().await? {
+                            info!("   Using stored deployment-scoped sync token");
+                            sync_token = stored_sync_token;
+                        }
+                    }
+                    StartupDeploymentId::Configured(deployment_id) => {
+                        if args.sync_token_revision > 0 {
+                            return Err(AlienError::new(ErrorData::ConfigurationError {
+                                message: "Credential rotation requires an existing identity volume"
+                                    .to_string(),
+                            }));
+                        }
+                        info!("   Using configured deployment ID: {}", deployment_id);
+                        db.set_deployment_id(&deployment_id).await?;
+                    }
+                    StartupDeploymentId::Initialize => {
+                        if args.sync_token_revision > 0 {
+                            return Err(AlienError::new(ErrorData::ConfigurationError {
+                                message: "Credential rotation requires an existing identity volume"
+                                    .to_string(),
+                            }));
+                        }
+                        info!("   First startup, initializing with manager...");
+
+                        let (initialized_deployment_id, deployment_token) =
+                            initialize_with_manager(
+                                &sync_url,
+                                &sync_token,
+                                args.platform,
+                                args.base_platform,
+                                args.operator_name.as_deref(),
+                                args.operator_resource_prefix.as_deref(),
+                                args.operator_setup_item.as_deref(),
+                                operator_scope.as_deref(),
+                                operator_permission.as_deref(),
+                                operator_setup_method.as_deref(),
+                                helm_release.as_ref(),
+                                args.initial_desired_release,
+                                &stack_input_values,
+                            )
+                            .await?;
+
+                        sync_token = persist_initialized_manager_identity(
+                            &db,
+                            &initialized_deployment_id,
+                            deployment_token,
                             &sync_token,
                             args.platform,
                             args.base_platform,
-                            args.operator_name.as_deref(),
-                            args.operator_resource_prefix.as_deref(),
-                            args.operator_setup_item.as_deref(),
-                            operator_scope.as_deref(),
-                            operator_permission.as_deref(),
-                            operator_setup_method.as_deref(),
-                            helm_release.as_ref(),
-                            InitialDesiredReleaseArg::None,
-                            &stack_input_values,
+                            args.initial_desired_release,
                         )
                         .await?;
-                        if verified_id != stored_deployment_id || replacement.is_some() {
-                            return Err(AlienError::new(ErrorData::ConfigurationError {
-                                message: "Replacement credential does not belong to the stored deployment; local credentials were not changed".to_string(),
-                            }));
-                        }
-                        db.rotate_sync_token(&sync_token, args.sync_token_revision)
-                            .await?;
+
                         info!(
-                            revision = args.sync_token_revision,
-                            "Stored replacement deployment credential"
+                            "   Initialized successfully, deployment ID: {}",
+                            initialized_deployment_id
                         );
                     }
-                    if let Some(stored_sync_token) = db.get_sync_token().await? {
-                        info!("   Using stored deployment-scoped sync token");
-                        sync_token = stored_sync_token;
-                    }
                 }
-                StartupDeploymentId::Configured(deployment_id) => {
-                    if args.sync_token_revision > 0 {
-                        return Err(AlienError::new(ErrorData::ConfigurationError {
-                            message: "Credential rotation requires an existing identity volume"
-                                .to_string(),
-                        }));
-                    }
-                    info!("   Using configured deployment ID: {}", deployment_id);
-                    db.set_deployment_id(&deployment_id).await?;
-                }
-                StartupDeploymentId::Initialize => {
-                    if args.sync_token_revision > 0 {
-                        return Err(AlienError::new(ErrorData::ConfigurationError {
-                            message: "Credential rotation requires an existing identity volume"
-                                .to_string(),
-                        }));
-                    }
-                    info!("   First startup, initializing with manager...");
 
-                    let (initialized_deployment_id, deployment_token) = initialize_with_manager(
-                        &sync_url,
-                        &sync_token,
-                        args.platform,
-                        args.base_platform,
-                        args.operator_name.as_deref(),
-                        args.operator_resource_prefix.as_deref(),
-                        args.operator_setup_item.as_deref(),
-                        operator_scope.as_deref(),
-                        operator_permission.as_deref(),
-                        operator_setup_method.as_deref(),
-                        helm_release.as_ref(),
-                        args.initial_desired_release,
-                        &stack_input_values,
-                    )
-                    .await?;
-
-                    sync_token = persist_initialized_manager_identity(
-                        &db,
-                        &initialized_deployment_id,
-                        deployment_token,
-                        &sync_token,
-                        args.platform,
-                        args.base_platform,
-                        args.initial_desired_release,
-                    )
-                    .await?;
-
-                    info!(
-                        "   Initialized successfully, deployment ID: {}",
-                        initialized_deployment_id
-                    );
-                }
+                Some(crate::SyncConfig {
+                    url: sync_url,
+                    token: sync_token,
+                })
             }
-
-            Some(crate::SyncConfig {
-                url: sync_url,
-                token: sync_token,
-            })
-        }
-        (None, None) => {
-            warn!("   Running in airgapped mode (no sync server connection)");
-            // Air-gapped deployments are registered by the vendor; the bundle
-            // carries the deployment ID the Operator reports under.
-            if db.get_deployment_id().await?.is_none() {
-                if let Some(deployment_id) = &configured_deployment_id {
-                    db.set_deployment_id(deployment_id).await?;
+            (None, None) => {
+                warn!("   Running in airgapped mode (no sync server connection)");
+                // Air-gapped deployments are registered by the vendor; the bundle
+                // carries the deployment ID the Operator reports under.
+                if db.get_deployment_id().await?.is_none() {
+                    if let Some(deployment_id) = &configured_deployment_id {
+                        db.set_deployment_id(deployment_id).await?;
+                    }
                 }
+                None
             }
-            None
-        }
-        (Some(_), None) => {
-            return Err(AlienError::new(ErrorData::ConfigurationError {
-                message: "Sync token is required when sync URL is provided".to_string(),
-            }));
-        }
-        (None, Some(_)) => {
-            return Err(AlienError::new(ErrorData::ConfigurationError {
-                message: "Sync URL is required when sync token is provided".to_string(),
-            }));
+            (Some(_), None) => {
+                return Err(AlienError::new(ErrorData::ConfigurationError {
+                    message: "Sync token is required when sync URL is provided".to_string(),
+                }));
+            }
+            (None, Some(_)) => {
+                return Err(AlienError::new(ErrorData::ConfigurationError {
+                    message: "Sync URL is required when sync token is provided".to_string(),
+                }));
+            }
         }
     };
 
@@ -746,6 +819,7 @@ async fn run_operator_cli(
         .local_debug_enabled(args.enable_local_debug)
         .tunnel_enabled(args.tunnel_enabled)
         .maybe_self_update_deployment(args.self_update_deployment)
+        .maybe_registry_secret(args.registry_secret)
         .maybe_resource_prefix(args.operator_resource_prefix.clone())
         .maybe_airgap_target_secret(args.airgap_target_secret)
         .maybe_airgap_status_secret(args.airgap_status_secret)

@@ -8,6 +8,7 @@ import { Commands } from "./commands.js";
 import { DeploymentGroups } from "./deploymentgroups.js";
 import { Deployments } from "./deployments.js";
 import { Health } from "./health.js";
+import { Identity } from "./identity.js";
 import { Leases } from "./leases.js";
 import { Manager } from "./manager.js";
 import { Releases } from "./releases.js";
@@ -51,6 +52,11 @@ export class AlienManager extends ClientSDK {
   private _vault?: Vault;
   get vault(): Vault {
     return (this._vault ??= new Vault(this._options));
+  }
+
+  private _identity?: Identity;
+  get identity(): Identity {
+    return (this._identity ??= new Identity(this._options));
   }
 
   private _sync?: Sync;

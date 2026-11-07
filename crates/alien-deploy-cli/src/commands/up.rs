@@ -3130,6 +3130,116 @@ platform = "aws"
         initialize.assert_async().await;
     }
 
+    /// The rendered install holds the one-use code, and no deployment token
+    /// reaches the release Secret, its values or the Operator.
+    #[test]
+    fn kubernetes_install_carries_an_enrollment_code_and_no_token() {
+        let stack = Stack::new("orders".to_string()).build();
+        let chart = render_kubernetes_helm_chart(&stack, &StackSettings::default(), "orders-eu")
+            .expect("chart renders");
+        let values = write_kubernetes_helm_values(
+            chart.path(),
+            "https://manager.example.test",
+            &OperatorEnrollment {
+                code: "ax_enroll_fixture",
+                audience: "https://manager.example.test",
+            },
+            "dep_fixture",
+            "orders-eu",
+            "korders",
+            &StackSettings::default(),
+            "ghcr.io/example/operator:1.0.0",
+            None,
+            None,
+        )
+        .expect("values are written");
+        let output = std::process::Command::new("helm")
+            .arg("template")
+            .arg("orders")
+            .arg(chart.path())
+            .arg("-f")
+            .arg(&values)
+            .output()
+            .expect("helm runs");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let documents: Vec<serde_yaml::Value> =
+            serde_yaml::Deserializer::from_str(&String::from_utf8(output.stdout).unwrap())
+                .map(|document| serde_yaml::Value::deserialize(document).unwrap())
+                .filter(|document| !document.is_null())
+                .collect();
+        let of_kind = |kind: &str| {
+            documents
+                .iter()
+                .filter(|document| document["kind"].as_str() == Some(kind))
+                .collect::<Vec<_>>()
+        };
+        // The release Secret holds the code and no token value.
+        let release = of_kind("Secret")
+            .into_iter()
+            .find(|secret| secret["stringData"]["enrollment-code"].is_string())
+            .expect("release Secret with the code");
+        assert_eq!(
+            release["stringData"]["enrollment-code"].as_str(),
+            Some("ax_enroll_fixture")
+        );
+        assert!(release["stringData"]["sync-token"]
+            .as_str()
+            .is_none_or(str::is_empty));
+        // The Operator reads the code from that Secret, and no token file.
+        let operator = of_kind("Deployment")
+            .into_iter()
+            .find(|deployment| {
+                deployment["spec"]["template"]["spec"]["containers"][0]["name"].as_str()
+                    == Some("operator")
+            })
+            .expect("Operator Deployment");
+        let pod = &operator["spec"]["template"]["spec"];
+        let env: Vec<(&str, Option<&str>)> = pod["containers"][0]["env"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|variable| {
+                (
+                    variable["name"].as_str().unwrap(),
+                    variable["value"].as_str(),
+                )
+            })
+            .collect();
+        assert!(env.contains(&(
+            "OPERATOR_ENROLLMENT_CODE_FILE",
+            Some("/etc/deployment/secrets/enrollment-code")
+        )));
+        assert!(env.iter().all(|(name, _)| *name != "SYNC_TOKEN_FILE"));
+        let volume = pod["volumes"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|volume| volume["name"].as_str() == Some("management-token"))
+            .expect("credential volume");
+        assert_eq!(
+            volume["secret"]["secretName"].as_str(),
+            release["metadata"]["name"].as_str()
+        );
+        assert_eq!(
+            volume["secret"]["items"][0]["key"].as_str(),
+            Some("enrollment-code")
+        );
+        // The values file holds no token.
+        let written: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(&values).unwrap()).unwrap();
+        assert!(written["management"]["token"]
+            .as_str()
+            .is_none_or(str::is_empty));
+        assert_eq!(
+            written["management"]["enrollmentCode"].as_str(),
+            Some("ax_enroll_fixture")
+        );
+    }
+
     #[tokio::test]
     async fn kubernetes_initialize_reports_the_helm_release_it_installs() {
         for (flags, expected) in [
@@ -6912,7 +7022,6 @@ async fn run_pull_model(
                 client,
                 args,
                 manager_url,
-                token,
                 deployment_id,
                 deployment_name,
                 stack_settings,
@@ -7178,7 +7287,6 @@ async fn run_kubernetes_pull_model(
     client: &ServerClient,
     args: &UpArgs,
     manager_url: &str,
-    token: &str,
     deployment_id: &str,
     deployment_name: &str,
     stack_settings: &StackSettings,
@@ -7195,11 +7303,28 @@ async fn run_kubernetes_pull_model(
         .clone()
         .unwrap_or_else(|| "ghcr.io/alienplatform/alien-operator:latest".to_string());
 
+    // The Helm values carry a one-hour, one-use code, never a deployment
+    // token. The Operator trades it for its own key on first start.
+    let enrollment = client
+        .issue_enrollment_code()
+        .id(deployment_id)
+        .send()
+        .await
+        .into_sdk_error()
+        .await
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to get an Operator enrollment code from the manager".to_string(),
+        })?
+        .into_inner();
+
     let chart_dir = render_kubernetes_helm_chart(&stack, stack_settings, deployment_name)?;
     let values_file = write_kubernetes_helm_values(
         chart_dir.path(),
         manager_url,
-        token,
+        &OperatorEnrollment {
+            code: &enrollment.code,
+            audience: &enrollment.manager_audience,
+        },
         deployment_id,
         deployment_name,
         &resource_prefix,
@@ -7361,10 +7486,16 @@ fn render_kubernetes_helm_chart(
     Ok(chart_dir)
 }
 
+/// What the Operator needs to enroll with the manager.
+struct OperatorEnrollment<'a> {
+    code: &'a str,
+    audience: &'a str,
+}
+
 fn write_kubernetes_helm_values(
     chart_dir: &Path,
     manager_url: &str,
-    token: &str,
+    enrollment: &OperatorEnrollment<'_>,
     deployment_id: &str,
     deployment_name: &str,
     resource_prefix: &str,
@@ -7379,7 +7510,8 @@ fn write_kubernetes_helm_values(
     helm_settings.deployment_model = DeploymentModel::Pull;
     let values = serde_json::json!({
         "management": {
-            "token": token,
+            "enrollmentCode": enrollment.code,
+            "audience": enrollment.audience,
             "name": deployment_name,
             "url": manager_url,
             "deploymentId": deployment_id,

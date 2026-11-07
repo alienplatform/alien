@@ -1,0 +1,300 @@
+//! Exchange verified component identity for a narrowly scoped runtime credential.
+
+use std::sync::Arc;
+
+use alien_error::AlienError;
+use async_trait::async_trait;
+use axum::{
+    extract::{DefaultBodyLimit, Extension, Path, State},
+    http::HeaderMap,
+    response::{IntoResponse, Response},
+    routing::post,
+    Json, Router,
+};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+use super::runtime_capability::{RuntimeCredentials, RuntimeGrant, RuntimePurpose};
+use crate::{
+    error::ErrorData,
+    routes::{auth, AppState},
+    traits::DeploymentRecord,
+};
+
+/// Proof material is intentionally not Debug: providers must never log it.
+#[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum RuntimeIdentityProof {
+    /// An audience-signed STS GetCallerIdentity request.
+    Aws { presigned_url: String },
+    /// A metadata identity token for this manager's audience.
+    Gcp { id_token: String },
+    /// A bounded parent session; it cannot renew itself.
+    Session { token: String },
+    /// The explicit daily-key exception for enrolled components.
+    DailyKey { key: String },
+}
+
+#[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IdentityExchangeRequest {
+    /// Selects the binding to verify; never establishes membership by itself.
+    pub deployment_id: String,
+    pub purpose: RuntimePurpose,
+    pub proof: RuntimeIdentityProof,
+}
+
+/// A client must durably save the corresponding key before sending this request.
+#[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IdentityEnrollmentRequest {
+    pub code: String,
+    pub initial_key_hash: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IdentityEnrollmentResponse {
+    pub deployment_id: String,
+    pub component_id: String,
+    pub expires_at: DateTime<Utc>,
+    pub revision: u64,
+}
+
+/// A client saves its generated successor before the atomic hash replacement.
+#[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IdentityRotationRequest {
+    pub deployment_id: String,
+    pub key: String,
+    pub successor_hash: String,
+}
+
+/// No successor credential or hash is disclosed to a retired key holder.
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IdentityRotationResponse {
+    pub expires_at: DateTime<Utc>,
+    pub revision: u64,
+}
+
+/// A one-hour, one-use code that enrolls the deployment's operator.
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IssuedEnrollmentCode {
+    pub deployment_id: String,
+    pub code: String,
+    pub expires_at: DateTime<Utc>,
+    /// The audience the operator must use for this manager.
+    pub manager_audience: String,
+}
+
+/// Trusted result of verifying both proof and recorded component membership.
+pub struct VerifiedRuntimeIdentity {
+    pub grant: RuntimeGrant,
+    /// Fixed proof/session authority bound. Replays must not move this deadline.
+    pub authority_deadline: DateTime<Utc>,
+}
+
+/// An embedder supplies its authoritative resource/session lookup here. The
+/// adapter must validate issuer, audience and cloud principal before granting
+/// rights, and fail closed when the principal has no recorded binding.
+#[async_trait]
+pub trait RuntimeIdentityVerifier: Send + Sync {
+    /// Atomically consume a pre-authorized one-use reservation. The implementation
+    /// must restrict it to this manager's currently assigned component.
+    async fn enroll(
+        &self,
+        _request: &IdentityEnrollmentRequest,
+    ) -> Result<IdentityEnrollmentResponse, AlienError> {
+        Err(ErrorData::unauthorized("Enrollment unavailable").into_generic())
+    }
+
+    /// Replace an unexpired current hash by CAS, never returning the winning key.
+    async fn rotate(
+        &self,
+        _request: &IdentityRotationRequest,
+    ) -> Result<IdentityRotationResponse, AlienError> {
+        Err(ErrorData::unauthorized("Rotation unavailable").into_generic())
+    }
+
+    async fn verify(
+        &self,
+        request: &IdentityExchangeRequest,
+        audience: &str,
+    ) -> Result<VerifiedRuntimeIdentity, AlienError>;
+
+    /// Whether `code` is an unexpired enrollment code. Before it enrolls, an
+    /// operator pulls its own image from this manager with the code. This
+    /// never consumes the code. Implementations without codes refuse.
+    async fn enrollment_code_is_live(&self, _code: &str) -> Result<bool, AlienError> {
+        Ok(false)
+    }
+
+    /// Issue a one-hour, one-use enrollment code for this deployment's operator.
+    /// The caller is already authorized to update the deployment.
+    async fn issue_enrollment_code(
+        &self,
+        _deployment: &DeploymentRecord,
+    ) -> Result<(String, DateTime<Utc>), AlienError> {
+        Err(ErrorData::unauthorized("Enrollment unavailable").into_generic())
+    }
+}
+
+/// Mount the exchange with the same issuer used by the runtime auth validator.
+pub fn router(
+    credentials: Arc<RuntimeCredentials>,
+    verifier: Arc<dyn RuntimeIdentityVerifier>,
+) -> Router<AppState> {
+    Router::new()
+        .route("/v1/identity/exchange", post(exchange))
+        .route("/v1/identity/enroll", post(enroll))
+        .route("/v1/identity/rotate", post(rotate))
+        .route(
+            "/v1/deployments/{id}/enrollment-code",
+            post(issue_enrollment_code),
+        )
+        .layer(Extension(credentials))
+        .layer(Extension(verifier))
+        .layer(DefaultBodyLimit::max(16 * 1024))
+}
+
+/// Exchange a verified component proof for one bounded runtime purpose.
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/v1/identity/exchange",
+    operation_id = "exchangeRuntimeIdentity",
+    tag = "identity",
+    request_body = IdentityExchangeRequest,
+    responses(
+        (status = 200, description = "Bounded runtime credential", body = super::runtime_capability::IssuedRuntimeCredential),
+        (status = 401, description = "Identity proof or requested purpose refused"),
+        (status = 503, description = "Identity verification unavailable")
+    )
+))]
+pub async fn exchange(
+    Extension(credentials): Extension<Arc<RuntimeCredentials>>,
+    Extension(verifier): Extension<Arc<dyn RuntimeIdentityVerifier>>,
+    Json(request): Json<IdentityExchangeRequest>,
+) -> Response {
+    let identity = match verifier.verify(&request, credentials.audience()).await {
+        Ok(identity) => identity,
+        Err(error) => {
+            // Provider errors can contain signed URLs or tokens.
+            // Never log or return their source message.
+            return if error.retryable {
+                AlienError::new(ErrorData::AuthenticationUnavailable).into_response()
+            } else {
+                ErrorData::unauthorized("Identity verification failed").into_response()
+            };
+        }
+    };
+    // A verifier cannot accidentally answer a different requested binding
+    // or purpose. Its result still supplies all tenant/component identity.
+    if identity.grant.deployment_id != request.deployment_id
+        || identity.grant.purpose != request.purpose
+    {
+        return ErrorData::unauthorized("Identity does not authorize this request").into_response();
+    }
+    match credentials.issue(identity.grant, identity.authority_deadline) {
+        Ok(issued) => ([(http::header::CACHE_CONTROL, "no-store")], Json(issued)).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+fn credential_result<T: Serialize>(result: Result<T, AlienError>) -> Response {
+    match result {
+        Ok(value) => ([(http::header::CACHE_CONTROL, "no-store")], Json(value)).into_response(),
+        Err(error) if error.retryable => {
+            AlienError::new(ErrorData::AuthenticationUnavailable).into_response()
+        }
+        Err(_) => ErrorData::unauthorized("Component credential refused").into_response(),
+    }
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post, path = "/v1/identity/enroll", operation_id = "enrollRuntimeIdentity", tag = "identity",
+    request_body = IdentityEnrollmentRequest,
+    responses((status = 200, body = IdentityEnrollmentResponse), (status = 401), (status = 503))
+))]
+pub async fn enroll(
+    Extension(verifier): Extension<Arc<dyn RuntimeIdentityVerifier>>,
+    Json(request): Json<IdentityEnrollmentRequest>,
+) -> Response {
+    credential_result(verifier.enroll(&request).await)
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post, path = "/v1/identity/rotate", operation_id = "rotateRuntimeIdentity", tag = "identity",
+    request_body = IdentityRotationRequest,
+    responses((status = 200, body = IdentityRotationResponse), (status = 401), (status = 503))
+))]
+pub async fn rotate(
+    Extension(verifier): Extension<Arc<dyn RuntimeIdentityVerifier>>,
+    Json(request): Json<IdentityRotationRequest>,
+) -> Response {
+    credential_result(verifier.rotate(&request).await)
+}
+
+/// Issue the code that `management.enrollmentCode` carries into a Helm install.
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post, path = "/v1/deployments/{id}/enrollment-code", operation_id = "issueEnrollmentCode",
+    tag = "identity",
+    params(("id" = String, Path, description = "Deployment ID")),
+    responses(
+        (status = 200, body = IssuedEnrollmentCode),
+        (status = 401), (status = 403), (status = 404)
+    )
+))]
+pub async fn issue_enrollment_code(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Extension(credentials): Extension<Arc<RuntimeCredentials>>,
+    Extension(verifier): Extension<Arc<dyn RuntimeIdentityVerifier>>,
+) -> Response {
+    let subject = match auth::require_auth(&state, &headers).await {
+        Ok(subject) => subject,
+        Err(error) => return error.into_response(),
+    };
+    // A runtime capability never mints longer-lived authority.
+    if super::runtime_capability::is_runtime_capability(&subject.bearer_token) {
+        return ErrorData::forbidden("Cannot issue an enrollment code").into_response();
+    }
+    let deployment = match state.deployment_store.get_deployment(&subject, &id).await {
+        Ok(Some(deployment)) => deployment,
+        Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
+        Err(error) => return error.into_response(),
+    };
+    if !state.authz.can_update_deployment(&subject, &deployment) {
+        return ErrorData::forbidden("Cannot issue an enrollment code").into_response();
+    }
+    match verifier.issue_enrollment_code(&deployment).await {
+        Ok((code, expires_at)) => (
+            [(http::header::CACHE_CONTROL, "no-store")],
+            Json(IssuedEnrollmentCode {
+                deployment_id: deployment.id,
+                code,
+                expires_at,
+                manager_audience: credentials.audience().to_owned(),
+            }),
+        )
+            .into_response(),
+        Err(error) if error.retryable => {
+            AlienError::new(ErrorData::AuthenticationUnavailable).into_response()
+        }
+        Err(error) => error.into_response(),
+    }
+}

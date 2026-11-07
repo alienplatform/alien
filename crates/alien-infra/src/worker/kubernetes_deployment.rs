@@ -124,7 +124,7 @@ pub(super) async fn build_worker_deployment(
                 message,
             })
         })?;
-    let pod_spec = PodSpec {
+    let mut pod_spec = PodSpec {
         node_selector,
         service_account_name: Some(service_account_name.to_string()),
         containers: vec![container],
@@ -133,6 +133,13 @@ pub(super) async fn build_worker_deployment(
         ..Default::default()
     };
 
+    if ctx.deployment_config.runtime_identity_audience.is_some() {
+        crate::kubernetes_runtime_credentials::mount(
+            &mut pod_spec,
+            WORKER_CONTAINER_NAME,
+            function_name,
+        )?;
+    }
     Ok(Deployment {
         metadata: ObjectMeta {
             name: Some(function_name.to_string()),

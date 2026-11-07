@@ -20,11 +20,12 @@ alien-error = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tracing = { workspace = true }
-tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt", "time"] }
+tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt", "time", "fs"] }
 reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
 backon = { workspace = true }
 serde_path_to_error = "0.1.17"
 async-trait = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
 quick-xml = { version = "0.41.0", features = ["serialize", "overlapped-lists"] }
 
 [dev-dependencies]

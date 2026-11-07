@@ -530,6 +530,53 @@ impl EnvironmentVariableBuilder {
         }
         self.add_kubernetes_base_platform_env_vars(ctx, &renderer)?;
 
+        if let Some(audience) = &ctx.deployment_config.runtime_identity_audience {
+            let provider = match ctx.platform {
+                alien_core::Platform::Aws => "aws",
+                alien_core::Platform::Gcp => "gcp",
+                alien_core::Platform::Kubernetes => "capabilityFile",
+                // Azure workers keep the legacy telemetry header. Only their image pull changes.
+                alien_core::Platform::Azure => return Ok(self),
+                _ => return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message:
+                        "A parent session is required for runtime identity on this compute target"
+                            .into(),
+                    resource_id: Some(worker_id.into()),
+                })),
+            };
+            let manager_url = ctx.deployment_config.manager_url.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "Runtime identity requires a manager URL".into(),
+                    resource_id: Some(worker_id.into()),
+                })
+            })?;
+            if ctx.platform == alien_core::Platform::Kubernetes {
+                self.env_vars.remove("ALIEN_COMMANDS_TOKEN");
+                if ctx
+                    .desired_stack
+                    .command_targets()
+                    .iter()
+                    .any(|target| target.resource_id == worker_id)
+                {
+                    self.env_vars.insert(
+                        "ALIEN_COMMANDS_CAPABILITY_FILE".into(),
+                        "/var/run/alien-runtime/commands.json".into(),
+                    );
+                }
+                self.env_vars.insert(
+                    "ALIEN_TELEMETRY_CAPABILITY_FILE".into(),
+                    "/var/run/alien-runtime/telemetry.json".into(),
+                );
+            }
+            self.env_vars.remove(alien_core::ENV_ALIEN_RUNTIME_SECRETS);
+            self.env_vars
+                .insert("ALIEN_IDENTITY_PROVIDER".into(), provider.into());
+            self.env_vars
+                .insert("ALIEN_MANAGER_URL".into(), manager_url.clone());
+            self.env_vars
+                .insert("ALIEN_MANAGER_AUDIENCE".into(), audience.clone());
+        }
+
         Ok(self)
     }
 

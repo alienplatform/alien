@@ -76,6 +76,7 @@ fn create_authenticated_client(token: &str) -> crate::error::Result<reqwest::Cli
     headers.insert(USER_AGENT, HeaderValue::from_static("operator"));
 
     reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .default_headers(headers)
         .build()
         .into_alien_error()
@@ -117,12 +118,15 @@ async fn push_telemetry(
             }
         };
 
-        let result = client
-            .post(endpoint)
-            .header("Content-Type", "application/x-protobuf")
-            .body(data.clone())
-            .send()
-            .await;
+        let result = crate::daily_identity::send_manager_request(
+            state,
+            serde_json::json!({"type":"telemetry"}),
+            client
+                .post(endpoint)
+                .header("Content-Type", "application/x-protobuf")
+                .body(data.clone()),
+        )
+        .await;
 
         match result {
             Ok(response) if response.status().is_success() => {
