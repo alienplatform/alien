@@ -11,11 +11,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
+use tracing::warn;
 
 use crate::{
     db::OperatorDb,
     error::{ErrorData, Result},
 };
+
+/// How long after its expiry the manager still rotates the latest daily key,
+/// so an operator survives a manager outage longer than a day.
+pub const ROTATION_GRACE: chrono::Duration = chrono::Duration::days(7);
 
 /// Stored only in the encrypted local database; intentionally not Debug.
 #[derive(Clone, Serialize, Deserialize)]
@@ -289,10 +294,26 @@ impl DailyIdentity {
         if state.pending.is_none() && state.expires_at - now > chrono::Duration::hours(12) {
             return Ok(state.current);
         }
+        // Until the key expires, a manager outage or a failed rotation only
+        // delays the swap. The current key keeps working meanwhile.
+        let keep_current = |state: &DailyIdentityState, error: AlienError<ErrorData>| {
+            if now < state.expires_at {
+                warn!(error = %error, "Daily key rotation failed; using the current key");
+                Ok(state.current.clone())
+            } else {
+                Err(error)
+            }
+        };
         if let Some(pending) = &state.pending {
-            let mut probe = self.client.post(format!("{}/v1/identity/exchange", state.manager_url.trim_end_matches('/')))
+            let probe = self.client.post(format!("{}/v1/identity/exchange", state.manager_url.trim_end_matches('/')))
                 .json(&json!({"deploymentId":state.deployment_id,"purpose":{"type":"telemetry"},"proof":{"type":"dailyKey","key":pending}}))
-                .send().await.map_err(|_| failed("Cannot recover pending component key"))?;
+                .send().await;
+            let mut probe = match probe {
+                Ok(probe) => probe,
+                Err(_) => {
+                    return keep_current(&state, failed("Cannot recover pending component key"))
+                }
+            };
             if probe.status().is_success() {
                 let mut bytes = Vec::new();
                 while let Some(chunk) = probe
@@ -329,10 +350,16 @@ impl DailyIdentity {
                 return Ok(state.current);
             }
             if probe.status().as_u16() != 401 {
-                return Err(failed("Pending component key verification is unavailable"));
+                return keep_current(
+                    &state,
+                    failed("Pending component key verification is unavailable"),
+                );
             }
         } else {
-            if now >= state.expires_at {
+            // After a manager outage the manager still rotates the latest key
+            // for a week past its expiry. Rotation stays one-use, so a copy of
+            // the key still loses the race and is detected.
+            if now >= state.expires_at + ROTATION_GRACE {
                 return Err(failed("Component identity expired; enroll a replacement"));
             }
             state.pending = Some(new_key()?);
@@ -343,7 +370,10 @@ impl DailyIdentity {
             .pending
             .as_ref()
             .ok_or_else(|| failed("Pending key was not saved"))?;
-        let response = self.post(&state, "rotate", json!({"deploymentId":state.deployment_id,"key":state.current,"successorHash":key_hash(pending)})).await?;
+        let response = match self.post(&state, "rotate", json!({"deploymentId":state.deployment_id,"key":state.current,"successorHash":key_hash(pending)})).await {
+            Ok(response) => response,
+            Err(error) => return keep_current(&state, error),
+        };
         state.expires_at = response_expiry(&response)?;
         state.current = pending.clone();
         state.pending = None;
@@ -803,6 +833,32 @@ mod persistence_tests {
         current: Arc<Mutex<String>>,
         codes: Arc<Mutex<std::collections::HashMap<String, Option<String>>>>,
         enrolls: Arc<std::sync::atomic::AtomicUsize>,
+        /// Answer rotations with 503, as during a manager outage.
+        rotate_unavailable: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    /// Rotates the latest key once, like the manager inside its grace week.
+    async fn recovery_rotate(
+        axum::extract::State(manager): axum::extract::State<RecoveryManager>,
+        axum::Json(body): axum::Json<Value>,
+    ) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        if manager
+            .rotate_unavailable
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+        let mut current = manager.current.lock().await;
+        if key_hash(body["key"].as_str().unwrap()) != *current {
+            return axum::http::StatusCode::UNAUTHORIZED.into_response();
+        }
+        *current = body["successorHash"].as_str().unwrap().to_owned();
+        axum::Json(json!({
+            "expiresAt": Utc::now() + chrono::Duration::hours(24),
+            "revision": 3,
+        }))
+        .into_response()
     }
 
     async fn recovery_enroll(
@@ -866,6 +922,7 @@ mod persistence_tests {
                 .into(),
             )),
             enrolls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            rotate_unavailable: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let app = axum::Router::new()
             .route("/v1/identity/enroll", axum::routing::post(recovery_enroll))
@@ -873,6 +930,7 @@ mod persistence_tests {
                 "/v1/identity/exchange",
                 axum::routing::post(recovery_exchange),
             )
+            .route("/v1/identity/rotate", axum::routing::post(recovery_rotate))
             .with_state(manager.clone());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let db = Arc::new(
@@ -947,6 +1005,65 @@ mod persistence_tests {
                 enrolls
             );
         }
+    }
+
+    /// The manager was down for two days, so the key expired. Its key is still
+    /// the latest issued, so the operator rotates it on restart without a new
+    /// code. After the grace week it needs a new code.
+    #[tokio::test]
+    async fn an_operator_rotates_its_expired_key_after_a_manager_outage() {
+        let (db, state, manager, _directory) =
+            recovery_fixture(Utc::now() - chrono::Duration::days(2)).await;
+        *manager.current.lock().await = key_hash(&state.current);
+        let identity = Arc::new(DailyIdentity::new(db.clone()).unwrap());
+        let (_, token) = identity
+            .clone()
+            .connect(request(&state, "ax_enroll_original"))
+            .await
+            .expect("the operator rotates within the grace week");
+        assert_eq!(token, "ax_cap_v1_recovered");
+        assert_eq!(manager.enrolls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let saved = db.read_daily_identity().await.unwrap().unwrap();
+        assert!(saved.current != state.current);
+        assert_eq!(key_hash(&saved.current), *manager.current.lock().await);
+        assert!(saved.expires_at > Utc::now() + chrono::Duration::hours(23));
+
+        let (db, state, manager, _directory) =
+            recovery_fixture(Utc::now() - chrono::Duration::days(8)).await;
+        *manager.current.lock().await = key_hash(&state.current);
+        let identity = Arc::new(DailyIdentity::new(db.clone()).unwrap());
+        assert!(identity
+            .connect(request(&state, "ax_enroll_original"))
+            .await
+            .is_err());
+    }
+
+    /// The manager cannot rotate for hours. The key still has six hours, so
+    /// the operator keeps working with it and does not need a new code.
+    #[tokio::test]
+    async fn a_failed_rotation_does_not_stop_a_key_that_still_works() {
+        let (db, state, manager, _directory) =
+            recovery_fixture(Utc::now() + chrono::Duration::hours(6)).await;
+        *manager.current.lock().await = key_hash(&state.current);
+        manager
+            .rotate_unavailable
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let identity = Arc::new(DailyIdentity::new(db.clone()).unwrap());
+        let (_, token) = identity
+            .clone()
+            .connect(request(&state, "ax_enroll_original"))
+            .await
+            .expect("the current key keeps working");
+        assert_eq!(token, "ax_cap_v1_recovered");
+        // The next rotation succeeds once the manager answers again.
+        manager
+            .rotate_unavailable
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        identity.current_key("manager-one").await.unwrap();
+        let saved = db.read_daily_identity().await.unwrap().unwrap();
+        assert!(saved.current != state.current);
+        assert!(saved.pending.is_none());
+        assert_eq!(key_hash(&saved.current), *manager.current.lock().await);
     }
 
     #[tokio::test]
@@ -1070,7 +1187,9 @@ mod persistence_tests {
         };
         // The server swapped keys but the response was lost: the saved
         // successor is not promoted yet and the old key is not rotated again.
-        assert_eq!(attempt(directory.path().to_owned()).await, (false, true));
+        // The old key has not expired, so this attempt still offers it; the
+        // manager refuses it and the next attempt checks the successor.
+        assert_eq!(attempt(directory.path().to_owned()).await, (true, true));
         assert_eq!(
             fixture.rotations.load(std::sync::atomic::Ordering::SeqCst),
             1
