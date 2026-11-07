@@ -503,3 +503,62 @@ pub(crate) fn push_iam_member(
 fn escape_template_string_body(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::gcp_naming::gcp_service_account_id;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    /// What `terraform console` evaluates `expression` to with `resource_prefix` set.
+    fn evaluate(resource_prefix: &str, expression: &Expression) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let expression = hcl::format::to_string(expression).unwrap();
+        std::fs::write(
+            dir.path().join("main.tf"),
+            format!("locals {{\n  resource_prefix = \"{resource_prefix}\"\n  value = {expression}\n}}\n"),
+        )
+        .unwrap();
+        let mut console = Command::new("terraform")
+            .arg("console")
+            .current_dir(dir.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("terraform should be on PATH");
+        console
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"local.value\n")
+            .unwrap();
+        let output = console.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
+    }
+
+    /// The verifier derives a function's account from `gcp_service_account_id`, so it must
+    /// name the account setup creates, short prefix or long.
+    #[test]
+    fn setup_names_a_service_account_as_gcp_service_account_id_does() {
+        for (resource_prefix, label) in [
+            ("acme-prod", "execution_sa"),
+            ("acme-production-eu", "execution_sa"),
+            ("ab", "reader_sa"),
+            ("acme-prod-x", "verifier"),
+            ("Acme_Prod", "artifact_registry_pull"),
+        ] {
+            assert_eq!(
+                evaluate(resource_prefix, &service_account_id_template(label)),
+                gcp_service_account_id(resource_prefix, label),
+                "{resource_prefix} {label}"
+            );
+        }
+    }
+}

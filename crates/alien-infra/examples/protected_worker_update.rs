@@ -23,6 +23,7 @@
 use std::sync::Arc;
 
 use alien_aws_clients::AwsClientConfigExt as _;
+use alien_core::gcp_naming::gcp_service_account_id;
 use alien_core::import::data::aws::{AwsServiceAccountImportData, AwsWorkerImportData};
 use alien_core::import::data::gcp::{GcpServiceAccountImportData, GcpWorkerImportData};
 use alien_core::import::ImportContext;
@@ -215,7 +216,8 @@ fn imported_state(
                 GcpServiceAccountImportData {
                     project_id: account.to_string(),
                     service_account_email: format!(
-                        "{account_name}@{account}.iam.gserviceaccount.com"
+                        "{}@{account}.iam.gserviceaccount.com",
+                        gcp_service_account_id(prefix, &format!("{PROFILE}-sa"))
                     ),
                     service_account_unique_id: env("EXECUTION_SA_UNIQUE_ID")?,
                     stack_permissions_applied: true,

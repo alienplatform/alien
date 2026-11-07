@@ -4,8 +4,9 @@
 The GCP counterpart of `control_plane.py`. Sets up, as protected setup would, an install named
 `<p>` in --project (all names start with `<p>` and carry --label):
   - an Artifact Registry repository with two worker images (HTTP on 8080) and the verifier's;
-  - the workload's account `<p>-execution-sa`, the verifier's `<p>-verifier`, and a management
-    stand-in `<p>-mgmt` that may read Cloud Run and call the verifier, nothing more;
+  - the workload's account, named as setup names it (`a-<p>-execution-<hash>`), the verifier's
+    `<p>-verifier`, and a management stand-in `<p>-mgmt` that may read Cloud Run and call the
+    verifier, nothing more;
   - the signing settings and ledger in Parameter Manager (`signed-<p>-fingerprint`,
     `signed-<p>-state`), the verifier allowed to list and read them (parameterViewer) and to add
     ledger versions;
@@ -33,6 +34,7 @@ Requires gcloud, crane and Docker, and an access token for a disposable test pro
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import pathlib
@@ -45,6 +47,13 @@ import uuid
 
 def log(message):
     print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
+
+
+def setup_account_id(prefix, name):
+    """The account id setup gives service account `name` (`gcp_service_account_id` in alien-core)."""
+    full = f"{prefix}-{name}".lower().replace("_", "-")
+    start = f"a-{full}"[:21].strip("-")
+    return f"{start}-{hashlib.sha1(full.encode()).hexdigest()[:8]}"
 
 
 class Run:
@@ -61,7 +70,8 @@ class Run:
         self.not_after = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)) \
             .replace(microsecond=0).isoformat()
         self.sa = {name: f"{self.prefix}-{name}@{self.project}.iam.gserviceaccount.com"
-                   for name in ("verifier", "execution-sa", "mgmt")}
+                   for name in ("verifier", "mgmt")}
+        self.sa["execution-sa"] = f"{setup_account_id(self.prefix, 'execution-sa')}@{self.project}.iam.gserviceaccount.com"
         self.results = []
         self.bindings = []
         self.created = []
@@ -150,7 +160,7 @@ class Run:
 
     def accounts(self):
         for name in ("verifier", "execution-sa", "mgmt"):
-            self.gcloud("iam", "service-accounts", "create", f"{self.prefix}-{name}",
+            self.gcloud("iam", "service-accounts", "create", self.sa[name].split("@")[0],
                         f"--display-name={self.prefix} {name}")
             self.created.append(("account", self.sa[name]))
         time.sleep(10)

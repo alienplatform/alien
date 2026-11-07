@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use alien_core::gcp_naming::gcp_service_account_id;
 use alien_error::{AlienError, Context};
 use alien_signing::release::{is_sha256_digest, Runtime, WorkloadKind};
 use alien_signing::{
@@ -193,7 +194,10 @@ impl Place {
         let name = format!("{}-{profile}-sa", self.prefix);
         match &self.install {
             InstallId::Aws { account, .. } => format!("arn:aws:iam::{account}:role/{name}"),
-            InstallId::Gcp { project, .. } => format!("{name}@{project}.iam.gserviceaccount.com"),
+            InstallId::Gcp { project, .. } => format!(
+                "{}@{project}.iam.gserviceaccount.com",
+                gcp_service_account_id(&self.prefix, &format!("{profile}-sa"))
+            ),
             InstallId::Azure {
                 subscription,
                 resource_group,
@@ -573,6 +577,26 @@ pub(crate) mod tests {
             reason.contains("registry credentials are for 'attacker.example.com'"),
             "{reason}"
         );
+    }
+
+    #[test]
+    fn a_gcp_function_runs_as_the_account_setup_creates_for_its_profile() {
+        for (prefix, account) in [
+            ("acme-prod", "a-acme-prod-execution-cd640cda"),
+            ("acme-production-eu", "a-acme-production-eu-7e913b42"),
+        ] {
+            let place = Place {
+                install: alien_signing::InstallId::parse(&format!("gcp:shop-prod:{prefix}"))
+                    .unwrap(),
+                prefix: prefix.to_string(),
+                vpc: None,
+                machine_network: None,
+            };
+            assert_eq!(
+                place.run_as("execution"),
+                format!("{account}@shop-prod.iam.gserviceaccount.com")
+            );
+        }
     }
 
     #[test]
