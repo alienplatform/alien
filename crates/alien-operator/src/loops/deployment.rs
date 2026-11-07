@@ -242,6 +242,7 @@ pub(crate) async fn run_deployment_continuously(
         {
             Some(crate::db::ApprovalStatus::Pending) => {
                 debug!("Target release pending approval, skipping deployment");
+                renew_installed_credentials_or_warn(state).await;
                 return Ok((0, Duration::ZERO));
             }
             Some(crate::db::ApprovalStatus::Rejected) => {
@@ -307,6 +308,7 @@ pub(crate) async fn run_deployment_continuously(
             } => {
                 info!(release_id = %target_release_id, attempt, delay_seconds,
                     "Scheduled automatic retry of failed deployment");
+                renew_installed_credentials_or_warn(state).await;
                 return Ok((0, Duration::ZERO));
             }
             AutomaticRetry::Requested { attempt } => {
@@ -314,7 +316,10 @@ pub(crate) async fn run_deployment_continuously(
                 info!(release_id = %target_release_id, attempt,
                     "Resuming failed deployment from saved checkpoints");
             }
-            AutomaticRetry::Idle => return Ok((0, Duration::ZERO)),
+            AutomaticRetry::Idle => {
+                renew_installed_credentials_or_warn(state).await;
+                return Ok((0, Duration::ZERO));
+            }
         }
     }
     let mut enriched_config = enrich_config(
@@ -481,7 +486,7 @@ pub(super) async fn refresh_installed_deployment(state: &OperatorState) -> Resul
             DeploymentStatus::Running | DeploymentStatus::RefreshFailed
         )
     {
-        return Ok(());
+        return renew_installed_credentials(state).await;
     }
     let Some(release) = current.current_release.as_ref() else {
         return Ok(());
@@ -546,6 +551,66 @@ pub(super) async fn refresh_installed_deployment(state: &OperatorState) -> Resul
     {
         Err(_) if transport.superseded.load(Ordering::Relaxed) => Ok(()),
         result => result.map(|_| ()),
+    }
+}
+
+/// Renew the credential Secrets of the installed workloads when the installed
+/// release cannot be refreshed: an update waits for approval, waits to retry,
+/// or failed. Workloads keep running on their old revision, so their
+/// credentials must not expire meanwhile.
+async fn renew_installed_credentials(state: &OperatorState) -> Result<()> {
+    if !crate::daily_identity::has_runtime_identity(&state.db).await? {
+        return Ok(());
+    }
+    let Some(current) = state.db.get_deployment_state().await? else {
+        return Ok(());
+    };
+    let (Some(stack_state), Some(release)) = (&current.stack_state, &current.current_release)
+    else {
+        return Ok(());
+    };
+    // The stored config belongs to the target. The fields used here (manager
+    // audience, deployment id, cluster) do not change between releases.
+    let Some(config) = state.db.get_deployment_config().await? else {
+        return Ok(());
+    };
+    let config = enrich_config(
+        config,
+        &state.config,
+        current.platform,
+        &state.db,
+        Some(&release.stack),
+    )
+    .await?;
+    let client_config = resolve_client_config(
+        current.platform,
+        config.base_platform.or(state.config.base_platform),
+        &state.config.data_dir,
+        state.config.namespace.clone(),
+        state.config.sync.as_ref(),
+    )
+    .await?;
+    let service_provider = state
+        .service_provider
+        .clone()
+        .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));
+    alien_infra::refresh_installed_credentials(
+        stack_state,
+        &release.stack,
+        &config,
+        client_config,
+        &service_provider,
+    )
+    .await
+    .context(ErrorData::DeploymentFailed {
+        message: "Cannot renew installed workload credentials".to_string(),
+    })
+}
+
+/// A renewal failure never blocks the update work that follows.
+async fn renew_installed_credentials_or_warn(state: &OperatorState) {
+    if let Err(error) = renew_installed_credentials(state).await {
+        tracing::warn!(error = %error, "Cannot renew installed workload credentials");
     }
 }
 

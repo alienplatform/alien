@@ -208,6 +208,112 @@ pub(crate) async fn reconcile(
     Ok(())
 }
 
+/// Renew the credential Secrets of the installed Kubernetes workloads and
+/// republish their command leaf, without changing any workload. The Operator
+/// runs this when it cannot refresh the installed release: an update waits
+/// for approval, runs, or failed. `installed` is the stack the workloads run;
+/// each resource uses the config recorded in `state`.
+pub async fn refresh_installed_credentials(
+    state: &alien_core::StackState,
+    installed: &alien_core::Stack,
+    deployment_config: &alien_core::DeploymentConfig,
+    client_config: alien_core::ClientConfig,
+    service_provider: &std::sync::Arc<dyn crate::core::PlatformServiceProvider>,
+) -> Result<()> {
+    if deployment_config.runtime_identity_audience.is_none() {
+        return Ok(());
+    }
+    let registry = std::sync::Arc::new(crate::core::ResourceRegistry::with_built_ins());
+    let mut first_error = None;
+    for (resource_id, resource) in &state.resources {
+        let Some(internal) = resource.internal_state.as_ref() else {
+            continue;
+        };
+        let installed_workload = match internal.get("type").and_then(|value| value.as_str()) {
+            Some("KubernetesWorkerController") => {
+                serde_json::from_value::<crate::KubernetesWorkerController>(internal.clone())
+                    .ok()
+                    .and_then(|controller| controller.deployment_name.zip(controller.namespace))
+                    .map(|names| (names, CommandTargetType::Worker))
+            }
+            Some("KubernetesContainerController") => {
+                serde_json::from_value::<crate::KubernetesContainerController>(internal.clone())
+                    .ok()
+                    .and_then(|controller| controller.workload_name.zip(controller.namespace))
+                    .map(|names| (names, CommandTargetType::Container))
+            }
+            Some("KubernetesDaemonController") => {
+                serde_json::from_value::<crate::KubernetesDaemonController>(internal.clone())
+                    .ok()
+                    .and_then(|controller| controller.daemon_set_name.zip(controller.namespace))
+                    .map(|names| (names, CommandTargetType::Daemon))
+            }
+            _ => None,
+        };
+        let Some(((workload_name, namespace), target_type)) = installed_workload else {
+            continue;
+        };
+        let ctx = ResourceControllerContext {
+            desired_config: &resource.config,
+            platform: alien_core::Platform::Kubernetes,
+            client_config: client_config.clone(),
+            state,
+            resource_prefix: &state.resource_prefix,
+            registry: &registry,
+            desired_stack: installed,
+            service_provider,
+            deployment_config,
+            initial_setup_authority: Default::default(),
+            heartbeat_collector: Default::default(),
+        };
+        let image = resource
+            .config
+            .downcast_ref::<alien_core::Worker>()
+            .and_then(|worker| match &worker.code {
+                alien_core::WorkerCode::Image { image } => Some(image.clone()),
+                _ => None,
+            })
+            .or_else(|| {
+                resource
+                    .config
+                    .downcast_ref::<alien_core::Container>()
+                    .and_then(|container| match &container.code {
+                        alien_core::ContainerCode::Image { image } => Some(image.clone()),
+                        _ => None,
+                    })
+            })
+            .or_else(|| {
+                resource
+                    .config
+                    .downcast_ref::<alien_core::Daemon>()
+                    .and_then(|daemon| match &daemon.code {
+                        alien_core::DaemonCode::Image { image } => Some(image.clone()),
+                        _ => None,
+                    })
+            });
+        let result = async {
+            reconcile(&ctx, &namespace, &workload_name, resource_id, target_type).await?;
+            if let Some(image) = &image {
+                crate::kubernetes_registry::refresh_pull_secret(
+                    &ctx,
+                    &namespace,
+                    &workload_name,
+                    resource_id,
+                    image,
+                )
+                .await?;
+            }
+            Ok::<_, AlienError<ErrorData>>(())
+        }
+        .await;
+        // One workload's failure does not stop the others from renewing.
+        if let Err(error) = result {
+            first_error.get_or_insert(error);
+        }
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
 fn validate_credential(credential: &RuntimeCapability, resource_id: &str) -> Result<()> {
     let now = chrono::Utc::now();
     if credential.token.is_empty()
@@ -441,4 +547,135 @@ mod tests {
             "ax_cap_v1_renewed"
         );
     }
+
+    /// While an update waits or failed, the Operator cannot refresh the
+    /// installed release. The credentials-only pass still renews the Secret of
+    /// every installed workload, and leaves other resources alone.
+    #[cfg(feature = "test-utils")]
+    #[tokio::test]
+    async fn installed_workloads_are_renewed_without_a_refresh() {
+        let issued = Arc::new(Mutex::new(vec![
+            capability("ax_cap_v1_renewed", 60),
+            capability("ax_cap_v1_first", 30),
+        ]));
+        let mut provider = MockPlatformServiceProvider::new();
+        let queue = issued.clone();
+        provider
+            .expect_runtime_credential()
+            .withf(|deployment, purpose| {
+                deployment == "dep-1" && purpose == &json!({"type":"telemetry"})
+            })
+            .times(2)
+            .returning(move |_, _| Ok(queue.lock().unwrap().pop().unwrap()));
+        let live: Arc<Mutex<Option<Secret>>> = Arc::new(Mutex::new(None));
+        let mut secrets = MockSecretsApi::new();
+        let created = live.clone();
+        secrets.expect_create_secret().returning(move |namespace, secret| {
+            assert_eq!(namespace, "agents");
+            assert_eq!(secret.metadata.name.as_deref(), Some("agent-deploy-runtime"));
+            let mut live = created.lock().unwrap();
+            if live.is_some() {
+                return Err(AlienError::new(ClientError::RemoteResourceConflict {
+                    resource_type: "Secret".into(),
+                    resource_name: "agent-deploy-runtime".into(),
+                    message: "exists".into(),
+                }));
+            }
+            let mut stored = secret.clone();
+            stored.metadata.resource_version = Some("1".into());
+            *live = Some(stored.clone());
+            Ok(stored)
+        });
+        let read = live.clone();
+        secrets
+            .expect_get_secret()
+            .returning(move |_, _| Ok(read.lock().unwrap().clone().unwrap()));
+        let updated = live.clone();
+        secrets
+            .expect_update_secret()
+            .returning(move |_, _, secret| {
+                *updated.lock().unwrap() = Some(secret.clone());
+                Ok(secret.clone())
+            });
+        let secrets: Arc<dyn SecretsApi> = Arc::new(secrets);
+        provider
+            .expect_get_kubernetes_secrets_client()
+            .returning(move |_| Ok(secrets.clone()));
+        let provider: Arc<dyn crate::core::PlatformServiceProvider> = Arc::new(provider);
+
+        let mut harness = KubernetesManifestTestHarness::new(
+            Resource::new(Vault::new("unused".to_string()).build()),
+            vec![EnvironmentVariable {
+                name: ENV_ALIEN_DEPLOYMENT_ID.into(),
+                value: "dep-1".into(),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: None,
+            }],
+        );
+        harness.deployment_config_mut().runtime_identity_audience =
+            Some("https://manager.example".into());
+        let (deployment_config, client_config) = {
+            let ctx = harness.ctx();
+            (ctx.deployment_config.clone(), ctx.client_config.clone())
+        };
+
+        let worker = alien_core::Worker::new("agent".into())
+            .code(alien_core::WorkerCode::Image {
+                image: "example.test/agent:1".into(),
+            })
+            .permissions("default".into())
+            .build();
+        let installed = alien_core::Stack::new("app".into())
+            .add(worker.clone(), alien_core::ResourceLifecycle::Live)
+            .add(Vault::new("files".into()).build(), alien_core::ResourceLifecycle::Frozen)
+            .build();
+        let mut state = alien_core::StackState::new(alien_core::Platform::Kubernetes);
+        state.resources.insert(
+            "agent".into(),
+            alien_core::StackResourceState::builder()
+                .resource_type("worker".to_string())
+                .status(alien_core::ResourceStatus::Running)
+                .config(Resource::new(worker))
+                .internal_state({
+                    // Stored controller state carries its type, as the executor writes it.
+                    let mut internal = serde_json::to_value(
+                        crate::KubernetesWorkerController::mock_ready("agent-deploy", "agents"),
+                    )
+                    .unwrap();
+                    internal["type"] = json!("KubernetesWorkerController");
+                    internal
+                })
+                .build(),
+        );
+        state.resources.insert(
+            "files".into(),
+            alien_core::StackResourceState::builder()
+                .resource_type("vault".to_string())
+                .status(alien_core::ResourceStatus::Running)
+                .config(Resource::new(Vault::new("files".into()).build()))
+                .internal_state(json!({"type": "KubernetesVaultController"}))
+                .build(),
+        );
+
+        let pass = || {
+            refresh_installed_credentials(
+                &state,
+                &installed,
+                &deployment_config,
+                client_config.clone(),
+                &provider,
+            )
+        };
+        pass().await.unwrap();
+        assert_eq!(
+            telemetry(live.lock().unwrap().as_ref().unwrap()).token,
+            "ax_cap_v1_first"
+        );
+        pass().await.unwrap();
+        assert_eq!(
+            telemetry(live.lock().unwrap().as_ref().unwrap()).token,
+            "ax_cap_v1_renewed"
+        );
+    }
+
 }
