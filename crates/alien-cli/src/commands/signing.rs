@@ -602,10 +602,11 @@ async fn list(ctx: &ExecutionMode, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn remove(ctx: &ExecutionMode, name: &str) -> Result<()> {
-    let admin = admin(ctx).await?;
-    let list = admin.chain.current();
-    let mut body = list.body.clone();
+/// The device list without `name`. Refused when no admin but the recovery key would be left:
+/// every later device change would then need the recovery code, which is for a lost device,
+/// not for a removal.
+fn without_signer(current: &SignerListBody, name: &str) -> Result<SignerListBody> {
+    let mut body = current.clone();
     let before = body.signers.len();
     body.signers.retain(|signer| signer.id != name);
     if body.signers.len() == before {
@@ -614,19 +615,31 @@ async fn remove(ctx: &ExecutionMode, name: &str) -> Result<()> {
             message: format!("No trusted device is named '{name}'; see `alien devices list`"),
         }));
     }
-    let admins = body
-        .signers
-        .iter()
-        .filter(|signer| signer.roles.contains(&Role::Admin))
-        .count();
-    if admins == 0 {
+    let admins = |signers: &[Signer], recovery: bool| {
+        signers
+            .iter()
+            .filter(|signer| {
+                signer.roles.contains(&Role::Admin)
+                    && (recovery || signer.kind != SignerKind::Recovery)
+            })
+            .count()
+    };
+    if admins(&body.signers, false) == 0 {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "name".to_string(),
-            message: format!("'{name}' is the last admin; nobody could change the devices after"),
+            message: format!(
+                "'{name}' is the last admin device; only the recovery code could change the devices after. Add another admin first (`alien devices pair`)"
+            ),
         }));
     }
-    body.admin_threshold = body.admin_threshold.min(admins as u32);
+    body.admin_threshold = body.admin_threshold.min(admins(&body.signers, true) as u32);
     body.recovered = false;
+    Ok(body)
+}
+
+async fn remove(ctx: &ExecutionMode, name: &str) -> Result<()> {
+    let admin = admin(ctx).await?;
+    let body = without_signer(&admin.chain.current().body, name)?;
     println!(
         "Removing {name} from the devices of {}.",
         admin.chain.project()
@@ -1625,6 +1638,32 @@ mod tests {
             roles,
             label: Some(format!("{id}@example.com")),
         }
+    }
+
+    #[test]
+    fn the_last_admin_device_is_not_removed_while_only_the_recovery_key_would_be_left() {
+        let mut recovery = signer(RECOVERY_SIGNER, 9, vec![Role::Admin]);
+        recovery.kind = SignerKind::Recovery;
+        let alice = signer("alice", 1, vec![Role::Admin, Role::Release]);
+        let ci = signer("github-acme-app", 2, vec![Role::Release]);
+        let list = body(vec![alice.clone(), ci.clone(), recovery.clone()]);
+        let error = without_signer(&list, "alice").expect_err("alice is the last admin device");
+        assert!(
+            error.message.contains("'alice' is the last admin device"),
+            "{}",
+            error.message
+        );
+
+        // With another admin device, alice may go; the recovery key stays.
+        let bob = signer("bob", 3, vec![Role::Admin]);
+        let mut list = body(vec![alice, bob.clone(), ci.clone(), recovery.clone()]);
+        list.admin_threshold = 2;
+        let next = without_signer(&list, "alice").unwrap();
+        assert_eq!(next.signers, vec![bob, ci, recovery]);
+        assert_eq!(
+            next.admin_threshold, 2,
+            "bob and the recovery key still make two"
+        );
     }
 
     fn body(signers: Vec<Signer>) -> SignerListBody {
