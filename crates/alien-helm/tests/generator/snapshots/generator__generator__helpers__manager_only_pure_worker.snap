@@ -1275,6 +1275,9 @@ stringData:
   {{- if $createManagementSecret }}
   {{- if .Values.management.enrollmentCode }}
   enrollment-code: {{ .Values.management.enrollmentCode | quote }}
+  {{- /* Blank the token an earlier install stored. On upgrade Helm drops the
+  old stringData key, but the Secret keeps its stored value. */}}
+  sync-token: ""
   {{- else }}
   sync-token: {{ .Values.management.token | quote }}
   {{- end }}
