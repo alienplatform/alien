@@ -294,16 +294,26 @@ pub fn plan_compute_with_state(
                     })
                 });
         }
+        // The machines the workloads need, within the fleet a generated pool offers. The
+        // rolling-update machine is left out: it sits empty between releases.
+        let workload_machines = if group.generated {
+            group
+                .scale
+                .default_max_size()
+                .min(GENERATED_POOL_MAX_MACHINES)
+        } else {
+            group.scale.default_max_size()
+        };
         if group.generated {
             group.scale = generated_pool_scale_policy(
                 group.scale.default_min_size(),
-                group.scale.default_max_size(),
+                workload_machines + group.rolling_update_machines,
                 selected.map(ComputePoolSelection::max_size),
             );
         }
         let machines = selected
             .map(ComputePoolSelection::max_size)
-            .unwrap_or(group.scale.default_max_size())
+            .unwrap_or(workload_machines)
             .max(1);
         let mut sizing = requirements.clone();
         // A bounded fleet must fit total demand as well as its largest replica.
@@ -474,6 +484,9 @@ struct PlannedGroup {
     /// No capacity group in the source declares this pool. Its scale is the
     /// planner's recommendation, not a bound the developer chose.
     generated: bool,
+    /// Machines a generated pool's default max adds on top of its workloads, so a rolling
+    /// update has room to start a new replica before stopping the old one.
+    rolling_update_machines: u32,
 }
 
 /// Machine count up to which a setup offers choices for a pool the source does not declare.
@@ -592,6 +605,10 @@ fn collect_workload_groups(stack: &Stack) -> Result<HashMap<String, PlannedGroup
             .any(|workload| workload.requires_failure_domain);
         let min_size = default_min_machines(&requirements);
         let max_size = default_max_machines(&requirements);
+        // A replicated container's rolling update starts the new replica before it stops the
+        // old one. A stateful container replaces in place (its volume has one owner) and a
+        // daemon runs one replica per machine, so neither needs room for an extra replica.
+        let rolling_update_machines = u32::from(workloads.iter().any(|w| w.starts_before_stop));
         planned.insert(
             pool_id,
             PlannedGroup {
@@ -602,6 +619,7 @@ fn collect_workload_groups(stack: &Stack) -> Result<HashMap<String, PlannedGroup
                 requirements,
                 requires_failure_domain,
                 generated: true,
+                rolling_update_machines,
             },
         );
     }
@@ -652,6 +670,7 @@ fn merge_explicit_compute_groups(
                     requirements: explicit_requirements,
                     requires_failure_domain: false,
                     generated: false,
+                    rolling_update_machines: 0,
                 });
         }
     }
@@ -917,6 +936,8 @@ struct Workload {
     ephemeral_storage_bytes: u64,
     gpu: Option<GpuSpec>,
     requires_failure_domain: bool,
+    /// A rolling update starts a new replica before it stops an old one.
+    starts_before_stop: bool,
 }
 
 impl Workload {
@@ -962,6 +983,7 @@ impl Workload {
                 count: gpu.count,
             }),
             requires_failure_domain: container.stateful && container.persistent_storage.is_some(),
+            starts_before_stop: !container.stateful,
         })
     }
 
@@ -975,6 +997,7 @@ impl Workload {
             ephemeral_storage_bytes: 0,
             gpu: None,
             requires_failure_domain: false,
+            starts_before_stop: false,
         })
     }
 }
@@ -2840,36 +2863,114 @@ mod tests {
             max_http_p95_latency_ms: None,
         });
 
+        // Three replicas at most, one machine each, plus one for a rolling update.
         let plan = plan_compute(&stack, Platform::Aws, None).expect("plan should build");
         let pool = &plan.pools[0];
         assert_eq!(
             pool.scale,
             CapacityGroupScalePolicy::Autoscale {
                 min: range(1, 100, 1),
-                max: range(1, 100, 3),
+                max: range(1, 100, 4),
             }
         );
         assert_eq!(
             (pool.recommended.min_size(), pool.recommended.max_size()),
-            (1, 3)
+            (1, 4)
         );
+        assert!(pool.errors.is_empty());
+    }
 
-        // Workloads that never scale get a fixed recommendation, but either mode stays
-        // allowed: replica counts change between releases while the saved choice stays.
+    /// A one-replica container fills its one machine, so a release has nowhere to start the
+    /// new replica before stopping the old one. The default pool autoscales 1-2 so it can, on
+    /// the same machine type: the extra machine is only there during a release.
+    #[test]
+    fn generated_pool_has_room_to_start_a_new_replica_before_stopping_the_old_one() {
         let plan =
             plan_compute(&stack_with_container(), Platform::Aws, None).expect("plan should build");
+        let pool = &plan.pools[0];
         assert_eq!(
-            plan.pools[0].scale,
+            pool.scale,
             CapacityGroupScalePolicy::Autoscale {
                 min: range(1, 100, 1),
-                max: range(1, 100, 1),
+                max: range(1, 100, 2),
             }
         );
+        assert_eq!(
+            (pool.recommended.min_size(), pool.recommended.max_size()),
+            (1, 2)
+        );
         assert!(matches!(
-            plan.pools[0].recommended,
+            pool.recommended,
+            ComputePoolSelection::Autoscale { .. }
+        ));
+        assert!(pool.errors.is_empty());
+
+        // A stateful container replaces in place, so its pool gets no extra machine.
+        let mut stateful = stack_with_container();
+        stateful
+            .resources
+            .get_mut("api")
+            .and_then(|entry| entry.config.downcast_mut::<Container>())
+            .expect("test stack should contain a container")
+            .stateful = true;
+        let stateful_plan =
+            plan_compute(&stateful, Platform::Aws, None).expect("plan should build");
+        let stateful_pool = &stateful_plan.pools[0];
+        assert!(matches!(
+            stateful_pool.recommended,
             ComputePoolSelection::Fixed { machines: 1, .. }
         ));
-        assert!(plan.pools[0].errors.is_empty());
+
+        // The extra machine doesn't change the machine type: both pools fit one replica per
+        // machine on the same type.
+        assert!(pool.recommended.machine().is_some());
+        assert_eq!(
+            pool.recommended.machine(),
+            stateful_pool.recommended.machine()
+        );
+
+        // A saved choice is the installer's cost bound and stays as chosen.
+        let saved = ComputeSettings {
+            containers: Default::default(),
+            pools: [(
+                "general".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 1,
+                    machine: pool.recommended.machine().map(str::to_string),
+                    failure_domains: None,
+                    data_disk_gib: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let saved_plan = plan_compute(&stack_with_container(), Platform::Aws, Some(&saved))
+            .expect("plan should build");
+        assert_eq!(
+            (
+                saved_plan.pools[0].selected.min_size(),
+                saved_plan.pools[0].selected.max_size()
+            ),
+            (1, 1)
+        );
+    }
+
+    /// A pool larger than the offered machine count is sized onto bigger machines, so the
+    /// offered fleet still holds it. The rolling-update machine doesn't change that.
+    #[test]
+    fn generated_pool_beyond_the_offered_fleet_is_sized_to_fit_it() {
+        let mut stack = stack_with_container();
+        stack
+            .resources
+            .get_mut("api")
+            .and_then(|entry| entry.config.downcast_mut::<Container>())
+            .expect("test stack should contain a container")
+            .replicas = Some(400);
+
+        let plan = plan_compute(&stack, Platform::Aws, None).expect("plan should build");
+        let pool = &plan.pools[0];
+        assert!(pool.errors.is_empty(), "{:?}", pool.errors);
+        assert_eq!(pool.recommended.max_size(), GENERATED_POOL_MAX_MACHINES);
     }
 
     #[test]

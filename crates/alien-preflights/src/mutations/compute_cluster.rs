@@ -3184,8 +3184,8 @@ mod tests {
         let recommended = plan.pools[0].recommended.clone();
         assert_eq!(
             (recommended.min_size(), recommended.max_size()),
-            (1, 2),
-            "fixture should recommend autoscale 1-2"
+            (1, 3),
+            "fixture should recommend autoscale 1-3: two workload machines and one for a release"
         );
         let machine = recommended.machine().map(ToString::to_string);
 

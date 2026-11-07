@@ -379,6 +379,18 @@ pub fn is_transient_json_error(error: &AlienError<ErrorData>) -> bool {
     }
 }
 
+/// Whether a query-protocol (XML) read failed for a reason that may pass: throttling, a 5xx or
+/// a transport error. A 4xx answer (denied, not found, invalid) is final, so a caller probing for
+/// an object that does not exist gets its answer at once instead of after the full back-off.
+pub fn is_transient_xml_error(error: &AlienError<ErrorData>) -> bool {
+    match &error.error {
+        Some(ErrorData::HttpResponseError { http_status, .. }) => {
+            *http_status >= 500 || is_throttling(error)
+        }
+        _ => error.retryable,
+    }
+}
+
 /// Sign, retry and deserialize an XML response into `T`.
 pub async fn sign_send_xml<T: DeserializeOwned + Send + 'static>(
     builder: RequestBuilder,

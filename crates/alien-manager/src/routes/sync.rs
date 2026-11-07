@@ -1020,10 +1020,9 @@ mod tests {
         agent_report_completes_claim, build_target_deployment_config, deployment_needs_target,
         deployment_state_from_record, deployment_target_release_id, management_platform,
         may_deliver_agent_target, preserve_recorded_gate_answers, release_stack_platform,
-        resolve_pull_input_environment, should_ignore_agent_state_report,
-        should_return_current_state_for_agent_sync, validate_kubernetes_base_platform,
-        AgentSyncRequest, AgentSyncWireRequest, HelmRelease, InitialDesiredRelease,
-        InitializeRequest, ReconcileRequest, RunnerConfigSources,
+        should_ignore_agent_state_report, should_return_current_state_for_agent_sync,
+        validate_kubernetes_base_platform, AgentSyncRequest, AgentSyncWireRequest, HelmRelease,
+        InitialDesiredRelease, InitializeRequest, ReconcileRequest, RunnerConfigSources,
     };
 
     #[tokio::test]
@@ -2730,7 +2729,8 @@ mod tests {
             target_resources: None,
         };
         deployment.user_environment_variables = Some(vec![variable.clone()]);
-        let resolved = resolve_pull_input_environment(&stack, &deployment).unwrap();
+        let resolved =
+            crate::loops::deployment::resolve_input_environment(&stack, &deployment).unwrap();
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].name, variable.name);
         assert_eq!(resolved[0].value, variable.value);
@@ -3619,42 +3619,6 @@ fn remove_container_tunnels(stack: &mut alien_core::Stack) -> bool {
     removed
 }
 
-fn resolve_pull_input_environment(
-    stack: &alien_core::Stack,
-    deployment: &DeploymentRecord,
-) -> alien_core::Result<Vec<EnvironmentVariable>> {
-    let mut env_vars: Vec<EnvironmentVariable> = deployment
-        .user_environment_variables
-        .clone()
-        .unwrap_or_default();
-    // Inputs mapped to environment variables resolve against the
-    // target release, so a release that adds a mapped input takes
-    // effect without re-onboarding. Variables the deployment already
-    // carries win: embedders that resolve inputs themselves (into the
-    // deployment's variables) keep their values, and those mappings aren't
-    // resolved a second time. An input's other mappings still apply.
-    let unresolved_inputs: Vec<_> = stack
-        .inputs
-        .iter()
-        .map(|input| {
-            let mut input = input.clone();
-            input.env.retain(|mapping| {
-                !env_vars
-                    .iter()
-                    .any(|existing| existing.name == mapping.name)
-            });
-            input
-        })
-        .collect();
-    let input_env = alien_core::resolve_stack_input_environment_variables(
-        &unresolved_inputs,
-        &deployment.input_values,
-        deployment.platform,
-    )?;
-    env_vars.extend(input_env);
-    Ok(env_vars)
-}
-
 /// The management identity a pull deployment's target renders with; see
 /// [`crate::loops::deployment::resolve_deployment_management_config`] and
 /// [`ManagementRenderer::PullTarget`].
@@ -3718,7 +3682,7 @@ pub(crate) async fn build_pull_target(
         );
     }
 
-    let env_vars = match resolve_pull_input_environment(&stack, deployment) {
+    let env_vars = match crate::loops::deployment::resolve_input_environment(&stack, deployment) {
         Ok(variables) => variables,
         Err(error) => {
             return Err(ErrorData::bad_request(format!(

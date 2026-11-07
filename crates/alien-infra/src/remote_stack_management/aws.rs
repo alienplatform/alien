@@ -17,11 +17,17 @@ use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use alien_permissions::{
     generators::{
-        ensure_unique_statement_sids, AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator,
+        ensure_unique_statement_sids, pack_managed_policy_statements, AwsIamPolicy,
+        AwsIamStatement, AwsRuntimePermissionsGenerator, MAX_ATTACHED_MANAGEMENT_POLICIES,
+        MAX_MANAGED_POLICY_BYTES,
     },
     get_permission_set, BindingTarget, PermissionContext,
 };
 use chrono::Utc;
+
+fn permissions_boundary_name(prefix: &str) -> String {
+    format!("{prefix}-deployment-management-boundary")
+}
 
 /// Generates the AWS IAM role name for RemoteStackManagement.
 pub(crate) fn aws_management_role_name(prefix: &str) -> String {
@@ -30,8 +36,13 @@ pub(crate) fn aws_management_role_name(prefix: &str) -> String {
 
 const LEGACY_INLINE_POLICY_NAME: &str = "alien-management-policy";
 const MANAGED_POLICY_BASE_NAME: &str = "deployment-management";
-const MAX_MANAGED_POLICY_BYTES: usize = 5_500;
 const IAM_POLICY_NAME_MAX_LEN: usize = 128;
+/// Stale numbered management policies are looked for at every index below this, even past a
+/// missing one. Earlier releases detached and deleted stale policies one at a time, so an
+/// interrupted cleanup there can leave a gap with a detached policy above it. None of those
+/// releases created more than 22 numbered policies, and this code creates at most
+/// [`MAX_ATTACHED_MANAGEMENT_POLICIES`].
+const NUMBERED_POLICY_SCAN_END: usize = 32;
 
 #[controller]
 pub struct AwsRemoteStackManagementController {
@@ -85,6 +96,9 @@ impl AwsRemoteStackManagementController {
                 resource_id: Some(config.id.clone()),
             }))?;
         let managing_role_arn = &aws_management.managing_role_arn;
+
+        // Fail before the first IAM write if the grant can't fit the role.
+        self.planned_management_policy_documents(ctx, &role_name)?;
 
         let assume_role_policy = Self::generate_cross_account_trust_policy(managing_role_arn);
 
@@ -153,36 +167,25 @@ impl AwsRemoteStackManagementController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        let role_name = self.role_name.clone().unwrap();
+        let policy_documents = self.planned_management_policy_documents(ctx, &role_name)?;
         self.install_permissions_boundary(ctx).await?;
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
-        let role_name = self.role_name.as_ref().unwrap();
+        let role_name = &role_name;
 
         info!(
             role_name = %role_name,
             "Applying management permission sets to cross-account IAM role"
         );
 
-        let policy_documents = self.generate_management_policy_documents(ctx)?;
-
-        if !policy_documents.is_empty() {
-            self.apply_management_policy_documents(
-                ctx,
-                client.as_ref(),
-                role_name,
-                &policy_documents,
-            )
+        // Never empty: the grant always lets the role read itself.
+        self.apply_management_policy_documents(ctx, client.as_ref(), role_name, &policy_documents)
             .await?;
-            info!(
-                role_name = %role_name,
-                "Management permissions applied successfully"
-            );
-        } else {
-            info!(
-                role_name = %role_name,
-                "No management permissions to apply"
-            );
-        }
+        info!(
+            role_name = %role_name,
+            "Management permissions applied successfully"
+        );
 
         self.management_permissions_applied = true;
         self.management_permissions_revision = super::management_permissions_revision(ctx)?;
@@ -248,35 +251,26 @@ impl AwsRemoteStackManagementController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        let role_name = self.role_name.clone().unwrap();
+        let policy_documents = self.planned_management_policy_documents(ctx, &role_name)?;
         self.install_permissions_boundary(ctx).await?;
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
-        let role_name = self.role_name.as_ref().unwrap();
+        let role_name = &role_name;
 
         info!(
             role_name = %role_name,
             "Updating cross-account management IAM role policies"
         );
 
-        let policy_documents = self.generate_management_policy_documents(ctx)?;
-
-        if !policy_documents.is_empty() {
-            self.apply_management_policy_documents(
-                ctx,
-                client.as_ref(),
-                role_name,
-                &policy_documents,
-            )
+        // Never empty: the grant always lets the role read itself.
+        self.apply_management_policy_documents(ctx, client.as_ref(), role_name, &policy_documents)
             .await?;
 
-            info!(
-                role_name = %role_name,
-                "Cross-account management IAM role policies updated successfully"
-            );
-        } else {
-            self.reconcile_owned_management_policies(ctx, client.as_ref(), role_name, &[])
-                .await?;
-        }
+        info!(
+            role_name = %role_name,
+            "Cross-account management IAM role policies updated successfully"
+        );
         self.management_permissions_revision = super::management_permissions_revision(ctx)?;
 
         Ok(HandlerAction::Continue {
@@ -374,6 +368,11 @@ impl AwsRemoteStackManagementController {
                 }
             }
         }
+
+        // Numbered policies an interrupted setup or update created or detached are no longer
+        // attached, so the role's list above doesn't show them.
+        self.delete_stale_management_policies(ctx, client.as_ref(), 0)
+            .await?;
 
         // Step 2: List and delete all inline policies
         match client.list_role_policies(role_name).await {
@@ -663,7 +662,7 @@ impl AwsRemoteStackManagementController {
         let mut context = self.permission_context(ctx)?;
         context.aws_permissions_boundary_arn = Some(self.management_policy_arn(
             &ctx.get_aws_config()?.account_id,
-            &format!("{}-deployment-management-boundary", ctx.resource_prefix),
+            &permissions_boundary_name(ctx.resource_prefix),
         ));
         aws_permissions_boundary_for_stack(ctx.desired_stack, ctx.state, &context)
     }
@@ -685,7 +684,7 @@ impl AwsRemoteStackManagementController {
             return Ok(());
         }
         let aws = ctx.get_aws_config()?;
-        let name = format!("{}-deployment-management-boundary", ctx.resource_prefix);
+        let name = permissions_boundary_name(ctx.resource_prefix);
         let arn = self.management_policy_arn(&aws.account_id, &name);
         let serialized = serde_json::to_string(&document)
             .into_alien_error()
@@ -744,10 +743,14 @@ impl AwsRemoteStackManagementController {
                         self.permissions_boundary_arn = None;
                         Err(not_owned())
                     }
-                    None => Err(AlienError::new(ErrorData::CloudPlatformError {
+                    // IAM just said the name exists, so a read that cannot find it is either
+                    // lagging behind the create or racing a delete. Both pass, and the next
+                    // attempt creates the policy or reads it.
+                    None => Err(AlienError::new(ErrorData::InfrastructureError {
                         message: format!(
-                            "Permissions boundary '{arn}' was deleted while it was being installed"
+                            "Permissions boundary '{arn}' exists but could not be read yet"
                         ),
+                        operation: Some("install_permissions_boundary".to_string()),
                         resource_id: Some(resource_id.to_string()),
                     })),
                 }
@@ -765,11 +768,31 @@ impl AwsRemoteStackManagementController {
         }
     }
 
-    /// Generate managed IAM policy documents for management permissions from the stack's management profile.
-    fn generate_management_policy_documents(
+    /// The management policy documents this role will hold once its boundary is installed,
+    /// computed before any IAM write so a grant that can't fit fails without a half-built role.
+    fn planned_management_policy_documents(
         &self,
         ctx: &ResourceControllerContext<'_>,
+        role_name: &str,
     ) -> Result<Vec<String>> {
+        let aws = ctx.get_aws_config()?;
+        let boundary_arn = self.management_policy_arn(
+            &aws.account_id,
+            &permissions_boundary_name(ctx.resource_prefix),
+        );
+        let statements = self.management_policy_statements(ctx, role_name, &boundary_arn)?;
+        let resource_id = &ctx.desired_resource_config::<RemoteStackManagement>()?.id;
+        self.chunk_management_policy_documents(resource_id, statements)
+    }
+
+    /// The IAM statements the management role gets from the stack's management profile, for
+    /// the role `role_name` under the boundary `boundary_arn`, before they're packed.
+    fn management_policy_statements(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        role_name: &str,
+        boundary_arn: &str,
+    ) -> Result<Vec<AwsIamStatement>> {
         // Get the management permission profile from the stack
         // The stack processor should have processed the management permissions
         let management_permissions = ctx.desired_stack.management();
@@ -780,7 +803,8 @@ impl AwsRemoteStackManagementController {
                 resource_id: Some("management".to_string()),
             }))?;
 
-        let permission_context = self.permission_context(ctx)?;
+        let mut permission_context = self.permission_context(ctx)?;
+        permission_context.aws_permissions_boundary_arn = Some(boundary_arn.to_string());
 
         // Include all permission sets from the management profile in the stack-level
         // management policies. Generate each permission set independently so IAM
@@ -825,27 +849,21 @@ impl AwsRemoteStackManagementController {
         )?;
 
         // The management role always needs to read itself during heartbeat.
-        if let Some(role_name) = &self.role_name {
-            all_statements.push(AwsIamStatement {
-                sid: "ReadOwnManagementRole".to_string(),
-                effect: "Allow".to_string(),
-                action: vec!["iam:GetRole".to_string()],
-                resource: vec![format!(
-                    "arn:aws:iam::{}:role/{}",
-                    ctx.get_aws_config()?.account_id,
-                    role_name
-                )],
-                not_resource: Vec::new(),
-                condition: None,
-            });
-        }
-
-        if all_statements.is_empty() {
-            return Ok(Vec::new());
-        }
+        all_statements.push(AwsIamStatement {
+            sid: "ReadOwnManagementRole".to_string(),
+            effect: "Allow".to_string(),
+            action: vec!["iam:GetRole".to_string()],
+            resource: vec![format!(
+                "arn:aws:iam::{}:role/{}",
+                ctx.get_aws_config()?.account_id,
+                role_name
+            )],
+            not_resource: Vec::new(),
+            condition: None,
+        });
 
         ensure_unique_statement_sids(&mut all_statements);
-        self.chunk_management_policy_documents(all_statements)
+        Ok(all_statements)
     }
 
     fn append_resource_scoped_management_statements(
@@ -940,41 +958,89 @@ impl AwsRemoteStackManagementController {
         Ok(context)
     }
 
+    /// Packs the statements with the shared packer (see [`pack_managed_policy_statements`])
+    /// into compact JSON documents for `-0`, `-1`, ...
+    ///
+    /// An update rewrites these policies one at a time, from `-0` up, and a statement that
+    /// moves to another policy is missing from the role until that policy is written. So:
+    /// - every `Deny` statement goes into `-0`, which holds nothing else and is written first:
+    ///   the role is never without them, whatever layout it had before;
+    /// - statements are ordered by Sid and content before packing, so where each one lands
+    ///   doesn't depend on the order the permission sets were generated in.
+    ///
+    /// Refuses a grant that needs more than [`MAX_ATTACHED_MANAGEMENT_POLICIES`] policies:
+    /// AWS attaches at most 20 managed policies to a role by default, and a retry can't
+    /// change that.
     fn chunk_management_policy_documents(
         &self,
+        resource_id: &str,
         statements: Vec<AwsIamStatement>,
     ) -> Result<Vec<String>> {
-        let mut chunks = Vec::new();
-        let mut current = Vec::new();
-
+        let mut keyed = Vec::with_capacity(statements.len());
         for statement in statements {
-            let mut candidate = current.clone();
-            candidate.push(statement.clone());
-            if self.management_policy_document_size(&candidate)? <= MAX_MANAGED_POLICY_BYTES {
-                current = candidate;
-                continue;
-            }
-
-            if current.is_empty() {
-                return Err(AlienError::new(ErrorData::InfrastructureError {
-                    message: format!(
-                        "AWS IAM statement '{}' is too large for a managed policy",
-                        statement.sid
-                    ),
+            let content = serde_json::to_string(&statement)
+                .into_alien_error()
+                .context(ErrorData::InfrastructureError {
+                    message: format!("Failed to serialize IAM statement '{}'", statement.sid),
                     operation: Some("chunk_management_policy_documents".to_string()),
-                    resource_id: Some("management".to_string()),
-                }));
+                    resource_id: Some(resource_id.to_string()),
+                })?;
+            keyed.push((statement.sid.clone(), content, statement));
+        }
+        keyed.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+        let (denies, allows): (Vec<_>, Vec<_>) = keyed
+            .into_iter()
+            .map(|(_, _, statement)| statement)
+            .partition(|statement| statement.effect == "Deny");
+
+        let pack = |statements: Vec<AwsIamStatement>| {
+            pack_managed_policy_statements(
+                statements,
+                MAX_MANAGED_POLICY_BYTES,
+                |statements: &[AwsIamStatement]| self.management_policy_document_size(statements),
+            )
+        };
+        let deny_chunks = pack(denies)?;
+        if deny_chunks.len() > 1 {
+            // Not retryable: the grant is the same on every attempt.
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "The management grant's Deny statements need {} managed policies; they must fit in one, so an update never leaves the role without them",
+                    deny_chunks.len()
+                ),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+        let chunks: Vec<Vec<AwsIamStatement>> =
+            deny_chunks.into_iter().chain(pack(allows)?).collect();
+
+        for chunk in &chunks {
+            if let [statement] = chunk.as_slice() {
+                if self.management_policy_document_size(chunk)? > MAX_MANAGED_POLICY_BYTES {
+                    return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                        message: format!(
+                            "AWS IAM statement '{}' is too large for a managed policy",
+                            statement.sid
+                        ),
+                        resource_id: Some(resource_id.to_string()),
+                    }));
+                }
             }
-
-            chunks.push(self.serialize_management_policy_document(current)?);
-            current = vec![statement];
+        }
+        if chunks.len() > MAX_ATTACHED_MANAGEMENT_POLICIES {
+            return Err(AlienError::new(
+                ErrorData::ManagementPoliciesExceedRoleLimit {
+                    resource_id: resource_id.to_string(),
+                    policy_count: chunks.len(),
+                    limit: MAX_ATTACHED_MANAGEMENT_POLICIES,
+                },
+            ));
         }
 
-        if !current.is_empty() {
-            chunks.push(self.serialize_management_policy_document(current)?);
-        }
-
-        Ok(chunks)
+        chunks
+            .into_iter()
+            .map(|chunk| self.serialize_management_policy_document(chunk))
+            .collect()
     }
 
     fn management_policy_document_size(&self, statements: &[AwsIamStatement]) -> Result<usize> {
@@ -982,6 +1048,7 @@ impl AwsRemoteStackManagementController {
             .map(|policy| policy.len())
     }
 
+    /// Compact JSON: AWS counts a policy's size without whitespace, and stores it as sent.
     fn serialize_management_policy_document(
         &self,
         statements: Vec<AwsIamStatement>,
@@ -991,7 +1058,7 @@ impl AwsRemoteStackManagementController {
             statement: statements,
         };
 
-        serde_json::to_string_pretty(&policy)
+        serde_json::to_string(&policy)
             .into_alien_error()
             .context(ErrorData::InfrastructureError {
                 message: "Failed to serialize management IAM policy document".to_string(),
@@ -1007,8 +1074,15 @@ impl AwsRemoteStackManagementController {
         role_name: &str,
         policy_documents: &[String],
     ) -> Result<()> {
+        // Write the new documents into -0, -1, ... in order; then detach what the role no longer
+        // needs before attaching anything new, so the role never holds more of these policies
+        // than it did before or will after. While the documents are written, an Allow statement
+        // that moves to a later policy is missing until that policy is written; the Deny
+        // statements are all in -0, written first, so they're never missing.
         let desired_policy_arns = self
             .ensure_desired_management_policies(ctx, client, policy_documents)
+            .await?;
+        self.detach_stale_management_policies(ctx, client, role_name, &desired_policy_arns)
             .await?;
         for policy_arn in &desired_policy_arns {
             client
@@ -1023,7 +1097,7 @@ impl AwsRemoteStackManagementController {
                 })?;
         }
 
-        self.reconcile_owned_management_policies(ctx, client, role_name, &desired_policy_arns)
+        self.delete_stale_management_policies(ctx, client, desired_policy_arns.len())
             .await?;
         self.delete_legacy_inline_policy(client, role_name).await?;
 
@@ -1132,7 +1206,9 @@ impl AwsRemoteStackManagementController {
         Ok(())
     }
 
-    async fn reconcile_owned_management_policies(
+    /// Detaches this role's numbered management policies that aren't in `desired_policy_arns`.
+    /// They are deleted afterwards by [`Self::delete_stale_management_policies`].
+    async fn detach_stale_management_policies(
         &self,
         ctx: &ResourceControllerContext<'_>,
         client: &dyn IamApi,
@@ -1173,9 +1249,50 @@ impl AwsRemoteStackManagementController {
                     ),
                     resource_id: Some("remote-stack-management".to_string()),
                 })?;
-            self.delete_owned_policy(client, &policy.policy_arn).await?;
         }
 
+        Ok(())
+    }
+
+    /// Deletes numbered management policies from `first_stale` up, attached or not: an earlier
+    /// attempt can stop after creating a policy and before attaching it, or after detaching it
+    /// and before deleting it. Every index below [`NUMBERED_POLICY_SCAN_END`] is checked, even
+    /// past a missing one; above it, the search ends at the first missing index. Deleting from
+    /// the highest index down means this code never leaves a gap if it stops part way.
+    async fn delete_stale_management_policies(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        client: &dyn IamApi,
+        first_stale: usize,
+    ) -> Result<()> {
+        let aws_config = ctx.get_aws_config()?;
+        let mut stale = Vec::new();
+        for idx in first_stale.. {
+            let policy_name = self.management_policy_name(ctx.resource_prefix, idx);
+            let policy_arn = self.management_policy_arn(&aws_config.account_id, &policy_name);
+            match client.get_policy(&policy_arn).await {
+                Ok(_) => stale.push(policy_arn),
+                Err(e) if is_remote_not_found(&e) => {
+                    if idx + 1 >= NUMBERED_POLICY_SCAN_END {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    return Err(e
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to read management IAM policy '{}'",
+                                policy_name
+                            ),
+                            resource_id: Some("remote-stack-management".to_string()),
+                        })
+                        .into());
+                }
+            }
+        }
+        for policy_arn in stale.iter().rev() {
+            self.delete_owned_policy(client, policy_arn).await?;
+        }
         Ok(())
     }
 
@@ -1430,6 +1547,15 @@ mod tests {
                     },
                 })
             });
+        // No numbered policy beyond the ones this setup writes.
+        iam.expect_get_policy().returning(|arn| {
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "policy".to_string(),
+                    resource_name: arn.to_string(),
+                },
+            ))
+        });
         iam.expect_attach_role_policy().returning(|_, arn| {
             assert!(
                 !arn.ends_with("-deployment-management-boundary"),
@@ -1625,3 +1751,7 @@ mod tests {
 #[cfg(test)]
 #[path = "aws_boundary_tests.rs"]
 mod boundary_tests;
+
+#[cfg(test)]
+#[path = "aws_policy_quota_tests.rs"]
+mod policy_quota_tests;
