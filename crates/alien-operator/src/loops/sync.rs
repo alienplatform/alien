@@ -1997,6 +1997,199 @@ mod tests {
         panic!("the deployment loop kept stepping");
     }
 
+    /// An update waits for approval or failed, so the installed release is not
+    /// refreshed. The workloads still run it, and their credential Secret is
+    /// still renewed on every idle pass.
+    #[tokio::test]
+    async fn a_pending_or_failed_update_still_renews_workload_credentials() {
+        type Stored = Arc<Mutex<Option<Value>>>;
+        async fn create(State(stored): State<Stored>, Json(mut body): Json<Value>) -> axum::response::Response {
+            use axum::response::IntoResponse;
+            let mut stored = stored.lock().unwrap();
+            if stored.is_some() {
+                return (
+                    axum::http::StatusCode::CONFLICT,
+                    Json(json!({"kind":"Status","apiVersion":"v1","status":"Failure","reason":"AlreadyExists","code":409,"message":"exists"})),
+                )
+                    .into_response();
+            }
+            body["metadata"]["resourceVersion"] = json!("1");
+            *stored = Some(body.clone());
+            Json(body).into_response()
+        }
+        async fn read(State(stored): State<Stored>) -> Json<Value> {
+            Json(stored.lock().unwrap().clone().unwrap())
+        }
+        async fn replace(State(stored): State<Stored>, Json(body): Json<Value>) -> Json<Value> {
+            *stored.lock().unwrap() = Some(body.clone());
+            Json(body)
+        }
+        fn telemetry_token(stored: &Stored) -> String {
+            use base64::Engine as _;
+            let secret = stored.lock().unwrap().clone().expect("runtime Secret written");
+            let file = base64::engine::general_purpose::STANDARD
+                .decode(secret["data"]["telemetry.json"].as_str().unwrap())
+                .unwrap();
+            serde_json::from_slice::<Value>(&file).unwrap()["token"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        }
+
+        let stored: Stored = Arc::new(Mutex::new(None));
+        let app = Router::new()
+            .route("/api/v1/namespaces/agents/secrets", post(create))
+            .route(
+                "/api/v1/namespaces/agents/secrets/agent-deploy-runtime",
+                get(read).put(replace),
+            )
+            .with_state(stored.clone());
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let client: Arc<dyn alien_k8s_clients::SecretsApi> = Arc::new(
+            KubernetesClient::new(KubernetesClientConfig::Manual {
+                server_url: format!("http://{address}"),
+                certificate_authority_data: None,
+                insecure_skip_tls_verify: None,
+                client_certificate_data: None,
+                client_key_data: None,
+                token: Some("test-token".to_string()),
+                username: None,
+                password: None,
+                namespace: Some("agents".to_string()),
+                additional_headers: HashMap::new(),
+            })
+            .await
+            .unwrap(),
+        );
+        let issued = Arc::new(AtomicUsize::new(0));
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_kubernetes_secrets_client()
+            .returning(move |_| Ok(client.clone()));
+        let count = issued.clone();
+        provider.expect_runtime_credential().returning(move |deployment, purpose| {
+            assert_eq!(deployment, "dep_pending");
+            assert_eq!(purpose, json!({"type":"telemetry"}));
+            let n = count.fetch_add(1, Ordering::SeqCst);
+            Ok(alien_client_core::runtime_credentials::RuntimeCapability {
+                token: format!("ax_cap_v1_pass_{n}"),
+                expires_at: chrono::Utc::now() + chrono::Duration::minutes(30 + n as i64),
+            })
+        });
+
+        let data_dir = tempfile::tempdir().unwrap();
+        let directory = data_dir.path().to_str().unwrap();
+        let db = OperatorDb::new(directory, TEST_ENCRYPTION_KEY).await.unwrap();
+        db.set_deployment_id("dep_pending").await.unwrap();
+        db.write_daily_identity(&crate::daily_identity::DailyIdentityState {
+            manager_url: "https://manager.example".into(),
+            audience: "https://manager.example".into(),
+            deployment_id: "dep_pending".into(),
+            current: "ax_day_v1_fixture".into(),
+            pending: None,
+            pending_started_at: None,
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
+            enrolled_code_hash: None,
+            pending_enrollment: None,
+        })
+        .await
+        .unwrap();
+        let worker = |image: &str| {
+            alien_core::Worker::new("agent".into())
+                .code(alien_core::WorkerCode::Image {
+                    image: image.into(),
+                })
+                .permissions("default".into())
+                .build()
+        };
+        let release = |id: &str, image: &str| ReleaseInfo {
+            release_id: Some(id.into()),
+            version: None,
+            description: None,
+            stack: Stack::new("app".into())
+                .add(worker(image), alien_core::ResourceLifecycle::Live)
+                .build(),
+        };
+        let mut stack_state = alien_core::StackState::new(Platform::Kubernetes);
+        let mut internal = serde_json::to_value(alien_infra::KubernetesWorkerController::mock_ready(
+            "agent-deploy",
+            "agents",
+        ))
+        .unwrap();
+        internal["type"] = json!("KubernetesWorkerController");
+        stack_state.resources.insert(
+            "agent".into(),
+            alien_core::StackResourceState::builder()
+                .resource_type("worker".to_string())
+                .status(alien_core::ResourceStatus::Running)
+                .config(alien_core::Resource::new(worker("example.test/agent:1")))
+                .internal_state(internal)
+                .build(),
+        );
+        let mut config = alien_core::DeploymentConfig::builder()
+            .stack_settings(Default::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![alien_core::EnvironmentVariable {
+                    name: alien_core::ENV_ALIEN_DEPLOYMENT_ID.into(),
+                    value: "dep_pending".into(),
+                    var_type: alien_core::EnvironmentVariableType::Plain,
+                    target_resources: None,
+                }],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(Default::default())
+            .build();
+        config.runtime_identity_audience = Some("https://manager.example".into());
+        db.set_deployment_config(&config).await.unwrap();
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(directory)
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build(),
+            db: Arc::new(db),
+            service_provider: Some(Arc::new(provider)),
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+
+        for (pass, status) in [
+            DeploymentStatus::UpdatePending,
+            DeploymentStatus::UpdateFailed,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            state
+                .db
+                .set_deployment_state(&DeploymentState {
+                    platform: Platform::Kubernetes,
+                    status,
+                    current_release: Some(release("rel_installed", "example.test/agent:1")),
+                    target_release: Some(release("rel_next", "example.test/agent:2")),
+                    stack_state: Some(stack_state.clone()),
+                    error: None,
+                    environment_info: None,
+                    runtime_metadata: None,
+                    retry_requested: false,
+                    protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                })
+                .await
+                .unwrap();
+            super::super::deployment::refresh_installed_deployment(&state)
+                .await
+                .expect("credentials renewed");
+            assert_eq!(telemetry_token(&stored), format!("ax_cap_v1_pass_{pass}"));
+        }
+    }
+
     /// A token-mode Operator clears its config after each apply. Once it enrolls
     /// with a code it needs that config to refresh workload credentials, so it
     /// asks for it, and refreshes the release the manager sends again in place.
