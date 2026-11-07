@@ -24,18 +24,19 @@ move `api` to image B, and checks with the caller's own credentials:
   2. protected: a release whose signer list isn't the one setup pinned is refused with the
      verifier's reason, and the function keeps running B;
   3. unprotected: the update succeeds by writing the function directly; no verifier exists.
-  4. protected: a burst of concurrent applyWrite calls for releases 4..11 (alternating
-     images) never leaves the install behind its newest accepted release: once release 11 has
-     been applied (retrying it while it reports a failure, as the control plane does), the
-     ledger is at 11 and the function runs 11's image, and stays there; every other call either
-     applied or was refused as older or superseded, or failed and may be retried.
-  5. protected: release 13 gives the worker a schedule and a reserved concurrency (2, or 0
+  4. protected: ten concurrent applyWrite calls for releases 4..13 (alternating images) never
+     move the ledger back (every version SSM kept of it records a release no older than the one
+     before) or leave the install behind its newest: once release 13 has been applied (retrying
+     it while it reports a failure, as the control plane does), the ledger is at 13 and the
+     function runs 13's image, and stays there; every other call either applied, was refused
+     as older or superseded, found a newer release written over it, or failed and may be
+     retried.
+  5. protected: release 15 gives the worker a schedule and a reserved concurrency (2, or 0
      on an account with no room to reserve). The update lands; management creates the
      schedule's rule, the verifier sets the concurrency and lets that rule (and nothing else)
      invoke the function, and management itself is denied AddPermission and
      PutFunctionConcurrency.
-
-  6. protected: tampered requests for release 12 are refused, each naming the field it
+  6. protected: tampered requests for release 14 are refused, each naming the field it
      broke, and change nothing: an UpdateFunctionConfiguration with a layer, another role, a
      changed env value or a field the verifier doesn't know (each after a valid
      UpdateFunctionCode in the same request), and an UpdateFunctionCode to an image the release
@@ -69,6 +70,8 @@ import uuid
 import zipfile
 
 REGION = "us-east-1"
+# The releases case 4 applies at once.
+BURST = range(4, 14)
 
 
 def log(message):
@@ -291,40 +294,51 @@ class Run:
 
     def burst(self):
         install = f"{self.prefix}-p"
+        newest = BURST[-1]
         requests = {}
-        for sequence in range(4, 12):
+        for sequence in BURST:
             image = self.images["a" if sequence % 2 else "b"]
             requests[sequence] = json.loads(self.driver(
                 "request", install, {"TO_IMAGE": image, "SEQUENCE": str(sequence)}).stdout)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(BURST)) as pool:
             answers = dict(zip(requests, pool.map(lambda sequence: self.invoke(install, requests[sequence]),
                                                   requests)))
         (self.evidence / "burst-answers.json").write_text(json.dumps(answers, indent=2))
         outcomes = {sequence: ("applied" if error is None else body.get("errorType", error))
                     for sequence, (error, body) in answers.items()}
         retries = 0
-        while answers[11][0] is not None and answers[11][1].get("errorType") != "VERIFIER_REFUSED" and retries < 5:
+        while (answers[newest][0] is not None and answers[newest][1].get("errorType") != "VERIFIER_REFUSED"
+               and retries < 5):
             retries += 1
-            answers[11] = self.invoke(install, requests[11])
-        newest_applied = answers[11][0] is None
-        allowed = {"applied", "VERIFIER_REFUSED", "VERIFIER_CLOUD_CALL_FAILED"}
+            answers[newest] = self.invoke(install, requests[newest])
+        newest_applied = answers[newest][0] is None
+        # An older release may also find, reading its function back, that a newer one has
+        # already been written over it.
+        allowed = {"applied", "VERIFIER_REFUSED", "VERIFIER_CLOUD_CALL_FAILED", "VERIFIER_READ_BACK_MISMATCH"}
         ledger = json.loads(aws_json("ssm", "get-parameter", "--name", f"/signed/{install}/state")
                             ["Parameter"]["Value"])
+        # Every version SSM kept of the ledger, in order: the release it records never goes back.
+        history = aws_json("ssm", "get-parameter-history", "--name", f"/signed/{install}/state")["Parameters"]
+        floors = [json.loads(version["Value"]).get("release", {}).get("sequence", 0)
+                  for version in sorted(history, key=lambda version: version["Version"])]
+        (self.evidence / "burst-ledger-history.json").write_text(json.dumps(floors))
         image = self.image(install)
         time.sleep(20)
         later = self.image(install)
-        self.record("4 protected: concurrent releases never leave the install behind its newest",
-                    newest_applied and ledger.get("release", {}).get("sequence") == 11
-                    and image == self.images["a"] and later == image
-                    and set(outcomes.values()) <= allowed,
-                    f"outcomes={outcomes} retries-of-11={retries} ledger-release={ledger.get('release')} "
+        self.record(f"4 protected: {len(BURST)} concurrent releases never move the ledger back or leave the "
+                    "install behind its newest",
+                    newest_applied and ledger.get("release", {}).get("sequence") == newest
+                    and floors == sorted(floors)
+                    and image == self.images["a" if newest % 2 else "b"] and later == image
+                    and {outcome for sequence, outcome in outcomes.items() if sequence != newest} <= allowed,
+                    f"outcomes={outcomes} retries-of-{newest}={retries} ledger-history={floors} "
                     f"image={image.rsplit('@', 1)[-1][:19]} 20s-later={later.rsplit('@', 1)[-1][:19]}")
 
     def tamper(self):
         install = f"{self.prefix}-p"
         function = f"{install}-api"
         signed = json.loads(self.driver("request", install, {"TO_IMAGE": self.images["a"],
-                                                              "SEQUENCE": "12"}).stdout)
+                                                              "SEQUENCE": "14"}).stdout)
         live = aws_json("lambda", "get-function-configuration", "--function-name", function)
         variables = live.get("Environment", {}).get("Variables", {})
         configuration = {"Role": live["Role"], "Timeout": live["Timeout"], "MemorySize": live["MemorySize"],
@@ -381,7 +395,7 @@ class Run:
         room = aws_json("lambda", "get-account-settings")["AccountLimit"]["UnreservedConcurrentExecutions"] - 10
         reservation = 2 if room >= 2 else 0
         update = {**management, "FROM_IMAGE": self.images["a"], "TO_IMAGE": self.images["a"], "PROTECTED": "1",
-                  "SEQUENCE": "13", "ACCESS": "1", "ACCESS_CONCURRENCY": str(reservation)}
+                  "SEQUENCE": "15", "ACCESS": "1", "ACCESS_CONCURRENCY": str(reservation)}
         result = self.driver("update", install, update, check=False)
         outcome = json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {}
         function = aws_json("lambda", "get-function", "--function-name", f"{install}-api", check=False)
