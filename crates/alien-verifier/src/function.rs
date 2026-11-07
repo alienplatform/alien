@@ -152,11 +152,9 @@ impl<T: LambdaApi> FunctionStore for T {
                 })
                 .layers(Vec::new())
                 .file_system_configs(Vec::new())
-                .image_config(serde_json::json!({
-                    "EntryPoint": [],
-                    "Command": [],
-                    "WorkingDirectory": "",
-                }))
+                // Lambda clears an override only for an empty ImageConfig; empty
+                // EntryPoint and Command lists would replace the image's own.
+                .image_config(serde_json::json!({}))
                 .vpc_config(VpcConfig {
                     subnet_ids: Some(
                         spec.vpc
@@ -580,7 +578,12 @@ pub fn check_read_back(spec: &FunctionSpec, function: &Value) -> Result<()> {
             return Err(mismatch(format!("it has {field}")));
         }
     }
-    if !is_empty(&configuration["ImageConfigResponse"]["ImageConfig"]) {
+    let image_config = &configuration["ImageConfigResponse"]["ImageConfig"];
+    // An EntryPoint or Command key overrides the image's even when its list is empty.
+    if !is_empty(image_config)
+        || !image_config["EntryPoint"].is_null()
+        || !image_config["Command"].is_null()
+    {
         return Err(mismatch(
             "its image config overrides the entry point, command or working directory".to_string(),
         ));
@@ -748,6 +751,11 @@ mod tests {
         .contains("Layers"));
         assert!(reason(&|f| f["Configuration"]["ImageConfigResponse"] =
             json!({"ImageConfig": {"EntryPoint": ["/bin/sh"]}}))
+        .contains("image config"));
+        // What Lambda returns after an ImageConfig of empty arrays: the image's
+        // own entry point no longer runs ("empty entrypoint").
+        assert!(reason(&|f| f["Configuration"]["ImageConfigResponse"] =
+            json!({"ImageConfig": {"EntryPoint": [], "Command": [], "WorkingDirectory": ""}}))
         .contains("image config"));
         assert!(reason(&|f| f["Configuration"]["FileSystemConfigs"] =
             json!([{"Arn": "x", "LocalMountPath": "/mnt/x"}]))
@@ -976,6 +984,21 @@ mod tests {
                 .retain(|statement| statement["Sid"] != json!(statement_id));
             Ok(())
         }
+    }
+
+    /// Lambda clears an image config override only for an empty ImageConfig: empty
+    /// EntryPoint and Command lists replace the image's entry point with nothing.
+    #[tokio::test]
+    async fn writing_the_configuration_keeps_the_images_entry_point() {
+        let mut lambda = alien_aws_clients::lambda::MockLambdaApi::new();
+        lambda
+            .expect_update_function_configuration()
+            .times(1)
+            .returning(|_, request| {
+                assert_eq!(request.image_config, Some(json!({})));
+                Ok(Default::default())
+            });
+        lambda.update_configuration(&spec(), "r1").await.unwrap();
     }
 
     /// A statement as Lambda writes it for AddPermission of `grant`.
