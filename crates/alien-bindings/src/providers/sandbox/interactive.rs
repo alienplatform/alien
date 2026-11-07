@@ -174,7 +174,9 @@ impl AgentInput {
     }
 
     /// Sends a control request, sending it again only while it goes unanswered, and parses the
-    /// answer. Only for requests that are safe to repeat.
+    /// answer. Only for requests that are safe to repeat. An answer counts once its whole body has
+    /// arrived: headers followed by a body that stalls are as unanswered as no headers at all, and
+    /// waiting on that body without a bound would hold the input lock for good.
     async fn send_repeatable<T: serde::de::DeserializeOwned>(
         &self,
         path: &str,
@@ -183,24 +185,26 @@ impl AgentInput {
         field: &str,
     ) -> Result<T> {
         let mut attempt = 0;
-        let response = loop {
+        let answer = loop {
             attempt += 1;
-            match self.control(path, body.clone(), operation).await {
-                Ok(response) => break response,
+            let sent = match self.control(path, body.clone(), operation).await {
+                Ok(response) => agent_protocol::bounded_body(response, operation).await,
+                Err(error) => Err(error),
+            };
+            match sent {
+                Ok(answer) => break answer,
                 Err(error) if error.retryable && attempt < WRITE_ATTEMPTS => continue,
                 Err(error) => return Err(error),
             }
         };
-        response
-            .json()
-            .await
-            .into_alien_error()
-            .context(ErrorData::UnexpectedResponseFormat {
+        serde_json::from_slice(&answer).into_alien_error().context(
+            ErrorData::UnexpectedResponseFormat {
                 provider: self.agent.provider().to_string(),
                 binding_name: operation.to_string(),
                 field: field.to_string(),
                 response_json: "the agent returned a body this provider cannot parse".to_string(),
-            })
+            },
+        )
     }
 
     /// Sends one piece of input at `offset` and returns the agent's total. Unanswered, the agent
@@ -354,7 +358,41 @@ mod tests {
         /// Stdin requests to send to a port nobody listens on before the real one, so a lost
         /// write is exercised for real.
         unanswered_writes: AtomicUsize,
+        /// Stdin requests to send, after those, to a server that answers with headers and then
+        /// never finishes the body, so a lost acknowledgement is exercised for real.
+        stalled_acks: AtomicUsize,
+        stall_url: String,
         _root: tempfile::TempDir,
+    }
+
+    fn take_one(left: &AtomicUsize) -> bool {
+        left.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+            left.checked_sub(1)
+        })
+        .is_ok()
+    }
+
+    /// A server that takes any request, sends success headers promising a body, and then holds
+    /// the connection open without sending it.
+    async fn stalling_server() -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut request = [0u8; 4096];
+                    let _ = socket.read(&mut request).await;
+                    let _ = socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 64\r\n\r\n{",
+                        )
+                        .await;
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                });
+            }
+        });
+        url
     }
 
     #[async_trait]
@@ -364,15 +402,10 @@ mod tests {
             method: reqwest::Method,
             path: &str,
         ) -> Result<reqwest::RequestBuilder> {
-            let base = if path == "/v1/interactive/stdin"
-                && self
-                    .unanswered_writes
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
-                        left.checked_sub(1)
-                    })
-                    .is_ok()
-            {
+            let base = if path == "/v1/interactive/stdin" && take_one(&self.unanswered_writes) {
                 "http://127.0.0.1:9".to_string()
+            } else if path == "/v1/interactive/stdin" && take_one(&self.stalled_acks) {
+                self.stall_url.clone()
             } else {
                 self.url.clone()
             };
@@ -387,6 +420,10 @@ mod tests {
     }
 
     async fn agent(unanswered_writes: usize) -> Arc<LoopbackAgent> {
+        stalling_agent(unanswered_writes, 0).await
+    }
+
+    async fn stalling_agent(unanswered_writes: usize, stalled_acks: usize) -> Arc<LoopbackAgent> {
         let root = tempfile::TempDir::new().unwrap();
         let keys = KeyPair::from_seed(Seed::new([7u8; 32]));
         let state = Arc::new(AgentState {
@@ -441,6 +478,8 @@ mod tests {
             url,
             token,
             unanswered_writes: AtomicUsize::new(unanswered_writes),
+            stalled_acks: AtomicUsize::new(stalled_acks),
+            stall_url: stalling_server().await,
             _root: root,
         })
     }
@@ -605,6 +644,33 @@ mod tests {
             CommandOutput::Exit { code: 130, .. }
         ));
         assert!(String::from_utf8_lossy(&stdout).ends_with("stopped\n"));
+    }
+
+    /// An acknowledgement whose headers arrive and whose body never does is as unanswered as one
+    /// that never arrives: the write is sent again within the response deadline instead of
+    /// holding the input, and every later write and close behind it, for good.
+    #[tokio::test]
+    async fn a_write_whose_answer_stalls_after_its_headers_is_sent_again() {
+        let agent = stalling_agent(0, 2).await;
+        let command = run_interactive(agent, command("/bin/sh", &["-c", "wc -c"]))
+            .await
+            .expect("starts");
+
+        tokio::time::timeout(
+            agent_protocol::AGENT_RESPONSE_TIMEOUT * 20,
+            command.input.write(b"hello"),
+        )
+        .await
+        .expect("the write does not wait on a stalled body")
+        .expect("the write lands on a later attempt");
+        command.input.close_stdin().await.expect("closes");
+
+        let mut stdout = Vec::new();
+        assert!(matches!(
+            finish(command, &mut stdout).await,
+            CommandOutput::Exit { code: 0, .. }
+        ));
+        assert_eq!(String::from_utf8_lossy(&stdout).trim(), "5", "applied once");
     }
 
     /// A write the caller cancels part-way may already have reached the program. The next write
