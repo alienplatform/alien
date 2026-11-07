@@ -2120,9 +2120,10 @@ fn add_verifier_and_limits(
         VERIFIER_FUNCTION_ID.to_string(),
         "AWS::Lambda::Function".to_string(),
     );
-    function
-        .properties
-        .insert("FunctionName".to_string(), CfExpression::sub(&verifier_name));
+    function.properties.insert(
+        "FunctionName".to_string(),
+        CfExpression::sub(&verifier_name),
+    );
     function.properties.insert(
         "Description".to_string(),
         CfExpression::from(
@@ -2196,7 +2197,9 @@ fn add_verifier_and_limits(
     );
     limits.properties.insert(
         "ManagedPolicyName".to_string(),
-        CfExpression::sub(alien_permissions::generators::signing_limits::aws_management_limits_name(prefix)),
+        CfExpression::sub(
+            alien_permissions::generators::signing_limits::aws_management_limits_name(prefix),
+        ),
     );
     limits.properties.insert(
         "Description".to_string(),
@@ -2206,9 +2209,11 @@ fn add_verifier_and_limits(
     );
     limits.properties.insert(
         "PolicyDocument".to_string(),
-        sub_json(alien_permissions::generators::signing_limits::aws_management_limits(
-            prefix, account, region,
-        )),
+        sub_json(
+            alien_permissions::generators::signing_limits::aws_management_limits(
+                prefix, account, region,
+            ),
+        ),
     );
     limits.properties.insert(
         "Roles".to_string(),
@@ -4006,13 +4011,31 @@ fn stack_settings_expression(
     bindings_only: bool,
     profile: alien_core::SetupConfigurationProfile,
 ) -> CfExpression {
+    // A protected install registers as protected: the fingerprint it pins (the parameter
+    // allows only that value) and the channel it was signed for.
+    let signing = settings.signing.as_ref().map(|signing| {
+        (
+            "signing",
+            CfExpression::object([
+                (
+                    "fingerprint",
+                    CfExpression::ref_(SIGNING_FINGERPRINT_PARAMETER),
+                ),
+                ("channel", CfExpression::from(signing.channel.as_str())),
+            ]),
+        )
+    });
     if bindings_only {
-        return CfExpression::object([
-            ("deploymentModel", CfExpression::from("push")),
-            ("updates", CfExpression::from("approval-required")),
-            ("telemetry", CfExpression::from("off")),
-            ("heartbeats", CfExpression::from("on")),
-        ]);
+        return CfExpression::object(
+            [
+                ("deploymentModel", CfExpression::from("push")),
+                ("updates", CfExpression::from("approval-required")),
+                ("telemetry", CfExpression::from("off")),
+                ("heartbeats", CfExpression::from("on")),
+            ]
+            .into_iter()
+            .chain(signing),
+        );
     }
     let operation = |parameter, default: &str| {
         if profile == alien_core::SetupConfigurationProfile::Advanced {
@@ -4056,6 +4079,7 @@ fn stack_settings_expression(
     if let Some(compute) = compute_settings_expression(stack, settings.compute.as_ref()) {
         values.push(("compute", compute));
     }
+    values.extend(signing);
     CfExpression::object(values)
 }
 
@@ -4956,7 +4980,10 @@ mod unverifiable_code_tests {
         template.transform.clear();
         template.resources.insert(
             "Nested".to_string(),
-            CfResource::new("Nested".to_string(), "AWS::CloudFormation::Stack".to_string()),
+            CfResource::new(
+                "Nested".to_string(),
+                "AWS::CloudFormation::Stack".to_string(),
+            ),
         );
         assert!(reason(&template).contains("AWS::CloudFormation::Stack"));
     }

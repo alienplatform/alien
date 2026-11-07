@@ -579,3 +579,136 @@ async fn an_access_only_stack_gets_no_network_when_protected() {
         );
     }
 }
+
+/// The value `expression` of a rendered CloudFormation template takes when the stack is created
+/// with every parameter at its default: `Ref`, `Fn::Join`, `Fn::If` and the condition
+/// functions, as CloudFormation evaluates them.
+fn evaluate_cloudformation(
+    template: &serde_yaml::Value,
+    expression: &serde_yaml::Value,
+) -> serde_yaml::Value {
+    use serde_yaml::Value;
+    let parameter = |name: &str| -> Value {
+        let parameter = &template["Parameters"][name];
+        assert!(
+            !parameter.is_null(),
+            "{name} is not a parameter of the template"
+        );
+        match &parameter["Default"] {
+            Value::Number(number) => Value::String(number.to_string()),
+            Value::Null => Value::String(String::new()),
+            default => default.clone(),
+        }
+    };
+    let condition = |name: &str| -> bool {
+        evaluate_cloudformation(template, &template["Conditions"][name])
+            .as_bool()
+            .unwrap_or_else(|| panic!("condition {name} isn't a boolean"))
+    };
+    let Value::Mapping(fields) = expression else {
+        return match expression {
+            Value::Sequence(items) => Value::Sequence(
+                items
+                    .iter()
+                    .map(|item| evaluate_cloudformation(template, item))
+                    .collect(),
+            ),
+            other => other.clone(),
+        };
+    };
+    let Some((function, arguments)) = fields.iter().next() else {
+        return expression.clone();
+    };
+    let arguments_list = || arguments.as_sequence().cloned().unwrap_or_default();
+    match function.as_str().unwrap_or_default() {
+        "Ref" => parameter(arguments.as_str().expect("Ref names a parameter")),
+        "Condition" => Value::Bool(condition(arguments.as_str().expect("condition name"))),
+        "Fn::If" => {
+            let arguments = arguments_list();
+            let taken = if condition(arguments[0].as_str().expect("condition name")) {
+                &arguments[1]
+            } else {
+                &arguments[2]
+            };
+            evaluate_cloudformation(template, taken)
+        }
+        // CloudFormation compares scalars as strings: a Number parameter's Ref is a string.
+        "Fn::Equals" => {
+            let arguments = arguments_list();
+            let text = |value: Value| match value {
+                Value::String(text) => text,
+                other => serde_yaml::to_string(&other).unwrap().trim().to_string(),
+            };
+            Value::Bool(
+                text(evaluate_cloudformation(template, &arguments[0]))
+                    == text(evaluate_cloudformation(template, &arguments[1])),
+            )
+        }
+        "Fn::Not" => Value::Bool(
+            !evaluate_cloudformation(template, &arguments_list()[0])
+                .as_bool()
+                .expect("Fn::Not takes a condition"),
+        ),
+        function @ ("Fn::And" | "Fn::Or") => {
+            let values: Vec<bool> = arguments_list()
+                .iter()
+                .map(|argument| {
+                    evaluate_cloudformation(template, argument)
+                        .as_bool()
+                        .expect("a condition")
+                })
+                .collect();
+            Value::Bool(if function == "Fn::And" {
+                values.iter().all(|value| *value)
+            } else {
+                values.iter().any(|value| *value)
+            })
+        }
+        "Fn::Join" => {
+            let arguments = arguments_list();
+            let delimiter = arguments[0].as_str().expect("delimiter");
+            let items = evaluate_cloudformation(template, &arguments[1]);
+            let items: Vec<String> = items
+                .as_sequence()
+                .expect("Fn::Join takes a list")
+                .iter()
+                .map(|item| match item {
+                    Value::String(text) => text.clone(),
+                    Value::Sequence(_) => panic!("a list inside Fn::Join"),
+                    other => serde_yaml::to_string(other).unwrap().trim().to_string(),
+                })
+                .collect();
+            Value::String(items.join(delimiter))
+        }
+        other => panic!("{other} isn't evaluated here"),
+    }
+}
+
+/// A protected stack registers as protected: the settings the CloudFormation template reports
+/// carry the fingerprint it pins and the channel it was signed for. (Without them the service
+/// recorded a stack that protected itself as unprotected.)
+#[tokio::test]
+async fn a_protected_cloudformation_stack_registers_its_signing_settings() {
+    let rendered = render(FINGERPRINT).await;
+    let template: serde_yaml::Value =
+        serde_yaml::from_slice(&rendered["cloudformation"].bytes).expect("template is YAML");
+    let reported = evaluate_cloudformation(
+        &template,
+        &template["Outputs"]["DeploymentStackSettings"]["Value"],
+    );
+    let settings: serde_json::Value = serde_json::from_str(
+        reported
+            .as_str()
+            .expect("the settings are reported as JSON text"),
+    )
+    .expect("the reported settings are JSON");
+    let signing: Option<StackSigning> = serde_json::from_value(settings["signing"].clone())
+        .expect("the reported signing settings parse as the service parses them");
+    assert_eq!(
+        signing,
+        Some(StackSigning {
+            fingerprint: FINGERPRINT.to_string(),
+            channel: "production".to_string(),
+        })
+    );
+}
