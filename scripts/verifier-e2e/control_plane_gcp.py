@@ -13,16 +13,21 @@ The GCP counterpart of `control_plane.py`. Sets up, as protected setup would, an
   - the network protected setup creates by default: VPC `<p>-net` with subnet `<p>-workload`,
     given to the verifier in VERIFIER_FUNCTION_VPC, and the verifier's shared compute role;
   - the verifier as Cloud Run service `<p>-verifier`.
-No setup creates the worker's service. As the management stand-in (the caller impersonates it),
-`protected_worker_update update` (alien-infra example, CLOUD=gcp) runs the real stack executor and
-GCP worker controller, which call the verifier with an ID token, and the script checks with the
-caller's credentials:
-  0. the first deployment creates `<p>-api` through the verifier: the signed image, internal
-     ingress (the worker has no public endpoint), and the worker's account may invoke it;
+The verifier's Cloud Run role is a custom role bound on each worker's service alone. As the
+management stand-in (the caller impersonates it), `protected_worker_update update` (alien-infra
+example, CLOUD=gcp) runs the real stack executor and GCP worker controller, which call the verifier
+with an ID token, and the script checks with the caller's credentials:
+  0. before setup created the worker's service, the release is refused, naming the worker and
+     the signed setup update; then setup creates `<p>-api` as it does (placeholder image,
+     internal ingress, the worker's account) and binds the verifier's role on it, and the release
+     lands through the verifier: the signed image, internal ingress, the worker's account may
+     invoke it;
   1. an update moves it to the second image through the verifier, and management's own
      run.services.update is denied;
   2. a release under a signer list setup didn't pin is refused with the verifier's reason, and the
-     service keeps the second image.
+     service keeps the second image;
+  3. as the verifier's own account, a service it isn't bound on (`<p>-other`, like another
+     install's) can be neither read nor have its IAM policy set, while the worker's can be read.
 Everything is deleted at the end and the run fails if anything named `<p>` is left.
 
     scripts/verifier-e2e/control_plane_gcp.py \\
@@ -45,6 +50,12 @@ import sys
 import tempfile
 import time
 import uuid
+
+
+# What protected setup runs in a worker's service until a signed release lands (alien-terraform's
+# GCP_WORKER_PLACEHOLDER_IMAGE).
+PLACEHOLDER = ("us-docker.pkg.dev/cloudrun/container/hello@sha256:"
+               "1fde53e0b892bff3072b3cac1c0e37178e9c0b98cf0b01e83956915e02b828c7")
 
 
 def log(message):
@@ -98,6 +109,34 @@ class Run:
 
     def token(self):
         return pathlib.Path(self.args.token_file).read_text().strip()
+
+    def caller_email(self):
+        account = subprocess.run(["curl", "-s", "https://oauth2.googleapis.com/tokeninfo?access_token=" + self.token()],
+                                 capture_output=True, text=True).stdout
+        return json.loads(account)["email"]
+
+    def setup_service(self, name, bind_verifier):
+        """A worker's service as protected setup creates it: closed, the pinned placeholder, the
+        worker's account; the verifier's Cloud Run role bound on it alone."""
+        self.created.append(("service", name))
+        self.gcloud("run", "deploy", name, f"--image={PLACEHOLDER}", f"--region={self.region}",
+                    f"--service-account={self.sa['execution-sa']}", "--ingress=internal",
+                    "--no-allow-unauthenticated", f"--labels={self.label_key}={self.label_value},managed-by=setup")
+        if bind_verifier:
+            self.gcloud("run", "services", "add-iam-policy-binding", name, f"--region={self.region}",
+                        f"--member=serviceAccount:{self.sa['verifier']}",
+                        f"--role=projects/{self.project}/roles/{self.cloud_run_role}")
+
+    def token_file_for(self, account):
+        """An access token for `account`, minted with the caller's token."""
+        url = f"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{account}:generateAccessToken"
+        body = json.dumps({"scope": ["https://www.googleapis.com/auth/cloud-platform"]})
+        response = subprocess.run(["curl", "-s", "-X", "POST", "-H", f"Authorization: Bearer {self.token()}",
+                                   "-H", "Content-Type: application/json", "-d", body, url],
+                                  capture_output=True, text=True, check=True).stdout
+        path = self.work / f"token-{account.split('@')[0]}"
+        path.write_text(json.loads(response)["accessToken"])
+        return str(path)
 
     def management_token_file(self):
         """An access token for the management stand-in, minted with the caller's token."""
@@ -169,14 +208,15 @@ class Run:
         self.exec_id = self.gcloud_json("iam", "service-accounts", "describe", self.sa["execution-sa"])["uniqueId"]
         verifier = f"serviceAccount:{self.sa['verifier']}"
         mgmt = f"serviceAccount:{self.sa['mgmt']}"
-        # The verifier's Cloud Run grants as setup renders them: one custom role, bound without a
-        # condition (Cloud Run doesn't evaluate resource.name conditions).
-        role_id = self.prefix.replace("-", "_") + "_cloud_run"
-        self.gcloud("iam", "roles", "create", role_id, f"--title={self.prefix} cloud run",
-                    "--permissions=run.services.create,run.services.update,run.services.delete,"
-                    "run.services.get,run.services.getIamPolicy,run.services.setIamPolicy")
-        self.created.append(("role", role_id))
-        self.bind_project(verifier, f"projects/{self.project}/roles/{role_id}")
+        # The verifier's Cloud Run role as setup renders it, bound on each worker's service alone.
+        self.cloud_run_role = self.prefix.replace("-", "_") + "_cloud_run"
+        self.gcloud("iam", "roles", "create", self.cloud_run_role, f"--title={self.prefix} cloud run",
+                    "--permissions=run.services.update,run.services.get,run.services.getIamPolicy,"
+                    "run.services.setIamPolicy")
+        self.created.append(("role", self.cloud_run_role))
+        # The caller mints the verifier's tokens for case 3.
+        self.gcloud("iam", "service-accounts", "add-iam-policy-binding", self.sa["verifier"],
+                    f"--member=user:{self.caller_email()}", "--role=roles/iam.serviceAccountTokenCreator")
         self.bind_project(verifier, "roles/parametermanager.parameterViewer")
         self.bind_project(verifier, "roles/artifactregistry.reader")
         ledger = f"projects/{self.project}/locations/global/parameters/signed-{self.prefix}-state"
@@ -188,12 +228,8 @@ class Run:
         self.bind_project(mgmt, "roles/run.viewer")
         self.gcloud("iam", "service-accounts", "add-iam-policy-binding", self.sa["mgmt"],
                     f"--member={mgmt}", "--role=roles/iam.serviceAccountTokenCreator")
-        account = subprocess.run(["curl", "-s", "-H", f"Authorization: Bearer {self.token()}",
-                                  "https://oauth2.googleapis.com/tokeninfo?access_token=" + self.token()],
-                                 capture_output=True, text=True).stdout
-        self.caller = json.loads(account)["email"]
         self.gcloud("iam", "service-accounts", "add-iam-policy-binding", self.sa["mgmt"],
-                    f"--member=user:{self.caller}", "--role=roles/iam.serviceAccountTokenCreator")
+                    f"--member=user:{self.caller_email()}", "--role=roles/iam.serviceAccountTokenCreator")
 
     def parameters(self):
         fixtures = json.loads(self.driver("fixtures").stdout)
@@ -266,7 +302,19 @@ class Run:
         return json.loads(lines[-1]) if lines else {}
 
     def cases(self):
-        self.created.append(("service", f"{self.prefix}-api"))
+        result = self.driver("update", {"FROM_IMAGE": "", "TO_IMAGE": self.images["a"], "PROTECTED": "1",
+                                        "SEQUENCE": "1"}, check=False)
+        outcome = self.outcome(result)
+        exists = self.gcloud("run", "services", "describe", f"{self.prefix}-api", f"--region={self.region}",
+                             check=False).returncode == 0
+        self.record("0 before setup created the worker's service, the release is refused with the setup-update hint",
+                    result.returncode != 0 and outcome.get("code") == "RELEASE_REFUSED_BY_VERIFIER"
+                    and "worker 'api' has no Cloud Run service" in json.dumps(outcome)
+                    and "signed setup update" in json.dumps(outcome) and not exists,
+                    f"driver={json.dumps(outcome)[:400]} service-exists={exists}")
+        self.setup_service(f"{self.prefix}-api", bind_verifier=True)
+        log("waiting 60s for the service binding to propagate")
+        time.sleep(60)
         result = self.driver("update", {"FROM_IMAGE": "", "TO_IMAGE": self.images["a"], "PROTECTED": "1",
                                         "SEQUENCE": "1"}, check=False)
         outcome = self.outcome(result)
@@ -278,7 +326,7 @@ class Run:
                       and f"serviceAccount:{self.sa['execution-sa']}" in binding.get("members", [])
                       for binding in policy.get("bindings", []))
         egress = self.egress()
-        self.record("0 the first deployment creates the worker's service through the verifier, in the network",
+        self.record("0 after the setup update the release lands through the verifier, closed and in the network",
                     result.returncode == 0 and outcome.get("outcome") == "synced"
                     and self.image() == self.images["a"] and ingress == "internal" and invoker
                     and egress == (f"{self.prefix}-workload", "all-traffic"),
@@ -313,6 +361,23 @@ class Run:
                     and "does not match the pinned fingerprint" in json.dumps(outcome)
                     and self.image() == self.images["b"],
                     f"driver={json.dumps(outcome)[:400]} image={self.image()[-19:]}")
+
+    def reach(self):
+        other = f"{self.prefix}-other"
+        self.setup_service(other, bind_verifier=False)
+        token = self.token_file_for(self.sa["verifier"])
+        own = self.gcloud("run", "services", "describe", f"{self.prefix}-api", f"--region={self.region}",
+                          check=False, token_file=token)
+        read = self.gcloud("run", "services", "describe", other, f"--region={self.region}",
+                           check=False, token_file=token)
+        policy = self.work / "open-policy.json"
+        policy.write_text(json.dumps({"bindings": [{"role": "roles/run.invoker", "members": ["allUsers"]}]}))
+        opened = self.gcloud("run", "services", "set-iam-policy", other, str(policy), f"--region={self.region}",
+                             check=False, token_file=token)
+        self.record("3 the verifier reads its own worker's service but can't read or open a service it isn't bound on",
+                    own.returncode == 0 and read.returncode != 0 and "run.services.get" in read.stderr
+                    and opened.returncode != 0 and "run.services.setIamPolicy" in opened.stderr,
+                    f"own={own.returncode} read={read.stderr.strip()[-200:]} set-iam-policy={opened.stderr.strip()[-200:]}")
 
     # --- cleanup ----------------------------------------------------------------
 
@@ -385,6 +450,7 @@ class Run:
             self.network()
             self.verifier()
             self.cases()
+            self.reach()
         finally:
             self.cleanup()
             self.audit()
