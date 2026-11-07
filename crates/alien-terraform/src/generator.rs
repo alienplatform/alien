@@ -2544,7 +2544,9 @@ fn gcp_verifier_blocks(
                 attr("project", expr::raw("var.gcp_project")),
                 attr(
                     "role",
-                    Expression::String("roles/parametermanager.parameterAccessor".to_string()),
+                    // It lists a parameter's versions and reads the newest in full
+                    // (parameterVersions.list and .get); the accessor role only renders.
+                    Expression::String("roles/parametermanager.parameterViewer".to_string()),
                 ),
                 attr("member", member.clone()),
             ],
