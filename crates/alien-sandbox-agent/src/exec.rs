@@ -152,25 +152,26 @@ pub async fn stream(
         output_cap,
         sandbox_process::Framing::Lines,
         frames,
-        || {},
+        None::<fn()>,
     )
     .await;
 }
 
 /// Streams a spawned child's frames to `frames` until the terminal one, killing the child if the
-/// receiver goes away. `reaped` runs as soon as the child is reaped, before the terminal frame.
+/// receiver goes away. `exited`, when given, runs once the child has exited and before it is
+/// reaped, ahead of the terminal frame.
 pub(crate) async fn pump(
     child: tokio::process::Child,
     timeout: Duration,
     output_cap: usize,
     framing: sandbox_process::Framing,
     frames: mpsc::Sender<Frame>,
-    reaped: impl FnOnce() + Send,
+    exited: Option<impl FnOnce() + Send>,
 ) {
     // The framing itself is shared with the GCP binding, which runs commands through a launcher
     // CLI rather than in-guest. Only the wire type differs, and it differs here.
     let (raw, mut incoming) = mpsc::channel(FRAME_CHANNEL_DEPTH);
-    let produce = sandbox_process::stream_framed(child, timeout, output_cap, framing, raw, reaped);
+    let produce = sandbox_process::stream_framed(child, timeout, output_cap, framing, raw, exited);
 
     // `incoming` is moved in so it is dropped the moment forwarding stops. Holding it would
     // leave the producer writing into a channel nobody reads, which is exactly the runaway a

@@ -150,6 +150,22 @@ pub enum ErrorData {
         offset: u64,
     },
 
+    /// A write from before the caller's last barrier, arriving after it. Applying it would put
+    /// bytes the caller has already given up on ahead of the ones it sent since.
+    #[error(
+        code = "STDIN_STALE_WRITE",
+        message = "A write from input generation {generation} arrived after the input moved to generation {current}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    StdinStaleWrite {
+        /// The generation the refused write carried
+        generation: u64,
+        /// The command's current generation
+        current: u64,
+    },
+
     /// The command's stdin is closed, by the caller or because the command stopped reading it.
     #[error(
         code = "STDIN_CLOSED",

@@ -298,6 +298,10 @@ impl SandboxRoute {
                 post(interactive_stdin).layer(axum::extract::DefaultBodyLimit::max(1 << 20)),
             )
             .route(
+                "/v1/sessions/{session_id}/interactive/stdin-barrier",
+                post(interactive_stdin_barrier),
+            )
+            .route(
                 "/v1/sessions/{session_id}/interactive/close-stdin",
                 post(interactive_close_stdin),
             )
@@ -529,6 +533,7 @@ struct InteractiveStartBody {
 #[serde(rename_all = "camelCase")]
 struct InteractiveStdinBody {
     id: String,
+    generation: u64,
     offset: u64,
     data: String,
 }
@@ -612,10 +617,27 @@ async fn interactive_stdin(
     })?;
     let accepted = state
         .interactive
-        .write(&session_id, &body.id, body.offset, &data)
+        .write(&session_id, &body.id, body.generation, body.offset, &data)
         .await
         .map_err(control_failed)?;
     Ok(Json(serde_json::json!({ "accepted": accepted })))
+}
+
+async fn interactive_stdin_barrier(
+    State(state): State<RouteState>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<InteractiveIdBody>,
+) -> std::result::Result<Json<serde_json::Value>, (StatusCode, String)> {
+    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
+    let (accepted, generation) = state
+        .interactive
+        .barrier(&session_id, &body.id)
+        .await
+        .map_err(control_failed)?;
+    Ok(Json(
+        serde_json::json!({ "accepted": accepted, "generation": generation }),
+    ))
 }
 
 async fn interactive_close_stdin(

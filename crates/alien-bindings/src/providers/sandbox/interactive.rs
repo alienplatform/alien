@@ -7,7 +7,9 @@
 //! The wire is the agent's: `POST /v1/interactive` streams NDJSON frames, decoded exactly as
 //! `run_command`'s are, and input, close and signal are short requests naming the command by an
 //! id this client chooses. Input carries its offset in the command's stdin, so a write whose
-//! answer was lost is sent again and applied once.
+//! answer was lost is sent again and applied once. After a write that was cancelled or failed,
+//! the next one first sends a barrier, which retires the earlier requests: one still on its way
+//! is refused when it arrives rather than landing ahead of the new bytes.
 
 use std::sync::Arc;
 
@@ -51,6 +53,13 @@ struct StdinResponse {
     accepted: u64,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BarrierResponse {
+    accepted: u64,
+    generation: u64,
+}
+
 /// Starts an interactive command on `agent`.
 pub async fn run_interactive(
     agent: Arc<dyn BoundAgent>,
@@ -76,6 +85,7 @@ pub async fn run_interactive(
             id,
             state: tokio::sync::Mutex::new(InputState {
                 offset: 0,
+                generation: 0,
                 interrupted: false,
             }),
         }),
@@ -97,9 +107,12 @@ struct AgentInput {
 struct InputState {
     /// Bytes of input the agent has acknowledged
     offset: u64,
+    /// The input generation writes carry, moved on by each barrier
+    generation: u64,
     /// Set while a write is in flight and left set if it ends without its last acknowledgement,
     /// because it was cancelled or failed. The agent may then have taken bytes this client never
-    /// heard about, and the next write at the old offset would be deduplicated against them.
+    /// heard about, or take them later from a request still on its way; either would be
+    /// deduplicated against the next write at the old offset.
     interrupted: bool,
 }
 
@@ -110,6 +123,7 @@ fn named_failure(body: &str) -> Option<&'static str> {
         ("COMMAND_NOT_RUNNING", "commandNotRunning"),
         ("STDIN_CLOSED", "stdinClosed"),
         ("STDIN_OFFSET_MISMATCH", "stdinOffsetMismatch"),
+        ("STDIN_STALE_WRITE", "stdinStaleWrite"),
         ("INTERACTIVE_LIMIT_REACHED", "interactiveLimitReached"),
     ]
     .into_iter()
@@ -159,33 +173,62 @@ impl AgentInput {
         }))
     }
 
-    /// Sends one piece of input at `offset` and returns the agent's total, retrying only a request
-    /// that went unanswered.
-    async fn send_piece(&self, offset: u64, piece: &[u8]) -> Result<u64> {
-        let body = json!({ "id": self.id, "offset": offset, "data": BASE64.encode(piece) });
+    /// Sends a control request, sending it again only while it goes unanswered, and parses the
+    /// answer. Only for requests that are safe to repeat.
+    async fn send_repeatable<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+        operation: &str,
+        field: &str,
+    ) -> Result<T> {
         let mut attempt = 0;
         let response = loop {
             attempt += 1;
-            match self
-                .control("/v1/interactive/stdin", body.clone(), WRITE_STDIN)
-                .await
-            {
+            match self.control(path, body.clone(), operation).await {
                 Ok(response) => break response,
-                // Unanswered, so the agent may or may not have taken the bytes. The offset makes
-                // sending them again apply them once either way.
                 Err(error) if error.retryable && attempt < WRITE_ATTEMPTS => continue,
                 Err(error) => return Err(error),
             }
         };
-        let taken: StdinResponse = response.json().await.into_alien_error().context(
-            ErrorData::UnexpectedResponseFormat {
+        response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::UnexpectedResponseFormat {
                 provider: self.agent.provider().to_string(),
-                binding_name: WRITE_STDIN.to_string(),
-                field: "accepted".to_string(),
+                binding_name: operation.to_string(),
+                field: field.to_string(),
                 response_json: "the agent returned a body this provider cannot parse".to_string(),
-            },
-        )?;
+            })
+    }
+
+    /// Sends one piece of input at `offset` and returns the agent's total. Unanswered, the agent
+    /// may or may not have taken the bytes; the offset makes sending them again apply them once
+    /// either way.
+    async fn send_piece(&self, generation: u64, offset: u64, piece: &[u8]) -> Result<u64> {
+        let body = json!({
+            "id": self.id,
+            "generation": generation,
+            "offset": offset,
+            "data": BASE64.encode(piece),
+        });
+        let taken: StdinResponse = self
+            .send_repeatable("/v1/interactive/stdin", body, WRITE_STDIN, "accepted")
+            .await?;
         Ok(taken.accepted)
+    }
+
+    /// Retires every write sent so far and returns where the input stands. A repeat only moves
+    /// the generation on again.
+    async fn barrier(&self) -> Result<BarrierResponse> {
+        self.send_repeatable(
+            "/v1/interactive/stdin-barrier",
+            json!({ "id": self.id }),
+            WRITE_STDIN,
+            "generation",
+        )
+        .await
     }
 }
 
@@ -194,11 +237,15 @@ impl CommandInput for AgentInput {
     async fn write(&self, data: &[u8]) -> Result<()> {
         let mut state = self.state.lock().await;
 
-        // An earlier write ended without its last acknowledgement. Ask where the input stands
-        // before sending anything: an empty write at the known offset answers with the agent's
-        // total and applies nothing.
+        // An earlier write ended without its last acknowledgement, and one of its requests may
+        // still be on its way. The barrier waits out any the agent is applying, refuses any that
+        // arrive later, and says where the input stands, before anything new is sent.
         if state.interrupted {
-            let taken = self.send_piece(state.offset, &[]).await?;
+            let BarrierResponse {
+                accepted: taken,
+                generation,
+            } = self.barrier().await?;
+            state.generation = generation;
             state.interrupted = false;
             if taken != state.offset {
                 let lost = taken.saturating_sub(state.offset);
@@ -219,7 +266,9 @@ impl CommandInput for AgentInput {
         while state.offset < end {
             let from = usize::try_from(state.offset - start).expect("within data");
             let piece = &data[from..(from + MAX_WRITE_BYTES).min(data.len())];
-            let taken = self.send_piece(state.offset, piece).await?;
+            let taken = self
+                .send_piece(state.generation, state.offset, piece)
+                .await?;
             // Never backwards, and never past what was sent: either would mean this client and
             // the agent disagree about the stream, and continuing would corrupt it silently.
             if taken < state.offset || taken > end {
