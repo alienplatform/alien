@@ -1717,21 +1717,33 @@ async fn prepare_import_stack(
     Ok(prepared)
 }
 
+/// Imported resources name the cloud account when they hold ARNs or project
+/// fields. A setup that records none of these (a Terraform setup record) sends
+/// the account it was bound to as `accountId` in its setup metadata.
 fn infer_import_environment_info(req: &StackImportRequest) -> Option<EnvironmentInfo> {
+    let setup_account = || {
+        req.setup_metadata
+            .as_ref()
+            .and_then(|metadata| string_field(metadata, "accountId"))
+    };
     match req.base_platform.unwrap_or(req.platform) {
-        Platform::Aws => infer_aws_account_id(req).map(|account_id| {
-            EnvironmentInfo::Aws(AwsEnvironmentInfo {
-                account_id,
-                region: req.region.clone(),
-            })
-        }),
-        Platform::Gcp => infer_gcp_project_id(req).map(|project_id| {
-            EnvironmentInfo::Gcp(GcpEnvironmentInfo {
-                project_number: infer_gcp_project_number(req).unwrap_or_default(),
-                project_id,
-                region: req.region.clone(),
-            })
-        }),
+        Platform::Aws => infer_aws_account_id(req)
+            .or_else(setup_account)
+            .map(|account_id| {
+                EnvironmentInfo::Aws(AwsEnvironmentInfo {
+                    account_id,
+                    region: req.region.clone(),
+                })
+            }),
+        Platform::Gcp => infer_gcp_project_id(req)
+            .or_else(setup_account)
+            .map(|project_id| {
+                EnvironmentInfo::Gcp(GcpEnvironmentInfo {
+                    project_number: infer_gcp_project_number(req).unwrap_or_default(),
+                    project_id,
+                    region: req.region.clone(),
+                })
+            }),
         Platform::Azure => infer_azure_environment_info(req),
         _ => None,
     }
@@ -2377,6 +2389,35 @@ mod setup_update_authorization_tests {
                 "{status} must not accept a concurrent setup repair"
             );
         }
+    }
+
+    #[test]
+    fn a_setup_record_without_account_resources_records_its_bound_account() {
+        let mut req = request();
+        req.region = "us-east-1".to_string();
+        req.setup_metadata = Some(serde_json::json!({
+            "setupRecord": "s3://bucket/setup/dep/intent.json",
+            "region": "us-east-1",
+            "accountId": "123456789012",
+        }));
+        assert_eq!(
+            infer_import_environment_info(&req),
+            Some(EnvironmentInfo::Aws(AwsEnvironmentInfo {
+                account_id: "123456789012".to_string(),
+                region: "us-east-1".to_string(),
+            }))
+        );
+
+        req.platform = Platform::Gcp;
+        req.setup_metadata = Some(serde_json::json!({ "accountId": "my-project" }));
+        assert_eq!(
+            infer_import_environment_info(&req),
+            Some(EnvironmentInfo::Gcp(GcpEnvironmentInfo {
+                project_number: String::new(),
+                project_id: "my-project".to_string(),
+                region: "us-east-1".to_string(),
+            }))
+        );
     }
 
     #[test]
