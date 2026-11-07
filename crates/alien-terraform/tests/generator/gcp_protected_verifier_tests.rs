@@ -44,6 +44,10 @@ fn the_verifier_may_read_its_settings_ledger_and_the_images_it_deploys() {
                     "publicRead": false, "type": "storage", "versioning": false
                 },
                 "lifecycle": "frozen", "dependencies": [], "remoteAccess": false
+            },
+            "verifier": {
+                "config": { "id": "verifier", "type": "verifier" },
+                "lifecycle": "frozen", "dependencies": [], "remoteAccess": false
             }
         },
         "permissions": { "profiles": { "execution": {} }, "management": "auto" }
@@ -57,13 +61,10 @@ fn the_verifier_may_read_its_settings_ledger_and_the_images_it_deploys() {
         ..StackSettings::default()
     };
     let module = render(&stack, TerraformTarget::Gcp, settings);
-    let signing = module.get("signing.tf").expect("signing.tf");
+    let text = module_text(&module);
     // The project-level roles granted to the verifier's account.
     let mut permissions = Vec::new();
-    for block in signing
-        .split("resource \"google_project_iam_member\"")
-        .skip(1)
-    {
+    for block in text.split("resource \"google_project_iam_member\"").skip(1) {
         let body = &block[..block.find("\n}").unwrap_or(block.len())];
         if !body.contains("google_service_account.signing_verifier.email") {
             continue;
@@ -175,11 +176,24 @@ async fn every_custom_role_permission_exists_on_gcp() {
     );
 }
 
+/// Every Terraform file of `module`, one after the other: the verifier's grants live in its own
+/// file and the signing settings' in `signing.tf`.
+fn module_text(module: &alien_terraform::ModuleFiles) -> String {
+    module
+        .iter()
+        .filter(|(path, _)| path.ends_with(".tf"))
+        .map(|(_, contents)| format!("{contents}\n"))
+        .collect()
+}
+
 /// Custom role label to its permissions, and the custom roles bound to the verifier with and
-/// without a condition, from a rendered `signing.tf`.
-fn verifier_custom_roles(signing: &str) -> (Vec<(String, Vec<String>)>, Vec<(String, bool)>) {
+/// without a condition, from the rendered module.
+fn verifier_custom_roles(text: &str) -> (Vec<(String, Vec<String>)>, Vec<(String, bool)>) {
     let mut roles = Vec::new();
-    for block in signing.split("resource \"google_project_iam_custom_role\" \"").skip(1) {
+    for block in text
+        .split("resource \"google_project_iam_custom_role\" \"")
+        .skip(1)
+    {
         let label = block[..block.find('"').unwrap()].to_string();
         let body = &block[..block.find("\n}").unwrap_or(block.len())];
         let permissions = body
@@ -197,7 +211,7 @@ fn verifier_custom_roles(signing: &str) -> (Vec<(String, Vec<String>)>, Vec<(Str
         roles.push((label, permissions));
     }
     let mut bindings = Vec::new();
-    for block in signing.split("resource \"google_project_iam_member\"").skip(1) {
+    for block in text.split("resource \"google_project_iam_member\"").skip(1) {
         let body = &block[..block.find("\n}").unwrap_or(block.len())];
         if !body.contains("google_service_account.signing_verifier.email") {
             continue;
@@ -218,7 +232,12 @@ fn verifier_custom_roles(signing: &str) -> (Vec<(String, Vec<String>)>, Vec<(Str
 fn the_verifier_holds_its_cloud_run_permissions_without_a_name_condition() {
     let stack: Stack = serde_json::from_value(serde_json::json!({
         "id": "app",
-        "resources": {},
+        "resources": {
+            "verifier": {
+                "config": { "id": "verifier", "type": "verifier" },
+                "lifecycle": "frozen", "dependencies": [], "remoteAccess": false
+            }
+        },
         "permissions": { "profiles": { "execution": {} }, "management": "auto" }
     }))
     .expect("stack");
@@ -230,7 +249,7 @@ fn the_verifier_holds_its_cloud_run_permissions_without_a_name_condition() {
         ..StackSettings::default()
     };
     let module = render(&stack, TerraformTarget::Gcp, settings);
-    let (roles, bindings) = verifier_custom_roles(module.get("signing.tf").expect("signing.tf"));
+    let (roles, bindings) = verifier_custom_roles(&module_text(&module));
     let unconditioned: Vec<&String> = roles
         .iter()
         .filter(|(label, _)| {

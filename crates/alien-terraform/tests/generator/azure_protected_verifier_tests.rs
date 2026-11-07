@@ -4,8 +4,8 @@
 
 use alien_core::{
     AzureContainerAppsEnvironment, AzureResourceGroup, ContainerAppsEnvironmentBinding,
-    ExternalBinding, ExternalBindings, RemoteStackManagement, ResourceLifecycle, Stack,
-    StackSettings, StackSigning, Worker, WorkerCode,
+    ExternalBinding, ExternalBindings, RemoteStackManagement, ResourceLifecycle, SigningVerifier,
+    Stack, StackSettings, StackSigning, Worker, WorkerCode,
 };
 use alien_terraform::TerraformTarget;
 
@@ -37,7 +37,12 @@ fn stack(environments: &[&str]) -> Stack {
             ResourceLifecycle::Frozen,
         );
     }
+    // What the preflight adds to a protected stack with a function.
     stack
+        .add(
+            SigningVerifier::new(SigningVerifier::ID.to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
         .add(
             Worker::new("api".to_string())
                 .code(WorkerCode::Image {

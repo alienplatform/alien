@@ -27,7 +27,17 @@ pub async fn prepare_for_render(stack: Stack) -> Stack {
 
 /// The stack as `alien render --format terraform --target <target>` prepares it, on the target's
 /// deployment platform: Kubernetes, on its cloud, for a managed Kubernetes target.
-pub async fn prepare_for_target(mut stack: Stack, target: TerraformTarget) -> Stack {
+pub async fn prepare_for_target(stack: Stack, target: TerraformTarget) -> Stack {
+    prepare_for_target_with(stack, target, StackSettings::default()).await
+}
+
+/// [`prepare_for_target`] for a stack deployed with `settings`, which some mutations read (a
+/// protected stack gets its verifier).
+pub async fn prepare_for_target_with(
+    mut stack: Stack,
+    target: TerraformTarget,
+    settings: StackSettings,
+) -> Stack {
     let platform = target.deployment_platform();
     alien_core::remove_off_platform_gated_resources(&mut stack, platform, None);
     let runner = PreflightRunner::new();
@@ -37,7 +47,7 @@ pub async fn prepare_for_target(mut stack: Stack, target: TerraformTarget) -> St
         .expect("template preflights pass");
     let config = DeploymentConfig::builder()
         .deployment_name(stack.id().to_string())
-        .stack_settings(StackSettings::default())
+        .stack_settings(settings)
         .management_config(ManagementConfig::Aws(AwsManagementConfig {
             managing_role_arn: "rendered-from-template-parameter".to_string(),
         }))
@@ -257,6 +267,13 @@ pub fn snapshot_module(name: &str, module: &ModuleFiles) {
 pub fn assert_terraform_valid(module: &ModuleFiles, context: &str) {
     let files = linter_files(module);
     test_utils::terraform_fmt_check(&files).assert_ok(format!("{context} terraform fmt -check"));
+    test_utils::terraform_validate(&files).assert_ok(format!("{context} terraform validate"));
+}
+
+/// `terraform validate` alone, for a protected module: the generator leaves it unformatted so
+/// its bytes don't depend on the renderer's PATH.
+pub fn assert_terraform_validates(module: &ModuleFiles, context: &str) {
+    let files = linter_files(module);
     test_utils::terraform_validate(&files).assert_ok(format!("{context} terraform validate"));
 }
 
