@@ -201,6 +201,7 @@ async fn poll_and_dispatch(
                     &target.resource_id,
                     config,
                     &state.db,
+                    &state.service_provider,
                 )
                 .await
             },
@@ -425,6 +426,8 @@ struct PublishedWorkerDispatcher {
     target_url: String,
     resource_id: String,
     db: Arc<OperatorDb>,
+    config: crate::config::OperatorConfig,
+    service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
 }
 
 impl std::fmt::Debug for PublishedWorkerDispatcher {
@@ -439,6 +442,20 @@ impl std::fmt::Debug for PublishedWorkerDispatcher {
 #[async_trait]
 impl CommandDispatcher for PublishedWorkerDispatcher {
     async fn dispatch(&self, envelope: &alien_commands::Envelope) -> alien_commands::Result<()> {
+        // A Worker deployed before the Operator enrolled still checks pushes
+        // against its deployment token until the next rollout replaces it.
+        if let Some(token) = legacy_push_token(
+            &self.db,
+            &self.config,
+            self.service_provider.as_ref(),
+            &self.resource_id,
+        )
+        .await
+        {
+            return HttpCommandDispatcher::new(self.client.clone(), self.target_url.clone(), token)
+                .dispatch(envelope)
+                .await;
+        }
         let credential = crate::daily_identity::published_capability(&self.db,
             &json!({"type":"receiveCommands", "target":{"resourceId":self.resource_id,"resourceType":"worker"}}),
         ).await.context(alien_commands::ErrorData::TransportDispatchRejected {
@@ -460,6 +477,58 @@ impl CommandDispatcher for PublishedWorkerDispatcher {
     }
 }
 
+/// The deployment token a Kubernetes Worker still reads from its environment
+/// Secret, if it runs a revision deployed before the Operator enrolled. The
+/// enrolled Operator no longer writes this variable, so a Worker it deployed
+/// has none and gets the published capability instead.
+async fn legacy_push_token(
+    db: &OperatorDb,
+    config: &crate::config::OperatorConfig,
+    service_provider: Option<&Arc<dyn alien_infra::PlatformServiceProvider>>,
+    resource_id: &str,
+) -> Option<String> {
+    if config.platform != Platform::Kubernetes {
+        return None;
+    }
+    let state = db.get_deployment_state().await.ok()??;
+    let internal = state
+        .stack_state?
+        .resources
+        .get(resource_id)?
+        .internal_state
+        .clone()?;
+    if internal.get("type")?.as_str()? != "KubernetesWorkerController" {
+        return None;
+    }
+    let workload = internal.get("deploymentName")?.as_str()?.to_owned();
+    let namespace = internal.get("namespace")?.as_str()?.to_owned();
+    let ClientConfig::Kubernetes(kubernetes) = super::deployment::resolve_client_config(
+        Platform::Kubernetes,
+        None,
+        &config.data_dir,
+        config.namespace.clone(),
+        None,
+    )
+    .await
+    .ok()?
+    else {
+        return None;
+    };
+    let provider = service_provider
+        .cloned()
+        .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));
+    let secrets = provider
+        .get_kubernetes_secrets_client(&kubernetes)
+        .await
+        .ok()?;
+    let secret = secrets
+        .get_secret(&namespace, &format!("{workload}-env"))
+        .await
+        .ok()?;
+    let token = secret.data?.remove(alien_core::ENV_ALIEN_COMMANDS_TOKEN)?;
+    String::from_utf8(token.0).ok().filter(|token| !token.is_empty())
+}
+
 /// Create a platform-specific command dispatcher.
 async fn create_dispatcher(
     platform: Platform,
@@ -467,6 +536,7 @@ async fn create_dispatcher(
     resource_id: &str,
     config: &crate::config::OperatorConfig,
     db: &Arc<OperatorDb>,
+    service_provider: &Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
 ) -> Result<Box<dyn CommandDispatcher>, String> {
     let http_client = Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -485,6 +555,8 @@ async fn create_dispatcher(
                 target_url: push_target.to_owned(),
                 resource_id: resource_id.to_owned(),
                 db: db.clone(),
+                config: config.clone(),
+                service_provider: service_provider.clone(),
             }));
         }
         let token = config
@@ -890,4 +962,140 @@ mod tests {
         assert!(!rebuilt);
         assert_eq!(builds.get(), 3);
     }
+
+    /// F3: Workers deployed before the Operator enrolled check pushes against
+    /// the deployment token in their environment Secret. The enrolled Operator
+    /// pushes to them with that token, and to a Worker it deployed itself
+    /// (no token in the Secret) with the published capability.
+    #[tokio::test]
+    async fn workers_from_before_enrollment_still_receive_commands() {
+        use axum::{extract::State, http::HeaderMap, routing::{get, post}, Json, Router};
+        use base64::Engine as _;
+        use std::sync::Mutex;
+
+        const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        type Env = Arc<Mutex<serde_json::Value>>;
+        let env: Env = Arc::new(Mutex::new(serde_json::Value::Null));
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let kubernetes = Router::new()
+            .route(
+                "/api/v1/namespaces/agents/secrets/agent-deploy-env",
+                get(|State(env): State<Env>| async move { Json(env.lock().unwrap().clone()) }),
+            )
+            .with_state(env.clone());
+        let worker = Router::new()
+            .route(
+                "/",
+                post(|State(seen): State<Arc<Mutex<Vec<String>>>>, headers: HeaderMap| async move {
+                    seen.lock().unwrap().push(
+                        headers["authorization"].to_str().unwrap().to_owned(),
+                    );
+                    axum::http::StatusCode::ACCEPTED
+                }),
+            )
+            .with_state(seen.clone());
+        let mut addresses = Vec::new();
+        for app in [kubernetes, worker] {
+            let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                .await
+                .unwrap();
+            addresses.push(listener.local_addr().unwrap());
+            tokio::spawn(async move { axum::serve(listener, app).await });
+        }
+        let client: Arc<dyn alien_k8s_clients::SecretsApi> = Arc::new(
+            alien_k8s_clients::KubernetesClient::new(alien_k8s_clients::KubernetesClientConfig::Manual {
+                server_url: format!("http://{}", addresses[0]),
+                certificate_authority_data: None,
+                insecure_skip_tls_verify: None,
+                client_certificate_data: None,
+                client_key_data: None,
+                token: Some("test-token".to_string()),
+                username: None,
+                password: None,
+                namespace: Some("agents".to_string()),
+                additional_headers: HashMap::new(),
+            })
+            .await
+            .unwrap(),
+        );
+        let mut provider = alien_infra::MockPlatformServiceProvider::new();
+        provider
+            .expect_get_kubernetes_secrets_client()
+            .returning(move |_| Ok(client.clone()));
+
+        let data_dir = tempfile::tempdir().unwrap();
+        let directory = data_dir.path().to_str().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(directory, KEY)
+                .await
+                .unwrap(),
+        );
+        db.set_deployment_id("dep_f3").await.unwrap();
+        let mut stack_state = StackState::new(Platform::Kubernetes);
+        let mut agent = worker_state("agent", Some("unused"));
+        agent.internal_state = Some(serde_json::json!({
+            "type": "KubernetesWorkerController",
+            "deploymentName": "agent-deploy",
+            "namespace": "agents",
+        }));
+        stack_state.resources.insert("agent".into(), agent);
+        db.set_deployment_state(&alien_core::DeploymentState {
+            platform: Platform::Kubernetes,
+            status: alien_core::DeploymentStatus::Running,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(stack_state),
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        })
+        .await
+        .unwrap();
+        db.published_runtime_credentials.lock().await.insert(
+            serde_json::to_string(&serde_json::json!({"type":"receiveCommands", "target":{"resourceId":"agent","resourceType":"worker"}})).unwrap(),
+            alien_client_core::runtime_credentials::RuntimeCapability {
+                token: "ax_cap_v1_published".into(),
+                expires_at: Utc::now() + chrono::Duration::minutes(30),
+            },
+        );
+        let dispatcher = PublishedWorkerDispatcher {
+            client: Client::new(),
+            target_url: format!("http://{}/", addresses[1]),
+            resource_id: "agent".into(),
+            db,
+            config: crate::config::OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(directory)
+                .encryption_key(KEY)
+                .build(),
+            service_provider: Some(Arc::new(provider)),
+        };
+        let envelope = lease_response(BodySpec::inline(b"{}"))
+            .leases
+            .remove(0)
+            .envelope;
+
+        // Deployed before enrollment: the token is in its environment Secret.
+        let encoded = base64::engine::general_purpose::STANDARD.encode("ax_deploy_before");
+        *env.lock().unwrap() = serde_json::json!({
+            "apiVersion": "v1", "kind": "Secret",
+            "metadata": {"name": "agent-deploy-env", "namespace": "agents"},
+            "data": {"ALIEN_COMMANDS_TOKEN": encoded},
+        });
+        dispatcher.dispatch(&envelope).await.unwrap();
+        // Rolled out by the enrolled Operator: no token, capability files.
+        *env.lock().unwrap() = serde_json::json!({
+            "apiVersion": "v1", "kind": "Secret",
+            "metadata": {"name": "agent-deploy-env", "namespace": "agents"},
+            "data": {},
+        });
+        dispatcher.dispatch(&envelope).await.unwrap();
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["Bearer ax_deploy_before".to_string(), "Bearer ax_cap_v1_published".to_string()]
+        );
+    }
+
 }
