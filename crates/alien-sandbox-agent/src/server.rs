@@ -94,6 +94,8 @@ pub struct AgentState {
     pub output_cap: usize,
     /// Detached jobs this session is running or retaining for later polls
     pub jobs: JobRegistry,
+    /// Interactive commands this session is running
+    pub interactive: Arc<crate::interactive::InteractiveRegistry>,
     /// Gateway forwarding and readiness; absent only for legacy images.
     #[cfg(target_os = "linux")]
     pub gateway_egress: Option<Arc<crate::gateway_egress::GatewayEgress>>,
@@ -316,6 +318,19 @@ pub fn router(state: Arc<AgentState>) -> Router {
         .route("/v1/jobs/start", post(job_start))
         .route("/v1/jobs/poll", post(job_poll))
         .route("/v1/jobs/cancel", post(job_cancel))
+        .route("/v1/interactive", post(interactive_start))
+        // A write is at most 256 KiB from the client, so the file-transfer ceiling the rest of the
+        // router allows would only let a hostile caller make the agent hold more per request.
+        .route(
+            "/v1/interactive/stdin",
+            post(interactive_stdin).layer(axum::extract::DefaultBodyLimit::max(1 << 20)),
+        )
+        .route(
+            "/v1/interactive/stdin-barrier",
+            post(interactive_stdin_barrier),
+        )
+        .route("/v1/interactive/close-stdin", post(interactive_close_stdin))
+        .route("/v1/interactive/signal", post(interactive_signal))
         // The GCP Agent Platform proxies `:execute` to `POST /` with the body verbatim and can set
         // neither path nor method, so the one route it can reach carries every operation, chosen
         // by `op`. Placed before the body-limit layer so an envelope `writeFile` shares the same
@@ -517,6 +532,12 @@ async fn run_command(
         .await;
     });
 
+    ndjson_response(receiver)
+}
+
+/// Streams frames as NDJSON until the sender is done. Dropping the body drops the receiver, which
+/// is how a departed caller reaches the command.
+fn ndjson_response(receiver: mpsc::Receiver<Frame>) -> std::result::Result<Response, ApiError> {
     let frames = futures::stream::unfold(receiver, |mut receiver| async move {
         let frame = receiver.recv().await?;
         Some((encode_frame(&frame), receiver))
@@ -531,6 +552,213 @@ async fn run_command(
                 reason: error.to_string(),
             }))
         })
+}
+
+/// An interactive command to start, under an id the caller chose.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveStartBody {
+    /// The id every later write, close and signal names
+    pub id: String,
+    /// The command, as `/v1/exec` takes it
+    #[serde(flatten)]
+    pub request: ExecRequest,
+}
+
+/// Bytes for an interactive command's stdin.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveStdinBody {
+    /// The command
+    pub id: String,
+    /// The input generation the caller is writing in: 0 until its first barrier
+    pub generation: u64,
+    /// Where `data` starts in the command's input, counted from its first byte
+    pub offset: u64,
+    /// The bytes, base64
+    pub data: String,
+}
+
+/// How much of its input an interactive command has taken.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveStdinResponse {
+    /// Bytes taken in total. Short of `offset` plus the write's length means the command stopped
+    /// reading for a while; resend from here.
+    pub accepted: u64,
+}
+
+/// A barrier on an interactive command's input.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveBarrierBody {
+    /// The command
+    pub id: String,
+    /// The generation to move the input to; a barrier that finds it already there changes nothing
+    pub generation: u64,
+}
+
+/// Where an interactive command's input stands after a barrier.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveBarrierResponse {
+    /// Bytes taken in total, including any from writes the barrier retired
+    pub accepted: u64,
+    /// The generation every later write carries
+    pub generation: u64,
+}
+
+/// Which interactive command.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveIdBody {
+    /// The command
+    pub id: String,
+}
+
+/// A signal for an interactive command.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveSignalBody {
+    /// The command
+    pub id: String,
+    /// The signal, by name
+    pub signal: alien_core::sandbox_signal::CommandSignal,
+}
+
+/// Starts an interactive command and streams its output.
+///
+/// The id is reserved and the command spawned before the response answers, so the caller's first
+/// write cannot race the registration. A command that could not start still answers with a stream,
+/// whose only frame says why, as `/v1/exec` does.
+async fn interactive_start(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(mut body): Json<InteractiveStartBody>,
+) -> std::result::Result<Response, ApiError> {
+    authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+
+    state.native_environment(&mut body.request.env);
+    #[cfg(target_os = "linux")]
+    if let Some(egress) = &state.gateway_egress {
+        egress.command_environment(&mut body.request.env)?;
+    }
+    let working_directory = match &body.request.cwd {
+        Some(path) => resolve_within_root(&state.session_root, path)?,
+        None => state.session_root.clone(),
+    };
+
+    let reservation = state.interactive.reserve(&body.id)?;
+    let (sender, receiver) = mpsc::channel(FRAME_CHANNEL_DEPTH);
+
+    match exec::spawn(
+        &body.request,
+        Some(&working_directory),
+        state.exec_identity,
+        true,
+    ) {
+        Err(frame) => {
+            drop(reservation);
+            let _ = sender.try_send(frame);
+        }
+        Ok((mut child, registration)) => {
+            let group = child.id().and_then(|pid| i32::try_from(pid).ok());
+            let Some(group) = group else {
+                return Err(ApiError::from(AlienError::new(
+                    ErrorData::OperationFailed {
+                        operation: "start interactive command".to_string(),
+                        reason: "the spawned command has no pid".to_string(),
+                    },
+                )));
+            };
+            reservation.attach(child.stdin.take(), group).await;
+
+            let timeout = std::time::Duration::from_millis(body.request.timeout_ms);
+            let output_cap = state.output_cap;
+            tokio::spawn(async move {
+                exec::pump(
+                    child,
+                    timeout,
+                    output_cap,
+                    alien_core::sandbox_process::Framing::Chunks,
+                    sender,
+                    // The group is forgotten once the command exits and before it is reaped,
+                    // not when the terminal frame is delivered, which a slow reader can hold off
+                    // indefinitely.
+                    Some(|| reservation.exited()),
+                )
+                .await;
+                drop(reservation);
+                drop(registration);
+            });
+        }
+    }
+
+    ndjson_response(receiver)
+}
+
+async fn interactive_stdin(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<InteractiveStdinBody>,
+) -> std::result::Result<Json<InteractiveStdinResponse>, ApiError> {
+    authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+
+    let data = BASE64.decode(&body.data).map_err(|error| {
+        AlienError::new(ErrorData::RequestInvalid {
+            reason: format!("data is not valid base64: {error}"),
+        })
+    })?;
+    let accepted = state
+        .interactive
+        .write(
+            &body.id,
+            body.generation,
+            body.offset,
+            &data,
+            crate::interactive::STDIN_WRITE_WAIT,
+        )
+        .await?;
+
+    Ok(Json(InteractiveStdinResponse { accepted }))
+}
+
+async fn interactive_stdin_barrier(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<InteractiveBarrierBody>,
+) -> std::result::Result<Json<InteractiveBarrierResponse>, ApiError> {
+    authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    let (accepted, generation) = state.interactive.barrier(&body.id, body.generation).await?;
+    Ok(Json(InteractiveBarrierResponse {
+        accepted,
+        generation,
+    }))
+}
+
+async fn interactive_close_stdin(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<InteractiveIdBody>,
+) -> std::result::Result<StatusCode, ApiError> {
+    authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    state.interactive.close_stdin(&body.id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn interactive_signal(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<InteractiveSignalBody>,
+) -> std::result::Result<StatusCode, ApiError> {
+    authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    state.interactive.signal(&body.id, body.signal)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Serializes one frame as an NDJSON line.

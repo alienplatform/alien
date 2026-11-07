@@ -130,6 +130,9 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
   }
 
   const sandboxHandle: RawSandboxHandle = {
+    runInteractive: async () => {
+      throw new Error("not used by this test")
+    },
     updateEgress: async () => {},
     capabilities: () => ["reconnect"],
     sessionCapabilities: async () => ["reconnect"],
@@ -1488,5 +1491,67 @@ describe("sandbox streaming", () => {
     const read = await sandbox("sbx").readFile("s1", "a.txt")
 
     expect(Buffer.isBuffer(read)).toBe(true)
+  })
+})
+
+describe("sandbox interactive commands", () => {
+  it("forwards input and signals to the addon and ends the command when the loop leaves", async () => {
+    const { addon } = fakeAddon()
+    const writes: Buffer[] = []
+    const signals: string[] = []
+    let closed = 0
+    let stdinClosed = 0
+    const frames = [
+      { kind: "stdout", seq: 0, data: Buffer.from("> ") },
+      { kind: "stdout", seq: 1, data: Buffer.from("=2\n> ") },
+    ]
+    const runInteractive = vi.fn<RawSandboxHandle["runInteractive"]>(async () => ({
+      next: async () => frames.shift() ?? null,
+      close: async () => {
+        closed += 1
+      },
+      write: async (data: Buffer) => {
+        writes.push(data)
+      },
+      closeStdin: async () => {
+        stdinClosed += 1
+      },
+      signal: async (signal: string) => {
+        signals.push(signal)
+      },
+    }))
+
+    class InteractiveBindingsHandle {
+      async sandbox(name: string): Promise<RawSandboxHandle> {
+        const inner = await new addon.BindingsHandle().sandbox(name)
+        return { ...inner, runInteractive }
+      }
+    }
+
+    const { sandbox } = createFactories(() => ({
+      ...addon,
+      BindingsHandle: InteractiveBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    }))
+    const command = await sandbox("sbx").runInteractive("s1", "python3", {
+      args: ["-i"],
+      timeoutMs: 60_000,
+    })
+    expect(runInteractive).toHaveBeenCalledWith("s1", "python3", ["-i"], 60_000, null, null)
+
+    await command.write("1+1\n")
+    await command.write(Buffer.from([0, 255]))
+    await command.signal("interrupt")
+    await command.closeStdin()
+    expect(writes).toEqual([Buffer.from("1+1\n"), Buffer.from([0, 255])])
+    expect(signals).toEqual(["interrupt"])
+    expect(stdinClosed).toBe(1)
+
+    const seen: string[] = []
+    for await (const frame of command) {
+      if (frame.kind === "stdout") seen.push(frame.data.toString())
+      if (seen.length === 1) break
+    }
+    expect(seen).toEqual(["> "])
+    expect(closed).toBe(1)
   })
 })

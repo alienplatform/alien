@@ -269,11 +269,61 @@ impl CommandStreamHandle {
     }
 }
 
+/// A running interactive command: the output stream `runCommand` returns, plus its stdin and
+/// signals. A thin handle over the Rust command; nothing here reimplements it.
+#[napi]
+pub struct InteractiveCommandHandle {
+    output: CommandStreamHandle,
+    input: Arc<dyn alien_bindings::traits::CommandInput>,
+}
+
+#[napi]
+impl InteractiveCommandHandle {
+    /// The next output frame, or `null` once the terminal frame has been delivered.
+    #[napi]
+    pub async fn next(&self) -> napi::Result<Option<CommandFrameJs>> {
+        self.output.next().await
+    }
+
+    /// Ends the command by releasing its output, as `CommandStreamHandle.close` does.
+    #[napi]
+    pub async fn close(&self) {
+        self.output.close().await
+    }
+
+    /// Writes bytes to stdin. Resolves once the sandbox has handed them to the program.
+    #[napi]
+    pub async fn write(&self, data: Buffer) -> napi::Result<()> {
+        self.input.write(&data).await.map_err(map_alien_error)
+    }
+
+    /// End of input. Closing again, or after the command ended, is not an error.
+    #[napi]
+    pub async fn close_stdin(&self) -> napi::Result<()> {
+        self.input.close_stdin().await.map_err(map_alien_error)
+    }
+
+    /// Signals the command's process group: `interrupt`, `terminate`, `kill`, `hangup`, `quit`,
+    /// `user1` or `user2`.
+    #[napi]
+    pub async fn signal(&self, signal: String) -> napi::Result<()> {
+        let parsed: alien_bindings::traits::CommandSignal =
+            serde_json::from_value(serde_json::Value::String(signal.clone())).map_err(|_| {
+                napi::Error::new(
+                    napi::Status::InvalidArg,
+                    format!("unknown signal '{signal}'"),
+                )
+            })?;
+        self.input.signal(parsed).await.map_err(map_alien_error)
+    }
+}
+
 fn capability_names(value: alien_core::SandboxCapabilities) -> Vec<String> {
     let alien_core::SandboxCapabilities {
         files,
         reconnect,
         jobs,
+        interactive_commands,
         preview,
         pause_resume,
         snapshot: _,
@@ -290,6 +340,7 @@ fn capability_names(value: alien_core::SandboxCapabilities) -> Vec<String> {
         (files, "files"),
         (reconnect, "reconnect"),
         (jobs, "jobs"),
+        (interactive_commands, "interactiveCommands"),
         (preview, "preview"),
         (pause_resume, "pauseResume"),
         (domain_egress_rules, "domainEgressRules"),
@@ -467,6 +518,39 @@ impl SandboxHandle {
             .map_err(map_alien_error)?;
 
         Ok(CommandStreamHandle::new(frames))
+    }
+
+    /// Starts a command the caller can write to and signal while reading its output. Requires
+    /// `interactiveCommands`.
+    #[napi]
+    pub async fn run_interactive(
+        &self,
+        sandbox_id: String,
+        command: String,
+        args: Vec<String>,
+        timeout_ms: u32,
+        cwd: Option<String>,
+        env: Option<std::collections::HashMap<String, String>>,
+    ) -> napi::Result<InteractiveCommandHandle> {
+        let sandbox = self.inner.clone();
+        let command = sandbox
+            .run_interactive(
+                &sandbox_id,
+                RunCommandRequest {
+                    command,
+                    args,
+                    cwd,
+                    env: into_env(env),
+                    timeout: Duration::from_millis(u64::from(timeout_ms)),
+                },
+            )
+            .await
+            .map_err(map_alien_error)?;
+
+        Ok(InteractiveCommandHandle {
+            output: CommandStreamHandle::new(command.output),
+            input: command.input,
+        })
     }
 
     /// Starts a command as a job, returning the id later polls and cancels address.

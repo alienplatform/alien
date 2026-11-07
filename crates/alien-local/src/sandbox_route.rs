@@ -132,6 +132,8 @@ struct RouteState {
     /// updated declaration — new limits, image, egress or preview ports — reaches sessions
     /// created after it without rebinding the route the workload was already given.
     template: Arc<Mutex<SandboxSessionConfig>>,
+    /// Interactive commands across this sandbox's sessions
+    interactive: Arc<crate::sandbox_interactive::InteractiveRegistry>,
 }
 
 /// A running loopback route, and where to reach it.
@@ -271,6 +273,7 @@ impl SandboxRoute {
             sandbox: sandbox.to_string(),
             token,
             template: Arc::clone(&template),
+            interactive: Default::default(),
         };
 
         let router = Router::new()
@@ -285,6 +288,27 @@ impl SandboxRoute {
                 get(read_file).put(write_file),
             )
             .route("/v1/sessions/{session_id}/preview", get(preview))
+            .route(
+                "/v1/sessions/{session_id}/interactive",
+                post(interactive_start),
+            )
+            // A write is at most 256 KiB from the client; nothing larger is a write.
+            .route(
+                "/v1/sessions/{session_id}/interactive/stdin",
+                post(interactive_stdin).layer(axum::extract::DefaultBodyLimit::max(1 << 20)),
+            )
+            .route(
+                "/v1/sessions/{session_id}/interactive/stdin-barrier",
+                post(interactive_stdin_barrier),
+            )
+            .route(
+                "/v1/sessions/{session_id}/interactive/close-stdin",
+                post(interactive_close_stdin),
+            )
+            .route(
+                "/v1/sessions/{session_id}/interactive/signal",
+                post(interactive_signal),
+            )
             .with_state(state);
 
         let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
@@ -490,6 +514,175 @@ async fn exec(
             .collect(),
         exit_code: result.exit_code,
     }))
+}
+
+/// An interactive command to start: the agent's `/v1/interactive` body.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InteractiveStartBody {
+    id: String,
+    command: Vec<String>,
+    timeout_ms: u64,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    env: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InteractiveStdinBody {
+    id: String,
+    generation: u64,
+    offset: u64,
+    data: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InteractiveIdBody {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InteractiveBarrierBody {
+    id: String,
+    generation: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InteractiveSignalBody {
+    id: String,
+    signal: alien_core::sandbox_signal::CommandSignal,
+}
+
+fn control_failed(error: crate::sandbox_interactive::ControlError) -> (StatusCode, String) {
+    let (status, body) = error.response();
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
+        body,
+    )
+}
+
+/// Starts an interactive command and streams its frames as NDJSON, as the agent does.
+async fn interactive_start(
+    State(state): State<RouteState>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<InteractiveStartBody>,
+) -> std::result::Result<axum::response::Response, (StatusCode, String)> {
+    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
+    let container_id = container_for(&state, &session_id).await?;
+
+    // Run to completion even if the caller disconnects mid-start: a start dropped after Docker
+    // began the exec would leave a command nobody tracks or bounds. Finished, it hands its frames
+    // to a receiver that is dropped, and the pump then ends the command as for any caller who left.
+    let registry = Arc::clone(&state.interactive);
+    let manager = Arc::clone(&state.manager);
+    let receiver = tokio::spawn(async move {
+        registry
+            .start(
+                manager,
+                &session_id,
+                container_id,
+                crate::sandbox_interactive::StartRequest {
+                    id: body.id,
+                    command: body.command,
+                    timeout: std::time::Duration::from_millis(body.timeout_ms),
+                    cwd: body.cwd,
+                    env: body.env,
+                },
+            )
+            .await
+    })
+    .await
+    .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+    .map_err(control_failed)?;
+
+    let frames = futures::stream::unfold(receiver, |mut receiver| async move {
+        let frame = receiver.recv().await?;
+        let mut line = match serde_json::to_vec(&frame) {
+            Ok(line) => line,
+            Err(error) => return Some((Err(std::io::Error::other(error)), receiver)),
+        };
+        line.push(b'\n');
+        Some((Ok(bytes::Bytes::from(line)), receiver))
+    });
+
+    axum::response::Response::builder()
+        .header(axum::http::header::CONTENT_TYPE, "application/x-ndjson")
+        .body(axum::body::Body::from_stream(frames))
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
+}
+
+async fn interactive_stdin(
+    State(state): State<RouteState>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<InteractiveStdinBody>,
+) -> std::result::Result<Json<serde_json::Value>, (StatusCode, String)> {
+    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
+    let data = BASE64.decode(&body.data).map_err(|error| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("data is not base64: {error}"),
+        )
+    })?;
+    let accepted = state
+        .interactive
+        .write(&session_id, &body.id, body.generation, body.offset, &data)
+        .await
+        .map_err(control_failed)?;
+    Ok(Json(serde_json::json!({ "accepted": accepted })))
+}
+
+async fn interactive_stdin_barrier(
+    State(state): State<RouteState>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<InteractiveBarrierBody>,
+) -> std::result::Result<Json<serde_json::Value>, (StatusCode, String)> {
+    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
+    let (accepted, generation) = state
+        .interactive
+        .barrier(&session_id, &body.id, body.generation)
+        .await
+        .map_err(control_failed)?;
+    Ok(Json(
+        serde_json::json!({ "accepted": accepted, "generation": generation }),
+    ))
+}
+
+async fn interactive_close_stdin(
+    State(state): State<RouteState>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<InteractiveIdBody>,
+) -> std::result::Result<StatusCode, (StatusCode, String)> {
+    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
+    state
+        .interactive
+        .close_stdin(&session_id, &body.id)
+        .await
+        .map_err(control_failed)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn interactive_signal(
+    State(state): State<RouteState>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<InteractiveSignalBody>,
+) -> std::result::Result<StatusCode, (StatusCode, String)> {
+    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
+    state
+        .interactive
+        .signal(&state.manager, &session_id, &body.id, body.signal)
+        .await
+        .map_err(control_failed)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn write_file(

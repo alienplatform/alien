@@ -109,6 +109,76 @@ pub enum ErrorData {
         limit: usize,
     },
 
+    /// A write, close or signal named an interactive command that is not running.
+    #[error(
+        code = "COMMAND_NOT_RUNNING",
+        message = "No interactive command '{id}' is running",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 404
+    )]
+    CommandNotRunning {
+        /// The id as the caller supplied it
+        id: String,
+    },
+
+    /// Every interactive slot holds a running command.
+    #[error(
+        code = "INTERACTIVE_LIMIT_REACHED",
+        message = "The session is running its maximum of {limit} interactive commands; retry once one finishes",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 429
+    )]
+    InteractiveLimitReached {
+        /// The ceiling on concurrent interactive commands
+        limit: usize,
+    },
+
+    /// A write started past the input the command has taken, so bytes before it never arrived.
+    #[error(
+        code = "STDIN_OFFSET_MISMATCH",
+        message = "The command has taken {accepted} bytes of input; a write at offset {offset} would leave a gap",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    StdinOffsetMismatch {
+        /// Bytes the command has taken
+        accepted: u64,
+        /// Where the refused write started
+        offset: u64,
+    },
+
+    /// A write from before the caller's last barrier, arriving after it. Applying it would put
+    /// bytes the caller has already given up on ahead of the ones it sent since.
+    #[error(
+        code = "STDIN_STALE_WRITE",
+        message = "A write from input generation {generation} arrived after the input moved to generation {current}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    StdinStaleWrite {
+        /// The generation the refused write carried
+        generation: u64,
+        /// The command's current generation
+        current: u64,
+    },
+
+    /// The command's stdin is closed, by the caller or because the command stopped reading it.
+    #[error(
+        code = "STDIN_CLOSED",
+        message = "Interactive command '{id}' no longer reads its input",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    StdinClosed {
+        /// The command's id
+        id: String,
+    },
+
     /// The image's validate hook found it unable to serve a session.
     ///
     /// 500, never 503: the MicroVM service retries a 503 until the hook's timeout, and nothing

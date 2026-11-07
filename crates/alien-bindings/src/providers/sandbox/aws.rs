@@ -18,8 +18,8 @@ use crate::error::{ErrorData, Result};
 use crate::providers::sandbox::agent_protocol::{self, AgentTransport, AGENT_PORT};
 use crate::providers::sandbox::refusal::Unreachable;
 use crate::traits::{
-    Binding, CommandOutput, CreateSandboxRequest, JobPoll, JobStart, PreviewCapability,
-    ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
+    Binding, CommandOutput, CreateSandboxRequest, InteractiveCommand, JobPoll, JobStart,
+    PreviewCapability, ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
 };
 use alien_aws_clients::aws::lambda_microvms::{LambdaMicrovmsApi, Microvm, MAX_AUTH_TOKEN_MINUTES};
 use alien_core::{Platform, SandboxCapabilities};
@@ -704,6 +704,69 @@ impl AgentTransport for AwsSandbox {
     }
 }
 
+/// One MicroVM's agent, held for an interactive command.
+///
+/// Ownership is checked and the endpoint read once, at bind. The token is reused until shortly
+/// before it expires: input is many small requests, and minting per request would put a cloud
+/// call in front of every keystroke.
+#[derive(Debug)]
+struct AwsBoundAgent {
+    microvms: Arc<dyn LambdaMicrovmsApi>,
+    client: reqwest::Client,
+    sandbox_id: String,
+    endpoint: String,
+    token: tokio::sync::Mutex<Option<(std::time::Instant, Vec<(String, String)>)>>,
+}
+
+/// How long a minted agent token is reused: a minute short of its life, so a request built at the
+/// end of the window still arrives with time to spare.
+const AGENT_TOKEN_REUSE: std::time::Duration =
+    std::time::Duration::from_secs(AGENT_TOKEN_MINUTES as u64 * 60 - 60);
+
+#[async_trait]
+impl super::interactive::BoundAgent for AwsBoundAgent {
+    async fn request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+    ) -> Result<reqwest::RequestBuilder> {
+        let mut token = self.token.lock().await;
+        let headers = match token.as_ref() {
+            Some((minted, headers)) if minted.elapsed() < AGENT_TOKEN_REUSE => headers.clone(),
+            _ => {
+                let minted = self
+                    .microvms
+                    .create_microvm_auth_token(
+                        &self.sandbox_id,
+                        vec![AGENT_PORT],
+                        AGENT_TOKEN_MINUTES,
+                    )
+                    .await
+                    .unreachable(
+                        "sandbox.agent",
+                        &format!("could not mint an endpoint token for '{}'", self.sandbox_id),
+                    )?;
+                let headers: Vec<(String, String)> = minted.auth_token.into_iter().collect();
+                *token = Some((std::time::Instant::now(), headers.clone()));
+                headers
+            }
+        };
+
+        let mut request = self
+            .client
+            .request(method, format!("https://{}{path}", self.endpoint))
+            .header(PROXY_PORT_HEADER, AGENT_PORT.to_string());
+        for (name, value) in headers {
+            request = request.header(name, value);
+        }
+        Ok(request)
+    }
+
+    fn provider(&self) -> &'static str {
+        "aws-sandbox"
+    }
+}
+
 impl Binding for AwsSandbox {}
 
 /// Refused rather than dropped: `RunMicrovm` has nowhere to put either, and a sandbox-level
@@ -955,6 +1018,39 @@ impl Sandbox for AwsSandbox {
         request: RunCommandRequest,
     ) -> Result<BoxStream<'static, Result<CommandOutput>>> {
         agent_protocol::run_command(self, sandbox_id, request).await
+    }
+
+    async fn run_interactive(
+        &self,
+        sandbox_id: &str,
+        request: RunCommandRequest,
+    ) -> Result<InteractiveCommand> {
+        let microvm = self
+            .owned_microvm("sandbox.agent", sandbox_id)
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: "sandbox.agent".to_string(),
+                    reason: format!(
+                        "sandbox '{sandbox_id}' does not belong to this sandbox resource"
+                    ),
+                })
+            })?;
+        let endpoint = microvm.endpoint.ok_or_else(|| {
+            AlienError::new(ErrorData::SandboxUnreachable {
+                operation: "sandbox.agent".to_string(),
+                reason: format!("MicroVM '{sandbox_id}' has no endpoint yet"),
+            })
+        })?;
+
+        let agent = Arc::new(AwsBoundAgent {
+            microvms: Arc::clone(&self.microvms),
+            client: self.agent.clone(),
+            sandbox_id: sandbox_id.to_string(),
+            endpoint,
+            token: tokio::sync::Mutex::new(None),
+        });
+        super::interactive::run_interactive(agent, request).await
     }
 
     async fn start_job(&self, sandbox_id: &str, request: RunCommandRequest) -> Result<JobStart> {

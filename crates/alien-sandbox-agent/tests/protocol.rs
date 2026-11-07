@@ -78,6 +78,7 @@ impl Agent {
             exec_identity: test_identity(),
             output_cap: 1 << 20,
             jobs: JobRegistry::new(),
+            interactive: Default::default(),
             agent_binary: agent_binary(),
         });
 
@@ -462,6 +463,7 @@ async fn transport_authorization_needs_no_capability() {
         },
         output_cap: 1 << 20,
         jobs: JobRegistry::new(),
+        interactive: Default::default(),
         agent_binary: agent_binary(),
     });
 
@@ -510,6 +512,7 @@ async fn transport_authorization_refuses_the_code_the_agent_runs() {
         exec_identity: test_identity(),
         output_cap: 1 << 20,
         jobs: JobRegistry::new(),
+        interactive: Default::default(),
         agent_binary: agent_binary(),
     });
 
@@ -604,6 +607,7 @@ async fn the_validate_hook_passes_and_leaves_the_session_root_empty() {
         exec_identity: test_identity(),
         output_cap: 1 << 20,
         jobs: JobRegistry::new(),
+        interactive: Default::default(),
         agent_binary: agent_binary(),
     })
     .await
@@ -632,6 +636,7 @@ async fn the_validate_hook_refuses_a_caller_running_as_the_exec_identity() {
         exec_identity: test_identity(),
         output_cap: 1 << 20,
         jobs: JobRegistry::new(),
+        interactive: Default::default(),
         agent_binary: agent_binary(),
     }))
     .await;
@@ -679,6 +684,7 @@ async fn the_validate_hook_refuses_a_caller_without_a_capability() {
         exec_identity: test_identity(),
         output_cap: 1 << 20,
         jobs: JobRegistry::new(),
+        interactive: Default::default(),
         // A check that ran would answer 500 on this, so a 401 is the refusal and not a failed check.
         agent_binary: root.join("no-such-agent"),
     }))
@@ -725,6 +731,7 @@ async fn the_validate_hook_names_the_file_check_when_the_session_root_is_not_wri
         exec_identity: test_identity(),
         output_cap: 1 << 20,
         jobs: JobRegistry::new(),
+        interactive: Default::default(),
         agent_binary: agent_binary(),
     })
     .await;
@@ -765,6 +772,7 @@ async fn the_validate_hook_names_the_identity_check_when_the_probe_cannot_run_as
         },
         output_cap: 1 << 20,
         jobs: JobRegistry::new(),
+        interactive: Default::default(),
         agent_binary: agent_binary(),
     }))
     .await;
@@ -1008,6 +1016,7 @@ async fn the_envelope_refuses_the_code_the_agent_runs_under_transport() {
         exec_identity: test_identity(),
         output_cap: 1 << 20,
         jobs: JobRegistry::new(),
+        interactive: Default::default(),
         agent_binary: agent_binary(),
     });
 
@@ -1261,6 +1270,7 @@ async fn root_image_cannot_call_control_routes() {
         },
         output_cap: 1 << 20,
         jobs: JobRegistry::new(),
+        interactive: Default::default(),
         agent_binary: agent_binary(),
     });
     let base = serve(state).await;
@@ -1305,4 +1315,390 @@ assert not failures, failures
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(!dir.path().join("forged").exists());
+}
+
+// --- Interactive commands: one output stream, input and signals as separate requests ---
+
+/// One interactive command as a caller drives it: the output stream it reads, and the id its
+/// writes, closes and signals name.
+struct Interactive {
+    agent_url: String,
+    token: String,
+    id: String,
+    response: reqwest::Response,
+    pending: Vec<u8>,
+    stdout: Vec<u8>,
+    frames: Vec<serde_json::Value>,
+}
+
+impl Interactive {
+    async fn start(agent: &Agent, id: &str, command: &[&str]) -> Self {
+        let token = agent.capability();
+        let response = reqwest::Client::new()
+            .post(format!("{}/v1/interactive", agent.base_url))
+            .bearer_auth(&token)
+            .json(&json!({"id": id, "command": command, "timeoutMs": 30_000}))
+            .send()
+            .await
+            .expect("responds");
+        assert_eq!(response.status(), 200, "an interactive command starts");
+        Self {
+            agent_url: agent.base_url.clone(),
+            token,
+            id: id.to_string(),
+            response,
+            pending: Vec::new(),
+            stdout: Vec::new(),
+            frames: Vec::new(),
+        }
+    }
+
+    async fn post(&self, path: &str, body: serde_json::Value) -> reqwest::Response {
+        reqwest::Client::new()
+            .post(format!("{}{path}", self.agent_url))
+            .bearer_auth(&self.token)
+            .json(&body)
+            .send()
+            .await
+            .expect("responds")
+    }
+
+    async fn write(&self, offset: u64, data: &[u8]) -> reqwest::Response {
+        self.write_in(0, offset, data).await
+    }
+
+    async fn write_in(&self, generation: u64, offset: u64, data: &[u8]) -> reqwest::Response {
+        self.post(
+            "/v1/interactive/stdin",
+            json!({
+                "id": self.id,
+                "generation": generation,
+                "offset": offset,
+                "data": BASE64.encode(data),
+            }),
+        )
+        .await
+    }
+
+    async fn accepted(&self, offset: u64, data: &[u8]) -> u64 {
+        let response = self.write(offset, data).await;
+        assert_eq!(response.status(), 200, "the write is taken");
+        let body: serde_json::Value = response.json().await.expect("json");
+        body["accepted"].as_u64().expect("a count")
+    }
+
+    /// Reads frames until stdout ends with `expected`, failing after a bound rather than hanging.
+    async fn read_until(&mut self, expected: &str) {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !String::from_utf8_lossy(&self.stdout).ends_with(expected) {
+            let chunk = tokio::time::timeout_at(deadline, self.response.chunk())
+                .await
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "stdout never ended with {expected:?}: {:?}",
+                        String::from_utf8_lossy(&self.stdout)
+                    )
+                })
+                .expect("the stream reads")
+                .unwrap_or_else(|| panic!("the stream ended before {expected:?}"));
+            self.take(&chunk);
+        }
+    }
+
+    /// Reads to the end of the stream and returns the terminal frame.
+    async fn finish(mut self) -> (serde_json::Value, Vec<serde_json::Value>, String) {
+        while let Some(chunk) =
+            tokio::time::timeout(std::time::Duration::from_secs(10), self.response.chunk())
+                .await
+                .expect("the stream ends")
+                .expect("the stream reads")
+        {
+            self.take(&chunk);
+        }
+        let terminals = self
+            .frames
+            .iter()
+            .filter(|frame| matches!(frame["t"].as_str(), Some("exit") | Some("error")))
+            .count();
+        assert_eq!(
+            terminals, 1,
+            "exactly one terminal frame: {:?}",
+            self.frames
+        );
+        let terminal = self.frames.last().cloned().expect("a terminal frame");
+        let stdout = String::from_utf8_lossy(&self.stdout).into_owned();
+        (terminal, self.frames, stdout)
+    }
+
+    fn take(&mut self, chunk: &[u8]) {
+        self.pending.extend_from_slice(chunk);
+        while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
+            let line: Vec<u8> = self.pending.drain(..=end).collect();
+            let frame: serde_json::Value =
+                serde_json::from_slice(&line).expect("every frame is a complete JSON line");
+            if frame["t"] == "stdout" {
+                self.stdout.extend(
+                    BASE64
+                        .decode(frame["data"].as_str().expect("data"))
+                        .expect("base64"),
+                );
+            }
+            self.frames.push(frame);
+        }
+    }
+}
+
+/// The whole point of the verb: a program that prompts, reads a line, answers and prompts again,
+/// driven turn by turn while it runs. The prompt carries no newline, so this also proves output
+/// is framed per read rather than per line.
+#[tokio::test]
+async fn an_interactive_command_answers_each_input_while_it_runs() {
+    let agent = Agent::start().await;
+    let mut command = Interactive::start(
+        &agent,
+        "repl-1",
+        &[
+            "/bin/sh",
+            "-c",
+            "printf '> '; while read line; do echo \"got $line\"; printf '> '; done",
+        ],
+    )
+    .await;
+
+    command.read_until("> ").await;
+    assert_eq!(command.accepted(0, b"one\n").await, 4);
+    command.read_until("got one\n> ").await;
+    assert_eq!(command.accepted(4, b"two\n").await, 8);
+    command.read_until("got two\n> ").await;
+
+    let closed = command
+        .post("/v1/interactive/close-stdin", json!({"id": "repl-1"}))
+        .await;
+    assert_eq!(closed.status(), 204);
+
+    let (terminal, _, stdout) = command.finish().await;
+    assert_eq!(terminal["t"], "exit");
+    assert_eq!(terminal["code"], 0, "EOF on stdin ends the loop cleanly");
+    assert_eq!(stdout, "> got one\n> got two\n> ");
+    assert!(
+        agent.state.interactive.is_empty(),
+        "a finished command releases its id"
+    );
+}
+
+/// A write that is retried — because its answer was lost — must be applied once, and a write that
+/// would skip bytes must be refused rather than leave a silent gap in the program's input.
+#[tokio::test]
+async fn a_retried_write_is_applied_once_and_a_gap_is_refused() {
+    let agent = Agent::start().await;
+    let command = Interactive::start(&agent, "cat-1", &["/bin/cat"]).await;
+
+    assert_eq!(command.accepted(0, b"abc").await, 3);
+    assert_eq!(
+        command.accepted(0, b"abc").await,
+        3,
+        "a repeat of bytes already taken is acknowledged, not written again"
+    );
+    assert_eq!(
+        command.accepted(2, b"cde").await,
+        5,
+        "an overlapping write applies only its new tail"
+    );
+
+    let gap = command.write(9, b"x").await;
+    assert_eq!(gap.status(), 409, "a write past what was taken is refused");
+    assert!(
+        gap.text().await.unwrap().contains("would leave a gap"),
+        "the refusal says why"
+    );
+
+    command
+        .post("/v1/interactive/close-stdin", json!({"id": "cat-1"}))
+        .await;
+    let (terminal, _, stdout) = command.finish().await;
+    assert_eq!(terminal["code"], 0);
+    assert_eq!(stdout, "abcde", "every byte exactly once, in order");
+}
+
+/// A barrier retires every write sent before it. A caller that gave up on a write cannot know
+/// whether the request is still on its way; after the barrier that request is refused if it
+/// arrives, rather than landing ahead of the bytes the caller sends next.
+#[tokio::test]
+async fn a_write_from_before_a_barrier_is_refused_after_it() {
+    let agent = Agent::start().await;
+    let command = Interactive::start(&agent, "cat-2", &["/bin/cat"]).await;
+
+    assert_eq!(command.accepted(0, b"one ").await, 4);
+
+    let barrier: serde_json::Value = command
+        .post(
+            "/v1/interactive/stdin-barrier",
+            json!({"id": "cat-2", "generation": 1}),
+        )
+        .await
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(barrier["accepted"], 4, "the barrier reports what was taken");
+    assert_eq!(barrier["generation"], 1, "and moves the input on");
+
+    // The same barrier again, as a retry whose first answer was lost: it moves nothing.
+    let repeat: serde_json::Value = command
+        .post(
+            "/v1/interactive/stdin-barrier",
+            json!({"id": "cat-2", "generation": 1}),
+        )
+        .await
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(repeat["generation"], 1, "a repeated barrier is a no-op");
+
+    // The old write, delayed past the barrier, at the offset where the caller now writes.
+    let stale = command.write_in(0, 4, b"STALE ").await;
+    assert_eq!(stale.status(), 409, "a retired write is refused");
+    assert!(
+        stale.text().await.unwrap().starts_with("STDIN_STALE_WRITE"),
+        "the refusal names itself"
+    );
+
+    let taken: serde_json::Value = command
+        .write_in(1, 4, b"two")
+        .await
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(taken["accepted"], 7);
+
+    command
+        .post("/v1/interactive/close-stdin", json!({"id": "cat-2"}))
+        .await;
+    let (terminal, _, stdout) = command.finish().await;
+    assert_eq!(terminal["code"], 0);
+    assert_eq!(stdout, "one two", "nothing from the retired write");
+}
+
+/// A signal reaches the command and the program decides what it means: here it traps `SIGINT`,
+/// reports it, and exits on its own terms, as a REPL abandoning its input would keep running.
+#[tokio::test]
+async fn a_signal_reaches_the_command_while_it_runs() {
+    let agent = Agent::start().await;
+    let mut command = Interactive::start(
+        &agent,
+        "trap-1",
+        &[
+            "/bin/sh",
+            "-c",
+            "trap 'echo interrupted; exit 7' INT; echo ready; while :; do sleep 0.05; done",
+        ],
+    )
+    .await;
+
+    command.read_until("ready\n").await;
+    let signalled = command
+        .post(
+            "/v1/interactive/signal",
+            json!({"id": "trap-1", "signal": "interrupt"}),
+        )
+        .await;
+    assert_eq!(signalled.status(), 204);
+
+    let (terminal, _, stdout) = command.finish().await;
+    assert_eq!(terminal["t"], "exit");
+    assert_eq!(terminal["code"], 7, "the trap ran and chose the exit code");
+    assert!(stdout.ends_with("interrupted\n"), "{stdout:?}");
+
+    // The command has been reaped, so its id names nothing a later signal could reach.
+    let late = reqwest::Client::new()
+        .post(format!("{}/v1/interactive/signal", agent.base_url))
+        .bearer_auth(agent.capability())
+        .json(&json!({"id": "trap-1", "signal": "kill"}))
+        .send()
+        .await
+        .expect("responds");
+    assert_eq!(late.status(), 404);
+}
+
+/// Input larger than any pipe buffer: the command's pipe pushes back, the agent waits for it to
+/// read, and every byte arrives in order. A command slow to start reading is the case a buffered
+/// write would hide.
+#[tokio::test]
+async fn input_larger_than_a_pipe_buffer_arrives_whole() {
+    let agent = Agent::start().await;
+    let command = Interactive::start(&agent, "wc-1", &["/bin/sh", "-c", "sleep 1; wc -c"]).await;
+
+    let data = vec![b'x'; 4 << 20];
+    let mut offset = 0u64;
+    while offset < data.len() as u64 {
+        let end = (offset as usize + (256 << 10)).min(data.len());
+        offset = command.accepted(offset, &data[offset as usize..end]).await;
+    }
+    command
+        .post("/v1/interactive/close-stdin", json!({"id": "wc-1"}))
+        .await;
+
+    let (terminal, _, stdout) = command.finish().await;
+    assert_eq!(terminal["code"], 0);
+    assert_eq!(stdout.trim(), (4 << 20).to_string());
+}
+
+/// The rule `/v1/exec` already keeps, held for interactive commands too: a caller that stops
+/// reading ends the command, rather than leaving it running for nobody.
+#[tokio::test]
+async fn a_departed_reader_ends_the_interactive_command() {
+    let agent = Agent::start().await;
+    let command = Interactive::start(&agent, "sleep-1", &["/bin/sleep", "30"]).await;
+    assert_eq!(agent.state.interactive.len(), 1);
+
+    drop(command);
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !agent.state.interactive.is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the command outlived its reader"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// Every control names a command; one that is not running is a 404, never a silent success.
+#[tokio::test]
+async fn controls_for_an_unknown_command_are_refused() {
+    let agent = Agent::start().await;
+    let client = reqwest::Client::new();
+    for (path, body) in [
+        (
+            "/v1/interactive/stdin",
+            json!({"id": "nope", "generation": 0, "offset": 0, "data": ""}),
+        ),
+        ("/v1/interactive/close-stdin", json!({"id": "nope"})),
+        (
+            "/v1/interactive/signal",
+            json!({"id": "nope", "signal": "interrupt"}),
+        ),
+    ] {
+        let response = client
+            .post(format!("{}{path}", agent.base_url))
+            .bearer_auth(agent.capability())
+            .json(&body)
+            .send()
+            .await
+            .expect("responds");
+        assert_eq!(response.status(), 404, "{path}");
+    }
+}
+
+/// Interactive commands are reached only with the same capability every other operation needs.
+#[tokio::test]
+async fn starting_an_interactive_command_without_a_capability_is_refused() {
+    let agent = Agent::start().await;
+    let response = reqwest::Client::new()
+        .post(format!("{}/v1/interactive", agent.base_url))
+        .json(&json!({"id": "x", "command": ["/bin/true"], "timeoutMs": 1000}))
+        .send()
+        .await
+        .expect("responds");
+    assert_eq!(response.status(), 401);
+    assert!(agent.state.interactive.is_empty());
 }

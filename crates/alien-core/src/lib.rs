@@ -50,6 +50,7 @@ pub mod sandbox_egress;
 pub mod sandbox_identity;
 pub mod sandbox_image;
 pub mod sandbox_setup_inputs;
+pub mod sandbox_signal;
 
 #[cfg(feature = "sandbox-process")]
 pub mod sandbox_process;

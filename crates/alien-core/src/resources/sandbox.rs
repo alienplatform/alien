@@ -297,6 +297,9 @@ pub struct SandboxCapabilities {
     /// A command can be started, polled and cancelled across separate calls, so it outlives the
     /// one that started it. False where nothing inside the sandbox owns the process in between.
     pub jobs: bool,
+    /// A running command takes input on stdin, can be signalled, and streams its output as it is
+    /// written, so a caller can drive a REPL, a language server or a tool protocol over it.
+    pub interactive_commands: bool,
     /// An authenticated, port-scoped capability to reach a service inside the sandbox
     pub preview: bool,
     /// Sandbox state can be paused and resumed
@@ -340,6 +343,9 @@ impl SandboxCapabilities {
                 files: true,
                 reconnect: true,
                 jobs: true,
+                // The in-guest agent owns the process and its pipes, and the MicroVM proxy
+                // streams a response while separate requests carry input and signals.
+                interactive_commands: true,
                 preview: true,
                 pause_resume: true,
                 snapshot: false,
@@ -370,6 +376,9 @@ impl SandboxCapabilities {
                 files: true,
                 reconnect: true,
                 jobs: true,
+                // The pod runs the same agent, but this client does not drive its interactive
+                // routes yet, so the capability is not claimed until it is proven here.
+                interactive_commands: false,
                 preview: false,
                 pause_resume: false,
                 snapshot: false,
@@ -395,6 +404,9 @@ impl SandboxCapabilities {
                 reconnect: true,
                 // Nothing runs inside the sandbox: the manager drives Docker from outside it.
                 jobs: false,
+                // The manager holds the exec's attached stdin for as long as the output stream
+                // is open, so an interactive command needs nothing inside the sandbox.
+                interactive_commands: true,
                 preview: true,
                 pause_resume: false,
                 snapshot: false,
@@ -427,6 +439,9 @@ impl SandboxCapabilities {
             reconnect: true,
             // No Alien process runs inside the sandbox to own a command between two calls.
             jobs: false,
+            // Not claimed: the agent-mode client does not drive the agent's interactive routes
+            // yet, and the platform's own exec takes no stdin.
+            interactive_commands: false,
             // A sandbox port carries a URL and an auth config, and the auth config offers two
             // things: anonymous, or Entra ID with an allowlist of human email addresses.
             // Neither is a credential scoped to a port for a fixed time, which is what a
@@ -466,6 +481,9 @@ impl SandboxCapabilities {
             // replaced under a stable sandbox name rather than reconnecting to a blank one.
             reconnect: true,
             jobs: true,
+            // `:execute` is one request with one answer, capped at about 30 seconds. Input
+            // cannot reach a command after its call has answered, so there is no stream to drive.
+            interactive_commands: false,
             // No method mints a port-scoped ingress capability; the only ingress is `:execute`.
             preview: false,
             // `:resume` can return a fresh container while reporting success, so a pause does not
@@ -500,6 +518,7 @@ impl SandboxCapabilities {
             SandboxCapability::Files => self.files,
             SandboxCapability::Reconnect => self.reconnect,
             SandboxCapability::Jobs => self.jobs,
+            SandboxCapability::InteractiveCommands => self.interactive_commands,
             SandboxCapability::Preview => self.preview,
             SandboxCapability::PauseResume => self.pause_resume,
             SandboxCapability::Snapshot => self.snapshot,
@@ -534,6 +553,8 @@ pub enum SandboxCapability {
     Reconnect,
     /// Starting, polling and cancelling a command across separate calls
     Jobs,
+    /// Writing to, signalling and streaming a running command
+    InteractiveCommands,
     /// An authenticated, port-scoped ingress capability
     Preview,
     /// Pausing and resuming sandbox state
@@ -563,6 +584,7 @@ impl SandboxCapability {
             Self::Files => "files",
             Self::Reconnect => "reconnect",
             Self::Jobs => "jobs",
+            Self::InteractiveCommands => "interactiveCommands",
             Self::Preview => "preview",
             Self::PauseResume => "pauseResume",
             Self::Snapshot => "snapshot",
