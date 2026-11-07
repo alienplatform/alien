@@ -149,6 +149,10 @@ pub async fn handle_provisioning(
             observed_inventory_batches: vec![],
         });
     }
+    // Every required deployer secret is written now, so a wait recorded by an
+    // earlier step no longer describes this deployment. Clear it here: a step
+    // that is still in progress carries the previous error forward otherwise.
+    next.error = None;
 
     // A failure waiting for setup only reaches Provisioning through setup handing the
     // deployment back: any failure ends Provisioning in the step it happens, and a retry

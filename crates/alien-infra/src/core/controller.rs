@@ -753,6 +753,24 @@ pub trait ResourceController: Send + Sync + Debug {
         false
     }
 
+    /// As a dependency: whether its dependents may apply their updates in its current state,
+    /// although it is not Running. A dependent updates against it only when it also opts in
+    /// with [`Self::updates_during_dependency_change`].
+    ///
+    /// Override it for a state in which the dependency cannot finish until a dependent's new
+    /// config is applied, such as a cluster that is replacing machines a daemon must run on.
+    fn dependents_may_update(&self) -> bool {
+        false
+    }
+
+    /// As a dependent: whether it can apply its update against `dependency` while that
+    /// dependency is not Running, once the dependency allows it with
+    /// [`Self::dependents_may_update`]. A controller that returns true must handle that
+    /// state itself.
+    fn updates_during_dependency_change(&self, _dependency: &ResourceRef) -> bool {
+        false
+    }
+
     /// Whether a Running resource must continue its controller state machine
     /// during convergence phases. Most Ready resources are periodic health
     /// checks and should only run in the dedicated Running pass.

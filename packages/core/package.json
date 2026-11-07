@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/core",
-  "version": "3.3.53",
+  "version": "3.3.55",
   "type": "module",
   "files": [
     "dist"

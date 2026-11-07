@@ -491,14 +491,16 @@ impl PreflightRunner {
         let mutated_stack = self.apply_mutations(stack, stack_state, config).await?;
         // Drop the comparison projection before later awaits so it does not enlarge
         // the deployment future and exhaust the runner's worker stack.
-        let setup_update_authorized = {
+        let (direct_setup, imported_setup_authorized) = {
             let direct_setup =
                 setup_authority == Some(alien_core::InitialSetupAuthority::DirectSetup);
             let automatic_azure_runtime = !config.setup_run
                 && config.base_platform.unwrap_or(platform) == Platform::Azure
                 && config.stack_settings.setup_management == alien_core::SetupManagement::Automatic;
+            // A direct setup's runtime still needs setup's authorization for the changes
+            // only setup applies, such as its own management grant.
             let hashed_target = match old_stack {
-                Some(_) if !direct_setup || automatic_azure_runtime => {
+                Some(_) if !direct_setup || !config.setup_run => {
                     Some(without_declined_live_resources(
                         &mutated_stack,
                         &config.input_values,
@@ -529,8 +531,9 @@ impl PreflightRunner {
                     crate::compatibility::azure_setup::require_unchanged_setup(installed, target)?;
                 }
             }
-            direct_setup || imported_setup_authorized
+            (direct_setup, imported_setup_authorized)
         };
+        let setup_update_authorized = direct_setup || imported_setup_authorized;
 
         // Match the deployment values used by the IAM policy writers. Physical
         // resource names use shared create naming or saved outputs where available.
@@ -596,6 +599,28 @@ impl PreflightRunner {
                     }));
                 }
                 all_results.extend(compatibility_summary.results);
+            } else if compile_checks_succeeded
+                && direct_setup
+                && !config.setup_run
+                && !imported_setup_authorized
+                && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
+                && crate::compatibility::PermissionProfilesUnchangedCheck.management_needs_setup(
+                    old_stack,
+                    &mutated_stack,
+                    config,
+                )
+            {
+                // A direct setup's runtime applies the other changes itself, but never
+                // rewrites its own management identity: only a setup run does. Only the
+                // clouds grant automatic setup every resource type, so on other platforms
+                // adding a resource changes the grant and must keep running. Without
+                // this, the update would run on the old grants, and the setup run that
+                // applies the new ones would find nothing pending.
+                return Err(AlienError::new(ErrorData::SetupRequired {
+                    message:
+                        "this release changes the management permissions, which only setup applies"
+                            .to_string(),
+                }));
             } else {
                 info!("Applying explicit authority for frozen resource changes");
             }
@@ -1540,8 +1565,6 @@ mod setup_update_authorization_tests {
     #[cfg(feature = "runtime-checks")]
     #[tokio::test]
     async fn permission_updates_require_exact_setup_authority() {
-        use alien_core::permissions::{ManagementPermissions, PermissionProfile};
-
         let baseline = empty_stack();
         let mut target = baseline.clone();
         target.permissions.management = ManagementPermissions::Extend(
@@ -1607,6 +1630,229 @@ mod setup_update_authorization_tests {
             .await
             .expect_err("recovery authority cannot authorize provisioning");
         assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+    }
+
+    /// Runs the deployment preflights for a direct setup on a local client.
+    #[cfg(feature = "runtime-checks")]
+    async fn direct_setup_preflight(
+        runner: &PreflightRunner,
+        target: &Stack,
+        installed: Option<&Stack>,
+        state: &StackState,
+        config: &DeploymentConfig,
+    ) -> Result<(Stack, PreflightSummary, bool)> {
+        authorized_direct_setup_preflight(runner, target, installed, state, config, None).await
+    }
+
+    /// Runs the deployment preflights for a direct setup that a setup rerun authorized.
+    #[cfg(feature = "runtime-checks")]
+    async fn authorized_direct_setup_preflight(
+        runner: &PreflightRunner,
+        target: &Stack,
+        installed: Option<&Stack>,
+        state: &StackState,
+        config: &DeploymentConfig,
+        authorization: Option<&SetupUpdateAuthorization>,
+    ) -> Result<(Stack, PreflightSummary, bool)> {
+        runner
+            .run_deployment_time_preflights(
+                target.clone(),
+                state,
+                config,
+                &ClientConfig::Local {
+                    state_directory: "/unused".to_string(),
+                },
+                installed,
+                authorization,
+                Some(alien_core::InitialSetupAuthority::DirectSetup),
+            )
+            .await
+    }
+
+    /// A direct setup's runtime never rewrites its own management identity, so an update
+    /// that needs a wider management grant must stop for setup instead of running on the
+    /// installed grants. A setup run applies it; narrowing keeps running on the wider
+    /// installed grants until the next setup run. Off the clouds, such as Local, it runs.
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn direct_setup_runtime_requires_setup_for_a_wider_management_grant() {
+        let with_management = |grants: &[&str]| {
+            let mut stack = empty_stack();
+            stack.permissions.management = ManagementPermissions::Extend(
+                PermissionProfile::new().global(grants.iter().copied()),
+            );
+            stack
+        };
+        let installed = with_management(&["storage/provision"]);
+        let widened = with_management(&["storage/provision", "storage/data-read"]);
+        let changed = with_management(&["storage/data-read"]);
+        let runner = PreflightRunner::with_registry(PreflightRegistry::new());
+        let runtime = deployment_config();
+        let mut setup = deployment_config();
+        setup.setup_run = true;
+
+        for platform in [Platform::Aws, Platform::Gcp] {
+            let state = StackState::new(platform);
+            for target in [&widened, &changed] {
+                let error =
+                    direct_setup_preflight(&runner, target, Some(&installed), &state, &runtime)
+                        .await
+                        .expect_err("the runtime cannot grant itself new management permissions");
+                assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED", "{platform:?}");
+
+                let (prepared, _, authorized) =
+                    direct_setup_preflight(&runner, target, Some(&installed), &state, &setup)
+                        .await
+                        .expect("a setup run applies the new management permissions");
+                assert!(authorized, "{platform:?}");
+                assert_eq!(prepared.permissions, target.permissions, "{platform:?}");
+            }
+
+            let (prepared, _, authorized) =
+                direct_setup_preflight(&runner, &installed, Some(&widened), &state, &runtime)
+                    .await
+                    .expect("narrowing runs on the wider installed grants");
+            assert!(authorized, "{platform:?}");
+            assert_eq!(prepared.permissions, installed.permissions, "{platform:?}");
+
+            direct_setup_preflight(&runner, &installed, Some(&installed), &state, &runtime)
+                .await
+                .expect("unchanged management permissions need no setup");
+        }
+
+        // Off the clouds the management grant follows the resources, so a Local update runs.
+        let (prepared, _, _) = direct_setup_preflight(
+            &runner,
+            &widened,
+            Some(&installed),
+            &StackState::new(Platform::Local),
+            &runtime,
+        )
+        .await
+        .expect("a local update has no management grant to wait for");
+        assert_eq!(prepared.permissions, widened.permissions);
+    }
+
+    /// Automatic AWS setup installs provision grants for every resource type, so a release
+    /// that adds a resource keeps running without setup; only a wider declared grant stops.
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn automatic_aws_runtime_adds_resources_but_stops_for_a_wider_management_grant() {
+        let runner = PreflightRunner::with_registry({
+            let mut registry = PreflightRegistry::new();
+            registry.add_mutation(Box::new(
+                crate::mutations::ManagementPermissionProfileMutation,
+            ));
+            registry
+        });
+        let state = StackState::new(Platform::Aws);
+        let mut runtime = deployment_config();
+        runtime.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+        let mut setup = runtime.clone();
+        setup.setup_run = true;
+        let release = |management: ManagementPermissions, with_queue: bool| {
+            let stack = Stack::new("stack".into()).management(management).add(
+                alien_core::Storage::new("data".into()).build(),
+                ResourceLifecycle::Live,
+            );
+            if with_queue {
+                stack
+                    .add(Queue::new("jobs".into()).build(), ResourceLifecycle::Live)
+                    .build()
+            } else {
+                stack.build()
+            }
+        };
+
+        let (installed, _, _) = direct_setup_preflight(
+            &runner,
+            &release(ManagementPermissions::Auto, false),
+            None,
+            &state,
+            &setup,
+        )
+        .await
+        .expect("setup installs the first release");
+
+        let (with_queue, _, _) = direct_setup_preflight(
+            &runner,
+            &release(ManagementPermissions::Auto, true),
+            Some(&installed),
+            &state,
+            &runtime,
+        )
+        .await
+        .expect("setup already granted provisioning for every resource type");
+        assert!(with_queue.resources.contains_key("jobs"));
+
+        let wider = release(
+            ManagementPermissions::Extend(PermissionProfile::new().global(["storage/data-read"])),
+            false,
+        );
+        let error = direct_setup_preflight(&runner, &wider, Some(&installed), &state, &runtime)
+            .await
+            .expect_err("only setup can add a data grant to the management role");
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+        direct_setup_preflight(&runner, &wider, Some(&installed), &state, &setup)
+            .await
+            .expect("a setup run applies the data grant");
+    }
+
+    /// An automatic CloudFormation or Terraform rerun installs the wider management grant
+    /// itself and records an exact authorization. The direct-setup runtime must accept it,
+    /// or the update would wait for a setup run the installer never makes.
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn direct_setup_runtime_accepts_a_rerun_authorization_for_a_wider_management_grant() {
+        let with_management = |grants: &[&str]| {
+            let mut stack = empty_stack();
+            stack.permissions.management = ManagementPermissions::Extend(
+                PermissionProfile::new().global(grants.iter().copied()),
+            );
+            stack
+        };
+        let installed = with_management(&["storage/provision"]);
+        let widened = with_management(&["storage/provision", "storage/data-read"]);
+        let other = with_management(&["storage/provision", "storage/data-write"]);
+        let authorization = |target: &Stack| SetupUpdateAuthorization {
+            nonce: "nonce".to_string(),
+            baseline_frozen_digest: installed.setup_update_digest(),
+            target_frozen_digest: target.setup_update_digest(),
+            release_id: "release".to_string(),
+            setup_target: "target".to_string(),
+            setup_fingerprint: "fingerprint".to_string(),
+            setup_fingerprint_version: 1,
+        };
+        let runner = PreflightRunner::with_registry(PreflightRegistry::new());
+        let runtime = deployment_config();
+
+        for platform in [Platform::Aws, Platform::Gcp] {
+            let state = StackState::new(platform);
+            let (prepared, _, authorized) = authorized_direct_setup_preflight(
+                &runner,
+                &widened,
+                Some(&installed),
+                &state,
+                &runtime,
+                Some(&authorization(&widened)),
+            )
+            .await
+            .expect("the rerun already installed this management grant");
+            assert!(authorized, "{platform:?}");
+            assert_eq!(prepared.permissions, widened.permissions, "{platform:?}");
+
+            let error = authorized_direct_setup_preflight(
+                &runner,
+                &widened,
+                Some(&installed),
+                &state,
+                &runtime,
+                Some(&authorization(&other)),
+            )
+            .await
+            .expect_err("an authorization for another grant does not cover this one");
+            assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED", "{platform:?}");
+        }
     }
 
     #[test]

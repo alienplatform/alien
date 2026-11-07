@@ -350,6 +350,48 @@ impl PermissionProfilesUnchangedCheck {
     pub fn check_exact(&self, old_stack: &Stack, new_stack: &Stack) -> Result<CheckResult> {
         check_permission_profiles(old_stack, new_stack, false, false)
     }
+
+    /// Whether the update needs management grants the installed management
+    /// identity does not have. Only setup writes that identity's grants, so such an
+    /// update must wait for setup. Narrowing does not count: the installed
+    /// grants still cover the update, and stay until the next setup run.
+    pub fn management_needs_setup(
+        &self,
+        old_stack: &Stack,
+        new_stack: &Stack,
+        config: &alien_core::DeploymentConfig,
+    ) -> bool {
+        management_change_requires_setup(
+            old_stack,
+            new_stack,
+            &gated_contributions(old_stack, new_stack),
+            config.stack_settings.heartbeats.is_enabled(),
+            true,
+        )
+    }
+}
+
+/// Whether the management permissions changed in a way the installed grants do not
+/// cover. Both the comparison and the narrowing allowance see the new profile without
+/// the migration grants, so an update that adds one and removes another grant still
+/// only narrows.
+fn management_change_requires_setup(
+    old_stack: &Stack,
+    new_stack: &Stack,
+    gated: &GatedContributions,
+    allow_email_heartbeat_migration: bool,
+    allow_narrowing: bool,
+) -> bool {
+    let new_management =
+        without_added_migration_grants(old_stack, old_stack.management(), new_stack.management());
+    management_differs_outside_gates(
+        old_stack,
+        new_stack,
+        old_stack.management(),
+        &new_management,
+        gated,
+        allow_email_heartbeat_migration,
+    ) && !(allow_narrowing && management_narrowed(old_stack.management(), &new_management))
 }
 
 fn check_permission_profiles(
@@ -397,20 +439,13 @@ fn check_permission_profiles(
         }
     }
 
-    // Check management permissions. Both the comparison and the narrowing allowance see the new
-    // profile without the migration grants, so an update that adds one and removes another
-    // grant still only narrows.
-    let new_management =
-        without_added_migration_grants(old_stack, old_stack.management(), new_stack.management());
-    if management_differs_outside_gates(
+    if management_change_requires_setup(
         old_stack,
         new_stack,
-        old_stack.management(),
-        &new_management,
         &gated,
         allow_email_heartbeat_migration,
-    ) && !(allow_narrowing && management_narrowed(old_stack.management(), &new_management))
-    {
+        allow_narrowing,
+    ) {
         errors.push("Management permissions configuration was modified".to_string());
     }
 

@@ -569,7 +569,14 @@ pub(crate) fn parse_stack_input_arg(input: &str, flag: &str) -> Result<(String, 
     let Some((id, value)) = input.split_once('=') else {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: flag.trim_start_matches("--").to_string(),
-            message: format!("Invalid {flag} format: '{input}'. Use id=value"),
+            message: format!(
+                "Invalid {flag} format: '{input}'. Use {}",
+                if flag == "--secret-input-file" {
+                    "ID=PATH"
+                } else {
+                    "id=value"
+                }
+            ),
         }));
     };
     let id = id.trim();

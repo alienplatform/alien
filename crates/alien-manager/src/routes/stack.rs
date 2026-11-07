@@ -1439,10 +1439,6 @@ fn reimport_runtime_metadata(
         metadata
             .persisted_gate_answers
             .extend(imported_gate_answers);
-        if req.base_platform.unwrap_or(req.platform) != Platform::Azure {
-            metadata.setup_update_authorization = None;
-            return Ok(metadata);
-        }
     } else {
         metadata.initial_setup_authority = alien_core::InitialSetupAuthority::ImportedHandoff;
         // The route refused conflicting answers before calling this, so what
@@ -2460,6 +2456,63 @@ mod setup_update_authorization_tests {
             baseline.setup_update_digest()
         );
         assert_eq!(authority.target_frozen_digest, target.setup_update_digest());
+        assert_eq!(metadata.prepared_stack, Some(baseline));
+    }
+
+    /// Automatic setup is direct setup, so its runtime cannot apply a wider management grant.
+    /// A CloudFormation or Terraform rerun that installs one must hand the runtime the same
+    /// exact authorization an imported setup gets, on every cloud.
+    #[test]
+    fn automatic_aws_reimport_mints_setup_authority_for_a_management_change() {
+        let baseline = stack("live", "frozen");
+        let mut widened = baseline.clone();
+        widened.permissions.management = alien_core::permissions::ManagementPermissions::Extend(
+            alien_core::permissions::PermissionProfile::new().global(["storage/data-read"]),
+        );
+        let mut existing = record(baseline.clone());
+        let runtime_metadata = existing
+            .runtime_metadata
+            .as_mut()
+            .expect("runtime metadata");
+        runtime_metadata.automatic_setup = true;
+        runtime_metadata.initial_setup_authority = alien_core::InitialSetupAuthority::DirectSetup;
+
+        let unchanged = reimport_runtime_metadata(
+            &existing,
+            &baseline,
+            "release",
+            &request(),
+            Default::default(),
+        )
+        .expect("an unchanged automatic rerun should succeed");
+        assert!(unchanged.setup_update_authorization.is_none());
+
+        let metadata = reimport_runtime_metadata(
+            &existing,
+            &widened,
+            "release",
+            &request(),
+            Default::default(),
+        )
+        .expect("an automatic rerun may install a wider management grant");
+        let authorization = metadata
+            .setup_update_authorization
+            .expect("a management change should mint setup authority");
+        assert_eq!(
+            authorization.baseline_frozen_digest,
+            baseline.setup_update_digest()
+        );
+        assert_eq!(
+            authorization.target_frozen_digest,
+            widened.setup_update_digest()
+        );
+        assert_eq!(authorization.release_id, "release");
+        assert_eq!(authorization.setup_target, "target");
+        assert!(metadata.automatic_setup);
+        assert_eq!(
+            metadata.initial_setup_authority,
+            alien_core::InitialSetupAuthority::DirectSetup
+        );
         assert_eq!(metadata.prepared_stack, Some(baseline));
     }
 

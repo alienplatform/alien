@@ -26,7 +26,7 @@ pub struct HorizonClusterConfig {
     pub horizon_machine_image: Option<HorizonMachineImage>,
 }
 
-/// Horizon machine image architecture.
+/// Machine image architecture.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -39,7 +39,7 @@ pub enum HorizonMachineArchitecture {
     Amd64,
 }
 
-/// AWS Horizon machine image catalog.
+/// AWS machine image catalog.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -48,7 +48,7 @@ pub struct HorizonAwsMachineImages {
     pub amis: HashMap<HorizonMachineArchitecture, HashMap<String, String>>,
 }
 
-/// GCP Horizon machine image entry.
+/// GCP machine image entry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -57,7 +57,7 @@ pub struct HorizonGcpMachineImage {
     pub source_image: String,
 }
 
-/// GCP Horizon machine image catalog.
+/// GCP machine image catalog.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -66,7 +66,7 @@ pub struct HorizonGcpMachineImages {
     pub images: HashMap<HorizonMachineArchitecture, HorizonGcpMachineImage>,
 }
 
-/// Azure Horizon machine image entry.
+/// Azure machine image entry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -75,7 +75,7 @@ pub struct HorizonAzureMachineImage {
     pub image_version_id: String,
 }
 
-/// Base image metadata for the Horizon machine image.
+/// Base image metadata for the machine image.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -86,7 +86,7 @@ pub struct HorizonMachineBaseImage {
     pub version: String,
 }
 
-/// Azure Horizon machine image catalog.
+/// Azure machine image catalog.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -95,7 +95,7 @@ pub struct HorizonAzureMachineImages {
     pub images: HashMap<HorizonMachineArchitecture, HorizonAzureMachineImage>,
 }
 
-/// Download artifact for one horizond release platform.
+/// Machine agent download for one release platform.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -109,7 +109,7 @@ pub struct HorizondArtifact {
     pub sha256: String,
 }
 
-/// Horizon machine image catalog.
+/// Machine image catalog.
 ///
 /// Platform resolves concrete provider images from this catalog during rollout.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -123,7 +123,7 @@ pub struct HorizonMachineImage {
     pub channel: String,
     /// Published immutable machine image version.
     pub machine_image_version: String,
-    /// horizond daemon version baked into the image.
+    /// Machine agent version baked into the image.
     pub horizond_version: String,
     /// Git commit SHA used to build the image.
     pub git_sha: String,
@@ -131,7 +131,7 @@ pub struct HorizonMachineImage {
     pub created_at: String,
     /// Base OS image metadata.
     pub base_image: HorizonMachineBaseImage,
-    /// Per-architecture horizond artifacts by release-platform key.
+    /// Per-architecture machine agent downloads by release-platform key.
     pub horizond_artifacts: HashMap<String, HorizondArtifact>,
     /// AWS image catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -144,7 +144,7 @@ pub struct HorizonMachineImage {
     pub azure: Option<HorizonAzureMachineImages>,
 }
 
-/// Horizon control-plane configuration for container orchestration.
+/// Machine control-plane configuration for container orchestration.
 ///
 /// Contains all the information needed for Alien to interact with managed
 /// container clusters during deployment. Each ComputeCluster resource gets its own
@@ -153,10 +153,10 @@ pub struct HorizonMachineImage {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct HorizonConfig {
-    /// Horizon control-plane API base URL.
+    /// Machine control-plane API base URL.
     pub url: String,
 
-    /// Horizon machine image catalog.
+    /// Machine image catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub horizon_machine_image: Option<HorizonMachineImage>,
 

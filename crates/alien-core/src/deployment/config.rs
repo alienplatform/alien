@@ -208,6 +208,14 @@ pub struct VolumeRestoreRequest {
 /// consumers can filter generically, without enumerating component names.
 pub const ALIEN_SYSTEM_RESOURCE_ATTRIBUTE: &str = "alien.system";
 
+/// Prefix that marks one captured output line of a Worker as Alien system output.
+///
+/// The worker runtime strips it from the line and records
+/// [`ALIEN_SYSTEM_RESOURCE_ATTRIBUTE`] on the exported record. Alien components that run as a
+/// Worker's application write it at the start of every line they print. Like the attribute, it
+/// only hides a line by default; it grants nothing.
+pub const ALIEN_SYSTEM_LOG_LINE_PREFIX: &str = "\u{1e}ALIEN_SYSTEM\u{1f}";
+
 /// OTLP log export configuration for a deployment.
 ///
 /// When set, injected compute runtimes export captured application logs

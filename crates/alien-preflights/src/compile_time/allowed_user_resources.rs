@@ -2,10 +2,10 @@ use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::permissions::ManagementPermissions;
 use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
-use alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
-use alien_core::{
-    Platform, Sandbox, SandboxEgress, Stack, DEPLOYER_SECRETS_VAULT_ID, SECRETS_VAULT_ID,
+use alien_core::sandbox_egress::{
+    has_internet_sandbox, is_managed_gateway, SANDBOX_EGRESS_GATEWAY_ID,
 };
+use alien_core::{Platform, Stack, DEPLOYER_SECRETS_VAULT_ID, SECRETS_VAULT_ID};
 use std::collections::HashSet;
 
 /// Ensures the stack contains only allowed user-defined resource types and IDs.
@@ -51,13 +51,7 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
             "experimental/aws-opensearch",
         ]);
         let mut errors = Vec::new();
-        let internet = stack.resources().any(|(_, entry)| {
-            entry
-                .config
-                .downcast_ref::<Sandbox>()
-                .is_some_and(|sandbox| matches!(sandbox.egress, SandboxEgress::Internet))
-        });
-        if internet
+        if has_internet_sandbox(stack)
             && stack
                 .permissions
                 .profiles
@@ -121,7 +115,9 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
                 continue;
             }
 
-            if internet && resource_id == SANDBOX_EGRESS_GATEWAY_ID {
+            // Log consumers treat this resource as Alien's own (`is_managed_gateway`), so an
+            // application resource must never hold the id while it is reserved.
+            if is_managed_gateway(stack, resource_id) {
                 errors.push(format!(
                     "Resource ID '{resource_id}' is reserved for the sandbox gateway"
                 ));

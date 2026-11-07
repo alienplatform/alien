@@ -156,7 +156,9 @@ async fn installation_records_exact_document_and_retries_without_reinstalling() 
         controller.permissions_boundary_document
     );
     let policies = executor
-        .with_context(|ctx| controller.generate_management_policy_documents(ctx))
+        .with_context(|ctx| {
+            controller.planned_management_policy_documents(ctx, "test-prefix-management")
+        })
         .unwrap();
     let mut writes = 0;
     for policy in policies {
@@ -187,6 +189,50 @@ async fn installation_records_exact_document_and_retries_without_reinstalling() 
         }
     }
     assert!(writes > 0);
+}
+
+// IAM is eventually consistent: right after a create, the name can already conflict while a
+// read of it still answers 404. That answer must leave the install retryable, with the ARN kept
+// for cleanup, instead of failing setup for good.
+#[tokio::test]
+async fn a_boundary_that_conflicts_but_cannot_be_read_yet_is_retried() {
+    let mut iam = MockIamApi::new();
+    let mut sequence = Sequence::new();
+    iam.expect_create_policy()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _, _, _| {
+            Err(AlienError::new(ClientError::Timeout {
+                message: "response lost".to_string(),
+            }))
+        });
+    iam.expect_create_policy()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _, _, _| Err(conflict()));
+    iam.expect_get_policy()
+        .withf(|arn| arn == ARN)
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_| {
+            Err(AlienError::new(ClientError::RemoteResourceNotFound {
+                resource_type: "policy".to_string(),
+                resource_name: ARN.to_string(),
+            }))
+        });
+    let executor = executor(iam).await;
+    let mut controller = AwsRemoteStackManagementController::default();
+    executor
+        .with_context(|ctx| block_on(controller.install_permissions_boundary(ctx)))
+        .unwrap_err();
+
+    let error = executor
+        .with_context(|ctx| block_on(controller.install_permissions_boundary(ctx)))
+        .unwrap_err();
+
+    assert!(error.retryable, "a lagging read must be retried: {error:?}");
+    assert_eq!(controller.permissions_boundary_arn.as_deref(), Some(ARN));
+    assert!(controller.permissions_boundary_document.is_none());
 }
 
 #[tokio::test]
@@ -551,7 +597,7 @@ async fn kubernetes_management_scope_keeps_boundary_installed_in_current_step() 
 }
 
 #[tokio::test]
-async fn stale_chunk_cleanup_preserves_boundary_and_unrelated_policies() {
+async fn stale_chunk_detach_preserves_boundary_and_unrelated_policies() {
     let controller = AwsRemoteStackManagementController::default();
     let mut iam = MockIamApi::new();
     iam.expect_list_attached_role_policies()
@@ -588,27 +634,11 @@ async fn stale_chunk_cleanup_preserves_boundary_and_unrelated_policies() {
             assert_eq!(arn, stale);
             Ok(())
         });
-    iam.expect_list_policy_versions()
-        .times(1)
-        .returning(move |arn| {
-            assert_eq!(arn, stale);
-            Ok(ListPolicyVersionsResponse {
-                list_policy_versions_result: ListPolicyVersionsResult {
-                    versions: None,
-                    is_truncated: Some(false),
-                    marker: None,
-                },
-            })
-        });
-    iam.expect_delete_policy().times(1).returning(move |arn| {
-        assert_eq!(arn, stale);
-        Ok(())
-    });
     let executor = executor(MockIamApi::new()).await;
     executor
         .with_context(|ctx| {
             block_on(
-                controller.reconcile_owned_management_policies(
+                controller.detach_stale_management_policies(
                     ctx,
                     &iam,
                     "test-prefix-management",
