@@ -614,6 +614,7 @@ mod tests {
             subnet_ids: vec!["subnet-b".into(), "subnet-a".into()],
             security_group_ids: vec!["sg-1".into()],
             identity: None,
+            egress: None,
         });
         let mut back = function(&spec);
         back["Configuration"]["VpcConfig"] = json!({

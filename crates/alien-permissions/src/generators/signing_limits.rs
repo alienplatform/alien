@@ -264,6 +264,8 @@ pub fn aws_verifier_policy(prefix: &str, account: &str, region: &str, publisher:
                     "ec2:DescribeInstances",
                     "ec2:DescribeSubnets",
                     "ec2:DescribeSecurityGroups",
+                    // Lambda checks a function's VPC as its caller.
+                    "ec2:DescribeVpcs",
                     "autoscaling:DescribeAutoScalingGroups",
                                         "ecr:GetAuthorizationToken"
                 ],
@@ -401,6 +403,45 @@ mod tests {
                         .iter()
                         .any(|pattern| matches(pattern, resource))
             })
+    }
+
+    /// Whether an unconditional Allow in `policy` covers `action` on `resource` and no Deny does.
+    fn allows(policy: &Value, action: &str, resource: &str) -> bool {
+        !denies(policy, action, resource)
+            && policy["Statement"]
+                .as_array()
+                .expect("statements")
+                .iter()
+                .any(|statement| {
+                    statement["Effect"] == "Allow"
+                        && statement.get("Condition").is_none()
+                        && strings(&statement["Action"])
+                            .iter()
+                            .any(|pattern| matches(pattern, action))
+                        && strings(&statement["Resource"])
+                            .iter()
+                            .any(|pattern| matches(pattern, resource))
+                })
+    }
+
+    /// Lambda checks the subnets, security groups and VPC of a function's `VpcConfig` as its
+    /// caller (the Lambda developer guide, "Required IAM permissions" for VPC access), so the
+    /// verifier keeps the install's functions in its network only with these reads.
+    #[test]
+    fn the_verifier_may_put_functions_in_the_install_network() {
+        let policy = aws_verifier_policy("orders", "111122223333", "us-east-1", "444455556666");
+        for action in [
+            "ec2:DescribeSecurityGroups",
+            "ec2:DescribeSubnets",
+            "ec2:DescribeVpcs",
+        ] {
+            assert!(allows(&policy, action, "*"), "{action}");
+        }
+        assert!(allows(
+            &policy,
+            "lambda:UpdateFunctionConfiguration",
+            "arn:aws:lambda:us-east-1:111122223333:function:orders-api"
+        ));
     }
 
     #[test]

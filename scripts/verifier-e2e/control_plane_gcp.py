@@ -10,6 +10,8 @@ The GCP counterpart of `control_plane.py`. Sets up, as protected setup would, an
   - the signing settings and ledger in Parameter Manager (`signed-<p>-fingerprint`,
     `signed-<p>-state`), the verifier allowed to list and read them (parameterViewer) and to add
     ledger versions;
+  - the network protected setup creates by default: VPC `<p>-net` with subnet `<p>-workload`,
+    given to the verifier in VERIFIER_FUNCTION_VPC, and the verifier's shared compute role;
   - the verifier as Cloud Run service `<p>-verifier`.
 No setup creates the worker's service. As the management stand-in (the caller impersonates it),
 `protected_worker_update update` (alien-infra example, CLOUD=gcp) runs the real stack executor and
@@ -205,11 +207,33 @@ class Run:
             self.gcloud("parametermanager", "parameters", "versions", "create", "v1", f"--parameter={name}",
                         "--location=global", f"--payload-data-from-file={path}")
 
+    def network(self):
+        self.gcloud("compute", "networks", "create", f"{self.prefix}-net", "--subnet-mode=custom")
+        self.created.append(("network", f"{self.prefix}-net"))
+        self.gcloud("compute", "networks", "subnets", "create", f"{self.prefix}-workload",
+                    f"--network={self.prefix}-net", f"--region={self.region}", "--range=10.44.0.0/24")
+        self.created.append(("subnet", f"{self.prefix}-workload"))
+        self.subnet = self.gcloud_json("compute", "networks", "subnets", "describe", f"{self.prefix}-workload",
+                                       f"--region={self.region}")["selfLink"]
+        # The verifier's shared compute role as setup renders it (GCP_VERIFIER_SHARED_PERMISSIONS).
+        role_id = self.prefix.replace("-", "_") + "_shared"
+        self.gcloud("iam", "roles", "create", role_id, f"--title={self.prefix} shared",
+                    "--permissions=compute.subnetworks.use,compute.images.useReadOnly,"
+                    "compute.instanceTemplates.list,compute.globalOperations.get,"
+                    "compute.regionOperations.get,compute.zoneOperations.get")
+        self.created.append(("role", role_id))
+        self.bind_project(f"serviceAccount:{self.sa['verifier']}", f"projects/{self.project}/roles/{role_id}")
+
     def verifier(self):
+        env = self.work / "verifier-env.yaml"
+        env.write_text(json.dumps({
+            "VERIFIER_CLOUD": "gcp", "RUST_LOG": "info",
+            "VERIFIER_FUNCTION_VPC": json.dumps({"subnetIds": [self.subnet], "securityGroupIds": [],
+                                                 "egress": "ALL_TRAFFIC"}),
+        }))
         self.gcloud("run", "deploy", f"{self.prefix}-verifier", f"--image={self.verifier_image}",
                     f"--region={self.region}", f"--service-account={self.sa['verifier']}",
-                    "--no-allow-unauthenticated", "--max-instances=1",
-                    "--set-env-vars=VERIFIER_CLOUD=gcp,RUST_LOG=info",
+                    "--no-allow-unauthenticated", "--max-instances=1", f"--env-vars-file={env}",
                     f"--labels={self.label_key}={self.label_value}")
         self.created.append(("service", f"{self.prefix}-verifier"))
         self.gcloud("run", "services", "add-iam-policy-binding", f"{self.prefix}-verifier",
@@ -229,6 +253,14 @@ class Run:
         containers = service.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [{}])
         return containers[0].get("image", "")
 
+    def egress(self):
+        """The service's Direct VPC egress: (subnet name, egress setting)."""
+        annotations = self.service().get("spec", {}).get("template", {}).get("metadata", {}) \
+            .get("annotations", {})
+        interfaces = json.loads(annotations.get("run.googleapis.com/network-interfaces", "[]"))
+        subnet = interfaces[0].get("subnetwork", "") if interfaces else ""
+        return subnet.rsplit("/", 1)[-1], annotations.get("run.googleapis.com/vpc-access-egress", "")
+
     def outcome(self, result):
         lines = result.stdout.strip().splitlines()
         return json.loads(lines[-1]) if lines else {}
@@ -245,10 +277,13 @@ class Run:
         invoker = any(binding.get("role") == "roles/run.invoker"
                       and f"serviceAccount:{self.sa['execution-sa']}" in binding.get("members", [])
                       for binding in policy.get("bindings", []))
-        self.record("0 the first deployment creates the worker's service through the verifier",
+        egress = self.egress()
+        self.record("0 the first deployment creates the worker's service through the verifier, in the network",
                     result.returncode == 0 and outcome.get("outcome") == "synced"
-                    and self.image() == self.images["a"] and ingress == "internal" and invoker,
-                    f"driver={outcome} image={self.image()[-19:]} ingress={ingress} invoker={invoker}")
+                    and self.image() == self.images["a"] and ingress == "internal" and invoker
+                    and egress == (f"{self.prefix}-workload", "all-traffic"),
+                    f"driver={outcome} image={self.image()[-19:]} ingress={ingress} invoker={invoker} "
+                    f"egress={egress}")
 
         result = self.driver("update", {"FROM_IMAGE": self.images["a"], "TO_IMAGE": self.images["b"],
                                         "PROTECTED": "1", "SEQUENCE": "2"}, check=False)
@@ -257,10 +292,14 @@ class Run:
         direct = self.gcloud("run", "services", "update", f"{self.prefix}-api", f"--region={self.region}",
                              f"--image={self.images['a']}", check=False,
                              token_file=self.management_token_file())
-        self.record("1 an update goes through the verifier; management can't update the service itself",
+        egress = self.egress()
+        self.record("1 an update goes through the verifier and keeps the network; management can't update "
+                    "the service itself",
                     result.returncode == 0 and outcome.get("outcome") == "synced" and image == self.images["b"]
+                    and egress == (f"{self.prefix}-workload", "all-traffic")
                     and direct.returncode != 0 and "'run.services.update' denied" in direct.stderr,
-                    f"driver={outcome} image={image[-19:]} direct={direct.stderr.strip()[-300:]}")
+                    f"driver={outcome} image={image[-19:]} egress={egress} "
+                    f"direct={direct.stderr.strip()[-300:]}")
 
         foreign_after = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=20)) \
             .replace(microsecond=0).isoformat()
@@ -293,6 +332,16 @@ class Run:
                 self.gcloud("parametermanager", "parameters", "delete", name, "--location=global", check=False)
             elif kind == "repository":
                 self.gcloud("artifacts", "repositories", "delete", name, f"--location={self.region}", check=False)
+        for kind, name in reversed(self.created):
+            if kind == "subnet":
+                # Cloud Run keeps a deleted service's addresses in the subnet for a while.
+                for _ in range(40):
+                    if self.gcloud("compute", "networks", "subnets", "delete", name,
+                                   f"--region={self.region}", "--quiet", check=False).returncode == 0:
+                        break
+                    time.sleep(30)
+            elif kind == "network":
+                self.gcloud("compute", "networks", "delete", name, "--quiet", check=False)
         for member, role, condition in self.bindings:
             self.gcloud("projects", "remove-iam-policy-binding", self.project, f"--member={member}",
                         f"--role={role}", f"--condition={condition}" if condition else "--condition=None",
@@ -316,6 +365,10 @@ class Run:
                  f"--location={self.region}") if r["name"].endswith(f"/{self.prefix}")]
         left += [r["name"] for r in self.gcloud_json("iam", "roles", "list")
                  if self.prefix.replace("-", "_") in r["name"] and not r.get("deleted")]
+        left += [n["name"] for n in self.gcloud_json("compute", "networks", "list")
+                 if n["name"].startswith(self.prefix)]
+        left += [n["name"] for n in self.gcloud_json("compute", "networks", "subnets", "list")
+                 if n["name"].startswith(self.prefix)]
         policy = self.gcloud_json("projects", "get-iam-policy", self.project)
         left += [f"{b['role']} {m}" for b in policy.get("bindings", []) for m in b.get("members", [])
                  if self.prefix in m]
@@ -328,6 +381,7 @@ class Run:
             self.push_images()
             self.accounts()
             self.parameters()
+            self.network()
             self.verifier()
             self.cases()
         finally:

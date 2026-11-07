@@ -133,6 +133,10 @@ pub struct SetupNetwork {
     /// service account email, or the Azure user-assigned identity id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<String>,
+    /// Which traffic a Cloud Run function sends through the subnet: `ALL_TRAFFIC`, or
+    /// `PRIVATE_RANGES_ONLY` on the project's default network. GCP functions only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<String>,
 }
 
 impl Place {

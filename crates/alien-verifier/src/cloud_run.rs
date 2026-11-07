@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::error::{ErrorData, Result};
-use crate::plan::FunctionSpec;
+use crate::plan::{FunctionSpec, SetupNetwork};
 
 /// The Cloud Run calls the verifier makes.
 #[async_trait]
@@ -44,7 +44,7 @@ pub fn service_body(spec: &FunctionSpec) -> Value {
         .iter()
         .map(|(name, value)| json!({"name": name, "value": value}))
         .collect();
-    json!({
+    let mut service = json!({
         "template": {
             "serviceAccount": spec.run_as,
             "timeout": format!("{}s", spec.timeout_seconds),
@@ -62,7 +62,61 @@ pub fn service_body(spec: &FunctionSpec) -> Value {
         // Every request goes to the revision this template creates; no
         // older revision stays reachable by a split or a tag.
         "traffic": [{"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", "percent": 100}],
+    });
+    if let Some(vpc) = &spec.vpc {
+        service["template"]["vpcAccess"] = vpc_access(vpc);
+    }
+    service
+}
+
+/// Direct VPC egress through the subnet setup gives functions.
+fn vpc_access(vpc: &SetupNetwork) -> Value {
+    let interfaces: Vec<Value> = vpc
+        .subnet_ids
+        .iter()
+        .map(|subnet| {
+            // Setup gives the subnet's self link; Cloud Run takes its `projects/...` path.
+            let path = match subnet.split_once("/projects/") {
+                Some((_, rest)) => format!("projects/{rest}"),
+                None => subnet.clone(),
+            };
+            let mut interface = json!({ "subnetwork": path });
+            if !vpc.security_group_ids.is_empty() {
+                interface["tags"] = json!(vpc.security_group_ids);
+            }
+            interface
+        })
+        .collect();
+    json!({
+        "networkInterfaces": interfaces,
+        "egress": vpc.egress.as_deref().unwrap_or("ALL_TRAFFIC"),
     })
+}
+
+/// The subnets (by name), network tags and egress of a template's `vpcAccess`, as setup's
+/// network and what Cloud Run reads back compare.
+fn network_of(vpc_access: &Value) -> Option<(Vec<String>, Vec<String>, String)> {
+    let interfaces = vpc_access["networkInterfaces"].as_array()?;
+    if interfaces.is_empty() {
+        return None;
+    }
+    let name = |path: &str| path.rsplit('/').next().unwrap_or(path).to_string();
+    let mut subnets = Vec::new();
+    let mut tags = Vec::new();
+    for interface in interfaces {
+        subnets.push(name(interface["subnetwork"].as_str().unwrap_or_default()));
+        for tag in interface["tags"].as_array().into_iter().flatten() {
+            tags.push(tag.as_str().unwrap_or_default().to_string());
+        }
+    }
+    subnets.sort();
+    tags.sort();
+    tags.dedup();
+    let egress = vpc_access["egress"]
+        .as_str()
+        .unwrap_or("PRIVATE_RANGES_ONLY")
+        .to_string();
+    Some((subnets, tags, egress))
 }
 
 const UPDATE_WAIT: Duration = Duration::from_secs(300);
@@ -261,6 +315,18 @@ pub fn check_read_back(spec: &FunctionSpec, service: &Value) -> Result<()> {
     if !is_empty(&template["volumes"]) {
         return Err(mismatch("it mounts volumes".to_string()));
     }
+    let network = network_of(&template["vpcAccess"]);
+    if network
+        != spec
+            .vpc
+            .as_ref()
+            .and_then(|vpc| network_of(&vpc_access(vpc)))
+    {
+        return Err(mismatch(format!(
+            "its network is {}, not the one setup gives functions",
+            template["vpcAccess"]
+        )));
+    }
     check_serving(service).map_err(mismatch)
 }
 
@@ -368,6 +434,66 @@ mod tests {
         // A field Cloud Run added that the verifier doesn't know, still empty.
         template["sandboxes"] = json!({});
         service
+    }
+
+    /// `spec` in the subnet setup gives functions.
+    fn in_network(mut spec: FunctionSpec) -> FunctionSpec {
+        spec.vpc = Some(SetupNetwork {
+            subnet_ids: vec![
+                "https://www.googleapis.com/compute/v1/projects/p/regions/us-central1/subnetworks/acme-workload"
+                    .into(),
+            ],
+            security_group_ids: Vec::new(),
+            identity: None,
+            egress: Some("ALL_TRAFFIC".into()),
+        });
+        spec
+    }
+
+    #[test]
+    fn a_function_in_the_install_network_sends_its_traffic_through_it() {
+        let spec = in_network(spec());
+        assert_eq!(
+            service_body(&spec)["template"]["vpcAccess"],
+            json!({
+                "networkInterfaces": [{
+                    "subnetwork": "projects/p/regions/us-central1/subnetworks/acme-workload"
+                }],
+                "egress": "ALL_TRAFFIC",
+            })
+        );
+        // As Cloud Run reads it back: the network filled in, the subnet by name.
+        let read = |vpc_access: Value| {
+            let mut service = service(&spec);
+            service["template"]["vpcAccess"] = vpc_access;
+            service
+        };
+        let as_set = json!({
+            "networkInterfaces": [{"network": "acme-net", "subnetwork": "acme-workload"}],
+            "egress": "ALL_TRAFFIC",
+        });
+        check_read_back(&spec, &read(as_set.clone())).unwrap();
+
+        let reason = |vpc_access: Value| {
+            check_read_back(&spec, &read(vpc_access))
+                .expect_err("must not match")
+                .to_string()
+        };
+        assert!(reason(json!({})).contains("network"), "taken out of it");
+        let mut other_subnet = as_set.clone();
+        other_subnet["networkInterfaces"][0]["subnetwork"] = json!("elsewhere");
+        assert!(reason(other_subnet).contains("network"), "moved");
+        let mut private_only = as_set.clone();
+        private_only["egress"] = json!("PRIVATE_RANGES_ONLY");
+        assert!(reason(private_only).contains("network"), "egress narrowed");
+
+        // A function setup puts in no network isn't in one.
+        let mut joined = service(&self::spec());
+        joined["template"]["vpcAccess"] = as_set;
+        assert!(check_read_back(&self::spec(), &joined)
+            .expect_err("must not match")
+            .to_string()
+            .contains("network"));
     }
 
     #[test]

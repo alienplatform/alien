@@ -695,16 +695,29 @@ pub fn generate_cloudformation_template_with_profile(
     add_signing_settings(&mut template, &stack_settings_value, options.target)?;
     consolidate_role_inline_policies(&mut template)?;
     // After consolidation, so the count of managed policies on the management role is final.
-    let verifier_machine_network = if stack_settings_value.signing.is_some() {
-        verifier_machine_network(stack, &stack_settings_value, &names, options.target)?
+    let verifier_networks = if stack_settings_value.signing.is_some() {
+        VerifierNetworks {
+            functions: verifier_function_network(
+                stack,
+                &stack_settings_value,
+                &names,
+                options.target,
+            ),
+            machines: verifier_machine_network(
+                stack,
+                &stack_settings_value,
+                &names,
+                options.target,
+            )?,
+        }
     } else {
-        None
+        VerifierNetworks::default()
     };
     add_verifier_and_limits(
         &mut template,
         &stack_settings_value,
         &options.pins,
-        verifier_machine_network,
+        verifier_networks,
     )?;
     if stack_settings_value.signing.is_some() {
         refuse_unverifiable_code(&template)?;
@@ -2031,7 +2044,7 @@ fn add_verifier_and_limits(
     template: &mut CfTemplate,
     settings: &StackSettings,
     pins: &alien_core::SetupPins,
-    machine_network: Option<CfExpression>,
+    networks: VerifierNetworks,
 ) -> Result<()> {
     if settings.signing.is_none() {
         return Ok(());
@@ -2139,7 +2152,10 @@ fn add_verifier_and_limits(
         .properties
         .insert("MemorySize".to_string(), CfExpression::from(512u32));
     let mut environment = vec![("VERIFIER_CLOUD", CfExpression::from("aws"))];
-    if let Some(network) = machine_network {
+    if let Some(network) = networks.functions {
+        environment.push(("VERIFIER_FUNCTION_VPC", network));
+    }
+    if let Some(network) = networks.machines {
         environment.push(("VERIFIER_MACHINE_NETWORK", network));
     }
     function.properties.insert(
@@ -2240,11 +2256,76 @@ fn refuse_unverifiable_code(template: &CfTemplate) -> Result<()> {
                 _ => None,
             };
             if !text.is_some_and(|text| text.contains("@sha256:")) {
-                return refuse(format!("resource '{id}' runs an image not pinned by digest"));
+                return refuse(format!(
+                    "resource '{id}' runs an image not pinned by digest"
+                ));
             }
         }
     }
     Ok(())
+}
+
+/// The networks setup gives the verifier, as JSON `{"subnetIds": [..], "securityGroupIds": [..]}`.
+#[derive(Default)]
+struct VerifierNetworks {
+    /// Where it runs functions: `VERIFIER_FUNCTION_VPC`.
+    functions: Option<CfExpression>,
+    /// Where it launches machines: `VERIFIER_MACHINE_NETWORK`.
+    machines: Option<CfExpression>,
+}
+
+/// Where the verifier runs functions, when the stack has a network functions join: the
+/// private subnets and workload security group the worker controller puts an unprotected
+/// install's functions in. Functions stay out of the default VPC, so it gives none for that.
+fn verifier_function_network(
+    stack: &Stack,
+    settings: &StackSettings,
+    names: &IndexMap<String, String>,
+    target: CloudFormationTarget,
+) -> Option<CfExpression> {
+    let (network_id, entry) = stack
+        .resources()
+        .find(|(_, entry)| entry.config.downcast_ref::<Network>().is_some())?;
+    if matches!(
+        entry.config.downcast_ref::<Network>()?.settings,
+        NetworkSettings::UseDefault
+    ) {
+        return None;
+    }
+    let ctx = EmitContext {
+        stack,
+        resource: entry,
+        resource_id: network_id,
+        platform: target.cloud_platform(),
+        targets_kubernetes: target.is_kubernetes(),
+        stack_settings: settings,
+        names,
+    };
+    Some(subnets_and_groups(&ctx))
+}
+
+/// JSON `{"subnetIds": [..], "securityGroupIds": [..]}` of the private subnets and security
+/// group of the network `ctx` names.
+fn subnets_and_groups(ctx: &EmitContext<'_>) -> CfExpression {
+    CfExpression::sub_with(
+        r#"{"subnetIds":["${Subnets}"],"securityGroupIds":["${Groups}"]}"#,
+        [
+            (
+                "Subnets",
+                CfExpression::join(
+                    "\",\"",
+                    crate::emitters::aws::helpers::private_subnet_ids_expr(ctx),
+                ),
+            ),
+            (
+                "Groups",
+                CfExpression::join(
+                    "\",\"",
+                    crate::emitters::aws::helpers::security_group_ids_expr(ctx),
+                ),
+            ),
+        ],
+    )
 }
 
 /// Where the verifier launches machines, when the stack has any: the private subnets and
@@ -2286,19 +2367,7 @@ fn verifier_machine_network(
         stack_settings: settings,
         names,
     };
-    Ok(Some(CfExpression::sub_with(
-        r#"{"subnetIds":["${Subnets}"],"securityGroupIds":["${Groups}"]}"#,
-        [
-            (
-                "Subnets",
-                CfExpression::join("\",\"", crate::emitters::aws::helpers::private_subnet_ids_expr(&ctx)),
-            ),
-            (
-                "Groups",
-                CfExpression::join("\",\"", crate::emitters::aws::helpers::security_group_ids_expr(&ctx)),
-            ),
-        ],
-    )))
+    Ok(Some(subnets_and_groups(&ctx)))
 }
 
 /// The logical ID of the role named `<prefix>-management`, if the template creates it.

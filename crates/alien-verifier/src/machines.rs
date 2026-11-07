@@ -915,6 +915,7 @@ mod tests {
                 subnet_ids: vec![SUBNET.to_string()],
                 security_group_ids: vec![SECURITY_GROUP.to_string()],
                 identity: None,
+                egress: None,
             }),
         }
     }

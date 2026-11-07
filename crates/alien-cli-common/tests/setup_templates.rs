@@ -480,3 +480,61 @@ async fn a_protected_module_keeps_every_resource_of_the_unprotected_one() {
         }
     }
 }
+
+/// The expression the last `key = <expression>` in whitespace-collapsed HCL sets: up to the
+/// next `,`, closing bracket or `<key> =` at its own bracket depth.
+fn hcl_value<'a>(text: &'a str, key: &str) -> &'a str {
+    let start = text
+        .rfind(&format!(" {key} = "))
+        .unwrap_or_else(|| panic!("no {key} in {text}"))
+        + key.len()
+        + 4;
+    let rest = &text[start..];
+    let next_key = |at: usize| {
+        let word: String = rest[at + 1..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        !word.is_empty() && rest[at + 1 + word.len()..].starts_with(" = ")
+    };
+    let mut depth = 0i32;
+    for (offset, character) in rest.char_indices() {
+        match character {
+            '[' | '(' | '{' => depth += 1,
+            ']' | ')' | '}' if depth == 0 => return rest[..offset].trim(),
+            ']' | ')' | '}' => depth -= 1,
+            ',' if depth == 0 => return rest[..offset].trim(),
+            ' ' if depth == 0 && next_key(offset) => return rest[..offset].trim(),
+            _ => {}
+        }
+    }
+    rest.trim()
+}
+
+/// A protected install's verifier puts functions in the subnets setup reports for the network,
+/// the ones the worker controller puts an unprotected install's functions in, so protecting an
+/// install keeps its functions in its network.
+#[tokio::test]
+async fn the_verifier_runs_functions_in_the_subnets_setup_reports_for_the_network() {
+    let rendered = render(FINGERPRINT).await;
+    for (name, reported) in [
+        ("terraform-aws", "privateSubnetIds"),
+        ("terraform-gcp", "subnetSelfLinks"),
+    ] {
+        let files: std::collections::BTreeMap<String, String> =
+            serde_json::from_slice(&rendered[name].bytes).expect("a module is a JSON file map");
+        let signing = files["signing.tf"]
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let at = signing
+            .find("VERIFIER_FUNCTION_VPC")
+            .unwrap_or_else(|| panic!("{name}: the verifier is given no function network"));
+        let given = hcl_value(&signing[at..], "subnetIds");
+        let locals = files["locals.tf"]
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(given, hcl_value(&locals, reported), "{name}");
+    }
+}

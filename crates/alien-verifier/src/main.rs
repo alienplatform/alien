@@ -5,11 +5,12 @@
 //! with this configuration, which only setup can change:
 //!
 //! - `VERIFIER_CLOUD`: `aws`, `gcp` or `azure`;
-//! - on AWS, `VERIFIER_FUNCTION_VPC`: `{"subnetIds": [..], "securityGroupIds": [..]}`
-//!   when setup puts functions in a VPC, and `VERIFIER_MACHINE_NETWORK`, the
-//!   same for the subnets and security groups setup created for machines
-//!   when the install runs any. The verifier's own name, account and region
-//!   come from the ARN Lambda invokes it with;
+//! - on AWS and GCP, `VERIFIER_FUNCTION_VPC`: `{"subnetIds": [..], "securityGroupIds": [..]}`
+//!   when setup puts functions in a network (on GCP the subnet path, network tags and the
+//!   Cloud Run `egress`), and everywhere `VERIFIER_MACHINE_NETWORK`, the same for the
+//!   subnets and security groups setup created for machines when the install runs any;
+//! - on AWS the verifier's own name, account and region come from the ARN Lambda invokes it
+//!   with;
 //! - on GCP the project and region come from the metadata server, and the
 //!   name from Cloud Run's `K_SERVICE`;
 //! - on Azure, `VERIFIER_AZURE_RESOURCE_GROUP`
@@ -81,6 +82,21 @@ fn network_env(name: &str) -> Result<Option<SetupNetwork>> {
         .transpose()
 }
 
+/// The networks setup gives the verifier: the one functions run in, if setup puts them in
+/// one, and the one machines run in, if the install has machines.
+fn setup_networks() -> Result<(Option<SetupNetwork>, Option<SetupNetwork>)> {
+    // Setup names no subnets when functions stay out of the network (AWS's default VPC);
+    // CloudFormation joins that empty list into one empty id.
+    let functions = network_env("VERIFIER_FUNCTION_VPC")?
+        .map(|mut network| {
+            network.subnet_ids.retain(|id| !id.is_empty());
+            network.security_group_ids.retain(|id| !id.is_empty());
+            network
+        })
+        .filter(|network| !network.subnet_ids.is_empty());
+    Ok((functions, network_env("VERIFIER_MACHINE_NETWORK")?))
+}
+
 struct Aws {
     store: Arc<dyn InstallStore>,
     backend: Arc<dyn Backend>,
@@ -108,8 +124,7 @@ impl Aws {
             },
         )?;
         let http = reqwest::Client::new();
-        let vpc = network_env("VERIFIER_FUNCTION_VPC")?;
-        let machine_network = network_env("VERIFIER_MACHINE_NETWORK")?;
+        let (vpc, machine_network) = setup_networks()?;
         Ok(Self {
             store: Arc::new(SsmInstall::new(SsmClient::new(
                 http.clone(),
@@ -150,6 +165,7 @@ async fn gcp_verifier() -> Result<Verifier> {
     };
     let (project, region) = gcp::metadata_identity().await?;
     let client = Gcp::new(tokens, project.clone(), region);
+    let (vpc, machine_network) = setup_networks()?;
     Ok(Verifier {
         own_name: env("K_SERVICE")?,
         install_id: Arc::new(move |prefix: &str| InstallId::Gcp {
@@ -161,8 +177,8 @@ async fn gcp_verifier() -> Result<Verifier> {
             client,
             alien_verifier::machines::ImagePins::gcp(),
         )),
-        vpc: None,
-        machine_network: None,
+        vpc,
+        machine_network,
     })
 }
 
@@ -184,6 +200,7 @@ fn azure_verifier() -> Result<Verifier> {
                         .to_string(),
             })),
         };
+    let (_, machine_network) = setup_networks()?;
     let client = Azure::new(
         resource_group,
         env("VERIFIER_AZURE_VAULT")?,
@@ -201,7 +218,7 @@ fn azure_verifier() -> Result<Verifier> {
             alien_verifier::machines::ImagePins::azure(),
         )),
         vpc: None,
-        machine_network: None,
+        machine_network,
     })
 }
 

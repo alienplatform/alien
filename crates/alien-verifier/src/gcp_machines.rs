@@ -379,6 +379,7 @@ mod tests {
                 subnet_ids: vec![SUBNETWORK.to_string()],
                 security_group_ids: vec!["acme-prod-machines".to_string()],
                 identity: Some(SERVICE_ACCOUNT.to_string()),
+                egress: None,
             }),
         }
     }

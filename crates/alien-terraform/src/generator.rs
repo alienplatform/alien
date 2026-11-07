@@ -597,15 +597,23 @@ pub(crate) fn render_terraform_module(
             _ => None,
         })
         .collect();
-    let verifier_machine_network =
-        verifier_machine_network(stack, &stack_settings, &labels, target, options.registry)?;
+    let verifier_networks = VerifierNetworks {
+        functions: verifier_function_network(stack, &stack_settings, &labels, target),
+        machines: verifier_machine_network(
+            stack,
+            &stack_settings,
+            &labels,
+            target,
+            options.registry,
+        )?,
+    };
     let mut signing = signing_blocks(
         &stack_settings,
         target,
         &options.pins,
         management_label.as_deref(),
         &runtime_service_accounts,
-        verifier_machine_network,
+        verifier_networks,
     )?;
     // The signing parameters and the verifier need their APIs (Parameter Manager, Cloud Run)
     // enabled first.
@@ -1923,7 +1931,7 @@ fn signing_blocks(
     pins: &alien_core::SetupPins,
     management_label: Option<&str>,
     runtime_service_accounts: &[String],
-    verifier_machine_network: Option<Expression>,
+    networks: VerifierNetworks,
 ) -> Result<Vec<Block>> {
     let Some(signing) = &settings.signing else {
         return Ok(Vec::new());
@@ -1951,7 +1959,7 @@ fn signing_blocks(
     match target {
         TerraformTarget::Aws => Ok([
             vec![fingerprint_variable],
-            aws_verifier_blocks(pins, management_label, verifier_machine_network)?,
+            aws_verifier_blocks(pins, management_label, networks)?,
             vec![
                 resource_block(
                     "aws_ssm_parameter",
@@ -1988,7 +1996,7 @@ fn signing_blocks(
                 pins,
                 management_label,
                 runtime_service_accounts,
-                verifier_machine_network,
+                networks,
             )?);
             for (label, name, value) in [
                 (
@@ -2028,7 +2036,7 @@ fn signing_blocks(
         }
         TerraformTarget::Azure => Ok([
             vec![fingerprint_variable],
-            azure_verifier_blocks(pins, management_label, verifier_machine_network)?,
+            azure_verifier_blocks(pins, management_label, networks.machines)?,
         ]
         .concat()),
         TerraformTarget::Eks | TerraformTarget::Gke | TerraformTarget::Aks => {
@@ -2045,7 +2053,7 @@ fn signing_blocks(
 fn aws_verifier_blocks(
     pins: &alien_core::SetupPins,
     management_label: Option<&str>,
-    machine_network: Option<Expression>,
+    networks: VerifierNetworks,
 ) -> Result<Vec<Block>> {
     let missing = |what: &str| {
         AlienError::new(ErrorData::OperationNotSupported {
@@ -2148,10 +2156,7 @@ fn aws_verifier_blocks(
                         expr::object(
                             [("VERIFIER_CLOUD", Expression::String("aws".to_string()))]
                                 .into_iter()
-                                .chain(
-                                    machine_network
-                                        .map(|network| ("VERIFIER_MACHINE_NETWORK", network)),
-                                ),
+                                .chain(networks.env()),
                         ),
                     )],
                 )),
@@ -2414,7 +2419,7 @@ fn gcp_verifier_blocks(
     pins: &alien_core::SetupPins,
     management_label: Option<&str>,
     runtime_service_accounts: &[String],
-    machine_network: Option<Expression>,
+    networks: VerifierNetworks,
 ) -> Result<Vec<Block>> {
     let image = pins
         .gcp_verifier_image
@@ -2649,7 +2654,7 @@ fn gcp_verifier_blocks(
         )),
         env("VERIFIER_CLOUD", Expression::String("gcp".to_string())),
     ];
-    container.extend(machine_network.map(|network| env("VERIFIER_MACHINE_NETWORK", network)));
+    container.extend(networks.env().map(|(name, network)| env(name, network)));
     blocks.push(resource_block(
         "google_cloud_run_v2_service",
         "signing_verifier",
@@ -2689,10 +2694,7 @@ fn gcp_verifier_blocks(
                     expr::traversal(["google_project_iam_member", "signing_verifier"]),
                     expr::traversal(["google_project_iam_member", "signing_verifier_shared"]),
                     expr::traversal(["google_project_iam_member", "signing_verifier_cloud_run"]),
-                    expr::traversal([
-                        "google_project_iam_member",
-                        "signing_verifier_pulls_images",
-                    ]),
+                    expr::traversal(["google_project_iam_member", "signing_verifier_pulls_images"]),
                     expr::traversal([
                         "google_project_iam_member",
                         "signing_verifier_reads_settings",
@@ -2741,6 +2743,86 @@ fn gcp_verifier_blocks(
         ));
     }
     Ok(blocks)
+}
+
+/// The networks setup gives a protected install's verifier, as JSON expressions.
+struct VerifierNetworks {
+    /// Where it runs functions: `VERIFIER_FUNCTION_VPC`.
+    functions: Option<Expression>,
+    /// Where it launches machines: `VERIFIER_MACHINE_NETWORK`.
+    machines: Option<Expression>,
+}
+
+impl VerifierNetworks {
+    /// The verifier's environment variables that carry them.
+    fn env(self) -> impl Iterator<Item = (&'static str, Expression)> {
+        [
+            ("VERIFIER_FUNCTION_VPC", self.functions),
+            ("VERIFIER_MACHINE_NETWORK", self.machines),
+        ]
+        .into_iter()
+        .filter_map(|(name, network)| network.map(|network| (name, network)))
+    }
+}
+
+/// Where a protected install's verifier runs functions, when the stack has a network: the
+/// subnets an unprotected install's functions join. On AWS, `{"subnetIds", "securityGroupIds"}`
+/// of the private subnets and the workload security group (none on the default VPC, which
+/// functions stay out of). On GCP, `{"subnetIds": [subnet self link], "securityGroupIds": [],
+/// "egress"}` for Cloud Run's Direct VPC egress. Azure functions take their network from the
+/// Container Apps environment.
+fn verifier_function_network(
+    stack: &Stack,
+    settings: &StackSettings,
+    labels: &IndexMap<String, String>,
+    target: TerraformTarget,
+) -> Option<Expression> {
+    settings.signing.as_ref()?;
+    let (network_id, entry) = stack
+        .resources()
+        .find(|(_, entry)| entry.config.downcast_ref::<Network>().is_some())?;
+    let network = entry.config.downcast_ref::<Network>()?;
+    let label = labels.get(network_id)?;
+    match target {
+        TerraformTarget::Aws => {
+            let ctx = EmitContext {
+                stack,
+                resource: entry,
+                resource_id: network_id,
+                platform: target.cloud_platform(),
+                targets_kubernetes: false,
+                stack_settings: settings,
+                names: labels,
+            };
+            Some(expr::jsonencode(expr::object([
+                (
+                    "subnetIds",
+                    crate::emitters::aws::helpers::private_subnet_ids_expr(&ctx),
+                ),
+                (
+                    "securityGroupIds",
+                    crate::emitters::aws::helpers::security_group_ids_expr(&ctx),
+                ),
+            ])))
+        }
+        TerraformTarget::Gcp => match network.settings {
+            NetworkSettings::Create { .. }
+            | NetworkSettings::UseDefault
+            | NetworkSettings::ByoVpcGcp { .. } => Some(expr::jsonencode(expr::object([
+                (
+                    "subnetIds",
+                    crate::emitters::gcp::network::subnet_self_links(label, &network.settings),
+                ),
+                ("securityGroupIds", Expression::Array(Vec::new())),
+                (
+                    "egress",
+                    crate::emitters::gcp::network::function_egress(&network.settings),
+                ),
+            ]))),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Where a protected install's verifier launches machines, when the stack has any: JSON

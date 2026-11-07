@@ -454,6 +454,7 @@ mod tests {
                 subnet_ids: vec![SUBNET.to_string()],
                 security_group_ids: Vec::new(),
                 identity: Some(IDENTITY.to_string()),
+                egress: None,
             }),
         }
     }
