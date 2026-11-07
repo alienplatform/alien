@@ -459,7 +459,10 @@ pub async fn setup_templates(
         .build();
     let mut templates = BTreeMap::new();
     for &name in platform_templates(platform) {
-        let settings = protected_stack_settings(name, signing);
+        let settings =
+            protected_stack_settings(name, stack, signing).context(ErrorData::SigningFailed {
+                message: format!("Could not choose the settings of the {name} setup template"),
+            })?;
         let rendered = render_setup_template(name, stack, &settings, &options)
             .await
             .context(ErrorData::SigningFailed {

@@ -1,8 +1,8 @@
 //! Rendering a protected stack's setup templates the way a signed release records them.
 
 use alien_cli_common::setup_templates::{
-    file_map_bytes, render_setup_template, render_setup_templates, SetupHostingOptions,
-    SetupRenderOptions,
+    file_map_bytes, package_stack_settings, render_setup_template, render_setup_templates,
+    SetupHostingOptions, SetupRenderOptions,
 };
 use alien_cloudformation::CfRegistry;
 use alien_core::{SetupPins, Stack, StackSettings, StackSigning};
@@ -452,16 +452,10 @@ async fn a_protected_module_keeps_every_resource_of_the_unprotected_one() {
         .hosting(hosting())
         .pins(pins())
         .build();
-    // What unprotected packages are rendered with: the network is the customer's choice.
-    let unprotected_settings = StackSettings {
-        network: Some(alien_core::NetworkSettings::Create {
-            cidr: None,
-            availability_zones: 2,
-        }),
-        ..StackSettings::default()
-    };
     for name in ["terraform-aws", "terraform-gcp", "terraform-azure"] {
-        let unprotected = render_setup_template(name, &stack(), &unprotected_settings, &options)
+        // What the unprotected package is rendered with.
+        let settings = package_stack_settings(name, &stack()).expect("package settings");
+        let unprotected = render_setup_template(name, &stack(), &settings, &options)
             .await
             .expect("unprotected module renders");
         let protected = terraform_resources(&rendered[name].bytes);
@@ -536,5 +530,52 @@ async fn the_verifier_runs_functions_in_the_subnets_setup_reports_for_the_networ
             .collect::<Vec<_>>()
             .join(" ");
         assert_eq!(given, hcl_value(&locals, reported), "{name}");
+    }
+}
+
+/// A stack that only gives access to resources running elsewhere: its unprotected package
+/// creates no network and registers telemetry off, so the protected module doesn't either.
+#[tokio::test]
+async fn an_access_only_stack_gets_no_network_when_protected() {
+    let mut stack = stack();
+    stack
+        .resources
+        .get_mut("assets")
+        .expect("assets")
+        .remote_access = true;
+    let signing = StackSigning {
+        fingerprint: FINGERPRINT.to_string(),
+        channel: "production".to_string(),
+    };
+    let cloudformation = CfRegistry::built_in();
+    let terraform = TfRegistry::built_in();
+    let helm = HelmRegistry::built_in();
+    let rendered = render_setup_templates(
+        &stack,
+        SetupRenderOptions::builder()
+            .signing(&signing)
+            .cloudformation_registry(&cloudformation)
+            .terraform_registry(&terraform)
+            .helm_registry(&helm)
+            .hosting(hosting())
+            .pins(pins())
+            .build(),
+    )
+    .await
+    .expect("protected setup templates render");
+    for name in ["terraform-aws", "terraform-gcp", "terraform-azure"] {
+        let networks: Vec<String> = terraform_resources(&rendered[name].bytes)
+            .into_iter()
+            .filter(|address| address.contains("default_network"))
+            .collect();
+        assert_eq!(networks, Vec::<String>::new(), "{name}");
+        assert!(
+            !rendered[name]
+                .allowed
+                .iter()
+                .any(|variable| variable == "network_mode"),
+            "{name}: {:?}",
+            rendered[name].allowed
+        );
     }
 }

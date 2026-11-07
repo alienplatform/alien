@@ -14,12 +14,15 @@ use alien_cloudformation::{
     RegistrationMode,
 };
 use alien_core::{
-    AwsManagementConfig, AzureManagementConfig, DeploymentConfig, EnvironmentVariablesSnapshot,
-    ExternalBindings, GcpManagementConfig, ManagementConfig, NetworkSettings, Platform, SetupPins,
-    Stack, StackSettings, StackSigning, StackState,
+    compute_planner::plan_compute, remote_bindings::remote_binding_for_entry, AwsManagementConfig,
+    AzureManagementConfig, ComputeCluster, ComputePoolSelection, ComputeSettings, DeploymentConfig,
+    EnvironmentVariablesSnapshot, ExternalBindings, GcpManagementConfig, ManagementConfig,
+    NetworkSettings, Platform, ResourceEntry, ResourceLifecycle, SetupPins, Stack, StackSettings,
+    StackSigning, StackState, TelemetryMode,
 };
 use alien_error::{AlienError, AlienErrorData, Context, IntoAlienError};
 use alien_helm::{HelmOptions, HelmRegistry};
+use alien_preflights::compile_time::stack_requires_network;
 use alien_signing::release::{SetupTemplate, SETUP_TEMPLATES};
 use alien_terraform::{TerraformOptions, TerraformSetupIdentity, TerraformTarget, TfRegistry};
 use bon::Builder;
@@ -110,20 +113,94 @@ impl RenderedSetupTemplate {
     }
 }
 
-/// The stack settings a release renders setup template `name` with: signing on, and on a
-/// cloud the network left to the customer as unprotected packages leave it (a new network by
-/// default, or an existing or the default one). Protecting an install replaces its unprotected
-/// setup with this one, which must keep the network the install already has.
-pub fn protected_stack_settings(name: &str, signing: &StackSigning) -> StackSettings {
-    let network = (name != "helm").then_some(NetworkSettings::Create {
-        cidr: None,
-        availability_zones: 2,
-    });
-    StackSettings {
-        signing: Some(signing.clone()),
-        network,
+/// The stack settings the setup package of `stack` for template `name` is rendered with, before
+/// any signing: on a cloud the network is left to the customer, a new one by default, unless the
+/// stack only reaches resources that run elsewhere and needs no network of its own; a stack that
+/// runs nothing (it only gives access) registers telemetry off; and the stack's compute
+/// clusters get the pools they plan. The CLI and the service that hosts packages both render
+/// with this, so a protected install keeps what its unprotected package created.
+pub fn package_stack_settings(name: &str, stack: &Stack) -> Result<StackSettings> {
+    let platform = match name {
+        "cloudformation" | "terraform-aws" => Platform::Aws,
+        "terraform-gcp" => Platform::Gcp,
+        "terraform-azure" => Platform::Azure,
+        "helm" => return Ok(StackSettings::default()),
+        other => return Err(render_failed(other, "no renderer for this template name")),
+    };
+    let mut settings = StackSettings {
+        network: Some(NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        }),
         ..StackSettings::default()
+    };
+    let reached_elsewhere = |entry: &ResourceEntry| remote_binding_for_entry(entry).is_some();
+    let reaches_any = stack.resources().any(|(_, entry)| reached_elsewhere(entry));
+    // A Live resource reached elsewhere (a Live sandbox) needs no network of its own, so only
+    // other Live resources keep the default network.
+    if reaches_any
+        && !stack.resources().any(|(_, entry)| {
+            entry.lifecycle == ResourceLifecycle::Live && !reached_elsewhere(entry)
+        })
+        && !stack_requires_network(stack)
+    {
+        settings.network = None;
     }
+    if reaches_any
+        && !stack
+            .resources()
+            .any(|(_, entry)| entry.lifecycle == ResourceLifecycle::Live)
+    {
+        settings.telemetry = TelemetryMode::Off;
+    }
+    let plan = plan_compute(stack, platform, None).context(ErrorData::RenderFailed {
+        template: name.to_string(),
+        message: "planning the stack's compute pools".to_string(),
+    })?;
+    if !plan.pools.is_empty() {
+        settings.compute = Some(ComputeSettings {
+            containers: Default::default(),
+            pools: plan
+                .pools
+                .into_iter()
+                .map(|pool| {
+                    // A machine the stack's cluster names stays its choice.
+                    let machine = stack
+                        .resources
+                        .values()
+                        .filter_map(|entry| entry.config.downcast_ref::<ComputeCluster>())
+                        .flat_map(|cluster| &cluster.capacity_groups)
+                        .find(|group| group.group_id == pool.pool_id)
+                        .and_then(|group| group.instance_type.clone());
+                    let mut selection = pool.selected;
+                    match &mut selection {
+                        ComputePoolSelection::Fixed {
+                            machine: chosen, ..
+                        }
+                        | ComputePoolSelection::Autoscale {
+                            machine: chosen, ..
+                        } => *chosen = machine,
+                    }
+                    (pool.pool_id, selection)
+                })
+                .collect(),
+        });
+    }
+    Ok(settings)
+}
+
+/// The stack settings a release renders setup template `name` for `stack` with: the package's
+/// ([`package_stack_settings`]) with signing on. Protecting an install replaces its unprotected
+/// setup with this one, which must keep what the install already has.
+pub fn protected_stack_settings(
+    name: &str,
+    stack: &Stack,
+    signing: &StackSigning,
+) -> Result<StackSettings> {
+    Ok(StackSettings {
+        signing: Some(signing.clone()),
+        ..package_stack_settings(name, stack)?
+    })
 }
 
 /// Render each template in [`SETUP_TEMPLATES`] for `stack` with signing on, keyed by name.
@@ -133,7 +210,7 @@ pub async fn render_setup_templates(
 ) -> Result<BTreeMap<String, RenderedSetupTemplate>> {
     let mut rendered = BTreeMap::new();
     for &name in SETUP_TEMPLATES {
-        let settings = protected_stack_settings(name, options.signing);
+        let settings = protected_stack_settings(name, stack, options.signing)?;
         let template = render_setup_template(name, stack, &settings, &options)
             .await
             .context(ErrorData::RenderFailed {

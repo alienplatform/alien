@@ -36,7 +36,7 @@ pub(crate) async fn module(cloud: ModuleCloud) -> RenderedSetupTemplate {
         fingerprint: fingerprint(),
         channel: "production".to_string(),
     };
-    let settings = protected_stack_settings(cloud.template(), &signing);
+    let settings = protected_stack_settings(cloud.template(), &stack(), &signing).unwrap();
     let cloudformation = alien_cloudformation::CfRegistry::built_in();
     let terraform = alien_terraform::TfRegistry::built_in();
     let helm = alien_helm::HelmRegistry::built_in();
