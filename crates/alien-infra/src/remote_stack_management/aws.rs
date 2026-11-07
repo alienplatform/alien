@@ -743,10 +743,14 @@ impl AwsRemoteStackManagementController {
                         self.permissions_boundary_arn = None;
                         Err(not_owned())
                     }
-                    None => Err(AlienError::new(ErrorData::CloudPlatformError {
+                    // IAM just said the name exists, so a read that cannot find it is either
+                    // lagging behind the create or racing a delete. Both pass, and the next
+                    // attempt creates the policy or reads it.
+                    None => Err(AlienError::new(ErrorData::InfrastructureError {
                         message: format!(
-                            "Permissions boundary '{arn}' was deleted while it was being installed"
+                            "Permissions boundary '{arn}' exists but could not be read yet"
                         ),
+                        operation: Some("install_permissions_boundary".to_string()),
                         resource_id: Some(resource_id.to_string()),
                     })),
                 }
