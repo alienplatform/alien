@@ -1628,6 +1628,30 @@ mod setup_update_authorization_tests {
         assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
     }
 
+    /// Runs the deployment preflights for a direct setup on a local client.
+    #[cfg(feature = "runtime-checks")]
+    async fn direct_setup_preflight(
+        runner: &PreflightRunner,
+        target: &Stack,
+        installed: Option<&Stack>,
+        state: &StackState,
+        config: &DeploymentConfig,
+    ) -> Result<(Stack, PreflightSummary, bool)> {
+        runner
+            .run_deployment_time_preflights(
+                target.clone(),
+                state,
+                config,
+                &ClientConfig::Local {
+                    state_directory: "/unused".to_string(),
+                },
+                installed,
+                None,
+                Some(alien_core::InitialSetupAuthority::DirectSetup),
+            )
+            .await
+    }
+
     /// A direct setup's runtime never rewrites its own management identity, so an update
     /// that needs a wider management grant must stop for setup instead of running on the
     /// installed grants. A setup run applies it; narrowing keeps running on the wider
@@ -1637,69 +1661,46 @@ mod setup_update_authorization_tests {
     async fn direct_setup_runtime_requires_setup_for_a_wider_management_grant() {
         use alien_core::permissions::{ManagementPermissions, PermissionProfile};
 
-        let installed = {
+        let with_management = |grants: &[&str]| {
             let mut stack = empty_stack();
             stack.permissions.management = ManagementPermissions::Extend(
-                PermissionProfile::new().global(["storage/provision"]),
+                PermissionProfile::new().global(grants.iter().copied()),
             );
             stack
         };
-        let widened = {
-            let mut stack = installed.clone();
-            stack.permissions.management = ManagementPermissions::Extend(
-                PermissionProfile::new().global(["storage/provision", "storage/data-read"]),
-            );
-            stack
-        };
-        let changed = {
-            let mut stack = installed.clone();
-            stack.permissions.management = ManagementPermissions::Extend(
-                PermissionProfile::new().global(["storage/data-read"]),
-            );
-            stack
-        };
+        let installed = with_management(&["storage/provision"]);
+        let widened = with_management(&["storage/provision", "storage/data-read"]);
+        let changed = with_management(&["storage/data-read"]);
         let runner = PreflightRunner::with_registry(PreflightRegistry::new());
-        let client = ClientConfig::Local {
-            state_directory: "/unused".to_string(),
-        };
         let runtime = deployment_config();
         let mut setup = deployment_config();
         setup.setup_run = true;
 
         for platform in [Platform::Aws, Platform::Gcp] {
             let state = StackState::new(platform);
-            let preflight = |target: &Stack, old: &Stack, config: &DeploymentConfig| {
-                runner.run_deployment_time_preflights(
-                    target.clone(),
-                    &state,
-                    config,
-                    &client,
-                    Some(old),
-                    None,
-                    Some(alien_core::InitialSetupAuthority::DirectSetup),
-                )
-            };
-
             for target in [&widened, &changed] {
-                let error = preflight(target, &installed, &runtime)
-                    .await
-                    .expect_err("the runtime cannot grant itself new management permissions");
+                let error =
+                    direct_setup_preflight(&runner, target, Some(&installed), &state, &runtime)
+                        .await
+                        .expect_err("the runtime cannot grant itself new management permissions");
                 assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED", "{platform:?}");
 
-                let (prepared, _, authorized) = preflight(target, &installed, &setup)
-                    .await
-                    .expect("a setup run applies the new management permissions");
+                let (prepared, _, authorized) =
+                    direct_setup_preflight(&runner, target, Some(&installed), &state, &setup)
+                        .await
+                        .expect("a setup run applies the new management permissions");
                 assert!(authorized, "{platform:?}");
                 assert_eq!(prepared.permissions, target.permissions, "{platform:?}");
             }
 
-            let (prepared, _, authorized) = preflight(&installed, &widened, &runtime)
-                .await
-                .expect("narrowing runs on the wider installed grants");
+            let (prepared, _, authorized) =
+                direct_setup_preflight(&runner, &installed, Some(&widened), &state, &runtime)
+                    .await
+                    .expect("narrowing runs on the wider installed grants");
             assert!(authorized, "{platform:?}");
             assert_eq!(prepared.permissions, installed.permissions, "{platform:?}");
 
-            preflight(&installed, &installed, &runtime)
+            direct_setup_preflight(&runner, &installed, Some(&installed), &state, &runtime)
                 .await
                 .expect("unchanged management permissions need no setup");
         }
@@ -1719,9 +1720,6 @@ mod setup_update_authorization_tests {
             ));
             registry
         });
-        let client = ClientConfig::Local {
-            state_directory: "/unused".to_string(),
-        };
         let state = StackState::new(Platform::Aws);
         let mut runtime = deployment_config();
         runtime.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
@@ -1740,35 +1738,22 @@ mod setup_update_authorization_tests {
                 stack.build()
             }
         };
-        let preflight = |target: Stack, old: Option<&Stack>, config: &DeploymentConfig| {
-            let config = config.clone();
-            let state = state.clone();
-            let client = client.clone();
-            let old = old.cloned();
-            let runner = &runner;
-            async move {
-                runner
-                    .run_deployment_time_preflights(
-                        target,
-                        &state,
-                        &config,
-                        &client,
-                        old.as_ref(),
-                        None,
-                        Some(alien_core::InitialSetupAuthority::DirectSetup),
-                    )
-                    .await
-            }
-        };
 
-        let (installed, _, _) =
-            preflight(release(ManagementPermissions::Auto, false), None, &setup)
-                .await
-                .expect("setup installs the first release");
+        let (installed, _, _) = direct_setup_preflight(
+            &runner,
+            &release(ManagementPermissions::Auto, false),
+            None,
+            &state,
+            &setup,
+        )
+        .await
+        .expect("setup installs the first release");
 
-        let (with_queue, _, _) = preflight(
-            release(ManagementPermissions::Auto, true),
+        let (with_queue, _, _) = direct_setup_preflight(
+            &runner,
+            &release(ManagementPermissions::Auto, true),
             Some(&installed),
+            &state,
             &runtime,
         )
         .await
@@ -1779,11 +1764,11 @@ mod setup_update_authorization_tests {
             ManagementPermissions::Extend(PermissionProfile::new().global(["storage/data-read"])),
             false,
         );
-        let error = preflight(wider.clone(), Some(&installed), &runtime)
+        let error = direct_setup_preflight(&runner, &wider, Some(&installed), &state, &runtime)
             .await
             .expect_err("only setup can add a data grant to the management role");
         assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
-        preflight(wider, Some(&installed), &setup)
+        direct_setup_preflight(&runner, &wider, Some(&installed), &state, &setup)
             .await
             .expect("a setup run applies the data grant");
     }
