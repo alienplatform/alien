@@ -186,7 +186,7 @@ async fn values_line(set: &[(&str, Value)]) -> Line {
             defaults,
             schema,
         },
-        &rendered.setup_template().allowed,
+        Some(&rendered.setup_template().allowed),
         &settings,
     )
 }

@@ -464,7 +464,9 @@ pub fn check_signed(
                 .is_some_and(|template| template.sha256 == *digest)
         })
         .max_by_key(|(_, verified)| verified.sequence);
-    let allowed: Vec<String> = match matching {
+    // What the customer may choose, from the release the template belongs to; none when it
+    // belongs to no signed release.
+    let allowed: Option<Vec<String>> = match matching {
         Some((id, verified)) => {
             lines.push(line(
                 "Template",
@@ -474,7 +476,7 @@ pub fn check_signed(
                 ),
                 Mark::Pass,
             ));
-            verified.body.setup[installed.template].allowed.clone()
+            Some(verified.body.setup[installed.template].allowed.clone())
         }
         // A release whose signer has since left the list still verifies against
         // the list it names and keeps running until the next release (only the
@@ -489,7 +491,7 @@ pub fn check_signed(
                     ),
                     Mark::Info,
                 ));
-                body.setup[installed.template].allowed.clone()
+                Some(body.setup[installed.template].allowed.clone())
             }
             None => {
                 lines.push(line(
@@ -500,11 +502,15 @@ pub fn check_signed(
                     ),
                     Mark::Fail,
                 ));
-                Vec::new()
+                None
             }
         },
     };
-    lines.push(choices_line(&installed.choices, &allowed, &settings));
+    lines.push(choices_line(
+        &installed.choices,
+        allowed.as_deref(),
+        &settings,
+    ));
     lines.extend(extra);
 
     let list = trust.chain().current();
@@ -590,11 +596,39 @@ pub fn check_signed(
 /// The line for what the customer chose, against the signed `allowed` list.
 pub(crate) fn choices_line(
     choices: &Choices,
-    allowed: &[String],
+    allowed: Option<&[String]>,
     settings: &SigningSettings,
 ) -> Line {
     let mut refused = Vec::new();
     let mut chosen = 0;
+    // Without a release there is no allow-list: only what needs none is checked.
+    let Some(allowed) = allowed else {
+        let unchecked = "can't be checked against a release: the template belongs to none";
+        return match choices {
+            Choices::Parameters(parameters) => match parameters.get(FINGERPRINT_PARAMETER) {
+                Some(value) if *value == settings.fingerprint => line(
+                    "Parameters",
+                    format!(
+                        "fingerprint pinned · the other {} {unchecked}",
+                        parameters.len() - 1
+                    ),
+                    Mark::Info,
+                ),
+                Some(value) => line(
+                    "Parameters",
+                    format!("{FINGERPRINT_PARAMETER} is {value}, not the pinned fingerprint"),
+                    Mark::Fail,
+                ),
+                None => line(
+                    "Parameters",
+                    format!("{FINGERPRINT_PARAMETER} is missing"),
+                    Mark::Fail,
+                ),
+            },
+            Choices::Values { .. } => line("Values", unchecked, Mark::Info),
+            Choices::NotRead(reason) => line("Variables", *reason, Mark::Info),
+        };
+    };
     let (label, what) = match choices {
         Choices::Parameters(parameters) => {
             for (name, value) in parameters {

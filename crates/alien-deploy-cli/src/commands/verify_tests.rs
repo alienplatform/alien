@@ -353,8 +353,22 @@ fn a_tampered_template_fails() {
     assert!(lines[2]
         .text
         .contains("is not the cloudformation template of any release signed for production"));
-    // With no signed template to compare against, no parameter is a choice.
+    // With no signed template there is no allow-list: the parameters can't be checked against a
+    // release, so they aren't each reported as refused. The pinned fingerprint still is checked.
+    assert_eq!(marks(&lines)[3], ("Parameters", Mark::Info));
+    assert_eq!(
+        lines[3].text,
+        "fingerprint pinned · the other 4 can't be checked against a release: the template belongs to none"
+    );
+    observed
+        .parameters
+        .insert("SigningFingerprint".to_string(), "SHA256:other".to_string());
+    let lines = check(&observed, now()).unwrap();
     assert_eq!(marks(&lines)[3], ("Parameters", Mark::Fail));
+    assert_eq!(
+        lines[3].text,
+        "SigningFingerprint is SHA256:other, not the pinned fingerprint"
+    );
 }
 
 #[test]
