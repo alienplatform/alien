@@ -698,26 +698,6 @@ impl ServiceStore for Gcp {
         .await
     }
 
-    async fn create(&self, name: &str, service: &Value) -> Result<()> {
-        let url = format!(
-            "https://run.googleapis.com/v2/projects/{}/locations/{}/services?serviceId={name}",
-            self.project, self.region
-        );
-        self.call(
-            reqwest::Method::POST,
-            &url,
-            Some(service),
-            &format!("run.services.create {name}"),
-        )
-        .await?
-        .ok_or_else(|| {
-            AlienError::new(failed(format!(
-                "run.services.create {name}: the location does not exist"
-            )))
-        })?;
-        Ok(())
-    }
-
     async fn policy(&self, name: &str) -> Result<Value> {
         self.call(
             reqwest::Method::GET,

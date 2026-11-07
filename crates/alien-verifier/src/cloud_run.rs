@@ -25,8 +25,6 @@ pub trait ServiceStore: Send + Sync {
     async fn replace(&self, name: &str, service: &Value) -> Result<()>;
     /// GET the service, or `None` when it doesn't exist.
     async fn find(&self, name: &str) -> Result<Option<Value>>;
-    /// Create service `name` from `service`.
-    async fn create(&self, name: &str, service: &Value) -> Result<()>;
     /// The service's IAM policy.
     async fn policy(&self, name: &str) -> Result<Value>;
     /// Replace the service's IAM policy with `policy`, which carries the etag it was read at.
@@ -136,16 +134,20 @@ fn network_of(vpc_access: &Value) -> Option<(Vec<String>, Vec<String>, String)> 
 const UPDATE_WAIT: Duration = Duration::from_secs(300);
 const POLL: Duration = Duration::from_secs(3);
 
-/// Write `spec` and read it back, creating the service when it doesn't exist: setup renders
-/// no workload, and management may not create one on a protected install. A service the
-/// verifier creates takes requests from the internet only when the signed stack gives the
-/// workload a public endpoint; a private one admits its own account as invoker.
+/// Write `spec` and read it back. Setup creates each worker's service, closed, and the verifier
+/// may write only those: one that doesn't exist is refused, so a release that adds a worker
+/// waits for the setup update that creates its service. A public worker is opened here; a
+/// private one admits its own account as invoker.
 pub async fn apply(store: &dyn ServiceStore, spec: &FunctionSpec) -> Result<Value> {
     if store.find(&spec.name).await?.is_none() {
-        store.create(&spec.name, &service_body(spec)).await?;
-    } else {
-        store.replace(&spec.name, &service_body(spec)).await?;
+        return Err(AlienError::new(ErrorData::Refused {
+            reason: format!(
+                "worker '{}' has no Cloud Run service {}: on GCP, setup creates each worker's service, and this install's setup predates the worker. Apply this release's signed setup update, then deploy again",
+                spec.workload, spec.name
+            ),
+        }));
     }
+    store.replace(&spec.name, &service_body(spec)).await?;
     let service = settled(store, spec).await?;
     if !spec.public {
         admit_own_account(store, spec).await?;
@@ -661,12 +663,7 @@ mod tests {
 
         fn serving(&self, body: &Value) {
             let mut held = self.service.lock().unwrap();
-            let current = held.get_or_insert_with(|| {
-                let mut created = service(&spec());
-                created["ingress"] = body["ingress"].clone();
-                created["invokerIamDisabled"] = body["invokerIamDisabled"].clone();
-                created
-            });
+            let current = held.as_mut().expect("setup created the service");
             current["template"] = body["template"].clone();
             current["trafficStatuses"] = json!([{
                 "type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST",
@@ -683,14 +680,6 @@ mod tests {
         }
         async fn find(&self, _name: &str) -> Result<Option<Value>> {
             Ok(self.service.lock().unwrap().clone())
-        }
-        async fn create(&self, name: &str, body: &Value) -> Result<()> {
-            self.calls.lock().unwrap().push(format!(
-                "create {name} ingress={} invokerIamDisabled={}",
-                body["ingress"], body["invokerIamDisabled"]
-            ));
-            self.serving(body);
-            Ok(())
         }
         /// As Cloud Run's v2 PATCH: the body replaces the service, so a field it leaves out
         /// takes its default (ingress from anywhere, the invoker check on).
@@ -789,17 +778,42 @@ mod tests {
         }
     }
 
+    /// A service as setup creates it: the placeholder image, internal ingress, the invoker
+    /// check on, and nobody admitted yet.
+    fn as_setup_creates() -> Value {
+        let mut created = service(&spec());
+        created["template"]["containers"][0]["image"] =
+            json!("us-docker.pkg.dev/cloudrun/container/hello@sha256:1fde");
+        created["ingress"] = json!("INGRESS_TRAFFIC_INTERNAL_ONLY");
+        created["invokerIamDisabled"] = json!(false);
+        created
+    }
+
+    /// The verifier writes only the services setup created: a release that adds a worker is
+    /// refused, naming the worker and the setup update, and nothing is written.
     #[tokio::test]
-    async fn a_missing_private_service_is_created_internal_and_its_account_may_invoke_it() {
-        // Setup renders no workload, and management may not create one on a protected install.
+    async fn a_worker_without_a_setup_created_service_is_refused() {
         let run = FakeRun::empty();
+        let error = apply(&run, &spec()).await.unwrap_err();
+        assert_eq!(error.code, "VERIFIER_REFUSED");
+        let reason = error.to_string();
+        assert!(
+            reason.contains("worker 'api' has no Cloud Run service acme-fn-api")
+                && reason.contains("signed setup update"),
+            "{reason}"
+        );
+        assert!(run.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_private_worker_stays_closed_and_its_account_may_invoke_it() {
+        let run = FakeRun::holding(as_setup_creates(), json!({"etag": "e1"}));
         apply(&run, &spec()).await.unwrap();
         check_read_back(&spec(), run.service.lock().unwrap().as_ref().unwrap()).unwrap();
         assert_eq!(
             *run.calls.lock().unwrap(),
             [
-                "create acme-fn-api ingress=\"INGRESS_TRAFFIC_INTERNAL_ONLY\" invokerIamDisabled=false"
-                    .to_string(),
+                "replace acme-fn-api".to_string(),
                 format!("setIamPolicy acme-fn-api {}", json!([invoker()])),
             ]
         );
@@ -811,16 +825,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_missing_public_service_is_created_open_without_invoker_grants() {
+    async fn a_public_worker_is_opened_without_invoker_grants() {
         let public = FunctionSpec {
             public: true,
             ..spec()
         };
-        let run = FakeRun::empty();
+        let run = FakeRun::holding(as_setup_creates(), json!({"etag": "e1"}));
         apply(&run, &public).await.unwrap();
-        assert_eq!(
-            *run.calls.lock().unwrap(),
-            ["create acme-fn-api ingress=\"INGRESS_TRAFFIC_ALL\" invokerIamDisabled=true"]
-        );
+        let held = run.service.lock().unwrap().clone().unwrap();
+        assert_eq!(held["ingress"], json!("INGRESS_TRAFFIC_ALL"));
+        assert_eq!(held["invokerIamDisabled"], json!(true));
+        assert_eq!(*run.calls.lock().unwrap(), ["replace acme-fn-api"]);
     }
 }

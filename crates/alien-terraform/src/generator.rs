@@ -609,12 +609,14 @@ pub(crate) fn render_terraform_module(
         )?,
         environment: verifier_workload_environment(stack, &stack_settings, &labels, target)?,
     };
+    let signed_workers = gcp_signed_workers(stack, &stack_settings, &labels, target)?;
     let mut signing = signing_blocks(
         &stack_settings,
         target,
         &options.pins,
         management_label.as_deref(),
         &runtime_service_accounts,
+        &signed_workers,
         verifier_networks,
     )?;
     // The signing parameters and the verifier need their APIs (Parameter Manager, Cloud Run)
@@ -1939,6 +1941,7 @@ fn signing_blocks(
     pins: &alien_core::SetupPins,
     management_label: Option<&str>,
     runtime_service_accounts: &[String],
+    workers: &[GcpSignedWorker],
     networks: VerifierNetworks,
 ) -> Result<Vec<Block>> {
     let Some(signing) = &settings.signing else {
@@ -2004,6 +2007,7 @@ fn signing_blocks(
                 pins,
                 management_label,
                 runtime_service_accounts,
+                workers,
                 networks,
             )?);
             for (label, name, value) in [
@@ -2384,25 +2388,67 @@ const GCP_VERIFIER_OWN_RESOURCE_PERMISSIONS: &[&str] = &[
     "compute.disks.create",
 ];
 
-/// What the GCP verifier may do with Cloud Run services and jobs. Bound without a condition:
-/// Cloud Run doesn't evaluate `resource.name` in IAM conditions (a binding conditioned on the
-/// service's name denies even a get of a service it names), and it checks a create against the
-/// parent location. The verifier only ever writes `<prefix>-<workload>`; management holds none of
-/// these on a protected install.
+/// What the GCP verifier may do with a worker's Cloud Run service, granted on each service setup
+/// creates and nowhere else: Cloud Run evaluates no resource name in IAM conditions, so a
+/// project-wide grant would reach every service in the project. It deploys the signed release
+/// to the service, opens a public worker, and admits a private one's own account as invoker.
+/// It creates no service: a release that adds a worker needs a setup update first.
 const GCP_VERIFIER_CLOUD_RUN_PERMISSIONS: &[&str] = &[
-    "run.services.create",
-    "run.services.update",
-    "run.services.delete",
     "run.services.get",
-    // A service it creates for a private worker admits the worker's own account as invoker.
+    "run.services.update",
     "run.services.getIamPolicy",
     "run.services.setIamPolicy",
-    "run.jobs.create",
-    "run.jobs.update",
-    "run.jobs.delete",
-    "run.jobs.get",
-    "run.jobs.run",
 ];
+
+/// What a worker's Cloud Run service runs from setup until the verifier deploys the signed
+/// release: Google's public sample, pinned by digest. Setup creates the service closed (internal
+/// ingress, invoker check on).
+const GCP_WORKER_PLACEHOLDER_IMAGE: &str = "us-docker.pkg.dev/cloudrun/container/hello@sha256:1fde53e0b892bff3072b3cac1c0e37178e9c0b98cf0b01e83956915e02b828c7";
+
+/// A Live worker of a protected GCP stack, whose Cloud Run service setup creates.
+struct GcpSignedWorker {
+    /// The worker's id; its service is `<prefix>-<id>`.
+    id: String,
+    /// The Terraform label of its service.
+    label: String,
+    /// The Terraform label of the service account it runs as.
+    service_account: String,
+}
+
+/// The Live workers of a protected GCP stack, with the service accounts setup creates for their
+/// permission profiles. Empty for other stacks.
+fn gcp_signed_workers(
+    stack: &Stack,
+    settings: &StackSettings,
+    labels: &IndexMap<String, String>,
+    target: TerraformTarget,
+) -> Result<Vec<GcpSignedWorker>> {
+    if settings.signing.is_none() || target != TerraformTarget::Gcp {
+        return Ok(Vec::new());
+    }
+    let mut workers = Vec::new();
+    for (id, entry) in stack.resources() {
+        let Some(worker) = entry.config.downcast_ref::<alien_core::Worker>() else {
+            continue;
+        };
+        if entry.lifecycle != ResourceLifecycle::Live {
+            continue;
+        }
+        let account = format!("{}-sa", worker.get_permissions());
+        let service_account = labels.get(&account).cloned().ok_or_else(|| {
+            AlienError::new(ErrorData::OperationNotSupported {
+                operation: format!("render a protected GCP setup with worker '{id}'"),
+                reason: format!("setup creates no service account '{account}' for it to run as"),
+            })
+        })?;
+        workers.push(GcpSignedWorker {
+            id: id.clone(),
+            label: format!("signing_worker_{}", resource_label_for_file(labels, id)),
+            service_account,
+        });
+    }
+    Ok(workers)
+}
 
 /// What the GCP verifier uses that the install doesn't name: the network its machines join, the
 /// images they boot, the template list (it picks the next template number) and the operations
@@ -2424,6 +2470,7 @@ fn gcp_verifier_blocks(
     pins: &alien_core::SetupPins,
     management_label: Option<&str>,
     runtime_service_accounts: &[String],
+    workers: &[GcpSignedWorker],
     networks: VerifierNetworks,
 ) -> Result<Vec<Block>> {
     let image = pins
@@ -2511,7 +2558,7 @@ fn gcp_verifier_blocks(
         custom_role(
             "signing_verifier_cloud_run",
             "verifier_cloud_run",
-            "verifier: the install's Cloud Run services and jobs",
+            "verifier: the install's Cloud Run services",
             GCP_VERIFIER_CLOUD_RUN_PERMISSIONS,
         ),
         custom_role(
@@ -2537,22 +2584,6 @@ fn gcp_verifier_blocks(
                         attr("expression", escaped_template(&own_resources)),
                     ],
                 )),
-            ],
-        ),
-        resource_block(
-            "google_project_iam_member",
-            "signing_verifier_cloud_run",
-            [
-                attr("project", expr::raw("var.gcp_project")),
-                attr(
-                    "role",
-                    expr::traversal([
-                        "google_project_iam_custom_role",
-                        "signing_verifier_cloud_run",
-                        "name",
-                    ]),
-                ),
-                attr("member", member.clone()),
             ],
         ),
         resource_block(
@@ -2625,6 +2656,72 @@ fn gcp_verifier_blocks(
             ],
         ),
     ];
+    for worker in workers {
+        blocks.push(resource_block(
+            "google_cloud_run_v2_service",
+            &worker.label,
+            [
+                attr(
+                    "name",
+                    expr::template(format!("${{local.resource_prefix}}-{}", worker.id)),
+                ),
+                attr("project", expr::raw("var.gcp_project")),
+                attr("location", expr::raw("var.gcp_region")),
+                attr(
+                    "ingress",
+                    Expression::String("INGRESS_TRAFFIC_INTERNAL_ONLY".to_string()),
+                ),
+                attr(
+                    "labels",
+                    expr::object([("managed-by", Expression::String("setup".to_string()))]),
+                ),
+                attr("deletion_protection", Expression::Bool(false)),
+                nested(block(
+                    "template",
+                    [
+                        attr(
+                            "service_account",
+                            expr::traversal([
+                                "google_service_account",
+                                &worker.service_account,
+                                "email",
+                            ]),
+                        ),
+                        nested(block(
+                            "containers",
+                            [attr(
+                                "image",
+                                Expression::String(GCP_WORKER_PLACEHOLDER_IMAGE.to_string()),
+                            )],
+                        )),
+                    ],
+                )),
+                // From here on the verifier writes what the service runs and who may reach it.
+                nested(block("lifecycle", [attr("ignore_changes", expr::raw("all"))])),
+            ],
+        ));
+        blocks.push(resource_block(
+            "google_cloud_run_v2_service_iam_member",
+            &format!("{}_verifier", worker.label),
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr("location", expr::raw("var.gcp_region")),
+                attr(
+                    "name",
+                    expr::traversal(["google_cloud_run_v2_service", &worker.label, "name"]),
+                ),
+                attr(
+                    "role",
+                    expr::traversal([
+                        "google_project_iam_custom_role",
+                        "signing_verifier_cloud_run",
+                        "name",
+                    ]),
+                ),
+                attr("member", member.clone()),
+            ],
+        ));
+    }
     for label in runtime_service_accounts {
         blocks.push(resource_block(
             "google_service_account_iam_member",
@@ -2698,7 +2795,6 @@ fn gcp_verifier_blocks(
                 Expression::Array(vec![
                     expr::traversal(["google_project_iam_member", "signing_verifier"]),
                     expr::traversal(["google_project_iam_member", "signing_verifier_shared"]),
-                    expr::traversal(["google_project_iam_member", "signing_verifier_cloud_run"]),
                     expr::traversal(["google_project_iam_member", "signing_verifier_pulls_images"]),
                     expr::traversal([
                         "google_project_iam_member",

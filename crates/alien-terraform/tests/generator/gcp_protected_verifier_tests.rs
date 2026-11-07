@@ -179,7 +179,10 @@ async fn every_custom_role_permission_exists_on_gcp() {
 /// without a condition, from a rendered `signing.tf`.
 fn verifier_custom_roles(signing: &str) -> (Vec<(String, Vec<String>)>, Vec<(String, bool)>) {
     let mut roles = Vec::new();
-    for block in signing.split("resource \"google_project_iam_custom_role\" \"").skip(1) {
+    for block in signing
+        .split("resource \"google_project_iam_custom_role\" \"")
+        .skip(1)
+    {
         let label = block[..block.find('"').unwrap()].to_string();
         let body = &block[..block.find("\n}").unwrap_or(block.len())];
         let permissions = body
@@ -197,7 +200,10 @@ fn verifier_custom_roles(signing: &str) -> (Vec<(String, Vec<String>)>, Vec<(Str
         roles.push((label, permissions));
     }
     let mut bindings = Vec::new();
-    for block in signing.split("resource \"google_project_iam_member\"").skip(1) {
+    for block in signing
+        .split("resource \"google_project_iam_member\"")
+        .skip(1)
+    {
         let body = &block[..block.find("\n}").unwrap_or(block.len())];
         if !body.contains("google_service_account.signing_verifier.email") {
             continue;
@@ -210,46 +216,140 @@ fn verifier_custom_roles(signing: &str) -> (Vec<(String, Vec<String>)>, Vec<(Str
     (roles, bindings)
 }
 
-/// Cloud Run doesn't evaluate `resource.name` in IAM conditions: on real GCP a binding of the
-/// verifier's role conditioned on the service's name denied even a get of a service it names,
-/// and a create is checked against the parent location. So the verifier's Cloud Run permissions
-/// must come from a binding without a condition.
-#[test]
-fn the_verifier_holds_its_cloud_run_permissions_without_a_name_condition() {
-    let stack: Stack = serde_json::from_value(serde_json::json!({
+/// A protected GCP stack with worker `api` running as profile `execution`.
+fn stack_with_worker() -> Stack {
+    let permissions: Stack = serde_json::from_value(serde_json::json!({
         "id": "app",
         "resources": {},
         "permissions": { "profiles": { "execution": {} }, "management": "auto" }
     }))
     .expect("stack");
-    let settings = StackSettings {
+    Stack::new("app".to_string())
+        .permissions(permissions.permissions().clone())
+        .add(
+            alien_core::ServiceAccount::new("execution-sa".to_string()).build(),
+            alien_core::ResourceLifecycle::Frozen,
+        )
+        .add(
+            alien_core::RemoteStackManagement::new("management".to_string()).build(),
+            alien_core::ResourceLifecycle::Frozen,
+        )
+        .add(
+            alien_core::Worker::new("api".to_string())
+                .code(alien_core::WorkerCode::Image {
+                    image: format!("us-docker.pkg.dev/acme/app/api@sha256:{}", "a".repeat(64)),
+                })
+                .permissions("execution".to_string())
+                .build(),
+            alien_core::ResourceLifecycle::Live,
+        )
+        .build()
+}
+
+fn protected() -> StackSettings {
+    StackSettings {
         signing: Some(StackSigning {
             fingerprint: format!("SHA256:{}", "9f".repeat(32)),
             channel: "production".to_string(),
         }),
         ..StackSettings::default()
-    };
-    let module = render(&stack, TerraformTarget::Gcp, settings);
-    let (roles, bindings) = verifier_custom_roles(module.get("signing.tf").expect("signing.tf"));
-    let unconditioned: Vec<&String> = roles
-        .iter()
-        .filter(|(label, _)| {
-            bindings
-                .iter()
-                .any(|(bound, conditioned)| bound == label && !conditioned)
-        })
-        .flat_map(|(_, permissions)| permissions)
-        .collect();
-    for needed in [
-        "run.services.create",
-        "run.services.get",
-        "run.services.update",
-        "run.services.getIamPolicy",
-        "run.services.setIamPolicy",
-    ] {
+    }
+}
+
+/// Setup creates each worker's Cloud Run service, closed, running as the worker's account; the
+/// verifier's Cloud Run role holds no create, and is bound on that service alone, so it reaches
+/// no other service in the project. Evaluated with Terraform against mocked providers.
+#[test]
+fn setup_creates_each_workers_service_and_the_verifier_reaches_only_those() {
+    let module = render(&stack_with_worker(), TerraformTarget::Gcp, protected());
+    let mut files = super::helpers::linter_files(&module);
+    files.insert(
+        "tests/workers.tftest.hcl".to_string(),
+        r#"
+mock_provider "google" {
+  mock_resource "google_service_account" {
+    defaults = {
+      id = "projects/acme/serviceAccounts/account@acme.iam.gserviceaccount.com"
+      name = "projects/acme/serviceAccounts/account@acme.iam.gserviceaccount.com"
+      email = "account@acme.iam.gserviceaccount.com"
+    }
+    override_during = plan
+  }
+}
+override_resource {
+  target = google_service_account.execution_sa
+  values = {
+    email = "execution@acme.iam.gserviceaccount.com"
+    name = "projects/acme/serviceAccounts/execution@acme.iam.gserviceaccount.com"
+  }
+  override_during = plan
+}
+override_resource {
+  target = google_service_account.signing_verifier
+  values = {
+    email = "verifier@acme.iam.gserviceaccount.com"
+    name = "projects/acme/serviceAccounts/verifier@acme.iam.gserviceaccount.com"
+  }
+  override_during = plan
+}
+override_resource {
+  target = google_project_iam_custom_role.signing_verifier_cloud_run
+  values = { name = "projects/acme/roles/acme_verifier_cloud_run" }
+  override_during = plan
+}
+override_resource {
+  target = google_cloud_run_v2_service.signing_worker_api
+  values = { name = "acme-api" }
+  override_during = plan
+}
+variables {
+  name = "app"
+  resource_prefix = "acme"
+  gcp_project = "acme"
+  gcp_region = "us-central1"
+  deployment_id = "dep_test"
+  managing_oidc_issuer = "https://issuer.example.com"
+  managing_oidc_subject = "manager"
+}
+run "workers" {
+  command = plan
+  assert {
+    condition = google_cloud_run_v2_service.signing_worker_api.ingress == "INGRESS_TRAFFIC_INTERNAL_ONLY"
+    error_message = "Setup creates the service closed."
+  }
+  assert {
+    condition = startswith(google_cloud_run_v2_service.signing_worker_api.template[0].containers[0].image, "us-docker.pkg.dev/cloudrun/container/hello@sha256:")
+    error_message = "Until a signed release lands the service runs the pinned placeholder."
+  }
+  assert {
+    condition = google_cloud_run_v2_service.signing_worker_api.template[0].service_account == "execution@acme.iam.gserviceaccount.com"
+    error_message = "The service runs as the worker's account."
+  }
+  assert {
+    condition = google_cloud_run_v2_service_iam_member.signing_worker_api_verifier.name == "acme-api" && google_cloud_run_v2_service_iam_member.signing_worker_api_verifier.role == "projects/acme/roles/acme_verifier_cloud_run" && google_cloud_run_v2_service_iam_member.signing_worker_api_verifier.member == "serviceAccount:verifier@acme.iam.gserviceaccount.com"
+    error_message = "The verifier's Cloud Run role is bound on the worker's service."
+  }
+  assert {
+    condition = toset(google_project_iam_custom_role.signing_verifier_cloud_run.permissions) == toset(["run.services.get", "run.services.update", "run.services.getIamPolicy", "run.services.setIamPolicy"])
+    error_message = "The verifier may not create services."
+  }
+}
+"#
+        .to_string(),
+    );
+    super::helpers::test_utils::terraform_test(&files).assert_ok("protected GCP workers' services");
+
+    // No project-level binding grants any Cloud Run permission: every project role the module
+    // gives the verifier, custom or predefined, holds none.
+    let signing = module.get("signing.tf").expect("signing.tf");
+    for block in signing
+        .split("resource \"google_project_iam_member\"")
+        .skip(1)
+    {
+        let body = &block[..block.find("\n}").unwrap_or(block.len())];
         assert!(
-            unconditioned.iter().any(|held| *held == needed),
-            "{needed} is not granted without a condition: roles {roles:?}, bindings {bindings:?}"
+            !body.contains("signing_verifier_cloud_run"),
+            "the Cloud Run role is bound project-wide: {body}"
         );
     }
 }
