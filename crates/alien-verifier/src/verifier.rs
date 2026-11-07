@@ -460,6 +460,8 @@ mod tests {
     struct Forwards {
         store: Arc<MemoryStore>,
         forwarded: Mutex<Vec<(String, Option<u64>)>>,
+        /// An operation whose next forward the cloud fails, once.
+        fail_once: Mutex<Option<&'static str>>,
     }
 
     #[async_trait]
@@ -481,6 +483,12 @@ mod tests {
             newest: &dyn StillNewest,
         ) -> Result<Value> {
             newest.check().await?;
+            if *self.fail_once.lock().unwrap() == Some(write.operation()) {
+                *self.fail_once.lock().unwrap() = None;
+                return Err(AlienError::new(ErrorData::CloudCallFailed {
+                    operation: format!("lambda:{}", write.operation()),
+                }));
+            }
             let recorded = recorded_release(&self.store);
             self.forwarded
                 .lock()
@@ -508,6 +516,7 @@ mod tests {
         let backend = Arc::new(Forwards {
             store: store.clone(),
             forwarded: Mutex::new(Vec::new()),
+            fail_once: Mutex::new(None),
         });
         let verifier = Verifier {
             own_name: format!("{PREFIX}-verifier"),
@@ -588,6 +597,71 @@ mod tests {
         empty["applyWrite"]["writes"] = json!([]);
         let reason = refusal(verifier.handle(empty).await);
         assert!(reason.contains("carries no write"), "{reason}");
+    }
+
+    /// A cloud error partway through a recorded release leaves some writes out; the control
+    /// plane applies the same release again, which passes and sends every write.
+    #[tokio::test]
+    async fn a_release_a_cloud_error_cut_short_applies_again_in_full() {
+        let store = Arc::new(MemoryStore::protected(&settings()));
+        let backend = Arc::new(Forwards {
+            store: store.clone(),
+            forwarded: Mutex::new(Vec::new()),
+            fail_once: Mutex::new(Some("UpdateFunctionCode")),
+        });
+        let verifier = Verifier {
+            own_name: format!("{PREFIX}-verifier"),
+            install_id: Arc::new(|prefix| crate::aws::install_id(ACCOUNT, REGION, prefix)),
+            store: store.clone(),
+            backend: backend.clone(),
+            vpc: None,
+            machine_network: None,
+        };
+        let request = json!({"applyWrite": {
+            "release": release(1, function_workload()),
+            "signerLists": [signer_list()],
+            "workload": "api",
+            "writes": [
+                {"createFunction": {
+                    "FunctionName": format!("{PREFIX}-api"),
+                    "Role": crate::plan::tests::place().run_as("execution"),
+                    "Code": {"ImageUri": format!("{REGISTRY}/api@{DIGEST}")},
+                    "PackageType": "Image",
+                    "Environment": {"Variables": {"MODE": "signed"}},
+                    "Architectures": ["arm64"],
+                }},
+                {"updateFunctionCode": {
+                    "functionName": format!("{PREFIX}-api"),
+                    "request": {"ImageUri": format!("{REGISTRY}/api@{DIGEST}"), "Publish": true},
+                }},
+            ],
+        }});
+
+        let error = verifier.handle(request.clone()).await.unwrap_err();
+        assert_eq!(error.code, "VERIFIER_CLOUD_CALL_FAILED", "{error}");
+        assert_eq!(
+            *backend.forwarded.lock().unwrap(),
+            vec![("CreateFunction".to_string(), Some(1))],
+            "the first write went out before the cloud failed the second"
+        );
+        assert_eq!(
+            recorded_release(&store),
+            Some(1),
+            "the release was recorded"
+        );
+
+        let answer = verifier.handle(request).await.unwrap();
+        assert_eq!(answer["release"], json!(1));
+        assert_eq!(
+            *backend.forwarded.lock().unwrap(),
+            vec![
+                ("CreateFunction".to_string(), Some(1)),
+                ("CreateFunction".to_string(), Some(1)),
+                ("UpdateFunctionCode".to_string(), Some(1)),
+            ],
+            "the same release applies again, every write this time"
+        );
+        assert_eq!(recorded_release(&store), Some(1));
     }
 
     /// A backend whose forward of an UpdateFunctionCode to `slow_image` pauses after reading
