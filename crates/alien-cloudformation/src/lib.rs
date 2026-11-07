@@ -26,7 +26,8 @@ pub use emitter::CfEmitter;
 pub use generator::{
     generate_cloudformation_stack_policy, generate_cloudformation_template,
     generate_cloudformation_template_with_profile, to_yaml, CloudFormationOptions,
-    CloudFormationTarget, ManagementTrustOptions, RegistrationMode, SIGNING_FINGERPRINT_PARAMETER,
+    CloudFormationTarget, ManagementTrustOptions, RegistrationMode, REGISTRATION_RESOURCE,
+    SETUP_REVISION, SIGNING_FINGERPRINT_PARAMETER,
 };
 pub use registry::CfRegistry;
 pub use template::{CfExpression, CfOutput, CfParameter, CfResource, CfTemplate};

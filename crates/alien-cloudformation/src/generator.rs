@@ -34,6 +34,7 @@ use alien_core::{
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
 use serde_json::{json, Value};
+use sha2::{Digest as _, Sha256};
 use std::collections::{HashMap, HashSet};
 
 const TEMPLATE_VERSION: &str = "2010-09-09";
@@ -78,6 +79,10 @@ const OUTPUT_SETUP_FINGERPRINT: &str = "DeploymentSetupFingerprint";
 const OUTPUT_SETUP_FINGERPRINT_VERSION: &str = "DeploymentSetupFingerprintVersion";
 const OUTPUT_MANAGEMENT_CONFIG: &str = "DeploymentManagementConfig";
 const OUTPUT_STACK_SETTINGS: &str = "DeploymentStackSettings";
+/// The custom resource that registers the stack with the service.
+pub const REGISTRATION_RESOURCE: &str = "DeploymentRegistration";
+/// Its property that changes with every protected setup template (see `add_setup_revision`).
+pub const SETUP_REVISION: &str = "SetupRevision";
 const OUTPUT_RESOURCES: &str = "DeploymentResources";
 const OUTPUT_RESOURCES_CHUNK_BYTES: usize = 3_500;
 const STANDARD_OUTPUT_COUNT: usize = 12;
@@ -779,7 +784,31 @@ pub fn generate_cloudformation_template_with_profile(
     lower_json_strings(&mut template)?;
     validate_role_policy_limits(&template)?;
     validate_acyclic(&template)?;
+    if stack_settings_value.signing.is_some() {
+        add_setup_revision(&mut template)?;
+    }
     Ok(template)
+}
+
+/// Makes a protected stack's registration run again on every setup update. CloudFormation
+/// re-runs the registration custom resource only when its properties change, and a signed
+/// setup update can change only what the install runs (a new verifier image). So the resource
+/// carries `SetupRevision`, the digest of the rest of the template: any other change to the
+/// template changes it, and the service hears of the update when it runs.
+fn add_setup_revision(template: &mut CfTemplate) -> Result<()> {
+    if !template.resources.contains_key(REGISTRATION_RESOURCE) {
+        return Ok(());
+    }
+    let digest = format!(
+        "sha256:{}",
+        hex::encode(Sha256::digest(to_yaml(template)?.as_bytes()))
+    );
+    if let Some(registration) = template.resources.get_mut(REGISTRATION_RESOURCE) {
+        registration
+            .properties
+            .insert(SETUP_REVISION.to_string(), CfExpression::from(digest));
+    }
+    Ok(())
 }
 
 fn public_http_resource_ids(stack: &Stack) -> Vec<String> {
@@ -3636,7 +3665,7 @@ fn add_custom_resource(
         })
         .collect();
     let mut resource = CfResource::new(
-        "DeploymentRegistration".to_string(),
+        REGISTRATION_RESOURCE.to_string(),
         "AWS::CloudFormation::CustomResource".to_string(),
     );
     resource.depends_on = depends_on;

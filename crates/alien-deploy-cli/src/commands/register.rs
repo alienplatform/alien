@@ -25,6 +25,12 @@ use serde_json::Value as JsonValue;
 
 use super::up::resolve_base_url_option;
 
+/// The custom resource a CloudFormation setup template registers through, and its property
+/// that changes with every protected template (alien-cloudformation's `REGISTRATION_RESOURCE`
+/// and `SETUP_REVISION`).
+const REGISTRATION_RESOURCE: &str = "DeploymentRegistration";
+const SETUP_REVISION: &str = "SetupRevision";
+
 #[derive(Parser, Debug, Clone)]
 #[command(
     about = "Register an externally-provisioned stack with a manager",
@@ -146,6 +152,15 @@ async fn register_cloudformation(
     )?;
 
     let outputs = fetch_cloudformation_outputs(&args.region, &stack_name).await?;
+    // A stack created through the console's quick-create registers through its custom resource
+    // and has no registration outputs to send.
+    if outputs.platform.is_none() {
+        let template = fetch_cloudformation_template(&args.region, &stack_name).await?;
+        if let Some(registered) = registered_by_custom_resource(&stack_name, &template)? {
+            println!("{registered}");
+            return Ok(());
+        }
+    }
     let request = build_import_request(
         &outputs,
         ImportSourceKind::CloudFormation,
@@ -523,6 +538,62 @@ async fn fetch_cloudformation_outputs(region: &str, stack_name: &str) -> Result<
         .flatten()
         .filter_map(|output| Some((output.output_key()?, output.output_value()?)));
     collect_outputs(pairs)
+}
+
+async fn fetch_cloudformation_template(region: &str, stack_name: &str) -> Result<String> {
+    let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .region(aws_config::Region::new(region.to_string()))
+        .load()
+        .await;
+    aws_sdk_cloudformation::Client::new(&config)
+        .get_template()
+        .stack_name(stack_name)
+        .template_stage(aws_sdk_cloudformation::types::TemplateStage::Original)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::HttpError {
+            operation: "GetTemplate".to_string(),
+            url: format!("aws://cloudformation/{region}/{stack_name}"),
+            reason: "GetTemplate request failed".to_string(),
+        })?
+        .template_body()
+        .map(str::to_string)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: format!("CloudFormation stack '{stack_name}' returned no template"),
+            })
+        })
+}
+
+/// Whether stack `stack_name`, created from `template`, registers through its own custom
+/// resource: `Some` with what to tell the user when there is nothing for `register` to do,
+/// `None` when it has no such resource. A protected template's resource carries
+/// `SetupRevision`, so every setup update ran it again; an older one runs only when what it
+/// reports changes, and `register` can't stand in for it (the resources it reports are resolved
+/// inside the stack).
+fn registered_by_custom_resource(stack_name: &str, template: &str) -> Result<Option<String>> {
+    let template: serde_yaml::Value = serde_yaml::from_str(template).into_alien_error().context(
+        ErrorData::ConfigurationError {
+            message: format!("the template of stack '{stack_name}' can't be read"),
+        },
+    )?;
+    let registration = &template["Resources"][REGISTRATION_RESOURCE];
+    if registration["Type"].as_str() != Some("AWS::CloudFormation::CustomResource") {
+        return Ok(None);
+    }
+    if registration["Properties"][SETUP_REVISION].is_null() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "Stack '{stack_name}' registers through its {} custom resource, which runs again only when what it reports changes, and it has no registration outputs for this command to send. Apply a setup update rendered by a newer release; its registration runs on every setup update",
+                REGISTRATION_RESOURCE
+            ),
+        }));
+    }
+    Ok(Some(format!(
+        "✓ Stack '{stack_name}' registers through its {} custom resource, which ran again with this setup update. Nothing to register.",
+        REGISTRATION_RESOURCE
+    )))
 }
 
 /// Collect outputs keyed by their CloudFormation names.
@@ -949,6 +1020,54 @@ mod tests {
 
     use super::*;
     use alien_core::AwsManagementConfig;
+
+    #[test]
+    fn the_registration_names_are_the_generators() {
+        assert_eq!(
+            REGISTRATION_RESOURCE,
+            alien_cloudformation::REGISTRATION_RESOURCE
+        );
+        assert_eq!(SETUP_REVISION, alien_cloudformation::SETUP_REVISION);
+    }
+
+    /// A quick-created stack registers through its custom resource and has no registration
+    /// outputs. A protected template's resource runs again on every setup update, so register
+    /// has nothing to do; an older one can't be stood in for, and register says how to get
+    /// there; a stack with neither still fails on the missing output.
+    #[test]
+    fn a_stack_registered_by_its_custom_resource_is_told_apart() {
+        let template = |properties: &str| {
+            format!(
+                "Resources:\n  DeploymentRegistration:\n    Type: AWS::CloudFormation::CustomResource\n    Properties:\n      ServiceToken: arn:aws:lambda:us-east-1:1:function:r\n{properties}"
+            )
+        };
+        let current =
+            registered_by_custom_resource("acme", &template("      SetupRevision: sha256:abcd\n"))
+                .unwrap()
+                .expect("nothing to register");
+        assert!(
+            current.contains("ran again with this setup update"),
+            "{current}"
+        );
+
+        let older = registered_by_custom_resource("acme", &template("")).unwrap_err();
+        assert!(
+            older
+                .message
+                .contains("runs again only when what it reports changes"),
+            "{}",
+            older.message
+        );
+
+        assert_eq!(
+            registered_by_custom_resource(
+                "acme",
+                "Resources:\n  Bucket:\n    Type: AWS::S3::Bucket\n"
+            )
+            .unwrap(),
+            None
+        );
+    }
 
     fn base_outputs() -> SetupOutputs {
         SetupOutputs {

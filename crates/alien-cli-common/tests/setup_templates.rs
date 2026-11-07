@@ -712,3 +712,79 @@ async fn a_protected_cloudformation_stack_registers_its_signing_settings() {
         })
     );
 }
+
+/// The protected CloudFormation template a stack is created from when the service registers it
+/// through its custom resource, as the console's quick-create does, with `pins`.
+async fn custom_resource_template(pins: SetupPins) -> String {
+    let signing = StackSigning {
+        fingerprint: FINGERPRINT.to_string(),
+        channel: "production".to_string(),
+    };
+    let hosting: SetupHostingOptions = serde_json::from_value(serde_json::json!({
+        "registration": {
+            "mode": "customResource",
+            "lambdaArn": "arn:aws:lambda:us-east-1:999988887777:function:register"
+        }
+    }))
+    .expect("hosting options parse");
+    let cloudformation = CfRegistry::built_in();
+    let terraform = TfRegistry::built_in();
+    let helm = HelmRegistry::built_in();
+    let rendered = render_setup_templates(
+        &stack(),
+        SetupRenderOptions::builder()
+            .signing(&signing)
+            .cloudformation_registry(&cloudformation)
+            .terraform_registry(&terraform)
+            .helm_registry(&helm)
+            .hosting(hosting)
+            .pins(pins)
+            .build(),
+    )
+    .await
+    .expect("protected setup templates render");
+    String::from_utf8(rendered["cloudformation"].bytes.clone()).expect("UTF-8 template")
+}
+
+/// CloudFormation re-runs the registration custom resource only when its properties change. A
+/// signed setup update may change only what the install runs (here, the verifier image), so the
+/// resource carries the digest of the rest of the template: the service hears of every setup
+/// update when it runs, and of none when nothing changed.
+#[tokio::test]
+async fn every_protected_setup_update_runs_the_registration_again() {
+    let revision = |template: &str| -> String {
+        let parsed: serde_yaml::Value = serde_yaml::from_str(template).expect("template is YAML");
+        parsed["Resources"]["DeploymentRegistration"]["Properties"]["SetupRevision"]
+            .as_str()
+            .expect("the registration carries a SetupRevision")
+            .to_string()
+    };
+    let first = custom_resource_template(pins()).await;
+    let again = custom_resource_template(pins()).await;
+    assert_eq!(
+        revision(&first),
+        revision(&again),
+        "nothing changed, nothing re-runs"
+    );
+
+    let mut newer = pins();
+    newer.aws_verifier_image = Some(format!("verifier@sha256:{}", "1a".repeat(32)));
+    let update = custom_resource_template(newer).await;
+    assert_ne!(
+        revision(&first),
+        revision(&update),
+        "a new verifier image re-runs the registration"
+    );
+
+    // It is the digest of the template without it.
+    let line = format!("      SetupRevision: {}\n", revision(&first));
+    assert!(first.contains(&line), "{line}");
+    let without = first.replacen(&line, "", 1);
+    assert_eq!(
+        revision(&first),
+        format!(
+            "sha256:{}",
+            hex::encode(<sha2::Sha256 as sha2::Digest>::digest(without.as_bytes()))
+        )
+    );
+}
