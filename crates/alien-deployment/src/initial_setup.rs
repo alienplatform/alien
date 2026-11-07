@@ -2648,20 +2648,7 @@ mod tests {
             ResourceStatus::UpdateFailed
         );
 
-        // Setup saves the stack its preflights prepared, so the release compares like for like.
-        let (prepared, _, _) = alien_preflights::runner::PreflightRunner::new()
-            .run_deployment_time_preflights(
-                installed.clone(),
-                &StackState::new(Platform::Test),
-                &config(),
-                &ClientConfig::Test,
-                None,
-                None,
-                Some(InitialSetupAuthority::DirectSetup),
-            )
-            .await
-            .expect("prepare the installed release");
-        let mut state = resumed_test_setup(stack_state, prepared);
+        let mut state = resumed_test_setup(stack_state, installed.clone());
         state.status = DeploymentStatus::UpdatePending;
         state.runtime_metadata.as_mut().unwrap().automatic_setup = true;
         let state = crate::updating::handle_update_pending(
@@ -2685,74 +2672,6 @@ mod tests {
             "unchanged failed runtime resource must resume, got {:?}",
             live.status
         );
-    }
-
-    /// An automatic install's runtime cannot grant its own management role more, so a
-    /// release that needs a wider management grant stops for setup instead of running on
-    /// the installed grants. The setup run then prepares the same release.
-    #[tokio::test]
-    async fn automatic_update_stops_for_setup_when_management_widens() {
-        let installed = Stack::new("test".to_string())
-            .add(
-                Storage::new("live".to_string()).build(),
-                ResourceLifecycle::Live,
-            )
-            .build();
-        let stack_state = deployed_test_stack(&installed).await;
-        let (prepared, _, _) = alien_preflights::runner::PreflightRunner::new()
-            .run_deployment_time_preflights(
-                installed.clone(),
-                &StackState::new(Platform::Test),
-                &config(),
-                &ClientConfig::Test,
-                None,
-                None,
-                Some(InitialSetupAuthority::DirectSetup),
-            )
-            .await
-            .expect("prepare the installed release");
-        let mut widened = installed.clone();
-        widened.permissions.management = alien_core::permissions::ManagementPermissions::Extend(
-            alien_core::permissions::PermissionProfile::new().global(["storage/data-read"]),
-        );
-        let mut state = resumed_test_setup(stack_state, prepared);
-        state.status = DeploymentStatus::UpdatePending;
-        state.runtime_metadata.as_mut().unwrap().automatic_setup = true;
-
-        let error = crate::updating::handle_update_pending(
-            state.clone(),
-            widened.clone(),
-            config(),
-            ClientConfig::Test,
-            Arc::new(DefaultPlatformServiceProvider::default()),
-        )
-        .await
-        .err()
-        .expect("the runtime cannot apply a wider management grant");
-        let codes = std::iter::once(error.code.clone())
-            .chain(
-                std::iter::successors(error.source.as_deref(), |source| source.source.as_deref())
-                    .map(|source| source.code.clone()),
-            )
-            .collect::<Vec<_>>();
-        assert!(
-            codes.iter().any(|code| code == "DEPLOYMENT_SETUP_REQUIRED"),
-            "expected a setup request, got {codes:?}"
-        );
-
-        let mut setup = config();
-        setup.setup_run = true;
-        let state = crate::updating::handle_update_pending(
-            state,
-            widened,
-            setup,
-            ClientConfig::Test,
-            Arc::new(DefaultPlatformServiceProvider::default()),
-        )
-        .await
-        .expect("a setup run applies the wider management grant")
-        .state;
-        assert_eq!(state.status, DeploymentStatus::InitialSetup);
     }
 
     #[tokio::test]

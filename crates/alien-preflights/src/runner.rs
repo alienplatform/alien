@@ -603,11 +603,7 @@ impl PreflightRunner {
                 && direct_setup
                 && !config.setup_run
                 && !imported_setup_authorized
-                && crate::mutations::remote_stack_management::stack_renders_management_identity(
-                    platform,
-                    config.base_platform,
-                    &config.stack_settings,
-                )
+                && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
                 && crate::compatibility::PermissionProfilesUnchangedCheck.management_needs_setup(
                     old_stack,
                     &mutated_stack,
@@ -615,8 +611,9 @@ impl PreflightRunner {
                 )
             {
                 // A direct setup's runtime applies the other changes itself, but never
-                // rewrites its own management identity: only a setup run does. Local has
-                // no management identity, so `alien dev` updates are not stopped. Without
+                // rewrites its own management identity: only a setup run does. Only the
+                // clouds grant automatic setup every resource type, so on other platforms
+                // adding a resource changes the grant and must keep running. Without
                 // this, the update would run on the old grants, and the setup run that
                 // applies the new ones would find nothing pending.
                 return Err(AlienError::new(ErrorData::SetupRequired {
@@ -1675,7 +1672,7 @@ mod setup_update_authorization_tests {
     /// A direct setup's runtime never rewrites its own management identity, so an update
     /// that needs a wider management grant must stop for setup instead of running on the
     /// installed grants. A setup run applies it; narrowing keeps running on the wider
-    /// installed grants until the next setup run. Local has no management identity.
+    /// installed grants until the next setup run. Off the clouds, such as Local, it runs.
     #[cfg(feature = "runtime-checks")]
     #[tokio::test]
     async fn direct_setup_runtime_requires_setup_for_a_wider_management_grant() {
@@ -1723,7 +1720,7 @@ mod setup_update_authorization_tests {
                 .expect("unchanged management permissions need no setup");
         }
 
-        // `alien dev` has no management identity, so a Local update is never stopped for it.
+        // Off the clouds the management grant follows the resources, so a Local update runs.
         let (prepared, _, _) = direct_setup_preflight(
             &runner,
             &widened,
