@@ -138,9 +138,40 @@ fn dropped(sent: &Value, parsed: &Value, at: String) -> Option<String> {
 }
 
 /// Check every field of `write` (an `operation` request) against `rows`. A field in no row is
-/// refused, and so is a field that breaks its row; the reason names the row.
+/// refused, and so is a field that breaks its row; the reason names the row. For a write that
+/// changes part of a resource: a field it leaves out stays as the verifier last set it.
 pub fn check(operation: &str, write: &Value, rows: &[Row<'_>]) -> Result<()> {
     walk(operation, write, "", rows)
+}
+
+/// [`check`] for a write that makes the whole resource (a create, or a replace): the cloud fills
+/// a field it leaves out with its default, which may be what the release rules out, so a field
+/// the signed release or setup decides is checked as null when it is left out.
+pub fn check_whole(operation: &str, write: &Value, rows: &[Row<'_>]) -> Result<()> {
+    walk(operation, write, "", rows)?;
+    for row in rows {
+        if write
+            .pointer(row.field)
+            .is_some_and(|value| !value.is_null())
+        {
+            continue;
+        }
+        let broken = match &row.rule {
+            Rule::Signed(check) => check(&Value::Null).err(),
+            Rule::Setup(expected) => {
+                (!expected.is_null()).then(|| format!("it is left out, setup fixed {expected}"))
+            }
+            Rule::Empty | Rule::Free => None,
+        };
+        if let Some(reason) = broken {
+            return Err(refused(format!(
+                "{operation} field {} {}: {reason}",
+                row.field,
+                row.rule.kind()
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn walk(operation: &str, value: &Value, at: &str, rows: &[Row<'_>]) -> Result<()> {

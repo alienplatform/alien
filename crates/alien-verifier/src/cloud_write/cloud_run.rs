@@ -12,7 +12,7 @@ use super::env::check_env;
 use super::{check_target, refused, CloudWrite, Facts};
 use crate::cloud_run::{network_of, vpc_access, ServiceStore};
 use crate::error::{ErrorData, Result};
-use crate::fields::{check, empty, free, is_empty, parse_strict, signed, Row};
+use crate::fields::{check_whole, empty, free, is_empty, parse_strict, signed, Row};
 use crate::function::StillNewest;
 
 /// Check `write`, a Cloud Run write for `facts.workload`, against the table.
@@ -35,7 +35,8 @@ pub fn check_write(facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
     };
     parse_strict::<Service>(operation, service)?;
     check_target(facts, named, operation)?;
-    check(operation, service, &service_rows(facts))
+    // Both make the whole service: a create, and services.patch of the whole service.
+    check_whole(operation, service, &service_rows(facts))
 }
 
 /// The role a private service's own account needs: Pub/Sub and Cloud Scheduler sign their
@@ -144,7 +145,11 @@ fn is_public(facts: &Facts<'_>) -> Result<bool> {
 
 fn service_rows<'a>(facts: &'a Facts<'a>) -> Vec<Row<'a>> {
     vec![
+        // Left out, the service is the one the request names (its id or path), checked first.
         signed("/name", move |value| {
+            if value.is_null() {
+                return Ok(());
+            }
             let name = value.as_str().unwrap_or_default();
             (name.rsplit('/').next() == Some(facts.own_name.as_str()))
                 .then_some(())
@@ -266,7 +271,7 @@ fn check_containers(facts: &Facts<'_>, value: &Value) -> std::result::Result<(),
         free("/resources"),
         free("/ports"),
     ];
-    check("Cloud Run container", container, &rows).map_err(|error| error.to_string())
+    check_whole("Cloud Run container", container, &rows).map_err(|error| error.to_string())
 }
 
 const UPDATE_WAIT: Duration = Duration::from_secs(300);
@@ -569,6 +574,23 @@ mod tests {
             (
                 Box::new(|s| s["template"]["nodeSelector"] = json!({"accelerator": "nvidia-l4"})),
                 "field /template/nodeSelector",
+            ),
+            // Left out, Cloud Run takes its defaults: ingress from anywhere, and the project's
+            // default compute account.
+            (
+                Box::new(|s| {
+                    s.as_object_mut().unwrap().remove("ingress");
+                }),
+                "field /ingress must match",
+            ),
+            (
+                Box::new(|s| {
+                    s["template"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("serviceAccount");
+                }),
+                "field /template/serviceAccount must match",
             ),
         ];
         for (change, says) in cases {

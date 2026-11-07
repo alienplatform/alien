@@ -11,7 +11,7 @@ use super::env::check_env;
 use super::{check_target, refused, CloudWrite, Facts};
 use crate::container_apps::AppStore;
 use crate::error::{ErrorData, Result};
-use crate::fields::{check, empty, free, is_empty, parse_strict, signed, Row};
+use crate::fields::{check, check_whole, empty, free, is_empty, parse_strict, signed, Row};
 use crate::function::StillNewest;
 
 /// Check `write`, a Container Apps write for `facts.workload`, against the table.
@@ -30,7 +30,13 @@ pub fn check_write(facts: &Facts<'_>, write: &CloudWrite, environment: Option<&s
     parse_strict::<ContainerApp>(operation, app)?;
     check_target(facts, named, operation)?;
     check_secrets(operation, app)?;
-    check(operation, app, &app_rows(facts, environment))
+    match write {
+        CloudWrite::CreateContainerApp { .. } => {
+            check_whole(operation, app, &app_rows(facts, environment))
+        }
+        // A PATCH: what it leaves out stays as the verifier last set it.
+        _ => check(operation, app, &app_rows(facts, environment)),
+    }
 }
 
 /// Every secret is a registry's pull credential, and nothing else reads one.
@@ -255,7 +261,7 @@ fn check_containers(facts: &Facts<'_>, value: &Value) -> std::result::Result<(),
         free("/resources"),
         free("/probes"),
     ];
-    check("Container Apps container", container, &rows).map_err(|error| error.to_string())
+    check_whole("Container Apps container", container, &rows).map_err(|error| error.to_string())
 }
 
 const UPDATE_WAIT: Duration = Duration::from_secs(300);

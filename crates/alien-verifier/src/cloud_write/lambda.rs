@@ -14,7 +14,7 @@ use serde_json::Value;
 use super::env::check_env;
 use super::{check_target, refused, CloudWrite, Facts};
 use crate::error::Result;
-use crate::fields::{check, empty, free, is_empty, parse_strict, signed, Row};
+use crate::fields::{check, check_whole, empty, free, is_empty, parse_strict, signed, Row};
 use crate::function::{default_log_group, wait_until_idle, StillNewest};
 use crate::plan::{invoke_grants, signed_worker};
 
@@ -25,7 +25,7 @@ pub fn check_write(facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
         CloudWrite::CreateFunction(request) => {
             let parsed: CreateFunctionRequest = parse_strict("CreateFunction", request)?;
             check_target(facts, &parsed.function_name, "CreateFunction")?;
-            check("CreateFunction", request, &create_rows(facts))
+            check_whole("CreateFunction", request, &create_rows(facts))
         }
         CloudWrite::UpdateFunctionCode {
             function_name,
