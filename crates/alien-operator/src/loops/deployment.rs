@@ -17,7 +17,8 @@ use crate::OperatorState;
 use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
     EnvironmentVariableType, KubernetesClientConfig, ObservedInventoryBatch, Platform,
-    ResourceHeartbeat, ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
+    ReceiverCommandCredential, ResourceHeartbeat, ENV_ALIEN_DEPLOYMENT_ID,
+    ENV_ALIEN_DEPLOYMENT_NAME,
 };
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
@@ -813,7 +814,9 @@ async fn enrich_config(
                     // contract as Worker push handling above.
                     vars.extend(
                         stack
-                            .receiver_command_env_vars(&commands_url, Some(&sync_config.token))
+                            .receiver_command_env_vars(&commands_url, |_| {
+                                ReceiverCommandCredential::Token(Some(sync_config.token.clone()))
+                            })
                             .context(ErrorData::ConfigurationError {
                                 message: "Failed to build command receiver env".to_string(),
                             })?,

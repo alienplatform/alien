@@ -619,7 +619,9 @@ impl Receiver {
     /// Polls `POST {url}/commands/leases` every poll interval, dispatches
     /// each leased command to its handler concurrently, and submits
     /// responses. Retryable lease errors are logged and retried on the next
-    /// interval; non-retryable errors terminate the receiver. Returns after
+    /// interval; non-retryable errors terminate the receiver. With a token
+    /// file or a runtime credential, a missing, unreadable or rejected
+    /// credential is retried with backoff. Returns after
     /// [`ShutdownHandle::shutdown`]: no new lease poll starts once draining
     /// begins (a poll already in flight still completes and its leases are
     /// processed). In-flight commands may finish during the configured drain
@@ -784,6 +786,25 @@ impl Receiver {
     }
 
     async fn acquire_leases(&self, max_leases: usize) -> Result<Vec<LeaseInfo>> {
+        self.acquire_leases_once(max_leases)
+            .await
+            .map_err(|mut error| {
+                // A credential file can be missing, late or expired, and an
+                // exchange can fail for a while. Keep polling with backoff:
+                // a credential must not stop command delivery for good.
+                if self.token_source.refreshable()
+                    && matches!(
+                        error.code.as_str(),
+                        "COMMAND_RECEIVER_CONFIG_INVALID" | "COMMAND_RECEIVER_UNAUTHORIZED"
+                    )
+                {
+                    error.retryable = true;
+                }
+                error
+            })
+    }
+
+    async fn acquire_leases_once(&self, max_leases: usize) -> Result<Vec<LeaseInfo>> {
         self.token_source
             .validate_endpoint(self.lease_client.endpoint())?;
         let request = self.build_lease_request(max_leases);
@@ -1344,34 +1365,6 @@ mod tests {
             "new-token"
         );
         std::fs::remove_file(path).expect("remove token file");
-    }
-
-    #[tokio::test]
-    async fn run_returns_terminal_token_file_error() {
-        let path = std::env::temp_dir().join(format!(
-            "alien-command-token-missing-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("clock after epoch")
-                .as_nanos()
-        ));
-        let mut env = full_env();
-        env.remove(ENV_ALIEN_COMMANDS_TOKEN);
-        env.insert(
-            ENV_ALIEN_COMMANDS_TOKEN_FILE.to_string(),
-            path.display().to_string(),
-        );
-        let receiver = Receiver::from_env_vars(&env).expect("valid file-token config");
-
-        let error = receiver
-            .run()
-            .await
-            .expect_err("a missing token file is a terminal configuration error");
-
-        assert_eq!(error.code, "COMMAND_RECEIVER_CONFIG_INVALID");
-        assert!(!error.retryable);
-        assert!(error.message.contains("Failed to read command token file"));
     }
 
     #[test]
