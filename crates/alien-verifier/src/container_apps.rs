@@ -269,13 +269,15 @@ pub fn check_read_back(spec: &FunctionSpec, app: &Value) -> Result<()> {
         }
     }
     // It runs as exactly the signed identity: no system-assigned identity,
-    // and no other user-assigned one.
+    // and no other user-assigned one. Azure resource ids are case-insensitive, and Azure
+    // answers in its own casing.
     let identity = &app["identity"];
     let identities: Vec<&String> = identity["userAssignedIdentities"]
         .as_object()
         .map(|identities| identities.keys().collect())
         .unwrap_or_default();
-    if identity["type"].as_str() != Some("UserAssigned") || identities != [&spec.run_as] {
+    let signed = matches!(identities.as_slice(), [only] if only.eq_ignore_ascii_case(&spec.run_as));
+    if identity["type"].as_str() != Some("UserAssigned") || !signed {
         return Err(mismatch(format!("it runs as {}", identity)));
     }
     Ok(())
@@ -335,6 +337,17 @@ mod tests {
     #[test]
     fn the_app_as_built_reads_back() {
         check_read_back(&spec(), &app(&spec())).unwrap();
+    }
+
+    /// Azure answers with resource ids in its own casing (`resourcegroups`); an id is the same
+    /// resource whatever its case.
+    #[test]
+    fn the_identity_reads_back_in_azures_casing() {
+        let mut back = app(&spec());
+        back["identity"]["userAssignedIdentities"] = json!({
+            IDENTITY.replace("resourceGroups", "resourcegroups"): {"clientId": "c", "principalId": "p"}
+        });
+        check_read_back(&spec(), &back).unwrap();
     }
 
     #[test]
