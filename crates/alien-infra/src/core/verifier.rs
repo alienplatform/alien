@@ -59,7 +59,8 @@ pub const WORKLOAD_SECRETS: &str = "WORKLOAD_SECRETS";
 /// Render into `env`, the environment a controller built for `workload`, what the signed
 /// statements decide on a protected install: the secrets list it loads at start
 /// (`WORKLOAD_SECRETS` from the signed workload, in place of the deployment's `ALIEN_SECRETS`)
-/// and the values the signed `config` sets for the names the release makes configurable.
+/// and the values the signed `config` sets for the names the release makes configurable. The
+/// deployment's telemetry goes to the signed config's endpoint, or nowhere.
 pub fn apply_signed_values(
     statements: &ReleaseStatements,
     config: Option<&SignedStatement>,
@@ -98,19 +99,58 @@ pub fn apply_signed_values(
         );
     }
 
-    if let Some(config) = config {
-        let config: alien_signing::ConfigBody = config
-            .open()
-            .and_then(|opened| opened.body())
-            .map_err(|error| refuse(format!("The signed config can't be read: {error}")))?;
-        for (name, value) in config.env {
-            if signed.configurable_env.contains(&name) {
-                env.insert(name, value);
+    let config = config
+        .map(|config| {
+            config
+                .open()
+                .and_then(|opened| opened.body::<alien_signing::ConfigBody>())
+                .map_err(|error| refuse(format!("The signed config can't be read: {error}")))
+        })
+        .transpose()?
+        .unwrap_or_default();
+    for (name, value) in &config.env {
+        if signed.configurable_env.contains(name) {
+            env.insert(name.clone(), value.clone());
+        }
+    }
+
+    // Telemetry: the deployment decides whether its workloads send any, the signed config
+    // where. Without a signed endpoint they send none. Metrics have no signed endpoint, so
+    // the deployment's never goes out; the release may still sign one into the env.
+    match (
+        &config.telemetry_endpoint,
+        env.contains_key(OTLP_LOGS_ENDPOINT),
+    ) {
+        (Some(endpoint), true) => {
+            env.insert(OTLP_LOGS_ENDPOINT.to_string(), endpoint.clone());
+        }
+        _ => {
+            env.remove(OTLP_LOGS_ENDPOINT);
+            for name in TELEMETRY_FOLLOWERS {
+                env.remove(*name);
             }
         }
     }
+    match signed.env.get(OTLP_METRICS_ENDPOINT) {
+        Some(value) => env.insert(OTLP_METRICS_ENDPOINT.to_string(), value.clone()),
+        None => env.remove(OTLP_METRICS_ENDPOINT),
+    };
     Ok(())
 }
+
+/// Where a workload sends its logs; on a protected install only the signed config's
+/// `telemetryEndpoint` may be it.
+const OTLP_LOGS_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT";
+/// Where a workload sends its metrics, which the signed config has no endpoint for.
+const OTLP_METRICS_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT";
+/// What the deployment sets with its logs endpoint, and the verifier lets through only with
+/// one: the service's name and attributes, and the runtime's pointer to its telemetry
+/// credentials.
+const TELEMETRY_FOLLOWERS: &[&str] = &[
+    "OTEL_SERVICE_NAME",
+    "OTEL_RESOURCE_ATTRIBUTES",
+    alien_core::ENV_ALIEN_RUNTIME_SECRETS,
+];
 
 /// The digest of the signed config the step carries, if any.
 pub fn config_digest(ctx: &ResourceControllerContext<'_>) -> Result<Option<String>> {

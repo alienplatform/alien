@@ -6299,7 +6299,9 @@ mod tests {
 
     use crate::core::aws_tag_scoped::logs_access_denied;
     use crate::core::controller_test::SingleControllerExecutor;
-    use crate::core::verifier_test_support::{run_write, signed_release, CHANNEL};
+    use crate::core::verifier_test_support::{
+        run_write, signed_release, signed_telemetry_config, CHANNEL,
+    };
     use crate::core::{
         serialize_controller, MockPlatformServiceProvider, ResourceController, StackExecutor,
     };
@@ -12215,12 +12217,28 @@ mod tests {
         Vec<(String, Vec<u8>)>,
         alien_core::ReleaseStatements,
     ) {
-        let from = pinned_worker('1', 256);
         let to = pinned_worker('2', 512);
+        protected_update_to(to.clone(), to, None, answer).await
+    }
+
+    /// The protected worker updated to the signed `authored` worker, which the deployment
+    /// hands the controller as `deployed`, with the signed `config`.
+    async fn protected_update_to(
+        authored: Worker,
+        deployed: Worker,
+        config: Option<alien_core::SignedStatement>,
+        answer: InvokeResponse,
+    ) -> (
+        SingleControllerExecutor,
+        Result<(), AlienError<crate::error::ErrorData>>,
+        Vec<(String, Vec<u8>)>,
+        alien_core::ReleaseStatements,
+    ) {
+        let from = pinned_worker('1', 256);
         let release = signed_release(
             Platform::Aws,
             &Stack::new("test".to_string())
-                .add(to.clone(), ResourceLifecycle::Live)
+                .add(authored, ResourceLifecycle::Live)
                 .build(),
             2,
         );
@@ -12238,11 +12256,11 @@ mod tests {
             .with_dependency(setup_role(), setup_role_controller())
             .with_dependency(setup_vault(), setup_vault_controller())
             .stack_settings(protected_settings())
-            .signed_release(release.clone(), None)
+            .signed_release(release.clone(), config)
             .build()
             .await
             .unwrap();
-        executor.update(to).unwrap();
+        executor.update(deployed).unwrap();
         let result = executor.run_until_terminal().await;
         let invocations = invocations.lock().unwrap().clone();
         (executor, result, invocations, release)
@@ -12299,6 +12317,87 @@ mod tests {
                 ["MemorySize"],
             serde_json::json!(512)
         );
+    }
+
+    /// The deployment injects its own telemetry env into every worker (its monitoring
+    /// settings). A protected worker sends telemetry only to the signed config's endpoint, and
+    /// none when the config names none, so the verifier accepts the configuration update.
+    #[tokio::test]
+    async fn a_protected_worker_sends_telemetry_only_to_the_signed_endpoint() {
+        const SIGNED_ENDPOINT: &str = "https://telemetry.vendor.example/v1/logs";
+        let authored = pinned_worker('2', 512);
+        let mut deployed = authored.clone();
+        deployed.environment.extend(
+            [
+                (
+                    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+                    "https://manager.example/v1/logs",
+                ),
+                (
+                    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+                    "https://manager.example/v1/metrics",
+                ),
+                ("OTEL_SERVICE_NAME", PROTECTED_WORKER),
+                ("OTEL_RESOURCE_ATTRIBUTES", "alien.deployment_id=dep_1"),
+                (
+                    alien_core::ENV_ALIEN_RUNTIME_SECRETS,
+                    r#"{"otlpLogsAuthHeader":"__alien_runtime_otlp_logs_auth_header","otlpMetricsAuthHeader":"__alien_runtime_otlp_metrics_auth_header","hash":"h"}"#,
+                ),
+            ]
+            .map(|(name, value)| (name.to_string(), value.to_string())),
+        );
+        let telemetry = [
+            "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+            "OTEL_SERVICE_NAME",
+            "OTEL_RESOURCE_ATTRIBUTES",
+            alien_core::ENV_ALIEN_RUNTIME_SECRETS,
+        ];
+
+        for config in [
+            None,
+            Some(signed_telemetry_config(&aws_install(), SIGNED_ENDPOINT, 1)),
+        ] {
+            let sends = config.is_some();
+            let (_, result, invocations, _) = protected_update_to(
+                authored.clone(),
+                deployed.clone(),
+                config,
+                written("Update"),
+            )
+            .await;
+
+            result.expect("the update completes through the verifier");
+            assert_eq!(invocations.len(), 2);
+            let request: serde_json::Value = serde_json::from_slice(&invocations[1].1).unwrap();
+            let env = request["applyWrite"]["write"]["updateFunctionConfiguration"]["request"]
+                ["Environment"]["Variables"]
+                .as_object()
+                .expect("the configuration update carries the env")
+                .clone();
+            for name in telemetry {
+                assert_eq!(
+                    env.contains_key(name),
+                    sends,
+                    "{name} (config sends: {sends})"
+                );
+            }
+            if sends {
+                assert_eq!(
+                    env["OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"],
+                    serde_json::json!(SIGNED_ENDPOINT)
+                );
+                assert_eq!(
+                    env["OTEL_SERVICE_NAME"],
+                    serde_json::json!(PROTECTED_WORKER)
+                );
+            }
+            assert!(!env.contains_key("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"));
+            for (_, payload) in &invocations {
+                let (answer, forwarded) = run_write(aws_install(), "test", None, payload).await;
+                answer.expect("the verifier's tables accept the controller's request");
+                assert_eq!(forwarded.len(), 1);
+            }
+        }
     }
 
     /// A refusal is the deployment's error, with the verifier's reason; nothing else writes.

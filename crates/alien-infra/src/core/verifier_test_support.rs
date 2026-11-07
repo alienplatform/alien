@@ -131,6 +131,23 @@ pub fn signed_config(install: &InstallId, env: &[(&str, &str)], sequence: u64) -
     )
 }
 
+/// The signed config of `install` that sends telemetry to `endpoint`, at `sequence`.
+pub fn signed_telemetry_config(
+    install: &InstallId,
+    endpoint: &str,
+    sequence: u64,
+) -> SignedStatement {
+    statement_for(
+        Some(install),
+        Kind::Config,
+        sequence,
+        alien_signing::ConfigBody {
+            telemetry_endpoint: Some(endpoint.to_string()),
+            ..Default::default()
+        },
+    )
+}
+
 /// The settings setup writes for `prefix`, pinning the signer list's fingerprint.
 pub fn settings(prefix: &str) -> SigningSettings {
     SigningSettings {
