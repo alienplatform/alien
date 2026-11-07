@@ -242,13 +242,16 @@ impl InteractiveRegistry {
         Ok(*accepted)
     }
 
-    /// Retires every write sent so far: waits for one in progress, then moves the input to a new
-    /// generation. Returns how many bytes the command has taken and the generation later writes
-    /// carry.
-    pub async fn barrier(&self, id: &str) -> Result<(u64, u64)> {
+    /// Retires every write sent so far: waits for one in progress, then moves the input to
+    /// generation `target` unless it is already there or past it. Returns how many bytes the
+    /// command has taken and the current generation.
+    ///
+    /// The caller names the generation rather than asking for the next one, so a barrier sent
+    /// twice, because its first answer was lost, moves the input once.
+    pub async fn barrier(&self, id: &str, target: u64) -> Result<(u64, u64)> {
         let command = self.get(id)?;
         let mut stdin = command.stdin.lock().await;
-        stdin.generation += 1;
+        stdin.generation = stdin.generation.max(target);
         Ok((stdin.accepted, stdin.generation))
     }
 

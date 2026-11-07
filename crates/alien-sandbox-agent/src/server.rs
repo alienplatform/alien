@@ -588,6 +588,16 @@ pub struct InteractiveStdinResponse {
     pub accepted: u64,
 }
 
+/// A barrier on an interactive command's input.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveBarrierBody {
+    /// The command
+    pub id: String,
+    /// The generation to move the input to; a barrier that finds it already there changes nothing
+    pub generation: u64,
+}
+
 /// Where an interactive command's input stands after a barrier.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -719,10 +729,10 @@ async fn interactive_stdin_barrier(
     State(state): State<Arc<AgentState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Json(body): Json<InteractiveIdBody>,
+    Json(body): Json<InteractiveBarrierBody>,
 ) -> std::result::Result<Json<InteractiveBarrierResponse>, ApiError> {
     authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
-    let (accepted, generation) = state.interactive.barrier(&body.id).await?;
+    let (accepted, generation) = state.interactive.barrier(&body.id, body.generation).await?;
     Ok(Json(InteractiveBarrierResponse {
         accepted,
         generation,

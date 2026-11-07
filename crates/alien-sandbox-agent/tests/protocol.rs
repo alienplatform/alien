@@ -1531,13 +1531,28 @@ async fn a_write_from_before_a_barrier_is_refused_after_it() {
     assert_eq!(command.accepted(0, b"one ").await, 4);
 
     let barrier: serde_json::Value = command
-        .post("/v1/interactive/stdin-barrier", json!({"id": "cat-2"}))
+        .post(
+            "/v1/interactive/stdin-barrier",
+            json!({"id": "cat-2", "generation": 1}),
+        )
         .await
         .json()
         .await
         .expect("json");
     assert_eq!(barrier["accepted"], 4, "the barrier reports what was taken");
     assert_eq!(barrier["generation"], 1, "and moves the input on");
+
+    // The same barrier again, as a retry whose first answer was lost: it moves nothing.
+    let repeat: serde_json::Value = command
+        .post(
+            "/v1/interactive/stdin-barrier",
+            json!({"id": "cat-2", "generation": 1}),
+        )
+        .await
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(repeat["generation"], 1, "a repeated barrier is a no-op");
 
     // The old write, delayed past the barrier, at the offset where the caller now writes.
     let stale = command.write_in(0, 4, b"STALE ").await;

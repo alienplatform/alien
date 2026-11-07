@@ -219,9 +219,13 @@ pub async fn stream_framed(
             }
             result = async {
                 connected = pump.await;
-                if let Some(exited) = exited.take() {
+                // Taken only once the wait is over: if the deadline or a departed caller ends
+                // this branch mid-wait, the hook is still there for the kill below to run first.
+                if exited.is_some() {
                     exited_unreaped(&child).await;
-                    exited();
+                    if let Some(exited) = exited.take() {
+                        exited();
+                    }
                 }
                 child.wait().await
             } => result,
@@ -278,21 +282,45 @@ pub async fn stream_framed(
 /// An exited child that has not been reaped keeps its pid, and with it its process group's
 /// number, so nothing else can be given either. That is the window in which a caller can stop
 /// signalling the group by number with no chance of reaching another process.
+///
+/// The wait runs on a blocking thread, which outlives this future if it is dropped. On Linux it
+/// waits on a pidfd opened here, while the child is still unreaped, so the thread is tied to this
+/// child: it ends when the child exits or is reaped, never on a later process given its number.
 async fn exited_unreaped(child: &Child) {
     #[cfg(unix)]
     if let Some(pid) = child.id() {
+        #[cfg(target_os = "linux")]
+        let target = {
+            // SAFETY: `pidfd_open` takes a pid and flags and returns a new descriptor or -1. The
+            // child is unreaped, so the pid is still this child's.
+            let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0) };
+            if fd >= 0 {
+                // SAFETY: the descriptor was just returned to us and nothing else owns it.
+                let fd = unsafe {
+                    <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fd as i32)
+                };
+                WaitTarget::PidFd(fd)
+            } else {
+                WaitTarget::Pid(pid)
+            }
+        };
+        #[cfg(not(target_os = "linux"))]
+        let target = WaitTarget::Pid(pid);
+
         let _ = tokio::task::spawn_blocking(move || loop {
+            let (kind, id) = match &target {
+                #[cfg(target_os = "linux")]
+                WaitTarget::PidFd(fd) => (
+                    libc::P_PIDFD,
+                    std::os::fd::AsRawFd::as_raw_fd(fd) as libc::id_t,
+                ),
+                WaitTarget::Pid(pid) => (libc::P_PID, *pid as libc::id_t),
+            };
             // SAFETY: `waitid` writes only into `info`, which lives for the call. `WNOWAIT` leaves
             // the child waitable, so the reap that follows still collects its status.
             let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-            let result = unsafe {
-                libc::waitid(
-                    libc::P_PID,
-                    pid as libc::id_t,
-                    &mut info,
-                    libc::WEXITED | libc::WNOWAIT,
-                )
-            };
+            let result =
+                unsafe { libc::waitid(kind, id, &mut info, libc::WEXITED | libc::WNOWAIT) };
             if result == 0
                 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted
             {
@@ -303,6 +331,16 @@ async fn exited_unreaped(child: &Child) {
     }
     #[cfg(not(unix))]
     let _ = child;
+}
+
+/// What [`exited_unreaped`] waits on.
+#[cfg(unix)]
+enum WaitTarget {
+    /// A descriptor for the child itself, which no later process can take over
+    #[cfg(target_os = "linux")]
+    PidFd(std::os::fd::OwnedFd),
+    /// The child's number, where pidfds are not available
+    Pid(u32),
 }
 
 /// Where both streams' frames go, and the state they share.
@@ -830,6 +868,52 @@ mod tests {
         assert!(matches!(
             terminal(&frames),
             ProcessFrame::Exit { code: 0, .. }
+        ));
+    }
+
+    /// A command that closes its own output and runs past its deadline: the hook is waiting for
+    /// the exit when the deadline ends that wait, and must still run, before the kill reaps the
+    /// command, rather than be dropped with the wait.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn exited_still_runs_when_the_deadline_ends_its_wait() {
+        let child = child(&["/bin/sh", "-c", "exec >/dev/null 2>&1; exec sleep 30"]);
+        let pid = child.id().expect("a running child has a pid");
+        let (sender, receiver) = mpsc::channel(FRAME_CHANNEL_DEPTH);
+        let state = std::sync::Arc::new(Mutex::new(None));
+        let seen = std::sync::Arc::clone(&state);
+        let produce = stream_framed(
+            child,
+            Duration::from_millis(500),
+            1 << 20,
+            Framing::Chunks,
+            sender,
+            Some(move || {
+                *seen.lock().expect("no panic holds this lock") =
+                    Some(std::path::Path::new(&format!("/proc/{pid}")).exists());
+            }),
+        );
+        let consume = async {
+            let mut receiver = receiver;
+            let mut frames = Vec::new();
+            while let Some(frame) = receiver.recv().await {
+                frames.push(frame);
+            }
+            frames
+        };
+        let (_, frames) = tokio::join!(produce, consume);
+
+        assert_eq!(
+            *state.lock().expect("no panic holds this lock"),
+            Some(true),
+            "the hook ran, and ran while the command still held its pid"
+        );
+        assert!(matches!(
+            terminal(&frames),
+            ProcessFrame::Failed {
+                code: "timeoutExceeded",
+                ..
+            }
         ));
     }
 
