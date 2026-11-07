@@ -85,6 +85,9 @@ pub enum ListPublished {
 pub struct SigningApi {
     client: Client,
     base_url: String,
+    /// `?workspace=` for every request: the platform API answers a user's
+    /// own credentials only within a named workspace.
+    workspace: Option<String>,
 }
 
 impl SigningApi {
@@ -93,13 +96,19 @@ impl SigningApi {
         Self {
             client,
             base_url: base_url.into().trim_end_matches('/').to_string(),
+            workspace: None,
         }
     }
 
-    /// From the execution context's authenticated client.
+    /// From the execution context's authenticated client, scoped to its
+    /// workspace on the platform API (a manager serves one project and
+    /// takes none).
     pub async fn from_context(ctx: &crate::execution_context::ExecutionMode) -> Result<Self> {
         let http = ctx.auth_http().await?;
-        Ok(Self::new(http.client.clone(), http.base_url.clone()))
+        Ok(Self {
+            workspace: workspace_scope(ctx).await?,
+            ..Self::new(http.client.clone(), http.base_url.clone())
+        })
     }
 
     /// What the control plane renders setup templates with
@@ -308,6 +317,9 @@ impl SigningApi {
     ) -> Result<(StatusCode, String)> {
         let url = format!("{}{path}", self.base_url);
         let mut request = self.client.request(method.clone(), &url);
+        if let Some(workspace) = &self.workspace {
+            request = request.query(&[("workspace", workspace)]);
+        }
         if let Some(body) = body {
             request = request.json(body);
         }
@@ -369,6 +381,20 @@ impl SigningApi {
                 url: Some(format!("{}{path}", self.base_url)),
             })
     }
+}
+
+/// The workspace the platform API scopes requests to; none on a manager.
+#[cfg(feature = "platform")]
+async fn workspace_scope(ctx: &crate::execution_context::ExecutionMode) -> Result<Option<String>> {
+    if !ctx.is_platform() {
+        return Ok(None);
+    }
+    ctx.resolve_workspace_query_with_bootstrap(false).await
+}
+
+#[cfg(not(feature = "platform"))]
+async fn workspace_scope(_ctx: &crate::execution_context::ExecutionMode) -> Result<Option<String>> {
+    Ok(None)
 }
 
 /// Query parameters that scope a listing to the project on the platform API;
@@ -442,4 +468,74 @@ struct ErrorBody {
 struct AlreadyOnContext {
     #[serde(default)]
     enabled_by: Option<String>,
+}
+
+#[cfg(all(test, feature = "platform"))]
+mod tests {
+    use super::*;
+    use crate::execution_context::ExecutionMode;
+
+    /// The platform API answers signing routes for a user's credentials only
+    /// within a workspace, so every request carries the one the CLI uses.
+    #[tokio::test]
+    async fn signing_requests_on_the_platform_name_the_workspace() {
+        let server = httpmock::MockServer::start_async().await;
+        let lists = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/projects/shop/signer-lists")
+                    .query_param("workspace", "acme");
+                then.status(200).body(r#"{"items":[]}"#);
+            })
+            .await;
+        let pending = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/projects/shop/pending-changes")
+                    .query_param("status", "pending")
+                    .query_param("workspace", "acme");
+                then.status(200).body(r#"{"items":[]}"#);
+            })
+            .await;
+        let ctx = ExecutionMode::Platform {
+            base_url: server.base_url(),
+            api_key: Some("ax_test".to_string()),
+            no_browser: true,
+            workspace: Some("acme".to_string()),
+            project: None,
+        };
+
+        let api = SigningApi::from_context(&ctx).await.unwrap();
+        assert!(api.signer_lists("shop").await.unwrap().is_empty());
+        assert!(api.pending("shop").await.unwrap().is_empty());
+
+        lists.assert_async().await;
+        pending.assert_async().await;
+    }
+
+    /// A manager serves one project and takes no workspace.
+    #[tokio::test]
+    async fn signing_requests_on_a_manager_name_no_workspace() {
+        let server = httpmock::MockServer::start_async().await;
+        let lists = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/projects/shop/signer-lists")
+                    .matches(|request| {
+                        !request.query_params.as_ref().is_some_and(|params| {
+                            params.iter().any(|(name, _)| name == "workspace")
+                        })
+                    });
+                then.status(200).body(r#"{"items":[]}"#);
+            })
+            .await;
+        let ctx = ExecutionMode::Standalone {
+            server_url: server.base_url(),
+            api_key: "ax_test".to_string(),
+        };
+
+        let api = SigningApi::from_context(&ctx).await.unwrap();
+        assert!(api.signer_lists("shop").await.unwrap().is_empty());
+        lists.assert_async().await;
+    }
 }
