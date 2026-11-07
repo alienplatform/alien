@@ -380,17 +380,33 @@ pub fn check_signed(
             ));
             verified.body.setup[installed.template].allowed.clone()
         }
-        None => {
-            lines.push(line(
-                "Template",
-                format!(
-                    "{digest} is not the {} template of any release signed for {}",
-                    installed.template, settings.channel
-                ),
-                Mark::Fail,
-            ));
-            Vec::new()
-        }
+        // A release whose signer has since left the list still verifies against
+        // the list it names and keeps running until the next release (only the
+        // deny-list stops it), and so does the template it came with.
+        None => match from_removed_signer(&trust, &settings, &signed, installed, now) {
+            Some((id, signed_by, body)) => {
+                lines.push(line(
+                    "Template",
+                    format!(
+                        "matches release {id} · {} · {digest} · signed by {signed_by}, no longer on the list",
+                        body.channel
+                    ),
+                    Mark::Info,
+                ));
+                body.setup[installed.template].allowed.clone()
+            }
+            None => {
+                lines.push(line(
+                    "Template",
+                    format!(
+                        "{digest} is not the {} template of any release signed for {}",
+                        installed.template, settings.channel
+                    ),
+                    Mark::Fail,
+                ));
+                Vec::new()
+            }
+        },
     };
     lines.push(choices_line(&installed.choices, &allowed, &settings));
     lines.extend(extra);
@@ -570,6 +586,35 @@ fn schema_violations(
 /// for this install's channel, signed with the release role by the list
 /// version it names. Returns its id (the control plane's name for it), its
 /// signers and whether they all still hold the release role now.
+/// The newest release whose `installed` template this is and whose signer has
+/// left the list since, checked the way [`running_release`] checks one: against
+/// the list version it names, not deny-listed, for this channel and platform.
+fn from_removed_signer<'a>(
+    trust: &Trust,
+    settings: &SigningSettings,
+    signed: &'a Signed,
+    installed: &Installed,
+    now: DateTime<Utc>,
+) -> Option<(&'a str, String, ReleaseBody)> {
+    signed
+        .releases
+        .iter()
+        .filter_map(|(_, statement)| {
+            let opened = statement.open().ok()?;
+            let body: ReleaseBody = opened.body().ok()?;
+            let template = body.setup.get(installed.template)?;
+            (body.platform == signed.platform && template.sha256 == installed.digest)
+                .then_some((opened, body))
+        })
+        .filter_map(|(opened, body)| {
+            let (id, signers, _) =
+                running_release(trust, settings, &signed.releases, &opened.digest, now).ok()?;
+            Some((opened.sequence, id, signers.join(", "), body))
+        })
+        .max_by_key(|(sequence, ..)| *sequence)
+        .map(|(_, id, signed_by, body)| (id, signed_by, body))
+}
+
 fn running_release<'a>(
     trust: &Trust,
     settings: &SigningSettings,

@@ -392,6 +392,15 @@ fn a_release_whose_signer_was_removed_keeps_running_and_says_so() {
     assert_eq!(line.mark, Mark::Info);
     assert!(line.text.contains("no longer on the list"), "{}", line.text);
     let lines = check(&observed, now()).unwrap();
+    // The installed template came with that release: it is still the signed
+    // one, and the screen says who signed it.
+    let template = lines.iter().find(|line| line.label == "Template").unwrap();
+    assert_eq!(template.mark, Mark::Info, "{}", template.text);
+    assert!(
+        template.text.contains("no longer on the list"),
+        "{}",
+        template.text
+    );
     let keys = lines
         .iter()
         .find(|line| line.label == "Trusted keys")
