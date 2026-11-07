@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 
+use alien_azure_clients::azure::container_apps::CONTAINER_APPS_API_VERSION;
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -21,7 +22,6 @@ use crate::trust::InstallStore;
 use crate::verifier::Backend;
 
 const ARM: &str = "https://management.azure.com";
-const CONTAINER_APPS_API: &str = "2024-03-01";
 const KEY_VAULT_API: &str = "7.4";
 
 fn failed(operation: impl Into<String>) -> ErrorData {
@@ -147,7 +147,7 @@ impl Azure {
 
     fn app_url(&self, name: &str) -> String {
         format!(
-            "{ARM}{}/providers/Microsoft.App/containerApps/{name}?api-version={CONTAINER_APPS_API}",
+            "{ARM}{}/providers/Microsoft.App/containerApps/{name}?api-version={CONTAINER_APPS_API_VERSION}",
             self.resource_group
         )
     }
