@@ -44,6 +44,9 @@ pub struct SqliteDeploymentStore {
 
 /// A setup reservation whose installer has not registered yet. The manager has
 /// installed nothing for it; the installer owns any cloud resources until then.
+/// The deployment's last error, or one of its sources, asks for setup. Walks only the
+/// `source` chain, as `$.code`, `$.source.code`, `$.source.source.code`, and so on.
+const ERROR_WAITS_FOR_SETUP: &str = "EXISTS (SELECT 1 FROM json_tree(COALESCE(error, '{}')) WHERE key = 'code' AND value = 'DEPLOYMENT_SETUP_REQUIRED' AND replace(fullkey, '.source', '') = '$.code')";
 const UNREGISTERED_SETUP_RESERVATION: &str = "status = 'pending' AND current_release_id IS NULL AND json_extract(COALESCE(setup_metadata, '{}'), '$.setupReservation.releaseId') IS NOT NULL";
 
 impl SqliteDeploymentStore {
@@ -334,18 +337,42 @@ impl SqliteDeploymentStore {
         )
     }
 
-    fn acquire_status_condition(statuses: Option<&Vec<String>>) -> sea_query::Condition {
+    fn acquire_status_condition(
+        statuses: Option<&Vec<String>>,
+        mode: Option<DeploymentAcquireMode>,
+    ) -> sea_query::Condition {
         Cond::all()
             .add(Expr::cust(format!(
                 "NOT ({UNREGISTERED_SETUP_RESERVATION})"
             )))
-            .add(Self::unreserved_acquire_status_condition(statuses))
+            .add(Self::unreserved_acquire_status_condition(statuses, mode))
     }
 
-    fn unreserved_acquire_status_condition(statuses: Option<&Vec<String>>) -> sea_query::Condition {
+    /// Rust side of [`ERROR_WAITS_FOR_SETUP`].
+    fn error_waits_for_setup(error: Option<&serde_json::Value>) -> bool {
+        std::iter::successors(error, |error| error.get("source"))
+            .any(|error| error["code"] == "DEPLOYMENT_SETUP_REQUIRED")
+    }
+
+    /// A failed deployment runs again after an explicit retry. A setup run may also claim one
+    /// whose failure asks for setup: only setup can apply what it stopped for, and the
+    /// runtime would stop again on a retry.
+    fn failed_claimable_condition(mode: Option<DeploymentAcquireMode>) -> sea_query::Condition {
+        let condition = Cond::any().add(Expr::col(Deployments::RetryRequested).eq(1));
+        if mode == Some(DeploymentAcquireMode::SetupRun) {
+            condition.add(Expr::cust(ERROR_WAITS_FOR_SETUP))
+        } else {
+            condition
+        }
+    }
+
+    fn unreserved_acquire_status_condition(
+        statuses: Option<&Vec<String>>,
+        mode: Option<DeploymentAcquireMode>,
+    ) -> sea_query::Condition {
         let retryable_failed = Cond::all()
             .add(Expr::col(Deployments::Status).is_in(Self::FAILED_STATUSES))
-            .add(Expr::col(Deployments::RetryRequested).eq(1));
+            .add(Self::failed_claimable_condition(mode));
 
         if let Some(statuses) = statuses {
             let requested_active: Vec<&str> = statuses
@@ -378,7 +405,7 @@ impl SqliteDeploymentStore {
                 condition = condition.add(
                     Cond::all()
                         .add(Expr::col(Deployments::Status).is_in(requested_failed))
-                        .add(Expr::col(Deployments::RetryRequested).eq(1)),
+                        .add(Self::failed_claimable_condition(mode)),
                 );
             }
 
@@ -396,10 +423,10 @@ impl SqliteDeploymentStore {
 
     fn acquire_status_matches(
         status: &str,
-        retry_requested: bool,
+        failed_claimable: bool,
         statuses: Option<&Vec<String>>,
     ) -> bool {
-        let failed_is_retryable = Self::FAILED_STATUSES.contains(&status) && retry_requested;
+        let failed_is_retryable = Self::FAILED_STATUSES.contains(&status) && failed_claimable;
 
         let Some(statuses) = statuses else {
             return Self::WORK_STATUSES.contains(&status) || failed_is_retryable;
@@ -417,7 +444,7 @@ impl SqliteDeploymentStore {
         });
         let explicitly_failed = statuses.iter().any(|requested| requested == status)
             && Self::FAILED_STATUSES.contains(&status)
-            && retry_requested;
+            && failed_claimable;
 
         explicitly_active || explicitly_failed
     }
@@ -1533,7 +1560,10 @@ impl DeploymentStore for SqliteDeploymentStore {
                 .columns(Self::DEPLOYMENT_COLUMNS)
                 .from(Deployments::Table);
 
-            query.cond_where(Self::acquire_status_condition(explicit_status_filter));
+            query.cond_where(Self::acquire_status_condition(
+                explicit_status_filter,
+                filter.acquire_mode,
+            ));
 
             query
                 // Unlocked OR stale-locked (locked_at older than 5 minutes)
@@ -1631,7 +1661,10 @@ impl DeploymentStore for SqliteDeploymentStore {
                     .value(Deployments::RetryRequested, 0i64)
                     .and_where(Expr::col(Deployments::Id).eq(dep.id.as_str()));
 
-                query.cond_where(Self::acquire_status_condition(explicit_status_filter));
+                query.cond_where(Self::acquire_status_condition(
+                    explicit_status_filter,
+                    filter.acquire_mode,
+                ));
                 if let Some(model) = filter.deployment_model {
                     query.cond_where(Self::deployment_model_condition(model));
                 }
@@ -1669,10 +1702,16 @@ impl DeploymentStore for SqliteDeploymentStore {
             // Only count as acquired if our UPDATE actually modified a row.
             // Another caller may have locked it between our SELECT and UPDATE.
             if rows_affected > 0 {
+                // The setup run that a failure asked for is that failure's retry.
+                let retry_requested = dep.retry_requested
+                    || (filter.acquire_mode == Some(DeploymentAcquireMode::SetupRun)
+                        && Self::FAILED_STATUSES.contains(&dep.status.as_str())
+                        && Self::error_waits_for_setup(dep.error.as_ref()));
                 acquired.push(AcquiredDeployment {
                     deployment: DeploymentRecord {
                         locked_by: Some(session.to_string()),
                         locked_at: Some(now),
+                        retry_requested,
                         ..dep
                     },
                     execution_claim: None,
@@ -1699,6 +1738,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                         Deployments::NextStepAfter,
                         Deployments::Platform,
                         Deployments::StackSettings,
+                        Deployments::Error,
                     ])
                     .from(Deployments::Table)
                     .and_where(Expr::col(Deployments::Id).is_in(id_strs))
@@ -1741,6 +1781,13 @@ impl DeploymentStore for SqliteDeploymentStore {
                     .map_err(|error| db_error(&error))?;
                 let stack_settings =
                     parser.json::<alien_core::StackSettings>(7, "stack_settings")?;
+                let failed_claimable = retry_requested
+                    || (filter.acquire_mode == Some(DeploymentAcquireMode::SetupRun)
+                        && Self::error_waits_for_setup(
+                            parser
+                                .optional_json::<serde_json::Value>(8, "error")?
+                                .as_ref(),
+                        ));
 
                 let reason = if filter
                     .deployment_model
@@ -1755,7 +1802,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                     DeploymentAcquireUnavailableReason::PlatformMismatch
                 } else if !Self::acquire_status_matches(
                     &status,
-                    retry_requested,
+                    failed_claimable,
                     explicit_status_filter,
                 ) {
                     DeploymentAcquireUnavailableReason::StatusMismatch

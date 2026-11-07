@@ -251,6 +251,9 @@ async fn push_azure_comprehensive_ts(ctx: &mut AzurePushTypeScript) {
 
 macro_rules! automatic_setup_test {
     ($context:ident, $test:ident, $platform:expr) => {
+        automatic_setup_test!($context, $test, $platform, run);
+    };
+    ($context:ident, $test:ident, $platform:expr, $scenario:ident) => {
         struct $context(common::automatic_setup::AutomaticSetup);
         impl test_context::AsyncTestContext for $context {
             async fn setup() -> Self {
@@ -270,12 +273,21 @@ macro_rules! automatic_setup_test {
         #[test_context($context)]
         #[tokio::test]
         async fn $test(ctx: &mut $context) {
-            ctx.0.run().await.expect("automatic setup cloud lifecycle");
+            ctx.0
+                .$scenario()
+                .await
+                .expect("automatic setup cloud lifecycle");
         }
     };
 }
 automatic_setup_test!(AwsAutomaticSetup, push_aws_automatic_setup, Platform::Aws);
 automatic_setup_test!(GcpAutomaticSetup, push_gcp_automatic_setup, Platform::Gcp);
+automatic_setup_test!(
+    AwsAutomaticManagementChange,
+    push_aws_automatic_management_change,
+    Platform::Aws,
+    run_management_change
+);
 automatic_setup_test!(
     AzureAutomaticSetup,
     push_azure_automatic_setup,

@@ -319,7 +319,7 @@ pub async fn check_bundle_bucket_deleted(bucket: &str) -> anyhow::Result<()> {
 }
 
 /// An IAM client with the target account's credentials.
-async fn target_iam() -> anyhow::Result<IamClient> {
+pub async fn target_iam() -> anyhow::Result<IamClient> {
     let config = TestConfig::from_env();
     let target = config
         .aws_target
