@@ -141,8 +141,8 @@ print("other source admitted")'''
         time.sleep(.1)
         logs=[json.loads(line) for line in docker("logs",prefix+"-proxy1").splitlines() if line.startswith("{")]
         events=[entry for entry in logs if entry.get("sub")=="audit-reset"]
-        assert any(event.get("event")=="open" and event.get("decision")=="allow" for event in events),events
-        assert any(event.get("event")=="close" and event.get("decision")=="allow" and "closeReason" in event for event in events),events
+        assert any(event.get("connectionEvent")=="open" and event.get("decision")=="allow" for event in events),events
+        assert any(event.get("connectionEvent")=="close" and event.get("decision")=="allow" and "closeReason" in event for event in events),events
         status,metrics=suite.admin("/metrics",{},method="GET")
         assert status==200 and b"alien_egress_active_connections" in metrics and b'reason="capacity"' in metrics
         assert b"sub=" not in metrics and b"host=" not in metrics

@@ -8,11 +8,13 @@ use alien_bindings::Bindings;
 use alien_egress_gateway::{
     admin,
     error::{ErrorData, Result},
+    logging,
     runtime::{self, ConfigSource, LiveGateway},
     server,
 };
 use alien_error::{Context, IntoAlienError};
 use tokio::net::TcpListener;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 fn failed(operation: &str) -> ErrorData {
     ErrorData::Unavailable {
@@ -26,10 +28,9 @@ fn failed(operation: &str) -> ErrorData {
     reason = "Alien errors retain structured metadata and causal context"
 )]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .json()
-        .flatten_event(true)
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+    tracing_subscriber::registry()
+        .with(logging::json_layer(std::io::stdout))
+        .with(EnvFilter::from_default_env())
         .init();
     let bindings = Arc::new(Bindings::from_env().context(failed("load deployment bindings"))?);
     // An inline configuration or a command-line file is static. A refreshing gateway reads a
