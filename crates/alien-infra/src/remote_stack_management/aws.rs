@@ -37,6 +37,12 @@ pub(crate) fn aws_management_role_name(prefix: &str) -> String {
 const LEGACY_INLINE_POLICY_NAME: &str = "alien-management-policy";
 const MANAGED_POLICY_BASE_NAME: &str = "deployment-management";
 const IAM_POLICY_NAME_MAX_LEN: usize = 128;
+/// Stale numbered management policies are looked for at every index below this, even past a
+/// missing one. Earlier releases detached and deleted stale policies one at a time, so an
+/// interrupted cleanup there can leave a gap with a detached policy above it. None of those
+/// releases created more than 22 numbered policies, and this code creates at most
+/// [`MAX_ATTACHED_MANAGEMENT_POLICIES`].
+const NUMBERED_POLICY_SCAN_END: usize = 32;
 
 #[controller]
 pub struct AwsRemoteStackManagementController {
@@ -384,6 +390,11 @@ impl AwsRemoteStackManagementController {
                 }
             }
         }
+
+        // Numbered policies an interrupted setup or update created or detached are no longer
+        // attached, so the role's list above doesn't show them.
+        self.delete_stale_management_policies(ctx, client.as_ref(), 0)
+            .await?;
 
         // Step 2: List and delete all inline policies
         match client.list_role_policies(role_name).await {
@@ -1218,10 +1229,11 @@ impl AwsRemoteStackManagementController {
         Ok(())
     }
 
-    /// Deletes numbered management policies from `first_stale` up, including ones created but
-    /// never attached (an earlier attempt can stop between the two). Policies are numbered from
-    /// 0 without gaps, so the first missing number ends the search; deleting from the highest
-    /// number down keeps that true if this stops part way.
+    /// Deletes numbered management policies from `first_stale` up, attached or not: an earlier
+    /// attempt can stop after creating a policy and before attaching it, or after detaching it
+    /// and before deleting it. Every index below [`NUMBERED_POLICY_SCAN_END`] is checked, even
+    /// past a missing one; above it, the search ends at the first missing index. Deleting from
+    /// the highest index down means this code never leaves a gap if it stops part way.
     async fn delete_stale_management_policies(
         &self,
         ctx: &ResourceControllerContext<'_>,
@@ -1235,7 +1247,11 @@ impl AwsRemoteStackManagementController {
             let policy_arn = self.management_policy_arn(&aws_config.account_id, &policy_name);
             match client.get_policy(&policy_arn).await {
                 Ok(_) => stale.push(policy_arn),
-                Err(e) if is_remote_not_found(&e) => break,
+                Err(e) if is_remote_not_found(&e) => {
+                    if idx + 1 >= NUMBERED_POLICY_SCAN_END {
+                        break;
+                    }
+                }
                 Err(e) => {
                     return Err(e
                         .context(ErrorData::CloudPlatformError {

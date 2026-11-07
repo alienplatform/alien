@@ -13,7 +13,8 @@ use alien_aws_clients::iam::{
     CreatePolicyVersionResponse, CreatePolicyVersionResult, CreateRoleResponse, CreateRoleResult,
     GetPolicyResponse, GetPolicyResult, ListAttachedRolePoliciesResponse,
     ListAttachedRolePoliciesResult, ListPolicyVersionsResponse, ListPolicyVersionsResult,
-    MockIamApi, Policy, PolicyVersion, Role,
+    ListRolePoliciesResponse, ListRolePoliciesResult, MockIamApi, Policy, PolicyNames,
+    PolicyVersion, Role,
 };
 use alien_client_core::ErrorData as ClientError;
 use alien_core::{SetupManagement, StackSettings};
@@ -227,7 +228,30 @@ fn fake_iam(account: Arc<Mutex<Account>>) -> MockIamApi {
     iam.expect_delete_policy_version().returning(|_, _| Ok(()));
     iam.expect_delete_role_policy()
         .returning(|_, name| Err(not_found(name)));
+    iam.expect_list_role_policies().returning(|_| {
+        Ok(ListRolePoliciesResponse {
+            list_role_policies_result: ListRolePoliciesResult {
+                policy_names: Some(PolicyNames { member: Vec::new() }),
+                is_truncated: Some(false),
+                marker: None,
+            },
+        })
+    });
     iam
+}
+
+/// Seeds numbered policies: `attached` are created and attached, `detached` only created.
+fn seed(account: &Arc<Mutex<Account>>, attached: &[usize], detached: &[usize]) {
+    let mut account = account.lock().unwrap();
+    for &index in attached.iter().chain(detached) {
+        account
+            .policies
+            .insert(arn(&numbered(index)), "{}".to_string());
+    }
+    for &index in attached {
+        account.attached.push(arn(&numbered(index)));
+    }
+    account.most_attached = account.attached.len();
 }
 
 /// The smallest stack direct setup manages automatically: one function. The automatic grant
@@ -469,4 +493,70 @@ fn a_grant_needing_more_than_the_limit_is_refused_and_not_retried() {
         "{error:?}"
     );
     assert!(!error.retryable);
+}
+
+/// Earlier releases detached and deleted stale policies one at a time, so an interrupted cleanup
+/// can leave a gap with a detached policy above it.
+#[tokio::test]
+async fn update_deletes_stale_policies_past_a_gap() {
+    let account = Arc::new(Mutex::new(Account::default()));
+    let executor = automatic_setup(account.clone()).await;
+    let mut controller = AwsRemoteStackManagementController::default();
+    controller.role_name = Some(ROLE.to_string());
+    let documents = executor
+        .with_context(|ctx| controller.planned_management_policy_documents(ctx, ROLE))
+        .expect("the automatic grant fits");
+    let packed = documents.len();
+    // `packed` is missing, `packed + 1` is detached, `packed + 2` is still attached, and
+    // `packed + 4` is detached past a second gap.
+    let attached: Vec<usize> = (0..packed).chain([packed + 2]).collect();
+    seed(&account, &attached, &[packed + 1, packed + 4]);
+
+    executor
+        .with_context(|ctx| {
+            block_on(controller.apply_management_policy_documents(
+                ctx,
+                &fake_iam(account.clone()),
+                ROLE,
+                &documents,
+            ))
+        })
+        .expect("the update applies");
+
+    let account = account.lock().unwrap();
+    let expected: Vec<String> = (0..packed).map(|i| arn(&numbered(i))).collect();
+    assert_eq!(account.attached, expected);
+    let mut sorted = expected;
+    sorted.sort();
+    assert_eq!(
+        account.policies.keys().cloned().collect::<Vec<_>>(),
+        sorted,
+        "every stale policy is deleted, past gaps and whether attached or not"
+    );
+}
+
+/// An interrupted setup can leave policies it created but never attached, and an interrupted
+/// update can leave policies it detached but never deleted. The role doesn't list either.
+#[tokio::test]
+async fn teardown_deletes_policies_the_role_no_longer_lists() {
+    let account = Arc::new(Mutex::new(Account::default()));
+    seed(&account, &[0, 1, 2], &[3, 5, 21]);
+    let executor = automatic_setup(account.clone()).await;
+    let mut controller = AwsRemoteStackManagementController::default();
+    controller.role_name = Some(ROLE.to_string());
+
+    let action = executor
+        .with_context(|ctx| block_on(controller.delete_start(ctx)))
+        .expect("policy cleanup succeeds");
+
+    assert!(matches!(
+        action,
+        AwsRemoteStackManagementHandlerAction::Continue {
+            state: AwsRemoteStackManagementState::DeletingRole,
+            ..
+        }
+    ));
+    let account = account.lock().unwrap();
+    assert!(account.attached.is_empty(), "{:?}", account.attached);
+    assert!(account.policies.is_empty(), "{:?}", account.policies.keys());
 }
