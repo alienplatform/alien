@@ -2,7 +2,7 @@
 """A protected install's Cloud Run worker, created and updated by the control plane on real GCP.
 
 The GCP counterpart of `control_plane.py`. Sets up, as protected setup would, an install named
-`<p>` in --project (all names start with `<p>`, labeled sd2173... see --label):
+`<p>` in --project (all names start with `<p>` and carry --label):
   - an Artifact Registry repository with two worker images (HTTP on 8080) and the verifier's;
   - the workload's account `<p>-execution-sa`, the verifier's `<p>-verifier`, and a management
     stand-in `<p>-mgmt` that may read Cloud Run and call the verifier, nothing more;
