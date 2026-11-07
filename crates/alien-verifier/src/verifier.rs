@@ -180,6 +180,10 @@ impl Verifier {
                     ),
                 })?;
         }
+        // Every write passed, so the install accepts the release before the first goes out: a
+        // request for an older release that arrives while these writes run is refused, and
+        // can't land in the middle of them.
+        store_ledger(self.store.as_ref(), &place.prefix, &accepted.ledger).await?;
         let floor = Floor {
             store: self.store.as_ref(),
             prefix: &place.prefix,
@@ -197,8 +201,6 @@ impl Verifier {
                 "applied the controller's checked write"
             );
         }
-        // The install accepts the release once every write is in place.
-        store_ledger(self.store.as_ref(), &place.prefix, &accepted.ledger).await?;
         Ok(json!({
             "release": accepted.release.sequence,
             "function": facts.own_name,
@@ -499,8 +501,7 @@ mod tests {
 
     /// All of a workload's writes for one release come in one request. Every write is checked
     /// before any goes out, so one that breaks a row sends none and records nothing; a request
-    /// whose writes all pass sends them in order, and the install records the release only
-    /// after the last.
+    /// whose writes all pass is recorded, then its writes go out in order.
     #[tokio::test]
     async fn a_request_whose_second_write_breaks_a_row_sends_none() {
         let store = Arc::new(MemoryStore::protected(&settings()));
@@ -575,11 +576,11 @@ mod tests {
         assert_eq!(
             *backend.forwarded.lock().unwrap(),
             vec![
-                ("CreateFunction".to_string(), None),
-                ("UpdateFunctionCode".to_string(), None),
-                ("PutFunctionConcurrency".to_string(), None),
+                ("CreateFunction".to_string(), Some(1)),
+                ("UpdateFunctionCode".to_string(), Some(1)),
+                ("PutFunctionConcurrency".to_string(), Some(1)),
             ],
-            "the writes go out in order, before the release is recorded"
+            "the release is recorded, then the writes go out in order"
         );
         assert_eq!(recorded_release(&store), Some(1));
 
@@ -690,6 +691,60 @@ mod tests {
             other => panic!("the ledger is gone: {other:?}"),
         };
         assert_eq!(ledger.release.unwrap().sequence, 11);
+    }
+
+    #[tokio::test]
+    async fn an_older_release_is_refused_while_a_newer_one_is_being_applied() {
+        // Release 11 is accepted and starts writing; release 10 arrives while 11's write waits.
+        // 10 must not land in the middle of 11's apply: the install already records 11.
+        let image =
+            |digit: char| format!("ghcr.io/shop/api@sha256:{}", digit.to_string().repeat(64));
+        let request = |sequence: u64, digit: char| {
+            let workload = alien_signing::Workload {
+                image: image(digit),
+                ..function_workload()
+            };
+            json!({"applyWrite": {
+                "release": signed_release(sequence, &crate::fixtures::release_body(vec![workload])),
+                "signerLists": [signer_list()],
+                "workload": "api",
+                "writes": [{"updateFunctionCode": {
+                    "functionName": format!("{PREFIX}-api"),
+                    "request": {"ImageUri": image(digit), "Publish": true},
+                }}],
+            }})
+        };
+        let backend = Arc::new(Paused {
+            slow_image: image('b'),
+            read: tokio::sync::Notify::new(),
+            resume: tokio::sync::Notify::new(),
+            written: Mutex::new(Vec::new()),
+        });
+        let store = Arc::new(MemoryStore::protected(&settings()));
+        let verifier = Verifier {
+            own_name: format!("{PREFIX}-verifier"),
+            install_id: Arc::new(|prefix| crate::aws::install_id(ACCOUNT, REGION, prefix)),
+            store: store.clone(),
+            backend: backend.clone(),
+            vpc: None,
+            machine_network: None,
+        };
+        let newer = verifier.handle(request(11, 'b'));
+        let older = async {
+            backend.read.notified().await;
+            let answer = verifier.handle(request(10, 'a')).await;
+            backend.resume.notify_one();
+            answer
+        };
+        let (newer, older) = tokio::join!(newer, older);
+
+        assert_eq!(newer.unwrap()["release"], json!(11));
+        let reason = refusal(older);
+        assert!(
+            reason.contains("the release is older than one this install accepted"),
+            "{reason}"
+        );
+        assert_eq!(*backend.written.lock().unwrap(), vec![image('b')]);
     }
 
     #[tokio::test]
