@@ -323,9 +323,11 @@ fn call_failed(operation: String) -> crate::error::ErrorData {
     crate::error::ErrorData::CloudCallFailed { operation }
 }
 
-/// Send `write`, already checked, to Lambda as it is, checking `newest` right before. After a
-/// write that changes what runs, wait for Lambda to finish and read back what decides what
-/// runs. Answers what Lambda answered.
+/// Send `write`, already checked, to Lambda as it is, checking `newest` right before. An
+/// update goes out only over the function as read before that check (its `RevisionId`), so an
+/// update held up behind another one (Lambda answers "update in progress", and the call is
+/// retried) fails rather than land after a newer release. After a write that changes what runs,
+/// wait for Lambda to finish and read back what decides what runs. Answers what Lambda answered.
 pub async fn forward<L: LambdaApi>(
     lambda: &L,
     facts: &Facts<'_>,
@@ -334,6 +336,12 @@ pub async fn forward<L: LambdaApi>(
 ) -> Result<Value> {
     let name = facts.own_name.as_str();
     let failed = |operation: &str| call_failed(format!("lambda:{operation} {name}"));
+    let revision = match write {
+        CloudWrite::UpdateFunctionCode { .. } | CloudWrite::UpdateFunctionConfiguration { .. } => {
+            Some(revision(lambda, name).await?)
+        }
+        _ => None,
+    };
     newest.check().await?;
     let answer = match write {
         CloudWrite::CreateFunction(request) => {
@@ -345,7 +353,9 @@ pub async fn forward<L: LambdaApi>(
             serde_json::json!({ "functionArn": created.function_arn })
         }
         CloudWrite::UpdateFunctionCode { request, .. } => {
-            let request: UpdateFunctionCodeRequest = parse_strict("UpdateFunctionCode", request)?;
+            let mut request: UpdateFunctionCodeRequest =
+                parse_strict("UpdateFunctionCode", request)?;
+            request.revision_id = revision;
             lambda
                 .update_function_code(name, request)
                 .await
@@ -353,8 +363,9 @@ pub async fn forward<L: LambdaApi>(
             Value::Null
         }
         CloudWrite::UpdateFunctionConfiguration { request, .. } => {
-            let request: UpdateFunctionConfigurationRequest =
+            let mut request: UpdateFunctionConfigurationRequest =
                 parse_strict("UpdateFunctionConfiguration", request)?;
+            request.revision_id = revision;
             lambda
                 .update_function_configuration(name, request)
                 .await
@@ -404,6 +415,22 @@ pub async fn forward<L: LambdaApi>(
         check_written(facts, write, &function)?;
     }
     Ok(answer)
+}
+
+/// The `RevisionId` of function `name` as Lambda holds it now.
+async fn revision<L: LambdaApi>(lambda: &L, name: &str) -> Result<String> {
+    let function = lambda
+        .get_function_json(name)
+        .await
+        .context(call_failed(format!("lambda:GetFunction {name}")))?;
+    function["Configuration"]["RevisionId"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| {
+            AlienError::new(crate::error::ErrorData::CloudCallFailed {
+                operation: format!("lambda:GetFunction {name} answered no RevisionId"),
+            })
+        })
 }
 
 /// Check that `function`, as GetFunction answers after `write`, runs what was checked: the
@@ -932,6 +959,82 @@ mod tests {
             let error = checked(release, None, grant(request)).await.unwrap_err();
             assert!(error.contains(says), "{says}: {error}");
         }
+    }
+
+    /// An update goes out only over the function as the verifier read it before its last check
+    /// that no newer release was accepted: Lambda refuses it if anything wrote the function in
+    /// between, so an older release's update held up by a newer one's (Lambda answers "update in
+    /// progress", and the call is retried) can't land after it.
+    #[tokio::test]
+    async fn an_update_is_sent_only_over_the_function_it_read() {
+        use alien_aws_clients::lambda::MockLambdaApi;
+        use std::sync::{Arc, Mutex};
+
+        struct Newest(Arc<Mutex<Vec<String>>>);
+        #[async_trait::async_trait]
+        impl StillNewest for Newest {
+            async fn check(&self) -> Result<()> {
+                self.0.lock().unwrap().push("floor checked".to_string());
+                Ok(())
+            }
+        }
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut lambda = MockLambdaApi::new();
+        let read = events.clone();
+        lambda.expect_get_function_json().returning(move |_| {
+            read.lock().unwrap().push("function read".to_string());
+            Ok(json!({
+                "Configuration": {
+                    "RevisionId": "rev-7",
+                    "Role": role(),
+                    "State": "Active",
+                    "LastUpdateStatus": "Successful",
+                },
+                "Code": {
+                    "ImageUri": format!("{REGISTRY}/api@{DIGEST}"),
+                    "ResolvedImageUri": format!("{REGISTRY}/api@{DIGEST}"),
+                },
+            }))
+        });
+        let updated = events.clone();
+        lambda
+            .expect_update_function_code()
+            .times(1)
+            .returning(move |_, request| {
+                updated
+                    .lock()
+                    .unwrap()
+                    .push(format!("code updated over {:?}", request.revision_id));
+                Ok(alien_aws_clients::lambda::FunctionConfiguration::default())
+            });
+        let accepted = accepted(release(1, function_workload()), None).await;
+        let place = place();
+        let reads = Reads::default();
+        let workload = functions(&accepted.release.body).next().unwrap();
+        let facts = Facts {
+            place: &place,
+            accepted: &accepted,
+            workload,
+            reads: &reads,
+            own_name: own(),
+        };
+        let write = CloudWrite::UpdateFunctionCode {
+            function_name: own(),
+            request: json!({"ImageUri": format!("{REGISTRY}/api@{DIGEST}"), "Publish": true}),
+        };
+        forward(&lambda, &facts, &write, &Newest(events.clone()))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            events.lock().unwrap()[..3],
+            [
+                "function read".to_string(),
+                "floor checked".to_string(),
+                "code updated over Some(\"rev-7\")".to_string(),
+            ]
+        );
     }
 
     /// The checked write reaches Lambda as the controller built it, and a function that then
