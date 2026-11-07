@@ -15,7 +15,7 @@
 //! typed fields.
 
 use alien_aws_clients::autoscaling::{
-    AutoScalingApi, CreateAutoScalingGroupRequest, DescribeAutoScalingGroupsRequest,
+    AsgTag, AutoScalingApi, CreateAutoScalingGroupRequest, DescribeAutoScalingGroupsRequest,
     LaunchTemplateSpecification, UpdateAutoScalingGroupRequest,
 };
 use alien_aws_clients::ec2::{
@@ -27,7 +27,10 @@ use alien_aws_clients::ec2::{
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::release_statement::signed_stack;
-use alien_core::{CapacityGroup, ComputeCluster, Platform, ALIEN_STACK_TAG_KEY};
+use alien_core::{
+    CapacityGroup, ComputeCluster, Platform, ALIEN_MANAGED_BY_TAG_KEY, ALIEN_MANAGED_BY_TAG_VALUE,
+    ALIEN_STACK_TAG_KEY,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_signing::{Kind, ReleaseBody, SignedStatement};
 use async_trait::async_trait;
@@ -298,8 +301,9 @@ pub struct RollPlan {
     pub max_size: i32,
     /// Subnets, for a group the verifier creates.
     pub subnet_ids: Vec<String>,
-    /// The install's `deployment` tag value, its prefix. The template and every machine carry
-    /// it: setup lets the verifier create launch templates and tag at launch only with it.
+    /// The install's `deployment` tag value, its prefix. The template, every machine and the
+    /// group carry it: setup lets the verifier create launch templates and tag at launch only
+    /// with it, and management changes only groups that carry it.
     pub deployment: String,
 }
 
@@ -640,6 +644,25 @@ pub struct Rolled {
     pub group: String,
 }
 
+/// The tags of a group the verifier creates: the install's, as runtime-managed. Management
+/// scales, replaces and removes machines, and uninstall deletes the group, only on groups that
+/// carry them. Machines take their tags from the launch template.
+fn group_tags(deployment: &str) -> Vec<AsgTag> {
+    [
+        (ALIEN_STACK_TAG_KEY, deployment),
+        (ALIEN_MANAGED_BY_TAG_KEY, ALIEN_MANAGED_BY_TAG_VALUE),
+    ]
+    .into_iter()
+    .map(|(key, value)| {
+        AsgTag::builder()
+            .key(key.to_string())
+            .value(value.to_string())
+            .propagate_at_launch(false)
+            .build()
+    })
+    .collect()
+}
+
 /// Write the launch template version and point the group at it with the
 /// signed bounds. Machines already running keep their template until the
 /// platform replaces them.
@@ -675,6 +698,7 @@ pub async fn roll(api: &dyn MachineApi, plan: &RollPlan) -> Result<Rolled> {
                 .desired_capacity(plan.min_size)
                 .launch_template(launch_template)
                 .vpc_zone_identifier(plan.subnet_ids.join(","))
+                .tags(group_tags(&plan.deployment))
                 .build(),
         )
         .await?;
@@ -1414,6 +1438,8 @@ mod tests {
         template: Option<String>,
         group_exists: bool,
         calls: Mutex<Vec<String>>,
+        /// The groups it was asked to create.
+        groups: Mutex<Vec<CreateAutoScalingGroupRequest>>,
     }
 
     impl Recorded {
@@ -1453,6 +1479,7 @@ mod tests {
             Ok(self.group_exists)
         }
         async fn create_group(&self, request: CreateAutoScalingGroupRequest) -> Result<()> {
+            self.groups.lock().unwrap().push(request.clone());
             self.call(format!(
                 "CreateAutoScalingGroup {} min={} max={} desired={:?} version={:?} subnets={:?}",
                 request.auto_scaling_group_name,
@@ -1479,6 +1506,127 @@ mod tests {
             ));
             Ok(())
         }
+    }
+
+    /// Whether `pattern`, an IAM ARN or action pattern, matches `value`.
+    fn iam_matches(pattern: &str, value: &str) -> bool {
+        match pattern.split_once('*') {
+            None => pattern.eq_ignore_ascii_case(value),
+            Some((head, rest)) => {
+                value.len() >= head.len()
+                    && value[..head.len()].eq_ignore_ascii_case(head)
+                    && (0..=value.len() - head.len())
+                        .any(|skip| iam_matches(rest, &value[head.len() + skip..]))
+            }
+        }
+    }
+
+    /// One or many strings, as an IAM policy writes them.
+    fn strings(value: &serde_json::Value) -> Vec<String> {
+        match value {
+            serde_json::Value::String(one) => vec![one.clone()],
+            serde_json::Value::Array(many) => many
+                .iter()
+                .map(|item| item.as_str().unwrap().to_string())
+                .collect(),
+            serde_json::Value::Null => Vec::new(),
+            other => panic!("not a string or list: {other}"),
+        }
+    }
+
+    /// Whether `policies` let `action` through on the group `arn` that carries `tags`: an
+    /// Allow names the action and the group, and each of its conditions is a `StringEquals` on
+    /// `aws:ResourceTag/<key>` the group's tags meet; no unconditioned Deny names both.
+    fn allows_on_group(
+        policies: &[serde_json::Value],
+        action: &str,
+        arn: &str,
+        tags: &[AsgTag],
+    ) -> bool {
+        let statements: Vec<&serde_json::Value> = policies
+            .iter()
+            .flat_map(|policy| policy["Statement"].as_array().unwrap())
+            .collect();
+        let names = |statement: &serde_json::Value| {
+            strings(&statement["Action"])
+                .iter()
+                .any(|pattern| iam_matches(pattern, action))
+                && strings(&statement["Resource"])
+                    .iter()
+                    .any(|pattern| iam_matches(pattern, arn))
+        };
+        let denied = statements.iter().any(|statement| {
+            statement["Effect"] == "Deny" && statement["Condition"].is_null() && names(statement)
+        });
+        !denied
+            && statements.iter().any(|statement| {
+                statement["Effect"] == "Allow"
+                    && names(statement)
+                    && statement["Condition"]
+                        .as_object()
+                        .into_iter()
+                        .flatten()
+                        .all(|(operator, conditions)| {
+                            operator == "StringEquals"
+                                && conditions.as_object().unwrap().iter().all(|(key, values)| {
+                                    key.strip_prefix("aws:ResourceTag/").is_some_and(|key| {
+                                        tags.iter().any(|tag| {
+                                            tag.key == key && strings(values).contains(&tag.value)
+                                        })
+                                    })
+                                })
+                        })
+            })
+    }
+
+    /// Management scales, replaces and removes a protected install's machines, and uninstall
+    /// deletes their groups; setup grants those only on groups tagged as the install's and as
+    /// runtime-managed. The group a first roll creates must carry those tags.
+    #[tokio::test]
+    async fn setup_lets_management_scale_and_delete_the_group_a_roll_creates() {
+        let api = Recorded::default();
+        roll(&api, &plan()).await.unwrap();
+        let groups = api.groups.into_inner().unwrap();
+        assert_eq!(groups.len(), 1, "the first roll creates the group");
+        let group = &groups[0];
+        let tags = group.tags.clone().unwrap_or_default();
+        let arn = format!(
+            "arn:aws:autoscaling:{REGION}:{ACCOUNT}:autoScalingGroup:0a1b2c3d-0000-4000-8000-000000000000:autoScalingGroupName/{}",
+            group.auto_scaling_group_name
+        );
+
+        let context = alien_permissions::PermissionContext::new()
+            .with_aws_region(REGION)
+            .with_aws_account_id(ACCOUNT)
+            .with_stack_prefix(PREFIX);
+        let management = alien_permissions::generators::AwsRuntimePermissionsGenerator::new()
+            .generate_policy(
+                alien_permissions::get_permission_set("compute-cluster/management").unwrap(),
+                alien_permissions::BindingTarget::Stack,
+                &context,
+            )
+            .unwrap();
+        let policies = [
+            serde_json::to_value(&management).unwrap(),
+            alien_permissions::generators::signing_limits::aws_management_limits(
+                PREFIX, ACCOUNT, REGION,
+            ),
+        ];
+        for action in [
+            "autoscaling:SetDesiredCapacity",
+            "autoscaling:TerminateInstanceInAutoScalingGroup",
+            "autoscaling:DeleteAutoScalingGroup",
+        ] {
+            assert!(
+                allows_on_group(&policies, action, &arn, &tags),
+                "setup denies management {action} on the group the verifier created with tags {tags:?}"
+            );
+        }
+        assert!(
+            tags.iter()
+                .all(|tag| tag.propagate_at_launch == Some(false)),
+            "machines take their tags from the launch template, not the group: {tags:?}"
+        );
     }
 
     fn plan() -> RollPlan {
