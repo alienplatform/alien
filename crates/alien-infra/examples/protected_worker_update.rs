@@ -143,13 +143,10 @@ fn stack(image: &str, deployed: bool, access: bool) -> Stack {
             image: image.to_string(),
         })
         .permissions(PROFILE.to_string())
-        // Cloud Run gen2 takes 512 MiB at least; the WorkerMemoryCheck preflight, which this
-        // driver doesn't run, holds stacks to that.
-        .memory_mb(if matches!(platform(), Ok(Platform::Gcp)) {
-            512
-        } else {
-            256
-        })
+        // The smallest size every cloud takes: Cloud Run gen2 and Container Apps start at 512
+        // MiB. The WorkerMemoryCheck preflight, which this driver doesn't run, holds stacks to
+        // that.
+        .memory_mb(512)
         .build();
     // A value the release signs, which a request may not change.
     worker
