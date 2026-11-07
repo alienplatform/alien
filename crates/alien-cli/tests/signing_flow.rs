@@ -332,16 +332,48 @@ impl World {
     }
 }
 
-/// Whether the terminal output erases a line between `from` and `to`.
-fn erases_between(output: &str, from: &str, to: &str) -> bool {
-    let start = output
-        .find(from)
-        .unwrap_or_else(|| panic!("no '{from}' in {output:?}"));
-    let end = start
-        + output[start..]
-            .find(to)
-            .unwrap_or_else(|| panic!("no '{to}' after '{from}' in {output:?}"));
-    output[start..end].contains("\u{1b}[2K")
+/// Whether `text` is still on the screen after `output` is drawn: plain
+/// lines, colors ignored, and the cursor moves and line erases that live
+/// progress uses.
+fn on_screen(output: &str, text: &str) -> bool {
+    let mut lines = vec![String::new()];
+    let mut row = 0;
+    let mut chars = output.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\n' => {
+                row += 1;
+                if row == lines.len() {
+                    lines.push(String::new());
+                }
+            }
+            '\u{1b}' if chars.peek() == Some(&'[') => {
+                chars.next();
+                let mut code = String::new();
+                while let Some(&next) = chars.peek() {
+                    chars.next();
+                    if next.is_ascii_alphabetic() {
+                        code.push(next);
+                        break;
+                    }
+                    code.push(next);
+                }
+                match code.as_str() {
+                    "1A" => row = row.saturating_sub(1),
+                    "1B" => {
+                        row += 1;
+                        if row == lines.len() {
+                            lines.push(String::new());
+                        }
+                    }
+                    "2K" => lines[row].clear(),
+                    _ => {}
+                }
+            }
+            c => lines[row].push(c),
+        }
+    }
+    lines.iter().any(|line| line.contains(text))
 }
 
 fn shell_quote(text: &str) -> String {
@@ -566,16 +598,9 @@ async fn signing_from_first_release_to_recovery() {
         "{output}"
     );
     let recovery_code = line_after(&output, "Recovery code (shown once");
-    // Progress redraws by erasing its last lines; while the code waits to be
-    // saved, nothing may take it off the screen.
-    assert!(
-        !erases_between(
-            &output,
-            "Recovery code (shown once",
-            "Wrote .alien/signing.json"
-        ),
-        "{output:?}"
-    );
+    // Progress redraws by erasing its last lines: the code must still be on
+    // the screen when the release is done.
+    assert!(on_screen(&output, &recovery_code), "{output:?}");
     assert!(
         output.contains("Wrote .alien/signing.json — commit it."),
         "{output}"
@@ -650,6 +675,7 @@ async fn signing_from_first_release_to_recovery() {
     );
     let pairing_code = line_after(&output, "Send them this code over Slack or in person:");
     assert_eq!(pairing_code.len(), 19, "{pairing_code}");
+    assert!(on_screen(&output, &pairing_code), "{output:?}");
     assert_eq!(newest_release(&world.manager, &fingerprint).await, None);
 
     // Alice types the wrong code: refused, nothing signed.

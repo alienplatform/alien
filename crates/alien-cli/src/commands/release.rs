@@ -694,7 +694,11 @@ async fn plan_signing(
     }
     let api = SigningApi::from_context(ctx).await?;
     let protected = protected_following(ctx, project_id, &channel).await?;
+    // Planning may show a recovery code or a pairing code; progress drawn
+    // meanwhile would erase it.
+    let progress = crate::ui::pause_progress();
     let plan = signing::release::plan(&api, dir, project_id, interactive).await?;
+    drop(progress);
     Ok(SigningState {
         plan,
         protected,
