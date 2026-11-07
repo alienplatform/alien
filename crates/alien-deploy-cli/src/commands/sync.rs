@@ -151,7 +151,9 @@ struct SiteState {
     bundle_key: Option<String>,
 
     // Online side.
-    /// Image blobs the site reported having.
+    /// Image blobs the site reported having, as `<repository>@<digest>`
+    /// (`airgap::inventory_key`). Bare digests from older sites match nothing,
+    /// so their next update carries every layer.
     #[serde(default)]
     site_has: BTreeSet<String>,
     /// Highest telemetry batch the manager has received.
@@ -213,7 +215,8 @@ struct SiteReport {
     telemetry: Vec<ReportedBatch>,
     /// Batches the Operator dropped to stay within its buffer.
     dropped: u64,
-    /// Image blobs in the site's registry for the installed release.
+    /// Image blobs in the site's registry for the installed release, by
+    /// repository (`airgap::inventory_key`).
     inventory: BTreeSet<String>,
 }
 
@@ -1191,6 +1194,8 @@ async fn download_update(
                     && architecture.is_none()
                     && site.capabilities.tool_platform.is_none()))
             && manifest.telemetry_ack.unwrap_or_default() >= site.uploaded_through
+            // --full replaces a pending bundle that left layers out.
+            && (!full || manifest.omitted_blobs.is_empty())
         {
             already_carried = Some(path);
             break;
@@ -6783,16 +6788,78 @@ stringData:
     }
 
     fn pending_test_bundle(path: &Path, target: &serde_json::Value, ack: i64) {
+        pending_test_bundle_omitting(path, target, ack, &[]);
+    }
+
+    /// A pending bundle that left out `omitted` because the site had them.
+    fn pending_test_bundle_omitting(
+        path: &Path,
+        target: &serde_json::Value,
+        ack: i64,
+        omitted: &[&str],
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let manifest = serde_json::json!({
             "formatVersion": 1, "deploymentId": "dep_1", "deploymentName": "site",
             "releaseId": target["releaseInfo"]["releaseId"], "sequence": 2,
             "createdAt": "now", "stackId": "app", "chart": "chart/app.tgz",
-            "images": [], "chartImages": {}, "telemetryAck": ack,
+            "images": [], "chartImages": {}, "telemetryAck": ack, "omittedBlobs": omitted,
             "files": {"target.json": hex::encode(Sha256::digest(serde_json::to_vec_pretty(target).unwrap()))}
         });
         std::fs::write(dir.path().join(airgap::MANIFEST_FILE), manifest.to_string()).unwrap();
         airgap::pack(dir.path(), path).unwrap();
+    }
+
+    /// `--full` is the recovery when a site registry lacks a layer an update
+    /// left out, so it must replace that update rather than reuse it.
+    #[tokio::test]
+    async fn full_replaces_a_pending_update_that_left_layers_out() {
+        let target = serde_json::json!({
+            "releaseInfo": {"releaseId": "rel_new", "stack": {"id": "app"}}
+        });
+        for (omitted, full, downloads) in [
+            (&["sha256:layer"][..], false, false),
+            (&["sha256:layer"][..], true, true),
+            (&[][..], true, false),
+        ] {
+            let server = MockServer::start_async().await;
+            server
+                .mock_async(|when, then| {
+                    when.method(GET).path("/v1/deployments/dep_1/target");
+                    then.status(200).json_body(target.clone());
+                })
+                .await;
+            let sources = server
+                .mock_async(|when, then| {
+                    when.method(GET)
+                        .path("/v1/deployments/dep_1/bundle-sources");
+                    then.status(503).body("download reached");
+                })
+                .await;
+            let folder = tempfile::tempdir().unwrap();
+            let pending = folder.path().join(TO_SITE).join("2-rel_new.bundle");
+            std::fs::create_dir_all(pending.parent().unwrap()).unwrap();
+            pending_test_bundle_omitting(&pending, &target, 0, omitted);
+            let mut site = SiteState {
+                deployment_id: "dep_1".into(),
+                ..Default::default()
+            };
+
+            let result =
+                download_update(folder.path(), &mut site, &access(&server), full, false, &[]).await;
+
+            if downloads {
+                result.expect_err("the replacement download reaches bundle-sources");
+                sources.assert_hits_async(1).await;
+            } else {
+                result.expect("the pending update is reused");
+                sources.assert_hits_async(0).await;
+            }
+            assert!(
+                pending.exists(),
+                "a failed download keeps the pending update"
+            );
+        }
     }
 
     #[tokio::test]
