@@ -158,6 +158,13 @@ pub struct RuntimeMetadata {
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub persisted_gate_answers: GateAnswers,
 
+    /// Setup-created resources the current release adds behind a gate this
+    /// deployment's setup never answered. Updates go ahead without them; setup
+    /// creates them when it is re-run. Shown so an administrator knows setup
+    /// has something to add.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources_awaiting_setup: Vec<String>,
+
     /// Prepared target for an update that has not reached Running yet. Keeping
     /// it separate preserves the last successful baseline across retries.
     #[serde(default, skip_serializing_if = "Option::is_none")]

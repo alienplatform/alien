@@ -240,12 +240,11 @@ pub async fn handle_pending(
 /// the delivered resource ids on a setup import, the recorded answers on an
 /// update. Nothing is inferred here.
 ///
-/// A gate with NO recorded answer is deliberately not a decline. It is a gate
-/// nobody has been asked, which happens when a release introduces a frozen
-/// resource that setup has never created. Leaving it in the stack is what lets
-/// the frozen-compatibility check say so — "frozen resources are setup-owned
-/// and can only be added by rerunning setup" — instead of this strip silently
-/// deleting the release's new resource and reporting success.
+/// A gate with NO recorded answer is deliberately not a decline here. It is a
+/// gate nobody has been asked, which happens when a release introduces a frozen
+/// resource that setup has never created. The update path decides that case
+/// explicitly with [`frozen_resources_awaiting_setup`]: it leaves the resource
+/// out, says so, and records no answer.
 fn strip_declined_frozen_resources(mut stack: Stack, answers: &alien_core::GateAnswers) -> Stack {
     let declined: Vec<String> = frozen_gated(&stack)
         .filter(|(_, input_id)| answers.get(*input_id) == Some(&false))
@@ -454,6 +453,30 @@ pub fn frozen_gating_inputs(
             !alien_core::gate_is_off_platform(&stack.inputs, input_id, platform)
         })
         .map(|(_, input_id)| input_id.to_string())
+        .collect()
+}
+
+/// Setup-created resources a release adds behind a gate this deployment's
+/// setup never answered, as `(resource_id, input_id)`.
+///
+/// Such a resource is optional and setup hasn't created it, so an update goes
+/// ahead without it: the update treats its gate as declined, without recording
+/// that answer, and setup answers the gate when it is re-run. A new frozen
+/// resource without a gate still requires setup through the
+/// frozen-compatibility check.
+pub fn frozen_resources_awaiting_setup(
+    stack: &Stack,
+    answers: &alien_core::GateAnswers,
+    stack_state: &alien_core::StackState,
+    platform: Platform,
+) -> Vec<(String, String)> {
+    frozen_gated(stack)
+        .filter(|(resource_id, input_id)| {
+            !answers.contains_key(*input_id)
+                && !stack_state.resources.contains_key(*resource_id)
+                && !alien_core::gate_is_off_platform(&stack.inputs, input_id, platform)
+        })
+        .map(|(resource_id, input_id)| (resource_id.clone(), input_id.to_string()))
         .collect()
 }
 
@@ -1290,11 +1313,9 @@ mod tests {
         assert!(stripped.resources.contains_key("execution-sa"));
     }
 
-    /// The heart of the model: a gate nobody has answered is not a decline.
-    /// A release that introduces a frozen gated resource leaves it in the
-    /// stack so the frozen-compatibility check can refuse the update and say
-    /// setup has to run again — the strip must not delete it and report
-    /// success.
+    /// A gate nobody has answered is not a decline: only a recorded no strips.
+    /// The update path handles unanswered gates on its own, through
+    /// `frozen_resources_awaiting_setup`.
     #[test]
     fn an_unanswered_frozen_gate_is_left_for_the_compatibility_check() {
         let kept = strip_declined_frozen_resources(gated_stack(), &Default::default());

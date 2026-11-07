@@ -11,7 +11,7 @@ use std::{
     borrow::Cow,
     collections::{BTreeMap, HashSet},
 };
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 fn machines_deployment_has_zero_machines(platform: Platform, stack_state: &StackState) -> bool {
     platform == Platform::Machines
@@ -217,8 +217,8 @@ pub async fn handle_update_pending(
 
     // A frozen gate is answered once: the answers recorded at creation are
     // what every later input value is held against. A gate with no recorded
-    // answer was never asked, which leaves its resource in the stack for the
-    // frozen-compatibility check to refuse.
+    // answer was never asked: its resource waits for setup to be re-run (see
+    // `frozen_resources_awaiting_setup` below).
     let persisted_gate_answers = current
         .runtime_metadata
         .as_ref()
@@ -239,9 +239,27 @@ pub async fn handle_update_pending(
     // Live declines apply AFTER the mutations, so a declined workload's service
     // account and capacity stay identical to the accepted render. Its grant is
     // scrubbed, which `permission_profiles_unchanged`'s gated exemption absorbs.
+    // Optional setup-created resources this release adds behind a gate setup
+    // never answered wait for setup to be re-run. This update leaves them out
+    // as if declined, without recording an answer.
+    let awaiting_setup = crate::pending::frozen_resources_awaiting_setup(
+        &target_stack,
+        &persisted_gate_answers,
+        &stack_state,
+        current.platform,
+    );
+    let mut strip_answers = persisted_gate_answers.clone();
+    for (resource_id, input_id) in &awaiting_setup {
+        warn!(
+            resource_id = %resource_id,
+            input_id = %input_id,
+            "Resource waits for setup to be re-run; updating without it"
+        );
+        strip_answers.insert(input_id.clone(), false);
+    }
     let target_stack = crate::pending::strip_recorded_gate_declines(
         target_stack,
-        &persisted_gate_answers,
+        &strip_answers,
         &frozen_gating,
         config.stack_settings.compute.as_mut(),
         current.platform,
@@ -330,6 +348,10 @@ pub async fn handle_update_pending(
     runtime_metadata.pending_prepared_stack = Some(mutated_stack);
     runtime_metadata.pending_prepared_release_id = pending_prepared_release_id;
     runtime_metadata.persisted_gate_answers = persisted_gate_answers;
+    runtime_metadata.resources_awaiting_setup = awaiting_setup
+        .into_iter()
+        .map(|(resource_id, _)| resource_id)
+        .collect();
 
     // Transition to Updating
     next.status = DeploymentStatus::Updating;

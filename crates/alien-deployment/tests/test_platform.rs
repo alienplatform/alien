@@ -3567,28 +3567,32 @@ async fn a_declined_gated_import_is_not_created_by_the_runner() {
     assert!(resources.contains_key("test-function"));
 }
 
-/// A release that introduces a gated frozen resource must fail the update
-/// loudly, not drop the resource and report success.
-///
-/// Frozen resources are setup-owned: only a setup run creates them. The gate
-/// has therefore never been answered, and the decline strip must leave the
-/// resource alone so the frozen-compatibility check can say what the operator
-/// needs to hear — rerun setup. Silently stripping it would converge a
-/// deployment that is missing the release's new resource, with nothing said.
-#[tokio::test]
-async fn an_update_introducing_a_gated_frozen_resource_refuses_instead_of_dropping_it() {
-    // The settled release has no gated resource at all, so nothing was ever
-    // asked and nothing was recorded.
-    let settled_stack = create_test_stack("gate-refusal-stack", "test-function");
+/// A running deployment whose next release adds a frozen `archive` storage,
+/// behind a gate when `gated`. Setup ran before the release existed, so it
+/// never created the archive or answered the gate.
+async fn update_adding_a_frozen_archive(gated: bool) -> DeploymentState {
+    let mut state = run_to_completion(
+        create_initial_state(create_test_stack("gate-refusal-stack", "test-function")),
+        create_test_config("hash_v1", false),
+    )
+    .await;
+    assert_eq!(state.status, DeploymentStatus::Running);
 
-    let mut target_stack = create_test_stack("gate-refusal-stack", "test-function");
-    target_stack.inputs = vec![alien_core::StackInputDefinition::deployer_boolean(
+    let mut target = create_test_stack("gate-refusal-stack", "test-function");
+    target.permissions = state
+        .current_release
+        .as_ref()
+        .unwrap()
+        .stack
+        .permissions
+        .clone();
+    target.inputs = vec![alien_core::StackInputDefinition::deployer_boolean(
         "archiveEnabled",
         "Enable the archive",
         "Whether to create the archive store.",
         Some(true),
     )];
-    target_stack.resources.insert(
+    target.resources.insert(
         "archive".to_string(),
         ResourceEntry {
             config: alien_core::Resource::new(Storage::new("archive".to_string()).build()),
@@ -3597,44 +3601,65 @@ async fn an_update_introducing_a_gated_frozen_resource_refuses_instead_of_droppi
             display_name: None,
             description: None,
             remote_access: false,
-            enabled_when: Some("archiveEnabled".to_string()),
+            enabled_when: gated.then(|| "archiveEnabled".to_string()),
         },
     );
-
-    let state = DeploymentState {
-        status: DeploymentStatus::UpdatePending,
-        platform: Platform::Test,
-        current_release: Some(ReleaseInfo {
-            release_id: Some("rel_v1".to_string()),
-            version: Some("1.0.0".to_string()),
-            description: None,
-            stack: settled_stack.clone(),
-        }),
-        target_release: Some(ReleaseInfo {
+    start_update(
+        &mut state,
+        ReleaseInfo {
             release_id: Some("rel_v2".to_string()),
             version: Some("2.0.0".to_string()),
             description: None,
-            stack: target_stack,
-        }),
-        stack_state: Some(StackState::new(Platform::Test)),
-        error: None,
-        environment_info: None,
-        runtime_metadata: Some(RuntimeMetadata {
-            prepared_stack: Some(settled_stack),
-            ..Default::default()
-        }),
-        retry_requested: false,
-        protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
-    };
+            stack: target,
+        },
+    );
+    state
+}
 
-    let error = alien_deployment::step(
-        state,
+/// A release can add an optional frozen resource, behind a gate, without
+/// stopping the updates of deployments whose setup predates it. The update
+/// goes ahead without the resource, records no answer for its gate, and says
+/// the resource waits for setup to be re-run.
+#[tokio::test]
+async fn an_update_adding_a_gated_frozen_resource_proceeds_and_reports_it_awaits_setup() {
+    let next = alien_deployment::step(
+        update_adding_a_frozen_archive(true).await,
         create_test_config("hash_v1", false),
         ClientConfig::Test,
         None,
     )
     .await
-    .expect_err("adding a frozen resource must refuse until setup runs again");
+    .expect("an optional frozen resource doesn't block the update");
+
+    assert_eq!(next.state.status, DeploymentStatus::Updating);
+    let metadata = next.state.runtime_metadata.as_ref().unwrap();
+    assert_eq!(
+        metadata.resources_awaiting_setup,
+        vec!["archive".to_string()]
+    );
+    assert!(
+        !metadata
+            .persisted_gate_answers
+            .contains_key("archiveEnabled"),
+        "the gate stays unanswered, so re-running setup can still answer yes"
+    );
+    let prepared = metadata.pending_prepared_stack.as_ref().unwrap();
+    assert!(!prepared.resources.contains_key("archive"));
+    assert!(prepared.resources.contains_key("test-function"));
+}
+
+/// A frozen resource without a gate is required. Adding one still requires
+/// setup to run again, and the update refuses until it does.
+#[tokio::test]
+async fn an_update_adding_an_ungated_frozen_resource_still_requires_setup() {
+    let error = alien_deployment::step(
+        update_adding_a_frozen_archive(false).await,
+        create_test_config("hash_v1", false),
+        ClientConfig::Test,
+        None,
+    )
+    .await
+    .expect_err("adding a required frozen resource must refuse until setup runs again");
     let rendered = format!("{error:?}");
     assert!(
         rendered.contains("archive"),
