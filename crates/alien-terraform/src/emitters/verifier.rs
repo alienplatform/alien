@@ -269,6 +269,12 @@ fn aws_verifier_blocks(
                 ),
                 attr("timeout", Expression::Number(300.into())),
                 attr("memory_size", Expression::Number(512.into())),
+                // The verifier image is built for x86_64; say so rather than lean on Lambda's
+                // default.
+                attr(
+                    "architectures",
+                    Expression::Array(vec![Expression::String("x86_64".to_string())]),
+                ),
                 nested(block(
                     "environment",
                     [attr(

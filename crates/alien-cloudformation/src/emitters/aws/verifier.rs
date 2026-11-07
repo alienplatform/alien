@@ -131,6 +131,11 @@ impl CfEmitter for AwsVerifierEmitter {
         function
             .properties
             .insert("MemorySize".to_string(), CfExpression::from(512u32));
+        // The verifier image is built for x86_64; say so rather than lean on Lambda's default.
+        function.properties.insert(
+            "Architectures".to_string(),
+            CfExpression::list([CfExpression::from("x86_64")]),
+        );
         let mut environment = vec![("VERIFIER_CLOUD", CfExpression::from("aws"))];
         if let Some(network) = function_network(ctx) {
             environment.push(("VERIFIER_FUNCTION_VPC", network));
