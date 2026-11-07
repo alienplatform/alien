@@ -1018,6 +1018,16 @@ impl AzureWorkerController {
                 })
             })?
             .clone();
+        // On a protected install no setup creates the app and management may not: the verifier
+        // creates it from the signed release.
+        if let Some(statements) = verifier::protected_statements(ctx, &func_cfg.id)? {
+            self.apply_through_verifier(ctx, statements, func_cfg, &container_app_name)
+                .await?;
+            return Ok(HandlerAction::Continue {
+                state: CreatingContainerApp,
+                suggested_delay: None,
+            });
+        }
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let environment_name = get_container_apps_environment_name(ctx.state)?;
 
@@ -4329,13 +4339,30 @@ impl AzureWorkerController {
             .into_iter()
             .filter_map(|variable| Some((variable.name?, variable.value?)))
             .collect();
+        // The image comes through the manager's registry proxy, which takes the deployment
+        // token, as the controller's own Container Apps do.
+        let registry = verifier::RegistryCredentials {
+            server: image.split('/').next().unwrap_or_default().to_string(),
+            username: "deployment".to_string(),
+            password: ctx
+                .deployment_config
+                .deployment_token
+                .clone()
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::ResourceConfigInvalid {
+                        message: "deployment_token is required for Azure Container Apps to pull images from the registry proxy".to_string(),
+                        resource_id: Some(func.id.clone()),
+                    })
+                })?,
+        };
         let request = verifier::ApplyRelease::for_workload(
             statements,
             ctx.deployment_config.signed_config.as_ref(),
             &func.id,
             &environment,
             &image,
-        )?;
+        )?
+        .with_registry(registry);
         let verifier = verifier::azure_verifier(ctx).await?;
         let applied =
             verifier::apply_release(&verifier, request, &func.id, container_app_name).await?;
@@ -8421,6 +8448,74 @@ mod tests {
                 .get("ALIEN_WORKER_TIMEOUT_SECONDS")
                 .map(String::as_str),
             Some("180")
+        );
+    }
+
+    /// On a protected install no setup creates the app and management may not: the worker's
+    /// first deployment has the verifier create it, with the registry proxy's credentials.
+    #[tokio::test]
+    async fn a_protected_worker_is_created_by_the_verifier() {
+        let worker = pinned_worker('2', 1024);
+        let release = signed_release(
+            Platform::Azure,
+            &Stack::new("test".to_string())
+                .add(worker.clone(), ResourceLifecycle::Live)
+                .build(),
+            1,
+        );
+        let answer = serde_json::json!({"release": 1, "functions": [{
+            "function": PROTECTED_APP,
+            "imageUri": pinned_image('2'),
+            "digest": format!("sha256:{}", "2".repeat(64)),
+        }]});
+        let (url, requests) = http_verifier_stub(axum::http::StatusCode::OK, answer).await;
+        let mut config = AzureClientConfig::mock();
+        config.service_overrides = Some(AzureServiceOverrides {
+            endpoints: HashMap::from([("verifier".to_string(), url)]),
+        });
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(AzureWorkerController::default())
+            .platform(Platform::Azure)
+            .client_config(ClientConfig::Azure(Box::new(config)))
+            .service_provider(protected_provider())
+            .with_test_dependencies()
+            .stack_settings(protected_settings())
+            .signed_release(release, None)
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 1, "one verifier call creates the app");
+        let request: serde_json::Value = serde_json::from_slice(&requests[0].1).unwrap();
+        assert_eq!(
+            request["applyRelease"]["registry"],
+            serde_json::json!({
+                "server": "acmeprod.azurecr.io",
+                "username": "deployment",
+                "password": "test-deployment-token",
+            })
+        );
+        let (answer, written) = run_verifier(
+            alien_signing::InstallId::Azure {
+                subscription: "12345678-1234-1234-1234-123456789012".to_string(),
+                resource_group: "test-rg".to_string(),
+            },
+            "test",
+            &requests[0].1,
+        )
+        .await;
+        answer.expect("the verifier accepts the controller's request");
+        assert_eq!(written.len(), 1);
+        assert_eq!(
+            written[0]
+                .registry
+                .as_ref()
+                .map(|registry| registry.server.as_str()),
+            Some("acmeprod.azurecr.io")
         );
     }
 

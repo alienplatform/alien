@@ -64,6 +64,29 @@ pub struct ApplyRelease {
     pub images: BTreeMap<String, String>,
     /// The one workload this request writes; the release's other functions keep what runs.
     pub workloads: BTreeSet<String>,
+    /// Pull credentials for the image's registry, where the function needs them (Container
+    /// Apps). They can't change what runs: the image is pinned by the signed digest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry: Option<RegistryCredentials>,
+}
+
+/// A registry's pull credentials.
+#[derive(Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistryCredentials {
+    pub server: String,
+    pub username: String,
+    pub password: String,
+}
+
+impl std::fmt::Debug for RegistryCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegistryCredentials")
+            .field("server", &self.server)
+            .field("username", &self.username)
+            .field("password", &"<redacted>")
+            .finish()
+    }
 }
 
 impl ApplyRelease {
@@ -118,7 +141,14 @@ impl ApplyRelease {
                 BTreeMap::from([(workload.to_string(), image.to_string())])
             },
             workloads: BTreeSet::from([workload.to_string()]),
+            registry: None,
         })
+    }
+
+    /// The same request with pull credentials for the image's registry.
+    pub fn with_registry(mut self, registry: RegistryCredentials) -> Self {
+        self.registry = Some(registry);
+        self
     }
 }
 
