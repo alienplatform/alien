@@ -1703,13 +1703,93 @@ impl RunnerConfigSources<'_> {
 }
 
 /// The deployment's own environment variables plus those its stack inputs map
-/// to, resolved against `stack` (the target release's stack). Both the push loop
-/// and pull targets deliver this set.
+/// to, resolved against `stack` (the target release's stack). Pull targets
+/// deliver this set; a stack that maps two values to one variable is an error.
 pub(crate) fn resolve_input_environment(
     stack: &alien_core::Stack,
     deployment: &DeploymentRecord,
 ) -> alien_core::Result<Vec<EnvironmentVariable>> {
-    let mut env_vars: Vec<EnvironmentVariable> = deployment
+    let (mut env_vars, unresolved_inputs) = input_environment_parts(stack, deployment);
+    let input_env = alien_core::resolve_stack_input_environment_variables(
+        &unresolved_inputs,
+        &deployment.input_values,
+        deployment.platform,
+    )?;
+    env_vars.extend(input_env);
+    Ok(env_vars)
+}
+
+/// The same set for the push loop, which never fails on it. Before inputs
+/// resolved here, a push delivered the deployment's own variables and could
+/// not fail, so an input that doesn't resolve, or that maps a variable another
+/// input also maps, is skipped and logged rather than holding the deployment.
+fn push_input_environment(
+    stack: &alien_core::Stack,
+    deployment: &DeploymentRecord,
+) -> Vec<EnvironmentVariable> {
+    let (mut env_vars, unresolved_inputs) = input_environment_parts(stack, deployment);
+    // Each input resolves on its own (the others keep their definitions, so
+    // `when` conditions still see them) and every input in a name conflict
+    // is skipped: neither value is more right than the other.
+    let mut resolved: Vec<(&str, Vec<EnvironmentVariable>)> = Vec::new();
+    for (index, input) in unresolved_inputs.iter().enumerate() {
+        if input.env.is_empty() {
+            continue;
+        }
+        let only_this: Vec<_> = unresolved_inputs
+            .iter()
+            .enumerate()
+            .map(|(other, definition)| {
+                let mut definition = definition.clone();
+                if other != index {
+                    definition.env.clear();
+                }
+                definition
+            })
+            .collect();
+        match alien_core::resolve_stack_input_environment_variables(
+            &only_this,
+            &deployment.input_values,
+            deployment.platform,
+        ) {
+            Ok(variables) => resolved.push((input.id.as_str(), variables)),
+            Err(error) => warn!(
+                deployment_id = %deployment.id,
+                input_id = %input.id,
+                %error,
+                "Skipping a stack input whose environment variables don't resolve"
+            ),
+        }
+    }
+    for (input_id, variables) in &resolved {
+        let conflict = variables.iter().find(|variable| {
+            resolved.iter().any(|(other_id, others)| {
+                other_id != input_id && others.iter().any(|other| other.name == variable.name)
+            })
+        });
+        match conflict {
+            Some(variable) => warn!(
+                deployment_id = %deployment.id,
+                input_id = %input_id,
+                variable = %variable.name,
+                "Skipping a stack input that maps a variable another input also maps"
+            ),
+            None => env_vars.extend(variables.iter().cloned()),
+        }
+    }
+    env_vars
+}
+
+/// The deployment's own variables, and the stack's inputs without the
+/// mappings those variables already carry.
+fn input_environment_parts(
+    stack: &alien_core::Stack,
+    deployment: &DeploymentRecord,
+) -> (
+    Vec<EnvironmentVariable>,
+    Vec<alien_core::StackInputDefinition>,
+) {
+    let env_vars: Vec<EnvironmentVariable> = deployment
         .user_environment_variables
         .clone()
         .unwrap_or_default();
@@ -1719,7 +1799,7 @@ pub(crate) fn resolve_input_environment(
     // carries win: embedders that resolve inputs themselves (into the
     // deployment's variables) keep their values, and those mappings aren't
     // resolved a second time. An input's other mappings still apply.
-    let unresolved_inputs: Vec<_> = stack
+    let unresolved_inputs = stack
         .inputs
         .iter()
         .map(|input| {
@@ -1732,13 +1812,7 @@ pub(crate) fn resolve_input_environment(
             input
         })
         .collect();
-    let input_env = alien_core::resolve_stack_input_environment_variables(
-        &unresolved_inputs,
-        &deployment.input_values,
-        deployment.platform,
-    )?;
-    env_vars.extend(input_env);
-    Ok(env_vars)
+    (env_vars, unresolved_inputs)
 }
 
 /// The environment variables snapshot injected into the deployment's
@@ -1798,10 +1872,7 @@ fn deployment_environment_variables(
     }
 
     match deployment_stack {
-        Some(deployment_stack) => vars.extend(
-            resolve_input_environment(deployment_stack, deployment)
-                .map_err(|e| e.into_generic())?,
-        ),
+        Some(deployment_stack) => vars.extend(push_input_environment(deployment_stack, deployment)),
         None => vars.extend(
             deployment
                 .user_environment_variables
@@ -5636,6 +5707,99 @@ mod tests {
         assert_eq!(variable.value, "generated-value");
         assert_eq!(variable.var_type, EnvironmentVariableType::Secret);
         assert_eq!(variable.target_resources, Some(vec!["api".to_string()]));
+    }
+
+    fn plain_input(id: &str, variable: &str) -> alien_core::StackInputDefinition {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "kind": "string", "providedBy": ["deployer"], "required": false,
+            "label": id, "description": id, "env": [{"name": variable}]
+        }))
+        .unwrap()
+    }
+
+    fn user_variable(name: &str, value: &str) -> EnvironmentVariable {
+        EnvironmentVariable {
+            name: name.to_string(),
+            value: value.to_string(),
+            var_type: EnvironmentVariableType::Plain,
+            target_resources: None,
+        }
+    }
+
+    /// An embedder that resolves inputs itself puts every mapped variable in
+    /// the deployment's own variables. Its snapshot is the one a push built
+    /// before inputs resolved here (no stack inputs considered), hash
+    /// included, so a manager upgrade changes no workload.
+    #[test]
+    fn push_snapshot_is_unchanged_when_the_deployment_carries_every_mapped_variable() {
+        let stack = Stack::new("inputs-stack".to_string())
+            .inputs(vec![
+                plain_input("region", "APP_REGION"),
+                plain_input("tier", "APP_TIER"),
+            ])
+            .build();
+        let mut deployment = deployment_record(DeploymentStatus::Running, None);
+        deployment.user_environment_variables = Some(vec![
+            user_variable("APP_TIER", "resolved-by-embedder"),
+            user_variable("OTHER", "x"),
+            user_variable("APP_REGION", "eu"),
+        ]);
+        // A stored answer that differs from the carried variable doesn't win.
+        deployment
+            .input_values
+            .insert("tier".to_string(), serde_json::json!("stored-answer"));
+        let config = crate::config::ManagerConfig::default();
+
+        let with_inputs =
+            deployment_environment_variables(&config, &deployment, Some(&stack)).unwrap();
+        // The old push path: the snapshot from the deployment's own variables.
+        let mut old = deployment.clone();
+        let mut old_stack = stack.clone();
+        old_stack.inputs.clear();
+        old.input_values.clear();
+        let before = deployment_environment_variables(&config, &old, Some(&old_stack)).unwrap();
+
+        assert_eq!(with_inputs.hash, before.hash);
+        assert_eq!(with_inputs.variables, before.variables);
+    }
+
+    /// A target release that maps two inputs to one variable the deployment
+    /// doesn't carry fails a pull target, but never a push: both inputs are
+    /// skipped (neither value wins) and every other input still resolves.
+    #[test]
+    fn push_snapshot_skips_inputs_that_map_one_variable_twice() {
+        let stack = Stack::new("inputs-stack".to_string())
+            .inputs(vec![
+                plain_input("primary", "SHARED"),
+                plain_input("secondary", "SHARED"),
+                plain_input("region", "APP_REGION"),
+            ])
+            .build();
+        let mut deployment = deployment_record(DeploymentStatus::Running, None);
+        for (id, value) in [("primary", "a"), ("secondary", "b"), ("region", "eu")] {
+            deployment
+                .input_values
+                .insert(id.to_string(), serde_json::json!(value));
+        }
+
+        assert!(
+            super::resolve_input_environment(&stack, &deployment).is_err(),
+            "the strict resolver refuses this stack"
+        );
+        let snapshot = deployment_environment_variables(
+            &crate::config::ManagerConfig::default(),
+            &deployment,
+            Some(&stack),
+        )
+        .expect("a push snapshot never fails on inputs");
+
+        assert!(!snapshot.variables.iter().any(|v| v.name == "SHARED"));
+        let region = snapshot
+            .variables
+            .iter()
+            .find(|v| v.name == "APP_REGION")
+            .expect("the other input still resolves");
+        assert_eq!(region.value, "eu");
     }
 
     /// A control plane's config carries its own copy of the deployment's
