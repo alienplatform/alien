@@ -121,6 +121,9 @@ pub fn release_body(
             workloads.push(workload);
         }
     }
+    // In name order: the stored stack comes back with its resources in id order, whatever
+    // order they were declared in, and the workloads it builds must be these.
+    workloads.sort_by(|a, b| a.name.cmp(&b.name));
     let mut configurable_env = options.configurable_env.clone();
     let mut configurable_inputs = options.configurable_inputs.clone();
     for input in stack
@@ -614,6 +617,38 @@ mod tests {
         };
         release_body(Platform::Aws, &stack(&pinned()), &options)
             .expect_err("a loader variable can't be configurable");
+    }
+
+    /// The stored stack comes back with its resources in id order, whatever order the vendor
+    /// declared them in, so a release built from a stack declared out of order must still read
+    /// back as its own stack. (Before, signing such a release failed: "the signed workloads do
+    /// not match the signed stack".)
+    #[test]
+    fn a_stack_declared_out_of_order_reads_back_as_its_own() {
+        let mut web = container(&pinned());
+        web.id = "web".to_string();
+        let mut agent = container(&pinned());
+        agent.id = "agent".to_string();
+        let stack = Stack::new("shop".to_string())
+            .add(web, ResourceLifecycle::Live)
+            .add(agent, ResourceLifecycle::Live)
+            .build();
+        let body = release_body(Platform::Aws, &stack, &production()).unwrap();
+        assert_eq!(
+            body.workloads
+                .iter()
+                .map(|workload| workload.name.as_str())
+                .collect::<Vec<_>>(),
+            ["agent", "web"],
+            "workloads are in name order"
+        );
+        let back = signed_stack(&body, Platform::Aws).expect("the release reads back as its stack");
+        assert_eq!(
+            back.resources()
+                .map(|(id, _)| id.as_str())
+                .collect::<Vec<_>>(),
+            ["agent", "web"]
+        );
     }
 
     #[test]
