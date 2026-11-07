@@ -463,6 +463,63 @@ mod tests {
         checked(create(cased)).await.unwrap();
     }
 
+    /// The install's subscription and the Container Apps transport, which the deployment
+    /// provides, are what the verifier knows them to be.
+    #[tokio::test]
+    async fn the_provided_subscription_and_transport_are_the_installs() {
+        let mut body = release_body(vec![alien_signing::Workload {
+            provided_env: [
+                "ALIEN_DEPLOYMENT_ID",
+                "ALIEN_TRANSPORT",
+                "AZURE_SUBSCRIPTION_ID",
+            ]
+            .map(str::to_string)
+            .to_vec(),
+            ..function_workload_with(&format!("{IMAGE_HOST}/api@{DIGEST}"))
+        }]);
+        body.platform = "azure".to_string();
+        let accepted = accepted(signed_release(1, &body)).await;
+        let place = place();
+        let reads = Reads::default();
+        let workload = functions(&accepted.release.body).next().unwrap();
+        let facts = Facts {
+            place: &place,
+            accepted: &accepted,
+            workload,
+            reads: &reads,
+            own_name: own(),
+        };
+        let with = |name: &str, value: &str| {
+            let mut app = app();
+            let env = app["properties"]["template"]["containers"][0]["env"]
+                .as_array_mut()
+                .unwrap();
+            for (key, derived) in [
+                ("ALIEN_TRANSPORT", "container-app"),
+                ("AZURE_SUBSCRIPTION_ID", "0000"),
+            ] {
+                let value = if key == name { value } else { derived };
+                env.push(json!({"name": key, "value": value}));
+            }
+            create(app)
+        };
+        check_write(&facts, &with("", ""), Some(ENVIRONMENT)).expect("the derived values pass");
+        for (name, value) in [
+            ("ALIEN_TRANSPORT", "http"),
+            ("AZURE_SUBSCRIPTION_ID", "attacker-subscription"),
+        ] {
+            let error = check_write(&facts, &with(name, value), Some(ENVIRONMENT))
+                .expect_err(name)
+                .to_string();
+            assert!(
+                error.contains(&format!(
+                    "env {name} of workload 'api' is {value}, not the value the verifier derives"
+                )),
+                "{name}: {error}"
+            );
+        }
+    }
+
     /// One refusal per row of the Container Apps table, naming the row.
     #[tokio::test]
     async fn each_app_row_refuses_what_breaks_it() {

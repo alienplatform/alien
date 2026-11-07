@@ -479,6 +479,66 @@ mod tests {
     }
 
     /// One refusal per row of the Cloud Run table, naming the row.
+    /// The install's project and the Cloud Run transport, which the deployment provides, are
+    /// what the verifier knows them to be.
+    #[tokio::test]
+    async fn the_provided_project_and_transport_are_the_installs() {
+        let mut body = release_body(vec![alien_signing::Workload {
+            provided_env: [
+                "ALIEN_DEPLOYMENT_ID",
+                "ALIEN_TRANSPORT",
+                "GCP_PROJECT_ID",
+                "GOOGLE_CLOUD_PROJECT",
+            ]
+            .map(str::to_string)
+            .to_vec(),
+            ..function_workload()
+        }]);
+        body.platform = "gcp".to_string();
+        let accepted = accepted(signed_release(1, &body)).await;
+        let place = place();
+        let reads = Reads::default();
+        let workload = functions(&accepted.release.body).next().unwrap();
+        let facts = Facts {
+            place: &place,
+            accepted: &accepted,
+            workload,
+            reads: &reads,
+            own_name: own(),
+        };
+        let with = |name: &str, value: &str| {
+            let mut service = service();
+            let env = service["template"]["containers"][0]["env"]
+                .as_array_mut()
+                .unwrap();
+            for (key, derived) in [
+                ("ALIEN_TRANSPORT", "cloud-run"),
+                ("GCP_PROJECT_ID", "acme-project"),
+                ("GOOGLE_CLOUD_PROJECT", "acme-project"),
+            ] {
+                let value = if key == name { value } else { derived };
+                env.push(json!({"name": key, "value": value}));
+            }
+            create(service)
+        };
+        check_write(&facts, &with("", "")).expect("the derived values pass");
+        for (name, value) in [
+            ("ALIEN_TRANSPORT", "http"),
+            ("GCP_PROJECT_ID", "attacker-project"),
+            ("GOOGLE_CLOUD_PROJECT", "attacker-project"),
+        ] {
+            let error = check_write(&facts, &with(name, value))
+                .expect_err(name)
+                .to_string();
+            assert!(
+                error.contains(&format!(
+                    "env {name} of workload 'api' is {value}, not the value the verifier derives"
+                )),
+                "{name}: {error}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn each_service_row_refuses_what_breaks_it() {
         let cases: Vec<(Change, &str)> = vec![

@@ -1080,6 +1080,63 @@ mod tests {
         CloudWrite::CreateFunction(request)
     }
 
+    /// The runtime values the deployment provides that the verifier can derive itself (what
+    /// platform and transport this is, which binding is the worker's own, the install's
+    /// account) must be what it derives; the ones it can't know stay the control plane's.
+    #[tokio::test]
+    async fn provided_values_the_verifier_can_derive_are_pinned() {
+        let workload = || alien_signing::Workload {
+            provided_env: [
+                "ALIEN_DEPLOYMENT_ID",
+                "ALIEN_DEPLOYMENT_TYPE",
+                "ALIEN_TRANSPORT",
+                "ALIEN_LAMBDA_MODE",
+                "ALIEN_CURRENT_WORKER_BINDING_NAME",
+                "AWS_ACCOUNT_ID",
+                "ALIEN_COMMANDS_TOKEN",
+            ]
+            .map(str::to_string)
+            .to_vec(),
+            ..function_workload()
+        };
+        let derived = [
+            ("ALIEN_DEPLOYMENT_TYPE", "aws"),
+            ("ALIEN_TRANSPORT", "lambda"),
+            ("ALIEN_LAMBDA_MODE", "buffered"),
+            ("ALIEN_CURRENT_WORKER_BINDING_NAME", "api"),
+            ("AWS_ACCOUNT_ID", ACCOUNT),
+        ];
+        let with = |changed: Option<(&str, &str)>| {
+            let mut env: Vec<(&str, &str)> = derived.to_vec();
+            env.push(("ALIEN_COMMANDS_TOKEN", "whatever-the-control-plane-holds"));
+            if let Some((name, value)) = changed {
+                env.retain(|(key, _)| *key != name);
+                env.push((name, value));
+            }
+            create_with_env(&env)
+        };
+        checked(release(1, workload()), None, with(None))
+            .await
+            .expect("the derived values, and a value only the control plane knows");
+        for (name, value) in [
+            ("ALIEN_DEPLOYMENT_TYPE", "kubernetes"),
+            ("ALIEN_TRANSPORT", "http"),
+            ("ALIEN_LAMBDA_MODE", "streaming"),
+            ("ALIEN_CURRENT_WORKER_BINDING_NAME", "other"),
+            ("AWS_ACCOUNT_ID", "999999999999"),
+        ] {
+            let error = checked(release(1, workload()), None, with(Some((name, value))))
+                .await
+                .expect_err(name);
+            assert!(
+                error.contains(&format!(
+                    "env {name} of workload 'api' is {value}, not the value the verifier derives"
+                )),
+                "{name}: {error}"
+            );
+        }
+    }
+
     /// Names the release doesn't let the control plane set are refused, the loader's secrets
     /// lists among them.
     #[tokio::test]

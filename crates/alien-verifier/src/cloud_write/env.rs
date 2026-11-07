@@ -3,10 +3,11 @@
 
 use std::collections::BTreeMap;
 
+use alien_core::{worker_runtime_environment_plan, Platform, RuntimeEnvironmentValue};
 use alien_error::{AlienError, Context};
 use alien_signing::{
-    binding_env, binding_env_name, build_workload, resolve_bindings, LocalValues, Workload,
-    WorkloadRequest,
+    binding_env, binding_env_name, build_workload, resolve_bindings, InstallId, LocalValues,
+    Workload, WorkloadRequest,
 };
 use serde_json::Value;
 
@@ -28,6 +29,43 @@ const SECRETS_VAULT: &str = "secrets";
 
 fn refused(reason: String) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::Refused { reason })
+}
+
+/// The runtime values the deployment provides for `workload` that the verifier knows itself,
+/// from the runtime plan the controller follows: what platform and transport this is, which
+/// binding is the worker's own, and the install's account, project or subscription. The rest
+/// (region, tenant, client id, and what only the control plane holds, such as the commands
+/// token) stay the control plane's to provide.
+fn derived_runtime_env(place: &Place, workload: &Workload) -> BTreeMap<&'static str, String> {
+    let platform = match &place.install {
+        InstallId::Aws { .. } => Platform::Aws,
+        InstallId::Gcp { .. } => Platform::Gcp,
+        InstallId::Azure { .. } => Platform::Azure,
+        InstallId::Kubernetes { .. } | InstallId::Machine { .. } => return BTreeMap::new(),
+    };
+    worker_runtime_environment_plan(platform)
+        .into_iter()
+        // On or off, telemetry can only go to the signed endpoint (see `check_env`).
+        .filter(|entry| entry.name != RUNTIME_SEND_OTLP)
+        .filter_map(|entry| {
+            let value = match (entry.value, &place.install) {
+                (RuntimeEnvironmentValue::Literal(value), _) => value.to_string(),
+                (RuntimeEnvironmentValue::CurrentWorkerBindingName, _) => workload.name.clone(),
+                (RuntimeEnvironmentValue::AwsAccountId, InstallId::Aws { account, .. }) => {
+                    account.clone()
+                }
+                (RuntimeEnvironmentValue::GcpProjectId, InstallId::Gcp { project, .. }) => {
+                    project.clone()
+                }
+                (
+                    RuntimeEnvironmentValue::AzureSubscriptionId,
+                    InstallId::Azure { subscription, .. },
+                ) => subscription.clone(),
+                _ => return None,
+            };
+            Some((entry.name, value))
+        })
+        .collect()
 }
 
 /// Check `env`, the environment of `workload`'s function in a controller's request, against
@@ -74,6 +112,17 @@ pub fn check_env(
         }
     }
     rest.remove(RUNTIME_SEND_OTLP);
+
+    // What the deployment provides and the verifier knows itself must be what it knows.
+    for (key, expected) in derived_runtime_env(place, workload) {
+        if let Some(sent) = rest.get(key) {
+            if *sent != expected {
+                return Err(refused(format!(
+                    "env {key} of workload '{name}' is {sent}, not the value the verifier derives ({expected})"
+                )));
+            }
+        }
+    }
 
     // The secrets vault is the install's own.
     let vault_key = binding_env_name(SECRETS_VAULT);
