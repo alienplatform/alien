@@ -360,6 +360,24 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// The management grant needs more managed policies than one IAM role can hold.
+    ///
+    /// Not retryable: the grant is the same on every attempt.
+    #[error(
+        code = "MANAGEMENT_POLICIES_EXCEED_ROLE_LIMIT",
+        message = "The management permissions for resource '{resource_id}' need {policy_count} managed IAM policies, more than the {limit} Alien attaches to one role. AWS allows 20 by default.",
+        retryable = "false",
+        internal = "false"
+    )]
+    ManagementPoliciesExceedRoleLimit {
+        /// The resource whose role would hold the policies
+        resource_id: String,
+        /// How many managed policies the grant packs into
+        policy_count: usize,
+        /// The most Alien attaches to one role
+        limit: usize,
+    },
+
     /// A cloud provider limit refuses the step until a later time, which the message names.
     ///
     /// Not retryable: retrying before that time fails the same way.
