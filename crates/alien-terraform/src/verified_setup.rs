@@ -118,8 +118,18 @@ fn optional_variable(
     }
 }
 
+/// The account that holds the setup record, as the cloud provider reports it:
+/// the AWS caller identity or the GCP project the bucket is created in. The
+/// first call with the enrollment code binds the reservation to it.
+fn setup_account(target: TerraformTarget) -> &'static str {
+    match target.cloud_platform() {
+        alien_core::Platform::Gcp => "var.gcp_project",
+        _ => "data.aws_caller_identity.current.account_id",
+    }
+}
+
 /// Attributes that select the registration path on the `this` resource.
-pub(crate) fn reserve_attributes() -> Vec<Structure> {
+pub(crate) fn reserve_attributes(target: TerraformTarget) -> Vec<Structure> {
     vec![
         attr(
             "token",
@@ -134,6 +144,13 @@ pub(crate) fn reserve_attributes() -> Vec<Structure> {
             expr::raw("var.setup_reservation_id == null ? null : \"registration\""),
         ),
         attr("enrollment_code", expr::raw("var.enrollment_code")),
+        attr(
+            "setup_account_id",
+            expr::raw(format!(
+                "var.setup_reservation_id == null ? null : {}",
+                setup_account(target)
+            )),
+        ),
     ]
 }
 
@@ -212,6 +229,7 @@ pub(crate) fn observe_block(
         expr::raw("var.setup_reservation_id"),
     ));
     attributes.push(attr("setup_stage", Expression::String("observe".into())));
+    attributes.push(attr("setup_account_id", expr::raw(setup_account(target))));
     attributes.push(attr(
         "depends_on",
         Expression::Array(vec![expr::raw(record_object)]),

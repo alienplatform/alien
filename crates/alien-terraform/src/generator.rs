@@ -4199,7 +4199,7 @@ fn registration_body(
                     lifecycle.body.0.push(nested(precondition));
                 }
             }
-            verified_setup::reserve_attributes()
+            verified_setup::reserve_attributes(target)
         } else {
             vec![attr("token", expr::raw("var.token"))]
         };
