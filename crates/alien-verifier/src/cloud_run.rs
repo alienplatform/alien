@@ -62,11 +62,25 @@ pub fn service_body(spec: &FunctionSpec) -> Value {
         // Every request goes to the revision this template creates; no
         // older revision stays reachable by a split or a tag.
         "traffic": [{"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", "percent": 100}],
+        // The body replaces the service, so it always carries who may reach it: a field left
+        // out takes its default, ingress from anywhere. Only a workload the signed stack
+        // makes public takes requests from the internet, without the invoker check.
+        "ingress": ingress(spec),
+        "invokerIamDisabled": spec.public,
     });
     if let Some(vpc) = &spec.vpc {
         service["template"]["vpcAccess"] = vpc_access(vpc);
     }
     service
+}
+
+/// Where `spec`'s service takes requests from.
+fn ingress(spec: &FunctionSpec) -> &'static str {
+    if spec.public {
+        "INGRESS_TRAFFIC_ALL"
+    } else {
+        "INGRESS_TRAFFIC_INTERNAL_ONLY"
+    }
 }
 
 /// Direct VPC egress through the subnet setup gives functions.
@@ -128,14 +142,7 @@ const POLL: Duration = Duration::from_secs(3);
 /// workload a public endpoint; a private one admits its own account as invoker.
 pub async fn apply(store: &dyn ServiceStore, spec: &FunctionSpec) -> Result<Value> {
     if store.find(&spec.name).await?.is_none() {
-        let mut service = service_body(spec);
-        if spec.public {
-            service["ingress"] = json!("INGRESS_TRAFFIC_ALL");
-            service["invokerIamDisabled"] = json!(true);
-        } else {
-            service["ingress"] = json!("INGRESS_TRAFFIC_INTERNAL_ONLY");
-        }
-        store.create(&spec.name, &service).await?;
+        store.create(&spec.name, &service_body(spec)).await?;
     } else {
         store.replace(&spec.name, &service_body(spec)).await?;
     }
@@ -258,6 +265,19 @@ pub fn check_read_back(spec: &FunctionSpec, service: &Value) -> Result<()> {
         }
         Ok(())
     };
+    if service["ingress"].as_str() != Some(ingress(spec)) {
+        return Err(mismatch(format!(
+            "its ingress is {}, not {}",
+            service["ingress"],
+            ingress(spec)
+        )));
+    }
+    if service["invokerIamDisabled"].as_bool().unwrap_or(false) != spec.public {
+        return Err(mismatch(format!(
+            "its invokerIamDisabled is {}",
+            service["invokerIamDisabled"]
+        )));
+    }
     let template = &service["template"];
     unknown("the template", template, KNOWN_TEMPLATE)?;
     let containers = template["containers"]
@@ -644,6 +664,7 @@ mod tests {
             let current = held.get_or_insert_with(|| {
                 let mut created = service(&spec());
                 created["ingress"] = body["ingress"].clone();
+                created["invokerIamDisabled"] = body["invokerIamDisabled"].clone();
                 created
             });
             current["template"] = body["template"].clone();
@@ -671,9 +692,21 @@ mod tests {
             self.serving(body);
             Ok(())
         }
+        /// As Cloud Run's v2 PATCH: the body replaces the service, so a field it leaves out
+        /// takes its default (ingress from anywhere, the invoker check on).
         async fn replace(&self, name: &str, body: &Value) -> Result<()> {
             self.calls.lock().unwrap().push(format!("replace {name}"));
             self.serving(body);
+            let mut held = self.service.lock().unwrap();
+            let current = held.as_mut().unwrap();
+            current["ingress"] = match &body["ingress"] {
+                Value::Null => json!("INGRESS_TRAFFIC_ALL"),
+                ingress => ingress.clone(),
+            };
+            current["invokerIamDisabled"] = match &body["invokerIamDisabled"] {
+                Value::Null => json!(false),
+                disabled => disabled.clone(),
+            };
             Ok(())
         }
         async fn policy(&self, _name: &str) -> Result<Value> {
@@ -712,6 +745,50 @@ mod tests {
         );
     }
 
+    /// An update replaces the service, so it must carry the signed ingress: a private worker
+    /// stays reachable only from inside the project, a public one stays open. (On real GCP an
+    /// update that left ingress out turned a private worker's ingress to all traffic.)
+    #[tokio::test]
+    async fn an_update_keeps_the_signed_ingress() {
+        let mut private = service(&spec());
+        private["ingress"] = json!("INGRESS_TRAFFIC_INTERNAL_ONLY");
+        let run = FakeRun::holding(private, json!({"etag": "e1", "bindings": [invoker()]}));
+        apply(&run, &spec()).await.unwrap();
+        let held = run.service.lock().unwrap().clone().unwrap();
+        assert_eq!(held["ingress"], json!("INGRESS_TRAFFIC_INTERNAL_ONLY"));
+        assert_eq!(held["invokerIamDisabled"], json!(false));
+
+        let public_spec = FunctionSpec {
+            public: true,
+            ..spec()
+        };
+        let mut public = service(&public_spec);
+        public["ingress"] = json!("INGRESS_TRAFFIC_ALL");
+        public["invokerIamDisabled"] = json!(true);
+        let run = FakeRun::holding(public, json!({"etag": "e1"}));
+        apply(&run, &public_spec).await.unwrap();
+        let held = run.service.lock().unwrap().clone().unwrap();
+        assert_eq!(held["ingress"], json!("INGRESS_TRAFFIC_ALL"));
+        assert_eq!(held["invokerIamDisabled"], json!(true));
+    }
+
+    /// A private worker whose ingress was opened, or whose invoker check was turned off,
+    /// doesn't read back as signed.
+    #[test]
+    fn a_private_service_opened_behind_the_verifier_is_caught() {
+        for (field, value) in [
+            ("ingress", json!("INGRESS_TRAFFIC_ALL")),
+            ("invokerIamDisabled", json!(true)),
+        ] {
+            let mut opened = service(&spec());
+            opened[field] = value;
+            let error = check_read_back(&spec(), &opened)
+                .expect_err("a private worker must stay private")
+                .to_string();
+            assert!(error.contains(field), "{error}");
+        }
+    }
+
     #[tokio::test]
     async fn a_missing_private_service_is_created_internal_and_its_account_may_invoke_it() {
         // Setup renders no workload, and management may not create one on a protected install.
@@ -721,7 +798,7 @@ mod tests {
         assert_eq!(
             *run.calls.lock().unwrap(),
             [
-                "create acme-fn-api ingress=\"INGRESS_TRAFFIC_INTERNAL_ONLY\" invokerIamDisabled=null"
+                "create acme-fn-api ingress=\"INGRESS_TRAFFIC_INTERNAL_ONLY\" invokerIamDisabled=false"
                     .to_string(),
                 format!("setIamPolicy acme-fn-api {}", json!([invoker()])),
             ]

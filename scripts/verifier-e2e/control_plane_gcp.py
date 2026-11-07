@@ -293,12 +293,13 @@ class Run:
                              f"--image={self.images['a']}", check=False,
                              token_file=self.management_token_file())
         egress = self.egress()
-        self.record("1 an update goes through the verifier and keeps the network; management can't update "
-                    "the service itself",
+        ingress = self.service().get("metadata", {}).get("annotations", {}).get("run.googleapis.com/ingress")
+        self.record("1 an update goes through the verifier and keeps the network and internal ingress; "
+                    "management can't update the service itself",
                     result.returncode == 0 and outcome.get("outcome") == "synced" and image == self.images["b"]
-                    and egress == (f"{self.prefix}-workload", "all-traffic")
+                    and egress == (f"{self.prefix}-workload", "all-traffic") and ingress == "internal"
                     and direct.returncode != 0 and "'run.services.update' denied" in direct.stderr,
-                    f"driver={outcome} image={image[-19:]} egress={egress} "
+                    f"driver={outcome} image={image[-19:]} egress={egress} ingress={ingress} "
                     f"direct={direct.stderr.strip()[-300:]}")
 
         foreign_after = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=20)) \
