@@ -4,8 +4,16 @@
 //! authenticated transport the cloud backends do, so it exercises the real path rather than a
 //! shortcut.
 
-#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
+#[cfg(any(
+    feature = "aws",
+    feature = "azure",
+    feature = "kubernetes",
+    feature = "local"
+))]
 pub mod agent_protocol;
+
+#[cfg(any(feature = "aws", feature = "local"))]
+pub mod interactive;
 
 #[cfg(feature = "aws")]
 pub mod aws;
