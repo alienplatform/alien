@@ -73,6 +73,8 @@ pub trait LambdaApi: Send + Sync + std::fmt::Debug {
         function_name: &str,
         qualifier: Option<String>,
     ) -> Result<GetPolicyResponse>;
+    /// RemovePermission: drop statement `statement_id` from the function's resource policy.
+    async fn remove_permission(&self, function_name: &str, statement_id: &str) -> Result<()>;
 
     // Function invocation operations
     async fn invoke(&self, request: InvokeRequest) -> Result<InvokeResponse>;
@@ -680,6 +682,22 @@ impl LambdaApi for LambdaClient {
             if qp.is_empty() { None } else { Some(qp) },
             None,
             "GetPolicy",
+            function_name,
+        )
+        .await
+    }
+
+    async fn remove_permission(&self, function_name: &str, statement_id: &str) -> Result<()> {
+        let path = format!(
+            "/2015-03-31/functions/{}/policy/{}",
+            function_name,
+            form_urlencoded::byte_serialize(statement_id.as_bytes()).collect::<String>()
+        );
+        self.send_no_body(
+            Method::DELETE,
+            &path,
+            None,
+            "RemovePermission",
             function_name,
         )
         .await

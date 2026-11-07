@@ -400,6 +400,8 @@ mod tests {
             public: false,
             dapr: false,
             registry: None,
+            reserved_concurrency: None,
+            invoke_grants: Vec::new(),
         }
     }
 

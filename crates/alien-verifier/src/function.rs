@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
 use alien_aws_clients::lambda::{
-    CreateFunctionRequest, Environment, FunctionCode, LambdaApi, UpdateFunctionCodeRequest,
-    UpdateFunctionConfigurationRequest, VpcConfig,
+    AddPermissionRequest, CreateFunctionRequest, Environment, FunctionCode, LambdaApi,
+    UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest, VpcConfig,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_error::{AlienError, Context};
@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::error::{ErrorData, Result};
-use crate::plan::FunctionSpec;
+use crate::plan::{FunctionSpec, InvokeGrant};
 
 /// The Lambda calls the verifier makes.
 #[async_trait]
@@ -38,6 +38,14 @@ pub trait FunctionStore: Send + Sync {
     /// still at `revision`, clearing layers, mounts, image overrides, the environment key, the
     /// dead-letter target and any custom log destination.
     async fn update_configuration(&self, spec: &FunctionSpec, revision: &str) -> Result<()>;
+    /// PutFunctionConcurrency, or DeleteFunctionConcurrency when `reserved` is `None`.
+    async fn set_concurrency(&self, name: &str, reserved: Option<u32>) -> Result<()>;
+    /// The statements of the function's resource policy; none when it has no policy.
+    async fn policy(&self, name: &str) -> Result<Vec<Value>>;
+    /// AddPermission: `grant`'s service may invoke the function for `grant`'s source.
+    async fn grant(&self, name: &str, grant: &InvokeGrant) -> Result<()>;
+    /// RemovePermission of statement `statement_id`.
+    async fn revoke(&self, name: &str, statement_id: &str) -> Result<()>;
 }
 
 /// Whether the release being applied is still the newest one the install accepted. Checked
@@ -178,6 +186,154 @@ impl<T: LambdaApi> FunctionStore for T {
         })?;
         Ok(())
     }
+
+    async fn set_concurrency(&self, name: &str, reserved: Option<u32>) -> Result<()> {
+        match reserved {
+            Some(reserved) => self
+                .put_function_concurrency(name, reserved)
+                .await
+                .context(ErrorData::CloudCallFailed {
+                    operation: format!("lambda:PutFunctionConcurrency {name}"),
+                }),
+            None => self
+                .delete_function_concurrency(name)
+                .await
+                .context(ErrorData::CloudCallFailed {
+                    operation: format!("lambda:DeleteFunctionConcurrency {name}"),
+                }),
+        }
+    }
+
+    async fn policy(&self, name: &str) -> Result<Vec<Value>> {
+        let operation = || ErrorData::CloudCallFailed {
+            operation: format!("lambda:GetPolicy {name}"),
+        };
+        let policy = match self.get_policy(name, None).await {
+            Ok(response) => response.policy.unwrap_or_default(),
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                return Ok(Vec::new())
+            }
+            Err(error) => return Err(error).context(operation()),
+        };
+        if policy.is_empty() {
+            return Ok(Vec::new());
+        }
+        let policy: Value = serde_json::from_str(&policy).map_err(|error| {
+            AlienError::new(ErrorData::CloudCallFailed {
+                operation: format!("lambda:GetPolicy {name} returned a policy that isn't JSON: {error}"),
+            })
+        })?;
+        Ok(match &policy["Statement"] {
+            Value::Array(statements) => statements.clone(),
+            Value::Null => Vec::new(),
+            statement => vec![statement.clone()],
+        })
+    }
+
+    async fn grant(&self, name: &str, grant: &InvokeGrant) -> Result<()> {
+        self.add_permission(
+            name,
+            AddPermissionRequest::builder()
+                .statement_id(grant.statement_id.clone())
+                .action(INVOKE.to_string())
+                .principal(grant.principal.clone())
+                .source_arn(grant.source_arn.clone())
+                .maybe_source_account(grant.source_account.clone())
+                .build(),
+        )
+        .await
+        .context(ErrorData::CloudCallFailed {
+            operation: format!("lambda:AddPermission {name} {}", grant.statement_id),
+        })?;
+        Ok(())
+    }
+
+    async fn revoke(&self, name: &str, statement_id: &str) -> Result<()> {
+        self.remove_permission(name, statement_id)
+            .await
+            .context(ErrorData::CloudCallFailed {
+                operation: format!("lambda:RemovePermission {name} {statement_id}"),
+            })
+    }
+}
+
+/// The one action a function's resource policy grants.
+const INVOKE: &str = "lambda:InvokeFunction";
+
+/// Whether resource-policy `statement` grants exactly `grant`: its service may invoke the
+/// function, for its source alone.
+fn grants_exactly(grant: &InvokeGrant, statement: &Value) -> bool {
+    let mut condition = serde_json::Map::new();
+    condition.insert(
+        "ArnLike".to_string(),
+        serde_json::json!({"AWS:SourceArn": grant.source_arn}),
+    );
+    if let Some(account) = &grant.source_account {
+        condition.insert(
+            "StringEquals".to_string(),
+            serde_json::json!({"AWS:SourceAccount": account}),
+        );
+    }
+    statement["Sid"].as_str() == Some(grant.statement_id.as_str())
+        && statement["Effect"].as_str() == Some("Allow")
+        && statement["Principal"] == serde_json::json!({"Service": grant.principal})
+        && statement["Action"].as_str() == Some(INVOKE)
+        && statement["Condition"] == Value::Object(condition)
+}
+
+/// Make the function's reserved concurrency and resource policy what `spec` sets: who may
+/// invoke it and how often is the signed stack's, like what it runs. Statements the signed
+/// stack doesn't name are removed.
+async fn reconcile_access(
+    store: &dyn FunctionStore,
+    spec: &FunctionSpec,
+    function: &Value,
+    newest: &dyn StillNewest,
+) -> Result<()> {
+    if reserved_concurrency(function) != spec.reserved_concurrency {
+        newest.check().await?;
+        store
+            .set_concurrency(&spec.name, spec.reserved_concurrency)
+            .await?;
+    }
+    let statements = store.policy(&spec.name).await?;
+    for statement in &statements {
+        if !spec
+            .invoke_grants
+            .iter()
+            .any(|grant| grants_exactly(grant, statement))
+        {
+            let statement_id = statement["Sid"].as_str().ok_or_else(|| {
+                AlienError::new(ErrorData::CloudCallFailed {
+                    operation: format!("lambda:GetPolicy {} returned a statement without a Sid", spec.name),
+                })
+            })?;
+            newest.check().await?;
+            store.revoke(&spec.name, statement_id).await?;
+        }
+    }
+    for grant in &spec.invoke_grants {
+        if !statements
+            .iter()
+            .any(|statement| grants_exactly(grant, statement))
+        {
+            newest.check().await?;
+            store.grant(&spec.name, grant).await?;
+        }
+    }
+    Ok(())
+}
+
+/// The reserved concurrency a GetFunction response reports, if any.
+fn reserved_concurrency(function: &Value) -> Option<u32> {
+    function["Concurrency"]["ReservedConcurrentExecutions"]
+        .as_u64()
+        .and_then(|reserved| u32::try_from(reserved).ok())
 }
 
 /// The log group Lambda writes to when nothing else is configured.
@@ -227,6 +383,8 @@ pub async fn apply(
     store
         .update_configuration(spec, revision(&current, &spec.name)?)
         .await?;
+    let written = wait_until_idle(store, &spec.name).await?;
+    reconcile_access(store, spec, &written, newest).await?;
     let back = wait_until_idle(store, &spec.name).await?;
     check_read_back(spec, &back)?;
     Ok(back)
@@ -383,6 +541,12 @@ pub fn check_read_back(spec: &FunctionSpec, function: &Value) -> Result<()> {
             configuration["MemorySize"]
         )));
     }
+    if reserved_concurrency(function) != spec.reserved_concurrency {
+        return Err(mismatch(format!(
+            "its reserved concurrency is {}",
+            function["Concurrency"]
+        )));
+    }
     if configuration["Timeout"].as_u64() != Some(u64::from(spec.timeout_seconds)) {
         return Err(mismatch(format!("timeout is {}", configuration["Timeout"])));
     }
@@ -508,6 +672,8 @@ mod tests {
             public: false,
             dapr: false,
             registry: None,
+            reserved_concurrency: None,
+            invoke_grants: Vec::new(),
         }
     }
 
@@ -660,6 +826,8 @@ mod tests {
         function: Mutex<Value>,
         exists: Mutex<bool>,
         calls: Mutex<Vec<String>>,
+        /// The resource policy's statements, as GetPolicy returns them.
+        policy: Mutex<Vec<Value>>,
     }
 
     impl FakeLambda {
@@ -669,6 +837,7 @@ mod tests {
                 function: Mutex::new(function),
                 exists: Mutex::new(true),
                 calls: Mutex::new(Vec::new()),
+                policy: Mutex::new(Vec::new()),
             }
         }
 
@@ -769,6 +938,60 @@ mod tests {
                 json!({"LogFormat": "Text", "LogGroup": default_log_group(&spec.name)});
             Ok(())
         }
+        async fn set_concurrency(&self, name: &str, reserved: Option<u32>) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("concurrency {name} {reserved:?}"));
+            let mut function = self.function.lock().unwrap();
+            match reserved {
+                Some(reserved) => {
+                    function["Concurrency"] = json!({"ReservedConcurrentExecutions": reserved})
+                }
+                None => {
+                    function.as_object_mut().unwrap().remove("Concurrency");
+                }
+            }
+            Ok(())
+        }
+        async fn policy(&self, _name: &str) -> Result<Vec<Value>> {
+            Ok(self.policy.lock().unwrap().clone())
+        }
+        async fn grant(&self, name: &str, grant: &InvokeGrant) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("grant {name} {}", grant.statement_id));
+            self.policy.lock().unwrap().push(lambda_statement(name, grant));
+            Ok(())
+        }
+        async fn revoke(&self, name: &str, statement_id: &str) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("revoke {name} {statement_id}"));
+            self.policy
+                .lock()
+                .unwrap()
+                .retain(|statement| statement["Sid"] != json!(statement_id));
+            Ok(())
+        }
+    }
+
+    /// A statement as Lambda writes it for AddPermission of `grant`.
+    fn lambda_statement(name: &str, grant: &InvokeGrant) -> Value {
+        let mut condition = json!({"ArnLike": {"AWS:SourceArn": grant.source_arn}});
+        if let Some(account) = &grant.source_account {
+            condition["StringEquals"] = json!({"AWS:SourceAccount": account});
+        }
+        json!({
+            "Sid": grant.statement_id,
+            "Effect": "Allow",
+            "Principal": {"Service": grant.principal},
+            "Action": "lambda:InvokeFunction",
+            "Resource": format!("arn:aws:lambda:us-east-1:111122223333:function:{name}"),
+            "Condition": condition,
+        })
     }
 
     /// The release being applied is still the newest.
@@ -879,6 +1102,95 @@ mod tests {
             "{error}"
         );
         assert!(lambda.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn who_may_invoke_the_function_and_how_often_become_the_signed_stacks() {
+        let bucket = InvokeGrant {
+            statement_id: "acme-prod-api-s3-uploads".to_string(),
+            principal: "s3.amazonaws.com".to_string(),
+            source_arn: "arn:aws:s3:::acme-prod-uploads".to_string(),
+            source_account: Some("111122223333".to_string()),
+        };
+        let schedule = InvokeGrant {
+            statement_id: "acme-prod-api-eb-1".to_string(),
+            principal: "events.amazonaws.com".to_string(),
+            source_arn: "arn:aws:events:us-east-1:111122223333:rule/acme-prod-api-cron-1"
+                .to_string(),
+            source_account: None,
+        };
+        let signed = FunctionSpec {
+            reserved_concurrency: Some(5),
+            invoke_grants: vec![bucket.clone(), schedule.clone()],
+            ..spec()
+        };
+        let mut drifted = function(&signed);
+        drifted["Concurrency"] = json!({"ReservedConcurrentExecutions": 900});
+        let lambda = FakeLambda::new(drifted);
+        // Management's own grants: anyone may invoke it, and the bucket grant widened to every
+        // bucket in every account.
+        *lambda.policy.lock().unwrap() = vec![
+            json!({"Sid": "open", "Effect": "Allow", "Principal": "*",
+                   "Action": "lambda:InvokeFunction", "Resource": "x"}),
+            lambda_statement(
+                &signed.name,
+                &InvokeGrant {
+                    source_arn: "arn:aws:s3:::*".to_string(),
+                    source_account: None,
+                    ..bucket.clone()
+                },
+            ),
+        ];
+
+        apply(&lambda, &signed, &HashMap::new(), &Newest)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *lambda.calls.lock().unwrap(),
+            [
+                "configuration acme-prod-api",
+                "concurrency acme-prod-api Some(5)",
+                "revoke acme-prod-api open",
+                "revoke acme-prod-api acme-prod-api-s3-uploads",
+                "grant acme-prod-api acme-prod-api-s3-uploads",
+                "grant acme-prod-api acme-prod-api-eb-1",
+            ]
+        );
+        assert_eq!(
+            *lambda.policy.lock().unwrap(),
+            vec![
+                lambda_statement(&signed.name, &bucket),
+                lambda_statement(&signed.name, &schedule)
+            ]
+        );
+
+        // Applied again, nothing about access is written.
+        lambda.calls.lock().unwrap().clear();
+        apply(&lambda, &signed, &HashMap::new(), &Newest)
+            .await
+            .unwrap();
+        assert_eq!(
+            *lambda.calls.lock().unwrap(),
+            ["configuration acme-prod-api"]
+        );
+
+        // A release that drops the triggers and the limit takes them away.
+        apply(&lambda, &spec(), &HashMap::new(), &Newest)
+            .await
+            .unwrap();
+        assert!(lambda.policy.lock().unwrap().is_empty());
+        assert_eq!(lambda.function.lock().unwrap().get("Concurrency"), None);
+    }
+
+    #[test]
+    fn a_reserved_concurrency_changed_behind_the_verifier_is_caught() {
+        let mut changed = function(&spec());
+        changed["Concurrency"] = json!({"ReservedConcurrentExecutions": 0});
+        let error = check_read_back(&spec(), &changed)
+            .expect_err("the signed stack reserves none")
+            .to_string();
+        assert!(error.contains("reserved concurrency"), "{error}");
     }
 
     #[tokio::test]

@@ -95,6 +95,10 @@ pub struct ApplyRelease {
     /// Apps). They can't change what runs: the image is pinned by the signed digest.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub registry: Option<RegistryCredentials>,
+    /// AWS: the API Gateway API in front of the workload, once created. The verifier lets it
+    /// invoke the function only if the signed stack gives the workload a public endpoint.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub apis: BTreeMap<String, String>,
 }
 
 /// A registry's pull credentials.
@@ -169,7 +173,21 @@ impl ApplyRelease {
             },
             workloads: BTreeSet::from([workload.to_string()]),
             registry: None,
+            apis: BTreeMap::new(),
         })
+    }
+
+    /// The same request naming `api` as the API Gateway API in front of the workload.
+    pub fn with_api(mut self, api: Option<&str>) -> Self {
+        self.apis = api
+            .into_iter()
+            .flat_map(|api| {
+                self.workloads
+                    .iter()
+                    .map(move |workload| (workload.clone(), api.to_string()))
+            })
+            .collect();
+        self
     }
 
     /// The same request with pull credentials for the image's registry.

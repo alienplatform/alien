@@ -156,6 +156,12 @@ fn lambda_progress(config: &FunctionConfiguration) -> LambdaProgress {
     }
 }
 
+/// Whether only the install's verifier may change who invokes this install's functions and
+/// their reserved concurrency: on a protected install it sets both from the signed stack.
+fn verifier_owns_access(ctx: &ResourceControllerContext<'_>) -> bool {
+    ctx.deployment_config.stack_settings.signing.is_some()
+}
+
 /// Generates the full, prefixed AWS resource name.
 fn get_aws_worker_name(prefix: &str, name: &str) -> String {
     aws_prefixed_resource_name(prefix, name)
@@ -2276,23 +2282,29 @@ impl AwsWorkerController {
                     resource_id: Some(worker_config.id.clone()),
                 })
             })?;
-        let request = AddPermissionRequest::builder()
-            .statement_id("ApiGatewayInvoke".to_string())
-            .action("lambda:InvokeFunction".to_string())
-            .principal("apigateway.amazonaws.com".to_string())
-            .source_arn(format!(
-                "arn:aws:execute-api:{}:{}:{api_id}/*",
-                aws_cfg.region, aws_cfg.account_id
-            ))
-            .build();
+        if let Some(statements) = verifier::protected_statements(ctx, &worker_config.id)? {
+            // The verifier lets the API invoke the function if the signed stack makes it public.
+            self.apply_through_verifier(ctx, statements, worker_config)
+                .await?;
+        } else {
+            let request = AddPermissionRequest::builder()
+                .statement_id("ApiGatewayInvoke".to_string())
+                .action("lambda:InvokeFunction".to_string())
+                .principal("apigateway.amazonaws.com".to_string())
+                .source_arn(format!(
+                    "arn:aws:execute-api:{}:{}:{api_id}/*",
+                    aws_cfg.region, aws_cfg.account_id
+                ))
+                .build();
 
-        client
-            .add_permission(&aws_worker_name, request)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to add API Gateway permission".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+            client
+                .add_permission(&aws_worker_name, request)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to add API Gateway permission".to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                })?;
+        }
 
         if self.fqdn.is_some() {
             if self.uses_custom_domain {
@@ -2608,34 +2620,37 @@ impl AwsWorkerController {
 
                 // Add Lambda permission for S3 to invoke this worker
                 let statement_id = format!("{}-s3-{}", worker_name, storage_ref.id);
-                let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
-                let permission_request = AddPermissionRequest::builder()
-                    .statement_id(statement_id.clone())
-                    .action("lambda:InvokeFunction".to_string())
-                    .principal("s3.amazonaws.com".to_string())
-                    .source_arn(format!("arn:aws:s3:::{}", bucket_name))
-                    .build();
+                // On a protected install the verifier grants it from the signed stack.
+                if !verifier_owns_access(ctx) {
+                    let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+                    let permission_request = AddPermissionRequest::builder()
+                        .statement_id(statement_id.clone())
+                        .action("lambda:InvokeFunction".to_string())
+                        .principal("s3.amazonaws.com".to_string())
+                        .source_arn(format!("arn:aws:s3:::{}", bucket_name))
+                        .build();
 
-                match lambda_client
-                    .add_permission(worker_name, permission_request)
-                    .await
-                {
-                    Ok(_) => {}
-                    Err(e) if is_remote_resource_conflict(&e) => {
-                        info!(
-                            worker=%config.id,
-                            statement_id=%statement_id,
-                            "S3 invoke permission already exists; treating as created"
-                        );
-                    }
-                    Err(e) => {
-                        return Err(e.context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to add S3 invoke permission for storage '{}'",
-                                storage_ref.id
-                            ),
-                            resource_id: Some(config.id.clone()),
-                        }));
+                    match lambda_client
+                        .add_permission(worker_name, permission_request)
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(e) if is_remote_resource_conflict(&e) => {
+                            info!(
+                                worker=%config.id,
+                                statement_id=%statement_id,
+                                "S3 invoke permission already exists; treating as created"
+                            );
+                        }
+                        Err(e) => {
+                            return Err(e.context(ErrorData::CloudPlatformError {
+                                message: format!(
+                                    "Failed to add S3 invoke permission for storage '{}'",
+                                    storage_ref.id
+                                ),
+                                resource_id: Some(config.id.clone()),
+                            }));
+                        }
                     }
                 }
 
@@ -2769,34 +2784,37 @@ impl AwsWorkerController {
 
                 // Add Lambda permission for EventBridge
                 let statement_id = format!("{}-eb-{}", worker_name, index);
-                let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
-                let permission_request = AddPermissionRequest::builder()
-                    .statement_id(statement_id.clone())
-                    .action("lambda:InvokeFunction".to_string())
-                    .principal("events.amazonaws.com".to_string())
-                    .source_arn(rule_arn)
-                    .build();
+                // On a protected install the verifier grants it from the signed stack.
+                if !verifier_owns_access(ctx) {
+                    let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+                    let permission_request = AddPermissionRequest::builder()
+                        .statement_id(statement_id.clone())
+                        .action("lambda:InvokeFunction".to_string())
+                        .principal("events.amazonaws.com".to_string())
+                        .source_arn(rule_arn)
+                        .build();
 
-                match lambda_client
-                    .add_permission(worker_name, permission_request)
-                    .await
-                {
-                    Ok(_) => {}
-                    Err(e) if is_remote_resource_conflict(&e) => {
-                        info!(
-                            worker=%config.id,
-                            statement_id=%statement_id,
-                            "EventBridge invoke permission already exists; treating as created"
-                        );
-                    }
-                    Err(e) => {
-                        return Err(e.context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to add EventBridge invoke permission for rule '{}'",
-                                rule_name
-                            ),
-                            resource_id: Some(config.id.clone()),
-                        }));
+                    match lambda_client
+                        .add_permission(worker_name, permission_request)
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(e) if is_remote_resource_conflict(&e) => {
+                            info!(
+                                worker=%config.id,
+                                statement_id=%statement_id,
+                                "EventBridge invoke permission already exists; treating as created"
+                            );
+                        }
+                        Err(e) => {
+                            return Err(e.context(ErrorData::CloudPlatformError {
+                                message: format!(
+                                    "Failed to add EventBridge invoke permission for rule '{}'",
+                                    rule_name
+                                ),
+                                resource_id: Some(config.id.clone()),
+                            }));
+                        }
                     }
                 }
 
@@ -2855,7 +2873,9 @@ impl AwsWorkerController {
         let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &config.id);
 
-        if let Some(limit) = config.concurrency_limit {
+        if verifier_owns_access(ctx) {
+            debug!(worker=%config.id, "The verifier set reserved concurrency from the signed stack");
+        } else if let Some(limit) = config.concurrency_limit {
             info!(worker=%config.id, limit=%limit, "Setting reserved concurrency on worker");
             client
                 .put_function_concurrency(&aws_worker_name, limit)
@@ -4299,34 +4319,39 @@ impl AwsWorkerController {
                         })?;
 
                     let statement_id = format!("{}-s3-{}", worker_name, storage_ref.id);
-                    let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
-                    let permission_request = AddPermissionRequest::builder()
-                        .statement_id(statement_id.clone())
-                        .action("lambda:InvokeFunction".to_string())
-                        .principal("s3.amazonaws.com".to_string())
-                        .source_arn(format!("arn:aws:s3:::{}", bucket_name))
-                        .build();
 
-                    match lambda_client
-                        .add_permission(worker_name, permission_request)
-                        .await
-                    {
-                        Ok(_) => {}
-                        Err(e) if is_remote_resource_conflict(&e) => {
-                            info!(
-                                worker=%current_config.id,
-                                statement_id=%statement_id,
-                                "S3 invoke permission already exists; treating as created"
-                            );
-                        }
-                        Err(e) => {
-                            return Err(e.context(ErrorData::CloudPlatformError {
-                                message: format!(
-                                    "Failed to add S3 invoke permission for storage '{}'",
-                                    storage_ref.id
-                                ),
-                                resource_id: Some(current_config.id.clone()),
-                            }));
+                    // On a protected install the verifier grants it from the signed stack.
+                    if !verifier_owns_access(ctx) {
+                        let lambda_client =
+                            ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+                        let permission_request = AddPermissionRequest::builder()
+                            .statement_id(statement_id.clone())
+                            .action("lambda:InvokeFunction".to_string())
+                            .principal("s3.amazonaws.com".to_string())
+                            .source_arn(format!("arn:aws:s3:::{}", bucket_name))
+                            .build();
+
+                        match lambda_client
+                            .add_permission(worker_name, permission_request)
+                            .await
+                        {
+                            Ok(_) => {}
+                            Err(e) if is_remote_resource_conflict(&e) => {
+                                info!(
+                                    worker=%current_config.id,
+                                    statement_id=%statement_id,
+                                    "S3 invoke permission already exists; treating as created"
+                                );
+                            }
+                            Err(e) => {
+                                return Err(e.context(ErrorData::CloudPlatformError {
+                                    message: format!(
+                                        "Failed to add S3 invoke permission for storage '{}'",
+                                        storage_ref.id
+                                    ),
+                                    resource_id: Some(current_config.id.clone()),
+                                }));
+                            }
                         }
                     }
 
@@ -4420,34 +4445,38 @@ impl AwsWorkerController {
                     }
                     let rule_arn = rule_response.rule_arn.unwrap_or_default();
                     let statement_id = format!("{}-eb-{}", worker_name, index);
-                    let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
-                    let permission_request = AddPermissionRequest::builder()
-                        .statement_id(statement_id.clone())
-                        .action("lambda:InvokeFunction".to_string())
-                        .principal("events.amazonaws.com".to_string())
-                        .source_arn(rule_arn)
-                        .build();
+                    // On a protected install the verifier grants it from the signed stack.
+                    if !verifier_owns_access(ctx) {
+                        let lambda_client =
+                            ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+                        let permission_request = AddPermissionRequest::builder()
+                            .statement_id(statement_id.clone())
+                            .action("lambda:InvokeFunction".to_string())
+                            .principal("events.amazonaws.com".to_string())
+                            .source_arn(rule_arn)
+                            .build();
 
-                    match lambda_client
-                        .add_permission(worker_name, permission_request)
-                        .await
-                    {
-                        Ok(_) => {}
-                        Err(e) if is_remote_resource_conflict(&e) => {
-                            info!(
-                                worker=%current_config.id,
-                                statement_id=%statement_id,
-                                "EventBridge invoke permission already exists; treating as created"
-                            );
-                        }
-                        Err(e) => {
-                            return Err(e.context(ErrorData::CloudPlatformError {
-                                message: format!(
-                                    "Failed to add EventBridge invoke permission for rule '{}'",
-                                    rule_name
-                                ),
-                                resource_id: Some(current_config.id.clone()),
-                            }));
+                        match lambda_client
+                            .add_permission(worker_name, permission_request)
+                            .await
+                        {
+                            Ok(_) => {}
+                            Err(e) if is_remote_resource_conflict(&e) => {
+                                info!(
+                                    worker=%current_config.id,
+                                    statement_id=%statement_id,
+                                    "EventBridge invoke permission already exists; treating as created"
+                                );
+                            }
+                            Err(e) => {
+                                return Err(e.context(ErrorData::CloudPlatformError {
+                                    message: format!(
+                                        "Failed to add EventBridge invoke permission for rule '{}'",
+                                        rule_name
+                                    ),
+                                    resource_id: Some(current_config.id.clone()),
+                                }));
+                            }
                         }
                     }
 
@@ -4501,7 +4530,9 @@ impl AwsWorkerController {
         let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &config.id);
 
-        if config.concurrency_limit != prev_config.concurrency_limit {
+        if verifier_owns_access(ctx) {
+            debug!(worker=%config.id, "The verifier set reserved concurrency from the signed stack");
+        } else if config.concurrency_limit != prev_config.concurrency_limit {
             match config.concurrency_limit {
                 Some(limit) => {
                     info!(worker=%config.id, limit=%limit, "Updating reserved concurrency on worker");
@@ -5982,7 +6013,9 @@ impl AwsWorkerController {
             &config.id,
             &environment,
             &Self::function_image_uri(ctx, config)?,
-        )?;
+        )?
+        // Once management created the API in front of the worker, the verifier may let it in.
+        .with_api(self.rest_api_id.as_deref().or(self.api_id.as_deref()));
         let lambda = ctx
             .service_provider
             .get_aws_lambda_client(ctx.get_aws_config()?)
@@ -12264,6 +12297,102 @@ mod tests {
         answer.expect("the verifier accepts the controller's request");
         assert_eq!(written.len(), 1);
         assert_eq!(written[0].image_uri, pinned_image('2'));
+    }
+
+    /// On a protected install who may invoke a function and its reserved concurrency are the
+    /// verifier's to write, from the signed stack: the worker's create sends the verifier the
+    /// release, and management never calls AddPermission or PutFunctionConcurrency (the Lambda
+    /// mock has no expectation for either). Management still creates the schedule's rule.
+    #[tokio::test]
+    async fn a_protected_worker_leaves_invoke_grants_and_concurrency_to_the_verifier() {
+        let mut worker = pinned_worker('2', 512);
+        worker.concurrency_limit = Some(5);
+        worker.triggers = vec![alien_core::WorkerTrigger::schedule("0 * * * *")];
+        let release = signed_release(
+            Platform::Aws,
+            &Stack::new("test".to_string())
+                .add(worker.clone(), ResourceLifecycle::Live)
+                .build(),
+            1,
+        );
+        let invocations = Arc::new(Mutex::new(Vec::new()));
+        let answer = serde_json::json!({"release": 1, "functions": [{
+            "function": PROTECTED_WORKER_NAME,
+            "imageUri": pinned_image('2'),
+            "digest": format!("sha256:{}", "2".repeat(64)),
+        }]});
+        let lambda = protected_lambda(invocations.clone(), invoke_answer(None, answer));
+        let rules = Arc::new(Mutex::new(Vec::new()));
+        let mut eventbridge = MockEventBridgeApi::new();
+        let recorded = rules.clone();
+        eventbridge.expect_put_rule().returning(move |request| {
+            recorded.lock().unwrap().push(request.name.clone());
+            Ok(alien_aws_clients::eventbridge::PutRuleResponse {
+                rule_arn: Some(format!(
+                    "arn:aws:events:us-east-1:123456789012:rule/{}",
+                    request.name
+                )),
+            })
+        });
+        eventbridge.expect_put_targets().returning(|_| Ok(()));
+        let eventbridge = Arc::new(eventbridge);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_lambda_client()
+            .returning(move |_| Ok(lambda.clone()));
+        let logs = create_logs_mock_accepting_log_groups();
+        provider
+            .expect_get_aws_logs_client()
+            .returning(move |_| Ok(logs.clone()));
+        provider
+            .expect_get_aws_eventbridge_client()
+            .returning(move |_| Ok(eventbridge.clone()));
+        let iam = create_aws_iam_mock_for_resource_permissions();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(AwsWorkerController::default())
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .stack_settings(protected_settings())
+            .signed_release(release, None)
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(*rules.lock().unwrap(), ["test-api-cron-0"]);
+        let invocations = invocations.lock().unwrap().clone();
+        assert_eq!(invocations.len(), 1, "one verifier call creates the function");
+        let (answer, written) = run_verifier(
+            alien_signing::InstallId::Aws {
+                account: "123456789012".to_string(),
+                region: "us-east-1".to_string(),
+                prefix: "test".to_string(),
+            },
+            "test",
+            &invocations[0].1,
+        )
+        .await;
+        answer.expect("the verifier accepts the controller's request");
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].reserved_concurrency, Some(5));
+        assert_eq!(
+            written[0]
+                .invoke_grants
+                .iter()
+                .map(|grant| (grant.statement_id.as_str(), grant.source_arn.as_str()))
+                .collect::<Vec<_>>(),
+            [(
+                "test-api-eb-0",
+                "arn:aws:events:us-east-1:123456789012:rule/test-api-cron-0"
+            )],
+            "the rule management created may invoke the function"
+        );
     }
 
     /// A verifier failure that isn't a refusal (a cloud call, a write that raced another) is

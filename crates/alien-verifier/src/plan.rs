@@ -70,6 +70,11 @@ pub struct ReleaseRequest {
     /// the signed digest. Only for the registry the images name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registry: Option<RegistryCredentials>,
+    /// AWS: the API Gateway API in front of each workload, by workload, once management created
+    /// it. Only a workload the signed stack gives a public endpoint may name one; the API may
+    /// then invoke the function.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub apis: BTreeMap<String, String>,
 }
 
 /// A registry's pull credentials.
@@ -259,6 +264,26 @@ pub struct FunctionSpec {
     /// Credentials for the registry the image is pulled from, when the request carried them.
     #[serde(skip)]
     pub registry: Option<RegistryCredentials>,
+    /// AWS: the reserved concurrency the signed stack sets, if any.
+    pub reserved_concurrency: Option<u32>,
+    /// AWS: who may invoke the function, from the signed stack's endpoints and triggers. The
+    /// function's resource policy holds exactly these.
+    pub invoke_grants: Vec<InvokeGrant>,
+}
+
+/// One statement of a Lambda function's resource policy: a service that may invoke it, for one
+/// source in this install.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvokeGrant {
+    /// The statement id, as the worker controller names it.
+    pub statement_id: String,
+    /// The AWS service, such as `s3.amazonaws.com`.
+    pub principal: String,
+    /// The one source the service may invoke the function for.
+    pub source_arn: String,
+    /// The account that source must belong to, for sources whose ARN names none (S3).
+    pub source_account: Option<String>,
 }
 
 /// What the verifier read from its own install for one workload.
@@ -410,9 +435,16 @@ pub fn plan_function(
         .as_ref()
         .is_some_and(|worker| worker.commands_enabled || !worker.triggers.is_empty());
     let registry = registry_for(request, &image_uri)?;
+    let name_in_cloud = place.function_name(name)?;
+    let invoke_grants = invoke_grants(
+        place,
+        signed.as_ref(),
+        &name_in_cloud,
+        request.apis.get(name).map(String::as_str),
+    )?;
     Ok(FunctionSpec {
         workload: name.clone(),
-        name: place.function_name(name)?,
+        name: name_in_cloud,
         image_uri,
         digest: digest.to_string(),
         env: std::mem::take(&mut built.env),
@@ -424,7 +456,76 @@ pub fn plan_function(
         public,
         dapr,
         registry,
+        reserved_concurrency: signed.as_ref().and_then(|worker| worker.concurrency_limit),
+        invoke_grants,
     })
+}
+
+/// Who may invoke the AWS function `function` of signed worker `worker`: the API Gateway API
+/// `api` when the worker has a public endpoint, each bucket a storage trigger names and each
+/// schedule's EventBridge rule, every source pinned to this account and region. The statement
+/// ids and the rule names are the worker controller's. Other clouds take none.
+fn invoke_grants(
+    place: &Place,
+    worker: Option<&alien_core::Worker>,
+    function: &str,
+    api: Option<&str>,
+) -> Result<Vec<InvokeGrant>> {
+    let InstallId::Aws {
+        account, region, ..
+    } = &place.install
+    else {
+        return match api {
+            None => Ok(Vec::new()),
+            Some(_) => Err(refused("only an AWS function is fronted by an API Gateway API")),
+        };
+    };
+    let mut grants = Vec::new();
+    if let Some(api) = api {
+        if !worker.is_some_and(|worker| !worker.public_endpoints.is_empty()) {
+            return Err(refused(format!(
+                "function {function} has no public endpoint in the signed stack, so no API may invoke it"
+            )));
+        }
+        let plain = !api.is_empty()
+            && api.len() <= 32
+            && api
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit());
+        if !plain {
+            return Err(refused(format!("'{api}' is not an API Gateway API id")));
+        }
+        grants.push(InvokeGrant {
+            statement_id: "ApiGatewayInvoke".to_string(),
+            principal: "apigateway.amazonaws.com".to_string(),
+            source_arn: format!("arn:aws:execute-api:{region}:{account}:{api}/*"),
+            source_account: None,
+        });
+    }
+    for (index, trigger) in worker
+        .map(|worker| worker.triggers.as_slice())
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+    {
+        match trigger {
+            alien_core::WorkerTrigger::Storage { storage, .. } => grants.push(InvokeGrant {
+                statement_id: format!("{function}-s3-{}", storage.id),
+                principal: "s3.amazonaws.com".to_string(),
+                source_arn: format!("arn:aws:s3:::{}-{}", place.prefix, storage.id),
+                source_account: Some(account.clone()),
+            }),
+            alien_core::WorkerTrigger::Schedule { .. } => grants.push(InvokeGrant {
+                statement_id: format!("{function}-eb-{index}"),
+                principal: "events.amazonaws.com".to_string(),
+                source_arn: format!("arn:aws:events:{region}:{account}:rule/{function}-cron-{index}"),
+                source_account: None,
+            }),
+            // A queue reaches the function through an event source mapping, not its policy.
+            alien_core::WorkerTrigger::Queue { .. } => {}
+        }
+    }
+    Ok(grants)
 }
 
 /// The request's registry credentials, if it carried any, for the registry `image` names. Ones
@@ -498,6 +599,7 @@ pub(crate) mod tests {
             images: BTreeMap::from([("api".to_string(), format!("{REGISTRY}/api@{DIGEST}"))]),
             workloads: None,
             registry: None,
+            apis: BTreeMap::new(),
         }
     }
 
@@ -553,8 +655,107 @@ pub(crate) mod tests {
                 public: false,
                 dapr: false,
                 registry: None,
+                reserved_concurrency: None,
+                invoke_grants: Vec::new(),
             }
         );
+    }
+
+    /// Release 1 of a stack whose worker `api` reserves 5, is fronted by a public endpoint when
+    /// `public`, and is triggered by bucket `uploads`, a queue and a schedule.
+    fn release_with_access(public: bool) -> SignedStatement {
+        let uploads = alien_core::Storage::new("uploads".to_string()).build();
+        let jobs = alien_core::Queue::new("jobs".to_string()).build();
+        let mut worker = alien_core::Worker::new("api".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: format!("ghcr.io/shop/api@{DIGEST}"),
+            })
+            .permissions("execution".to_string())
+            .concurrency_limit(5)
+            .build();
+        worker.triggers = vec![
+            alien_core::WorkerTrigger::storage(&uploads, vec!["created".to_string()]),
+            alien_core::WorkerTrigger::queue(&jobs),
+            alien_core::WorkerTrigger::schedule("0 * * * *"),
+        ];
+        if public {
+            worker.public_endpoints = vec![alien_core::WorkerPublicEndpoint {
+                name: "api".to_string(),
+                host_label: None,
+                wildcard_subdomains: false,
+            }];
+        }
+        let stack = alien_core::Stack::new("shop".to_string())
+            .add(uploads, alien_core::ResourceLifecycle::Frozen)
+            .add(jobs, alien_core::ResourceLifecycle::Frozen)
+            .add(worker, alien_core::ResourceLifecycle::Live)
+            .build();
+        let body = alien_core::release_statement::release_body(
+            alien_core::Platform::Aws,
+            &stack,
+            &alien_core::release_statement::ReleaseOptions {
+                channel: CHANNEL.to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        signed_release(1, &body)
+    }
+
+    #[tokio::test]
+    async fn who_may_invoke_a_function_and_how_often_come_from_the_signed_stack() {
+        let mut request = request(release_with_access(true));
+        request.images.clear();
+        request.provided_env.clear();
+        request.apis = BTreeMap::from([("api".to_string(), "a1b2c3d4e5".to_string())]);
+        let spec = planned(&request, &Reads::default()).await.unwrap();
+        assert_eq!(spec.reserved_concurrency, Some(5));
+        assert_eq!(
+            spec.invoke_grants,
+            vec![
+                InvokeGrant {
+                    statement_id: "ApiGatewayInvoke".to_string(),
+                    principal: "apigateway.amazonaws.com".to_string(),
+                    source_arn: format!("arn:aws:execute-api:{REGION}:{ACCOUNT}:a1b2c3d4e5/*"),
+                    source_account: None,
+                },
+                InvokeGrant {
+                    statement_id: format!("{PREFIX}-api-s3-uploads"),
+                    principal: "s3.amazonaws.com".to_string(),
+                    source_arn: format!("arn:aws:s3:::{PREFIX}-uploads"),
+                    source_account: Some(ACCOUNT.to_string()),
+                },
+                InvokeGrant {
+                    statement_id: format!("{PREFIX}-api-eb-2"),
+                    principal: "events.amazonaws.com".to_string(),
+                    source_arn: format!("arn:aws:events:{REGION}:{ACCOUNT}:rule/{PREFIX}-api-cron-2"),
+                    source_account: None,
+                },
+            ]
+        );
+
+        // Before management created the API, the function takes no API grant.
+        request.apis.clear();
+        let spec = planned(&request, &Reads::default()).await.unwrap();
+        assert!(spec
+            .invoke_grants
+            .iter()
+            .all(|grant| grant.principal != "apigateway.amazonaws.com"));
+    }
+
+    #[tokio::test]
+    async fn an_api_may_front_only_a_public_function_and_only_by_its_id() {
+        let mut private = request(release_with_access(false));
+        private.images.clear();
+        private.provided_env.clear();
+        private.apis = BTreeMap::from([("api".to_string(), "a1b2c3d4e5".to_string())]);
+        assert!(refused(&private).await.contains("has no public endpoint"));
+
+        let mut public = request(release_with_access(true));
+        public.images.clear();
+        public.provided_env.clear();
+        public.apis = BTreeMap::from([("api".to_string(), "*".to_string())]);
+        assert!(refused(&public).await.contains("is not an API Gateway API id"));
     }
 
     #[tokio::test]
