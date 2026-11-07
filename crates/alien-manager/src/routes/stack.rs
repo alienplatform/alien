@@ -602,7 +602,14 @@ async fn stack_import_as(
             .and_then(|metadata| metadata.get(SETUP_REGISTRATION_OPERATION_ID))
             .and_then(serde_json::Value::as_str)
             .is_some_and(|operation_id| !operation_id.is_empty());
-        if !has_registration_operation
+        // In a stable state, an unchanged import with a registration
+        // operation still goes through the write below, which records that
+        // operation as the new replay baseline. While the deployment is
+        // reconciling that write is refused, so an unchanged import, such as
+        // a setup source rolling back to what is installed, succeeds here
+        // and writes nothing.
+        if (!has_registration_operation
+            || (!activates_setup_reservation && !can_reconcile_after_import(&existing)))
             && is_idempotent_import(&existing, &stack_state, &release.id, &req)
         {
             let deployment_token = response_deployment_token(&subject, &existing);
