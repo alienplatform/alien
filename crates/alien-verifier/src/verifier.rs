@@ -167,6 +167,9 @@ impl Verifier {
             }
             specs.push(plan_function(&place, &accepted, request, workload, &reads)?);
         }
+        for spec in &specs {
+            own_name(&place, spec)?;
+        }
         if write {
             store_ledger(self.store.as_ref(), &place.prefix, &accepted.ledger).await?;
         }
@@ -284,6 +287,20 @@ impl Verifier {
     }
 }
 
+/// The verifier writes only `<prefix>-<workload>`: its own install's name for a function of the
+/// signed release. Its grants on Cloud Run reach every service in the project, so this check is
+/// the boundary: any other name is refused before the ledger or the cloud is written.
+fn own_name(place: &Place, spec: &FunctionSpec) -> Result<()> {
+    let own = place.function_name(&spec.workload)?;
+    if spec.name != own || !spec.name.starts_with(&format!("{}-", place.prefix)) {
+        return Err(refused(format!(
+            "function {} is not {own}, the name this install gives workload '{}'",
+            spec.name, spec.workload
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,6 +309,46 @@ mod tests {
     use alien_core::release_statement::{release_body, ReleaseOptions};
     use alien_core::{CapacityGroup, ComputeCluster, Platform, ResourceLifecycle, Stack};
     use std::sync::Mutex;
+
+    /// The verifier writes only its own install's name for a signed workload; a spec naming
+    /// another service is refused before anything is written, whatever built it.
+    #[test]
+    fn only_the_installs_own_names_are_written() {
+        let place = crate::plan::tests::place();
+        let spec = |name: &str| FunctionSpec {
+            workload: "api".into(),
+            name: name.into(),
+            image_uri: format!("{REGISTRY}/api@{DIGEST}"),
+            digest: DIGEST.into(),
+            env: Default::default(),
+            memory_mb: 512,
+            timeout_seconds: 30,
+            architecture: "arm64".into(),
+            run_as: "arn:aws:iam::111122223333:role/acme-prod-execution-sa".into(),
+            vpc: None,
+            public: false,
+            dapr: false,
+            registry: None,
+            reserved_concurrency: None,
+            invoke_grants: Vec::new(),
+        };
+        own_name(&place, &spec(&format!("{PREFIX}-api"))).unwrap();
+        for other in [
+            "other-install-api",
+            "acme-prod-other",
+            "acme-api",
+            "acme-prod-api-2",
+        ] {
+            let error = own_name(&place, &spec(other)).unwrap_err();
+            assert_eq!(error.code, "VERIFIER_REFUSED", "{other}");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("function {other} is not {PREFIX}-api")),
+                "{error}"
+            );
+        }
+    }
 
     /// A GCP backend that records each resize.
     #[derive(Default)]
