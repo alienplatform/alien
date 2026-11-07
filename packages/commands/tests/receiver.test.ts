@@ -995,26 +995,45 @@ describe("CommandReceiver.run", () => {
     }
   })
 
-  it("run rejects a terminal missing-token-file error", async () => {
+  it("keeps polling until its token file appears", async () => {
     const directory = await mkdtemp(join(tmpdir(), "alien-command-token-missing-"))
     const tokenFile = join(directory, "token")
     try {
+      server = await openServer()
+      const env = envelope({ baseUrl: server.baseUrl })
+      route = req => {
+        if (req.method === "POST" && req.path === "/v1/commands/leases") {
+          expect(req.headers.authorization).toBe("Bearer host-token")
+          return { json: { leases: [lease(env)] } }
+        }
+        return { status: 200 }
+      }
       const envWithoutToken: Record<string, string | undefined> = {
         ...FULL_ENV,
+        ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/`,
         ALIEN_COMMANDS_TOKEN_FILE: tokenFile,
       }
       envWithoutToken.ALIEN_COMMANDS_TOKEN = undefined
       const r = createCommandReceiver({
         env: envWithoutToken,
         pollIntervalMs: 5,
+        pollMaxIntervalMs: 10,
         pollJitter: 0,
       })
-
-      await expect(r.run()).rejects.toMatchObject({
-        code: "COMMAND_RECEIVER_CONFIG_INVALID",
-        retryable: false,
-        context: { envVar: "ALIEN_COMMANDS_TOKEN_FILE" },
+      r.handleRaw("echo", () => ({ ok: true }))
+      receiverStop = () => r.stop()
+      let stopped = false
+      running = r.run().finally(() => {
+        stopped = true
       })
+
+      // Several polls fail on the missing file; the receiver keeps running.
+      await new Promise(resolve => setTimeout(resolve, 60))
+      expect(stopped).toBe(false)
+      await writeFile(tokenFile, "host-token\n")
+      await waitFor(() => submitBody("cmd_1") !== undefined)
+      r.stop()
+      await running
     } finally {
       await rm(directory, { recursive: true, force: true })
     }

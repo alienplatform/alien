@@ -102,7 +102,10 @@ export interface ReceiverConnection {
   resourceType: Exclude<CommandTargetType, "worker">
 }
 
-export type ReceiverConnectionProvider = RefreshingConnectionProvider<ReceiverConnection>
+export type ReceiverConnectionProvider = RefreshingConnectionProvider<ReceiverConnection> & {
+  /** The credential is a file the host rotates; a rejection may clear later. */
+  readonly credentialRotates?: boolean
+}
 
 export function resolveReceiverConfig(
   options: CommandReceiverOptions | HostedCommandReceiverOptions,
@@ -331,19 +334,14 @@ class TokenSource {
     try {
       token = (await readFile(path, "utf8")).trim()
     } catch (error) {
-      throw (await AlienError.from(error)).withContext(
-        CommandReceiverConfigInvalidError.create({
-          envVar: ENV_ALIEN_COMMANDS_TOKEN_FILE,
-          reason: `Failed to read command token file '${path}'`,
-        }),
+      throw unavailableTokenFile(
+        `Failed to read command token file '${path}'`,
+        await AlienError.from(error),
       )
     }
     if (token === "") {
-      throw new AlienError(
-        CommandReceiverConfigInvalidError.create({
-          envVar: ENV_ALIEN_COMMANDS_TOKEN_FILE,
-          reason: `${ENV_ALIEN_COMMANDS_TOKEN_FILE} '${path}' contains an empty token`,
-        }),
+      throw unavailableTokenFile(
+        `${ENV_ALIEN_COMMANDS_TOKEN_FILE} '${path}' contains an empty token`,
       )
     }
     this.cachedFileToken = token
@@ -351,11 +349,33 @@ class TokenSource {
   }
 }
 
+/**
+ * The host writes the token file and rotates it, so it can be missing, empty
+ * or stale for a while. The receiver keeps polling with backoff.
+ */
+function unavailableTokenFile(reason: string, source?: AlienError): AlienError {
+  const definition = CommandReceiverConfigInvalidError.create({
+    envVar: ENV_ALIEN_COMMANDS_TOKEN_FILE,
+    reason,
+  })
+  return new AlienError({
+    code: definition.metadata.code,
+    message: definition.metadata.message(definition.context),
+    retryable: true,
+    internal: definition.metadata.internal,
+    httpStatusCode: definition.metadata.httpStatusCode,
+    context: definition.context,
+    source,
+  })
+}
+
 class EnvironmentReceiverConnectionProvider implements ReceiverConnectionProvider {
   private readonly tokenSource: TokenSource
+  readonly credentialRotates: boolean
 
   constructor(private readonly config: ReceiverConfig) {
     this.tokenSource = new TokenSource(config.token, config.tokenFile)
+    this.credentialRotates = config.token === undefined
   }
 
   async get(): Promise<ReceiverConnection> {
