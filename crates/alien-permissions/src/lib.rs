@@ -4,6 +4,8 @@ pub mod operations;
 pub use error::*;
 
 #[cfg(feature = "infrastructure")]
+pub mod aws_key_policy;
+#[cfg(feature = "infrastructure")]
 pub mod aws_resource_policies;
 #[cfg(feature = "infrastructure")]
 pub mod generators;

@@ -3,7 +3,7 @@ use crate::{
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
         downcast, emit_iam_role_policy_for_target_with_label, iam_policy_name_sanitize,
-        required_label, stack_permission_context, tags,
+        json_value_to_expression, jsonencode, required_label, stack_permission_context, tags,
     },
     expr,
 };
@@ -11,7 +11,10 @@ use alien_core::{
     id_error_message, id_regex_pattern, import::EmitContext, IdType, Key, PermissionSetReference,
     RemoteBindings, RemoteStackManagement, Result,
 };
-use alien_permissions::BindingTarget;
+use alien_permissions::{
+    aws_key_policy::{aws_key_policy, key_has_native_service_use},
+    BindingTarget,
+};
 use hcl::{
     expr::{Conditional, Expression},
     structure::Block,
@@ -90,6 +93,7 @@ impl TfEmitter for AwsKeyEmitter {
                     "deletion_window_in_days",
                     Expression::Number(hcl::Number::from(30i64)),
                 ),
+                attr("policy", key_policy(ctx)),
                 attr("tags", tags(ctx, "key")),
                 nested(crate::block::block(
                     "lifecycle",
@@ -233,6 +237,28 @@ impl TfEmitter for AwsKeyEmitter {
     }
 }
 
+/// Policy for a key that setup creates. A customer-supplied key keeps its own policy.
+fn key_policy(ctx: &EmitContext<'_>) -> Expression {
+    let management_role_arn = management_role_label(ctx)
+        .map(|label| serde_json::Value::String(format!("${{aws_iam_role.{label}.arn}}")));
+    jsonencode(json_value_to_expression(aws_key_policy(
+        serde_json::Value::String(
+            "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root"
+                .to_string(),
+        ),
+        management_role_arn,
+        key_has_native_service_use(ctx.stack, ctx.resource_id),
+    )))
+}
+
+fn management_role_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        (entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
+            .then(|| ctx.name_for(id))
+            .flatten()
+    })
+}
+
 fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
     ctx.stack.resources().find_map(|(id, entry)| {
         (entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
@@ -251,13 +277,7 @@ fn management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
             refs.iter()
                 .any(|reference| reference.id() == "key/management")
         });
-    has_permission.then(|| {
-        ctx.stack.resources().find_map(|(id, entry)| {
-            (entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
-                .then(|| ctx.name_for(id))
-                .flatten()
-        })
-    })?
+    has_permission.then(|| management_role_label(ctx))?
 }
 
 /// The setup-pinned AWS key identity used by imports and encrypted resources.
