@@ -63,6 +63,15 @@ pub fn helm_install(
         ),
     })?;
     let defaults = yaml_object(files, "values.yaml")?;
+    let schema: Value = serde_json::from_str(
+        files
+            .get("values.schema.json")
+            .ok_or_else(|| failed("the chart has no values.schema.json"))?,
+    )
+    .into_alien_error()
+    .context(ErrorData::VerifyFailed {
+        message: "the chart's values.schema.json is not JSON".to_string(),
+    })?;
     // What Helm renders with: the stored chart's values with the
     // installer's on top. An upgrade with `--reuse-values` stores the
     // previous values in the chart, so the chart's values alone aren't
@@ -98,6 +107,7 @@ pub fn helm_install(
         choices: Choices::Values {
             effective,
             defaults,
+            schema,
         },
     };
     let chart = match installed_chart_differences(&observed.record["chart"], files) {

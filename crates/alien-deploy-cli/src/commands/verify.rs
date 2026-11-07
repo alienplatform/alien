@@ -224,12 +224,16 @@ pub enum Choices {
     /// pinned fingerprint, every other parameter must be allowed.
     Parameters(BTreeMap<String, String>),
     /// Helm values in effect (`helm get values --all`): each top-level value
-    /// that isn't the signed chart's default must be allowed.
+    /// that isn't the signed chart's default must be allowed, and all of them
+    /// must satisfy the signed chart's values schema, which pins what an
+    /// allowed value may hold (image digests, no chart-run database).
     Values {
         /// Values in effect.
         effective: serde_json::Map<String, serde_json::Value>,
         /// The signed chart's `values.yaml`.
         defaults: serde_json::Map<String, serde_json::Value>,
+        /// The signed chart's `values.schema.json`.
+        schema: serde_json::Value,
     },
     /// Not readable from the install (Terraform variables live in the
     /// customer's own configuration); the reason is shown.
@@ -468,7 +472,11 @@ pub fn check_signed(
 }
 
 /// The line for what the customer chose, against the signed `allowed` list.
-fn choices_line(choices: &Choices, allowed: &[String], settings: &SigningSettings) -> Line {
+pub(crate) fn choices_line(
+    choices: &Choices,
+    allowed: &[String],
+    settings: &SigningSettings,
+) -> Line {
     let mut refused = Vec::new();
     let mut chosen = 0;
     let (label, what) = match choices {
@@ -492,6 +500,7 @@ fn choices_line(choices: &Choices, allowed: &[String], settings: &SigningSetting
         Choices::Values {
             effective,
             defaults,
+            schema,
         } => {
             let mut names: Vec<&String> = effective.keys().chain(defaults.keys()).collect();
             names.sort();
@@ -508,6 +517,7 @@ fn choices_line(choices: &Choices, allowed: &[String], settings: &SigningSetting
                     ));
                 }
             }
+            refused.extend(schema_violations(schema, effective));
             ("Values", "")
         }
         Choices::NotRead(reason) => return line("Variables", *reason, Mark::Info),
@@ -524,6 +534,35 @@ fn choices_line(choices: &Choices, allowed: &[String], settings: &SigningSetting
     } else {
         line(label, refused.join("; "), Mark::Fail)
     }
+}
+
+/// Where `effective` breaks the signed chart's values schema, as Helm would have refused it
+/// without `--skip-schema-validation`. A schema the validator can't read is itself a reason.
+fn schema_violations(
+    schema: &serde_json::Value,
+    effective: &serde_json::Map<String, serde_json::Value>,
+) -> Vec<String> {
+    let validator = match jsonschema::draft7::new(schema) {
+        Ok(validator) => validator,
+        Err(error) => {
+            return vec![format!(
+                "the signed chart's values schema can't be read: {error}"
+            )]
+        }
+    };
+    let instance = serde_json::Value::Object(effective.clone());
+    validator
+        .iter_errors(&instance)
+        .map(|error| {
+            let path = error.instance_path().to_string();
+            let path = path.trim_start_matches('/').replace('/', ".");
+            if path.is_empty() {
+                format!("the values break the signed schema: {error}")
+            } else {
+                format!("{path} breaks the signed schema: {error}")
+            }
+        })
+        .collect()
 }
 
 /// The release the ledger says runs, checked from the statement the control

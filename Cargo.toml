@@ -172,6 +172,8 @@ hyper = "1.6.0"
 hyper-util = "0.1"
 indexmap = "2.2.6"
 insta = "1"
+# Without its default features it resolves no remote references.
+jsonschema = { version = "0.60", default-features = false }
 zstd = "0.13"
 lambda-extension = "0.12"
 lambda_http = { version = "0.17", default-features = false, features = ["apigw_http", "tracing"] }

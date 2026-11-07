@@ -9,7 +9,9 @@
 
 use super::*;
 use crate::commands::verify::tests::{fingerprint, genesis, signed, PROJECT};
-use crate::commands::verify::{check_signed, render, signed_releases, verify_command, VerifyArgs};
+use crate::commands::verify::{
+    check_signed, choices_line, render, signed_releases, verify_command, Choices, VerifyArgs,
+};
 use alien_cli_common::setup_templates::{
     render_setup_template, RenderedSetupTemplate, SetupHostingOptions, SetupRenderOptions,
 };
@@ -138,6 +140,73 @@ async fn screen(files: &BTreeMap<String, String>, url: &str) -> Vec<Line> {
 
 fn find<'a>(lines: &'a [Line], label: &str) -> &'a Line {
     lines.iter().find(|line| line.label == label).unwrap()
+}
+
+/// The values of a protected chart's install, with `set` (dotted path, value) on top of the
+/// chart's defaults and the management values every install sets, checked as `verify` checks
+/// them.
+async fn values_line(set: &[(&str, Value)]) -> Line {
+    let rendered = chart().await;
+    let files: BTreeMap<String, String> = serde_json::from_slice(&rendered.bytes).unwrap();
+    let defaults = yaml_object(&files, "values.yaml").unwrap();
+    let mut effective = Value::Object(defaults.clone());
+    for (path, value) in [
+        ("management.token", Value::from("test-token")),
+        (
+            "management.defaultUrl",
+            Value::from("https://manager.example.com"),
+        ),
+    ]
+    .iter()
+    .chain(set)
+    {
+        let mut node = &mut effective;
+        let keys: Vec<&str> = path.split('.').collect();
+        for key in &keys[..keys.len() - 1] {
+            node = node
+                .as_object_mut()
+                .unwrap()
+                .entry(key.to_string())
+                .or_insert_with(|| Value::Object(Map::new()));
+        }
+        node[keys[keys.len() - 1]] = value.clone();
+    }
+    let Value::Object(effective) = effective else {
+        unreachable!()
+    };
+    let schema = serde_json::from_str(&files["values.schema.json"]).unwrap();
+    let settings = alien_signing::SigningSettings {
+        fingerprint: fingerprint(),
+        prefix: RELEASE.to_string(),
+        channel: "production".to_string(),
+    };
+    choices_line(
+        &Choices::Values {
+            effective,
+            defaults,
+            schema,
+        },
+        &rendered.setup_template().allowed,
+        &settings,
+    )
+}
+
+#[tokio::test]
+async fn a_nested_value_the_signed_schema_pins_fails_under_an_allowed_key() {
+    // `runtime` is a value the customer may set, but the signed schema pins its image to the
+    // signed digest: a tag alone would let the cluster pull whatever the tag names.
+    let line = values_line(&[("runtime.image.tag", Value::from("latest"))]).await;
+    assert_eq!(line.mark, Mark::Fail, "{}", line.text);
+    assert!(
+        line.text
+            .contains("runtime.image.tag breaks the signed schema"),
+        "{}",
+        line.text
+    );
+
+    // What the schema allows under an allowed key still passes.
+    let line = values_line(&[("management.token", Value::from("rotated"))]).await;
+    assert_eq!(line.mark, Mark::Pass, "{}", line.text);
 }
 
 #[tokio::test]
@@ -286,6 +355,32 @@ async fn a_protected_helm_release_verifies_and_changes_to_it_fail() {
         render(&lines)
     );
     assert_eq!(find(&lines, "Template").mark, Mark::Pass);
+
+    // A nested value under an allowed key that the schema pins: refused by the schema, and a
+    // release installed with the schema skipped fails verify.
+    let nested = ["--reuse-values", "--set", "runtime.image.tag=latest"];
+    let refused = install(&chart_dir, &nested);
+    assert!(
+        !refused.status.success(),
+        "the schema must refuse a tag without the signed digest"
+    );
+    let mut skipped = nested.to_vec();
+    skipped.push("--skip-schema-validation");
+    let output = install(&chart_dir, &skipped);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lines = screen(&files, &url).await;
+    assert_eq!(find(&lines, "Values").mark, Mark::Fail);
+    assert!(
+        find(&lines, "Values")
+            .text
+            .contains("runtime.image.tag breaks the signed schema"),
+        "{}",
+        render(&lines)
+    );
 
     // A changed chart: checked against the signed chart it is not what Helm
     // installed; checked as itself it is not the signed chart.

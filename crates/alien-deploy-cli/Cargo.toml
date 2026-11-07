@@ -15,6 +15,7 @@ name = "alien-deploy"
 path = "src/main.rs"
 
 [dependencies]
+jsonschema = { workspace = true }
 # Alien crates
 alien-core = { workspace = true }
 alien-aws-clients = { workspace = true }
