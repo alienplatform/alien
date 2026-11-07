@@ -15,29 +15,40 @@
 //! Environment: `PREFIX`, `FROM_IMAGE`, `TO_IMAGE`, `SEQUENCE` (the release's, 1 when unset),
 //! `NOT_AFTER` (RFC 3339, when the signer list expires; the same value for every command so the
 //! fingerprint matches), `PROTECTED` (`1` signs the release and sets the stack's signing) and
-//! `CLOUD` (`aws`, the default, or `gcp`). On AWS, the credentials to run as, normally the
+//! `CLOUD` (`aws`, the default, `gcp` or `azure`). On AWS, the credentials to run as, normally the
 //! install's management role. On GCP, `GCP_PROJECT`, `GCP_PROJECT_NUMBER`, `GCP_REGION`,
 //! `GCP_TOKEN_FILE` (an access token allowed to impersonate it) and `MANAGEMENT_SA`, the
-//! management service account to run as, and `EXECUTION_SA_UNIQUE_ID`.
+//! management service account to run as, and `EXECUTION_SA_UNIQUE_ID`. On Azure,
+//! `AZURE_TOKEN_FILE` (JSON with an ARM `accessToken`, `subscription` and `tenant`), `AZURE_LOCATION`,
+//! the install's resource group `<prefix>`, the workload environment setup created
+//! (`ENVIRONMENT_NAME`, `ENVIRONMENT_DOMAIN`), the runtime identity's `EXECUTION_SA_PRINCIPAL_ID`
+//! and `EXECUTION_SA_CLIENT_ID`, and `DEPLOYMENT_TOKEN`, the registry password the verifier
+//! hands Container Apps.
 
 use std::sync::Arc;
 
 use alien_aws_clients::AwsClientConfigExt as _;
 use alien_core::gcp_naming::gcp_service_account_id;
 use alien_core::import::data::aws::{AwsServiceAccountImportData, AwsWorkerImportData};
+use alien_core::import::data::azure::{
+    AzureContainerAppsEnvironmentImportData, AzureResourceGroupImportData,
+    AzureServiceAccountImportData, AzureWorkerImportData,
+};
 use alien_core::import::data::gcp::{GcpServiceAccountImportData, GcpWorkerImportData};
 use alien_core::import::ImportContext;
 use alien_core::release_statement::{release_body, ReleaseOptions};
 use alien_core::{
+    AzureClientConfig, AzureContainerAppsEnvironment, AzureCredentials, AzureResourceGroup,
     ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot, GcpClientConfig, GcpCredentials,
     GcpImpersonationConfig, Platform, ReleaseStatements, ResourceLifecycle, ResourceRef,
     ResourceStatus, ServiceAccount, Stack, StackSettings, StackSigning, StackState, Worker,
     WorkerCode,
 };
 use alien_infra::{
-    AwsServiceAccountImporter, AwsWorkerImporter, DefaultPlatformServiceProvider,
-    GcpServiceAccountImporter, GcpWorkerImporter, ResourceImporter, RunningResourcePolicy,
-    StackExecutor,
+    AwsServiceAccountImporter, AwsWorkerImporter, AzureContainerAppsEnvironmentImporter,
+    AzureResourceGroupImporter, AzureServiceAccountImporter, AzureWorkerImporter,
+    DefaultPlatformServiceProvider, GcpServiceAccountImporter, GcpWorkerImporter, ResourceImporter,
+    RunningResourcePolicy, StackExecutor,
 };
 use alien_permissions::generators::signing_limits;
 use alien_signing::envelope::Envelope;
@@ -51,6 +62,9 @@ use serde::Serialize;
 const WORKER: &str = "api";
 const PROFILE: &str = "execution";
 const CHANNEL: &str = "production";
+/// The ids preflights give an Azure stack's resource group and Container Apps environment.
+const AZURE_RESOURCE_GROUP: &str = "default-resource-group";
+const AZURE_ENVIRONMENT: &str = "default-container-env";
 
 type Error = Box<dyn std::error::Error>;
 
@@ -63,7 +77,8 @@ fn platform() -> Result<Platform, Error> {
     match std::env::var("CLOUD").as_deref() {
         Err(_) | Ok("aws") => Ok(Platform::Aws),
         Ok("gcp") => Ok(Platform::Gcp),
-        Ok(other) => Err(format!("CLOUD '{other}' is not aws or gcp").into()),
+        Ok("azure") => Ok(Platform::Azure),
+        Ok(other) => Err(format!("CLOUD '{other}' is not aws, gcp or azure").into()),
     }
 }
 
@@ -118,7 +133,9 @@ fn settings(prefix: &str) -> Result<SigningSettings, Error> {
     })
 }
 
-fn stack(image: &str) -> Stack {
+/// The stack running `image`: as the vendor authors and signs it, or `deployed` with what
+/// preflights add for the platform.
+fn stack(image: &str, deployed: bool) -> Stack {
     let worker = Worker::new(WORKER.to_string())
         .code(WorkerCode::Image {
             image: image.to_string(),
@@ -126,19 +143,35 @@ fn stack(image: &str) -> Stack {
         .permissions(PROFILE.to_string())
         .memory_mb(256)
         .build();
-    Stack::new("control-plane-e2e".to_string())
-        .add(
-            ServiceAccount::new(format!("{PROFILE}-sa")).build(),
-            ResourceLifecycle::Frozen,
-        )
-        .add_with_dependencies(
-            worker,
-            ResourceLifecycle::Live,
-            vec![ResourceRef::new(
-                ServiceAccount::RESOURCE_TYPE,
-                format!("{PROFILE}-sa"),
-            )],
-        )
+    let mut stack = Stack::new("control-plane-e2e".to_string()).add(
+        ServiceAccount::new(format!("{PROFILE}-sa")).build(),
+        ResourceLifecycle::Frozen,
+    );
+    let mut dependencies = vec![ResourceRef::new(
+        ServiceAccount::RESOURCE_TYPE,
+        format!("{PROFILE}-sa"),
+    )];
+    // On Azure, setup's resource group and the environment workers run in, as preflights add them.
+    if deployed && matches!(platform(), Ok(Platform::Azure)) {
+        stack = stack
+            .add(
+                AzureResourceGroup::new(AZURE_RESOURCE_GROUP.to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                AzureContainerAppsEnvironment::new(AZURE_ENVIRONMENT.to_string()).build(),
+                ResourceLifecycle::Frozen,
+            );
+        dependencies.extend([
+            ResourceRef::new(AzureResourceGroup::RESOURCE_TYPE, AZURE_RESOURCE_GROUP),
+            ResourceRef::new(
+                AzureContainerAppsEnvironment::RESOURCE_TYPE,
+                AZURE_ENVIRONMENT,
+            ),
+        ]);
+    }
+    stack
+        .add_with_dependencies(worker, ResourceLifecycle::Live, dependencies)
         .build()
 }
 
@@ -169,65 +202,150 @@ fn imported_state(
             management_config: None,
             resource: entry,
         };
-        let imported = match (platform, id == WORKER) {
-            (Platform::Aws, true) => AwsWorkerImporter.import(
-                AwsWorkerImportData {
-                    function_name: function_name.clone(),
-                    function_arn: format!(
-                        "arn:aws:lambda:{region}:{account}:function:{function_name}"
-                    ),
-                    url: None,
-                    api_id: None,
-                    integration_id: None,
-                    route_id: None,
-                    stage_name: None,
-                    rest_api_id: None,
-                    rest_stage_name: None,
-                    event_source_mappings: Vec::new(),
-                    eventbridge_rule_names: Vec::new(),
-                    eventbridge_permission_statement_ids: Vec::new(),
-                    s3_permission_statement_ids: Vec::new(),
-                },
-                &ctx,
-            )?,
-            (Platform::Aws, false) => AwsServiceAccountImporter.import(
-                AwsServiceAccountImportData {
-                    role_name: account_name.clone(),
-                    role_arn: format!("arn:aws:iam::{account}:role/{account_name}"),
-                    stack_permissions_applied: true,
-                },
-                &ctx,
-            )?,
-            (_, true) => GcpWorkerImporter.import(
-                GcpWorkerImportData {
-                    project_id: account.to_string(),
-                    region: region.to_string(),
-                    service_name: function_name.clone(),
-                    url: None,
-                    pubsub_subscription_names: Vec::new(),
-                    scheduler_job_names: Vec::new(),
-                    eventarc_trigger_names: Vec::new(),
-                    commands_topic_name: None,
-                    commands_subscription_name: None,
-                },
-                &ctx,
-            )?,
-            (_, false) => GcpServiceAccountImporter.import(
-                GcpServiceAccountImportData {
-                    project_id: account.to_string(),
-                    service_account_email: format!(
-                        "{}@{account}.iam.gserviceaccount.com",
-                        gcp_service_account_id(prefix, &format!("{PROFILE}-sa"))
-                    ),
-                    service_account_unique_id: env("EXECUTION_SA_UNIQUE_ID")?,
-                    stack_permissions_applied: true,
-                },
-                &ctx,
-            )?,
+        let imported = if platform == Platform::Azure {
+            azure_import(prefix, account, region, id, &ctx)?
+        } else {
+            match (platform, id == WORKER) {
+                (Platform::Aws, true) => AwsWorkerImporter.import(
+                    AwsWorkerImportData {
+                        function_name: function_name.clone(),
+                        function_arn: format!(
+                            "arn:aws:lambda:{region}:{account}:function:{function_name}"
+                        ),
+                        url: None,
+                        api_id: None,
+                        integration_id: None,
+                        route_id: None,
+                        stage_name: None,
+                        rest_api_id: None,
+                        rest_stage_name: None,
+                        event_source_mappings: Vec::new(),
+                        eventbridge_rule_names: Vec::new(),
+                        eventbridge_permission_statement_ids: Vec::new(),
+                        s3_permission_statement_ids: Vec::new(),
+                    },
+                    &ctx,
+                )?,
+                (Platform::Aws, false) => AwsServiceAccountImporter.import(
+                    AwsServiceAccountImportData {
+                        role_name: account_name.clone(),
+                        role_arn: format!("arn:aws:iam::{account}:role/{account_name}"),
+                        stack_permissions_applied: true,
+                    },
+                    &ctx,
+                )?,
+                (_, true) => GcpWorkerImporter.import(
+                    GcpWorkerImportData {
+                        project_id: account.to_string(),
+                        region: region.to_string(),
+                        service_name: function_name.clone(),
+                        url: None,
+                        pubsub_subscription_names: Vec::new(),
+                        scheduler_job_names: Vec::new(),
+                        eventarc_trigger_names: Vec::new(),
+                        commands_topic_name: None,
+                        commands_subscription_name: None,
+                    },
+                    &ctx,
+                )?,
+                (_, false) => GcpServiceAccountImporter.import(
+                    GcpServiceAccountImportData {
+                        project_id: account.to_string(),
+                        service_account_email: format!(
+                            "{}@{account}.iam.gserviceaccount.com",
+                            gcp_service_account_id(prefix, &format!("{PROFILE}-sa"))
+                        ),
+                        service_account_unique_id: env("EXECUTION_SA_UNIQUE_ID")?,
+                        stack_permissions_applied: true,
+                    },
+                    &ctx,
+                )?,
+            }
         };
         state.resources.insert(id.clone(), imported);
     }
     Ok(state)
+}
+
+/// One resource of the Azure install, as setup created it in resource group `<prefix>` of
+/// subscription `subscription`.
+fn azure_import(
+    prefix: &str,
+    subscription: &str,
+    location: &str,
+    id: &str,
+    ctx: &ImportContext<'_>,
+) -> Result<alien_core::StackResourceState, Error> {
+    let group = format!("/subscriptions/{subscription}/resourceGroups/{prefix}");
+    Ok(match id {
+        AZURE_RESOURCE_GROUP => AzureResourceGroupImporter.import(
+            AzureResourceGroupImportData {
+                subscription_id: subscription.to_string(),
+                resource_group: prefix.to_string(),
+                location: location.to_string(),
+            },
+            ctx,
+        )?,
+        AZURE_ENVIRONMENT => {
+            let name = env("ENVIRONMENT_NAME")?;
+            AzureContainerAppsEnvironmentImporter.import(
+                AzureContainerAppsEnvironmentImportData {
+                    subscription_id: subscription.to_string(),
+                    resource_group: prefix.to_string(),
+                    resource_id: format!(
+                        "{group}/providers/Microsoft.App/managedEnvironments/{name}"
+                    ),
+                    environment_name: name,
+                    default_domain: env("ENVIRONMENT_DOMAIN")?,
+                    custom_domain_verification_id: None,
+                },
+                ctx,
+            )?
+        }
+        WORKER => AzureWorkerImporter.import(
+            AzureWorkerImportData {
+                subscription_id: subscription.to_string(),
+                resource_group: prefix.to_string(),
+                container_app_name: format!("{prefix}-{WORKER}"),
+                fqdn: None,
+            },
+            ctx,
+        )?,
+        _ => AzureServiceAccountImporter.import(
+            AzureServiceAccountImportData {
+                subscription_id: subscription.to_string(),
+                resource_group: prefix.to_string(),
+                identity_id: format!(
+                    "{group}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{prefix}-{PROFILE}-sa"
+                ),
+                principal_id: env("EXECUTION_SA_PRINCIPAL_ID")?,
+                client_id: env("EXECUTION_SA_CLIENT_ID")?,
+                stack_permissions_applied: true,
+            },
+            ctx,
+        )?,
+    })
+}
+
+/// The management identity's Azure credentials: the ARM access token in `AZURE_TOKEN_FILE`.
+fn azure_management() -> Result<AzureClientConfig, Error> {
+    let file: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(env("AZURE_TOKEN_FILE")?)?)?;
+    let field = |name: &str| -> Result<String, Error> {
+        file[name]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| format!("AZURE_TOKEN_FILE has no {name}").into())
+    };
+    Ok(AzureClientConfig {
+        subscription_id: field("subscription")?,
+        tenant_id: field("tenant")?,
+        region: Some(env("AZURE_LOCATION")?),
+        credentials: AzureCredentials::AccessToken {
+            token: field("accessToken")?,
+        },
+        service_overrides: None,
+    })
 }
 
 /// The management identity's GCP credentials: the access token in `GCP_TOKEN_FILE`
@@ -263,7 +381,7 @@ fn gcp_management() -> Result<GcpClientConfig, Error> {
 fn signed_release(image: &str, sequence: u64) -> Result<ReleaseStatements, Error> {
     let body = release_body(
         platform()?,
-        &stack(image),
+        &stack(image, false),
         &ReleaseOptions {
             channel: CHANNEL.to_string(),
             ..Default::default()
@@ -278,7 +396,7 @@ fn signed_release(image: &str, sequence: u64) -> Result<ReleaseStatements, Error
 async fn update() -> Result<(), Error> {
     let prefix = env("PREFIX")?;
     let protected = env("PROTECTED")? == "1";
-    let target = stack(&env("TO_IMAGE")?);
+    let target = stack(&env("TO_IMAGE")?, true);
     let mut stack_settings = StackSettings::default();
     let mut statements = None;
     if protected {
@@ -296,6 +414,11 @@ async fn update() -> Result<(), Error> {
             let (account, region) = (aws.account_id.clone(), aws.region.clone());
             (ClientConfig::Aws(Box::new(aws)), account, region)
         }
+        Platform::Azure => {
+            let azure = azure_management()?;
+            let (subscription, location) = (azure.subscription_id.clone(), env("AZURE_LOCATION")?);
+            (ClientConfig::Azure(Box::new(azure)), subscription, location)
+        }
         _ => {
             let gcp = gcp_management()?;
             let (project, region) = (gcp.project_id.clone(), gcp.region.clone());
@@ -306,7 +429,7 @@ async fn update() -> Result<(), Error> {
         &prefix,
         &account,
         &region,
-        &stack(&env("FROM_IMAGE")?),
+        &stack(&env("FROM_IMAGE")?, true),
         !env("FROM_IMAGE")?.is_empty(),
         &stack_settings,
     )?;
@@ -318,6 +441,7 @@ async fn update() -> Result<(), Error> {
             hash: String::new(),
             created_at: String::new(),
         })
+        .maybe_deployment_token(std::env::var("DEPLOYMENT_TOKEN").ok())
         .external_bindings(Default::default())
         .allow_frozen_changes(false)
         .build();
