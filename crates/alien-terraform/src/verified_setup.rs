@@ -8,7 +8,8 @@
 //!    `setup/<setup_reservation_id>/intent.json`. Only the managing identity
 //!    may read that object and list that exact key.
 //! 3. `setup_observe` asks the manager to read the record and activate the
-//!    deployment. It carries no token and no code.
+//!    deployment. It carries no token. It carries the code, which the manager
+//!    uses only after it has read the record.
 //!
 //! On destroy, Terraform deletes the record before `this`, so the manager can
 //! confirm the record is gone before it removes the deployment. The bucket
@@ -210,7 +211,9 @@ pub(crate) fn reserve_dependencies(target: TerraformTarget) -> Vec<Expression> {
 }
 
 /// The activation resource. It runs after the record exists and carries no
-/// token and no code.
+/// token. It carries the one-use code: the manager uses the code only here,
+/// after it has read the record, so `terraform apply` alone activates the
+/// install. Once the install is active the provider no longer sends it.
 pub(crate) fn observe_block(
     target: TerraformTarget,
     registration: &TerraformRegistration,
@@ -229,6 +232,7 @@ pub(crate) fn observe_block(
         expr::raw("var.setup_reservation_id"),
     ));
     attributes.push(attr("setup_stage", Expression::String("observe".into())));
+    attributes.push(attr("enrollment_code", expr::raw("var.enrollment_code")));
     attributes.push(attr("setup_account_id", expr::raw(setup_account(target))));
     attributes.push(attr(
         "depends_on",
