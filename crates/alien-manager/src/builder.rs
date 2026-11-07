@@ -805,6 +805,15 @@ impl AlienManagerBuilder {
             require_provider!(self.credential_resolver, "credential_resolver");
         let telemetry_backend = require_provider!(self.telemetry_backend, "telemetry_backend");
         let auth_validator = require_provider!(self.auth_validator, "auth_validator");
+        // Before it enrolls, an operator pulls its own image with its code.
+        let charts = match (self.charts, &self.runtime_identity_verifier) {
+            (Some(charts), Some(verifier)) => {
+                let mut charts = (*charts).clone();
+                charts.enrollment_codes = Some(verifier.clone());
+                Some(Arc::new(charts))
+            }
+            (charts, _) => charts,
+        };
         let extra_routes = if let Some(verifier) = self.runtime_identity_verifier {
             let credentials = self.runtime_credentials.clone().ok_or_else(|| {
                 ErrorData::bad_request("Identity exchange requires runtime credentials")
@@ -861,7 +870,7 @@ impl AlienManagerBuilder {
             self.dev_status_tx,
             self.import_registry,
             self.tunnels,
-            self.charts,
+            charts,
             self.release_channels,
             self.bundle_signing_key,
             self.bundle_sources,

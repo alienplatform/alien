@@ -888,6 +888,7 @@ dependencies = [
  "alien-permissions",
  "alien-preflights",
  "alien-terraform",
+ "base64 0.22.1",
  "flate2",
  "indexmap 2.14.1",
  "insta",

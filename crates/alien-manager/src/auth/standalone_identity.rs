@@ -343,6 +343,13 @@ impl RuntimeIdentityVerifier for StandaloneRuntimeIdentity {
             .await
             .map_err(|_| unavailable())
     }
+
+    async fn enrollment_code_is_live(&self, code: &str) -> Result<bool, AlienError> {
+        self.store
+            .code_is_live(code, self.now())
+            .await
+            .map_err(|_| unavailable())
+    }
 }
 
 #[cfg(test)]

@@ -5861,21 +5861,44 @@ roleRef:
     .to_string()
 }
 
-/// Pull credentials for an Operator image served by the manager: the
-/// registry is the image's host and the password is the install token.
+/// Pull credentials for an Operator image served by the manager. The
+/// registry is the image's host. A token install pulls with its token. An
+/// enrollment install first pulls with its one-hour code; once enrolled the
+/// operator keeps this Secret filled with its own pull credential, which
+/// outlives the code. An upgrade keeps that credential unless the code
+/// changed, so a new code can recover an operator whose credential expired.
 fn registry_secret_tpl() -> String {
-    r#"{{- if and (dig "pullWithManagementToken" false .Values.runtime.image) .Values.management.token }}
+    r#"{{- $pull := dig "pullWithManagementToken" false .Values.runtime.image }}
+{{- if and $pull (or .Values.management.token .Values.management.enrollmentCode) }}
 {{- $registry := first (splitList "/" .Values.runtime.image.repository) }}
-{{- $auth := printf "%s:%s" (default "deployment" .Values.management.name) .Values.management.token | b64enc }}
+{{- $name := printf "%s-registry" (include "deployment.fullname" .) }}
+{{- $user := default "deployment" .Values.management.name }}
+{{- $codeHash := "" }}
+{{- $config := "" }}
+{{- if .Values.management.token }}
+{{- $config = dict "auths" (dict $registry (dict "auth" (printf "%s:%s" $user .Values.management.token | b64enc))) | toJson | b64enc }}
+{{- else }}
+{{- $codeHash = .Values.management.enrollmentCode | sha256sum }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+{{- if and $existing (eq (dig "metadata" "annotations" "alien.dev/enrollment-code-sha256" "" $existing) $codeHash) (hasKey (default dict $existing.data) ".dockerconfigjson") }}
+{{- $config = index $existing.data ".dockerconfigjson" }}
+{{- else }}
+{{- $config = dict "auths" (dict $registry (dict "auth" (printf "%s:%s" $user .Values.management.enrollmentCode | b64enc))) | toJson | b64enc }}
+{{- end }}
+{{- end }}
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ include "deployment.fullname" . }}-registry
+  name: {{ $name }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
+  {{- if $codeHash }}
+  annotations:
+    alien.dev/enrollment-code-sha256: {{ $codeHash | quote }}
+  {{- end }}
 type: kubernetes.io/dockerconfigjson
 data:
-  .dockerconfigjson: {{ dict "auths" (dict $registry (dict "auth" $auth)) | toJson | b64enc }}
+  .dockerconfigjson: {{ $config }}
 {{- end }}
 "#
     .to_string()
@@ -6697,7 +6720,7 @@ spec:
       automountServiceAccountToken: {{ .Values.runtime.automountServiceAccountToken }}
       securityContext:
         {{- toYaml .Values.runtime.security.podSecurityContext | nindent 8 }}
-      {{- $pullWithToken := and (dig "pullWithManagementToken" false .Values.runtime.image) .Values.management.token }}
+      {{- $pullWithToken := and (dig "pullWithManagementToken" false .Values.runtime.image) (or .Values.management.token .Values.management.enrollmentCode) }}
       {{- if or .Values.runtime.imagePullSecrets $pullWithToken }}
       imagePullSecrets:
         {{- with .Values.runtime.imagePullSecrets }}
@@ -6814,6 +6837,10 @@ spec:
               value: /etc/deployment/secrets/enrollment-code
             - name: ALIEN_MANAGER_AUDIENCE
               value: {{ .Values.management.audience | quote }}
+            {{- if dig "pullWithManagementToken" false .Values.runtime.image }}
+            - name: OPERATOR_REGISTRY_SECRET
+              value: {{ printf "%s-registry" (include "deployment.fullname" .) | quote }}
+            {{- end }}
             {{- else }}
             - name: SYNC_TOKEN_FILE
               value: /etc/deployment/secrets/sync-token
@@ -9640,6 +9667,114 @@ mod tests {
             .assert_ok("helm template registered setup");
         crate::test_utils::helm_template_and_validate(&files, Some(&files["examples/onprem.yaml"]))
             .assert_ok("helm template external-bindings initialize path");
+    }
+
+    /// A chart served by the manager pulls the Operator image through the
+    /// manager. The pod must name a pull Secret the chart really creates, for
+    /// the manager's host, in token and in enrollment mode.
+    #[test]
+    fn manager_served_chart_pulls_the_operator_with_a_secret_it_creates() {
+        use base64::Engine as _;
+        let registry = HelmRegistry::built_in();
+        let chart = crate::package::apply_package_defaults(
+            generate_helm_chart(
+                &sample_stack(),
+                HelmOptions {
+                    registry: &registry,
+                    stack_settings: StackSettings::default(),
+                    chart_name: "sample-stack".to_string(),
+                },
+            )
+            .expect("chart"),
+            &crate::package::PackageDefaults {
+                operator_image: Some(crate::package::OperatorImageDefault {
+                    repository: "manager.example.test/alien-operator",
+                    tag: "v1",
+                }),
+                registry_pull_secret: true,
+                ..Default::default()
+            },
+        )
+        .expect("package defaults");
+        let stack_state =
+            alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
+        for (credential, password) in [
+            (
+                ManagementCredential::Token("ax_deploy_example"),
+                "ax_deploy_example",
+            ),
+            (
+                ManagementCredential::EnrollmentCode {
+                    code: "ax_enroll_example",
+                    audience: "https://manager.example.test",
+                },
+                "ax_enroll_example",
+            ),
+        ] {
+            let values = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
+                deployment_id: "dep_example",
+                deployment_name: "prod",
+                manager_url: "https://manager.example.test",
+                credential,
+                runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
+                stack: &sample_stack(),
+                stack_state: &stack_state,
+                stack_settings: &StackSettings::default(),
+                base_platform: None,
+                region: None,
+                gcp_project_id: None,
+                azure_location: None,
+            })
+            .expect("values should render");
+            let rendered = crate::test_utils::helm_template(&chart.files, Some(values.as_str()));
+            rendered.assert_ok("manager-served chart");
+            let docs = parse_manifest_docs(&rendered.stdout);
+            let secrets = docs_by_kind(&docs, "Secret");
+            let operator = docs_by_kind(&docs, "Deployment")
+                .into_iter()
+                .find(|deployment| {
+                    deployment["spec"]["template"]["spec"]["containers"][0]["name"].as_str()
+                        == Some("operator")
+                })
+                .expect("Operator Deployment");
+            let pod = &operator["spec"]["template"]["spec"];
+            assert!(pod["containers"][0]["image"]
+                .as_str()
+                .unwrap()
+                .starts_with("manager.example.test/alien-operator:"));
+            let names: Vec<&str> = pod["imagePullSecrets"]
+                .as_sequence()
+                .unwrap_or_else(|| panic!("{password}: the Operator pod names no pull Secret"))
+                .iter()
+                .map(|entry| entry["name"].as_str().unwrap())
+                .collect();
+            assert!(!names.is_empty(), "{password}: no pull Secret");
+            for name in names {
+                let secret = secrets
+                    .iter()
+                    .find(|secret| secret["metadata"]["name"].as_str() == Some(name))
+                    .unwrap_or_else(|| panic!("{password}: pull Secret {name} is not rendered"));
+                assert_eq!(
+                    secret["type"].as_str(),
+                    Some("kubernetes.io/dockerconfigjson")
+                );
+                let engine = base64::engine::general_purpose::STANDARD;
+                let config: serde_json::Value = serde_json::from_slice(
+                    &engine
+                        .decode(secret["data"][".dockerconfigjson"].as_str().unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                let auth = engine
+                    .decode(
+                        config["auths"]["manager.example.test"]["auth"]
+                            .as_str()
+                            .unwrap(),
+                    )
+                    .unwrap();
+                assert_eq!(String::from_utf8(auth).unwrap(), format!("prod:{password}"));
+            }
+        }
     }
 
     #[test]

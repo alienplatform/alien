@@ -536,6 +536,9 @@ async fn sync_with_manager(
             warn!(error = %e, image, "Operator self-update failed; will retry on the next sync");
         }
     }
+    if let Err(e) = crate::self_update::refresh_pull_secret(state).await {
+        warn!(error = %e, "Operator pull Secret refresh failed; will retry on the next sync");
+    }
 
     // Persist the target bundle set so a restart doesn't lose it for a full
     // extra tick — the sync_bundles() call above (built from THIS response,
