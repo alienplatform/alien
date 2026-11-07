@@ -255,12 +255,14 @@ pub async fn handle_update_pending(
         .and_then(|release| release.release_id.as_deref());
 
     // Run deployment-time preflights: compatibility checks + mutations + runtime checks
-    // Store the mutated stack to use for the actual update and for future compatibility checks
+    // Store the mutated stack to use for the actual update and for future compatibility checks.
+    // The setup update authority is bound to the setup it was prepared for (the installed and
+    // target setup digests the preflights compare), not to the release that recorded it: a newer
+    // release needing the same setup may use it after that release's apply failed.
     let setup_update_authorization = current
         .runtime_metadata
         .as_ref()
-        .and_then(|metadata| metadata.setup_update_authorization.as_ref())
-        .filter(|authorization| Some(authorization.release_id.as_str()) == target_release_id);
+        .and_then(|metadata| metadata.setup_update_authorization.as_ref());
     let (mutated_stack, _deployment_summary, setup_update_authorized) = runner
         .run_deployment_time_preflights(
             target_stack.clone(),
