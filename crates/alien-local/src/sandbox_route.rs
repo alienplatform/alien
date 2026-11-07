@@ -304,8 +304,25 @@ impl SandboxRoute {
             })
         })?;
 
+        // Containers linked to the sandbox reach the host through Docker's private gateway, not
+        // loopback, so the route is forwarded there too, as the dev server and Postgres are. The
+        // forward ends with the route: the serving task holds its sender. Every request still
+        // needs the route's token.
+        let (proxy_shutdown, proxy_stop) = tokio::sync::oneshot::channel::<()>();
+        crate::docker_network::start_docker_bridge_proxy_with_shutdown(address, async move {
+            let _ = proxy_stop.await;
+        })
+        .await
+        .map_err(|error| {
+            AlienError::new(ErrorData::SandboxSessionFailed {
+                session_id: sandbox.to_string(),
+                operation: format!("forward the route to Docker's host gateway: {error}"),
+            })
+        })?;
+
         let (shutdown, stop) = tokio::sync::oneshot::channel::<()>();
         let serving = tokio::spawn(async move {
+            let _proxy_shutdown = proxy_shutdown;
             let serve = axum::serve(listener, router).with_graceful_shutdown(async move {
                 // Either an explicit stop or the sender being dropped ends the wait.
                 let _ = stop.await;
