@@ -7726,6 +7726,80 @@ mod tests {
         assert_eq!(executor.status(), ResourceStatus::Running);
     }
 
+    /// A setup made before setup owned a registry pull identity can still have
+    /// an ArtifactRegistry, saved without those fields. Its next worker update
+    /// must keep the stored pull instead of asking for a setup update.
+    #[tokio::test]
+    async fn worker_update_with_a_registry_from_before_the_pull_identity_keeps_the_legacy_pull() {
+        let worker = basic_function();
+        let app_name = format!("test-{}", worker.id);
+        let mut apps = MockContainerAppsApi::new();
+        let created = app_name.clone();
+        apps.expect_create_or_update_container_app()
+            .withf(|_, _, app| {
+                let configuration = app
+                    .properties
+                    .as_ref()
+                    .and_then(|properties| properties.configuration.as_ref())
+                    .unwrap();
+                configuration.registries.iter().any(|registry| {
+                    registry.identity.is_none()
+                        && registry.password_secret_ref.as_deref()
+                            == Some("registry-proxy-password")
+                })
+            })
+            .times(1..)
+            .returning(move |_, _, _| {
+                Ok(OperationResult::Completed(
+                    create_successful_container_app_response(&created, false),
+                ))
+            });
+        apps.expect_get_container_app()
+            .returning(move |_, _| Ok(create_successful_container_app_response(&app_name, false)))
+            .times(0..);
+        let provider = setup_mock_service_provider(Arc::new(apps), None);
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(AzureWorkerController::default())
+            .platform(Platform::Azure)
+            .service_provider(provider)
+            .runtime_identity_audience("manager-one".into())
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        // The registry as an older release saved it: no pull identity fields.
+        let mut registry = alien_core::StackResourceState::new_pending(
+            alien_core::ArtifactRegistry::RESOURCE_TYPE.to_string(),
+            alien_core::Resource::new(
+                alien_core::ArtifactRegistry::new("registry".to_string()).build(),
+            ),
+            Some(alien_core::ResourceLifecycle::Frozen),
+            vec![],
+        );
+        registry.status = ResourceStatus::Running;
+        let mut saved =
+            serde_json::to_value(crate::artifact_registry::AzureArtifactRegistryController {
+                registry_name: Some("oldregistry".into()),
+                resource_group_name: Some("old-group".into()),
+                login_server: Some("oldregistry.azurecr.io".into()),
+                subscription_id: Some("00000000-0000-0000-0000-000000000000".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        for field in [
+            "pullIdentityResourceId",
+            "pullPrincipalId",
+            "pullRoleAssignmentId",
+        ] {
+            saved.as_object_mut().unwrap().remove(field);
+        }
+        registry.internal_state = Some(saved);
+        executor.insert_saved_resource("registry", registry);
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+    }
+
     /// Test that verifies environment variables are correctly passed
     #[tokio::test]
     async fn test_environment_variable_handling() {
