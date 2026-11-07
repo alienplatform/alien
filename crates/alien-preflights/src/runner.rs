@@ -612,8 +612,9 @@ impl PreflightRunner {
                 // this, the update would run on the old grants, and the setup run that
                 // applies the new ones would find nothing pending.
                 return Err(AlienError::new(ErrorData::SetupRequired {
-                    message: "The management permissions changed. Run setup again to apply them"
-                        .to_string(),
+                    message:
+                        "this release changes the management permissions, which only setup applies"
+                            .to_string(),
                 }));
             } else {
                 info!("Applying explicit authority for frozen resource changes");
