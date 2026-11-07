@@ -423,13 +423,17 @@ pub fn check_signed(
             })
             .unwrap_or_else(|| id.to_string())
     };
-    let running = ledger
+    // The verifier records a release in the ledger before it deploys it, so a deploy that then
+    // fails leaves it there: the ledger says which release was accepted (and that nothing older
+    // can run), not that it runs.
+    let accepted = ledger
         .floor(Kind::Release)
         .context(ErrorData::VerifyFailed {
             message: "the ledger can't be read".to_string(),
         })?;
-    lines.push(match running {
-        None => line("Running", "nothing yet: no release has been accepted", Mark::Info),
+    const ACCEPTED: &str = "Accepted release";
+    lines.push(match accepted {
+        None => line(ACCEPTED, "nothing yet: no release has been accepted", Mark::Info),
         Some(entry) => match running_release(&trust, &settings, &signed.releases, &entry.digest, now) {
             Ok((id, signers, still_trusted)) => {
                 let signed_by = signers
@@ -439,7 +443,7 @@ pub fn check_signed(
                     .join(", ");
                 if still_trusted {
                     line(
-                        "Running",
+                        ACCEPTED,
                         format!("release {id} · signed by {signed_by} · {}", entry.digest),
                         Mark::Pass,
                     )
@@ -447,9 +451,9 @@ pub fn check_signed(
                     // It verified against the list it names; its signer has
                     // since left the list, which doesn't stop it.
                     line(
-                        "Running",
+                        ACCEPTED,
                         format!(
-                            "release {id} · signed by {signed_by}, no longer on the list; it keeps running until the next release · {}",
+                            "release {id} · signed by {signed_by}, no longer on the list; it stays accepted until the next release · {}",
                             entry.digest
                         ),
                         Mark::Info,
@@ -457,7 +461,7 @@ pub fn check_signed(
                 }
             }
             Err(reason) => line(
-                "Running",
+                ACCEPTED,
                 format!("the release with digest {}: {reason}", entry.digest),
                 Mark::Fail,
             ),

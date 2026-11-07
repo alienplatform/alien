@@ -240,7 +240,7 @@ fn a_protected_stack_that_matches_its_signed_release_passes_on_one_screen() {
              Template             matches release 2026-11-04.3 · production · {template}  ✓\n\
              Parameters           fingerprint pinned · 4 customer choices allowed  ✓\n\
              Managed by           arn:aws:iam::999988887777:role/vendor-manager · with an external id\n\
-             Running              release 2026-11-04.3 · signed by GitHub Actions (acme/app) · {digest}  ✓\n\
+             Accepted release     release 2026-11-04.3 · signed by GitHub Actions (acme/app) · {digest}  ✓\n\
              Trusted keys         alice@acme.com, GitHub Actions (acme/app), recovery  (list v1, expires 2027-01-24)\n"
         )
     );
@@ -412,8 +412,30 @@ fn running(observed: &Observed) -> Line {
     let lines = check(observed, now()).unwrap();
     lines
         .into_iter()
-        .find(|line| line.label == "Running")
-        .expect("a Running line")
+        .find(|line| line.label == "Accepted release")
+        .expect("an Accepted release line")
+}
+
+/// The ledger holds the newest release the verifier accepted, which it records before it
+/// deploys; a deploy that then fails leaves it there. So `verify` reports the release as
+/// accepted (nothing older can run) and never claims, from the ledger alone, that it runs.
+#[test]
+fn the_ledgers_release_is_reported_as_accepted_not_running() {
+    let lines = check(&observed(), now()).unwrap();
+    assert!(
+        lines.iter().all(|line| line.label != "Running"),
+        "{:?}",
+        lines.iter().map(|line| &line.label).collect::<Vec<_>>()
+    );
+    let accepted = running(&observed());
+    assert_eq!(accepted.mark, Mark::Pass);
+    assert!(
+        accepted
+            .text
+            .starts_with("release 2026-11-04.3 · signed by"),
+        "{}",
+        accepted.text
+    );
 }
 
 #[test]

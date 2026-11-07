@@ -197,7 +197,7 @@ async fn a_gcp_module_from_the_served_archive_matches_its_signed_release() {
              Signing fingerprint  {}   (set by setup, 2026-11-02)\n\
              Template             matches release rel_30 · production · {}  ✓\n\
              Variables            {VARIABLES}\n\
-             Running              nothing yet: no release has been accepted\n\
+             Accepted release     nothing yet: no release has been accepted\n\
              Trusted keys         alice@acme.com, GitHub Actions (acme/app), recovery  (list v1, expires 2027-01-24)\n",
             alien_signing::display_fingerprint(&fingerprint()),
             installed.digest
