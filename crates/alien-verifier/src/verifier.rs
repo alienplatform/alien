@@ -29,7 +29,12 @@ pub trait Backend: Send + Sync {
         workload: &Workload,
     ) -> Result<BTreeMap<String, String>>;
     /// Write `spec` and read it back, checking `newest` before each write.
-    async fn apply(&self, spec: &FunctionSpec, newest: &dyn StillNewest) -> Result<()>;
+    async fn apply(
+        &self,
+        place: &Place,
+        spec: &FunctionSpec,
+        newest: &dyn StillNewest,
+    ) -> Result<()>;
     /// Read `spec` back.
     async fn check(&self, spec: &FunctionSpec) -> Result<()>;
     /// Roll a machine group to the signed release.
@@ -175,7 +180,7 @@ impl Verifier {
         };
         for spec in &specs {
             if write {
-                self.backend.apply(spec, &floor).await?;
+                self.backend.apply(&place, spec, &floor).await?;
                 info!(function = %spec.name, digest = %spec.digest, "applied the signed function");
             } else {
                 self.backend.check(spec).await?;
@@ -301,7 +306,12 @@ mod tests {
         ) -> Result<BTreeMap<String, String>> {
             Ok(BTreeMap::new())
         }
-        async fn apply(&self, _spec: &FunctionSpec, _newest: &dyn StillNewest) -> Result<()> {
+        async fn apply(
+            &self,
+            _place: &Place,
+            _spec: &FunctionSpec,
+            _newest: &dyn StillNewest,
+        ) -> Result<()> {
             unreachable!("scale writes no function")
         }
         async fn check(&self, _spec: &FunctionSpec) -> Result<()> {
@@ -454,7 +464,12 @@ mod tests {
         ) -> Result<BTreeMap<String, String>> {
             Ok(BTreeMap::new())
         }
-        async fn apply(&self, spec: &FunctionSpec, newest: &dyn StillNewest) -> Result<()> {
+        async fn apply(
+            &self,
+            _place: &Place,
+            spec: &FunctionSpec,
+            newest: &dyn StillNewest,
+        ) -> Result<()> {
             self.0.lock().unwrap().push(spec.clone());
             Ok(())
         }
@@ -569,7 +584,12 @@ mod tests {
         ) -> Result<BTreeMap<String, String>> {
             Ok(BTreeMap::new())
         }
-        async fn apply(&self, spec: &FunctionSpec, newest: &dyn StillNewest) -> Result<()> {
+        async fn apply(
+            &self,
+            _place: &Place,
+            spec: &FunctionSpec,
+            newest: &dyn StillNewest,
+        ) -> Result<()> {
             if spec.image_uri == self.slow_image {
                 self.read.notify_one();
                 self.resume.notified().await;

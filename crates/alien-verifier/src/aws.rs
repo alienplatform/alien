@@ -252,8 +252,15 @@ impl<L: LambdaApi, M: MachineApi> Backend for AwsBackend<L, M> {
         read_bindings(&self.lambda, &place.prefix, &self.region, workload).await
     }
 
-    async fn apply(&self, spec: &FunctionSpec, newest: &dyn StillNewest) -> Result<()> {
-        crate::function::apply(&self.lambda, spec, newest)
+    async fn apply(
+        &self,
+        place: &Place,
+        spec: &FunctionSpec,
+        newest: &dyn StillNewest,
+    ) -> Result<()> {
+        let mut tags = alien_core::standard_resource_tags(&place.prefix, &spec.workload);
+        tags.insert("Name".to_string(), spec.name.clone());
+        crate::function::apply(&self.lambda, spec, &tags, newest)
             .await
             .map(|_| ())
     }

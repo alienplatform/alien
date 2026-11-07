@@ -152,6 +152,7 @@ impl Backend for Recorded {
 
     async fn apply(
         &self,
+        _place: &Place,
         spec: &FunctionSpec,
         newest: &dyn StillNewest,
     ) -> alien_verifier::Result<()> {

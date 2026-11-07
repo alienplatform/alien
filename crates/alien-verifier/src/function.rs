@@ -1,12 +1,13 @@
 //! Apply a planned function and check that it reads back the same.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
 use alien_aws_clients::lambda::{
-    Environment, LambdaApi, UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest,
-    VpcConfig,
+    CreateFunctionRequest, Environment, FunctionCode, LambdaApi, UpdateFunctionCodeRequest,
+    UpdateFunctionConfigurationRequest, VpcConfig,
 };
+use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_error::{AlienError, Context};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -19,6 +20,11 @@ use crate::plan::FunctionSpec;
 pub trait FunctionStore: Send + Sync {
     /// GetFunction, exactly as returned.
     async fn get(&self, name: &str) -> Result<Value>;
+    /// GetFunction, or `None` when the function doesn't exist.
+    async fn find(&self, name: &str) -> Result<Option<Value>>;
+    /// CreateFunction from `spec` with `tags`. Only the fields a create needs; the
+    /// configuration write that follows sets every field the verifier owns.
+    async fn create(&self, spec: &FunctionSpec, tags: &HashMap<String, String>) -> Result<()>;
     /// UpdateFunctionCode to an image built for `architecture`, only if the function is still
     /// at `revision`.
     async fn update_code(
@@ -52,6 +58,55 @@ impl<T: LambdaApi> FunctionStore for T {
             .context(ErrorData::CloudCallFailed {
                 operation: format!("lambda:GetFunction {name}"),
             })
+    }
+
+    async fn find(&self, name: &str) -> Result<Option<Value>> {
+        match self.get_function_json(name).await {
+            Ok(function) => Ok(Some(function)),
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error).context(ErrorData::CloudCallFailed {
+                operation: format!("lambda:GetFunction {name}"),
+            }),
+        }
+    }
+
+    async fn create(&self, spec: &FunctionSpec, tags: &HashMap<String, String>) -> Result<()> {
+        self.create_function(
+            CreateFunctionRequest::builder()
+                .function_name(spec.name.clone())
+                .role(spec.run_as.clone())
+                .code(
+                    FunctionCode::builder()
+                        .image_uri(spec.image_uri.clone())
+                        .build(),
+                )
+                .package_type("Image".to_string())
+                .timeout(spec.timeout_seconds as i32)
+                .memory_size(spec.memory_mb as i32)
+                .publish(false)
+                .architectures(vec![spec.architecture.clone()])
+                .environment(Environment {
+                    variables: Some(spec.env.clone().into_iter().collect()),
+                })
+                .maybe_vpc_config(spec.vpc.as_ref().map(|vpc| VpcConfig {
+                    subnet_ids: Some(vpc.subnet_ids.clone()),
+                    security_group_ids: Some(vpc.security_group_ids.clone()),
+                }))
+                .tags(tags.clone())
+                .build(),
+        )
+        .await
+        .context(ErrorData::CloudCallFailed {
+            operation: format!("lambda:CreateFunction {}", spec.name),
+        })?;
+        Ok(())
     }
 
     async fn update_code(
@@ -134,14 +189,22 @@ pub fn default_log_group(function: &str) -> String {
 const UPDATE_WAIT: Duration = Duration::from_secs(120);
 const POLL: Duration = Duration::from_secs(2);
 
-/// Write `spec` and read it back. The function must already exist: setup
-/// creates the functions the verifier owns. Each write is conditioned on the
-/// revision read before it and preceded by `newest`.
+/// Write `spec` and read it back, creating the function with `tags` when it
+/// doesn't exist. Each write is conditioned on the revision read before it
+/// and preceded by `newest`.
 pub async fn apply(
     store: &dyn FunctionStore,
     spec: &FunctionSpec,
+    tags: &HashMap<String, String>,
     newest: &dyn StillNewest,
 ) -> Result<Value> {
+    // Setup creates no workload, and management may not create one on a protected install,
+    // so the verifier creates it from the signed release, tagged as the install's runtime
+    // resources are, so management reads and deletes it as it does the others.
+    if store.find(&spec.name).await?.is_none() {
+        newest.check().await?;
+        store.create(spec, tags).await?;
+    }
     let mut current = wait_until_idle(store, &spec.name).await?;
     let architectures = current["Configuration"]["Architectures"]
         .as_array()
@@ -591,6 +654,7 @@ mod tests {
     /// revision it was read at, as Lambda does with RevisionId.
     struct FakeLambda {
         function: Mutex<Value>,
+        exists: Mutex<bool>,
         calls: Mutex<Vec<String>>,
     }
 
@@ -599,8 +663,16 @@ mod tests {
             function["Configuration"]["RevisionId"] = json!("r1");
             Self {
                 function: Mutex::new(function),
+                exists: Mutex::new(true),
                 calls: Mutex::new(Vec::new()),
             }
+        }
+
+        /// A Lambda where the function doesn't exist yet.
+        fn empty() -> Self {
+            let lambda = Self::new(function(&spec()));
+            *lambda.exists.lock().unwrap() = false;
+            lambda
         }
 
         /// Accept a write at `revision` and move to the next one, or refuse it as Lambda
@@ -632,6 +704,30 @@ mod tests {
     impl FunctionStore for FakeLambda {
         async fn get(&self, _name: &str) -> Result<Value> {
             Ok(self.function.lock().unwrap().clone())
+        }
+        async fn find(&self, _name: &str) -> Result<Option<Value>> {
+            Ok((*self.exists.lock().unwrap()).then(|| self.function.lock().unwrap().clone()))
+        }
+        async fn create(&self, spec: &FunctionSpec, tags: &HashMap<String, String>) -> Result<()> {
+            let mut tags: Vec<_> = tags
+                .iter()
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect();
+            tags.sort();
+            self.calls.lock().unwrap().push(format!(
+                "create {} {} {}",
+                spec.name,
+                spec.image_uri,
+                tags.join(",")
+            ));
+            let mut function = self.function.lock().unwrap();
+            function["Code"]["ImageUri"] = json!(spec.image_uri);
+            function["Code"]["ResolvedImageUri"] = json!(spec.image_uri);
+            function["Configuration"]["Architectures"] = json!([spec.architecture]);
+            function["Configuration"]["Environment"]["Variables"] = json!({});
+            function["Configuration"]["RevisionId"] = json!("r1");
+            *self.exists.lock().unwrap() = true;
+            Ok(())
         }
         async fn update_code(
             &self,
@@ -715,9 +811,14 @@ mod tests {
         let mut stale = function(&spec());
         stale["Code"]["ImageUri"] = json!(format!("{REGISTRY}api@sha256:{}", "3".repeat(64)));
         let lambda = FakeLambda::new(stale);
-        let error = apply(&lambda, &spec(), &WrittenMeanwhile(&lambda))
-            .await
-            .expect_err("the function changed after it was read");
+        let error = apply(
+            &lambda,
+            &spec(),
+            &HashMap::new(),
+            &WrittenMeanwhile(&lambda),
+        )
+        .await
+        .expect_err("the function changed after it was read");
         assert!(error.retryable, "the caller retries and reads it again");
         assert_eq!(
             *lambda.calls.lock().unwrap(),
@@ -733,11 +834,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_missing_function_is_created_with_the_install_tags_then_written_as_signed() {
+        // Setup creates no workload and management may not create one on a protected install.
+        let lambda = FakeLambda::empty();
+        let tags = HashMap::from([
+            ("alien:stack".to_string(), "acme-prod".to_string()),
+            ("Name".to_string(), "acme-prod-api".to_string()),
+        ]);
+        apply(&lambda, &spec(), &tags, &Newest).await.unwrap();
+        assert_eq!(
+            *lambda.calls.lock().unwrap(),
+            [
+                format!(
+                    "create acme-prod-api {} Name=acme-prod-api,alien:stack=acme-prod",
+                    spec().image_uri
+                ),
+                "configuration acme-prod-api".to_string(),
+            ]
+        );
+        check_read_back(&spec(), &lambda.function.lock().unwrap()).unwrap();
+
+        // Not when a newer release was accepted meanwhile.
+        let lambda = FakeLambda::empty();
+        apply(&lambda, &spec(), &tags, &Superseded)
+            .await
+            .unwrap_err();
+        assert!(lambda.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn a_superseded_release_writes_nothing() {
         let mut stale = function(&spec());
         stale["Code"]["ImageUri"] = json!(format!("{REGISTRY}api@sha256:{}", "3".repeat(64)));
         let lambda = FakeLambda::new(stale);
-        let error = apply(&lambda, &spec(), &Superseded).await.unwrap_err();
+        let error = apply(&lambda, &spec(), &HashMap::new(), &Superseded)
+            .await
+            .unwrap_err();
         assert!(
             error.to_string().contains("release 11 was accepted"),
             "{error}"
@@ -759,7 +891,9 @@ mod tests {
         drifted["Configuration"]["KMSKeyArn"] = json!("arn:aws:kms:us-east-1:999999999999:key/x");
         drifted["Configuration"]["Architectures"] = json!(["x86_64"]);
         let lambda = FakeLambda::new(drifted);
-        apply(&lambda, &spec(), &Newest).await.unwrap();
+        apply(&lambda, &spec(), &HashMap::new(), &Newest)
+            .await
+            .unwrap();
         assert_eq!(
             *lambda.calls.lock().unwrap(),
             ["code acme-prod-api", "configuration acme-prod-api"]
@@ -770,7 +904,7 @@ mod tests {
         // in place silently.
         lambda.function.lock().unwrap()["Configuration"]["TenancyConfig"] =
             json!({"TenancyMode": "PerTenant"});
-        let error = apply(&lambda, &spec(), &Newest)
+        let error = apply(&lambda, &spec(), &HashMap::new(), &Newest)
             .await
             .unwrap_err()
             .to_string();

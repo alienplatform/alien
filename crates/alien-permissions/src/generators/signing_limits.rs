@@ -228,6 +228,16 @@ pub fn aws_verifier_policy(prefix: &str, account: &str, region: &str, publisher:
                 ]
             },
             {
+                // It creates the install's functions with the tags management's grants on
+                // runtime resources are scoped to.
+                "Sid": "TagThisInstallsFunctions",
+                "Effect": "Allow",
+                "Action": "lambda:TagResource",
+                "Resource": [
+                    format!("arn:aws:lambda:{region}:{account}:function:{prefix}-*")
+                ]
+            },
+            {
                 "Sid": "VerifierNeverChangesItself",
                 "Effect": "Deny",
                 "Action": lambda_writes(),

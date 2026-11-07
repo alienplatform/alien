@@ -372,7 +372,12 @@ impl Backend for AzureBackend {
         Ok(BTreeMap::new())
     }
 
-    async fn apply(&self, spec: &FunctionSpec, newest: &dyn StillNewest) -> Result<()> {
+    async fn apply(
+        &self,
+        _place: &Place,
+        spec: &FunctionSpec,
+        newest: &dyn StillNewest,
+    ) -> Result<()> {
         if spec.architecture != "x86_64" {
             return Err(AlienError::new(ErrorData::Refused {
                 reason: "Container Apps runs only x86_64".to_string(),
