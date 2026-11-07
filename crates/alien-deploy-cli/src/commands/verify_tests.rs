@@ -218,7 +218,103 @@ fn observed() -> Observed {
                 release("dev", 19, "Resources: {}\n", ("alice-mbp", 1)),
             ),
         ],
+        before_create: false,
     }
+}
+
+/// The same stack as a CREATE change set waiting for review: nothing exists yet, so the
+/// signing settings and ledger are what the change set's template writes.
+fn before_create() -> Observed {
+    let mut observed = observed();
+    let (settings, ledger) = written_at_create(
+        &observed.template,
+        &observed.stack_name,
+        &observed.parameters,
+    )
+    .expect("the template writes both signing parameters");
+    observed.settings = Some((settings, None));
+    observed.ledger = Some(ledger);
+    observed.before_create = true;
+    observed
+}
+
+/// A CREATE change set has no signing parameters in SSM yet. Verify checks it before anything
+/// runs: the template against the signed releases, the pinned fingerprint and the other
+/// parameters, and the settings and ledger its template writes.
+#[test]
+fn a_create_change_set_is_checked_before_anything_runs() {
+    let pending = before_create();
+    assert_eq!(
+        pending.settings.as_ref().unwrap().0,
+        format!(
+            r#"{{"fingerprint":"{}","prefix":"{PREFIX}","channel":"production"}}"#,
+            fingerprint()
+        )
+        .into_bytes()
+    );
+    let lines = check(&pending, now()).unwrap();
+    assert_eq!(
+        marks(&lines),
+        [
+            ("Install", Mark::Info),
+            ("Signing fingerprint", Mark::Info),
+            ("Template", Mark::Pass),
+            ("Parameters", Mark::Pass),
+            ("Managed by", Mark::Info),
+            ("Signing state", Mark::Info),
+            ("Accepted release", Mark::Info),
+            ("Trusted keys", Mark::Info),
+        ]
+    );
+    let accepted = lines
+        .iter()
+        .find(|line| line.label == "Accepted release")
+        .unwrap();
+    assert!(accepted.text.contains("nothing yet"), "{}", accepted.text);
+
+    // A fingerprint the change set overrides is what the install would pin; the vendor's
+    // signer lists don't verify from it.
+    let mut overridden = observed();
+    overridden.parameters.insert(
+        "SigningFingerprint".to_string(),
+        alien_signing::fingerprint(&format!("sha256:{}", "ab".repeat(32))),
+    );
+    let (settings, ledger) =
+        written_at_create(&overridden.template, PREFIX, &overridden.parameters).unwrap();
+    overridden.settings = Some((settings, None));
+    overridden.ledger = Some(ledger);
+    overridden.before_create = true;
+    let error = check(&overridden, now()).expect_err("the overridden pin is refused");
+    assert!(
+        error.message.contains("don't verify from fingerprint"),
+        "{}",
+        error.message
+    );
+
+    // A template that doesn't write the settings creates an unprotected install.
+    let unprotected = observed().template.replace(
+        "/signed/${AWS::StackName}/fingerprint",
+        "/elsewhere/${AWS::StackName}",
+    );
+    let error = written_at_create(&unprotected, PREFIX, &observed().parameters).unwrap_err();
+    assert!(
+        error.message.contains("is not protected"),
+        "{}",
+        error.message
+    );
+
+    // A value that references anything but the stack name and the parameters can't be
+    // evaluated before the stack exists.
+    let foreign = observed().template.replace(
+        "${AWS::StackName}\",\"channel",
+        "${AWS::AccountId}\",\"channel",
+    );
+    let error = written_at_create(&foreign, PREFIX, &observed().parameters).unwrap_err();
+    assert!(
+        error.message.contains("AWS::AccountId"),
+        "{}",
+        error.message
+    );
 }
 
 fn marks(lines: &[Line]) -> Vec<(&'static str, Mark)> {

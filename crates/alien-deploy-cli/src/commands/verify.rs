@@ -127,6 +127,9 @@ pub struct Observed {
     pub signer_lists: Vec<SignedStatement>,
     /// Release ids and their AWS statements, as the control plane serves them.
     pub releases: Vec<(String, SignedStatement)>,
+    /// Whether the stack doesn't exist yet: a CREATE change set waits for review, and
+    /// `settings` and `ledger` are what its template writes when it runs.
+    pub before_create: bool,
 }
 
 /// How one line of the screen came out.
@@ -269,6 +272,18 @@ pub fn check(observed: &Observed, now: DateTime<Utc>) -> Result<Vec<Line>> {
         .parameters
         .get("ManagementExternalId")
         .is_some_and(|id| !id.is_empty());
+    let mut extra = Vec::new();
+    if observed.before_create {
+        extra.push(line(
+            "Signing state",
+            format!(
+                "not written yet: this CREATE change set writes the settings and an empty ledger shown here ({}, {})",
+                names::aws_settings(prefix),
+                names::aws_ledger(prefix)
+            ),
+            Mark::Info,
+        ));
+    }
     let managed_by = line(
         "Managed by",
         match managing {
@@ -278,7 +293,88 @@ pub fn check(observed: &Observed, now: DateTime<Utc>) -> Result<Vec<Line>> {
         },
         Mark::Info,
     );
-    check_signed(&signed, &installed, vec![managed_by], now)
+    extra.insert(0, managed_by);
+    check_signed(&signed, &installed, extra, now)
+}
+
+/// What a CREATE change set's `template` writes to the signing settings and ledger parameters
+/// of stack `stack_name` with `parameters`: the `Fn::Sub` values of its two SSM parameters, with
+/// the stack name and the template's parameters substituted. Nothing else may be referenced.
+pub fn written_at_create(
+    template: &str,
+    stack_name: &str,
+    parameters: &BTreeMap<String, String>,
+) -> Result<(Vec<u8>, Vec<u8>)> {
+    let template: serde_yaml::Value =
+        serde_yaml::from_str(template)
+            .into_alien_error()
+            .context(ErrorData::VerifyFailed {
+                message: "the change set's template can't be read".to_string(),
+            })?;
+    let mut written = BTreeMap::new();
+    for (_, resource) in template["Resources"].as_mapping().into_iter().flatten() {
+        if resource["Type"].as_str() != Some("AWS::SSM::Parameter") {
+            continue;
+        }
+        let properties = &resource["Properties"];
+        let name = substitute(&properties["Name"], stack_name, parameters)?;
+        if name == names::aws_settings(stack_name) || name == names::aws_ledger(stack_name) {
+            let value = substitute(&properties["Value"], stack_name, parameters)?;
+            if written.insert(name.clone(), value).is_some() {
+                return Err(failed(format!("the template writes {name} twice")));
+            }
+        }
+    }
+    let mut take = |name: String| {
+        written.remove(&name).map(String::into_bytes).ok_or_else(|| {
+            failed(format!(
+                "the change set's template doesn't write {name}, so the install it creates is not protected"
+            ))
+        })
+    };
+    Ok((
+        take(names::aws_settings(stack_name))?,
+        take(names::aws_ledger(stack_name))?,
+    ))
+}
+
+/// A CloudFormation string, plain or `Fn::Sub` (long form or the `!Sub` tag), with
+/// `${AWS::StackName}` and `${<parameter>}` substituted.
+fn substitute(
+    value: &serde_yaml::Value,
+    stack_name: &str,
+    parameters: &BTreeMap<String, String>,
+) -> Result<String> {
+    let sub = match value {
+        serde_yaml::Value::String(text) => return Ok(text.clone()),
+        serde_yaml::Value::Tagged(tagged) if tagged.tag == "Sub" => &tagged.value,
+        serde_yaml::Value::Mapping(_) => &value["Fn::Sub"],
+        _ => &serde_yaml::Value::Null,
+    };
+    let text = sub.as_str().ok_or_else(|| {
+        failed("a signing parameter of the change set's template isn't a plain Fn::Sub string")
+    })?;
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("${") {
+        out.push_str(&rest[..start]);
+        let end = rest[start..]
+            .find('}')
+            .ok_or_else(|| failed(format!("unterminated reference in '{text}'")))?;
+        let reference = &rest[start + 2..start + end];
+        let resolved = match reference {
+            "AWS::StackName" => stack_name,
+            other => parameters.get(other).map(String::as_str).ok_or_else(|| {
+                failed(format!(
+                    "'{text}' references {other}, which a change set's parameters don't hold"
+                ))
+            })?,
+        };
+        out.push_str(resolved);
+        rest = &rest[start + end + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
 }
 
 /// `sha256:<hex>` of `bytes`.
@@ -911,11 +1007,23 @@ async fn observe(
         .ok_or_else(|| failed(format!("stack '{stack}' returned no template")))?
         .to_string();
 
-    let ssm = &ssm_client(aws, &stack_id).await?;
-    let settings = parameter(ssm, &names::aws_settings(&stack_name)).await?;
-    let ledger = parameter(ssm, &names::aws_ledger(&stack_name))
-        .await?
-        .map(|(bytes, _)| bytes);
+    // A CREATE change set waiting for review leaves the stack in REVIEW_IN_PROGRESS with nothing
+    // created: its template says what the signing parameters will hold.
+    let before_create = change_set.is_some()
+        && found.stack_status()
+            == Some(&aws_sdk_cloudformation::types::StackStatus::ReviewInProgress);
+    let (settings, ledger) = if before_create {
+        let (settings, ledger) = written_at_create(&template, &stack_name, &parameters)?;
+        (Some((settings, None)), Some(ledger))
+    } else {
+        let ssm = &ssm_client(aws, &stack_id).await?;
+        (
+            parameter(ssm, &names::aws_settings(&stack_name)).await?,
+            parameter(ssm, &names::aws_ledger(&stack_name))
+                .await?
+                .map(|(bytes, _)| bytes),
+        )
+    };
     let (signer_lists, releases) = signed_releases(url, token, "aws").await?;
     Ok(Observed {
         stack_id,
@@ -926,6 +1034,7 @@ async fn observe(
         ledger,
         signer_lists,
         releases,
+        before_create,
     })
 }
 
