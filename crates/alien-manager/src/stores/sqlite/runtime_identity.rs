@@ -15,6 +15,9 @@ use crate::ids::{generate_token, sha256_hash};
 
 const CODE_LIFETIME: Duration = Duration::hours(1);
 const KEY_LIFETIME: Duration = Duration::hours(24);
+/// After a manager outage, the latest key may still rotate for a week past its
+/// expiry. That week is the absolute deadline for any rotation.
+const ROTATION_GRACE: Duration = Duration::days(7);
 
 /// The current daily key of one deployment's operator.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,8 +192,11 @@ impl SqliteRuntimeIdentityStore {
             .map(|(_, state)| state))
     }
 
-    /// Replace an unexpired current key with its successor. The old key stops
-    /// working at once; a stale copy loses the race and gets nothing.
+    /// Replace the current key with its successor. The old key stops working
+    /// at once; a stale copy loses the race and gets nothing. Only the latest
+    /// issued key can rotate, and only until a week after it expired, so an
+    /// operator survives a manager outage longer than a day. An expired key
+    /// still cannot exchange for credentials.
     pub async fn rotate(
         &self,
         deployment_id: &str,
@@ -207,7 +213,7 @@ impl SqliteRuntimeIdentityStore {
                     sha256_hash(key),
                     successor_hash.to_owned(),
                     (now + KEY_LIFETIME).timestamp(),
-                    now.timestamp(),
+                    (now - ROTATION_GRACE).timestamp(),
                 ),
             )
             .await?;
@@ -360,7 +366,7 @@ mod tests {
             .await
             .unwrap()
             .is_none());
-        // An expired key can neither be used nor rotated.
+        // An expired key cannot be used. A week after expiry it cannot rotate.
         let expired = at(100) + KEY_LIFETIME;
         assert!(store
             .verify_key("dep-1", "ax_day_v1_second", expired)
@@ -372,7 +378,53 @@ mod tests {
                 "dep-1",
                 "ax_day_v1_second",
                 &sha256_hash("ax_day_v1_third"),
-                expired
+                expired + ROTATION_GRACE
+            )
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    /// The manager was down for three days, so the operator's key expired.
+    /// The latest key still rotates once; its stale copy does not.
+    #[tokio::test]
+    async fn the_latest_key_rotates_within_a_week_after_an_outage() {
+        let (store, _directory) = store().await;
+        let (code, _) = store.issue_enrollment_code("dep-1", at(0)).await.unwrap();
+        store
+            .enroll(&code, &sha256_hash("ax_day_v1_first"), at(0))
+            .await
+            .unwrap()
+            .unwrap();
+        let back = at(0) + KEY_LIFETIME + Duration::days(3);
+        assert!(store
+            .verify_key("dep-1", "ax_day_v1_first", back)
+            .await
+            .unwrap()
+            .is_none());
+        let rotated = store
+            .rotate(
+                "dep-1",
+                "ax_day_v1_first",
+                &sha256_hash("ax_day_v1_second"),
+                back,
+            )
+            .await
+            .unwrap()
+            .expect("the latest key rotates after the outage");
+        assert_eq!(rotated.expires_at, back + KEY_LIFETIME);
+        assert!(store
+            .verify_key("dep-1", "ax_day_v1_second", back)
+            .await
+            .unwrap()
+            .is_some());
+        // A clone of the old key is refused, which shows the copy.
+        assert!(store
+            .rotate(
+                "dep-1",
+                "ax_day_v1_first",
+                &sha256_hash("ax_day_v1_clone"),
+                back
             )
             .await
             .unwrap()
