@@ -1292,3 +1292,7 @@ mod tests {
 #[cfg(all(test, unix))]
 #[path = "local_tmp_tests.rs"]
 mod tmp_tests;
+
+#[cfg(all(test, unix))]
+#[path = "local_sandbox_link_tests.rs"]
+mod sandbox_link_tests;
