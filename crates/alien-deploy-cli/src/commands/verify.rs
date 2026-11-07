@@ -52,6 +52,12 @@ pub struct VerifyArgs {
     #[arg(long, requires = "stack")]
     pub lock: bool,
 
+    /// After the checks pass, execute the change set and wait for it. A locked stack's lock is
+    /// lifted only from the signing resources this change set changes, and put back whole
+    /// when it finishes, whether it succeeded or not.
+    #[arg(long, requires = "change_set")]
+    pub execute: bool,
+
     /// A Terraform module directory, exactly as downloaded, to check before
     /// you apply it. Keep it apart from your own configuration: every file
     /// in it counts.
@@ -864,6 +870,9 @@ pub async fn verify_command(
         )
         .await?;
         show(&check(&observed, Utc::now())?)?;
+        if let (true, Some(change_set)) = (args.execute, args.change_set.as_deref()) {
+            return execute(&cloudformation, stack, change_set, args.lock).await;
+        }
         if args.lock {
             lock(&cloudformation, stack).await?;
         }
@@ -1239,6 +1248,34 @@ pub(crate) async fn signed_releases(
 /// Add a stack policy that refuses updates to the signing settings and the
 /// verifier, keeping whatever the existing policy says.
 async fn lock(cloudformation: &aws_sdk_cloudformation::Client, stack: &str) -> Result<()> {
+    let locked = lockable_resources(cloudformation, stack).await?;
+    let existing = cloudformation
+        .get_stack_policy()
+        .stack_name(stack)
+        .send()
+        .await
+        .into_alien_error()
+        .context(aws_failed("GetStackPolicy", stack))?;
+    // A lock lifted for a change set comes back whole, as one statement.
+    let unlocked = existing
+        .stack_policy_body()
+        .map(|policy| unlocked_for(policy, &locked, &locked))
+        .transpose()?;
+    let policy = locked_policy(unlocked.as_deref(), &locked)?;
+    set_policy(cloudformation, stack, &policy).await?;
+    println!(
+        "Locked: stack updates can no longer change {}.",
+        locked.join(", ")
+    );
+    Ok(())
+}
+
+/// The resources the lock covers: the signing settings and ledger, and every resource named
+/// `<stack>-verifier` (the verifier and its role).
+async fn lockable_resources(
+    cloudformation: &aws_sdk_cloudformation::Client,
+    stack: &str,
+) -> Result<Vec<String>> {
     let resources = cloudformation
         .describe_stack_resources()
         .stack_name(stack)
@@ -1247,22 +1284,118 @@ async fn lock(cloudformation: &aws_sdk_cloudformation::Client, stack: &str) -> R
         .into_alien_error()
         .context(aws_failed("DescribeStackResources", stack))?;
     let verifier = format!("{stack}-verifier");
-    let mut locked: Vec<String> = SIGNING_RESOURCES.iter().map(|id| id.to_string()).collect();
+    let mut lockable: Vec<String> = SIGNING_RESOURCES.iter().map(|id| id.to_string()).collect();
     for resource in resources.stack_resources() {
         if resource.physical_resource_id() == Some(verifier.as_str()) {
             if let Some(id) = resource.logical_resource_id() {
-                locked.push(id.to_string());
+                lockable.push(id.to_string());
             }
         }
     }
+    Ok(lockable)
+}
+
+/// Execute `change_set` of `stack` and wait for it. When the stack is locked (or `lock` asks for
+/// it), the lock is lifted from just the resources the change set changes, and the whole lock is
+/// put back once the change set finished, whatever its outcome.
+async fn execute(
+    cloudformation: &aws_sdk_cloudformation::Client,
+    stack: &str,
+    change_set: &str,
+    lock_after: bool,
+) -> Result<()> {
+    let described = cloudformation
+        .describe_change_set()
+        .stack_name(stack)
+        .change_set_name(change_set)
+        .send()
+        .await
+        .into_alien_error()
+        .context(aws_failed("DescribeChangeSet", stack))?;
+    let changed: Vec<String> = described
+        .changes()
+        .iter()
+        .filter_map(|change| change.resource_change())
+        .filter_map(|change| change.logical_resource_id().map(str::to_string))
+        .collect();
     let existing = cloudformation
         .get_stack_policy()
         .stack_name(stack)
         .send()
         .await
         .into_alien_error()
-        .context(aws_failed("GetStackPolicy", stack))?;
-    let policy = locked_policy(existing.stack_policy_body(), &locked)?;
+        .context(aws_failed("GetStackPolicy", stack))?
+        .stack_policy_body()
+        .map(str::to_string);
+    let lockable = lockable_resources(cloudformation, stack).await?;
+    let locked = existing
+        .as_deref()
+        .is_some_and(|policy| is_locked(policy, &lockable));
+    if let Some(policy) = existing.as_deref().filter(|_| locked) {
+        let lifted = unlocked_for(policy, &changed, &lockable)?;
+        if lifted != policy {
+            println!("Lifting the lock from what this change set changes, until it finishes.");
+            set_policy(cloudformation, stack, &lifted).await?;
+        }
+    }
+    let outcome = run_change_set(cloudformation, stack, change_set).await;
+    // The lock comes back even when the change set failed.
+    if locked || lock_after {
+        lock(cloudformation, stack).await?;
+    }
+    outcome
+}
+
+/// Execute the change set and wait until the stack settles.
+async fn run_change_set(
+    cloudformation: &aws_sdk_cloudformation::Client,
+    stack: &str,
+    change_set: &str,
+) -> Result<()> {
+    cloudformation
+        .execute_change_set()
+        .stack_name(stack)
+        .change_set_name(change_set)
+        .send()
+        .await
+        .into_alien_error()
+        .context(aws_failed("ExecuteChangeSet", stack))?;
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        let described = cloudformation
+            .describe_stacks()
+            .stack_name(stack)
+            .send()
+            .await
+            .into_alien_error()
+            .context(aws_failed("DescribeStacks", stack))?;
+        let found = described
+            .stacks()
+            .first()
+            .ok_or_else(|| failed(format!("no stack '{stack}'")))?;
+        let status = found
+            .stack_status()
+            .map(|status| status.as_str().to_string())
+            .unwrap_or_default();
+        if status.ends_with("_IN_PROGRESS") {
+            continue;
+        }
+        if status == "CREATE_COMPLETE" || status == "UPDATE_COMPLETE" {
+            println!("✓ Change set {change_set} executed: {status}");
+            return Ok(());
+        }
+        return Err(failed(format!(
+            "change set {change_set} ended {status}: {}",
+            found.stack_status_reason().unwrap_or("no reason given")
+        )));
+    }
+}
+
+async fn set_policy(
+    cloudformation: &aws_sdk_cloudformation::Client,
+    stack: &str,
+    policy: &str,
+) -> Result<()> {
     cloudformation
         .set_stack_policy()
         .stack_name(stack)
@@ -1271,11 +1404,75 @@ async fn lock(cloudformation: &aws_sdk_cloudformation::Client, stack: &str) -> R
         .await
         .into_alien_error()
         .context(aws_failed("SetStackPolicy", stack))?;
-    println!(
-        "Locked: stack updates can no longer change {}.",
-        locked.join(", ")
-    );
     Ok(())
+}
+
+/// Whether `policy` holds the lock [`locked_policy`] adds over `lockable`.
+fn is_locked(policy: &str, lockable: &[String]) -> bool {
+    serde_json::from_str::<serde_json::Value>(policy)
+        .ok()
+        .and_then(|policy| policy["Statement"].as_array().cloned())
+        .is_some_and(|statements| {
+            statements
+                .iter()
+                .any(|statement| is_lock(statement, lockable))
+        })
+}
+
+/// Whether `statement` is the deny [`locked_policy`] adds: every update of resources that are
+/// all `lockable`. A customer's own statement names other resources or actions, and is left
+/// alone.
+fn is_lock(statement: &serde_json::Value, lockable: &[String]) -> bool {
+    statement["Effect"] == "Deny"
+        && statement["Action"] == "Update:*"
+        && statement["Principal"] == "*"
+        && statement["Resource"].as_array().is_some_and(|resources| {
+            resources.iter().all(|resource| {
+                resource
+                    .as_str()
+                    .and_then(|resource| resource.strip_prefix("LogicalResourceId/"))
+                    .is_some_and(|id| lockable.iter().any(|lockable| lockable == id))
+            })
+        })
+}
+
+/// `policy` with the lock over `lockable` lifted from `changed` (logical ids) and kept on the
+/// rest; a lock left with nothing to deny is dropped.
+fn unlocked_for(policy: &str, changed: &[String], lockable: &[String]) -> Result<String> {
+    let mut policy: serde_json::Value =
+        serde_json::from_str(policy)
+            .into_alien_error()
+            .context(ErrorData::JsonError {
+                operation: "parse".to_string(),
+                reason: "the stack policy".to_string(),
+            })?;
+    let statements = policy["Statement"]
+        .as_array_mut()
+        .ok_or_else(|| failed("the stack policy has no Statement list"))?;
+    for statement in statements
+        .iter_mut()
+        .filter(|statement| is_lock(statement, lockable))
+    {
+        if let Some(resources) = statement["Resource"].as_array_mut() {
+            resources.retain(|resource| {
+                !changed
+                    .iter()
+                    .any(|id| resource.as_str() == Some(format!("LogicalResourceId/{id}").as_str()))
+            });
+        }
+    }
+    statements.retain(|statement| {
+        !(statement["Effect"] == "Deny"
+            && statement["Action"] == "Update:*"
+            && statement["Principal"] == "*"
+            && statement["Resource"].as_array().is_some_and(Vec::is_empty))
+    });
+    serde_json::to_string(&policy)
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "serialize".to_string(),
+            reason: "the stack policy".to_string(),
+        })
 }
 
 /// `existing` (or a policy allowing every update) plus a statement denying

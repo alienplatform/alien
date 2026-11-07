@@ -285,6 +285,7 @@ async fn a_protected_helm_release_verifies_and_changes_to_it_fail() {
             stack: None,
             change_set: None,
             lock: false,
+            execute: false,
             terraform: None,
             platform: None,
             prefix: None,

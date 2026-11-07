@@ -631,6 +631,61 @@ fn locking_keeps_the_existing_policy_and_adds_one_deny() {
     );
 }
 
+/// A signed setup update that changes the verifier can't run under the lock, and
+/// ExecuteChangeSet takes no policy for the update. `--execute` lifts the lock from exactly what
+/// the change set changes and puts the whole lock back after; a customer's own deny stays.
+#[test]
+fn executing_a_change_set_lifts_the_lock_only_from_what_it_changes() {
+    let lockable: Vec<String> = [
+        "SigningFingerprintParameter",
+        "SigningStateParameter",
+        "SigningVerifier",
+        "SigningVerifierRole",
+    ]
+    .map(str::to_string)
+    .to_vec();
+    let customers = r#"{"Statement":[{"Effect":"Deny","Action":"Update:*","Principal":"*","Resource":["LogicalResourceId/Database"]},{"Effect":"Allow","Action":"Update:*","Principal":"*","Resource":"*"}]}"#;
+    let locked = locked_policy(Some(customers), &lockable).unwrap();
+    assert!(is_locked(&locked, &lockable));
+    assert!(
+        !is_locked(customers, &lockable),
+        "a customer's deny of other resources isn't the lock"
+    );
+
+    let changed = ["SigningVerifier", "Database", "Queue"].map(str::to_string);
+    let lifted: serde_json::Value =
+        serde_json::from_str(&unlocked_for(&locked, &changed, &lockable).unwrap()).unwrap();
+    assert_eq!(
+        lifted["Statement"],
+        serde_json::json!([
+            {"Effect": "Deny", "Action": "Update:*", "Principal": "*",
+             "Resource": ["LogicalResourceId/Database"]},
+            {"Effect": "Allow", "Action": "Update:*", "Principal": "*", "Resource": "*"},
+            {"Effect": "Deny", "Action": "Update:*", "Principal": "*", "Resource": [
+                "LogicalResourceId/SigningFingerprintParameter",
+                "LogicalResourceId/SigningStateParameter",
+                "LogicalResourceId/SigningVerifierRole",
+            ]},
+        ]),
+        "only the verifier is lifted; the customer's deny on Database stays"
+    );
+
+    // Locking again after the change set puts the whole lock back, as one statement.
+    let relocked = locked_policy(
+        Some(&unlocked_for(&lifted.to_string(), &lockable, &lockable).unwrap()),
+        &lockable,
+    )
+    .unwrap();
+    assert_eq!(relocked, locked);
+
+    // A change set that changes nothing locked leaves the policy as it is.
+    let untouched = unlocked_for(&locked, &["Queue".to_string()], &lockable).unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&untouched).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&locked).unwrap()
+    );
+}
+
 #[tokio::test]
 async fn ssm_is_read_in_the_stacks_own_region_and_account_only() {
     let aws = aws_config::SdkConfig::builder()
