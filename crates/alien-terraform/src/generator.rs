@@ -25,11 +25,11 @@ use crate::{
 };
 use alien_core::{
     import::{setup_import_format_version_for_platform, EmitContext},
-    AzureContainerAppsEnvironment, ComputeCluster, DeploymentModel, ErrorData, HeartbeatsMode, KubernetesCertificateMode,
-    KubernetesExposureSettings, KubernetesSettings, Kv, Network, NetworkSettings, RemoteBindings,
-    RemoteStackManagement, ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue,
-    StackInputDefinition, StackInputKind, StackInputProvider, StackInputValidation, StackSettings,
-    TelemetryMode, UpdatesMode,
+    AzureContainerAppsEnvironment, ComputeCluster, DeploymentModel, ErrorData, HeartbeatsMode,
+    KubernetesCertificateMode, KubernetesExposureSettings, KubernetesSettings, Kv, Network,
+    NetworkSettings, RemoteBindings, RemoteStackManagement, ResourceLifecycle, Result, Sandbox,
+    Stack, StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
+    StackInputValidation, StackSettings, TelemetryMode, UpdatesMode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::generators::signing_limits;
@@ -2697,7 +2697,10 @@ fn gcp_verifier_blocks(
                     ],
                 )),
                 // From here on the verifier writes what the service runs and who may reach it.
-                nested(block("lifecycle", [attr("ignore_changes", expr::raw("all"))])),
+                nested(block(
+                    "lifecycle",
+                    [attr("ignore_changes", expr::raw("all"))],
+                )),
             ],
         ));
         blocks.push(resource_block(

@@ -477,7 +477,9 @@ fn invoke_grants(
     else {
         return match api {
             None => Ok(Vec::new()),
-            Some(_) => Err(refused("only an AWS function is fronted by an API Gateway API")),
+            Some(_) => Err(refused(
+                "only an AWS function is fronted by an API Gateway API",
+            )),
         };
     };
     let mut grants = Vec::new();
@@ -518,7 +520,9 @@ fn invoke_grants(
             alien_core::WorkerTrigger::Schedule { .. } => grants.push(InvokeGrant {
                 statement_id: format!("{function}-eb-{index}"),
                 principal: "events.amazonaws.com".to_string(),
-                source_arn: format!("arn:aws:events:{region}:{account}:rule/{function}-cron-{index}"),
+                source_arn: format!(
+                    "arn:aws:events:{region}:{account}:rule/{function}-cron-{index}"
+                ),
                 source_account: None,
             }),
             // A queue reaches the function through an event source mapping, not its policy.
@@ -728,7 +732,9 @@ pub(crate) mod tests {
                 InvokeGrant {
                     statement_id: format!("{PREFIX}-api-eb-2"),
                     principal: "events.amazonaws.com".to_string(),
-                    source_arn: format!("arn:aws:events:{REGION}:{ACCOUNT}:rule/{PREFIX}-api-cron-2"),
+                    source_arn: format!(
+                        "arn:aws:events:{REGION}:{ACCOUNT}:rule/{PREFIX}-api-cron-2"
+                    ),
                     source_account: None,
                 },
             ]
@@ -755,7 +761,9 @@ pub(crate) mod tests {
         public.images.clear();
         public.provided_env.clear();
         public.apis = BTreeMap::from([("api".to_string(), "*".to_string())]);
-        assert!(refused(&public).await.contains("is not an API Gateway API id"));
+        assert!(refused(&public)
+            .await
+            .contains("is not an API Gateway API id"));
     }
 
     #[tokio::test]

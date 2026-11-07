@@ -12367,7 +12367,11 @@ mod tests {
         assert_eq!(executor.status(), ResourceStatus::Running);
         assert_eq!(*rules.lock().unwrap(), ["test-api-cron-0"]);
         let invocations = invocations.lock().unwrap().clone();
-        assert_eq!(invocations.len(), 1, "one verifier call creates the function");
+        assert_eq!(
+            invocations.len(),
+            1,
+            "one verifier call creates the function"
+        );
         let (answer, written) = run_verifier(
             alien_signing::InstallId::Aws {
                 account: "123456789012".to_string(),

@@ -187,18 +187,18 @@ impl<T: LambdaApi> FunctionStore for T {
 
     async fn set_concurrency(&self, name: &str, reserved: Option<u32>) -> Result<()> {
         match reserved {
-            Some(reserved) => self
-                .put_function_concurrency(name, reserved)
-                .await
-                .context(ErrorData::CloudCallFailed {
+            Some(reserved) => self.put_function_concurrency(name, reserved).await.context(
+                ErrorData::CloudCallFailed {
                     operation: format!("lambda:PutFunctionConcurrency {name}"),
-                }),
-            None => self
-                .delete_function_concurrency(name)
-                .await
-                .context(ErrorData::CloudCallFailed {
-                    operation: format!("lambda:DeleteFunctionConcurrency {name}"),
-                }),
+                },
+            ),
+            None => {
+                self.delete_function_concurrency(name)
+                    .await
+                    .context(ErrorData::CloudCallFailed {
+                        operation: format!("lambda:DeleteFunctionConcurrency {name}"),
+                    })
+            }
         }
     }
 
@@ -223,7 +223,9 @@ impl<T: LambdaApi> FunctionStore for T {
         }
         let policy: Value = serde_json::from_str(&policy).map_err(|error| {
             AlienError::new(ErrorData::CloudCallFailed {
-                operation: format!("lambda:GetPolicy {name} returned a policy that isn't JSON: {error}"),
+                operation: format!(
+                    "lambda:GetPolicy {name} returned a policy that isn't JSON: {error}"
+                ),
             })
         })?;
         Ok(match &policy["Statement"] {
@@ -308,7 +310,10 @@ async fn reconcile_access(
         {
             let statement_id = statement["Sid"].as_str().ok_or_else(|| {
                 AlienError::new(ErrorData::CloudCallFailed {
-                    operation: format!("lambda:GetPolicy {} returned a statement without a Sid", spec.name),
+                    operation: format!(
+                        "lambda:GetPolicy {} returned a statement without a Sid",
+                        spec.name
+                    ),
                 })
             })?;
             newest.check().await?;
@@ -970,7 +975,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(format!("grant {name} {}", grant.statement_id));
-            self.policy.lock().unwrap().push(lambda_statement(name, grant));
+            self.policy
+                .lock()
+                .unwrap()
+                .push(lambda_statement(name, grant));
             Ok(())
         }
         async fn revoke(&self, name: &str, statement_id: &str) -> Result<()> {

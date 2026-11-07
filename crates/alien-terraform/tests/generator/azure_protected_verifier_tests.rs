@@ -4,8 +4,8 @@
 
 use alien_core::{
     AzureContainerAppsEnvironment, AzureResourceGroup, ContainerAppsEnvironmentBinding,
-    ExternalBinding, ExternalBindings, RemoteStackManagement, ResourceLifecycle, Stack, StackSettings, StackSigning,
-    Worker, WorkerCode,
+    ExternalBinding, ExternalBindings, RemoteStackManagement, ResourceLifecycle, Stack,
+    StackSettings, StackSigning, Worker, WorkerCode,
 };
 use alien_terraform::TerraformTarget;
 
