@@ -945,6 +945,12 @@ pub(crate) fn render_terraform_module(
         }
     }
 
+    if stack_settings.signing.is_some() && target == TerraformTarget::Gcp {
+        if let Some(readme) = files.get_mut("README.md") {
+            readme.push_str(include_str!("templates/protected-uninstall-gcp.md"));
+        }
+    }
+
     if has_retention_workflow {
         if let Some(readme) = files.get_mut("README.md") {
             readme.push_str(
