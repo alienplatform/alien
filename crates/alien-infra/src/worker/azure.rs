@@ -4319,7 +4319,6 @@ impl AzureWorkerController {
         }
     }
 
-    /// Prepare environment variables using the shared logic, then convert to Azure's EnvironmentVar format
     /// Has the install's verifier write this worker's Container App from the signed release,
     /// with the values the release lets the deployment provide, and waits for its answer.
     async fn apply_through_verifier(
@@ -4384,6 +4383,7 @@ impl AzureWorkerController {
         Ok(())
     }
 
+    /// Prepare environment variables using the shared logic, then convert to Azure's EnvironmentVar format
     async fn prepare_environment_variables_azure(
         &self,
         func: &Worker,
