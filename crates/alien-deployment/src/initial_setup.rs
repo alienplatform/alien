@@ -2648,7 +2648,20 @@ mod tests {
             ResourceStatus::UpdateFailed
         );
 
-        let mut state = resumed_test_setup(stack_state, installed.clone());
+        // Setup saves the stack its preflights prepared, so the release compares like for like.
+        let (prepared, _, _) = alien_preflights::runner::PreflightRunner::new()
+            .run_deployment_time_preflights(
+                installed.clone(),
+                &StackState::new(Platform::Test),
+                &config(),
+                &ClientConfig::Test,
+                None,
+                None,
+                Some(InitialSetupAuthority::DirectSetup),
+            )
+            .await
+            .expect("prepare the installed release");
+        let mut state = resumed_test_setup(stack_state, prepared);
         state.status = DeploymentStatus::UpdatePending;
         state.runtime_metadata.as_mut().unwrap().automatic_setup = true;
         let state = crate::updating::handle_update_pending(

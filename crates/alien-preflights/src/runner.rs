@@ -497,8 +497,10 @@ impl PreflightRunner {
             let automatic_azure_runtime = !config.setup_run
                 && config.base_platform.unwrap_or(platform) == Platform::Azure
                 && config.stack_settings.setup_management == alien_core::SetupManagement::Automatic;
+            // A direct setup's runtime still needs setup's authorization for the changes
+            // only setup applies, such as its own management grant.
             let hashed_target = match old_stack {
-                Some(_) if !direct_setup || automatic_azure_runtime => {
+                Some(_) if !direct_setup || !config.setup_run => {
                     Some(without_declined_live_resources(
                         &mutated_stack,
                         &config.input_values,
@@ -1638,6 +1640,19 @@ mod setup_update_authorization_tests {
         state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<(Stack, PreflightSummary, bool)> {
+        authorized_direct_setup_preflight(runner, target, installed, state, config, None).await
+    }
+
+    /// Runs the deployment preflights for a direct setup that a setup rerun authorized.
+    #[cfg(feature = "runtime-checks")]
+    async fn authorized_direct_setup_preflight(
+        runner: &PreflightRunner,
+        target: &Stack,
+        installed: Option<&Stack>,
+        state: &StackState,
+        config: &DeploymentConfig,
+        authorization: Option<&alien_core::SetupUpdateAuthorization>,
+    ) -> Result<(Stack, PreflightSummary, bool)> {
         runner
             .run_deployment_time_preflights(
                 target.clone(),
@@ -1647,7 +1662,7 @@ mod setup_update_authorization_tests {
                     state_directory: "/unused".to_string(),
                 },
                 installed,
-                None,
+                authorization,
                 Some(alien_core::InitialSetupAuthority::DirectSetup),
             )
             .await
@@ -1772,6 +1787,65 @@ mod setup_update_authorization_tests {
         direct_setup_preflight(&runner, &wider, Some(&installed), &state, &setup)
             .await
             .expect("a setup run applies the data grant");
+    }
+
+    /// An automatic CloudFormation or Terraform rerun installs the wider management grant
+    /// itself and records an exact authorization. The direct-setup runtime must accept it,
+    /// or the update would wait for a setup run the installer never makes.
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn direct_setup_runtime_accepts_a_rerun_authorization_for_a_wider_management_grant() {
+        use alien_core::permissions::{ManagementPermissions, PermissionProfile};
+
+        let with_management = |grants: &[&str]| {
+            let mut stack = empty_stack();
+            stack.permissions.management = ManagementPermissions::Extend(
+                PermissionProfile::new().global(grants.iter().copied()),
+            );
+            stack
+        };
+        let installed = with_management(&["storage/provision"]);
+        let widened = with_management(&["storage/provision", "storage/data-read"]);
+        let other = with_management(&["storage/provision", "storage/data-write"]);
+        let authorization = |target: &Stack| alien_core::SetupUpdateAuthorization {
+            nonce: "nonce".to_string(),
+            baseline_frozen_digest: installed.setup_update_digest(),
+            target_frozen_digest: target.setup_update_digest(),
+            release_id: "release".to_string(),
+            setup_target: "target".to_string(),
+            setup_fingerprint: "fingerprint".to_string(),
+            setup_fingerprint_version: 1,
+        };
+        let runner = PreflightRunner::with_registry(PreflightRegistry::new());
+        let runtime = deployment_config();
+
+        for platform in [Platform::Aws, Platform::Gcp] {
+            let state = StackState::new(platform);
+            let (prepared, _, authorized) = authorized_direct_setup_preflight(
+                &runner,
+                &widened,
+                Some(&installed),
+                &state,
+                &runtime,
+                Some(&authorization(&widened)),
+            )
+            .await
+            .expect("the rerun already installed this management grant");
+            assert!(authorized, "{platform:?}");
+            assert_eq!(prepared.permissions, widened.permissions, "{platform:?}");
+
+            let error = authorized_direct_setup_preflight(
+                &runner,
+                &widened,
+                Some(&installed),
+                &state,
+                &runtime,
+                Some(&authorization(&other)),
+            )
+            .await
+            .expect_err("an authorization for another grant does not cover this one");
+            assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED", "{platform:?}");
+        }
     }
 
     #[test]
