@@ -1745,7 +1745,7 @@ mod tests {
                 pending: None,
                 pending_started_at: None,
                 expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
-                enrollment_revision: 0,
+                enrolled_code_hash: None,
                 pending_enrollment: None,
             })
             .await

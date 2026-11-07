@@ -82,10 +82,6 @@ pub struct Args {
     #[arg(long, env = "OPERATOR_ENROLLMENT_CODE_FILE")]
     pub identity_enrollment_code_file: Option<PathBuf>,
 
-    /// Server-issued enrollment revision. A higher revision requests explicit replacement.
-    #[arg(long, env = "OPERATOR_ENROLLMENT_REVISION", default_value_t = 0)]
-    pub identity_enrollment_revision: u64,
-
     /// Exact manager audience supplied by installation configuration.
     #[arg(long, env = "ALIEN_MANAGER_AUDIENCE")]
     pub manager_audience: Option<String>,
@@ -564,16 +560,15 @@ async fn run_operator_cli(
         let code = load_sync_token(args.identity_enrollment_code_file.as_deref())
             .await?
             .unwrap_or_default();
-        let proof = std::sync::Arc::new(crate::daily_identity::DailyIdentity::new(db.clone())?);
-        let deployment_id = proof
-            .enroll(crate::daily_identity::EnrollmentRequest {
-                manager_url: &manager_url,
-                audience: &audience,
-                code: &code,
-                deployment_id: configured_deployment_id.as_deref(),
-                revision: args.identity_enrollment_revision,
-            })
-            .await?;
+        let (deployment_id, token) =
+            std::sync::Arc::new(crate::daily_identity::DailyIdentity::new(db.clone())?)
+                .connect(crate::daily_identity::EnrollmentRequest {
+                    manager_url: &manager_url,
+                    audience: &audience,
+                    code: &code,
+                    deployment_id: configured_deployment_id.as_deref(),
+                })
+                .await?;
         if configured_deployment_id
             .as_ref()
             .is_some_and(|expected| expected != &deployment_id)
@@ -582,24 +577,6 @@ async fn run_operator_cli(
                 message: "Enrolled component belongs to another deployment".into(),
             }));
         }
-        let credentials = alien_client_core::runtime_credentials::RuntimeCredentials::new(
-            alien_client_core::runtime_credentials::RuntimeCredentialConfig {
-                manager_url: manager_url.clone(),
-                audience,
-                deployment_id,
-                purpose: serde_json::json!({"type":"operatorSync"}),
-            },
-            proof,
-        )
-        .context(ErrorData::ConfigurationError {
-            message: "Invalid component manager configuration".into(),
-        })?;
-        let token = credentials
-            .token()
-            .await
-            .context(ErrorData::ConfigurationError {
-                message: "Cannot authenticate enrolled component".into(),
-            })?;
         Some(crate::SyncConfig {
             url: manager_url
                 .parse()

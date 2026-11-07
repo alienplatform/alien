@@ -28,26 +28,29 @@ pub(crate) struct DailyIdentityState {
     pub pending: Option<String>,
     pub pending_started_at: Option<DateTime<Utc>>,
     pub expires_at: DateTime<Utc>,
+    /// Hash of the code that enrolled the current key. A configured code with
+    /// this hash is spent and is never sent again.
     #[serde(default)]
-    pub enrollment_revision: u64,
+    pub enrolled_code_hash: Option<String>,
     #[serde(default)]
     pub pending_enrollment: Option<PendingEnrollment>,
 }
 
+/// A re-enrollment whose response may have been lost. A retry with the same
+/// code sends the same key hash, so the manager answers it again.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PendingEnrollment {
-    revision: u64,
     code_hash: String,
     key: String,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct EnrollmentRequest<'a> {
     pub manager_url: &'a str,
     pub audience: &'a str,
     pub code: &'a str,
     pub deployment_id: Option<&'a str>,
-    pub revision: u64,
 }
 
 pub(crate) struct DailyIdentity {
@@ -71,19 +74,16 @@ impl DailyIdentity {
         })
     }
 
-    /// Save the initial key before enrollment so a lost response can be retried
-    /// with the same key hash and one-use code.
+    /// Enroll with the configured code unless this operator is already
+    /// enrolled. The initial key is saved before the request, so a lost
+    /// response can be retried with the same key hash and one-use code.
     pub async fn enroll(&self, request: EnrollmentRequest<'_>) -> Result<String> {
         let EnrollmentRequest {
             manager_url,
             audience,
             code,
             deployment_id,
-            revision,
         } = request;
-        let expected_revision = revision
-            .checked_add(1)
-            .ok_or_else(|| failed("Enrollment revision exceeds supported range"))?;
         let _operation = self.operation.lock().await;
         let endpoint =
             reqwest::Url::parse(manager_url).map_err(|_| failed("Invalid manager URL"))?;
@@ -110,24 +110,10 @@ impl DailyIdentity {
                 return Err(failed("Saved operator belongs to another deployment"));
             }
         }
-        let mut state = match self.db.read_daily_identity().await? {
+        let state = match self.db.read_daily_identity().await? {
             Some(state) => {
-                if state.manager_url != manager_url || state.audience != audience {
-                    return Err(failed(
-                        "Saved component identity belongs to another manager",
-                    ));
-                }
-                if deployment_id.is_some_and(|expected| {
-                    !state.deployment_id.is_empty() && expected != state.deployment_id
-                }) {
-                    return Err(failed("Saved component belongs to another deployment"));
-                }
-                if revision < state.enrollment_revision {
-                    return Err(failed(
-                        "Enrollment revision is older than the saved identity",
-                    ));
-                }
-                if !state.deployment_id.is_empty() && revision == state.enrollment_revision {
+                check_saved_identity(&state, manager_url, audience, deployment_id)?;
+                if !state.deployment_id.is_empty() {
                     self.db.repair_enrolled_deployment_id(&state).await?;
                     return Ok(state.deployment_id);
                 }
@@ -142,38 +128,67 @@ impl DailyIdentity {
                     pending: None,
                     pending_started_at: None,
                     expires_at: Utc::now(),
-                    enrollment_revision: 0,
+                    enrolled_code_hash: None,
                     pending_enrollment: None,
                 };
                 self.db.write_daily_identity(&state).await?;
                 state
             }
         };
+        self.enroll_with_code(state, code, deployment_id).await
+    }
+
+    /// Enroll again with the configured code when the saved key no longer
+    /// works. Returns `None` when there is no code, or when the code is the
+    /// one that enrolled the current key. The current key stays saved until
+    /// the manager confirms the replacement.
+    pub async fn recover(&self, request: EnrollmentRequest<'_>) -> Result<Option<String>> {
+        let EnrollmentRequest {
+            manager_url,
+            audience,
+            code,
+            deployment_id,
+        } = request;
+        let _operation = self.operation.lock().await;
+        let Some(mut state) = self.db.read_daily_identity().await? else {
+            return Ok(None);
+        };
+        check_saved_identity(&state, manager_url, audience, deployment_id)?;
+        let code_hash = key_hash(code);
+        if code.trim().is_empty()
+            || state.deployment_id.is_empty()
+            || state.enrolled_code_hash.as_deref() == Some(code_hash.as_str())
+        {
+            return Ok(None);
+        }
+        if state
+            .pending_enrollment
+            .as_ref()
+            .is_none_or(|pending| pending.code_hash != code_hash)
+        {
+            state.pending_enrollment = Some(PendingEnrollment {
+                code_hash,
+                key: new_key()?,
+            });
+            self.db.write_daily_identity(&state).await?;
+        }
+        self.enroll_with_code(state, code, deployment_id)
+            .await
+            .map(Some)
+    }
+
+    /// Send the enrollment and save the confirmed key. The caller holds the
+    /// operation lock and has saved the candidate key.
+    async fn enroll_with_code(
+        &self,
+        mut state: DailyIdentityState,
+        code: &str,
+        deployment_id: Option<&str>,
+    ) -> Result<String> {
         if code.trim().is_empty() {
             return Err(failed("A fresh component enrollment code is required"));
         }
         let replacing = !state.deployment_id.is_empty();
-        if replacing {
-            let code_hash = key_hash(code);
-            match &state.pending_enrollment {
-                Some(pending) if pending.revision > revision => {
-                    return Err(failed("A newer enrollment replacement is already pending"));
-                }
-                Some(pending) if pending.revision == revision => {
-                    if pending.code_hash != code_hash {
-                        return Err(failed("Enrollment code changed for the pending revision"));
-                    }
-                }
-                _ => {
-                    state.pending_enrollment = Some(PendingEnrollment {
-                        revision,
-                        code_hash,
-                        key: new_key()?,
-                    });
-                    self.db.write_daily_identity(&state).await?;
-                }
-            }
-        }
         let candidate = state
             .pending_enrollment
             .as_ref()
@@ -196,20 +211,11 @@ impl DailyIdentity {
         {
             return Err(failed("Enrollment belongs to another deployment"));
         }
-        // Issuance increments the server enrollment revision exactly once.
-        // An idempotent lost-response retry returns the same revision.
-        if revision > 0
-            && response.get("revision").and_then(Value::as_u64) != Some(expected_revision)
-        {
-            return Err(failed(
-                "Enrollment response revision does not match this replacement",
-            ));
-        }
         let expires_at = response_expiry(&response)?;
         state.current = candidate.to_owned();
         state.deployment_id = verified_deployment.to_owned();
         state.expires_at = expires_at;
-        state.enrollment_revision = revision;
+        state.enrolled_code_hash = Some(key_hash(code));
         state.pending_enrollment = None;
         state.pending = None;
         state.pending_started_at = None;
@@ -221,6 +227,50 @@ impl DailyIdentity {
         }
         self.db.persist_enrolled_identity(&state).await?;
         Ok(state.deployment_id)
+    }
+
+    /// Enroll if needed, then get the first sync credential. If the saved key
+    /// is expired or refused, enroll again with a configured code this
+    /// operator has not used yet. So `helm upgrade` with a new code recovers
+    /// an operator whose key expired while it was down, or was replaced.
+    pub(crate) async fn connect(
+        self: Arc<Self>,
+        request: EnrollmentRequest<'_>,
+    ) -> Result<(String, String)> {
+        let deployment_id = self.enroll(request).await?;
+        let error = match self.clone().sync_token(&request, &deployment_id).await {
+            Ok(token) => return Ok((deployment_id, token)),
+            Err(error) => error,
+        };
+        let Some(deployment_id) = self.recover(request).await? else {
+            return Err(error);
+        };
+        let token = self.sync_token(&request, &deployment_id).await?;
+        Ok((deployment_id, token))
+    }
+
+    async fn sync_token(
+        self: Arc<Self>,
+        request: &EnrollmentRequest<'_>,
+        deployment_id: &str,
+    ) -> Result<String> {
+        alien_client_core::runtime_credentials::RuntimeCredentials::new(
+            alien_client_core::runtime_credentials::RuntimeCredentialConfig {
+                manager_url: request.manager_url.to_owned(),
+                audience: request.audience.to_owned(),
+                deployment_id: deployment_id.to_owned(),
+                purpose: json!({"type":"operatorSync"}),
+            },
+            self,
+        )
+        .context(ErrorData::ConfigurationError {
+            message: "Invalid component manager configuration".into(),
+        })?
+        .token()
+        .await
+        .context(ErrorData::ConfigurationError {
+            message: "Cannot authenticate enrolled component".into(),
+        })
     }
 
     async fn current_key(&self, audience: &str) -> Result<String> {
@@ -349,6 +399,25 @@ impl RuntimeProofProvider for DailyIdentity {
         )?;
         Ok(json!({"type":"dailyKey","key":key}))
     }
+}
+
+fn check_saved_identity(
+    state: &DailyIdentityState,
+    manager_url: &str,
+    audience: &str,
+    deployment_id: Option<&str>,
+) -> Result<()> {
+    if state.manager_url != manager_url || state.audience != audience {
+        return Err(failed(
+            "Saved component identity belongs to another manager",
+        ));
+    }
+    if deployment_id
+        .is_some_and(|expected| !state.deployment_id.is_empty() && expected != state.deployment_id)
+    {
+        return Err(failed("Saved component belongs to another deployment"));
+    }
+    Ok(())
 }
 
 fn key_hash(key: &str) -> String {
@@ -678,7 +747,7 @@ mod persistence_tests {
             current: format!("ax_day_v1_{}", "1".repeat(64)),
             pending: Some(format!("ax_day_v1_{}", "2".repeat(64))),
             pending_started_at: Some(Utc::now()),
-            enrollment_revision: 0,
+            enrolled_code_hash: None,
             pending_enrollment: None,
             expires_at: Utc::now() + chrono::Duration::hours(12),
         };
@@ -727,48 +796,172 @@ mod persistence_tests {
         assert_eq!(state.deployment_id, "deployment-one");
     }
 
-    #[tokio::test]
-    async fn changed_enrollment_code_alone_preserves_existing_identity() {
+    /// A manager that knows one current key per deployment, like the real
+    /// one: exchange answers 401 for any other key, and a code enrolls once.
+    #[derive(Clone)]
+    struct RecoveryManager {
+        current: Arc<Mutex<String>>,
+        codes: Arc<Mutex<std::collections::HashMap<String, Option<String>>>>,
+        enrolls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    async fn recovery_enroll(
+        axum::extract::State(manager): axum::extract::State<RecoveryManager>,
+        axum::Json(body): axum::Json<Value>,
+    ) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        manager
+            .enrolls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let hash = body["initialKeyHash"].as_str().unwrap().to_owned();
+        let mut codes = manager.codes.lock().await;
+        match codes.get_mut(body["code"].as_str().unwrap()) {
+            Some(used @ None) => *used = Some(hash.clone()),
+            Some(Some(used)) if *used == hash => {}
+            _ => return axum::http::StatusCode::UNAUTHORIZED.into_response(),
+        }
+        *manager.current.lock().await = hash;
+        axum::Json(json!({
+            "deploymentId": "deployment-one",
+            "revision": 2,
+            "expiresAt": Utc::now() + chrono::Duration::hours(24),
+        }))
+        .into_response()
+    }
+
+    async fn recovery_exchange(
+        axum::extract::State(manager): axum::extract::State<RecoveryManager>,
+        axum::Json(body): axum::Json<Value>,
+    ) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        if key_hash(body["proof"]["key"].as_str().unwrap()) != *manager.current.lock().await {
+            return axum::http::StatusCode::UNAUTHORIZED.into_response();
+        }
+        axum::Json(json!({
+            "token": "ax_cap_v1_recovered",
+            "expiresAt": Utc::now() + chrono::Duration::hours(1),
+        }))
+        .into_response()
+    }
+
+    async fn recovery_fixture(
+        expires_at: DateTime<Utc>,
+    ) -> (
+        Arc<OperatorDb>,
+        DailyIdentityState,
+        RecoveryManager,
+        tempfile::TempDir,
+    ) {
         let directory = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let manager = RecoveryManager {
+            // Someone else holds the deployment's key now.
+            current: Arc::new(Mutex::new(key_hash("ax_day_v1_other"))),
+            codes: Arc::new(Mutex::new(
+                [
+                    ("ax_enroll_original".to_owned(), Some("spent".to_owned())),
+                    ("ax_enroll_new".to_owned(), None),
+                ]
+                .into(),
+            )),
+            enrolls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        };
+        let app = axum::Router::new()
+            .route("/v1/identity/enroll", axum::routing::post(recovery_enroll))
+            .route(
+                "/v1/identity/exchange",
+                axum::routing::post(recovery_exchange),
+            )
+            .with_state(manager.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let db = Arc::new(
             OperatorDb::new(directory.path().to_str().unwrap(), &"a".repeat(64))
                 .await
                 .unwrap(),
         );
         let state = DailyIdentityState {
-            manager_url: "https://manager.example".into(),
+            manager_url: url,
             audience: "manager-one".into(),
             deployment_id: "deployment-one".into(),
             current: format!("ax_day_v1_{}", "1".repeat(64)),
             pending: None,
             pending_started_at: None,
-            enrollment_revision: 0,
+            enrolled_code_hash: Some(key_hash("ax_enroll_original")),
             pending_enrollment: None,
-            expires_at: Utc::now() - chrono::Duration::seconds(1),
+            expires_at,
         };
         db.write_daily_identity(&state).await.unwrap();
-        let identity = DailyIdentity::new(db.clone()).unwrap();
-        let deployment = identity
-            .enroll(EnrollmentRequest {
-                manager_url: &state.manager_url,
-                audience: &state.audience,
-                code: "replacement-code-fixture",
-                deployment_id: Some(&state.deployment_id),
-                revision: 0,
-            })
+        db.persist_enrolled_identity(&state).await.unwrap();
+        (db, state, manager, directory)
+    }
+
+    fn request<'a>(state: &'a DailyIdentityState, code: &'a str) -> EnrollmentRequest<'a> {
+        EnrollmentRequest {
+            manager_url: &state.manager_url,
+            audience: &state.audience,
+            code,
+            deployment_id: Some("deployment-one"),
+        }
+    }
+
+    #[tokio::test]
+    async fn new_code_recovers_an_operator_whose_key_expired_or_was_refused() {
+        for expires_at in [
+            // Down for longer than the key's life.
+            Utc::now() - chrono::Duration::hours(1),
+            // Locally valid, but the manager refuses it.
+            Utc::now() + chrono::Duration::hours(20),
+        ] {
+            let (db, state, manager, _directory) = recovery_fixture(expires_at).await;
+            let identity = Arc::new(DailyIdentity::new(db.clone()).unwrap());
+            // Restarting with the spent code cannot recover.
+            assert!(identity
+                .clone()
+                .connect(request(&state, "ax_enroll_original"))
+                .await
+                .is_err());
+            // `helm upgrade` with a new code recovers on the next start.
+            let (deployment, token) = identity
+                .clone()
+                .connect(request(&state, "ax_enroll_new"))
+                .await
+                .unwrap();
+            assert_eq!(deployment, "deployment-one");
+            assert_eq!(token, "ax_cap_v1_recovered");
+            let saved = db.read_daily_identity().await.unwrap().unwrap();
+            assert_eq!(key_hash(&saved.current), *manager.current.lock().await);
+            assert_eq!(
+                saved.enrolled_code_hash.as_deref(),
+                Some(key_hash("ax_enroll_new").as_str())
+            );
+            // Later restarts keep the new key and do not send the code again.
+            let enrolls = manager.enrolls.load(std::sync::atomic::Ordering::SeqCst);
+            identity
+                .clone()
+                .connect(request(&state, "ax_enroll_new"))
+                .await
+                .unwrap();
+            assert_eq!(
+                manager.enrolls.load(std::sync::atomic::Ordering::SeqCst),
+                enrolls
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_working_key_ignores_a_new_code() {
+        let (db, state, manager, _directory) =
+            recovery_fixture(Utc::now() + chrono::Duration::hours(20)).await;
+        *manager.current.lock().await = key_hash(&state.current);
+        let identity = Arc::new(DailyIdentity::new(db.clone()).unwrap());
+        identity
+            .connect(request(&state, "ax_enroll_new"))
             .await
             .unwrap();
-        assert_eq!(deployment, state.deployment_id);
-        let after = db.read_daily_identity().await.unwrap().unwrap();
-        assert!(
-            after.current == state.current,
-            "changing code alone must not silently replace a durable identity"
-        );
-        assert_eq!(after.expires_at, state.expires_at);
-        assert!(
-            identity.proof(&state.audience).await.is_err(),
-            "expired saved authority cannot recover merely from a changed code"
-        );
+        assert_eq!(manager.enrolls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let saved = db.read_daily_identity().await.unwrap().unwrap();
+        assert!(saved.current == state.current);
     }
 
     #[derive(Clone)]
@@ -854,7 +1047,7 @@ mod persistence_tests {
                 current: initial,
                 pending: None,
                 pending_started_at: None,
-                enrollment_revision: 0,
+                enrolled_code_hash: None,
                 pending_enrollment: None,
                 expires_at: Utc::now() + chrono::Duration::hours(11),
             })
@@ -909,35 +1102,37 @@ mod persistence_tests {
         let before = db.read_daily_identity().await.unwrap().unwrap();
         let identity = DailyIdentity::new(db.clone()).unwrap();
         let result = identity
-            .enroll(EnrollmentRequest {
+            .recover(EnrollmentRequest {
                 manager_url: &before.manager_url,
                 audience: &before.audience,
                 code: "replacement-code-fixture",
                 deployment_id: Some("deployment-one"),
-                revision: if mode == "stale" { 1 } else { 2 },
             })
             .await;
         let after = db.read_daily_identity().await.unwrap().unwrap();
-        if mode == "lost" {
-            assert!(result.is_err());
-            assert!(
-                after.current == before.current,
-                "lost response must preserve prior identity until verified retry"
-            );
-            assert!(after.pending_enrollment.is_some());
-        } else if mode == "stale" {
-            assert!(result.is_err());
-            assert!(after.current == before.current);
-            assert_eq!(after.enrollment_revision, 2);
-        } else {
-            assert_eq!(result.unwrap(), "deployment-one");
-            assert!(after.pending_enrollment.is_none());
-            assert_eq!(after.enrollment_revision, 2);
+        match mode {
+            "lost" => {
+                assert!(result.is_err());
+                assert!(
+                    after.current == before.current,
+                    "lost response must preserve prior identity until verified retry"
+                );
+                assert!(after.pending_enrollment.is_some());
+            }
+            "recover" => {
+                assert_eq!(result.unwrap().as_deref(), Some("deployment-one"));
+                assert!(after.pending_enrollment.is_none());
+            }
+            _ => {
+                // The code is spent: nothing is sent and nothing changes.
+                assert!(result.unwrap().is_none());
+                assert!(after.current == before.current);
+            }
         }
     }
 
     #[tokio::test]
-    async fn explicit_replacement_survives_response_loss_and_rejects_stale_restart() {
+    async fn replacement_survives_response_loss_and_never_reuses_the_code() {
         let directory = tempfile::tempdir().unwrap();
         let hash = Arc::new(Mutex::new(String::new()));
         let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -979,13 +1174,13 @@ mod persistence_tests {
                 pending: None,
                 pending_started_at: None,
                 expires_at: Utc::now() - chrono::Duration::seconds(1),
-                enrollment_revision: 1,
+                enrolled_code_hash: None,
                 pending_enrollment: None,
             })
             .await
             .unwrap();
         }
-        for mode in ["lost", "recover", "repeat", "stale"] {
+        for mode in ["lost", "recover", "repeat"] {
             replacement_attempt(directory.path(), mode).await;
         }
         assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 2);
@@ -1028,7 +1223,7 @@ mod persistence_tests {
             pending: None,
             pending_started_at: None,
             expires_at: Utc::now() + chrono::Duration::hours(1),
-            enrollment_revision: 1,
+            enrolled_code_hash: None,
             pending_enrollment: None,
         };
         db.write_daily_identity(&original).await.unwrap();
@@ -1036,12 +1231,11 @@ mod persistence_tests {
         for code in [401, 200] {
             status.store(code, std::sync::atomic::Ordering::SeqCst);
             let error = identity
-                .enroll(EnrollmentRequest {
+                .recover(EnrollmentRequest {
                     manager_url: &url,
                     audience: "manager-one",
                     code: "replacement-fixture",
                     deployment_id: Some("deployment-one"),
-                    revision: 2,
                 })
                 .await
                 .unwrap_err();
@@ -1050,7 +1244,7 @@ mod persistence_tests {
             assert!(saved.current == original.current);
             assert_eq!(saved.deployment_id, original.deployment_id);
             assert_eq!(saved.expires_at, original.expires_at);
-            assert_eq!(saved.enrollment_revision, 1);
+            assert!(saved.enrolled_code_hash.is_none());
             assert!(saved.pending_enrollment.is_some());
         }
         server.abort();
