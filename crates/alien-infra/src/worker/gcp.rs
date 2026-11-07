@@ -5216,10 +5216,18 @@ impl GcpWorkerController {
 
         let original = policy.clone();
 
-        // Apply resource-scoped permissions from the stack.
+        // Apply resource-scoped permissions from the stack. On a protected install setup binds
+        // the permission sets granted for every worker (`*`) on the project, and the verifier
+        // creates the service, so only grants naming this worker belong on its policy.
+        let protected = ctx.deployment_config.stack_settings.signing.is_some();
         let mut resource_bindings = Vec::new();
-        self.collect_resource_scoped_bindings(ctx, service_name, &mut resource_bindings)
-            .await?;
+        self.collect_resource_scoped_bindings(
+            ctx,
+            service_name,
+            !protected,
+            &mut resource_bindings,
+        )
+        .await?;
 
         // Pub/Sub and Cloud Scheduler mint their OIDC token for the worker's
         // execution service account. Private services keep the Cloud Run IAM
@@ -5265,9 +5273,9 @@ impl GcpWorkerController {
             policy.bindings.extend(resource_bindings);
         }
 
-        // On a protected install setup sets the service's IAM policy and management may not:
-        // what the worker needs must already be there.
-        if ctx.deployment_config.stack_settings.signing.is_some() {
+        // On a protected install management may not set the service's IAM policy: what the
+        // worker needs must already be there.
+        if protected {
             let missing = grants_missing(&original, &policy);
             if missing.is_empty() {
                 return Ok(());
@@ -5298,10 +5306,14 @@ impl GcpWorkerController {
     }
 
     /// Collect resource-scoped bindings without applying them
+    /// The bindings the stack's permission profiles and management grant on this worker's
+    /// service: the ones naming the worker, and with `wildcards` the ones granted for every
+    /// worker (`*`).
     async fn collect_resource_scoped_bindings(
         &self,
         ctx: &ResourceControllerContext<'_>,
         service_name: &str,
+        wildcards: bool,
         all_bindings: &mut Vec<alien_gcp_clients::iam::Binding>,
     ) -> Result<()> {
         use alien_permissions::generators::GcpRuntimePermissionsGenerator;
@@ -5328,7 +5340,7 @@ impl GcpWorkerController {
                 );
             }
 
-            if let Some(wildcard_refs) = profile.0.get("*") {
+            if let Some(wildcard_refs) = profile.0.get("*").filter(|_| wildcards) {
                 combined_refs.extend(
                     wildcard_refs
                         .iter()
@@ -5380,7 +5392,7 @@ impl GcpWorkerController {
                 );
             }
 
-            if let Some(wildcard_refs) = management_profile.0.get("*") {
+            if let Some(wildcard_refs) = management_profile.0.get("*").filter(|_| wildcards) {
                 management_refs.extend(
                     wildcard_refs
                         .iter()
@@ -9342,6 +9354,25 @@ mod tests {
         Vec<(Option<String>, Vec<u8>)>,
         alien_core::ReleaseStatements,
     ) {
+        protected_update_with(
+            status,
+            answer,
+            setup_policy,
+            alien_core::ManagementPermissions::Auto,
+        )
+        .await
+    }
+
+    async fn protected_update_with(
+        status: axum::http::StatusCode,
+        answer: serde_json::Value,
+        setup_policy: IamPolicy,
+        management: alien_core::ManagementPermissions,
+    ) -> (
+        Result<(), AlienError<crate::error::ErrorData>>,
+        Vec<(Option<String>, Vec<u8>)>,
+        alien_core::ReleaseStatements,
+    ) {
         let to = pinned_worker('2', 512);
         let release = signed_release(
             Platform::Gcp,
@@ -9359,6 +9390,13 @@ mod tests {
             .service_provider(protected_provider(&url, setup_policy))
             .with_test_dependencies()
             .stack_settings(protected_settings())
+            .management_config(alien_core::ManagementConfig::Gcp(
+                alien_core::GcpManagementConfig {
+                    service_account_email: MANAGEMENT_SA.to_string(),
+                    federation_trust: None,
+                },
+            ))
+            .management_permissions(management)
             .signed_release(release.clone(), None)
             .build()
             .await
@@ -9370,6 +9408,29 @@ mod tests {
         }
         let requests = requests.lock().unwrap().clone();
         (result, requests, release)
+    }
+
+    /// Setup grants management's permissions for every worker (`*`) at the project, so the
+    /// service the verifier created needs no copy of them on its own policy.
+    #[tokio::test]
+    async fn a_protected_update_needs_no_service_grant_setup_makes_for_every_worker() {
+        let answer = serde_json::json!({"release": 2, "functions": [{
+            "function": PROTECTED_SERVICE,
+            "imageUri": pinned_image('2'),
+            "digest": format!("sha256:{}", "2".repeat(64)),
+        }]});
+        let (result, requests, _) = protected_update_with(
+            axum::http::StatusCode::OK,
+            answer,
+            setup_policy(),
+            alien_core::ManagementPermissions::Extend(
+                alien_core::PermissionProfile::new().resource("*", ["worker/heartbeat"]),
+            ),
+        )
+        .await;
+
+        result.expect("management's project grants cover the service");
+        assert_eq!(requests.len(), 1, "one verifier call for the update");
     }
 
     /// On a protected install management may not write the Cloud Run service, so an update
