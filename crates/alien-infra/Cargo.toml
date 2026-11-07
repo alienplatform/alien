@@ -108,3 +108,7 @@ axum = { workspace = true, features = ["http1", "json", "tokio"] }
 tokio = { workspace = true, features = ["net"] }
 mockall = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[[example]]
+name = "protected_worker_update"
+required-features = ["all-platforms"]
