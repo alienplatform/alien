@@ -22,8 +22,8 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use sandbox::{
-    CommandFrame, CommandStreamHandle, InteractiveCommandHandle, JobResult, Preview, ResolvedSandbox, SandboxHandle,
-    SandboxInfo,
+    CommandFrame, CommandStreamHandle, InteractiveCommandHandle, JobResult, Preview,
+    ResolvedSandbox, SandboxHandle, SandboxInfo,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;

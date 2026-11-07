@@ -14,13 +14,16 @@
 //!   not reading answers with how far it got rather than holding the request open past a proxy's
 //!   timeout, and a retry of the same bytes is applied once. A gap is refused: bytes a caller
 //!   thinks it sent that never arrived would otherwise be silently skipped.
+//! - **A barrier retires every write sent before it.** A caller whose write was cancelled cannot
+//!   know whether that request is still on its way. The barrier waits out any write in progress,
+//!   reports how much input the command has taken, and moves the input to a new generation; a
+//!   write from an older generation that arrives later is refused rather than applied.
 //! - **A signal reaches the process group, and only while the command runs.** The group is
-//!   forgotten the moment the command is reaped, before its terminal frame is delivered, so a
-//!   late signal cannot reach a process that later took the same number, however slowly the
-//!   caller reads.
+//!   forgotten once the command has exited and before it is reaped, under the lock every signal
+//!   holds while it is sent. An exited child keeps its pid until it is reaped, so a signal sent
+//!   under that lock can only reach this command, and none is sent after it.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -56,8 +59,9 @@ pub struct Interactive {
     /// it repeats.
     stdin: tokio::sync::Mutex<Stdin>,
     /// The command's process group: set after spawn and before the stream answers, and cleared
-    /// to 0 when the command is reaped.
-    process_group: AtomicI32,
+    /// to 0 once the command has exited, before it is reaped. Held while a signal is sent, so the
+    /// clearing waits for a signal in flight and the reap waits for the clearing.
+    process_group: Mutex<i32>,
 }
 
 struct Stdin {
@@ -65,6 +69,8 @@ struct Stdin {
     pipe: Option<ChildStdin>,
     /// Bytes the command's pipe has taken so far
     accepted: u64,
+    /// Moved on by each barrier. Only writes carrying the current one are applied.
+    generation: u64,
 }
 
 /// A slot held for one command. Dropping it frees the id, which is what makes a signal after the
@@ -81,14 +87,13 @@ impl Reservation {
     /// the command's input before anyone wrote to it.
     pub async fn attach(&self, stdin: Option<ChildStdin>, process_group: i32) {
         self.command.stdin.lock().await.pipe = stdin;
-        self.command
-            .process_group
-            .store(process_group, Ordering::SeqCst);
+        *lock(&self.command.process_group) = process_group;
     }
 
-    /// Forgets the process group. Called once the command has been reaped.
-    pub fn reaped(&self) {
-        self.command.process_group.store(0, Ordering::SeqCst);
+    /// Forgets the process group. Called once the command has exited and before it is reaped;
+    /// waits for a signal being sent to finish first.
+    pub fn exited(&self) {
+        *lock(&self.command.process_group) = 0;
     }
 }
 
@@ -130,8 +135,9 @@ impl InteractiveRegistry {
             stdin: tokio::sync::Mutex::new(Stdin {
                 pipe: None,
                 accepted: 0,
+                generation: 0,
             }),
-            process_group: AtomicI32::new(0),
+            process_group: Mutex::new(0),
         });
 
         let mut commands = self.lock();
@@ -159,11 +165,30 @@ impl InteractiveRegistry {
     ///
     /// Bytes before what the command already took are acknowledged without being written again,
     /// so a retry is safe. A return short of `offset + data.len()` means the command stopped
-    /// reading for `wait`; the caller resends from the returned count.
-    pub async fn write(&self, id: &str, offset: u64, data: &[u8], wait: Duration) -> Result<u64> {
+    /// reading for `wait`; the caller resends from the returned count. A write from a generation
+    /// a barrier has retired is refused.
+    pub async fn write(
+        &self,
+        id: &str,
+        generation: u64,
+        offset: u64,
+        data: &[u8],
+        wait: Duration,
+    ) -> Result<u64> {
         let command = self.get(id)?;
         let mut stdin = command.stdin.lock().await;
-        let Stdin { pipe, accepted } = &mut *stdin;
+        let Stdin {
+            pipe,
+            accepted,
+            generation: current,
+        } = &mut *stdin;
+
+        if generation != *current {
+            return Err(AlienError::new(ErrorData::StdinStaleWrite {
+                generation,
+                current: *current,
+            }));
+        }
 
         if offset > *accepted {
             return Err(AlienError::new(ErrorData::StdinOffsetMismatch {
@@ -217,6 +242,16 @@ impl InteractiveRegistry {
         Ok(*accepted)
     }
 
+    /// Retires every write sent so far: waits for one in progress, then moves the input to a new
+    /// generation. Returns how many bytes the command has taken and the generation later writes
+    /// carry.
+    pub async fn barrier(&self, id: &str) -> Result<(u64, u64)> {
+        let command = self.get(id)?;
+        let mut stdin = command.stdin.lock().await;
+        stdin.generation += 1;
+        Ok((stdin.accepted, stdin.generation))
+    }
+
     /// Closes the command's stdin, so a program reading to end of input finishes. Closing twice
     /// is not an error: the second close asks for what is already true.
     pub async fn close_stdin(&self, id: &str) -> Result<()> {
@@ -233,9 +268,11 @@ impl InteractiveRegistry {
     /// Sends `signal` to the command's process group.
     pub fn signal(&self, id: &str, signal: CommandSignal) -> Result<()> {
         let command = self.get(id)?;
-        // Read once and used as read: the group is cleared at the reap, so a 0 here is a command
-        // that has ended even if its terminal frame has not reached the caller yet.
-        let group = command.process_group.load(Ordering::SeqCst);
+        // Held until the signal is sent. The group is cleared under this lock once the command has
+        // exited and before it is reaped, so a group read here is still this command's: a 0 is a
+        // command that has ended even if its terminal frame has not reached the caller yet.
+        let held = lock(&command.process_group);
+        let group = *held;
         if group <= 0 {
             return Err(AlienError::new(ErrorData::CommandNotRunning {
                 id: id.to_string(),
@@ -254,7 +291,8 @@ impl InteractiveRegistry {
                 CommandSignal::User2 => libc::SIGUSR2,
             };
             // SAFETY: `kill(2)` with a negative pid signals a process group. The group is the
-            // command's own, established at spawn, and the id is released when it is reaped.
+            // command's own, established at spawn, and `held` keeps it from being cleared, and so
+            // the command from being reaped, until this returns.
             if unsafe { libc::kill(-group, number) } != 0 {
                 let error = std::io::Error::last_os_error();
                 // The group is already gone: everything in it exited between the lookup and the
@@ -273,6 +311,7 @@ impl InteractiveRegistry {
         #[cfg(not(unix))]
         let _ = (group, signal);
 
+        drop(held);
         Ok(())
     }
 
@@ -298,6 +337,14 @@ impl InteractiveRegistry {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
+}
+
+/// Locks a command's process group. A panic while holding it leaves a number that is either the
+/// command's or 0, both of which are still true.
+fn lock(group: &Mutex<i32>) -> MutexGuard<'_, i32> {
+    group
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl Default for InteractiveRegistry {
@@ -334,7 +381,7 @@ mod tests {
         let data = vec![0u8; 4 << 20];
         let started = std::time::Instant::now();
         let accepted = registry
-            .write("slow", 0, &data, Duration::from_millis(300))
+            .write("slow", 0, 0, &data, Duration::from_millis(300))
             .await
             .expect("a short write is not an error");
 
@@ -353,6 +400,7 @@ mod tests {
         let again = registry
             .write(
                 "slow",
+                0,
                 accepted,
                 &data[accepted as usize..],
                 Duration::from_millis(100),

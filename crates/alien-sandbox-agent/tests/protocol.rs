@@ -1364,9 +1364,18 @@ impl Interactive {
     }
 
     async fn write(&self, offset: u64, data: &[u8]) -> reqwest::Response {
+        self.write_in(0, offset, data).await
+    }
+
+    async fn write_in(&self, generation: u64, offset: u64, data: &[u8]) -> reqwest::Response {
         self.post(
             "/v1/interactive/stdin",
-            json!({"id": self.id, "offset": offset, "data": BASE64.encode(data)}),
+            json!({
+                "id": self.id,
+                "generation": generation,
+                "offset": offset,
+                "data": BASE64.encode(data),
+            }),
         )
         .await
     }
@@ -1511,6 +1520,49 @@ async fn a_retried_write_is_applied_once_and_a_gap_is_refused() {
     assert_eq!(stdout, "abcde", "every byte exactly once, in order");
 }
 
+/// A barrier retires every write sent before it. A caller that gave up on a write cannot know
+/// whether the request is still on its way; after the barrier that request is refused if it
+/// arrives, rather than landing ahead of the bytes the caller sends next.
+#[tokio::test]
+async fn a_write_from_before_a_barrier_is_refused_after_it() {
+    let agent = Agent::start().await;
+    let command = Interactive::start(&agent, "cat-2", &["/bin/cat"]).await;
+
+    assert_eq!(command.accepted(0, b"one ").await, 4);
+
+    let barrier: serde_json::Value = command
+        .post("/v1/interactive/stdin-barrier", json!({"id": "cat-2"}))
+        .await
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(barrier["accepted"], 4, "the barrier reports what was taken");
+    assert_eq!(barrier["generation"], 1, "and moves the input on");
+
+    // The old write, delayed past the barrier, at the offset where the caller now writes.
+    let stale = command.write_in(0, 4, b"STALE ").await;
+    assert_eq!(stale.status(), 409, "a retired write is refused");
+    assert!(
+        stale.text().await.unwrap().starts_with("STDIN_STALE_WRITE"),
+        "the refusal names itself"
+    );
+
+    let taken: serde_json::Value = command
+        .write_in(1, 4, b"two")
+        .await
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(taken["accepted"], 7);
+
+    command
+        .post("/v1/interactive/close-stdin", json!({"id": "cat-2"}))
+        .await;
+    let (terminal, _, stdout) = command.finish().await;
+    assert_eq!(terminal["code"], 0);
+    assert_eq!(stdout, "one two", "nothing from the retired write");
+}
+
 /// A signal reaches the command and the program decides what it means: here it traps `SIGINT`,
 /// reports it, and exits on its own terms, as a REPL abandoning its input would keep running.
 #[tokio::test]
@@ -1603,7 +1655,7 @@ async fn controls_for_an_unknown_command_are_refused() {
     for (path, body) in [
         (
             "/v1/interactive/stdin",
-            json!({"id": "nope", "offset": 0, "data": ""}),
+            json!({"id": "nope", "generation": 0, "offset": 0, "data": ""}),
         ),
         ("/v1/interactive/close-stdin", json!({"id": "nope"})),
         (

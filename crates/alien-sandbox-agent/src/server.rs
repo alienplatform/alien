@@ -325,6 +325,10 @@ pub fn router(state: Arc<AgentState>) -> Router {
             "/v1/interactive/stdin",
             post(interactive_stdin).layer(axum::extract::DefaultBodyLimit::max(1 << 20)),
         )
+        .route(
+            "/v1/interactive/stdin-barrier",
+            post(interactive_stdin_barrier),
+        )
         .route("/v1/interactive/close-stdin", post(interactive_close_stdin))
         .route("/v1/interactive/signal", post(interactive_signal))
         // The GCP Agent Platform proxies `:execute` to `POST /` with the body verbatim and can set
@@ -567,6 +571,8 @@ pub struct InteractiveStartBody {
 pub struct InteractiveStdinBody {
     /// The command
     pub id: String,
+    /// The input generation the caller is writing in: 0 until its first barrier
+    pub generation: u64,
     /// Where `data` starts in the command's input, counted from its first byte
     pub offset: u64,
     /// The bytes, base64
@@ -580,6 +586,16 @@ pub struct InteractiveStdinResponse {
     /// Bytes taken in total. Short of `offset` plus the write's length means the command stopped
     /// reading for a while; resend from here.
     pub accepted: u64,
+}
+
+/// Where an interactive command's input stands after a barrier.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveBarrierResponse {
+    /// Bytes taken in total, including any from writes the barrier retired
+    pub accepted: u64,
+    /// The generation every later write carries
+    pub generation: u64,
 }
 
 /// Which interactive command.
@@ -657,9 +673,10 @@ async fn interactive_start(
                     output_cap,
                     alien_core::sandbox_process::Framing::Chunks,
                     sender,
-                    // The group is forgotten at the reap itself, not when the terminal frame is
-                    // delivered, which a slow reader can hold off indefinitely.
-                    || reservation.reaped(),
+                    // The group is forgotten once the command exits and before it is reaped,
+                    // not when the terminal frame is delivered, which a slow reader can hold off
+                    // indefinitely.
+                    Some(|| reservation.exited()),
                 )
                 .await;
                 drop(reservation);
@@ -688,6 +705,7 @@ async fn interactive_stdin(
         .interactive
         .write(
             &body.id,
+            body.generation,
             body.offset,
             &data,
             crate::interactive::STDIN_WRITE_WAIT,
@@ -695,6 +713,20 @@ async fn interactive_stdin(
         .await?;
 
     Ok(Json(InteractiveStdinResponse { accepted }))
+}
+
+async fn interactive_stdin_barrier(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<InteractiveIdBody>,
+) -> std::result::Result<Json<InteractiveBarrierResponse>, ApiError> {
+    authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    let (accepted, generation) = state.interactive.barrier(&body.id).await?;
+    Ok(Json(InteractiveBarrierResponse {
+        accepted,
+        generation,
+    }))
 }
 
 async fn interactive_close_stdin(

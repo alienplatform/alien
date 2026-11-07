@@ -96,6 +96,11 @@ pub async fn run_cases(sandbox: Arc<dyn Sandbox>, sandbox_id: &str) -> Vec<CaseR
         deadline_without_reader(&*sandbox, sandbox_id)
     );
 
+    case!(
+        "concurrentStartsStopAtTheLimit",
+        concurrent_starts(&*sandbox, sandbox_id)
+    );
+
     let started = Instant::now();
     let repl = python_repl(&*sandbox, sandbox_id).await;
     results.push(CaseResult {
@@ -508,6 +513,60 @@ async fn python_repl(sandbox: &dyn Sandbox, id: &str) -> Result<Option<String>, 
     }
     Ok(Some(
         "prompt on stderr, 42 on stdout, exit 0 at EOF".to_string(),
+    ))
+}
+
+/// How many interactive commands one session runs at once, on every backend that has them.
+const INTERACTIVE_LIMIT: usize = 16;
+
+/// Starts that arrive together cannot pass the limit between them: each is admitted or refused
+/// as if it had come alone, and the refused ones say why.
+async fn concurrent_starts(sandbox: &dyn Sandbox, id: &str) -> Outcome {
+    let attempts = INTERACTIVE_LIMIT + 4;
+    let starts = (0..attempts).map(|_| sandbox.run_interactive(id, sh("exec sleep 300")));
+    let results = futures::future::join_all(starts).await;
+
+    let mut running = Vec::new();
+    let mut refused = 0;
+    for result in results {
+        match result {
+            Ok(command) => running.push(command),
+            Err(error) if error.to_string().contains("INTERACTIVE_LIMIT_REACHED") => refused += 1,
+            Err(error) => return Err(format!("a start failed for another reason: {error}")),
+        }
+    }
+    let admitted = running.len();
+    // Dropping the output kills each command and frees its slot.
+    drop(running);
+    if admitted != INTERACTIVE_LIMIT || refused != attempts - INTERACTIVE_LIMIT {
+        return Err(format!(
+            "{attempts} concurrent starts: {admitted} admitted and {refused} refused, expected \
+             {INTERACTIVE_LIMIT} and {}",
+            attempts - INTERACTIVE_LIMIT
+        ));
+    }
+
+    // The slots come back once the commands are gone, so later cases start in an empty session.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let probes = (0..INTERACTIVE_LIMIT).map(|_| sandbox.run_interactive(id, sh("exit 0")));
+        let probes = futures::future::join_all(probes).await;
+        let all_admitted = probes.iter().all(Result::is_ok);
+        // Read to the end, so each probe has finished and given its slot back too.
+        for mut probe in probes.into_iter().flatten() {
+            while probe.output.next().await.is_some() {}
+        }
+        if all_admitted {
+            break;
+        }
+        if Instant::now() > deadline {
+            return Err("the slots were not released 30s after the commands were dropped".into());
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    Ok(format!(
+        "{attempts} concurrent starts: {admitted} admitted, {refused} refused with \
+         INTERACTIVE_LIMIT_REACHED; all slots free again after the drop"
     ))
 }
 
