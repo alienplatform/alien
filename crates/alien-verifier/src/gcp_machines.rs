@@ -103,6 +103,10 @@ pub fn image_facts(path: &str, image: &Value) -> Result<ImageFacts> {
     })
 }
 
+/// Instance metadata key that marks a machine the verifier launched. Not
+/// `block-project-ssh-keys`, which customers also set for hardening.
+pub const SIGNED_MACHINE_KEY: &str = "alien-signed";
+
 /// The metadata key a machine reads instance tag `tag` from: the tag's
 /// words, lower case, joined by dashes, as the machine agent derives it.
 pub fn metadata_key(tag: &str) -> String {
@@ -177,6 +181,10 @@ pub fn template_body(
         .map(|(tag, value)| json!({"key": metadata_key(tag), "value": value}))
         .collect();
     metadata.push(json!({"key": "block-project-ssh-keys", "value": "true"}));
+    // Only the verifier writes it: a machine carrying it was launched from a signed release, so
+    // the machine agent never runs it unprotected. Management may not set instance or template
+    // metadata on a protected install.
+    metadata.push(json!({"key": SIGNED_MACHINE_KEY, "value": "true"}));
     Ok(json!({
         "name": name,
         "properties": {
@@ -538,6 +546,9 @@ mod tests {
             json!([
                 {"key": metadata_key(crate::machines::CAPACITY_GROUP_TAG), "value": "general"},
                 {"key": "block-project-ssh-keys", "value": "true"},
+                // Marks a machine the verifier launched; customers set block-project-ssh-keys
+                // for hardening on unprotected installs too, so it can't be the marker.
+                {"key": "alien-signed", "value": "true"},
             ])
         );
         assert!(
