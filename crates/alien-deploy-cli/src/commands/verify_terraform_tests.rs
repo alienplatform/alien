@@ -6,9 +6,10 @@ use super::*;
 use crate::commands::verify::tests::{fingerprint, genesis, now, signed};
 use crate::commands::verify::{check_signed, render, Line, Mark};
 use alien_cli_common::setup_templates::{
-    render_setup_template, RenderedSetupTemplate, SetupHostingOptions, SetupRenderOptions,
+    protected_stack_settings, render_setup_template, RenderedSetupTemplate, SetupHostingOptions,
+    SetupRenderOptions,
 };
-use alien_core::{SetupPins, Stack, StackSettings, StackSigning};
+use alien_core::{SetupPins, Stack, StackSigning};
 use alien_signing::{Kind, ReleaseBody, SignedStatement};
 
 const PREFIX: &str = "acme-prod";
@@ -35,10 +36,7 @@ pub(crate) async fn module(cloud: ModuleCloud) -> RenderedSetupTemplate {
         fingerprint: fingerprint(),
         channel: "production".to_string(),
     };
-    let settings = StackSettings {
-        signing: Some(signing.clone()),
-        ..StackSettings::default()
-    };
+    let settings = protected_stack_settings(cloud.template(), &signing);
     let cloudformation = alien_cloudformation::CfRegistry::built_in();
     let terraform = alien_terraform::TfRegistry::built_in();
     let helm = alien_helm::HelmRegistry::built_in();

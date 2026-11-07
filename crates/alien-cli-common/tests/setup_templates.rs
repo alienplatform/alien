@@ -414,3 +414,69 @@ async fn file_map_bytes_rebuild_the_rendered_module() {
         serde_json::to_vec(&tricky).unwrap()
     );
 }
+
+/// The `resource` addresses of a rendered Terraform module.
+fn terraform_resources(template: &[u8]) -> std::collections::BTreeSet<String> {
+    let files: std::collections::BTreeMap<String, String> =
+        serde_json::from_slice(template).expect("a module is a JSON file map");
+    files
+        .values()
+        .flat_map(|contents| contents.lines())
+        .filter_map(|line| line.strip_prefix("resource \""))
+        .map(|rest| {
+            rest.trim_end_matches(" {")
+                .replace("\" \"", ".")
+                .replace('"', "")
+        })
+        .collect()
+}
+
+/// Protecting an install replaces its unprotected module with the protected one, so the
+/// protected module keeps everything the unprotected one creates for the same stack, the
+/// network the unprotected module offers included, and only adds the signing resources.
+#[tokio::test]
+async fn a_protected_module_keeps_every_resource_of_the_unprotected_one() {
+    let rendered = render(FINGERPRINT).await;
+    let terraform = TfRegistry::built_in();
+    let cloudformation = CfRegistry::built_in();
+    let helm = HelmRegistry::built_in();
+    let signing = StackSigning {
+        fingerprint: FINGERPRINT.to_string(),
+        channel: "production".to_string(),
+    };
+    let options = SetupRenderOptions::builder()
+        .signing(&signing)
+        .cloudformation_registry(&cloudformation)
+        .terraform_registry(&terraform)
+        .helm_registry(&helm)
+        .hosting(hosting())
+        .pins(pins())
+        .build();
+    // What unprotected packages are rendered with: the network is the customer's choice.
+    let unprotected_settings = StackSettings {
+        network: Some(alien_core::NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        }),
+        ..StackSettings::default()
+    };
+    for name in ["terraform-aws", "terraform-gcp", "terraform-azure"] {
+        let unprotected = render_setup_template(name, &stack(), &unprotected_settings, &options)
+            .await
+            .expect("unprotected module renders");
+        let protected = terraform_resources(&rendered[name].bytes);
+        let missing: Vec<_> = terraform_resources(&unprotected.bytes)
+            .into_iter()
+            .filter(|address| !protected.contains(address))
+            .collect();
+        assert_eq!(missing, Vec::<String>::new(), "{name}");
+        for variable in &unprotected.allowed {
+            if variable.starts_with("network") || variable == "availability_zones" {
+                assert!(
+                    rendered[name].allowed.contains(variable),
+                    "{name}: the protected module lets the customer choose {variable}"
+                );
+            }
+        }
+    }
+}

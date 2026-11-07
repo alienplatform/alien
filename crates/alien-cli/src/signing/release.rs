@@ -12,11 +12,12 @@ use std::io::Write as _;
 use std::path::Path;
 
 use alien_cli_common::setup_templates::{
-    render_setup_template, RenderedSetupTemplate, SetupHostingOptions, SetupRenderOptions,
+    protected_stack_settings, render_setup_template, RenderedSetupTemplate, SetupHostingOptions,
+    SetupRenderOptions,
 };
 use alien_cloudformation::RegistrationMode;
 use alien_core::release_statement::{release_body, signed_stack, ReleaseOptions};
-use alien_core::{Platform, SetupPins, Stack, StackSettings, StackSigning};
+use alien_core::{Platform, SetupPins, Stack, StackSigning};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_signing::{
     display_fingerprint, fingerprint, Envelope, Kind, RecoveryCode, ReleaseBody, Role,
@@ -445,10 +446,6 @@ pub async fn setup_templates(
     hosting: &SetupHostingOptions,
     pins: SetupPins,
 ) -> Result<BTreeMap<String, RenderedSetupTemplate>> {
-    let settings = StackSettings {
-        signing: Some(signing.clone()),
-        ..StackSettings::default()
-    };
     let cloudformation = crate::commands::render::cloudformation_registry();
     let terraform = crate::commands::render::terraform_registry();
     let helm = alien_helm::HelmRegistry::built_in();
@@ -462,6 +459,7 @@ pub async fn setup_templates(
         .build();
     let mut templates = BTreeMap::new();
     for &name in platform_templates(platform) {
+        let settings = protected_stack_settings(name, signing);
         let rendered = render_setup_template(name, stack, &settings, &options)
             .await
             .context(ErrorData::SigningFailed {

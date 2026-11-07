@@ -15,8 +15,8 @@ use alien_cloudformation::{
 };
 use alien_core::{
     AwsManagementConfig, AzureManagementConfig, DeploymentConfig, EnvironmentVariablesSnapshot,
-    ExternalBindings, GcpManagementConfig, ManagementConfig, Platform, SetupPins, Stack,
-    StackSettings, StackSigning, StackState,
+    ExternalBindings, GcpManagementConfig, ManagementConfig, NetworkSettings, Platform, SetupPins,
+    Stack, StackSettings, StackSigning, StackState,
 };
 use alien_error::{AlienError, AlienErrorData, Context, IntoAlienError};
 use alien_helm::{HelmOptions, HelmRegistry};
@@ -110,17 +110,30 @@ impl RenderedSetupTemplate {
     }
 }
 
+/// The stack settings a release renders setup template `name` with: signing on, and on a
+/// cloud the network left to the customer as unprotected packages leave it (a new network by
+/// default, or an existing or the default one). Protecting an install replaces its unprotected
+/// setup with this one, which must keep the network the install already has.
+pub fn protected_stack_settings(name: &str, signing: &StackSigning) -> StackSettings {
+    let network = (name != "helm").then_some(NetworkSettings::Create {
+        cidr: None,
+        availability_zones: 2,
+    });
+    StackSettings {
+        signing: Some(signing.clone()),
+        network,
+        ..StackSettings::default()
+    }
+}
+
 /// Render each template in [`SETUP_TEMPLATES`] for `stack` with signing on, keyed by name.
 pub async fn render_setup_templates(
     stack: &Stack,
     options: SetupRenderOptions<'_>,
 ) -> Result<BTreeMap<String, RenderedSetupTemplate>> {
-    let settings = StackSettings {
-        signing: Some(options.signing.clone()),
-        ..StackSettings::default()
-    };
     let mut rendered = BTreeMap::new();
     for &name in SETUP_TEMPLATES {
+        let settings = protected_stack_settings(name, options.signing);
         let template = render_setup_template(name, stack, &settings, &options)
             .await
             .context(ErrorData::RenderFailed {
@@ -133,8 +146,8 @@ pub async fn render_setup_templates(
 }
 
 /// Render the setup template `name` (from [`SETUP_TEMPLATES`]) for `stack` with `settings`.
-/// [`render_setup_templates`] calls this with signing on and nothing else set; other settings
-/// make templates a release does not record. `options.signing` is not used here.
+/// [`render_setup_templates`] calls this with [`protected_stack_settings`]; other settings make
+/// templates a release does not record. `options.signing` is not used here.
 pub async fn render_setup_template(
     name: &str,
     source: &Stack,
