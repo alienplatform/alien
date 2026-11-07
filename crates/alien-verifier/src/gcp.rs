@@ -102,6 +102,18 @@ impl Gcp {
         body: Option<&Value>,
         operation: &str,
     ) -> Result<Option<Value>> {
+        let (status, text) = self.send(method, url, body, operation).await?;
+        answer(status, &text, operation)
+    }
+
+    /// Send a request and return its status and body.
+    async fn send(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        body: Option<&Value>,
+        operation: &str,
+    ) -> Result<(reqwest::StatusCode, String)> {
         let mut request = self
             .http
             .request(method, url)
@@ -120,22 +132,7 @@ impl Gcp {
             .await
             .into_alien_error()
             .context(failed(operation))?;
-        if status == reqwest::StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-        if !status.is_success() {
-            return Err(AlienError::new(failed(format!(
-                "{operation}: HTTP {status}: {}",
-                text.chars().take(2000).collect::<String>()
-            ))));
-        }
-        if text.trim().is_empty() {
-            return Ok(Some(Value::Null));
-        }
-        serde_json::from_str(&text)
-            .map(Some)
-            .into_alien_error()
-            .context(failed(format!("{operation}: the response is not JSON")))
+        Ok((status, text))
     }
 
     fn service_url(&self, name: &str) -> String {
@@ -689,13 +686,22 @@ impl ServiceStore for Gcp {
     }
 
     async fn find(&self, name: &str) -> Result<Option<Value>> {
-        self.call(
-            reqwest::Method::GET,
-            &self.service_url(name),
-            None,
-            &format!("run.services.get {name}"),
-        )
-        .await
+        let operation = format!("run.services.get {name}");
+        let (status, text) = self
+            .send(
+                reqwest::Method::GET,
+                &self.service_url(name),
+                None,
+                &operation,
+            )
+            .await?;
+        // The verifier may read only the services setup bound it on, and Cloud Run answers 403,
+        // not 404, for a service that doesn't exist to a principal with no project-wide grant.
+        // Either way setup didn't give it this service.
+        if status == reqwest::StatusCode::FORBIDDEN {
+            return Ok(None);
+        }
+        answer(status, &text, &operation)
     }
 
     async fn policy(&self, name: &str) -> Result<Value> {
@@ -736,6 +742,27 @@ impl ServiceStore for Gcp {
         })?;
         Ok(())
     }
+}
+
+/// What a response of `status` with body `text` means: `None` for 404, the JSON body for a
+/// success, an error otherwise.
+fn answer(status: reqwest::StatusCode, text: &str, operation: &str) -> Result<Option<Value>> {
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !status.is_success() {
+        return Err(AlienError::new(failed(format!(
+            "{operation}: HTTP {status}: {}",
+            text.chars().take(2000).collect::<String>()
+        ))));
+    }
+    if text.trim().is_empty() {
+        return Ok(Some(Value::Null));
+    }
+    serde_json::from_str(text)
+        .map(Some)
+        .into_alien_error()
+        .context(failed(format!("{operation}: the response is not JSON")))
 }
 
 #[cfg(test)]
