@@ -3161,18 +3161,83 @@ platform = "aws"
             .arg(&values)
             .output()
             .expect("helm runs");
-        let rendered = String::from_utf8(output.stdout).unwrap();
         assert!(
             output.status.success(),
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert!(rendered.contains("enrollment-code: \"ax_enroll_fixture\""));
-        assert!(rendered.contains("OPERATOR_ENROLLMENT_CODE_FILE"));
-        assert!(!rendered.contains("sync-token:"));
-        assert!(!rendered.contains("SYNC_TOKEN_FILE"));
-        let written = std::fs::read_to_string(&values).unwrap();
-        assert!(!written.contains("\"token\""));
+        let documents: Vec<serde_yaml::Value> =
+            serde_yaml::Deserializer::from_str(&String::from_utf8(output.stdout).unwrap())
+                .map(|document| serde_yaml::Value::deserialize(document).unwrap())
+                .filter(|document| !document.is_null())
+                .collect();
+        let of_kind = |kind: &str| {
+            documents
+                .iter()
+                .filter(|document| document["kind"].as_str() == Some(kind))
+                .collect::<Vec<_>>()
+        };
+        // The release Secret holds the code and no token value.
+        let release = of_kind("Secret")
+            .into_iter()
+            .find(|secret| secret["stringData"]["enrollment-code"].is_string())
+            .expect("release Secret with the code");
+        assert_eq!(
+            release["stringData"]["enrollment-code"].as_str(),
+            Some("ax_enroll_fixture")
+        );
+        assert!(release["stringData"]["sync-token"]
+            .as_str()
+            .is_none_or(str::is_empty));
+        // The Operator reads the code from that Secret, and no token file.
+        let operator = of_kind("Deployment")
+            .into_iter()
+            .find(|deployment| {
+                deployment["spec"]["template"]["spec"]["containers"][0]["name"].as_str()
+                    == Some("operator")
+            })
+            .expect("Operator Deployment");
+        let pod = &operator["spec"]["template"]["spec"];
+        let env: Vec<(&str, Option<&str>)> = pod["containers"][0]["env"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|variable| {
+                (
+                    variable["name"].as_str().unwrap(),
+                    variable["value"].as_str(),
+                )
+            })
+            .collect();
+        assert!(env.contains(&(
+            "OPERATOR_ENROLLMENT_CODE_FILE",
+            Some("/etc/deployment/secrets/enrollment-code")
+        )));
+        assert!(env.iter().all(|(name, _)| *name != "SYNC_TOKEN_FILE"));
+        let volume = pod["volumes"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|volume| volume["name"].as_str() == Some("management-token"))
+            .expect("credential volume");
+        assert_eq!(
+            volume["secret"]["secretName"].as_str(),
+            release["metadata"]["name"].as_str()
+        );
+        assert_eq!(
+            volume["secret"]["items"][0]["key"].as_str(),
+            Some("enrollment-code")
+        );
+        // The values file holds no token.
+        let written: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(&values).unwrap()).unwrap();
+        assert!(written["management"]["token"]
+            .as_str()
+            .is_none_or(str::is_empty));
+        assert_eq!(
+            written["management"]["enrollmentCode"].as_str(),
+            Some("ax_enroll_fixture")
+        );
     }
 
     #[tokio::test]
