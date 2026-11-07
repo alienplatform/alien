@@ -47,11 +47,15 @@ DEPLOYMENT can be a deployment ID (`dep_...`) or `<group>/<name>`.",
     alien debug acme/prod -- gcloud projects list
     alien debug acme/prod -- kubectl get pods
 
-    # Remote Operator (pull-mode Kubernetes) deployments require an approved
-    # access request covering the tool + namespace/scope you're debugging:
+    # Remote Operator (pull-mode Kubernetes) and push-mode AWS, GCP and Azure
+    # deployments require an approved access request covering the tool and
+    # the namespace or scope you're debugging:
     alien access-requests create --deployment acme/prod \\
       --debug-tool kubectl --debug-namespace braintrust --duration 30m
     alien debug acme/prod --access-request ar_123 -- kubectl get pods -n braintrust
+
+    # Or request access, wait for approval and run in one step:
+    alien debug acme/prod --request-access -- aws sts get-caller-identity
 
     # No `--` arg drops you into a local interactive shell with the env set:
     alien debug acme/prod
@@ -79,14 +83,15 @@ pub struct DebugArgs {
     pub cmd: Vec<String>,
 
     /// Access request id (`ar_...`) authorizing this debug session. Required for
-    /// Remote Operator (pull-mode Kubernetes) deployments, where debugging shares
-    /// the same approval flow as `alien operations invoke`. Create one with
+    /// Remote Operator (pull-mode Kubernetes) deployments and for push-mode AWS,
+    /// GCP and Azure deployments, where debugging shares the same approval flow
+    /// as `alien operations invoke`. Create one with
     /// `alien access-requests create --debug-tool <kubectl|aws|gcloud|az> ...`.
     #[arg(long = "access-request", conflicts_with = "request_access")]
     pub access_request: Option<String>,
 
     /// Shortcut: create a debug-tool access request for this deployment, wait for
-    /// customer approval, then start the session against it. Creates the same
+    /// it to be approved, then start the session against it. Creates the same
     /// access-request resource as `alien access-requests create --debug-tool ...`.
     #[arg(long = "request-access", conflicts_with = "access_request")]
     pub request_access: bool,
@@ -189,9 +194,8 @@ struct CreateDebugSessionRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     tty: Option<bool>,
     /// Access request id (`ar_...`) authorizing this session. Required by the
-    /// manager for pull-mode Kubernetes (Remote Operator) sessions; ignored
-    /// for push-mode cloud/Machines sessions, which aren't gated by access
-    /// requests in this round.
+    /// manager for pull-mode Kubernetes (Remote Operator) sessions and push-mode
+    /// AWS, GCP and Azure sessions; ignored for Machines sessions.
     #[serde(skip_serializing_if = "Option::is_none")]
     access_request_id: Option<String>,
 }
@@ -326,7 +330,7 @@ async fn request_debug_access_then_wait(
     // in --json mode stdout is reserved for exactly one JSON document (the
     // final result), so progress can't share it.
     eprintln!(
-        "Debug access requested: {}\nWaiting for the customer to approve it in-cluster...",
+        "Debug access requested: {}\nWaiting for it to be approved...",
         created.id
     );
 
