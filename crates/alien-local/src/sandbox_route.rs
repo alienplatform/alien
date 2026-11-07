@@ -162,6 +162,12 @@ struct ServingRoute {
 /// listener each time and hand the workload a different port than the one it was given.
 static ROUTES: OnceLock<Mutex<HashMap<String, ServingRoute>>> = OnceLock::new();
 
+/// Routes forwarded to Docker's host gateway, keyed by base URL; dropping a sender stops its
+/// forward. Async-locked because starting a forward awaits, and two containers starting at once
+/// must not both bind the same gateway port.
+static FORWARDS: OnceLock<tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>> =
+    OnceLock::new();
+
 impl SandboxRoute {
     /// Returns the sandbox's route, serving it first if this process has not already.
     ///
@@ -170,6 +176,19 @@ impl SandboxRoute {
         manager: Arc<LocalSandboxManager>,
         sandbox: &str,
         template: SandboxSessionConfig,
+    ) -> Result<Self> {
+        Self::ensure_at(manager, sandbox, template, None).await
+    }
+
+    /// Like [`Self::ensure`], first trying to serve at `previous`, the address an earlier process
+    /// served this sandbox at. Workloads that outlive a manager restart hold that URL in their
+    /// binding, and a route on a new port would leave them calling a dead one. Falls back to a
+    /// port the OS picks when `previous` is not a loopback address or is taken.
+    pub async fn ensure_at(
+        manager: Arc<LocalSandboxManager>,
+        sandbox: &str,
+        template: SandboxSessionConfig,
+        previous: Option<&str>,
     ) -> Result<Self> {
         let routes = ROUTES.get_or_init(|| Mutex::new(HashMap::new()));
 
@@ -186,7 +205,8 @@ impl SandboxRoute {
             }
         }
 
-        let (route, template, shutdown, serving) = Self::serve(manager, sandbox, template).await?;
+        let (route, template, shutdown, serving) =
+            Self::serve(manager, sandbox, template, previous).await?;
 
         routes.lock().expect("no panic holds this lock").insert(
             sandbox.to_string(),
@@ -200,6 +220,64 @@ impl SandboxRoute {
         );
 
         Ok(route)
+    }
+
+    /// Makes the route at `base_url` reachable from containers, on Docker's private host gateway
+    /// at the same port. Started only when a container links the sandbox, so a route nothing
+    /// in a container uses stays on loopback, out of reach of other containers (sandbox sessions
+    /// with internet egress among them). Idempotent; the forward ends when the route is removed.
+    ///
+    /// Hosts where that gateway cannot be bound, such as Docker Desktop, reach the host's
+    /// loopback through `host.docker.internal` natively and need no forward.
+    pub async fn forward_to_containers(sandbox: &str, base_url: &str) -> Result<()> {
+        // The sandbox's own route, not whatever this process serves at that address: a port a
+        // deleted sandbox held can since belong to another sandbox's route.
+        let serving = ROUTES.get().is_some_and(|routes| {
+            routes
+                .lock()
+                .expect("no panic holds this lock")
+                .get(sandbox)
+                .is_some_and(|route| route.base_url == base_url)
+        });
+        if !serving {
+            return Err(AlienError::new(ErrorData::SandboxSessionFailed {
+                session_id: base_url.to_string(),
+                operation: format!(
+                    "forward the route to containers: this process serves no route of sandbox '{sandbox}' there"
+                ),
+            }));
+        }
+        let address: SocketAddr = base_url
+            .strip_prefix("http://")
+            .and_then(|address| address.parse().ok())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxSessionFailed {
+                    session_id: base_url.to_string(),
+                    operation: "forward the route to containers: not a loopback route address"
+                        .to_string(),
+                })
+            })?;
+
+        let mut forwards = FORWARDS
+            .get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+            .lock()
+            .await;
+        if forwards.contains_key(base_url) {
+            return Ok(());
+        }
+        let (forward, stop) = tokio::sync::oneshot::channel::<()>();
+        crate::docker_network::start_docker_bridge_proxy_with_shutdown(address, async move {
+            let _ = stop.await;
+        })
+        .await
+        .map_err(|error| {
+            AlienError::new(ErrorData::SandboxSessionFailed {
+                session_id: base_url.to_string(),
+                operation: format!("forward the route to Docker's host gateway: {error}"),
+            })
+        })?;
+        forwards.insert(base_url.to_string(), forward);
+        Ok(())
     }
 
     /// Stops one sandbox's route and removes what it left behind.
@@ -220,6 +298,10 @@ impl SandboxRoute {
         let Some(mut route) = removed else {
             return;
         };
+
+        if let Some(forwards) = FORWARDS.get() {
+            drop(forwards.lock().await.remove(&route.base_url));
+        }
 
         // Dropping the sender is what the listener's graceful shutdown waits on. It is a signal,
         // not a fact: a create already inside the route finishes only when the task does, and a
@@ -242,13 +324,13 @@ impl SandboxRoute {
         manager: Arc<LocalSandboxManager>,
         sandbox: &str,
         template: SandboxSessionConfig,
+        previous: Option<&str>,
     ) -> Result<(
         Self,
         Arc<Mutex<SandboxSessionConfig>>,
         tokio::sync::oneshot::Sender<()>,
         tokio::task::JoinHandle<()>,
     )> {
-        let token = generate_token();
         let token_path = manager.state_dir().join(token_file_name(sandbox));
 
         if let Some(parent) = token_path.parent() {
@@ -263,7 +345,37 @@ impl SandboxRoute {
                 })?;
         }
 
-        write_token_file(&token_path, &token).await?;
+        let listener = bind_listener(sandbox, previous).await.map_err(|error| {
+            AlienError::new(ErrorData::SandboxSessionFailed {
+                session_id: sandbox.to_string(),
+                operation: format!("bind loopback route: {error}"),
+            })
+        })?;
+
+        let address = listener.local_addr().into_alien_error().map_err(|error| {
+            AlienError::new(ErrorData::SandboxSessionFailed {
+                session_id: sandbox.to_string(),
+                operation: format!("read route address: {error}"),
+            })
+        })?;
+
+        // Serving at the previous address continues the route an earlier process served, and
+        // workloads that outlived that process authenticate with the token they read then. A
+        // new token would answer them 401 at the address that was kept for them.
+        let continued = previous == Some(format!("http://{address}").as_str());
+        let kept = if continued {
+            read_token_file(&token_path).await
+        } else {
+            None
+        };
+        let token = match kept {
+            Some(token) => token,
+            None => {
+                let token = generate_token();
+                write_token_file(&token_path, &token).await?;
+                token
+            }
+        };
 
         let template = Arc::new(Mutex::new(template));
         let state = RouteState {
@@ -286,23 +398,6 @@ impl SandboxRoute {
             )
             .route("/v1/sessions/{session_id}/preview", get(preview))
             .with_state(state);
-
-        let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
-            .await
-            .into_alien_error()
-            .map_err(|error| {
-                AlienError::new(ErrorData::SandboxSessionFailed {
-                    session_id: sandbox.to_string(),
-                    operation: format!("bind loopback route: {error}"),
-                })
-            })?;
-
-        let address = listener.local_addr().into_alien_error().map_err(|error| {
-            AlienError::new(ErrorData::SandboxSessionFailed {
-                session_id: sandbox.to_string(),
-                operation: format!("read route address: {error}"),
-            })
-        })?;
 
         let (shutdown, stop) = tokio::sync::oneshot::channel::<()>();
         let serving = tokio::spawn(async move {
@@ -327,6 +422,27 @@ impl SandboxRoute {
     }
 }
 
+/// Binds the route's listener on loopback: at `previous` when that is a loopback address that is
+/// free, else on a port the OS picks.
+async fn bind_listener(sandbox: &str, previous: Option<&str>) -> std::io::Result<TcpListener> {
+    let previous = previous
+        .and_then(|url| url.strip_prefix("http://"))
+        .and_then(|address| address.parse::<SocketAddr>().ok())
+        .filter(|address| address.ip().is_loopback());
+    if let Some(address) = previous {
+        match TcpListener::bind(address).await {
+            Ok(listener) => return Ok(listener),
+            Err(error) => tracing::warn!(
+                sandbox,
+                %address,
+                %error,
+                "the previous route address is taken; serving on a new port"
+            ),
+        }
+    }
+    TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal")).await
+}
+
 /// Writes the token so that it is never readable by another user on the machine, not even for an
 /// instant.
 ///
@@ -349,6 +465,16 @@ async fn write_token_file(path: &std::path::Path, token: &str) -> Result<()> {
     options.mode(0o600);
 
     let mut file = options.open(path).await.map_err(failed)?;
+    // The mode above applies only to a file this call creates; one left with a looser mode is
+    // restricted before the token goes in. Written in place, not renamed over: a container
+    // mounts this one file, which pins its inode.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .await
+            .map_err(failed)?;
+    }
     tokio::io::AsyncWriteExt::write_all(&mut file, token.as_bytes())
         .await
         .map_err(failed)?;
@@ -357,6 +483,40 @@ async fn write_token_file(path: &std::path::Path, token: &str) -> Result<()> {
         .map_err(failed)?;
 
     Ok(())
+}
+
+/// Reads a token an earlier process wrote, if it is still one this process would have written:
+/// the generated shape, in a regular file this user owns and no one else can read, opened without
+/// following a link and checked on the handle it is read from. Anything else is replaced, not
+/// trusted.
+async fn read_token_file(path: &std::path::Path) -> Option<String> {
+    let mut options = tokio::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW);
+    let mut file = options.open(path).await.ok()?;
+    let metadata = file.metadata().await.ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: geteuid is a side-effect-free process identity query.
+        let me = unsafe { libc::geteuid() };
+        if metadata.uid() != me || metadata.mode() & 0o077 != 0 {
+            return None;
+        }
+    }
+    let mut token = String::new();
+    tokio::io::AsyncReadExt::read_to_string(&mut file, &mut token)
+        .await
+        .ok()?;
+    (token.len() == 64
+        && token
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))
+    .then_some(token)
 }
 
 fn generate_token() -> String {
@@ -574,6 +734,27 @@ async fn terminate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A manager restart serves the route where the workloads it outlived still call it.
+    #[tokio::test]
+    async fn the_route_comes_back_at_its_previous_address_when_it_is_free() {
+        let first = bind_listener("s", None).await.expect("binds");
+        let previous = format!("http://{}", first.local_addr().unwrap());
+        drop(first);
+
+        let again = bind_listener("s", Some(&previous)).await.expect("binds");
+        assert_eq!(format!("http://{}", again.local_addr().unwrap()), previous);
+
+        // Taken: a new port rather than a failure.
+        let moved = bind_listener("s", Some(&previous)).await.expect("binds");
+        assert_ne!(format!("http://{}", moved.local_addr().unwrap()), previous);
+
+        // Only a loopback address is ever taken from state.
+        let elsewhere = bind_listener("s", Some("http://0.0.0.0:0"))
+            .await
+            .expect("binds");
+        assert!(elsewhere.local_addr().unwrap().ip().is_loopback());
+    }
 
     /// Two sandboxes in one deployment share a state directory. With a fixed file name whichever
     /// one started last owned the credential for both, and the other's binding then authenticated
