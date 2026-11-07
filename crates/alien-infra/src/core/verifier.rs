@@ -15,7 +15,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use alien_aws_clients::lambda::{InvocationType, InvokeRequest, LambdaApi};
-use alien_core::{GcpClientConfig, GcpCredentials, ReleaseStatements, SignedStatement};
+use alien_azure_clients::AzureClientConfigExt as _;
+use alien_core::{
+    AzureClientConfig, GcpClientConfig, GcpCredentials, ReleaseStatements, SignedStatement,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::iam::{GenerateIdTokenRequest, IamApi};
 use alien_signing::ReleaseBody;
@@ -473,6 +476,27 @@ impl VerifierToken for GcpIdToken {
     }
 }
 
+/// The management identity's token for Azure Resource Manager. Container Apps authentication on
+/// the Azure verifier lets a request through only with this identity's token for that audience;
+/// every credential management has can mint it, so setup needs no app registration.
+pub struct AzureManagementToken {
+    pub config: AzureClientConfig,
+}
+
+#[async_trait]
+impl VerifierToken for AzureManagementToken {
+    async fn bearer(&self) -> Result<String> {
+        self.config
+            .get_bearer_token()
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to get the management identity's token for the verifier"
+                    .to_string(),
+                resource_id: None,
+            })
+    }
+}
+
 /// The URL Cloud Run gives the GCP verifier service `<prefix>-verifier`.
 pub fn cloud_run_verifier_url(resource_prefix: &str, project_number: &str, region: &str) -> String {
     format!("https://{resource_prefix}-verifier-{project_number}.{region}.run.app")
@@ -528,10 +552,13 @@ pub fn gcp_verifier(ctx: &ResourceControllerContext<'_>) -> Result<HttpVerifier>
 }
 
 /// The install's Azure verifier: Container App `<prefix>-verifier` in the install's resource
-/// group, at the ingress address Azure gave it.
+/// group, at the ingress address Azure gave it, called with the management identity's token.
 pub async fn azure_verifier(ctx: &ResourceControllerContext<'_>) -> Result<HttpVerifier> {
     let config = ctx.get_azure_config()?;
     let name = format!("{}-verifier", ctx.resource_prefix);
+    let token: Arc<dyn VerifierToken> = Arc::new(AzureManagementToken {
+        config: config.clone(),
+    });
     if let Some(url) = config
         .service_overrides
         .as_ref()
@@ -541,7 +568,7 @@ pub async fn azure_verifier(ctx: &ResourceControllerContext<'_>) -> Result<HttpV
             reqwest::Client::new(),
             name,
             url.clone(),
-            None,
+            Some(token),
         ));
     }
     let resource_group = crate::azure_utils::get_resource_group_name(ctx.state)?;
@@ -571,7 +598,7 @@ pub async fn azure_verifier(ctx: &ResourceControllerContext<'_>) -> Result<HttpV
         reqwest::Client::new(),
         name,
         format!("https://{fqdn}"),
-        None,
+        Some(token),
     ))
 }
 

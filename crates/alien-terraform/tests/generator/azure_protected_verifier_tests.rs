@@ -192,3 +192,59 @@ fn a_stack_with_several_environments_is_refused() {
         "{error}"
     );
 }
+
+/// Only the management identity reaches the verifier: Container Apps authentication on its app
+/// answers 401 without a token and 403 for anyone else's (proven on real Azure), and accepts the
+/// management identity's token for Azure Resource Manager.
+#[test]
+fn only_the_management_identity_reaches_the_verifier() {
+    let module = render(
+        &stack(&["default-container-env"]),
+        TerraformTarget::Azure,
+        protected(),
+    );
+    assert_planned(
+        &module,
+        &format!(
+            r#"
+  override_resource {{
+    target = azurerm_user_assigned_identity.management
+    values = {{ id = "{MANAGEMENT_ID}", principal_id = "{MANAGEMENT_PRINCIPAL}", client_id = "{MANAGEMENT_CLIENT}" }}
+    override_during = plan
+  }}
+  override_resource {{
+    target = azurerm_container_app.signing_verifier
+    values = {{ id = "{VERIFIER_APP_ID}" }}
+    override_during = plan
+  }}
+  assert {{
+    condition = azapi_resource.signing_verifier_auth.type == "Microsoft.App/containerApps/authConfigs@2024-03-01" && azapi_resource.signing_verifier_auth.name == "current" && azapi_resource.signing_verifier_auth.parent_id == "{VERIFIER_APP_ID}"
+    error_message = "The verifier's app carries the authentication settings."
+  }}
+  assert {{
+    condition = azapi_resource.signing_verifier_auth.body.properties.platform.enabled && azapi_resource.signing_verifier_auth.body.properties.globalValidation.unauthenticatedClientAction == "Return401"
+    error_message = "A request without a token is refused before the verifier sees it."
+  }}
+  assert {{
+    condition = azapi_resource.signing_verifier_auth.body.properties.identityProviders.azureActiveDirectory.validation.defaultAuthorizationPolicy.allowedPrincipals.identities == ["{MANAGEMENT_PRINCIPAL}"]
+    error_message = "Only the management identity is let through."
+  }}
+  assert {{
+    condition = azapi_resource.signing_verifier_auth.body.properties.identityProviders.azureActiveDirectory.validation.allowedAudiences == ["https://management.azure.com", "https://management.azure.com/"]
+    error_message = "It presents its token for Azure Resource Manager."
+  }}
+  assert {{
+    condition = azapi_resource.signing_verifier_auth.body.properties.identityProviders.azureActiveDirectory.registration.openIdIssuer == "https://sts.windows.net/{UUID}/" && azapi_resource.signing_verifier_auth.body.properties.identityProviders.azureActiveDirectory.registration.clientId == "{MANAGEMENT_CLIENT}"
+    error_message = "Tokens come from the install's tenant."
+  }}
+"#
+        ),
+        "protected Azure verifier authentication",
+    );
+}
+
+const MANAGEMENT_ID: &str = "/subscriptions/0000/resourceGroups/acme-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/acme-management";
+const MANAGEMENT_PRINCIPAL: &str = "00000000-0000-0000-0000-00000000aaaa";
+const MANAGEMENT_CLIENT: &str = "00000000-0000-0000-0000-00000000bbbb";
+const VERIFIER_APP_ID: &str =
+    "/subscriptions/0000/resourceGroups/acme-rg/providers/Microsoft.App/containerApps/acme-verifier";

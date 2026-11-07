@@ -18,12 +18,12 @@ use alien_aws_clients::s3::{
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    standard_resource_tags, AwsS3StorageHeartbeatData, HeartbeatBackend,
-    HeartbeatCollectionIssue, HeartbeatCollectionIssueReason, HeartbeatIssueSeverity,
-    ObservedHealth, Platform,
+    standard_resource_tags, AwsS3StorageHeartbeatData, HeartbeatBackend, HeartbeatCollectionIssue,
+    HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus, Storage, StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
-    AWS_ABORT_INCOMPLETE_UPLOAD_DAYS, AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID, AWS_LIFECYCLE_RULE_LIMIT,
+    AWS_ABORT_INCOMPLETE_UPLOAD_DAYS, AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID,
+    AWS_LIFECYCLE_RULE_LIMIT,
 };
 use alien_error::{Context, IntoAlienError};
 use alien_macros::controller;
@@ -1716,9 +1716,8 @@ mod tests {
         DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, HeartbeatCollectionIssue,
         HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, InitialSetupAuthority,
         LifecycleRule as AlienLifecycleRule, Platform, Resource, ResourceHeartbeatData,
-        ResourceLifecycle, ResourceStatus, StorageHeartbeatData,
-        Stack, StackResourceState, StackSettings, StackState, Storage, StorageOutputs,
-        AWS_LIFECYCLE_RULE_LIMIT,
+        ResourceLifecycle, ResourceStatus, Stack, StackResourceState, StackSettings, StackState,
+        Storage, StorageHeartbeatData, StorageOutputs, AWS_LIFECYCLE_RULE_LIMIT,
     };
     use alien_error::AlienError;
     use httpmock::{Method::PUT, MockServer};
@@ -3646,7 +3645,9 @@ mod tests {
             .expect_err("the app's rules were not written");
 
         assert!(
-            error.to_string().contains("Failed to configure lifecycle rules"),
+            error
+                .to_string()
+                .contains("Failed to configure lifecycle rules"),
             "{error}"
         );
     }

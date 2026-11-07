@@ -8452,7 +8452,11 @@ mod tests {
     async fn checked_writes(requests: &[(Option<String>, Vec<u8>)]) -> Vec<serde_json::Value> {
         let mut writes = Vec::new();
         for (bearer, payload) in requests {
-            assert_eq!(bearer, &None, "the Container App verifier takes no token");
+            assert_eq!(
+                bearer.as_deref(),
+                Some("Bearer mock_access_token_for_testing"),
+                "the verifier is called with the management identity's token"
+            );
             let (answer, forwarded) =
                 run_write(azure_install(), "test", Some(SETUP_ENVIRONMENT), payload).await;
             answer.expect("the verifier's tables accept the controller's request");

@@ -2,19 +2,19 @@
 
 #[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
 use crate::core::state_utils::StackResourceStateExt;
-#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
-use alien_bindings::BindingsProviderApi;
-use alien_bindings::Vault;
-use alien_error::{AlienError, Context};
-use base64::{Engine, engine::general_purpose::STANDARD};
-use ed25519_compact::{KeyPair, SecretKey};
-use serde::{Deserialize, Serialize};
 #[cfg(feature = "aws")]
 use alien_aws_clients::secrets_manager::{
     CreateSecretRequest, DeleteSecretRequest, DescribeSecretRequest, SecretsManagerApi,
 };
+#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
+use alien_bindings::BindingsProviderApi;
+use alien_bindings::Vault;
 #[cfg(feature = "aws")]
 use alien_client_core::ErrorData as CloudError;
+use alien_error::{AlienError, Context};
+use base64::{engine::general_purpose::STANDARD, Engine};
+use ed25519_compact::{KeyPair, SecretKey};
+use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
 use sha2::{Digest, Sha256};
 
@@ -178,7 +178,11 @@ mod tests {
         let error = create_signing_key(&vault)
             .await
             .expect_err("an existing key must not be replaced");
-        assert!(error.message.contains("is not replaced"), "{}", error.message);
+        assert!(
+            error.message.contains("is not replaced"),
+            "{}",
+            error.message
+        );
         assert_eq!(vault.get_secret(SIGNING_KEY).await.unwrap(), in_use);
         alien_bindings::sandbox_egress_token::EgressTokenIssuer::from_vault_json(&in_use, &key.kid)
             .unwrap();
@@ -255,7 +259,8 @@ mod tests {
         vault
             .set_secret(
                 GATEWAY_CONFIG,
-                &serde_json::json!({"audiences": ["first"], "replicaSecretSource": source}).to_string(),
+                &serde_json::json!({"audiences": ["first"], "replicaSecretSource": source})
+                    .to_string(),
             )
             .await
             .unwrap();
@@ -606,7 +611,9 @@ pub(crate) fn gateway_not_created(ctx: &crate::core::ResourceControllerContext<'
 /// absent, or access denied for a role without the existence check, and keeps the embedded
 /// secret.
 #[cfg(feature = "aws")]
-async fn ensure_aws_replica_secret(ctx: &crate::core::ResourceControllerContext<'_>) -> Result<bool> {
+async fn ensure_aws_replica_secret(
+    ctx: &crate::core::ResourceControllerContext<'_>,
+) -> Result<bool> {
     let name = replica_secret_name(ctx.resource_prefix);
     let client = ctx
         .service_provider
@@ -1085,7 +1092,12 @@ async fn write_embedded_config(
     if let Some(source) = stored
         .as_ref()
         .and_then(|stored| stored.get("replicaSecretSource"))
-        .filter(|_| stored.as_ref().and_then(|s| s.get("replicaSecret")).is_none())
+        .filter(|_| {
+            stored
+                .as_ref()
+                .and_then(|s| s.get("replicaSecret"))
+                .is_none()
+        })
     {
         value
             .as_object_mut()
@@ -1095,13 +1107,12 @@ async fn write_embedded_config(
         if current.as_deref() == Some(&value) {
             return Ok(());
         }
-        return vault
-            .set_secret(GATEWAY_CONFIG, &value)
-            .await
-            .context(ErrorData::ResourceConfigInvalid {
+        return vault.set_secret(GATEWAY_CONFIG, &value).await.context(
+            ErrorData::ResourceConfigInvalid {
                 message: "Failed to publish the sandbox gateway configuration".into(),
                 resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
-            });
+            },
+        );
     }
     let replica_secret = match stored.as_ref().and_then(|value| value.get("replicaSecret")) {
         Some(value) => {
@@ -1246,9 +1257,7 @@ mod aws_tests {
             })
             .await;
         let vault = parameter_store(&server);
-        let config = |audiences: &[&str]| {
-            serde_json::json!({"audiences": audiences, "peers": {"dns": "gateway.svc", "port": 3129}})
-        };
+        let config = |audiences: &[&str]| serde_json::json!({"audiences": audiences, "peers": {"dns": "gateway.svc", "port": 3129}});
         let mut published = None;
 
         publish_changed_gateway_config(&vault, config(&["first"]), &mut published)
@@ -1320,8 +1329,15 @@ mod aws_tests {
         publish_changed_gateway_config(&vault, config(&["first", "second"]), &mut published)
             .await
             .expect("a change the identity cannot read for waits instead of failing");
-        assert_eq!(write.hits_async().await, 1, "nothing is written without the secret");
-        assert_eq!(published, first, "the change stays pending for the next pass");
+        assert_eq!(
+            write.hits_async().await,
+            1,
+            "nothing is written without the secret"
+        );
+        assert_eq!(
+            published, first,
+            "the change stays pending for the next pass"
+        );
     }
 
     #[cfg(feature = "aws")]
@@ -1336,8 +1352,10 @@ mod aws_tests {
             })
             .times(1)
             .returning(|_| {
-                Ok(serde_json::from_value(serde_json::json!({"Name": "test-sandbox-egress-replica-secret"}))
-                    .unwrap())
+                Ok(serde_json::from_value(
+                    serde_json::json!({"Name": "test-sandbox-egress-replica-secret"}),
+                )
+                .unwrap())
             });
         delete_aws_replica_secret(&client, "test").await.unwrap();
 

@@ -1356,10 +1356,12 @@ async fn refuse_a_config_without_the_installs_signing(
         })
         .await
     {
-        Ok(_) => Err(AlienError::new(ErrorData::SigningSettingsMissingFromConfig {
-            resource_id: ctx.desired_config.id().to_string(),
-            settings_location,
-        })),
+        Ok(_) => Err(AlienError::new(
+            ErrorData::SigningSettingsMissingFromConfig {
+                resource_id: ctx.desired_config.id().to_string(),
+                settings_location,
+            },
+        )),
         Err(error)
             if is_remote_not_found(&error)
                 || matches!(
@@ -1370,7 +1372,9 @@ async fn refuse_a_config_without_the_installs_signing(
             Ok(())
         }
         Err(error) => Err(error.context(ErrorData::CloudPlatformError {
-            message: format!("Failed to read '{settings_location}' to tell whether the install is protected"),
+            message: format!(
+                "Failed to read '{settings_location}' to tell whether the install is protected"
+            ),
             resource_id: Some(ctx.desired_config.id().to_string()),
         })),
     }
@@ -1429,10 +1433,12 @@ mod tests {
         answer: fn(&str) -> alien_client_core::Result<GetParameterResponse>,
     ) -> Arc<MockSsmApi> {
         let mut ssm = MockSsmApi::new();
-        ssm.expect_get_parameter().times(1).returning(move |request| {
-            assert_eq!(request.name, name, "reads only this install's settings");
-            answer(&request.name)
-        });
+        ssm.expect_get_parameter()
+            .times(1)
+            .returning(move |request| {
+                assert_eq!(request.name, name, "reads only this install's settings");
+                answer(&request.name)
+            });
         Arc::new(ssm)
     }
 
@@ -1503,7 +1509,10 @@ mod tests {
             .await
             .expect_err("a protected install's management refuses a config without signing");
 
-        assert_eq!(error.code, "SIGNING_SETTINGS_MISSING_FROM_CONFIG", "{error:?}");
+        assert_eq!(
+            error.code, "SIGNING_SETTINGS_MISSING_FROM_CONFIG",
+            "{error:?}"
+        );
         assert!(
             error.message.contains("/signed/acme-prod/fingerprint"),
             "{}",

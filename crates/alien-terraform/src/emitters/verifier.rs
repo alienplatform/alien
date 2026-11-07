@@ -300,8 +300,8 @@ fn aws_verifier_blocks(
 /// hold no Container App writes on a protected install, so only setup changes its image and
 /// environment.
 ///
-/// Its ingress is public: whoever calls it can only hand it statements the vendor signed,
-/// which it checks against the install's settings and ledger itself.
+/// Its ingress is public, behind Container Apps authentication: only the management identity's
+/// token gets a request through to it.
 fn azure_verifier_blocks(
     pins: &alien_core::SetupPins,
     management_label: Option<&str>,
@@ -436,8 +436,119 @@ fn azure_verifier_blocks(
                 ),
             ],
         ),
+        // Container Apps authentication answers every request before the verifier sees it: 401
+        // without a token, 403 with a token of anyone but the management identity. Management
+        // presents its token for Azure Resource Manager, which every credential it has can
+        // mint, so no app registration is needed.
+        resource_block(
+            "azapi_resource",
+            "signing_verifier_auth",
+            [
+                attr(
+                    "type",
+                    Expression::String(format!("{AUTH_CONFIG_TYPE}@{AUTH_CONFIG_API_VERSION}")),
+                ),
+                attr("name", Expression::String("current".to_string())),
+                attr(
+                    "parent_id",
+                    expr::traversal(["azurerm_container_app", LABEL, "id"]),
+                ),
+                attr(
+                    "body",
+                    expr::object([(
+                        "properties",
+                        expr::object([
+                            (
+                                "platform",
+                                expr::object([("enabled", Expression::Bool(true))]),
+                            ),
+                            (
+                                "globalValidation",
+                                expr::object([(
+                                    "unauthenticatedClientAction",
+                                    Expression::String("Return401".to_string()),
+                                )]),
+                            ),
+                            (
+                                "identityProviders",
+                                expr::object([(
+                                    "azureActiveDirectory",
+                                    expr::object([
+                                        ("enabled", Expression::Bool(true)),
+                                        (
+                                            "registration",
+                                            expr::object([
+                                                (
+                                                    "clientId",
+                                                    expr::traversal([
+                                                        "azurerm_user_assigned_identity",
+                                                        management,
+                                                        "client_id",
+                                                    ]),
+                                                ),
+                                                (
+                                                    "openIdIssuer",
+                                                    expr::template(format!(
+                                                        "https://sts.windows.net/${{data.azurerm_client_config.{management}_current.tenant_id}}/"
+                                                    )),
+                                                ),
+                                            ]),
+                                        ),
+                                        (
+                                            "validation",
+                                            expr::object([
+                                                (
+                                                    "allowedAudiences",
+                                                    Expression::Array(
+                                                        MANAGEMENT_TOKEN_AUDIENCES
+                                                            .iter()
+                                                            .map(|audience| {
+                                                                Expression::String(
+                                                                    audience.to_string(),
+                                                                )
+                                                            })
+                                                            .collect(),
+                                                    ),
+                                                ),
+                                                (
+                                                    "defaultAuthorizationPolicy",
+                                                    expr::object([(
+                                                        "allowedPrincipals",
+                                                        expr::object([(
+                                                            "identities",
+                                                            Expression::Array(vec![
+                                                                expr::traversal([
+                                                                    "azurerm_user_assigned_identity",
+                                                                    management,
+                                                                    "principal_id",
+                                                                ]),
+                                                            ]),
+                                                        )]),
+                                                    )]),
+                                                ),
+                                            ]),
+                                        ),
+                                    ]),
+                                )]),
+                            ),
+                        ]),
+                    )]),
+                ),
+            ],
+        ),
     ])
 }
+
+/// The Container Apps authentication resource on the verifier.
+const AUTH_CONFIG_TYPE: &str = "Microsoft.App/containerApps/authConfigs";
+const AUTH_CONFIG_API_VERSION: &str = "2024-03-01";
+
+/// The audience of the management identity's token the verifier accepts: Azure Resource
+/// Manager's, with and without the trailing slash Azure issues either way.
+const MANAGEMENT_TOKEN_AUDIENCES: &[&str] = &[
+    "https://management.azure.com",
+    "https://management.azure.com/",
+];
 
 /// What the GCP verifier may change on the install's own machines: their templates and groups,
 /// and the machines and disks those create (byoc review §1). Bound under a condition on the
