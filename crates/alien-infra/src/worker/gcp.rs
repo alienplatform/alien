@@ -5202,6 +5202,8 @@ impl GcpWorkerController {
                 resource_id: Some(config.id.clone()),
             })?;
 
+        let original = policy.clone();
+
         // Apply resource-scoped permissions from the stack.
         let mut resource_bindings = Vec::new();
         self.collect_resource_scoped_bindings(ctx, service_name, &mut resource_bindings)
@@ -5249,6 +5251,22 @@ impl GcpWorkerController {
                 "Adding resource-scoped permissions to IAM policy"
             );
             policy.bindings.extend(resource_bindings);
+        }
+
+        // On a protected install setup sets the service's IAM policy and management may not:
+        // what the worker needs must already be there.
+        if ctx.deployment_config.stack_settings.signing.is_some() {
+            let missing = grants_missing(&original, &policy);
+            if missing.is_empty() {
+                return Ok(());
+            }
+            return Err(AlienError::new(ErrorData::SetupRerunRequired {
+                resource_id: config.id.clone(),
+                message: format!(
+                    "on a protected install setup sets the IAM policy of Cloud Run service '{service_name}', and it doesn't grant {}; rerun setup with this release",
+                    missing.join(", ")
+                ),
+            }));
         }
 
         // Apply the consolidated policy in one operation.
@@ -6184,6 +6202,45 @@ fn live_service_env(service: &Service) -> Option<HashMap<String, String>> {
             .filter_map(|var| Some((var.name.clone(), var.value.clone()?)))
             .collect(),
     )
+}
+
+/// The grants of `desired`, as `role to member` (with the condition's title when it has one),
+/// that `current` doesn't hold.
+fn grants_missing(
+    current: &alien_gcp_clients::iam::IamPolicy,
+    desired: &alien_gcp_clients::iam::IamPolicy,
+) -> Vec<String> {
+    let key = |binding: &alien_gcp_clients::iam::Binding| {
+        (
+            binding.role.clone(),
+            binding
+                .condition
+                .as_ref()
+                .map(|condition| serde_json::to_string(condition).unwrap_or_default()),
+        )
+    };
+    let held: HashSet<_> = current
+        .bindings
+        .iter()
+        .flat_map(|binding| {
+            binding
+                .members
+                .iter()
+                .map(move |member| (key(binding), member.clone()))
+        })
+        .collect();
+    let mut missing = Vec::new();
+    for binding in &desired.bindings {
+        for member in &binding.members {
+            if !held.contains(&(key(binding), member.clone())) {
+                let grant = format!("{} to {member}", binding.role);
+                if !missing.contains(&grant) {
+                    missing.push(grant);
+                }
+            }
+        }
+    }
+    missing
 }
 
 #[cfg(test)]
@@ -9182,17 +9239,19 @@ mod tests {
     }
 
     /// Cloud Run on a protected install: reads succeed and nothing may patch the service.
-    fn protected_provider(verifier_url: &str) -> Arc<MockPlatformServiceProvider> {
+    fn protected_provider(
+        verifier_url: &str,
+        setup_policy: IamPolicy,
+    ) -> Arc<MockPlatformServiceProvider> {
         let mut cloudrun = MockCloudRunApi::new();
         cloudrun
             .expect_get_service()
             .returning(|_, _| Ok(create_successful_service_response(PROTECTED_SERVICE)));
         cloudrun
             .expect_get_service_iam_policy()
-            .returning(|_, _| Ok(create_empty_iam_policy()));
-        cloudrun
-            .expect_set_service_iam_policy()
-            .returning(|_, _, _| Ok(create_empty_iam_policy()));
+            .returning(move |_, _| Ok(setup_policy.clone()));
+        // Setup sets the service's IAM policy on a protected install; management may not.
+        cloudrun.expect_set_service_iam_policy().never();
         cloudrun.expect_patch_service().never();
         let cloudrun = Arc::new(cloudrun);
         let mut iam = MockIamApi::new();
@@ -9218,9 +9277,53 @@ mod tests {
         Arc::new(provider)
     }
 
+    /// The IAM policy setup gave the worker's service: its own account may invoke it, which
+    /// Pub/Sub and Cloud Scheduler need for a private worker.
+    fn setup_policy() -> IamPolicy {
+        IamPolicy::builder()
+            .bindings(vec![alien_gcp_clients::iam::Binding::builder()
+                .role("roles/run.invoker".to_string())
+                .members(vec![
+                    "serviceAccount:default-profile-sa@mock-project.iam.gserviceaccount.com"
+                        .to_string(),
+                ])
+                .build()])
+            .build()
+    }
+
+    /// On a protected install management may not set the service's IAM policy; when setup's
+    /// policy lacks a grant the worker needs, the update says setup must run again, and
+    /// writes nothing.
+    #[tokio::test]
+    async fn a_protected_update_needs_setup_for_a_grant_setup_did_not_make() {
+        let answer = serde_json::json!({"release": 2, "functions": [{
+            "function": PROTECTED_SERVICE,
+            "imageUri": pinned_image('2'),
+            "digest": format!("sha256:{}", "2".repeat(64)),
+        }]});
+        let (result, requests, _) = protected_update(
+            axum::http::StatusCode::OK,
+            answer,
+            IamPolicy::builder().bindings(Vec::new()).build(),
+        )
+        .await;
+
+        let error = result.expect_err("setup must grant the invoker role");
+        assert_eq!(requests.len(), 1, "the verifier applied the release first");
+        assert_eq!(error.code, "SETUP_RERUN_REQUIRED", "{error:?}");
+        assert!(
+            error.message.contains(
+                "doesn't grant roles/run.invoker to serviceAccount:default-profile-sa@mock-project.iam.gserviceaccount.com"
+            ),
+            "{}",
+            error.message
+        );
+    }
+
     async fn protected_update(
         status: axum::http::StatusCode,
         answer: serde_json::Value,
+        setup_policy: IamPolicy,
     ) -> (
         Result<(), AlienError<crate::error::ErrorData>>,
         Vec<(Option<String>, Vec<u8>)>,
@@ -9240,7 +9343,7 @@ mod tests {
             .controller(GcpWorkerController::mock_ready(PROTECTED_SERVICE))
             .platform(Platform::Gcp)
             .client_config(management_client_config(&url))
-            .service_provider(protected_provider(&url))
+            .service_provider(protected_provider(&url, setup_policy))
             .with_test_dependencies()
             .stack_settings(protected_settings())
             .signed_release(release.clone(), None)
@@ -9267,7 +9370,7 @@ mod tests {
             "digest": format!("sha256:{}", "2".repeat(64)),
         }]});
         let (result, requests, release) =
-            protected_update(axum::http::StatusCode::OK, answer).await;
+            protected_update(axum::http::StatusCode::OK, answer, setup_policy()).await;
 
         result.expect("the update completes through the verifier");
         assert_eq!(requests.len(), 1, "one verifier call for the update");
@@ -9311,8 +9414,8 @@ mod tests {
         let (result, requests, _) = protected_update(
             axum::http::StatusCode::FORBIDDEN,
             serde_json::json!({"errorType": "VERIFIER_REFUSED", "errorMessage": "Refused: the release was refused: SIGNING_WRONG_CHANNEL: The release is for channel 'dev', but this install follows 'production'"}),
-        )
-        .await;
+            setup_policy(),
+        ).await;
 
         let error = result.expect_err("the verifier refused");
         assert_eq!(requests.len(), 1);
