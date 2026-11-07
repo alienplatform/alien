@@ -2355,8 +2355,9 @@ fn azure_verifier_blocks(
     ])
 }
 
-/// What the GCP verifier may change: the install's own machine templates and groups, the
-/// machines and disks those create, and its Cloud Run services and jobs (byoc review §1).
+/// What the GCP verifier may change on the install's own machines: their templates and groups,
+/// and the machines and disks those create (byoc review §1). Bound under a condition on the
+/// resources' names.
 const GCP_VERIFIER_OWN_RESOURCE_PERMISSIONS: &[&str] = &[
     "compute.instanceTemplates.create",
     "compute.instanceTemplates.delete",
@@ -2371,6 +2372,14 @@ const GCP_VERIFIER_OWN_RESOURCE_PERMISSIONS: &[&str] = &[
     "compute.instances.setServiceAccount",
     "compute.instances.delete",
     "compute.disks.create",
+];
+
+/// What the GCP verifier may do with Cloud Run services and jobs. Bound without a condition:
+/// Cloud Run doesn't evaluate `resource.name` in IAM conditions (a binding conditioned on the
+/// service's name denies even a get of a service it names), and it checks a create against the
+/// parent location. The verifier only ever writes `<prefix>-<workload>`; management holds none of
+/// these on a protected install.
+const GCP_VERIFIER_CLOUD_RUN_PERMISSIONS: &[&str] = &[
     "run.services.create",
     "run.services.update",
     "run.services.delete",
@@ -2451,8 +2460,6 @@ fn gcp_verifier_blocks(
         "instanceGroupManagers",
         "instances",
         "disks",
-        "services",
-        "jobs",
     ]
     .iter()
     .map(|collection| {
@@ -2488,8 +2495,14 @@ fn gcp_verifier_blocks(
         custom_role(
             "signing_verifier",
             "verifier",
-            "verifier: the install's machines and services",
+            "verifier: the install's machines",
             GCP_VERIFIER_OWN_RESOURCE_PERMISSIONS,
+        ),
+        custom_role(
+            "signing_verifier_cloud_run",
+            "verifier_cloud_run",
+            "verifier: the install's Cloud Run services and jobs",
+            GCP_VERIFIER_CLOUD_RUN_PERMISSIONS,
         ),
         custom_role(
             "signing_verifier_shared",
@@ -2514,6 +2527,22 @@ fn gcp_verifier_blocks(
                         attr("expression", escaped_template(&own_resources)),
                     ],
                 )),
+            ],
+        ),
+        resource_block(
+            "google_project_iam_member",
+            "signing_verifier_cloud_run",
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "role",
+                    expr::traversal([
+                        "google_project_iam_custom_role",
+                        "signing_verifier_cloud_run",
+                        "name",
+                    ]),
+                ),
+                attr("member", member.clone()),
             ],
         ),
         resource_block(
@@ -2659,6 +2688,7 @@ fn gcp_verifier_blocks(
                 Expression::Array(vec![
                     expr::traversal(["google_project_iam_member", "signing_verifier"]),
                     expr::traversal(["google_project_iam_member", "signing_verifier_shared"]),
+                    expr::traversal(["google_project_iam_member", "signing_verifier_cloud_run"]),
                     expr::traversal([
                         "google_project_iam_member",
                         "signing_verifier_pulls_images",

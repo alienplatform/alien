@@ -174,3 +174,82 @@ async fn every_custom_role_permission_exists_on_gcp() {
         "GCP refuses these in a custom role: {unknown:?}"
     );
 }
+
+/// Custom role label to its permissions, and the custom roles bound to the verifier with and
+/// without a condition, from a rendered `signing.tf`.
+fn verifier_custom_roles(signing: &str) -> (Vec<(String, Vec<String>)>, Vec<(String, bool)>) {
+    let mut roles = Vec::new();
+    for block in signing.split("resource \"google_project_iam_custom_role\" \"").skip(1) {
+        let label = block[..block.find('"').unwrap()].to_string();
+        let body = &block[..block.find("\n}").unwrap_or(block.len())];
+        let permissions = body
+            .split("permissions")
+            .nth(1)
+            .map(|list| {
+                list[..list.find(']').unwrap()]
+                    .split('"')
+                    .skip(1)
+                    .step_by(2)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        roles.push((label, permissions));
+    }
+    let mut bindings = Vec::new();
+    for block in signing.split("resource \"google_project_iam_member\"").skip(1) {
+        let body = &block[..block.find("\n}").unwrap_or(block.len())];
+        if !body.contains("google_service_account.signing_verifier.email") {
+            continue;
+        }
+        if let Some(rest) = body.split("google_project_iam_custom_role.").nth(1) {
+            let label = rest[..rest.find('.').unwrap()].to_string();
+            bindings.push((label, body.contains("condition {")));
+        }
+    }
+    (roles, bindings)
+}
+
+/// Cloud Run doesn't evaluate `resource.name` in IAM conditions: on real GCP a binding of the
+/// verifier's role conditioned on the service's name denied even a get of a service it names,
+/// and a create is checked against the parent location. So the verifier's Cloud Run permissions
+/// must come from a binding without a condition.
+#[test]
+fn the_verifier_holds_its_cloud_run_permissions_without_a_name_condition() {
+    let stack: Stack = serde_json::from_value(serde_json::json!({
+        "id": "app",
+        "resources": {},
+        "permissions": { "profiles": { "execution": {} }, "management": "auto" }
+    }))
+    .expect("stack");
+    let settings = StackSettings {
+        signing: Some(StackSigning {
+            fingerprint: format!("SHA256:{}", "9f".repeat(32)),
+            channel: "production".to_string(),
+        }),
+        ..StackSettings::default()
+    };
+    let module = render(&stack, TerraformTarget::Gcp, settings);
+    let (roles, bindings) = verifier_custom_roles(module.get("signing.tf").expect("signing.tf"));
+    let unconditioned: Vec<&String> = roles
+        .iter()
+        .filter(|(label, _)| {
+            bindings
+                .iter()
+                .any(|(bound, conditioned)| bound == label && !conditioned)
+        })
+        .flat_map(|(_, permissions)| permissions)
+        .collect();
+    for needed in [
+        "run.services.create",
+        "run.services.get",
+        "run.services.update",
+        "run.services.getIamPolicy",
+        "run.services.setIamPolicy",
+    ] {
+        assert!(
+            unconditioned.iter().any(|held| *held == needed),
+            "{needed} is not granted without a condition: roles {roles:?}, bindings {bindings:?}"
+        );
+    }
+}
