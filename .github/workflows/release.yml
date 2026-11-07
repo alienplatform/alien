@@ -2458,16 +2458,13 @@ jobs:
             done
 
       # The enforcer digests a signed release pins (crates/alien-cli/
-      # enforcer-digests.json). One verifier image serves every cloud. The
-      # official CLI distribution adds the machine agent digests and writes
-      # the file before it builds `alien`; a source build keeps the empty
-      # table and pins none.
+      # enforcer-digests.json). The official CLI distribution adds the machine
+      # agent digests and writes the file before it builds `alien`; a source
+      # build keeps the empty table and pins none. The verifier isn't in it:
+      # setup pins the verifier, from verifier-digest.json below.
       - name: Record enforcer digests
         run: |
-          jq '{operator: .images["alien-operator"],
-               "verifier/aws": .images["alien-verifier"],
-               "verifier/gcp": .images["alien-verifier"],
-               "verifier/azure": .images["alien-verifier"]}' \
+          jq '{operator: .images["alien-operator"]}' \
             qualification/qualified-image-digests.json > enforcer-digests.json
           jq -e 'to_entries | all(.value | test("^sha256:[0-9a-f]{64}$"))' \
             enforcer-digests.json >/dev/null || {
@@ -2480,6 +2477,24 @@ jobs:
         with:
           name: enforcer-digests
           path: enforcer-digests.json
+          if-no-files-found: error
+
+      # The verifier image setup pins, for whoever renders protected setups
+      # from this release.
+      - name: Record the verifier digest
+        run: |
+          jq '{"alien-verifier": .images["alien-verifier"]}' \
+            qualification/qualified-image-digests.json > verifier-digest.json
+          jq -e '.["alien-verifier"] | test("^sha256:[0-9a-f]{64}$")' verifier-digest.json >/dev/null || {
+            echo "::error::The verifier digest is not a sha256 digest"; cat verifier-digest.json; exit 1
+          }
+          cat verifier-digest.json
+
+      - name: Upload the verifier digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: verifier-digest
+          path: verifier-digest.json
           if-no-files-found: error
 
       # The checkout below cleans the workspace, so keep the verifier digest for

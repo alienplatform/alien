@@ -956,3 +956,24 @@ fn sessions_need_the_operate_role_and_the_enforcers_own_nonce() {
         "SIGNING_BODY_REFUSED"
     );
 }
+
+/// A release pins the builds of the enforcers it runs: the machine agent and the operator.
+/// Setup pins the verifier, so a release names no verifier build.
+#[test]
+fn a_release_pins_no_verifier_build() {
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let mut body = release_body();
+    body.components = BTreeMap::from([
+        ("operator".to_string(), digest.clone()),
+        ("machine-agent/linux-x86_64".to_string(), digest.clone()),
+    ]);
+    body.validate().expect("the operator and machine agent are components");
+    for name in ["verifier/aws", "verifier/gcp", "verifier/azure"] {
+        body.components = BTreeMap::from([(name.to_string(), digest.clone())]);
+        let error = body.validate().expect_err("a verifier build is not a component");
+        assert!(
+            error.to_string().contains(&format!("'{name}' is not a component")),
+            "{error}"
+        );
+    }
+}

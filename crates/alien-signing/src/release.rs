@@ -95,14 +95,11 @@ pub fn is_loader_env(name: &str) -> bool {
 }
 
 /// Components whose builds a release pins. An enforcer runs only a build
-/// whose digest the release names.
+/// whose digest the release names. The verifier isn't one: setup pins it.
 pub const COMPONENTS: &[&str] = &[
     "machine-agent/linux-x86_64",
     "machine-agent/linux-aarch64",
     "operator",
-    "verifier/aws",
-    "verifier/gcp",
-    "verifier/azure",
 ];
 
 /// Setup templates a release can carry digests of.

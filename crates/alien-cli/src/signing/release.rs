@@ -775,18 +775,18 @@ mod tests {
     fn component_changes_name_each_moved_build() {
         let previous = BTreeMap::from([
             ("operator".to_string(), A.to_string()),
-            ("verifier/aws".to_string(), A.to_string()),
+            ("machine-agent/linux-x86_64".to_string(), A.to_string()),
         ]);
         let next = BTreeMap::from([
             ("operator".to_string(), B.to_string()),
-            ("verifier/aws".to_string(), A.to_string()),
-            ("verifier/gcp".to_string(), B.to_string()),
+            ("machine-agent/linux-x86_64".to_string(), A.to_string()),
+            ("machine-agent/linux-aarch64".to_string(), B.to_string()),
         ]);
         assert_eq!(
             component_changes(&previous, &next),
             vec![
+                "machine-agent/linux-aarch64: none → sha256:bbbbbbbbbbbb".to_string(),
                 "operator: sha256:aaaaaaaaaaaa → sha256:bbbbbbbbbbbb".to_string(),
-                "verifier/gcp: none → sha256:bbbbbbbbbbbb".to_string(),
             ]
         );
         assert!(component_changes(&next, &next).is_empty());
