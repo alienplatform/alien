@@ -12,7 +12,7 @@ use alien_core::{
     sync::{SyncExecutionClaim, TargetDeployment},
     DeploymentConfig, DeploymentState, ObservedInventoryBatch, ReleaseInfo, ResourceHeartbeat,
 };
-use alien_error::{Context, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -1917,6 +1917,65 @@ impl OperatorDb {
             }
             None => Ok(None),
         }
+    }
+
+    /// The secret an enrolled Operator gives its command-enabled Workers as
+    /// `ALIEN_COMMANDS_TOKEN`. Worker runtimes that predate capability files
+    /// accept a command push only with this bearer. It is random, kept here,
+    /// and grants nothing at the manager. Created once and then reused, so a
+    /// rollout does not change it.
+    pub async fn worker_push_secret(&self) -> Result<String> {
+        let mut random = [0u8; 32];
+        getrandom::fill(&mut random).map_err(|_| {
+            AlienError::new(ErrorData::DatabaseError {
+                message: "Cannot generate the Worker push secret".to_string(),
+            })
+        })?;
+        let candidate = format!(
+            "ax_push_v1_{}",
+            random
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        );
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES ('worker_push_secret', ?, datetime('now'))
+             ON CONFLICT(key) DO NOTHING",
+            (candidate,),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to store worker_push_secret".to_string(),
+        })?;
+        let mut rows = conn
+            .query(
+                "SELECT value FROM state WHERE key = 'worker_push_secret'",
+                (),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query worker_push_secret".to_string(),
+            })?;
+        let row = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch worker_push_secret row".to_string(),
+            })?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::DatabaseError {
+                    message: "worker_push_secret was not stored".to_string(),
+                })
+            })?;
+        row.get(0)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to read worker_push_secret value".to_string(),
+            })
     }
 
     /// Persist the deployment-scoped sync token returned by initialization.

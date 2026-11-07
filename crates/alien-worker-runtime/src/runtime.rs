@@ -771,12 +771,8 @@ fn command_push_config(
     if capability_file.is_none() && legacy_token.is_none() {
         return Ok(None);
     }
-    if capability_file.is_some() && legacy_token.is_some() {
-        return Err(AlienError::new(ErrorData::ConfigurationInvalid {
-            message: "Command credentials must select exactly one source".into(),
-            field: Some("ALIEN_COMMANDS_CAPABILITY_FILE".into()),
-        }));
-    }
+    // An enrolled Operator sets both: the token is its push secret for
+    // runtimes that predate capability files. This runtime uses the file.
 
     let worker_resource_id = config
         .env_vars

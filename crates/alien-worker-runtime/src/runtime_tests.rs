@@ -321,6 +321,52 @@ fn command_push_requires_trusted_worker_identity() {
     assert_eq!(command_push.worker_resource_id, "reports");
 }
 
+/// An enrolled Operator gives a Worker both the capability file and its push
+/// secret, so images built by an older CLI keep receiving pushes. This
+/// runtime starts and authenticates pushes with the capability file only.
+#[test]
+fn command_push_prefers_the_capability_file_over_the_push_secret() {
+    let config = RuntimeConfig::builder()
+        .transport(TransportType::Local)
+        .command(vec!["app".to_string()])
+        .env_vars(HashMap::from([
+            (
+                ENV_ALIEN_COMMANDS_TOKEN.to_string(),
+                "operator-push-secret".to_string(),
+            ),
+            (
+                "ALIEN_COMMANDS_CAPABILITY_FILE".to_string(),
+                "/var/run/alien-runtime/commands.json".to_string(),
+            ),
+            (
+                "ALIEN_MANAGER_URL".to_string(),
+                "https://manager.example.test".to_string(),
+            ),
+            (
+                "ALIEN_MANAGER_AUDIENCE".to_string(),
+                "https://manager.example.test".to_string(),
+            ),
+            (
+                ENV_ALIEN_CURRENT_WORKER_BINDING_NAME.to_string(),
+                "reports".to_string(),
+            ),
+            (
+                ENV_ALIEN_DEPLOYMENT_ID.to_string(),
+                "deployment".to_string(),
+            ),
+        ]))
+        .build();
+
+    let command_push = command_push_config(&config, &HashMap::new())
+        .expect("both credentials must not stop the runtime")
+        .expect("command push enabled");
+    assert!(matches!(
+        command_push.credential,
+        crate::transports::local::CommandPushCredential::File(_)
+    ));
+    assert_eq!(command_push.worker_resource_id, "reports");
+}
+
 #[test]
 fn command_push_rejects_empty_or_whitespace_token() {
     let config = RuntimeConfig::builder()

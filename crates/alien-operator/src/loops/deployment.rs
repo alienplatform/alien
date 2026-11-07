@@ -15,10 +15,10 @@ use crate::config::OperatorConfig;
 use crate::db::{AutomaticRetry, OperatorDb};
 use crate::OperatorState;
 use alien_core::{
-    ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
-    EnvironmentVariableType, KubernetesClientConfig, ObservedInventoryBatch, Platform,
-    ReceiverCommandCredential, ResourceHeartbeat, ENV_ALIEN_DEPLOYMENT_ID,
-    ENV_ALIEN_DEPLOYMENT_NAME,
+    commands_types::CommandTargetType, ClientConfig, DeploymentConfig, DeploymentState,
+    DeploymentStatus, EnvironmentVariable, EnvironmentVariableType, KubernetesClientConfig,
+    ObservedInventoryBatch, Platform, ReceiverCommandCredential, ResourceHeartbeat,
+    ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
 };
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
@@ -673,7 +673,7 @@ async fn finish_maintenance_refresh(
 /// Applies public_endpoints and stack_settings from operator config,
 /// and injects command delivery env vars for K8s/Local platforms.
 /// External bindings also populate DeploymentConfig for executor preflights.
-async fn enrich_config(
+pub(super) async fn enrich_config(
     mut config: DeploymentConfig,
     operator_config: &OperatorConfig,
     platform: Platform,
@@ -768,7 +768,30 @@ async fn enrich_config(
                     }));
                 }
                 vars.retain(|variable| variable.name != "ALIEN_COMMANDS_TOKEN");
-                for target in stack.command_targets() {
+                // Worker runtimes built before capability files accept a push
+                // only with `ALIEN_COMMANDS_TOKEN`. Give them the Operator's
+                // own push secret, which grants nothing at the manager. Newer
+                // runtimes use the capability file and ignore it.
+                let targets = stack.command_targets();
+                let push_secret = if targets
+                    .iter()
+                    .any(|target| target.resource_type == CommandTargetType::Worker)
+                {
+                    Some(db.worker_push_secret().await?)
+                } else {
+                    None
+                };
+                for target in targets {
+                    if let (CommandTargetType::Worker, Some(secret)) =
+                        (target.resource_type, push_secret.as_ref())
+                    {
+                        vars.push(EnvironmentVariable {
+                            name: alien_core::ENV_ALIEN_COMMANDS_TOKEN.into(),
+                            value: secret.clone(),
+                            var_type: EnvironmentVariableType::Secret,
+                            target_resources: Some(vec![target.resource_id.clone()]),
+                        });
+                    }
                     let values = [
                         ("ALIEN_IDENTITY_PROVIDER", "capabilityFile".to_owned()),
                         ("ALIEN_MANAGER_URL", sync_config.url.to_string()),
