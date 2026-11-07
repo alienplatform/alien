@@ -360,16 +360,20 @@ const SANDBOX_TOKEN_DIR: &str = "/run/alien/sandbox";
 /// Makes each linked Local sandbox reachable from inside a container.
 ///
 /// The binding points at the manager's route on loopback and at a token file on the host; neither
-/// exists inside the container. The route is also served on Docker's host gateway, so its URL
-/// moves to `host.docker.internal`, and the one token file is mounted read-only (not its
-/// directory, which holds other sandboxes' tokens), with the binding pointed at the mount. The
-/// mount is shared with the host operator's identity because the file is readable by it alone.
+/// exists inside the container. Its URL moves to `host.docker.internal` (the caller forwards the
+/// route there, and gets the loopback URLs to forward back), and the one token file is mounted
+/// read-only (not its directory, which holds other sandboxes' tokens), with the binding pointed
+/// at the mount. The mount is shared with the host operator's identity because the file is
+/// readable by it alone, as Storage, KV and Vault mounts already are.
 ///
-/// **Fails fast** on a cloud sandbox binding, as the other rewrites do.
+/// **Fails fast** on a cloud sandbox binding, as the other rewrites do, and on a token file that
+/// is not there: Docker would create a directory in its place, which the route could then never
+/// write its token to.
 pub(super) fn mount_local_sandboxes_for_container(
     env_vars: &mut std::collections::HashMap<String, String>,
     bind_mounts: &mut Vec<alien_local::BindMount>,
-) -> Result<()> {
+) -> Result<Vec<String>> {
+    let mut routes = Vec::new();
     let mut binding_keys: Vec<String> = env_vars
         .keys()
         .filter(|k| k.starts_with("ALIEN_") && k.ends_with("_BINDING"))
@@ -392,11 +396,37 @@ pub(super) fn mount_local_sandboxes_for_container(
         };
 
         if let BindingValue::Value(url) = &mut local.manager_url {
-            *url = url
-                .replace("localhost:", "host.docker.internal:")
-                .replace("127.0.0.1:", "host.docker.internal:");
+            let mut endpoint = reqwest::Url::parse(url).into_alien_error().context(
+                ErrorData::ResourceControllerConfigError {
+                    resource_id: binding_key.clone(),
+                    message: "Invalid local sandbox route URL".into(),
+                },
+            )?;
+            if endpoint.host_str().is_some_and(|host| {
+                host == "localhost"
+                    || host
+                        .trim_matches(['[', ']'])
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback())
+            }) {
+                routes.push(url.clone());
+                endpoint
+                    .set_host(Some("host.docker.internal"))
+                    .into_alien_error()
+                    .context(ErrorData::ResourceControllerConfigError {
+                        resource_id: binding_key.clone(),
+                        message: "Rewrite local sandbox route URL for Docker".into(),
+                    })?;
+                *url = endpoint.as_str().trim_end_matches('/').to_string();
+            }
         }
         if let BindingValue::Value(host_path) = &local.token_path {
+            if !std::path::Path::new(host_path).is_file() {
+                return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: binding_key,
+                    message: "the linked sandbox's route has not written its token yet".into(),
+                }));
+            }
             let container_path = format!(
                 "{SANDBOX_TOKEN_DIR}/{}.token",
                 binding_key.to_ascii_lowercase()
@@ -420,7 +450,7 @@ pub(super) fn mount_local_sandboxes_for_container(
         debug!(resource = %binding_key, "Pointed the Local sandbox binding at the container's view");
     }
 
-    Ok(())
+    Ok(routes)
 }
 
 #[cfg(test)]
@@ -458,20 +488,29 @@ mod tests {
         }
     }
 
-    #[test]
-    fn local_sandbox_binding_is_reachable_from_a_container() {
-        let binding = SandboxBinding::Local(alien_core::bindings::LocalSandboxBinding {
+    fn local_sandbox_binding(token_path: &std::path::Path) -> SandboxBinding {
+        SandboxBinding::Local(alien_core::bindings::LocalSandboxBinding {
             default_policy: None,
             egress: None,
             manager_url: BindingValue::value("http://127.0.0.1:40205".to_string()),
             sandbox_key: BindingValue::value("code-key".to_string()),
-            token_path: BindingValue::value(
-                "/state/sandboxes/sandbox-manager-code.token".to_string(),
-            ),
-        });
-        let mut env = serialize_binding_as_env_var("code", &binding).unwrap();
+            token_path: BindingValue::value(token_path.display().to_string()),
+        })
+    }
+
+    #[test]
+    fn local_sandbox_binding_is_reachable_from_a_container() {
+        let state = tempfile::TempDir::new().unwrap();
+        let token = state.path().join("sandbox-manager-code.token");
+        std::fs::write(&token, "t").unwrap();
+        let mut env = serialize_binding_as_env_var("code", &local_sandbox_binding(&token)).unwrap();
         let mut mounts = Vec::new();
-        mount_local_sandboxes_for_container(&mut env, &mut mounts).unwrap();
+        let routes = mount_local_sandboxes_for_container(&mut env, &mut mounts).unwrap();
+        assert_eq!(
+            routes,
+            vec!["http://127.0.0.1:40205".to_string()],
+            "the route to forward"
+        );
 
         let SandboxBinding::Local(actual) =
             serde_json::from_str(&env[&binding_env_var_name("code")]).unwrap()
@@ -491,10 +530,7 @@ mod tests {
             BindingValue::value("code-key".to_string())
         );
         assert_eq!(mounts.len(), 1, "only the token file, never its directory");
-        assert_eq!(
-            mounts[0].host_path,
-            std::path::PathBuf::from("/state/sandboxes/sandbox-manager-code.token")
-        );
+        assert_eq!(mounts[0].host_path, token);
         assert_eq!(
             mounts[0].container_path,
             "/run/alien/sandbox/alien_code_binding.token"
@@ -503,6 +539,19 @@ mod tests {
         assert!(
             mounts[0].shared_with_host_workloads,
             "the file is the operator's alone"
+        );
+    }
+
+    #[test]
+    fn local_sandbox_binding_without_its_token_file_is_refused_unmounted() {
+        let state = tempfile::TempDir::new().unwrap();
+        let token = state.path().join("sandbox-manager-code.token");
+        let mut env = serialize_binding_as_env_var("code", &local_sandbox_binding(&token)).unwrap();
+        let mut mounts = Vec::new();
+        assert!(mount_local_sandboxes_for_container(&mut env, &mut mounts).is_err());
+        assert!(
+            mounts.is_empty(),
+            "Docker would create a directory at a missing source"
         );
     }
 

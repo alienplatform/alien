@@ -162,6 +162,12 @@ struct ServingRoute {
 /// listener each time and hand the workload a different port than the one it was given.
 static ROUTES: OnceLock<Mutex<HashMap<String, ServingRoute>>> = OnceLock::new();
 
+/// Routes forwarded to Docker's host gateway, keyed by base URL; dropping a sender stops its
+/// forward. Async-locked because starting a forward awaits, and two containers starting at once
+/// must not both bind the same gateway port.
+static FORWARDS: OnceLock<tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>> =
+    OnceLock::new();
+
 impl SandboxRoute {
     /// Returns the sandbox's route, serving it first if this process has not already.
     ///
@@ -202,6 +208,61 @@ impl SandboxRoute {
         Ok(route)
     }
 
+    /// Makes the route at `base_url` reachable from containers, on Docker's private host gateway
+    /// at the same port. Started only when a container links the sandbox, so a route nothing
+    /// in a container uses stays on loopback, out of reach of other containers (sandbox sessions
+    /// with internet egress among them). Idempotent; the forward ends when the route is removed.
+    ///
+    /// Hosts where that gateway cannot be bound, such as Docker Desktop, reach the host's
+    /// loopback through `host.docker.internal` natively and need no forward.
+    pub async fn forward_to_containers(base_url: &str) -> Result<()> {
+        let serving = ROUTES.get().is_some_and(|routes| {
+            routes
+                .lock()
+                .expect("no panic holds this lock")
+                .values()
+                .any(|route| route.base_url == base_url)
+        });
+        if !serving {
+            return Err(AlienError::new(ErrorData::SandboxSessionFailed {
+                session_id: base_url.to_string(),
+                operation: "forward the route to containers: this process serves no route there"
+                    .to_string(),
+            }));
+        }
+        let address: SocketAddr = base_url
+            .strip_prefix("http://")
+            .and_then(|address| address.parse().ok())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxSessionFailed {
+                    session_id: base_url.to_string(),
+                    operation: "forward the route to containers: not a loopback route address"
+                        .to_string(),
+                })
+            })?;
+
+        let mut forwards = FORWARDS
+            .get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+            .lock()
+            .await;
+        if forwards.contains_key(base_url) {
+            return Ok(());
+        }
+        let (forward, stop) = tokio::sync::oneshot::channel::<()>();
+        crate::docker_network::start_docker_bridge_proxy_with_shutdown(address, async move {
+            let _ = stop.await;
+        })
+        .await
+        .map_err(|error| {
+            AlienError::new(ErrorData::SandboxSessionFailed {
+                session_id: base_url.to_string(),
+                operation: format!("forward the route to Docker's host gateway: {error}"),
+            })
+        })?;
+        forwards.insert(base_url.to_string(), forward);
+        Ok(())
+    }
+
     /// Stops one sandbox's route and removes what it left behind.
     ///
     /// Delete has to reach further than the containers: a route left serving keeps accepting
@@ -220,6 +281,10 @@ impl SandboxRoute {
         let Some(mut route) = removed else {
             return;
         };
+
+        if let Some(forwards) = FORWARDS.get() {
+            drop(forwards.lock().await.remove(&route.base_url));
+        }
 
         // Dropping the sender is what the listener's graceful shutdown waits on. It is a signal,
         // not a fact: a create already inside the route finishes only when the task does, and a
@@ -304,25 +369,8 @@ impl SandboxRoute {
             })
         })?;
 
-        // Containers linked to the sandbox reach the host through Docker's private gateway, not
-        // loopback, so the route is forwarded there too, as the dev server and Postgres are. The
-        // forward ends with the route: the serving task holds its sender. Every request still
-        // needs the route's token.
-        let (proxy_shutdown, proxy_stop) = tokio::sync::oneshot::channel::<()>();
-        crate::docker_network::start_docker_bridge_proxy_with_shutdown(address, async move {
-            let _ = proxy_stop.await;
-        })
-        .await
-        .map_err(|error| {
-            AlienError::new(ErrorData::SandboxSessionFailed {
-                session_id: sandbox.to_string(),
-                operation: format!("forward the route to Docker's host gateway: {error}"),
-            })
-        })?;
-
         let (shutdown, stop) = tokio::sync::oneshot::channel::<()>();
         let serving = tokio::spawn(async move {
-            let _proxy_shutdown = proxy_shutdown;
             let serve = axum::serve(listener, router).with_graceful_shutdown(async move {
                 // Either an explicit stop or the sender being dropped ends the wait.
                 let _ = stop.await;
