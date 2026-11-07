@@ -1,4 +1,8 @@
 //! Select one explicit runtime identity source, without credential fallback.
+//!
+//! Nothing here contacts the manager. The exporter fetches a credential when
+//! it first sends logs, so a manager or cloud identity outage never stops the
+//! application from starting.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -28,10 +32,6 @@ pub async fn telemetry_credentials(
             required(env, "ALIEN_TELEMETRY_CAPABILITY_FILE")?.into(),
         )
         .context(configuration("invalid telemetry capability file"))?;
-        credentials
-            .token()
-            .await
-            .context(configuration("telemetry capability is unavailable"))?;
         return Ok(Some(Arc::new(credentials)));
     }
     let proof: Arc<dyn RuntimeProofProvider> = match kind.as_str() {
@@ -73,11 +73,6 @@ pub async fn telemetry_credentials(
         proof,
     )
     .context(configuration("invalid runtime exchange configuration"))?;
-    // Fail startup if the explicitly selected identity cannot establish authority.
-    credentials
-        .token()
-        .await
-        .context(configuration("runtime identity exchange failed"))?;
     Ok(Some(Arc::new(credentials)))
 }
 

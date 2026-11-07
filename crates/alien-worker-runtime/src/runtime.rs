@@ -223,8 +223,20 @@ pub async fn run(
 
         let mut identity_env: HashMap<String, String> = std::env::vars().collect();
         identity_env.extend(config.env_vars.clone());
-        let runtime_identity = crate::identity::telemetry_credentials(&identity_env).await?;
-        let runtime_secrets = if runtime_identity.is_some() {
+        // Telemetry must never decide whether the application runs. A broken
+        // identity configuration turns log export off and the app starts.
+        let (runtime_identity, export_logs) = match crate::identity::telemetry_credentials(
+            &identity_env,
+        )
+        .await
+        {
+            Ok(credentials) => (credentials, true),
+            Err(error) => {
+                warn!(error = %error, "Telemetry identity is unusable; app logs are not exported");
+                (None, false)
+            }
+        };
+        let runtime_secrets = if runtime_identity.is_some() || !export_logs {
             HashMap::new()
         } else if let Some(ref provider) = bindings_provider {
             load_runtime_secrets(&config, &**provider).await?
@@ -236,7 +248,7 @@ pub async fn run(
             .log_exporter
             .clone()
             .with_runtime_secrets(&runtime_secrets);
-        if let Some(otlp_config) = log_exporter.to_otlp_config() {
+        if let Some(otlp_config) = log_exporter.to_otlp_config().filter(|_| export_logs) {
             if let Some(credentials) = runtime_identity {
                 init_otlp_logging_with_identity(otlp_config, credentials)?;
             } else {

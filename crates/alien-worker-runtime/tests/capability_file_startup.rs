@@ -6,9 +6,21 @@ use alien_client_core::runtime_credentials::RuntimeCapability;
 use chrono::{TimeDelta, Utc};
 use tokio::process::Command;
 
+/// Lambda, Cloud Run and Kubernetes workers must start while the manager is
+/// unreachable or their telemetry credential is unusable. Log export then
+/// waits for a credential; the application does not.
 #[tokio::test]
-async fn capability_file_configuration_starts_application_with_and_without_telemetry() {
-    for (telemetry, valid) in [(false, true), (true, true), (false, false), (true, false)] {
+async fn application_starts_without_a_usable_telemetry_credential() {
+    for (provider, telemetry, valid) in [
+        // The cloud proof is not ready yet and the manager is down.
+        ("session", false, true),
+        ("session", true, true),
+        ("capabilityFile", false, true),
+        ("capabilityFile", true, true),
+        // The operator wrote a bad capability file.
+        ("capabilityFile", false, false),
+        ("capabilityFile", true, false),
+    ] {
         let directory = tempfile::tempdir().unwrap();
         let capability = directory.path().join("telemetry.json");
         std::fs::write(
@@ -32,11 +44,15 @@ async fn capability_file_configuration_starts_application_with_and_without_telem
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
             .env("ALIEN_DEPLOYMENT_TYPE", "local")
-            .env("ALIEN_IDENTITY_PROVIDER", "capabilityFile")
+            .env("ALIEN_IDENTITY_PROVIDER", provider)
             .env("ALIEN_MANAGER_URL", "http://127.0.0.1:1")
             .env("ALIEN_MANAGER_AUDIENCE", "startup-test")
             .env("ALIEN_DEPLOYMENT_ID", "deployment-one")
             .env("ALIEN_TELEMETRY_CAPABILITY_FILE", &capability)
+            .env(
+                "ALIEN_SESSION_FILE",
+                directory.path().join("not-yet-written"),
+            )
             .env("STARTUP_MARKER", &marker)
             .args([
                 "--worker-grpc-address",
@@ -58,23 +74,12 @@ async fn capability_file_configuration_starts_application_with_and_without_telem
             );
         }
         let mut child = command.spawn().unwrap();
-        if !valid {
-            let status = tokio::time::timeout(Duration::from_secs(10), child.wait())
-                .await
-                .expect("invalid identity should fail startup promptly")
-                .unwrap();
-            assert!(!status.success());
-            assert!(
-                !marker.exists(),
-                "a legacy credential cannot start an identity-mode workload"
-            );
-            continue;
-        }
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 assert!(
                     child.try_wait().unwrap().is_none(),
-                    "runtime exited before application startup (telemetry={telemetry})"
+                    "runtime exited before application startup \
+                     (provider={provider}, telemetry={telemetry}, valid={valid})"
                 );
                 if marker.exists() {
                     break;
@@ -83,7 +88,7 @@ async fn capability_file_configuration_starts_application_with_and_without_telem
             }
         })
         .await
-        .expect("application should start with the shared identity provider configuration");
+        .expect("application should start without the manager");
         assert_eq!(std::fs::read_to_string(marker).unwrap(), "started");
         child.kill().await.unwrap();
         child.wait().await.unwrap();
