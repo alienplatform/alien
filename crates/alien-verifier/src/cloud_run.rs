@@ -23,7 +23,7 @@ pub trait ServiceStore: Send + Sync {
     async fn get(&self, name: &str) -> Result<Value>;
     /// PATCH the service with `service`, replacing its template.
     async fn replace(&self, name: &str, service: &Value) -> Result<()>;
-    /// GET the service, or `None` when it doesn't exist or isn't one setup gave the verifier.
+    /// GET the service, or `None` when it doesn't exist.
     async fn find(&self, name: &str) -> Result<Option<Value>>;
     /// The service's IAM policy.
     async fn policy(&self, name: &str) -> Result<Value>;
@@ -142,7 +142,7 @@ pub async fn apply(store: &dyn ServiceStore, spec: &FunctionSpec) -> Result<Valu
     if store.find(&spec.name).await?.is_none() {
         return Err(AlienError::new(ErrorData::Refused {
             reason: format!(
-                "worker '{}' has no Cloud Run service {} that setup gave the verifier: on GCP, setup creates each worker's service, and this install's setup predates the worker. Apply this release's signed setup update, then deploy again (its grant can take a minute to reach Cloud Run)",
+                "worker '{}' has no Cloud Run service {}: on GCP, setup creates each worker's service, and this install's setup predates the worker. Apply this release's signed setup update, then deploy again",
                 spec.workload, spec.name
             ),
         }));
