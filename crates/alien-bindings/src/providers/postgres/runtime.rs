@@ -150,7 +150,7 @@ impl PostgresRuntime {
     }
 
     #[cfg(feature = "aws")]
-    async fn aws_secrets(&self) -> Result<Arc<dyn SecretsManagerApi>> {
+    pub(crate) async fn aws_secrets(&self) -> Result<Arc<dyn SecretsManagerApi>> {
         let client = self
             .aws_secrets
             .get_or_try_init(|| async {
@@ -179,7 +179,7 @@ impl PostgresRuntime {
     }
 
     #[cfg(feature = "gcp")]
-    async fn gcp_secrets(&self) -> Result<Arc<dyn SecretManagerApi>> {
+    pub(crate) async fn gcp_secrets(&self) -> Result<Arc<dyn SecretManagerApi>> {
         let client = self
             .gcp_secrets
             .get_or_try_init(|| async {

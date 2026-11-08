@@ -39,6 +39,11 @@ pub struct BindingsProvider {
     /// Each value is a `Box<Arc<dyn Trait>>` erased via `Any`.
     cache: Arc<RwLock<HashMap<String, Box<dyn Any + Send + Sync>>>>,
     postgres: Arc<PostgresRuntime>,
+    /// Azure Managed Redis client, created on first use and reused so its token cache
+    /// survives across binding loads.
+    #[cfg(feature = "azure")]
+    azure_managed_redis:
+        tokio::sync::OnceCell<Arc<dyn alien_azure_clients::managed_redis::ManagedRedisApi>>,
 }
 
 /// Environment-backed provider that defers cloud client configuration until the
@@ -100,6 +105,8 @@ impl BindingsProvider {
             bindings,
             cache: Arc::new(RwLock::new(HashMap::new())),
             postgres,
+            #[cfg(feature = "azure")]
+            azure_managed_redis: tokio::sync::OnceCell::new(),
         })
     }
 
@@ -1484,14 +1491,84 @@ impl BindingsProviderApi for BindingsProvider {
             RedisBinding::Local(_) | RedisBinding::External(_) => Ok(Arc::new(
                 ResolvedRedis::from_inline_binding(binding_name, &binding)?,
             )),
-            // Cloud secret resolution lands with each cloud controller.
-            RedisBinding::ElastiCache(_)
-            | RedisBinding::Memorystore(_)
-            | RedisBinding::AzureManagedRedis(_) => {
-                Err(AlienError::new(ErrorData::config_invalid(
-                    binding_name,
-                    "Cloud Redis bindings are not supported by this build yet",
-                )))
+            RedisBinding::ElastiCache(config) => {
+                #[cfg(feature = "aws")]
+                {
+                    // Resolved on every load so a rotated token is picked up.
+                    let secrets = self.postgres.aws_secrets().await?;
+                    let params = crate::providers::redis::cloud::resolve_elasticache(
+                        binding_name,
+                        config,
+                        secrets.as_ref(),
+                    )
+                    .await?;
+                    Ok(Arc::new(ResolvedRedis::new(params)))
+                }
+                #[cfg(not(feature = "aws"))]
+                {
+                    let _ = config;
+                    Err(AlienError::new(ErrorData::FeatureNotEnabled {
+                        feature: "aws".to_string(),
+                    }))
+                }
+            }
+            RedisBinding::Memorystore(config) => {
+                #[cfg(feature = "gcp")]
+                {
+                    let secrets = self.postgres.gcp_secrets().await?;
+                    let params = crate::providers::redis::cloud::resolve_memorystore(
+                        binding_name,
+                        config,
+                        secrets.as_ref(),
+                    )
+                    .await?;
+                    Ok(Arc::new(ResolvedRedis::new(params)))
+                }
+                #[cfg(not(feature = "gcp"))]
+                {
+                    let _ = config;
+                    Err(AlienError::new(ErrorData::FeatureNotEnabled {
+                        feature: "gcp".to_string(),
+                    }))
+                }
+            }
+            RedisBinding::AzureManagedRedis(config) => {
+                #[cfg(feature = "azure")]
+                {
+                    let client = self
+                        .azure_managed_redis
+                        .get_or_try_init(|| async {
+                            let azure_config =
+                                self.client_config.azure_config().ok_or_else(|| {
+                                    AlienError::new(ErrorData::ClientConfigInvalid {
+                                        platform: Platform::Azure,
+                                        message: "Azure config not available".to_string(),
+                                    })
+                                })?;
+                            Ok::<_, AlienError<ErrorData>>(Arc::new(
+                                alien_azure_clients::managed_redis::AzureManagedRedisClient::new(
+                                    crate::http_client::create_http_client(),
+                                    alien_azure_clients::AzureTokenCache::new(azure_config.clone()),
+                                ),
+                            )
+                                as Arc<dyn alien_azure_clients::managed_redis::ManagedRedisApi>)
+                        })
+                        .await?;
+                    let params = crate::providers::redis::cloud::resolve_azure_managed_redis(
+                        binding_name,
+                        config,
+                        client.as_ref(),
+                    )
+                    .await?;
+                    Ok(Arc::new(ResolvedRedis::new(params)))
+                }
+                #[cfg(not(feature = "azure"))]
+                {
+                    let _ = config;
+                    Err(AlienError::new(ErrorData::FeatureNotEnabled {
+                        feature: "azure".to_string(),
+                    }))
+                }
             }
         }
     }

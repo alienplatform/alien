@@ -7,6 +7,8 @@
 //! workload has already materialized). Cloud variants carry a pointer to the password
 //! in the cloud's secret store and are resolved by their own provider.
 
+pub(crate) mod cloud;
+
 use crate::error::{ErrorData, Result};
 use crate::traits::{Binding, Redis, RedisConnectionParams, RedisTlsPolicy};
 use alien_core::bindings::{BindingValue, RedisBinding};
