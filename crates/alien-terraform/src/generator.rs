@@ -1976,6 +1976,17 @@ fn signing_blocks(
                         attr("type", Expression::String("String".to_string())),
                         attr("tier", Expression::String("Standard".to_string())),
                         attr("value", ledger_value),
+                        // Setup writes the empty ledger once; from then on only the verifier
+                        // writes it, and it only rises. Without this, the next apply (a setup
+                        // update) would write the empty ledger back and let an install accept
+                        // releases older than the ones it already ran.
+                        nested(block(
+                            "lifecycle",
+                            [attr(
+                                "ignore_changes",
+                                Expression::Array(vec![expr::raw("value")]),
+                            )],
+                        )),
                     ],
                 ),
             ],
