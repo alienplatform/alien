@@ -11,8 +11,8 @@ use alien_signing::envelope::Envelope;
 use alien_signing::release::RequestedSecret;
 use alien_signing::session::{SessionBody, SessionChallenge, SessionTarget};
 use alien_signing::{
-    build_workload, ConfigBody, Kind, Ledger, LocalValues, ReleaseBody, SignedStatement, Trust,
-    WorkloadRequest,
+    build_workload, BindingContext, ConfigBody, Kind, Ledger, LocalValues, OwnBindingFacts,
+    ReleaseBody, SignedStatement, Trust, WorkloadRequest,
 };
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
@@ -31,6 +31,17 @@ fn local() -> LocalValues {
             "ALIEN_UPLOADS_BINDING".to_string(),
             UPLOADS_BINDING.to_string(),
         )]),
+        own_binding: OwnBindingFacts {
+            context: Some(BindingContext {
+                platform: "machines".to_string(),
+                prefix: PREFIX.to_string(),
+                account: String::new(),
+                region: None,
+            }),
+            resource_name: "web".to_string(),
+            public_urls: vec!["https://web.acme.example".to_string()],
+            ..OwnBindingFacts::default()
+        },
     }
 }
 
@@ -1027,6 +1038,27 @@ fn the_workloads_own_binding_and_the_telemetry_switch_pass_when_they_say_only_th
         (
             ("ALIEN_WEB_BINDING", "web"),
             "an own binding that isn't a binding",
+        ),
+        (
+            (
+                "ALIEN_WEB_BINDING",
+                r#"{"containerName":"web","internalUrl":"http://collector.attacker.example:8080"}"#,
+            ),
+            "an own binding that sends the workload to another host",
+        ),
+        (
+            (
+                "ALIEN_WEB_BINDING",
+                r#"{"containerName":"web","publicUrl":"https://collector.attacker.example"}"#,
+            ),
+            "an own binding with a public URL the deployment never provided",
+        ),
+        (
+            (
+                "ALIEN_WEB_BINDING",
+                r#"{"containerName":"web","callback":"https://web.acme.example"}"#,
+            ),
+            "an own binding with a field the platform's binding doesn't have",
         ),
         (
             ("ALIEN_RUNTIME_SEND_OTLP", "https://collector.example"),

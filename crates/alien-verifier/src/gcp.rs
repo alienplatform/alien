@@ -18,7 +18,7 @@ use crate::cloud_write::{CloudWrite, Facts};
 use crate::error::{ErrorData, Result};
 use crate::function::StillNewest;
 use crate::machines;
-use crate::plan::Place;
+use crate::plan::{OwnResource, Place};
 use crate::trust::InstallStore;
 use crate::verifier::Backend;
 
@@ -683,6 +683,36 @@ impl Backend for GcpBackend {
         _workload: &Workload,
     ) -> Result<BTreeMap<String, String>> {
         Ok(BTreeMap::new())
+    }
+
+    async fn own_resource(&self, _place: &Place, own_name: &str) -> Result<OwnResource> {
+        let service = self
+            .0
+            .call(
+                reqwest::Method::GET,
+                &self.0.service_url(own_name),
+                None,
+                &format!("run.services.get {own_name}"),
+            )
+            .await?;
+        Ok(match service {
+            None => OwnResource::default(),
+            Some(service) => OwnResource {
+                urls: service["uri"]
+                    .as_str()
+                    .into_iter()
+                    .chain(
+                        service["urls"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_str),
+                    )
+                    .map(str::to_string)
+                    .collect(),
+                location: Some(self.0.region.clone()),
+            },
+        })
     }
 
     fn check_write(&self, facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {

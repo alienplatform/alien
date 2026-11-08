@@ -962,6 +962,7 @@ impl GcpWorkerController {
         }
 
         let cloud_run_url = service.uri.or_else(|| service.urls.first().cloned());
+        self.cloud_run_url = cloud_run_url.clone();
 
         // Check for URL override in deployment config, otherwise use Cloud Run URL
         let config = ctx.desired_resource_config::<Worker>()?;
@@ -2369,6 +2370,14 @@ impl GcpWorkerController {
             }
         }
 
+        // The address the service reports is what the worker's own binding names as its private
+        // URL, so a worker recorded without it (imported, or deployed before it was kept) learns
+        // it here.
+        self.cloud_run_url = service
+            .uri
+            .clone()
+            .or_else(|| service.urls.first().cloned());
+
         emit_gcp_cloud_run_worker_heartbeat(ctx, &worker_config, &service_name, &service);
 
         // A linked resource can change what its binding publishes without this worker being
@@ -3730,6 +3739,7 @@ impl GcpWorkerController {
                 // Clear any remaining state and mark as deleted
                 self.service_name = None;
                 self.url = None;
+                self.cloud_run_url = None;
                 self.operation_name = None;
                 self.push_subscriptions.clear();
                 self.storage_notification_topics.clear();
@@ -4446,6 +4456,7 @@ impl GcpWorkerController {
 
                 self.service_name = None;
                 self.url = None;
+                self.cloud_run_url = None;
                 self.operation_name = None;
                 self.push_subscriptions.clear();
 
@@ -4560,6 +4571,7 @@ impl GcpWorkerController {
 
                 self.service_name = None;
                 self.url = None;
+                self.cloud_run_url = None;
                 self.operation_name = None;
                 self.push_subscriptions.clear();
 
@@ -4671,7 +4683,9 @@ impl GcpWorkerController {
                 project_id: BindingValue::Value(project_id),
                 service_name: BindingValue::Value(service_name.clone()),
                 location: BindingValue::Value(location),
-                private_url: BindingValue::Value(url.clone()),
+                private_url: BindingValue::Value(
+                    self.cloud_run_url.clone().unwrap_or_else(|| url.clone()),
+                ),
                 public_url: Some(BindingValue::Value(url.clone())),
             });
             Ok(Some(
@@ -6199,6 +6213,7 @@ impl GcpWorkerController {
             state: GcpWorkerState::Ready,
             service_name: Some(function_name.to_string()),
             url: Some(format!("https://{}-abcd1234-uc.a.run.app", function_name)),
+            cloud_run_url: None,
             operation_name: None,
             image_pull_permission_retries: 0,
             compute_operation_name: None,
@@ -6354,7 +6369,7 @@ mod tests {
     };
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::verifier_test_support::{
-        http_verifier_stub, run_write, signed_release, CHANNEL,
+        http_verifier_stub, run_write_over, signed_release, CHANNEL,
     };
     use crate::core::MockPlatformServiceProvider;
     use crate::worker::readiness_probe::test_utils::create_readiness_probe_mock;
@@ -6366,6 +6381,7 @@ mod tests {
     };
     use alien_gcp_clients::iam::GenerateIdTokenResponse;
     use alien_gcp_clients::GcpClientConfigExt as _;
+    use alien_verifier::plan::OwnResource;
 
     #[test]
     fn cloudrun_service_name_preserves_valid_short_names() {
@@ -8827,6 +8843,7 @@ mod tests {
             state: GcpWorkerState::CreateFailed,
             service_name: None, // This is the key - no service name set
             url: None,
+            cloud_run_url: None,
             operation_name: None,
             image_pull_permission_retries: 0,
             compute_operation_name: None,
@@ -8881,6 +8898,29 @@ mod tests {
 
         // Verify outputs are no longer available
         assert!(executor.outputs().is_none());
+    }
+
+    /// A worker behind a custom domain reaches itself at the address Cloud Run gave the
+    /// service, which a protected install's verifier can check against Cloud Run; the custom
+    /// domain is only what the worker displays.
+    #[test]
+    fn the_own_binding_reaches_the_service_not_the_custom_domain() {
+        let mut worker = GcpWorkerController::mock_ready("basic-func");
+        worker.url = Some("https://api.acme.example".to_string());
+        worker.cloud_run_url = Some("https://basic-func-abcd1234-uc.a.run.app".to_string());
+        let binding = worker.get_binding_params().unwrap().unwrap();
+        assert_eq!(
+            binding["privateUrl"],
+            "https://basic-func-abcd1234-uc.a.run.app"
+        );
+        assert_eq!(binding["publicUrl"], "https://api.acme.example");
+
+        worker.cloud_run_url = None;
+        let binding = worker.get_binding_params().unwrap().unwrap();
+        assert_eq!(
+            binding["privateUrl"], "https://api.acme.example",
+            "a worker recorded before the address was kept falls back to its url"
+        );
     }
 
     mod linked_binding_refresh {
@@ -9193,6 +9233,40 @@ mod tests {
             );
         }
 
+        /// A worker imported, or deployed before its Cloud Run address was kept, has none
+        /// recorded. Its own binding names that address as the private URL, which a protected
+        /// install's verifier checks against what Cloud Run reports, so the heartbeat records it.
+        #[tokio::test]
+        async fn a_heartbeat_records_the_address_cloud_run_reports() {
+            let mut cloudrun = MockCloudRunApi::new();
+            let mut service = rendered_service(true).await;
+            service.uri = Some("https://basic-func-abcd1234-uc.a.run.app".to_string());
+            serving(service, &mut cloudrun);
+            let mut worker = GcpWorkerController::mock_ready("basic-func");
+            worker.url = Some("https://api.acme.example".to_string());
+            worker.cloud_run_url = None;
+            let mut executor = executor(
+                cloudrun,
+                worker,
+                sandbox_on(true, GcpAgentPlatformTemplateState::Ready),
+                None,
+            )
+            .await;
+            executor.step().await.expect("the heartbeat runs");
+
+            let worker = executor.internal_state::<GcpWorkerController>().unwrap();
+            assert_eq!(
+                worker.cloud_run_url.as_deref(),
+                Some("https://basic-func-abcd1234-uc.a.run.app")
+            );
+            let binding = worker.get_binding_params().unwrap().unwrap();
+            assert_eq!(
+                binding["privateUrl"],
+                "https://basic-func-abcd1234-uc.a.run.app"
+            );
+            assert_eq!(binding["publicUrl"], "https://api.acme.example");
+        }
+
         /// The executor planned this worker only because a linked resource was planned, so its
         /// own configuration is unchanged. The update must still apply the binding that moved.
         #[tokio::test]
@@ -9260,6 +9334,21 @@ mod tests {
     const PROTECTED_WORKER: &str = "api";
     const PROTECTED_SERVICE: &str = "test-api";
     const MANAGEMENT_SA: &str = "test-management@test-project-123.iam.gserviceaccount.com";
+
+    /// The protected service as the controller holds it once it runs in the install's project.
+    fn protected_controller() -> GcpWorkerController {
+        let mut controller = GcpWorkerController::mock_ready(PROTECTED_SERVICE);
+        controller.project_id = Some("test-project-123".to_string());
+        controller
+    }
+
+    /// What Cloud Run reports about the protected service.
+    fn protected_service() -> OwnResource {
+        OwnResource {
+            urls: vec![format!("https://{PROTECTED_SERVICE}-abcd1234-uc.a.run.app")],
+            location: Some("us-central1".to_string()),
+        }
+    }
 
     fn pinned_image(digest_byte: char) -> String {
         format!(
@@ -9436,7 +9525,7 @@ mod tests {
             .returning(|_| Ok(Arc::new(MockPubSubApi::new())));
         let mut executor = SingleControllerExecutor::builder()
             .resource(pinned_worker('1', 256))
-            .controller(GcpWorkerController::mock_ready(PROTECTED_SERVICE))
+            .controller(protected_controller())
             .platform(Platform::Gcp)
             .client_config(management_client_config(&url))
             .service_provider(Arc::new(provider))
@@ -9486,7 +9575,8 @@ mod tests {
         let mut writes = Vec::new();
         for (bearer, payload) in requests {
             assert_eq!(bearer.as_deref(), Some("Bearer management-id-token"));
-            let (answer, forwarded) = run_write(gcp_install(), "test", None, payload).await;
+            let (answer, forwarded) =
+                run_write_over(gcp_install(), "test", None, protected_service(), payload).await;
             answer.expect("the verifier's tables accept the controller's request");
             assert_eq!(forwarded.len(), 1);
             let request: serde_json::Value = serde_json::from_slice(payload).unwrap();
@@ -9641,7 +9731,7 @@ mod tests {
         let (url, requests) = http_verifier_stub(status, answer).await;
         let mut executor = SingleControllerExecutor::builder()
             .resource(pinned_worker('1', 256))
-            .controller(GcpWorkerController::mock_ready(PROTECTED_SERVICE))
+            .controller(protected_controller())
             .platform(Platform::Gcp)
             .client_config(management_client_config(&url))
             .service_provider(protected_provider(&url, setup_policy))
@@ -9741,7 +9831,7 @@ mod tests {
         let (url, requests) = http_verifier_stub(axum::http::StatusCode::OK, written(2)).await;
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker.clone())
-            .controller(GcpWorkerController::mock_ready(PROTECTED_SERVICE))
+            .controller(protected_controller())
             .platform(Platform::Gcp)
             .client_config(management_client_config(&url))
             .service_provider(protected_provider(&url, setup_policy()))

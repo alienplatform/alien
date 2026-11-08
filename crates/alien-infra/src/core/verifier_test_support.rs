@@ -16,7 +16,7 @@ use alien_signing::{
 };
 use alien_verifier::cloud_write::{CloudWrite, Facts};
 use alien_verifier::function::StillNewest;
-use alien_verifier::plan::Place;
+use alien_verifier::plan::{OwnResource, Place};
 use alien_verifier::trust::InstallStore;
 use alien_verifier::{Backend, Verifier};
 use async_trait::async_trait;
@@ -194,6 +194,8 @@ impl InstallStore for MemoryInstall {
 /// A backend that checks each write with its cloud's table and records what it would send.
 struct Forwarded {
     install: InstallId,
+    /// What the cloud reports about the workload's own resource.
+    own: OwnResource,
     /// The Container Apps environment setup names (Azure).
     environment: Option<String>,
     writes: Mutex<Vec<CloudWrite>>,
@@ -207,6 +209,14 @@ impl Backend for Forwarded {
         _workload: &Workload,
     ) -> alien_verifier::Result<BTreeMap<String, String>> {
         Ok(BTreeMap::new())
+    }
+
+    async fn own_resource(
+        &self,
+        _place: &Place,
+        _own_name: &str,
+    ) -> alien_verifier::Result<OwnResource> {
+        Ok(self.own.clone())
     }
 
     fn check_write(&self, facts: &Facts<'_>, write: &CloudWrite) -> alien_verifier::Result<()> {
@@ -245,7 +255,27 @@ pub async fn run_write(
     environment: Option<&str>,
     payload: &[u8],
 ) -> (Result<serde_json::Value, String>, Vec<CloudWrite>) {
+    run_write_over(
+        install,
+        prefix,
+        environment,
+        OwnResource::default(),
+        payload,
+    )
+    .await
+}
+
+/// `run_write` where the cloud reports `own` about the workload's own resource, which its own
+/// binding is checked against (Cloud Run, Container Apps).
+pub async fn run_write_over(
+    install: InstallId,
+    prefix: &str,
+    environment: Option<&str>,
+    own: OwnResource,
+    payload: &[u8],
+) -> (Result<serde_json::Value, String>, Vec<CloudWrite>) {
     let backend = Arc::new(Forwarded {
+        own,
         install: install.clone(),
         environment: environment.map(str::to_string),
         writes: Mutex::new(Vec::new()),

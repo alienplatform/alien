@@ -35,6 +35,7 @@ impl ResourceImporter for GcpWorkerImporter {
             state: GcpWorkerState::Ready,
             service_name: Some(data.service_name),
             url: data.url,
+            cloud_run_url: None,
             operation_name: None,
             image_pull_permission_retries: 0,
             compute_operation_name: None,

@@ -493,6 +493,8 @@ pub struct LocalValues {
     pub deployer_inputs: BTreeMap<String, String>,
     /// Binding values, by environment name, from [`crate::resolve_bindings`].
     pub bindings: BTreeMap<String, String>,
+    /// What the workload's own binding is checked against.
+    pub own_binding: crate::binding::OwnBindingFacts,
 }
 
 /// A secret delivery the control plane asks for.
@@ -587,11 +589,11 @@ pub fn build_workload(
         }
         // The workload's own binding only describes the workload to itself.
         if *key == own_binding {
-            if !crate::binding::binding_names_itself(value, name) {
-                return Err(refuse(format!(
-                    "env {key} is the workload's own binding but doesn't name '{name}'"
-                )));
-            }
+            crate::binding::check_own_binding(value, &local.own_binding).map_err(|reason| {
+                refuse(format!(
+                    "env {key} is the workload's own binding but {reason}"
+                ))
+            })?;
             env.insert(key.clone(), value.clone());
             continue;
         }

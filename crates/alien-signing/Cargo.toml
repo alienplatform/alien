@@ -23,4 +23,5 @@ hex = { workspace = true }
 hmac = { workspace = true }
 snow = { workspace = true }
 getrandom = { workspace = true }
+url = { workspace = true }
 utoipa = { workspace = true, optional = true }

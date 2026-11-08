@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 
 use alien_signing::{
     binding_env, build_workload, candidate_prefixes, discover, resolve_bindings, BindingContext,
-    InstallId, Kind, Ledger, LocalValues, Lookup, RecoveryCode, Role, Signer, SignerKind,
-    SigningSettings, Trust, WorkloadRequest,
+    InstallId, Kind, Ledger, LocalValues, Lookup, OwnBindingFacts, RecoveryCode, Role, Signer,
+    SignerKind, SigningSettings, Trust, WorkloadRequest,
 };
 use chrono::Duration;
 use common::*;
@@ -510,6 +510,7 @@ fn bindings_come_from_the_install_not_the_control_plane() {
     let local = LocalValues {
         deployer_inputs: BTreeMap::from([("databaseUrl".to_string(), "postgres://db".to_string())]),
         bindings,
+        own_binding: OwnBindingFacts::default(),
     };
     let redirect = WorkloadRequest {
         env: BTreeMap::from([(

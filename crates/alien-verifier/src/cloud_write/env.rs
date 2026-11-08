@@ -3,12 +3,14 @@
 
 use std::collections::BTreeMap;
 
-use alien_core::{worker_runtime_environment_plan, Platform, RuntimeEnvironmentValue};
+use alien_core::{
+    worker_runtime_environment_plan, Platform, RuntimeEnvironmentValue,
+    ENV_ALIEN_PUBLIC_ENDPOINTS_JSON,
+};
 use alien_error::{AlienError, Context};
 use alien_signing::{
-    binding_env, binding_env_name, binding_names_itself, build_workload,
-    release::RUNTIME_SEND_OTLP, resolve_bindings, InstallId, LocalValues, Workload,
-    WorkloadRequest,
+    binding_env, binding_env_name, build_workload, check_own_binding, release::RUNTIME_SEND_OTLP,
+    resolve_bindings, InstallId, LocalValues, OwnBindingFacts, Workload, WorkloadRequest,
 };
 use serde_json::Value;
 
@@ -25,6 +27,8 @@ const TELEMETRY_FOLLOWERS: &[&str] = &["OTEL_SERVICE_NAME", "OTEL_RESOURCE_ATTRI
 const RUNTIME_SECRETS: &str = "ALIEN_RUNTIME_SECRETS";
 /// The install's `secrets` vault, which the runtime reads its credentials from.
 const SECRETS_VAULT: &str = "secrets";
+/// The public endpoints of the workload, which the deployment provides.
+const PUBLIC_ENDPOINTS: &str = ENV_ALIEN_PUBLIC_ENDPOINTS_JSON;
 
 fn refused(reason: String) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::Refused { reason })
@@ -146,8 +150,13 @@ pub fn check_env(
 
     // The function's own binding describes this function and nothing else.
     let own_key = binding_env_name(name);
+    let own_facts = own_binding_facts(place, reads, own_name, rest.get(PUBLIC_ENDPOINTS));
     if let Some(value) = rest.remove(&own_key) {
-        check_own_binding(name, own_name, &own_key, &value)?;
+        check_own_binding(&value, &own_facts).map_err(|reason| {
+            refused(format!(
+                "env {own_key} of workload '{name}' doesn't describe the function {own_name}: {reason}"
+            ))
+        })?;
     }
 
     // The secrets the function loads at start are the signed list.
@@ -169,6 +178,7 @@ pub fn check_env(
         &LocalValues {
             deployer_inputs: reads.deployer_inputs.clone(),
             bindings,
+            own_binding: own_facts,
         },
         &WorkloadRequest {
             env: rest.clone(),
@@ -244,12 +254,32 @@ fn check_runtime_secrets(name: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-/// The function's own binding names the function itself.
-fn check_own_binding(name: &str, own_name: &str, key: &str, value: &str) -> Result<()> {
-    if !binding_names_itself(value, own_name) {
-        return Err(refused(format!(
-            "env {key} of workload '{name}' doesn't describe the function {own_name}"
-        )));
+/// What the function's own binding is checked against: the install, what the cloud reports for
+/// the function, and the public endpoint URLs the deployment provides to the workload. Those
+/// come from the control plane, so they can name only fields that destine nothing.
+fn own_binding_facts(
+    place: &Place,
+    reads: &Reads,
+    own_name: &str,
+    public_endpoints: Option<&String>,
+) -> OwnBindingFacts {
+    let endpoints: BTreeMap<String, Value> = public_endpoints
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_default();
+    let public_urls = endpoints
+        .values()
+        .filter_map(|endpoint| endpoint["url"].as_str())
+        .map(str::to_string)
+        .collect();
+    OwnBindingFacts {
+        context: Some(place.binding_context()),
+        resource_name: own_name.to_string(),
+        resource_group: match &place.install {
+            InstallId::Azure { resource_group, .. } => Some(resource_group.clone()),
+            _ => None,
+        },
+        location: reads.own.location.clone(),
+        urls: reads.own.urls.clone(),
+        public_urls,
     }
-    Ok(())
 }

@@ -3869,11 +3869,12 @@ impl AzureWorkerController {
                 })?
                 .to_string();
 
-            // Private URL is the internal FQDN (same as public URL for Container Apps
-            // with external ingress; for internal ingress it would differ).
+            // Private URL is the address Azure gives the app, never a custom domain: a
+            // protected install's verifier checks it against what Azure reports for the app.
             let private_url = self
-                .url
+                .container_app_url
                 .clone()
+                .or_else(|| self.url.clone())
                 .unwrap_or_else(|| format!("https://{}", container_app_name));
 
             let binding = WorkerBinding::ContainerApp(ContainerAppWorkerBinding {
@@ -5702,9 +5703,11 @@ mod tests {
         AZURE_RBAC_WAIT_POLL_SECS, CONTAINER_APP_NAME_MAX_LEN, DAPR_COMPONENT_NAME_MAX_LEN,
     };
     use crate::core::verifier_test_support::{
-        http_verifier_stub, run_write, signed_release, CHANNEL,
+        http_verifier_stub, run_write_over, signed_release, CHANNEL,
     };
-    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+    use crate::core::{
+        controller_test::SingleControllerExecutor, MockPlatformServiceProvider, ResourceController,
+    };
     use crate::error::ErrorData;
     use crate::infra_requirements::azure_utils::is_azure_authorization_propagation_error;
     use crate::worker::{
@@ -5717,6 +5720,7 @@ mod tests {
         AzureClientConfig, AzureServiceOverrides, ClientConfig, ResourceLifecycle, Stack,
         StackSettings, StackSigning, WorkerCode,
     };
+    use alien_verifier::plan::OwnResource;
 
     #[test]
     fn azure_storage_trigger_maps_only_supported_event_types() {
@@ -5973,6 +5977,32 @@ mod tests {
             Some("test-worker.kindsky.eastus2.azurecontainerapps.io")
         );
         assert_ne!(dns_name, Some("test-worker.abc123.dev.vpc.direct"));
+    }
+
+    /// A worker behind a custom domain reaches itself at the address Azure gave the app,
+    /// which a protected install's verifier can check against Azure; the custom domain is
+    /// only what the worker displays.
+    #[test]
+    fn the_own_binding_reaches_the_app_not_the_custom_domain() {
+        let mut worker = AzureWorkerController::mock_ready("test-worker");
+        worker.url = Some("https://api.acme.example".to_string());
+        worker.container_app_url =
+            Some("https://test-worker.kindsky.eastus2.azurecontainerapps.io".to_string());
+        let binding = worker.get_binding_params().unwrap().unwrap();
+        assert_eq!(
+            binding["privateUrl"],
+            "https://test-worker.kindsky.eastus2.azurecontainerapps.io"
+        );
+        assert_eq!(binding["publicUrl"], "https://api.acme.example");
+
+        worker.container_app_url = None;
+        worker.url = None;
+        let binding = worker.get_binding_params().unwrap().unwrap();
+        assert_eq!(
+            binding["privateUrl"], "https://test-worker",
+            "an app without ingress is named by its bare name"
+        );
+        assert_eq!(binding.get("publicUrl"), None);
     }
 
     #[tokio::test]
@@ -8533,6 +8563,14 @@ mod tests {
         }
     }
 
+    /// What Container Apps reports about the protected app.
+    fn protected_app() -> OwnResource {
+        OwnResource {
+            urls: vec![format!("https://{PROTECTED_APP}.azurecontainerapps.io")],
+            location: None,
+        }
+    }
+
     /// The verifier's answer to an `applyWrite` of release `release` for the protected worker.
     fn written(release: u64) -> serde_json::Value {
         serde_json::json!({
@@ -8564,8 +8602,14 @@ mod tests {
                 Some("Bearer mock_access_token_for_testing"),
                 "the verifier is called with the management identity's token"
             );
-            let (answer, forwarded) =
-                run_write(azure_install(), "test", Some(SETUP_ENVIRONMENT), payload).await;
+            let (answer, forwarded) = run_write_over(
+                azure_install(),
+                "test",
+                Some(SETUP_ENVIRONMENT),
+                protected_app(),
+                payload,
+            )
+            .await;
             answer.expect("the verifier's tables accept the controller's request");
             assert_eq!(forwarded.len(), 1);
             let request: serde_json::Value = serde_json::from_slice(payload).unwrap();

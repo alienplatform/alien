@@ -193,6 +193,18 @@ pub struct Reads {
     pub deployer_inputs: BTreeMap<String, String>,
     /// Binding values for bindings whose value isn't a name, by resource id.
     pub bindings: BTreeMap<String, String>,
+    /// What the cloud says about the resource the workload runs as.
+    pub own: OwnResource,
+}
+
+/// What the verifier read about the resource a workload runs as, to check the workload's own
+/// binding against. Empty before the resource exists.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OwnResource {
+    /// The URLs the cloud serves the resource at.
+    pub urls: Vec<String>,
+    /// The location the resource is in, where the cloud has one.
+    pub location: Option<String>,
 }
 
 fn refused(reason: impl Into<String>) -> AlienError<ErrorData> {

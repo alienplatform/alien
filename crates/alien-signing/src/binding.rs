@@ -42,22 +42,218 @@ pub fn binding_env_name(id: &str) -> String {
     format!("ALIEN_{}_BINDING", id.replace('-', "_").to_uppercase())
 }
 
-/// Whether `value`, a workload's own binding, names `own_name`: the function, service, Container
-/// App or machine container the workload runs as. The rest of the binding only describes that
-/// one resource, so nothing else in it is checked.
-pub fn binding_names_itself(value: &str, own_name: &str) -> bool {
-    let Ok(binding) = serde_json::from_str::<serde_json::Value>(value) else {
-        return false;
+/// What an enforcer knows about the resource a workload runs as, to check the workload's own
+/// binding against. The binding tells the workload's code where to reach itself, so every field
+/// that picks a destination has to come from the install, not from the control plane.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OwnBindingFacts {
+    /// Where the enforcer runs.
+    pub context: Option<BindingContext>,
+    /// The function, service, Container App or machine container the binding must name.
+    pub resource_name: String,
+    /// The Azure resource group of the install.
+    pub resource_group: Option<String>,
+    /// The Cloud Run location the service is in: the one the enforcer is configured with.
+    pub location: Option<String>,
+    /// The addresses the cloud reports for the resource: the only ones a field that picks where
+    /// requests go (`privateUrl`, `internalUrl`) may carry.
+    pub urls: Vec<String>,
+    /// The public endpoint URLs the deployment provides to the workload. The control plane
+    /// chooses them and the enforcer can't verify them, so they can fill only fields that
+    /// destine no request (`publicUrl`, a Lambda function's `url`).
+    pub public_urls: Vec<String>,
+}
+
+/// Check `value`, a workload's own binding, against `facts`: the binding of the platform the
+/// workload runs on, naming the workload's own resource and nothing else, with no field the
+/// install doesn't decide, every destination one of `facts.urls` and every display URL one of
+/// those or `facts.public_urls`.
+pub fn check_own_binding(value: &str, facts: &OwnBindingFacts) -> std::result::Result<(), String> {
+    let context = facts
+        .context
+        .as_ref()
+        .ok_or("the enforcer knows no install to check it against")?;
+    let binding: serde_json::Value = serde_json::from_str(value)
+        .map_err(|_| "the own binding isn't a JSON object".to_string())?;
+    let object = binding
+        .as_object()
+        .ok_or("the own binding isn't a JSON object")?;
+    let text = |key: &str| object.get(key).and_then(|value| value.as_str());
+    let expect = |key: &str, expected: &str| match text(key) {
+        Some(found) if found == expected => Ok(()),
+        _ => Err(format!(
+            "its {key} is {}, not {expected}",
+            object
+                .get(key)
+                .map_or("missing".to_string(), |v| v.to_string())
+        )),
     };
-    [
-        "workerName",
-        "serviceName",
-        "containerAppName",
-        "containerName",
-    ]
-    .iter()
-    .filter_map(|field| binding.get(*field))
-    .any(|named| named.as_str() == Some(own_name))
+    let url = |key: &str, required: bool, display: bool| match object.get(key) {
+        None if !required => Ok(()),
+        None => Err(format!("it has no {key}")),
+        Some(found) => {
+            let found = found
+                .as_str()
+                .ok_or_else(|| format!("its {key} isn't a URL"))?;
+            let same = |url: &String| url.trim_end_matches('/') == found.trim_end_matches('/');
+            let allowed =
+                facts.urls.iter().any(same) || (display && facts.public_urls.iter().any(same));
+            if allowed {
+                Ok(())
+            } else if display {
+                Err(format!(
+                    "its {key} is {found}, which is no URL the cloud reports for {} or the deployment provides as a public endpoint",
+                    facts.resource_name
+                ))
+            } else {
+                Err(format!(
+                    "its {key} is {found}, which is no URL the cloud reports for {}",
+                    facts.resource_name
+                ))
+            }
+        }
+    };
+    let only = |keys: &[&str]| {
+        for key in object.keys() {
+            if !keys.contains(&key.as_str()) {
+                return Err(format!(
+                    "it has a field {key} the platform's binding doesn't"
+                ));
+            }
+        }
+        Ok(())
+    };
+    let name = facts.resource_name.as_str();
+    match context.platform.as_str() {
+        "aws" => {
+            only(&["service", "workerName", "region", "url"])?;
+            expect("service", "lambda")?;
+            expect("workerName", name)?;
+            expect(
+                "region",
+                context
+                    .region
+                    .as_deref()
+                    .ok_or("the enforcer knows no region")?,
+            )?;
+            // Lambda is invoked by name through the cloud API; the URL is only what the code
+            // reports as its own. API Gateway's address for a function can't be read back by
+            // the enforcer, so besides the public endpoints, an address AWS itself gives
+            // functions in this region passes.
+            if url("url", false, true).is_err() {
+                let region = context.region.as_deref().unwrap_or_default();
+                let found = text("url").unwrap_or_default();
+                let aws = [
+                    format!(".lambda-url.{region}.on.aws"),
+                    format!(".execute-api.{region}.amazonaws.com"),
+                ];
+                let plain = plain_https(found).filter(|(_, port)| port.is_none());
+                if !plain.is_some_and(|(host, _)| aws.iter().any(|suffix| host.ends_with(suffix))) {
+                    return Err(format!(
+                        "its url is {found}, no address AWS gives a function in {region} and no public endpoint of the deployment"
+                    ));
+                }
+            }
+        }
+        "gcp" => {
+            only(&[
+                "service",
+                "projectId",
+                "serviceName",
+                "location",
+                "privateUrl",
+                "publicUrl",
+            ])?;
+            expect("service", "cloudrun")?;
+            expect("projectId", &context.account)?;
+            expect("serviceName", name)?;
+            expect(
+                "location",
+                facts
+                    .location
+                    .as_deref()
+                    .ok_or("the enforcer found no such service to read its location from")?,
+            )?;
+            url("privateUrl", true, false)?;
+            url("publicUrl", false, true)?;
+        }
+        "azure" => {
+            only(&[
+                "service",
+                "subscriptionId",
+                "resourceGroupName",
+                "containerAppName",
+                "privateUrl",
+                "publicUrl",
+            ])?;
+            expect("service", "containerapp")?;
+            expect("subscriptionId", &context.account)?;
+            expect(
+                "resourceGroupName",
+                facts
+                    .resource_group
+                    .as_deref()
+                    .ok_or("the enforcer knows no resource group")?,
+            )?;
+            expect("containerAppName", name)?;
+            url("privateUrl", true, false)?;
+            url("publicUrl", false, true)?;
+        }
+        "machines" => {
+            only(&[
+                "service",
+                "containerName",
+                "internalUrl",
+                "internalUrls",
+                "publicUrl",
+            ])?;
+            if object.contains_key("service") {
+                expect("service", "horizon")?;
+            }
+            expect("containerName", name)?;
+            // A machine container is reached at `<name>.svc` inside its cluster.
+            let internal = |found: &serde_json::Value, key: &str| {
+                let found = found.as_str().unwrap_or_default();
+                let parsed = url::Url::parse(found).ok().filter(|parsed| {
+                    parsed.scheme() == "http"
+                        && parsed.host_str() == Some(&format!("{name}.svc"))
+                        && parsed.port().is_some()
+                        && parsed.username().is_empty()
+                        && parsed.password().is_none()
+                        && matches!(parsed.path(), "" | "/")
+                        && parsed.query().is_none()
+                        && parsed.fragment().is_none()
+                });
+                if parsed.is_some() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "its {key} is {found}, not an address of {name}.svc"
+                    ))
+                }
+            };
+            if let Some(found) = object.get("internalUrl") {
+                internal(found, "internalUrl")?;
+            }
+            for found in object
+                .get("internalUrls")
+                .and_then(|urls| urls.as_object())
+                .into_iter()
+                .flat_map(|urls| urls.values())
+            {
+                internal(found, "internalUrls")?;
+            }
+            if object
+                .get("internalUrls")
+                .is_some_and(|urls| !urls.is_object())
+            {
+                return Err("its internalUrls isn't a map".to_string());
+            }
+            url("publicUrl", false, true)?;
+        }
+        other => return Err(format!("{other} has no own binding the enforcer can check")),
+    }
+    Ok(())
 }
 
 /// Binding values derived from the install, and the bindings that need
@@ -174,4 +370,20 @@ fn refused(
             context.platform
         ),
     })
+}
+
+/// The host and port of `found`, a plain `https` URL: no user, no query, no fragment.
+fn plain_https(found: &str) -> Option<(String, Option<u16>)> {
+    let parsed = url::Url::parse(found).ok()?;
+    (parsed.scheme() == "https"
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+        && parsed.query().is_none()
+        && parsed.fragment().is_none())
+    .then(|| {
+        parsed
+            .host_str()
+            .map(|host| (host.to_string(), parsed.port()))
+    })
+    .flatten()
 }

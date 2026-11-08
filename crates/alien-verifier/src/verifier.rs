@@ -14,7 +14,7 @@ use crate::cloud_write::{own_workload, ApplyWrite, CloudWrite, Facts};
 use crate::error::{ErrorData, Result};
 use crate::function::StillNewest;
 use crate::machines::{self, DeleteMachines, RemoveMachines, RollMachines, Scale};
-use crate::plan::{DeleteWorkload, Place, Reads, Request, SetupNetwork};
+use crate::plan::{DeleteWorkload, OwnResource, Place, Reads, Request, SetupNetwork};
 use crate::trust::{accept, find_install, store_ledger, Floor, Install, InstallStore};
 
 /// The cloud writes one verifier makes.
@@ -27,6 +27,11 @@ pub trait Backend: Send + Sync {
         place: &Place,
         workload: &Workload,
     ) -> Result<BTreeMap<String, String>>;
+    /// What the cloud says about the resource `own_name`, the one a workload runs as, for
+    /// checking the workload's own binding. Nothing while the resource doesn't exist.
+    async fn own_resource(&self, _place: &Place, _own_name: &str) -> Result<OwnResource> {
+        Ok(OwnResource::default())
+    }
     /// Check every field of `write` against this cloud's table.
     fn check_write(&self, _facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
         Err(refused(format!(
@@ -196,6 +201,7 @@ impl Verifier {
         let (workload, own_name) = own_workload(&place, &accepted.release.body, &request.workload)?;
         let mut reads = Reads {
             bindings: self.backend.binding_reads(&place, workload).await?,
+            own: self.backend.own_resource(&place, &own_name).await?,
             ..Reads::default()
         };
         for input in workload.deployer_env.values() {

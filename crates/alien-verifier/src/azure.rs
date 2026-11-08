@@ -17,7 +17,7 @@ use crate::cloud_write::{CloudWrite, Facts};
 use crate::container_apps::AppStore;
 use crate::error::{ErrorData, Result};
 use crate::function::StillNewest;
-use crate::plan::Place;
+use crate::plan::{OwnResource, Place};
 use crate::trust::InstallStore;
 use crate::verifier::Backend;
 
@@ -398,6 +398,36 @@ impl Backend for AzureBackend {
         _workload: &Workload,
     ) -> Result<BTreeMap<String, String>> {
         Ok(BTreeMap::new())
+    }
+
+    async fn own_resource(&self, _place: &Place, own_name: &str) -> Result<OwnResource> {
+        let app = self
+            .0
+            .call(
+                reqwest::Method::GET,
+                &self.0.app_url(own_name),
+                ARM,
+                None,
+                &format!("containerApps get {own_name}"),
+            )
+            .await?;
+        // An app without ingress has no address; its controller names it by its bare name.
+        let urls = app
+            .iter()
+            .map(
+                |app| match app["properties"]["configuration"]["ingress"]["fqdn"].as_str() {
+                    Some(fqdn) if fqdn.starts_with("https://") || fqdn.starts_with("http://") => {
+                        fqdn.to_string()
+                    }
+                    Some(fqdn) => format!("https://{fqdn}"),
+                    None => format!("https://{own_name}"),
+                },
+            )
+            .collect();
+        Ok(OwnResource {
+            urls,
+            location: None,
+        })
     }
 
     fn check_write(&self, facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {

@@ -106,6 +106,7 @@ fuzz_target!(|data: &[u8]| {
                     .keys()
                     .map(|id| (alien_signing::binding_env_name(id), "{}".to_string()))
                     .collect(),
+                own_binding: alien_signing::OwnBindingFacts::default(),
             };
             let built = build_workload(
                 &verified.body,

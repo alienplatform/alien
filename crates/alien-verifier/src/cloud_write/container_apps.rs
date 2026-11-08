@@ -412,9 +412,12 @@ mod tests {
     }
 
     async fn checked(write: CloudWrite) -> std::result::Result<(), String> {
+        checked_reading(write, Reads::default()).await
+    }
+
+    async fn checked_reading(write: CloudWrite, reads: Reads) -> std::result::Result<(), String> {
         let accepted = accepted(azure_release()).await;
         let place = place();
-        let reads = Reads::default();
         let workload = functions(&accepted.release.body).next().unwrap();
         let facts = Facts {
             place: &place,
@@ -508,6 +511,107 @@ mod tests {
                 "{name}: {error}"
             );
         }
+    }
+
+    const APP_URL: &str =
+        "https://acme-prod-api.internal.happyfield-1.eastus.azurecontainerapps.io";
+
+    fn own_binding() -> Value {
+        json!({
+            "service": "containerapp",
+            "subscriptionId": "0000",
+            "resourceGroupName": "acme-rg",
+            "containerAppName": own(),
+            "privateUrl": APP_URL,
+            "publicUrl": APP_URL,
+        })
+    }
+
+    /// The app's own binding tells its code where to reach itself, so each field is the
+    /// install's or what Azure reports for the app, and a binding that names the app but
+    /// points `privateUrl` anywhere else is refused.
+    #[tokio::test]
+    async fn the_own_binding_is_the_installs_and_the_apps() {
+        let with = |binding: &Value| {
+            let mut app = app();
+            let env = app["properties"]["template"]["containers"][0]["env"]
+                .as_array_mut()
+                .unwrap();
+            env.push(json!({"name": "ALIEN_API_BINDING", "value": binding.to_string()}));
+            // The control plane's own word for the app's public endpoints.
+            env.push(json!({
+                "name": "ALIEN_PUBLIC_ENDPOINTS_JSON",
+                "value": json!({"api": {"url": "https://api.acme.example"}}).to_string(),
+            }));
+            CloudWrite::UpdateContainerApp { name: own(), app }
+        };
+        let reads = || Reads {
+            own: crate::plan::OwnResource {
+                urls: vec![APP_URL.to_string()],
+                location: None,
+            },
+            ..Reads::default()
+        };
+        checked_reading(with(&own_binding()), reads())
+            .await
+            .expect("the binding the controller writes once the app has its address");
+        let mut custom_domain = own_binding();
+        custom_domain["publicUrl"] = json!("https://api.acme.example");
+        checked_reading(with(&custom_domain), reads())
+            .await
+            .expect("a public endpoint the deployment provides is what the app displays");
+        let cases: Vec<(Box<dyn Fn(&mut Value)>, &str)> = vec![
+            (
+                // The same word cannot also say where requests go.
+                Box::new(|b| b["privateUrl"] = json!("https://api.acme.example")),
+                "its privateUrl is https://api.acme.example, which is no URL the cloud reports",
+            ),
+            (
+                Box::new(|b| b["privateUrl"] = json!("https://collector.attacker.example")),
+                "its privateUrl is https://collector.attacker.example",
+            ),
+            (
+                Box::new(|b| b["publicUrl"] = json!("https://collector.attacker.example")),
+                "its publicUrl is https://collector.attacker.example",
+            ),
+            (
+                Box::new(|b| {
+                    b.as_object_mut().unwrap().remove("privateUrl");
+                }),
+                "it has no privateUrl",
+            ),
+            (
+                Box::new(|b| b["resourceGroupName"] = json!("other-rg")),
+                "its resourceGroupName is \"other-rg\", not acme-rg",
+            ),
+            (
+                Box::new(|b| b["subscriptionId"] = json!("9999")),
+                "its subscriptionId is \"9999\", not 0000",
+            ),
+            (
+                Box::new(|b| b["containerAppName"] = json!("acme-prod-other")),
+                "its containerAppName is \"acme-prod-other\"",
+            ),
+            (
+                Box::new(|b| b["service"] = json!("lambda")),
+                "its service is \"lambda\", not containerapp",
+            ),
+            (
+                Box::new(|b| b["callback"] = json!("https://collector.attacker.example")),
+                "it has a field callback the platform's binding doesn't",
+            ),
+        ];
+        for (change, says) in cases {
+            let mut binding = own_binding();
+            change(&mut binding);
+            let error = checked_reading(with(&binding), reads())
+                .await
+                .expect_err(says);
+            assert!(error.contains(says), "{says}: {error}");
+        }
+        // Before the app has an address, the cloud reports none, and no URL can pass.
+        let error = checked(with(&own_binding())).await.unwrap_err();
+        assert!(error.contains("its privateUrl is"), "{error}");
     }
 
     /// One refusal per row of the Container Apps table, naming the row.
