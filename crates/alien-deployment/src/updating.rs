@@ -248,21 +248,24 @@ pub async fn handle_update_pending(
         &stack_state,
         current.platform,
     );
-    let mut strip_answers = persisted_gate_answers.clone();
     for (resource_id, input_id) in &awaiting_setup {
         warn!(
             resource_id = %resource_id,
             input_id = %input_id,
             "Resource waits for setup to be re-run; updating without it"
         );
-        strip_answers.insert(input_id.clone(), false);
     }
     let target_stack = crate::pending::strip_recorded_gate_declines(
         target_stack,
-        &strip_answers,
+        &persisted_gate_answers,
         &frozen_gating,
         config.stack_settings.compute.as_mut(),
         current.platform,
+    );
+    let target_stack = crate::pending::strip_resources_awaiting_setup(
+        target_stack,
+        &awaiting_setup,
+        config.stack_settings.compute.as_mut(),
     );
 
     let runner = alien_preflights::runner::PreflightRunner::new();

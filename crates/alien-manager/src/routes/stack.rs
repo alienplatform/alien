@@ -1451,6 +1451,16 @@ fn reimport_runtime_metadata(
                 .or_insert(*imported_answer);
         }
     }
+    // Setup has now answered some gates; only resources behind a gate that is
+    // still unanswered keep waiting.
+    let still_awaiting: std::collections::HashSet<&String> =
+        alien_core::frozen_gated(prepared_stack)
+            .filter(|(_, input_id)| !metadata.persisted_gate_answers.contains_key(*input_id))
+            .map(|(resource_id, _)| resource_id)
+            .collect();
+    metadata
+        .resources_awaiting_setup
+        .retain(|resource_id| still_awaiting.contains(resource_id));
     let baseline_stack = metadata.prepared_stack.as_ref().ok_or_else(|| {
         AlienError::new(ErrorData::ImportedDeploymentConflict {
             reason: format!(
@@ -2425,6 +2435,41 @@ mod setup_update_authorization_tests {
             );
             assert!(metadata.registry_access_granted);
         }
+    }
+
+    #[test]
+    fn a_setup_rerun_stops_reporting_resources_whose_gate_it_answered() {
+        let gated = |stack: &mut Stack, id: &str, input: &str| {
+            stack.resources.get_mut(id).unwrap().enabled_when = Some(input.to_string());
+        };
+        let mut target = Stack::new("stack".to_string())
+            .add(
+                Storage::new("archive".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("reports".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        gated(&mut target, "archive", "archiveEnabled");
+        gated(&mut target, "reports", "reportsEnabled");
+        let mut existing = record(target.clone());
+        existing
+            .runtime_metadata
+            .as_mut()
+            .unwrap()
+            .resources_awaiting_setup = vec!["archive".to_string(), "reports".to_string()];
+        let answered = alien_core::GateAnswers::from([("archiveEnabled".to_string(), true)]);
+
+        let metadata =
+            reimport_runtime_metadata(&existing, &target, "release", &request(), answered)
+                .expect("setup import should succeed");
+
+        assert_eq!(
+            metadata.resources_awaiting_setup,
+            vec!["reports".to_string()]
+        );
     }
 
     #[test]

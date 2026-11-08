@@ -3648,6 +3648,155 @@ async fn an_update_adding_a_gated_frozen_resource_proceeds_and_reports_it_awaits
     assert!(prepared.resources.contains_key("test-function"));
 }
 
+/// A running deployment whose next release adds a frozen `archive` behind the
+/// gate that already controls its live `cache`.
+async fn update_adding_a_frozen_archive_behind_the_cache_gate() -> (DeploymentState, Stack) {
+    let v1 = create_live_gated_stack("shared-gate-stack", "cache", "test-function");
+    let mut state = run_to_completion(
+        create_initial_state(v1.clone()),
+        create_test_config("hash_v1", false),
+    )
+    .await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert!(state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("cache"));
+
+    let mut v2 = v1;
+    v2.resources.insert(
+        "archive".to_string(),
+        ResourceEntry {
+            config: alien_core::Resource::new(Storage::new("archive".to_string()).build()),
+            lifecycle: ResourceLifecycle::Frozen,
+            dependencies: Vec::new(),
+            display_name: None,
+            description: None,
+            remote_access: false,
+            enabled_when: Some("storeEnabled".to_string()),
+        },
+    );
+    start_update(&mut state, release_of("rel_v2", v2.clone()));
+    (state, v2)
+}
+
+/// The resource that waits for setup is the only one left out. A live resource
+/// behind the same gate keeps running with its data: nobody answered the gate
+/// as "no".
+#[tokio::test]
+async fn an_update_leaving_out_a_frozen_resource_keeps_the_live_resources_behind_its_gate() {
+    let _vault = test_vault_env().await;
+    let (state, _) = update_adding_a_frozen_archive_behind_the_cache_gate().await;
+    let config = create_test_config("hash_v1", false);
+
+    let state = run_to_completion(state, config).await;
+
+    assert_eq!(state.status, DeploymentStatus::Running);
+    let resources = &state.stack_state.as_ref().unwrap().resources;
+    assert!(
+        resources
+            .get("cache")
+            .is_some_and(|cache| cache.status == alien_core::ResourceStatus::Running),
+        "the live cache must survive an update that leaves out the archive"
+    );
+    assert!(!resources.contains_key("archive"));
+    let metadata = state.runtime_metadata.as_ref().unwrap();
+    assert_eq!(
+        metadata.resources_awaiting_setup,
+        vec!["archive".to_string()]
+    );
+    assert!(!metadata.persisted_gate_answers.contains_key("storeEnabled"));
+}
+
+/// A release that also grants the new resource's permissions does not carry
+/// the grant into the deployment while the resource is left out.
+#[tokio::test]
+async fn an_update_leaving_out_a_frozen_resource_leaves_out_its_grants() {
+    let _vault = test_vault_env().await;
+    let (mut state, mut v2) = update_adding_a_frozen_archive_behind_the_cache_gate().await;
+    v2.permissions.profiles.insert(
+        "default".to_string(),
+        alien_core::PermissionProfile::new().resource("archive", ["storage/data-read"]),
+    );
+    start_update(&mut state, release_of("rel_v2", v2));
+
+    let next = alien_deployment::step(
+        state,
+        create_test_config("hash_v1", false),
+        ClientConfig::Test,
+        None,
+    )
+    .await
+    .expect("the grant on a resource that waits for setup doesn't block the update");
+
+    let prepared = next
+        .state
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .pending_prepared_stack
+        .as_ref()
+        .unwrap();
+    assert!(!prepared.resources.contains_key("archive"));
+    assert!(prepared.resources.contains_key("cache"));
+    assert!(
+        !prepared.permissions.profiles["default"]
+            .0
+            .contains_key("archive"),
+        "no grant on a resource that doesn't exist yet"
+    );
+}
+
+/// The full cycle: the deployment keeps updating without the archive, and
+/// re-running setup creates it, answers the gate and clears the waiting list.
+#[tokio::test]
+async fn setup_rerun_creates_the_resource_an_earlier_update_left_out() {
+    let _vault = test_vault_env().await;
+    let config = create_test_config("hash_v1", false);
+    let (state, v2) = update_adding_a_frozen_archive_behind_the_cache_gate().await;
+    let state = run_to_completion(state, config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+
+    let mut state = state;
+    start_update(&mut state, release_of("rel_v3", v2));
+    let state = run_to_completion(state, config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert_eq!(
+        state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .resources_awaiting_setup,
+        vec!["archive".to_string()],
+        "a second update still leaves it out"
+    );
+
+    let mut waiting = state;
+    waiting.target_release = waiting.current_release.clone();
+    let handed_back = rerun_setup(waiting, &config).await;
+    let metadata = handed_back.runtime_metadata.as_ref().unwrap();
+    assert!(
+        metadata.resources_awaiting_setup.is_empty(),
+        "setup answered the gate, so nothing waits for it"
+    );
+    assert_eq!(
+        metadata.persisted_gate_answers.get("storeEnabled"),
+        Some(&true)
+    );
+
+    let state = run_to_completion(handed_back, config).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    let resources = &state.stack_state.as_ref().unwrap().resources;
+    assert!(resources
+        .get("archive")
+        .is_some_and(|archive| archive.status == alien_core::ResourceStatus::Running));
+    assert!(resources
+        .get("cache")
+        .is_some_and(|cache| cache.status == alien_core::ResourceStatus::Running));
+}
+
 /// A frozen resource without a gate is required. Adding one still requires
 /// setup to run again, and the update refuses until it does.
 #[tokio::test]

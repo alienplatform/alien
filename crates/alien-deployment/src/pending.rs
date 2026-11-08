@@ -79,6 +79,8 @@ pub async fn prepare_direct_setup_update(
     metadata.initial_setup_authority = alien_core::InitialSetupAuthority::DirectSetup;
     metadata.prepared_stack = Some(mutated_stack);
     metadata.persisted_gate_answers = persisted_gate_answers;
+    // Setup answered every gate of the release it prepared, so nothing waits for it now.
+    metadata.resources_awaiting_setup.clear();
     metadata.setup_update_authorization = None;
     Ok(metadata)
 }
@@ -299,6 +301,34 @@ pub(crate) fn strip_recorded_gate_declines(
         .filter(|(id, _)| !alien_core::gate_is_off_platform(&stack.inputs, id, platform))
         .map(|(id, answer)| (id.clone(), *answer))
         .collect();
+    remove_stripped_container_allocations(stack, compute, |stack| {
+        let stack = strip_declined_frozen_resources(stack, &answers);
+        strip_frozen_dominated_live_resources(stack, &answers, still_frozen_gating)
+    })
+}
+
+/// Leave out the resources a release adds behind a gate setup never answered
+/// (see [`frozen_resources_awaiting_setup`]), with their links, dependency
+/// edges and grants. Only the named resources leave: live resources behind the
+/// same input are untouched, because no answer was recorded that could dominate them.
+pub(crate) fn strip_resources_awaiting_setup(
+    stack: Stack,
+    awaiting_setup: &[(String, String)],
+    compute: Option<&mut alien_core::ComputeSettings>,
+) -> Stack {
+    let resource_ids: Vec<String> = awaiting_setup.iter().map(|(id, _)| id.clone()).collect();
+    remove_stripped_container_allocations(stack, compute, |mut stack| {
+        alien_core::remove_declined_resources(&mut stack, &resource_ids);
+        stack
+    })
+}
+
+/// Run `strip`, then drop the deployment-time allocation of every container it removed.
+fn remove_stripped_container_allocations(
+    stack: Stack,
+    compute: Option<&mut alien_core::ComputeSettings>,
+    strip: impl FnOnce(Stack) -> Stack,
+) -> Stack {
     let container_ids: Vec<_> = stack
         .resources
         .iter()
@@ -310,8 +340,7 @@ pub(crate) fn strip_recorded_gate_declines(
         })
         .map(|(id, _)| id.clone())
         .collect();
-    let stack = strip_declined_frozen_resources(stack, &answers);
-    let stack = strip_frozen_dominated_live_resources(stack, &answers, still_frozen_gating);
+    let stack = strip(stack);
     if let Some(compute) = compute {
         for id in container_ids {
             if !stack.resources.contains_key(&id) {
