@@ -1491,13 +1491,23 @@ fn load_or_create_secrets_digest_key(
 /// without hard links (SMB, Azure Files) get a rename after an existence
 /// check, which leaves a small window where two simultaneous first starts
 /// could each keep their own key; those mounts hold one manager's state.
+///
+/// Linux reports a filesystem without hard links as `EPERM`, which Rust maps
+/// to `PermissionDenied`, so both kinds fall back. The caller has just
+/// created `temp` in the same directory, so the directory is writable and a
+/// real permission problem fails again in the rename with its own error.
 fn publish_key_file(
     temp: &std::path::Path,
     path: &std::path::Path,
     link: impl Fn(&std::path::Path, &std::path::Path) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     match link(temp, path) {
-        Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::Unsupported | std::io::ErrorKind::PermissionDenied
+            ) =>
+        {
             if path.exists() {
                 return Err(std::io::ErrorKind::AlreadyExists.into());
             }
@@ -1565,16 +1575,41 @@ mod secrets_digest_key_tests {
     }
 
     #[test]
+    fn a_filesystem_that_answers_eperm_to_link_still_publishes_the_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let temp = dir.path().join("key.tmp");
+        let path = dir.path().join("key");
+        std::fs::write(&temp, [7u8; 32]).unwrap();
+        // EPERM is 1 on Linux and macOS; Rust reports it as PermissionDenied.
+        let eperm =
+            |_: &std::path::Path, _: &std::path::Path| Err(std::io::Error::from_raw_os_error(1));
+        publish_key_file(&temp, &path, eperm).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), [7u8; 32]);
+    }
+
+    #[test]
+    fn a_real_permission_problem_still_fails_in_the_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let temp = dir.path().join("missing.tmp");
+        let path = dir.path().join("key");
+        let denied = |_: &std::path::Path, _: &std::path::Path| {
+            Err(std::io::ErrorKind::PermissionDenied.into())
+        };
+        let error = publish_key_file(&temp, &path, denied).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert!(!path.exists());
+    }
+
+    #[test]
     fn other_link_errors_are_not_retried_with_a_rename() {
         let dir = tempfile::tempdir().unwrap();
         let temp = dir.path().join("key.tmp");
         let path = dir.path().join("key");
         std::fs::write(&temp, [7u8; 32]).unwrap();
-        let denied = |_: &std::path::Path, _: &std::path::Path| {
-            Err(std::io::ErrorKind::PermissionDenied.into())
-        };
-        let error = publish_key_file(&temp, &path, denied).unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        let broken =
+            |_: &std::path::Path, _: &std::path::Path| Err(std::io::Error::other("disk on fire"));
+        let error = publish_key_file(&temp, &path, broken).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
         assert!(!path.exists());
     }
 }
