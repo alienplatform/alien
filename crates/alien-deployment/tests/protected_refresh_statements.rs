@@ -6,6 +6,7 @@
 //! against the signed release), so the release statements must reach them on every health tick
 //! and every deletion step, not only while provisioning or updating.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use alien_core::{
@@ -13,6 +14,7 @@ use alien_core::{
     EnvironmentVariablesSnapshot, Platform, ReleaseInfo, ResourceEntry, ResourceLifecycle,
     ResourceStatus, SignedStatement, Stack, StackSettings, StackSigning,
 };
+use alien_error::AlienError;
 use alien_infra::{
     register_controller_deserializer_extension, register_registry_extension,
     ResourceControllerContext,
@@ -35,6 +37,11 @@ use alien_infra::Result;
 static SEEN: Mutex<Vec<Option<SignedStatement>>> = Mutex::new(Vec::new());
 /// The release statement each Delete handler was handed, in order.
 static SEEN_ON_DELETE: Mutex<Vec<Option<SignedStatement>>> = Mutex::new(Vec::new());
+
+/// Whether the probe's verifier refuses the release on the next health check.
+static VERIFIER_REFUSES: AtomicBool = AtomicBool::new(false);
+
+const REFUSAL: &str = "SIGNING_RELEASE_OLDER: the release is older than one this install accepted";
 
 /// Stands in for a machines controller: its Ready handler needs the signed release on a
 /// protected install, as the cloud machines controllers do to admit a replacement machine.
@@ -65,6 +72,15 @@ impl ProtectedMachinesProbe {
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         self.ready_ticks += 1;
+        if VERIFIER_REFUSES.load(Ordering::SeqCst) {
+            return Err(AlienError::new(
+                alien_infra::ErrorData::ReleaseRefusedByVerifier {
+                    resource_id: "machines".to_string(),
+                    verifier: "acme-verifier".to_string(),
+                    reason: REFUSAL.to_string(),
+                },
+            ));
+        }
         let statements = alien_infra::verifier::protected_statements(ctx, "machines")?;
         SEEN.lock()
             .unwrap()
@@ -319,5 +335,47 @@ async fn a_protected_install_s_deletion_hands_controllers_the_running_release() 
         ),
         "{:?}",
         state.status
+    );
+}
+
+#[tokio::test]
+async fn a_verifier_s_refusal_reaches_the_deployment_error_with_its_reason() {
+    let _serial = SERIAL.lock().await;
+    let release = SignedStatement::new(br#"{"kind":"release/v2"}"#);
+    let signer_list = SignedStatement::new(br#"{"kind":"signers/v1"}"#);
+    let mut state = running_install(&release, &signer_list).await;
+
+    // Act: the verifier refuses on a health check.
+    VERIFIER_REFUSES.store(true, Ordering::SeqCst);
+    state = step(state, &config(protected_settings())).await;
+    VERIFIER_REFUSES.store(false, Ordering::SeqCst);
+
+    // Assert: what the manager stores as the deployment's error, and so what a vendor reads
+    // from the deployment, names the resource and carries the verifier's reason.
+    assert_eq!(
+        state.status,
+        DeploymentStatus::RefreshFailed,
+        "{:?}",
+        state.error
+    );
+    let headline = alien_deployment::deployment_headline_error_from_state(&state)
+        .expect("a failed deployment has a headline error");
+    let stored: serde_json::Value =
+        serde_json::from_str(&serde_json::to_string(&headline).unwrap()).unwrap();
+    assert_eq!(stored["code"], "DEPLOYMENT_FAILED");
+    let failures = stored["context"]["resource_errors"]
+        .as_array()
+        .expect("the resource errors travel with the headline");
+    assert_eq!(failures.len(), 1, "{stored}");
+    assert_eq!(failures[0]["resourceId"], "machines", "{stored}");
+    assert_eq!(failures[0]["error"]["code"], "RELEASE_REFUSED_BY_VERIFIER");
+    assert_eq!(failures[0]["error"]["retryable"], false);
+    assert_eq!(failures[0]["error"]["internal"], false);
+    assert!(
+        failures[0]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(REFUSAL),
+        "{stored}"
     );
 }
