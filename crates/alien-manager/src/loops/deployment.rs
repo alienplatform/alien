@@ -2000,17 +2000,15 @@ fn commands_receiver_env_vars(
 /// Whether the machines that run this Container or Daemon hold a runtime
 /// identity, and so write its command credential files. A cluster gets one
 /// when it is migrated to machine sessions; until then its workloads keep the
-/// deployment token.
+/// deployment token. Azure machines cannot open a session yet (horizond has
+/// no Azure proof), so Azure Containers keep the token as well.
 fn machine_writes_command_credentials(
     platform: Platform,
     compute_backend: Option<&alien_core::ComputeBackend>,
     stack: &Stack,
     resource_id: &str,
 ) -> bool {
-    if !matches!(
-        platform,
-        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Machines
-    ) {
+    if !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Machines) {
         return false;
     }
     let Some(alien_core::ComputeBackend::Horizon(backend)) = compute_backend else {
@@ -6183,6 +6181,20 @@ mod tests {
             "a cluster without machine identity keeps the token until it migrates"
         );
         assert!(!legacy.contains_key("ALIEN_COMMANDS_CAPABILITY_FILE"));
+
+        // horizond has no Azure proof, so an Azure machine never writes the
+        // files. Its Container keeps the token or commands stop for it.
+        deployment.platform = Platform::Azure;
+        let azure = sources
+            .deployment_config(&deployment, Some(&stack), None)
+            .await
+            .expect("azure runner config");
+        let azure_api = environment_of(&azure, "api");
+        assert_eq!(
+            azure_api.get(ENV_ALIEN_COMMANDS_TOKEN).map(String::as_str),
+            Some("ax_dep_test")
+        );
+        assert!(!azure_api.contains_key("ALIEN_COMMANDS_CAPABILITY_FILE"));
 
         // `alien dev` keeps the token: it never runs in a customer environment.
         deployment.platform = Platform::Local;
