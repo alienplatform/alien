@@ -1432,7 +1432,7 @@ roleArn = "arn:aws:iam::123456789012:role/management"
 fn load_or_create_secrets_digest_key(
     path: &std::path::Path,
 ) -> std::result::Result<[u8; 32], alien_error::AlienError> {
-    use alien_error::IntoAlienError;
+    use alien_error::{Context, IntoAlienError};
     use std::io::Write;
 
     let read = || -> std::result::Result<Option<[u8; 32]>, alien_error::AlienError> {
@@ -1463,11 +1463,10 @@ fn load_or_create_secrets_digest_key(
     let written = options
         .open(&temp)
         .and_then(|mut file| file.write_all(&key).and_then(|()| file.sync_all()));
-    // A hard link fails when the file exists, so a key another process wrote
-    // first is never replaced.
-    let linked = written.and_then(|()| std::fs::hard_link(&temp, path));
+    let published = written
+        .and_then(|()| publish_key_file(&temp, path, |from, to| std::fs::hard_link(from, to)));
     let _ = std::fs::remove_file(&temp);
-    match linked {
+    match published {
         Ok(()) => Ok(key),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             read()?.ok_or_else(|| {
@@ -1476,13 +1475,41 @@ fn load_or_create_secrets_digest_key(
                 })
             })
         }
-        Err(error) => Err(error).into_alien_error(),
+        Err(error) => Err(error)
+            .into_alien_error()
+            .context(alien_error::GenericError {
+                message: format!(
+                    "Could not create the secrets digest key '{}'",
+                    path.display()
+                ),
+            }),
+    }
+}
+
+/// Moves the finished temp file to `path` without replacing a key another
+/// process wrote first. A hard link fails when the target exists. Filesystems
+/// without hard links (SMB, Azure Files) get a rename after an existence
+/// check, which leaves a small window where two simultaneous first starts
+/// could each keep their own key; those mounts hold one manager's state.
+fn publish_key_file(
+    temp: &std::path::Path,
+    path: &std::path::Path,
+    link: impl Fn(&std::path::Path, &std::path::Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    match link(temp, path) {
+        Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {
+            if path.exists() {
+                return Err(std::io::ErrorKind::AlreadyExists.into());
+            }
+            std::fs::rename(temp, path)
+        }
+        other => other,
     }
 }
 
 #[cfg(test)]
 mod secrets_digest_key_tests {
-    use super::load_or_create_secrets_digest_key;
+    use super::{load_or_create_secrets_digest_key, publish_key_file};
 
     #[test]
     fn processes_starting_together_agree_on_one_key() {
@@ -1508,5 +1535,46 @@ mod secrets_digest_key_tests {
         let path = dir.path().join("secrets-digest.key");
         std::fs::write(&path, b"short").unwrap();
         assert!(load_or_create_secrets_digest_key(&path).is_err());
+    }
+
+    fn unsupported(_: &std::path::Path, _: &std::path::Path) -> std::io::Result<()> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+
+    #[test]
+    fn a_filesystem_without_hard_links_still_publishes_the_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let temp = dir.path().join("key.tmp");
+        let path = dir.path().join("key");
+        std::fs::write(&temp, [7u8; 32]).unwrap();
+        publish_key_file(&temp, &path, unsupported).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), [7u8; 32]);
+        assert!(!temp.exists());
+    }
+
+    #[test]
+    fn a_filesystem_without_hard_links_keeps_a_key_that_is_already_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let temp = dir.path().join("key.tmp");
+        let path = dir.path().join("key");
+        std::fs::write(&temp, [7u8; 32]).unwrap();
+        std::fs::write(&path, [9u8; 32]).unwrap();
+        let error = publish_key_file(&temp, &path, unsupported).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&path).unwrap(), [9u8; 32]);
+    }
+
+    #[test]
+    fn other_link_errors_are_not_retried_with_a_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let temp = dir.path().join("key.tmp");
+        let path = dir.path().join("key");
+        std::fs::write(&temp, [7u8; 32]).unwrap();
+        let denied = |_: &std::path::Path, _: &std::path::Path| {
+            Err(std::io::ErrorKind::PermissionDenied.into())
+        };
+        let error = publish_key_file(&temp, &path, denied).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(!path.exists());
     }
 }
