@@ -44,6 +44,10 @@ fn hash_token(raw: &str) -> (String, String) {
 }
 
 async fn start() -> Server {
+    start_with(false).await
+}
+
+async fn start_with(ephemeral_state_dir: bool) -> Server {
     let dir = tempfile::tempdir().unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -124,6 +128,7 @@ async fn start() -> Server {
     };
     let manager = AlienManagerBuilder::new(config)
         .token_store(token_store)
+        .ephemeral_state_dir(ephemeral_state_dir)
         .with_standalone_defaults(&Default::default())
         .await
         .unwrap()
@@ -294,6 +299,35 @@ async fn values_are_kept_in_the_encrypted_database_file() {
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].value, CANARY);
+}
+
+#[tokio::test]
+async fn an_ephemeral_state_dir_without_a_values_key_refuses_writes_and_keeps_reads() {
+    let server = start_with(true).await;
+
+    let (status, body) = server
+        .put(json!([{ "slot": "env:A", "value": CANARY, "kind": "secret" }]))
+        .await;
+    assert_eq!(status, 501, "{body}");
+    assert_eq!(body["code"], "VALUES_UNAVAILABLE");
+    assert!(body["message"]
+        .as_str()
+        .unwrap()
+        .contains("not on a persistent volume"));
+    assert!(!body.to_string().contains(CANARY));
+
+    let (status, listed) = server.get().await;
+    assert_eq!(status, 200);
+    assert!(listed["slots"].as_array().unwrap().is_empty());
+    let (status, _) = server
+        .call(
+            reqwest::Method::DELETE,
+            &format!("/v1/values/{}/env:A", server.scope()),
+            Some(&server.admin),
+            None,
+        )
+        .await;
+    assert_eq!(status, 204);
 }
 
 #[tokio::test]

@@ -68,6 +68,8 @@ pub struct AlienManagerBuilder {
     value_store: Option<Arc<crate::values::ValueStore>>,
     /// Who may use the value endpoints; the standalone rules when unset.
     value_access: Option<Arc<dyn crate::values::ValueAccessAuthorizer>>,
+    /// The state directory is lost when the process restarts.
+    ephemeral_state_dir: bool,
 }
 
 impl AlienManagerBuilder {
@@ -99,7 +101,17 @@ impl AlienManagerBuilder {
             bundle_sources: None,
             value_store: None,
             value_access: None,
+            ephemeral_state_dir: false,
         }
+    }
+
+    /// Say that the state directory does not survive a restart (see
+    /// [`crate::values::state_dir_is_ephemeral`]). Values that would be kept in
+    /// it are then refused; a values key keeps them in the key-value store
+    /// instead.
+    pub fn ephemeral_state_dir(mut self, ephemeral: bool) -> Self {
+        self.ephemeral_state_dir = ephemeral;
+        self
     }
 
     /// Keep deployment values (see [`crate::values`]) in `store`. Without
@@ -803,9 +815,14 @@ impl AlienManagerBuilder {
         // Without a cloud key-value binding, values stay in the encrypted
         // database; the local key-value file is not encrypted.
         if self.value_store.is_none() {
-            self.value_store = Some(Arc::new(crate::values::ValueStore::new(Arc::new(
+            let store = crate::values::ValueStore::new(Arc::new(
                 crate::stores::sqlite::SqliteValueBackend::new(db.clone()),
-            ))));
+            ));
+            self.value_store = Some(Arc::new(if self.ephemeral_state_dir {
+                store.refusing_writes()
+            } else {
+                store
+            }));
         }
 
         Ok(self)
@@ -952,7 +969,6 @@ fn azure_management_gap(
     crate::providers::impersonation_credentials::azure_management_config_from_env(environment).err()
 }
 
-/// Determine which cloud platform a KV binding targets.
 /// Loads the key that protects values kept in a cloud key-value store.
 async fn load_values_key(
     binding: &alien_core::bindings::KeyBinding,
@@ -990,6 +1006,7 @@ async fn load_values_key(
         })
 }
 
+/// Determine which cloud platform a KV binding targets.
 fn kv_binding_platform(binding: &alien_core::bindings::KvBinding) -> alien_core::Platform {
     use alien_core::bindings::KvBinding;
     match binding {

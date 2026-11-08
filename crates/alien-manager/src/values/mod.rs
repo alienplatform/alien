@@ -13,6 +13,7 @@ mod access;
 mod backend;
 mod cipher;
 mod digest_key;
+mod durability;
 mod hydrate;
 mod limiter;
 mod standalone;
@@ -23,6 +24,7 @@ pub use access::{ValueAccess, ValueAccessAuthorizer, ValueGrant};
 pub use backend::{KvValueBackend, ValueBackend};
 pub use cipher::{EnvelopeCipher, ValueCipher, DATA_KEY_CACHE_TTL};
 pub use digest_key::{load_or_create_digest_key, DIGEST_KEY_NAME};
+pub use durability::state_dir_is_ephemeral;
 pub use hydrate::hydrate_held_values;
 pub use limiter::VerifyLimiter;
 pub use standalone::StandaloneValueAccess;
@@ -42,6 +44,9 @@ use crate::error::{ErrorData, Result};
 #[derive(Clone)]
 pub struct ValueStore {
     backend: Arc<dyn ValueBackend>,
+    /// Set when the backend cannot keep a value across a restart: reads and
+    /// deletes still work, writes are refused.
+    refuse_writes: bool,
 }
 
 /// The current time at the precision a stored value keeps (milliseconds), so
@@ -54,7 +59,17 @@ fn now_in_stored_precision() -> chrono::DateTime<Utc> {
 
 impl ValueStore {
     pub fn new(backend: Arc<dyn ValueBackend>) -> Self {
-        Self { backend }
+        Self {
+            backend,
+            refuse_writes: false,
+        }
+    }
+
+    /// Refuses writes because the backend's storage is not durable. Values
+    /// already stored stay readable and deletable.
+    pub fn refusing_writes(mut self) -> Self {
+        self.refuse_writes = true;
+        self
     }
 
     /// Stores `value`, replacing any earlier value in the slot.
@@ -65,6 +80,9 @@ impl ValueStore {
         kind: ValueKind,
         value: String,
     ) -> Result<ValueMeta> {
+        if self.refuse_writes {
+            return Err(durability::ephemeral_state_error());
+        }
         check_size(slot, &value)?;
         let stored = StoredValue {
             slot: slot.clone(),
