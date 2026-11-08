@@ -32,7 +32,7 @@ pub use types::{
 use std::sync::Arc;
 
 use alien_error::AlienError;
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 
 use crate::error::{ErrorData, Result};
 
@@ -40,6 +40,14 @@ use crate::error::{ErrorData, Result};
 #[derive(Clone)]
 pub struct ValueStore {
     backend: Arc<dyn ValueBackend>,
+}
+
+/// The current time at the precision a stored value keeps (milliseconds), so
+/// the time returned by a write equals the time every later read returns.
+fn now_in_stored_precision() -> chrono::DateTime<Utc> {
+    Utc.timestamp_millis_opt(Utc::now().timestamp_millis())
+        .single()
+        .expect("the current time is a valid timestamp")
 }
 
 impl ValueStore {
@@ -60,7 +68,7 @@ impl ValueStore {
             slot: slot.clone(),
             kind,
             value,
-            updated_at: Utc::now(),
+            updated_at: now_in_stored_precision(),
         };
         self.backend.put(scope, &stored).await?;
         stored.meta(scope)
@@ -147,6 +155,28 @@ mod tests {
 
     fn slot(s: &str) -> ValueSlot {
         s.parse().unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_write_returns_the_time_that_reads_return() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        let (_dir, store) = kv_store().await;
+        let dep = scope("dep:dep_1");
+
+        let written = store
+            .put(&dep, &slot("env:REGION"), ValueKind::Plain, "eu".into())
+            .await
+            .unwrap();
+
+        let read = store.get(&dep, &slot("env:REGION")).await.unwrap().unwrap();
+        assert_eq!(written.updated_at, read.updated_at);
+        assert_eq!(
+            written
+                .updated_at
+                .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
+            read.updated_at
+                .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+        );
     }
 
     #[tokio::test]
