@@ -327,19 +327,6 @@ impl AlienManagerBuilder {
             })?,
         );
 
-        // The vault-sync digest in runtime metadata is keyed with a secret that
-        // stays with this manager's state. An embedder that keeps the key
-        // elsewhere sets it before building; managers built later in the same
-        // process use the key that is already set.
-        if !alien_deployment::secrets_digest_key_is_set() {
-            let digest_key =
-                load_or_create_secrets_digest_key(&state_dir_for_db.join("secrets-digest.key"))
-                    .context(ErrorData::ServerInitFailed {
-                        reason: "Failed to load the secrets digest key".to_string(),
-                    })?;
-            alien_deployment::set_secrets_digest_key_if_unset(digest_key);
-        }
-
         // --- Stores (only set if not already provided) ---
         // Channel routing joins the deployments table, so it comes with the
         // SQLite deployment store.
@@ -525,15 +512,33 @@ impl AlienManagerBuilder {
                     .context(ErrorData::ServerInitFailed {
                         reason: "Failed to load KV binding".to_string(),
                     })?;
+                let values_key = match &toml_config.commands.values_key {
+                    Some(binding) => Some(load_values_key(binding).await?),
+                    None => None,
+                };
                 if self.value_store.is_none() {
-                    if let Some(key_binding) = &toml_config.commands.values_key {
-                        let key = load_values_key(key_binding).await?;
-                        let cipher = Arc::new(crate::values::EnvelopeCipher::new(key, kv.clone()));
-                        self.value_store =
-                            Some(Arc::new(crate::values::ValueStore::new(Arc::new(
-                                crate::values::KvValueBackend::new(kv.clone(), cipher),
-                            ))));
+                    if let Some(key) = &values_key {
+                        let cipher =
+                            Arc::new(crate::values::EnvelopeCipher::new(key.clone(), kv.clone()));
+                        self.value_store = Some(Arc::new(crate::values::ValueStore::new(
+                            Arc::new(crate::values::KvValueBackend::new(kv.clone(), cipher)),
+                        )));
                     }
+                }
+                // The vault-sync digest and the environment hash are keyed with a
+                // secret that every process of this manager must share and that
+                // survives a restart, so it lives in the same store. An embedder
+                // that keeps the key elsewhere sets it before building.
+                if !alien_deployment::secrets_digest_key_is_set() {
+                    let digest_key = crate::values::load_or_create_digest_key(
+                        kv.as_ref(),
+                        values_key.as_deref(),
+                    )
+                    .await
+                    .context(ErrorData::ServerInitFailed {
+                        reason: "Failed to load the secrets digest key".to_string(),
+                    })?;
+                    alien_deployment::set_secrets_digest_key_if_unset(digest_key);
                 }
                 kv
             } else {
@@ -782,6 +787,17 @@ impl AlienManagerBuilder {
                 target_bindings_providers: target_bindings,
                 registry_routing_table: routing_table,
             });
+        }
+
+        // A manager with no cloud key-value store keeps the digest key next to its
+        // state, in a file that appears complete or not at all.
+        if !alien_deployment::secrets_digest_key_is_set() {
+            let digest_key =
+                load_or_create_secrets_digest_key(&state_dir_for_db.join("secrets-digest.key"))
+                    .context(ErrorData::ServerInitFailed {
+                        reason: "Failed to load the secrets digest key".to_string(),
+                    })?;
+            alien_deployment::set_secrets_digest_key_if_unset(digest_key);
         }
 
         // Without a cloud key-value binding, values stay in the encrypted

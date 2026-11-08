@@ -12,6 +12,7 @@
 mod access;
 mod backend;
 mod cipher;
+mod digest_key;
 mod hydrate;
 mod limiter;
 mod standalone;
@@ -21,6 +22,7 @@ mod types;
 pub use access::{ValueAccess, ValueAccessAuthorizer, ValueGrant};
 pub use backend::{KvValueBackend, ValueBackend};
 pub use cipher::{EnvelopeCipher, ValueCipher, DATA_KEY_CACHE_TTL};
+pub use digest_key::{load_or_create_digest_key, DIGEST_KEY_NAME};
 pub use hydrate::hydrate_held_values;
 pub use limiter::VerifyLimiter;
 pub use standalone::StandaloneValueAccess;
