@@ -125,8 +125,9 @@ pub fn check_own_binding(value: &str, facts: &OwnBindingFacts) -> std::result::R
                     .as_deref()
                     .ok_or("the enforcer knows no region")?,
             )?;
-            // Lambda is invoked by name through the cloud API; the URL is only what the code
-            // reports as its own, and the enforcer has to find it in its own account.
+            // Lambda is invoked by name through the cloud API. The enforcer reads no address for
+            // it, so the binding carries none: an API Gateway address can't be told from one the
+            // control plane created.
             url("url", false)?;
         }
         "gcp" => {

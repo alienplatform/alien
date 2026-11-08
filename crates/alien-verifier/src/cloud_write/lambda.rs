@@ -1497,49 +1497,33 @@ mod tests {
         );
     }
 
-    /// The url in a function's own binding is the API Gateway address the verifier found in
-    /// the function's policy; a hostname the control plane names is refused.
+    /// A function's own binding carries no url: the verifier reads no address for it, so an API
+    /// Gateway address, which it can't tell from one the control plane made, is refused too.
     #[tokio::test]
-    async fn the_own_binding_url_is_one_the_cloud_reports() {
-        const GATEWAY: &str = "https://abc123.execute-api.us-east-1.amazonaws.com";
-        let binding = |url: &str| {
-            let mut request = create();
-            request["Environment"]["Variables"]["ALIEN_API_BINDING"] = json!(json!({
+    async fn the_own_binding_carries_no_url() {
+        let binding = |url: Option<&str>| {
+            let mut value = json!({
                 "service": "lambda",
                 "workerName": own(),
                 "region": "us-east-1",
-                "url": url,
-            })
-            .to_string());
+            });
+            if let Some(url) = url {
+                value["url"] = json!(url);
+            }
+            let mut request = create();
+            request["Environment"]["Variables"]["ALIEN_API_BINDING"] = json!(value.to_string());
             CloudWrite::CreateFunction(request)
         };
-        let reads = || Reads {
-            own: crate::plan::OwnResource {
-                urls: vec![GATEWAY.to_string()],
-                location: None,
-            },
-            ..Reads::default()
-        };
-        checked_reading(
-            release(1, function_workload()),
-            None,
-            reads(),
-            binding(GATEWAY),
-        )
-        .await
-        .expect("the address the cloud reports");
-        for forged in [
-            "https://api.acme.example",
-            "https://collector.attacker.example",
-        ] {
-            let error = checked_reading(
-                release(1, function_workload()),
-                None,
-                reads(),
-                binding(forged),
-            )
+        checked(release(1, function_workload()), None, binding(None))
             .await
-            .unwrap_err();
+            .expect("a binding without a url");
+        for forged in [
+            "https://abc123.execute-api.us-east-1.amazonaws.com",
+            "https://api.acme.example",
+        ] {
+            let error = checked(release(1, function_workload()), None, binding(Some(forged)))
+                .await
+                .unwrap_err();
             assert!(
                 error.contains(&format!(
                     "its url is {forged}, which is no URL the cloud reports"
@@ -1547,13 +1531,6 @@ mod tests {
                 "{error}"
             );
         }
-        let error = checked(release(1, function_workload()), None, binding(GATEWAY))
-            .await
-            .unwrap_err();
-        assert!(
-            error.contains("which is no URL the cloud reports"),
-            "{error}"
-        );
     }
 
     /// CreateFunction for the signed `api` workload with `env` on top of the controller's.

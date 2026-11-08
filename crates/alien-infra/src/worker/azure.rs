@@ -2722,6 +2722,9 @@ impl AzureWorkerController {
                 resource_id: Some(func_cfg.id.clone()),
             })?;
         if let Some(address) = self.extract_url_from_container_app(&live) {
+            if protected.is_some() {
+                self.url = Some(address.clone());
+            }
             self.container_app_url = Some(address);
         }
 
@@ -8647,6 +8650,25 @@ mod tests {
         Vec<(Option<String>, Vec<u8>)>,
         alien_core::ReleaseStatements,
     ) {
+        protected_update_from(
+            AzureWorkerController::mock_ready(PROTECTED_APP),
+            status,
+            answer,
+            injected,
+        )
+        .await
+    }
+
+    async fn protected_update_from(
+        controller: AzureWorkerController,
+        status: axum::http::StatusCode,
+        answer: serde_json::Value,
+        injected: &[(&str, &str)],
+    ) -> (
+        Result<(), AlienError<ErrorData>>,
+        Vec<(Option<String>, Vec<u8>)>,
+        alien_core::ReleaseStatements,
+    ) {
         let signed = pinned_worker('2', 1024);
         let release = signed_release(
             Platform::Azure,
@@ -8668,7 +8690,7 @@ mod tests {
         });
         let mut executor = SingleControllerExecutor::builder()
             .resource(pinned_worker('1', 512))
-            .controller(AzureWorkerController::mock_ready(PROTECTED_APP))
+            .controller(controller)
             .platform(Platform::Azure)
             .client_config(ClientConfig::Azure(Box::new(config)))
             .service_provider(protected_provider())
@@ -8751,6 +8773,27 @@ mod tests {
             writes.push(sent[0].clone());
         }
         writes
+    }
+
+    /// A worker recorded with a domain the manager chose, from before the install was protected,
+    /// is updated with the address Container Apps reports for its own binding, which the
+    /// verifier accepts; the stale domain would be refused every time.
+    #[tokio::test]
+    async fn a_protected_update_replaces_a_recorded_custom_domain_with_the_app_address() {
+        let controller = AzureWorkerController {
+            url: Some("https://api.acme.example".to_string()),
+            container_app_url: None,
+            ..AzureWorkerController::mock_ready(PROTECTED_APP)
+        };
+        let (result, requests, _) = protected_update_from(
+            controller,
+            axum::http::StatusCode::OK,
+            written(2),
+            &[],
+        )
+        .await;
+        result.expect("the update completes through the verifier");
+        assert_eq!(checked_writes(&requests).await.len(), 1);
     }
 
     /// Env the deployment holds beside the signed release (set in the dashboard before the

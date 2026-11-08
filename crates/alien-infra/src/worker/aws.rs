@@ -1535,22 +1535,18 @@ impl AwsWorkerController {
                 })
             })?;
             if self.fqdn.is_some() {
-                if verifier::is_protected(ctx) {
-                    self.url = Some(format!(
-                        "https://{}.execute-api.{}.amazonaws.com",
-                        api_id, aws_cfg.region
-                    ));
-                }
                 return Ok(HandlerAction::Continue {
                     state: CreatingApiDomain,
                     suggested_delay: Some(Duration::from_secs(1)),
                 });
             }
 
-            self.url = Some(format!(
-                "https://{}.execute-api.{}.amazonaws.com",
-                api_id, aws_cfg.region
-            ));
+            if !verifier::is_protected(ctx) {
+                self.url = Some(format!(
+                    "https://{}.execute-api.{}.amazonaws.com",
+                    api_id, aws_cfg.region
+                ));
+            }
             return Ok(HandlerAction::Continue {
                 state: AddingApiGatewayPermission,
                 suggested_delay: Some(Duration::from_secs(1)),
@@ -1592,12 +1588,6 @@ impl AwsWorkerController {
 
         if self.fqdn.is_some() {
             // Platform mode: proceed to custom domain setup
-            if verifier::is_protected(ctx) {
-                self.url = Some(format!(
-                    "https://{}.execute-api.{}.amazonaws.com",
-                    api_id, aws_cfg.region
-                ));
-            }
             Ok(HandlerAction::Continue {
                 state: CreatingApiDomain,
                 suggested_delay: Some(Duration::from_secs(1)),
@@ -1612,7 +1602,9 @@ impl AwsWorkerController {
                 url=%default_url,
                 "Using API Gateway default endpoint (no custom domain)"
             );
-            self.url = Some(default_url);
+            if !verifier::is_protected(ctx) {
+                self.url = Some(default_url);
+            }
             Ok(HandlerAction::Continue {
                 state: AddingApiGatewayPermission,
                 suggested_delay: Some(Duration::from_secs(1)),
@@ -2086,12 +2078,6 @@ impl AwsWorkerController {
             })?;
 
         if self.fqdn.is_some() {
-            if verifier::is_protected(ctx) {
-                self.url = Some(format!(
-                    "https://{}.execute-api.{}.amazonaws.com/prod",
-                    rest_api_id, aws_cfg.region
-                ));
-            }
             Ok(HandlerAction::Continue {
                 state: CreatingRestDomain,
                 suggested_delay: Some(Duration::from_secs(1)),
@@ -2099,10 +2085,12 @@ impl AwsWorkerController {
         } else {
             // Standalone mode: the REST default endpoint serves under /{stage},
             // unlike the V2 `$default` stage which serves at the domain root.
-            self.url = Some(format!(
-                "https://{}.execute-api.{}.amazonaws.com/prod",
-                rest_api_id, aws_cfg.region
-            ));
+            if !verifier::is_protected(ctx) {
+                self.url = Some(format!(
+                    "https://{}.execute-api.{}.amazonaws.com/prod",
+                    rest_api_id, aws_cfg.region
+                ));
+            }
             Ok(HandlerAction::Continue {
                 state: AddingApiGatewayPermission,
                 suggested_delay: Some(Duration::from_secs(1)),
@@ -12288,59 +12276,51 @@ mod tests {
             .clone()
     }
 
-    /// The URL the worker shows, with a custom domain in play: the manager's domain on an
-    /// unprotected install, the gateway's own address, which the verifier can read back from the
-    /// function's policy, on a protected one.
+    /// The gateway address a worker shows: on an unprotected install the API's default endpoint,
+    /// on a protected one none, because the verifier can't tell the install's API from one the
+    /// control plane made, and an address it can't check isn't passed on.
     #[rstest]
     #[case::http_api(false, "https://abc123.execute-api.us-east-1.amazonaws.com")]
     #[case::rest_api(true, "https://abc123.execute-api.us-east-1.amazonaws.com/prod")]
     #[tokio::test]
-    async fn a_protected_worker_shows_the_gateway_address_not_the_managers_domain(
+    async fn a_protected_worker_shows_no_gateway_address(
         #[case] rest: bool,
         #[case] gateway: &str,
     ) {
-        let custom = "https://api.example.test";
         let controller = if rest {
             AwsWorkerController {
                 state: AwsWorkerState::CreatingRestDeployment,
                 rest_api_id: Some("abc123".to_string()),
                 rest_deployment_id: Some("dep-1".to_string()),
+                stage_name: Some("prod".to_string()),
                 ..Default::default()
             }
         } else {
             AwsWorkerController {
                 state: AwsWorkerState::CreatingApiStage,
                 api_id: Some("abc123".to_string()),
+                stage_name: Some("$default".to_string()),
                 ..Default::default()
             }
         };
-        let controller = AwsWorkerController {
-            stage_name: Some(if rest { "prod" } else { "$default" }.to_string()),
-            fqdn: Some("api.example.test".to_string()),
-            url: Some(custom.to_string()),
-            ..controller
-        };
-        let provider = || {
-            let mut provider = MockPlatformServiceProvider::new();
-            let mut rest_api = MockApiGatewayApi::new();
-            rest_api.expect_tag_resource().returning(|_, _| Ok(()));
-            let rest_api = Arc::new(rest_api);
-            provider
-                .expect_get_aws_apigateway_client()
-                .returning(move |_| Ok(rest_api.clone()));
-            Arc::new(provider)
-        };
         let provider = || {
             if rest {
-                provider()
+                let mut provider = MockPlatformServiceProvider::new();
+                let mut rest_api = MockApiGatewayApi::new();
+                rest_api.expect_tag_resource().returning(|_, _| Ok(()));
+                let rest_api = Arc::new(rest_api);
+                provider
+                    .expect_get_aws_apigateway_client()
+                    .returning(move |_| Ok(rest_api.clone()));
+                Arc::new(provider)
             } else {
                 setup_mock_service_provider(Arc::new(MockLambdaApi::new()), None, None)
             }
         };
         let unprotected = step_public_worker(controller.clone(), false, provider()).await;
-        assert_eq!(unprotected.url.as_deref(), Some(custom));
+        assert_eq!(unprotected.url.as_deref(), Some(gateway));
         let protected = step_public_worker(controller, true, provider()).await;
-        assert_eq!(protected.url.as_deref(), Some(gateway));
+        assert_eq!(protected.url, None);
     }
 
     /// Lambda on a protected install: reads succeed, and invoking the verifier records the

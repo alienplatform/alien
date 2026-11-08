@@ -2674,6 +2674,9 @@ impl GcpWorkerController {
             .clone()
             .or_else(|| current_service.urls.first().cloned())
         {
+            if protected.is_some() {
+                self.url = Some(address.clone());
+            }
             self.cloud_run_url = Some(address);
         }
 
@@ -9834,6 +9837,29 @@ mod tests {
         Vec<(Option<String>, Vec<u8>)>,
         alien_core::ReleaseStatements,
     ) {
+        protected_update_from(
+            protected_controller(),
+            status,
+            answer,
+            setup_policy,
+            management,
+            injected,
+        )
+        .await
+    }
+
+    async fn protected_update_from(
+        controller: GcpWorkerController,
+        status: axum::http::StatusCode,
+        answer: serde_json::Value,
+        setup_policy: IamPolicy,
+        management: alien_core::ManagementPermissions,
+        injected: &[(&str, &str)],
+    ) -> (
+        Result<(), AlienError<crate::error::ErrorData>>,
+        Vec<(Option<String>, Vec<u8>)>,
+        alien_core::ReleaseStatements,
+    ) {
         let signed = pinned_worker('2', 512);
         let release = signed_release(
             Platform::Gcp,
@@ -9851,7 +9877,7 @@ mod tests {
         let (url, requests) = http_verifier_stub(status, answer).await;
         let mut executor = SingleControllerExecutor::builder()
             .resource(pinned_worker('1', 256))
-            .controller(protected_controller())
+            .controller(controller)
             .platform(Platform::Gcp)
             .client_config(management_client_config(&url))
             .service_provider(protected_provider(&url, setup_policy))
@@ -9877,6 +9903,32 @@ mod tests {
         }
         let requests = requests.lock().unwrap().clone();
         (result, requests, release)
+    }
+
+    /// A worker recorded with a domain the manager chose, from before the install was protected,
+    /// is updated with the address Cloud Run reports for its own binding, which the verifier
+    /// accepts; the stale domain would be refused every time.
+    #[tokio::test]
+    async fn a_protected_update_replaces_a_recorded_custom_domain_with_the_cloud_run_address() {
+        let controller = GcpWorkerController {
+            url: Some("https://api.acme.example".to_string()),
+            cloud_run_url: None,
+            ..protected_controller()
+        };
+        let (result, requests, _) = protected_update_from(
+            controller,
+            axum::http::StatusCode::OK,
+            written(2),
+            setup_policy(),
+            alien_core::ManagementPermissions::Auto,
+            &[],
+        )
+        .await;
+        result.expect("the update completes through the verifier");
+        assert_eq!(
+            operations(&checked_writes(&requests).await)[0],
+            "replaceService"
+        );
     }
 
     /// Env the deployment holds beside the signed release (set in the dashboard before the

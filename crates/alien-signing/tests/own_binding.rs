@@ -6,7 +6,6 @@ use serde_json::{json, Value};
 
 const PUBLIC: &str = "https://api.acme.example";
 const RUN_APP: &str = "https://acme-prod-api-abc.a.run.app";
-const LAMBDA_URL: &str = "https://abc.lambda-url.us-east-1.on.aws/";
 
 fn facts(platform: &str) -> OwnBindingFacts {
     OwnBindingFacts {
@@ -32,10 +31,7 @@ fn facts(platform: &str) -> OwnBindingFacts {
         resource_group: Some("acme-rg".to_string()),
         location: Some("us-central1".to_string()),
         urls: match platform {
-            "aws" => vec![
-                LAMBDA_URL.to_string(),
-                "https://abc123.execute-api.us-east-1.amazonaws.com".to_string(),
-            ],
+            "aws" => Vec::new(),
             "machines" => vec![PUBLIC.to_string()],
             _ => vec![RUN_APP.to_string()],
         },
@@ -47,7 +43,6 @@ fn aws() -> Value {
         "service": "lambda",
         "workerName": "acme-prod-api",
         "region": "us-east-1",
-        "url": LAMBDA_URL,
     })
 }
 
@@ -96,12 +91,6 @@ fn the_binding_a_controller_writes_for_its_own_resource_passes() {
     ] {
         check(platform, &binding).unwrap_or_else(|e| panic!("{platform}: {e}"));
     }
-    let mut without_urls = aws();
-    without_urls.as_object_mut().unwrap().remove("url");
-    check("aws", &without_urls).expect("a Lambda binding without a URL");
-    let mut binding = aws();
-    binding["url"] = json!("https://abc123.execute-api.us-east-1.amazonaws.com");
-    check("aws", &binding).expect("the address of an API in the install's account");
 }
 
 #[test]
@@ -231,8 +220,9 @@ fn a_binding_that_points_anywhere_else_is_refused() {
 }
 
 /// A URL the control plane names, such as a custom or generated domain, is no address the
-/// enforcer read from the cloud, so it can't fill a display field or a destination, and a host
-/// that only looks like one of AWS's gateway hosts, in another account, passes no more.
+/// enforcer read from the cloud, so it can't fill a display field or a destination. An AWS
+/// worker's binding carries no URL at all, not even one that looks like an API Gateway host:
+/// the enforcer can't tell the install's API from one the control plane made.
 #[test]
 fn a_url_the_control_plane_names_is_no_url_the_cloud_reports() {
     let forged_gateway = "https://evil1.execute-api.us-east-1.amazonaws.com";

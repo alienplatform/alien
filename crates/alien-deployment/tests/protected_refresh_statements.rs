@@ -190,6 +190,7 @@ fn config(stack_settings: StackSettings) -> DeploymentConfig {
 }
 
 async fn step(state: DeploymentState, config: &DeploymentConfig) -> DeploymentState {
+    alien_deployment::set_ephemeral_secrets_digest_key();
     alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
         .await
         .expect("the step runs")
