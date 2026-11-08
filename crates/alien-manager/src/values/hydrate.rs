@@ -307,6 +307,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_secret_relabelled_as_plain_is_refused() {
+        let (_dir, store) = store().await;
+        let digest = put(&store, "env:X", ValueKind::Secret, "relabel-canary-s3cret").await;
+        // The digest does not cover the kind, so only the kind check stops this.
+        let deployment = record(vec![slot_ref(
+            "env:X",
+            EnvironmentVariableType::Plain,
+            &digest,
+        )]);
+
+        let error = hydrate_held_values(Some(&store), &deployment)
+            .await
+            .expect_err("a secret claimed as plain must not run");
+
+        assert_eq!(error.code, "DEPLOYMENT_VALUES_CHANGED");
+        assert!(!format!("{error:?}").contains("relabel-canary-s3cret"));
+        assert!(!error.to_string().contains("relabel-canary-s3cret"));
+    }
+
+    #[tokio::test]
     async fn a_missing_value_refuses_the_step() {
         let (_dir, store) = store().await;
         let deployment = record(vec![slot_ref(

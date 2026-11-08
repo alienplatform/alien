@@ -2385,8 +2385,11 @@
               }
             }
           },
+          "400": {
+            "description": "A slot appears more than once in the request"
+          },
           "429": {
-            "description": "Too many verifications for this scope"
+            "description": "Too many verifications for one of the slots"
           }
         },
         "security": [

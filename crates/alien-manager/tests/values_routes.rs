@@ -92,6 +92,29 @@ async fn start_with(ephemeral_state_dir: bool) -> Server {
 }
 
 async fn start_on(ephemeral_state_dir: bool, backend: Backend) -> Server {
+    start_full(ephemeral_state_dir, backend, false).await
+}
+
+/// Grants migrate access to any caller, as a control plane that moves values would.
+struct AllowMigrate;
+
+#[async_trait]
+impl alien_manager::values::ValueAccessAuthorizer for AllowMigrate {
+    async fn authorize(
+        &self,
+        _headers: &axum::http::HeaderMap,
+        _scope: &alien_manager::values::ValueScope,
+        _needed: alien_manager::values::ValueAccess,
+    ) -> Result<alien_manager::values::ValueGrant, alien_error::AlienError<alien_manager::error::ErrorData>>
+    {
+        Ok(alien_manager::values::ValueGrant {
+            access: alien_manager::values::ValueAccess::Migrate,
+            slots: None,
+        })
+    }
+}
+
+async fn start_full(ephemeral_state_dir: bool, backend: Backend, migrating: bool) -> Server {
     let dir = tempfile::tempdir().unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -173,6 +196,9 @@ async fn start_on(ephemeral_state_dir: bool, backend: Backend) -> Server {
     let mut builder = AlienManagerBuilder::new(config)
         .token_store(token_store)
         .ephemeral_state_dir(ephemeral_state_dir);
+    if migrating {
+        builder = builder.value_access(Arc::new(AllowMigrate));
+    }
     if let Backend::SealedKv = backend {
         let kv: Arc<dyn Kv> = Arc::new(
             LocalKv::single_process(dir.path().join("values-kv"))
@@ -557,6 +583,46 @@ async fn callers_without_rights_and_unknown_scopes_are_refused() {
 
     let (_, listed) = server.get().await;
     assert!(listed["slots"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn verify_refuses_a_repeated_slot_and_counts_every_slot_guessed() {
+    let server = start_full(false, Backend::Sqlite, true).await;
+    let (status, _) = server
+        .put(json!([{ "slot": "env:PIN", "value": CANARY, "kind": "secret" }]))
+        .await;
+    assert_eq!(status, 200);
+    let path = format!("/v1/values/{}/verify", server.scope());
+    let verify = |values: Value| {
+        server.call(
+            reqwest::Method::POST,
+            &path,
+            Some(&server.admin),
+            Some(json!({ "values": values })),
+        )
+    };
+
+    // One request cannot name a slot twice, so it cannot try many guesses at once.
+    let guesses: Vec<Value> = (0..50)
+        .map(|n| json!({ "slot": "env:PIN", "value": format!("guess-{n}") }))
+        .collect();
+    let (status, error) = verify(json!(guesses)).await;
+    assert_eq!(status, 400, "{error}");
+    assert!(error.to_string().contains("env:PIN"), "{error}");
+
+    // A right guess is reported, and ten guesses at one slot use up its minute.
+    let (status, ok) = verify(json!([{ "slot": "env:PIN", "value": CANARY }])).await;
+    assert_eq!(status, 200, "{ok}");
+    assert_eq!(ok["results"][0]["match"], true);
+    for n in 1..10 {
+        let (status, _) = verify(json!([{ "slot": "env:PIN", "value": format!("g{n}") }])).await;
+        assert_eq!(status, 200);
+    }
+    let (status, error) = verify(json!([{ "slot": "env:PIN", "value": CANARY }])).await;
+    assert_eq!(status, 429, "{error}");
+    // Another slot is not affected.
+    let (status, _) = verify(json!([{ "slot": "env:OTHER", "value": "x" }])).await;
+    assert_eq!(status, 200);
 }
 
 #[tokio::test]

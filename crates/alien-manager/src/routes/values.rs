@@ -399,7 +399,8 @@ pub(crate) async fn delete_value(
     request_body = VerifyValuesRequest,
     responses(
         (status = 200, description = "Whether each value equals the stored one", body = VerifyValuesResponse),
-        (status = 429, description = "Too many verifications for this scope")
+        (status = 400, description = "A slot appears more than once in the request"),
+        (status = 429, description = "Too many verifications for one of the slots")
     ),
     security(("bearer" = []))
 ))]
@@ -419,11 +420,17 @@ pub(crate) async fn verify_values(
     ) -> Result<VerifyValuesResponse> {
         let values = values(state)?;
         let scope: ValueScope = scope.parse()?;
-        let selection =
-            SlotSelection::Slots(request.values.iter().map(|v| v.slot.clone()).collect());
+        let slots: Vec<ValueSlot> = request.values.iter().map(|v| v.slot.clone()).collect();
+        let selection = SlotSelection::Slots(slots.clone());
         authorize(&values, headers, &scope, ValueAccess::Migrate, &selection).await?;
         check_item_count(request.values.len())?;
-        if !state.verify_limiter.allow(&scope) {
+        let mut distinct = std::collections::HashSet::new();
+        if let Some(repeated) = slots.iter().find(|slot| !distinct.insert(*slot)) {
+            return Err(ErrorData::bad_request(format!(
+                "The slot '{repeated}' appears more than once in one verify request"
+            )));
+        }
+        if !state.verify_limiter.allow(&scope, &slots) {
             return Err(alien_error::AlienError::new(
                 ErrorData::ValueVerifyRateLimited {
                     scope: scope.to_string(),
