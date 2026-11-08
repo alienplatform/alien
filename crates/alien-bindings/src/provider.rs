@@ -4,7 +4,7 @@ use crate::{
     error::{binding_env_var, ErrorData, Result},
     providers::postgres::runtime::PostgresRuntime,
     traits::{
-        ArtifactRegistry, BindingsProviderApi, Build, Container, Key, Kv, Postgres, Queue,
+        ArtifactRegistry, BindingsProviderApi, Build, Container, Key, Kv, Postgres, Queue, Redis,
         ServiceAccount, Storage, Vault, Worker,
     },
 };
@@ -12,7 +12,8 @@ use crate::{
 #[cfg(feature = "aws")]
 use crate::providers::queue::aws_sqs::{create_http_client as create_sqs_http_client, AwsSqsQueue};
 use alien_client_config::ClientConfigExt;
-use alien_core::bindings::PostgresBinding;
+use alien_core::bindings::{PostgresBinding, RedisBinding};
+use crate::providers::redis::ResolvedRedis;
 use alien_core::{ClientConfig, Platform, StackState, ENV_OPERATOR_BASE_PLATFORM};
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
@@ -509,6 +510,11 @@ impl BindingsProviderApi for LazyEnvBindingsProvider {
     async fn load_postgres(&self, binding_name: &str) -> Result<Arc<dyn Postgres>> {
         self.ensure_binding_present(binding_name)?;
         self.provider().await?.load_postgres(binding_name).await
+    }
+
+    async fn load_redis(&self, binding_name: &str) -> Result<Arc<dyn Redis>> {
+        self.ensure_binding_present(binding_name)?;
+        self.provider().await?.load_redis(binding_name).await
     }
 
     async fn load_queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>> {
@@ -1470,6 +1476,22 @@ impl BindingsProviderApi for BindingsProvider {
     async fn load_postgres(&self, binding_name: &str) -> Result<Arc<dyn Postgres>> {
         let binding: PostgresBinding = self.parse_binding(binding_name, "Postgres")?;
         self.postgres.load(binding_name, &binding).await
+    }
+
+    async fn load_redis(&self, binding_name: &str) -> Result<Arc<dyn Redis>> {
+        let binding: RedisBinding = self.parse_binding(binding_name, "Redis")?;
+        match &binding {
+            RedisBinding::Local(_) | RedisBinding::External(_) => {
+                Ok(Arc::new(ResolvedRedis::from_inline_binding(binding_name, &binding)?))
+            }
+            // Cloud secret resolution lands with each cloud controller.
+            RedisBinding::ElastiCache(_)
+            | RedisBinding::Memorystore(_)
+            | RedisBinding::AzureManagedRedis(_) => Err(AlienError::new(ErrorData::config_invalid(
+                binding_name,
+                "Cloud Redis bindings are not supported by this build yet",
+            ))),
+        }
     }
 
     async fn load_queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>> {

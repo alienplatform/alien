@@ -7,6 +7,7 @@ pub mod kv;
 #[cfg(feature = "local")]
 pub(crate) mod local_store;
 pub mod postgres;
+pub mod redis;
 pub mod queue;
 pub mod sandbox;
 pub mod service_account;

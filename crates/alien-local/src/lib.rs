@@ -62,6 +62,7 @@ mod kv_manager;
 mod local_bindings_provider;
 mod postgres_manager;
 mod postgres_runtime;
+mod redis_manager;
 mod queue_manager;
 mod queue_service;
 pub use queue_service::LocalQueueService;
@@ -88,6 +89,7 @@ pub use error::{ErrorData, Result};
 pub use kv_manager::LocalKvManager;
 pub use local_bindings_provider::LocalBindingsProvider;
 pub use postgres_manager::LocalPostgresManager;
+pub use redis_manager::{LocalRedisManager, RedisSpec, VALKEY_VERSION};
 pub use queue_manager::LocalQueueManager;
 pub use sandbox_manager::{
     LocalSandboxManager, SandboxEgressMode, SandboxExecResult, SandboxOutput, SandboxSessionConfig,

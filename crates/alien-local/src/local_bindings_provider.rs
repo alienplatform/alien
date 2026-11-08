@@ -8,7 +8,7 @@
 
 use crate::error::Result;
 use crate::{
-    LocalArtifactRegistryManager, LocalContainerManager, LocalKvManager, LocalPostgresManager,
+    LocalArtifactRegistryManager, LocalContainerManager, LocalKvManager, LocalPostgresManager, LocalRedisManager,
     LocalQueueManager, LocalSandboxManager, LocalStorageManager, LocalVaultManager,
     LocalWorkerManager,
 };
@@ -17,10 +17,10 @@ use alien_bindings::{
     providers::{
         artifact_registry::local::LocalArtifactRegistry,
         container::LocalContainer as LocalContainerBinding, kv::local::LocalKv,
-        postgres::local::LocalPostgres, storage::local::LocalStorage, vault::local::LocalVault,
+        postgres::local::LocalPostgres, redis::ResolvedRedis, storage::local::LocalStorage, vault::local::LocalVault,
     },
     traits::{
-        ArtifactRegistry, BindingsProviderApi, Build, Container, Kv, Postgres, Queue,
+        ArtifactRegistry, BindingsProviderApi, Build, Container, Kv, Postgres, Queue, Redis,
         ServiceAccount, Storage, Vault, Worker,
     },
 };
@@ -56,6 +56,7 @@ pub struct LocalBindingsProvider {
     storage_manager: Arc<LocalStorageManager>,
     kv_manager: Arc<LocalKvManager>,
     postgres_manager: Arc<LocalPostgresManager>,
+    redis_manager: Arc<LocalRedisManager>,
     queue_manager: Arc<LocalQueueManager>,
     vault_manager: Arc<LocalVaultManager>,
     artifact_registry_manager: Arc<LocalArtifactRegistryManager>,
@@ -79,6 +80,7 @@ impl Clone for LocalBindingsProvider {
             storage_manager: self.storage_manager.clone(),
             kv_manager: self.kv_manager.clone(),
             postgres_manager: self.postgres_manager.clone(),
+            redis_manager: self.redis_manager.clone(),
             queue_manager: self.queue_manager.clone(),
             vault_manager: self.vault_manager.clone(),
             artifact_registry_manager: self.artifact_registry_manager.clone(),
@@ -143,11 +145,16 @@ impl LocalBindingsProvider {
             LocalPostgresManager::new_with_shutdown(state_dir.clone(), shutdown_tx.subscribe());
         let postgres_manager = Arc::new(postgres_manager);
 
+        let (redis_manager, redis_task) =
+            LocalRedisManager::new_with_shutdown(state_dir.clone(), shutdown_tx.subscribe());
+        let redis_manager = Arc::new(redis_manager);
+
         // Create the provider (without worker_manager and container_manager initially)
         let provider = Arc::new(Self {
             storage_manager: storage_manager.clone(),
             kv_manager: kv_manager.clone(),
             postgres_manager: postgres_manager.clone(),
+            redis_manager: redis_manager.clone(),
             queue_manager: queue_manager.clone(),
             vault_manager: vault_manager.clone(),
             artifact_registry_manager: artifact_registry_manager.clone(),
@@ -180,6 +187,7 @@ impl LocalBindingsProvider {
                 tasks.push(task);
             }
             tasks.push(postgres_task);
+            tasks.push(redis_task);
         }
 
         Ok(provider)
@@ -247,6 +255,10 @@ impl LocalBindingsProvider {
     /// Returns the Postgres manager.
     pub fn postgres_manager(&self) -> &Arc<LocalPostgresManager> {
         &self.postgres_manager
+    }
+
+    pub fn redis_manager(&self) -> &Arc<LocalRedisManager> {
+        &self.redis_manager
     }
 
     /// Returns the queue manager.
@@ -348,6 +360,24 @@ impl LocalBindingsProvider {
                         "Serialize local queue binding",
                     ))?,
             ));
+        }
+        if resource_type == alien_core::Redis::RESOURCE_TYPE.0 {
+            // Re-reads the password live from the manager's 0600 metadata.
+            return match self.redis_manager.try_get_binding(binding_name).context(
+                BindingsErrorData::config_invalid(
+                    binding_name,
+                    "Failed to read the local Redis metadata",
+                ),
+            )? {
+                Some(binding) => Ok(Some(
+                    alien_core::bindings::serialize_binding_as_env_var(binding_name, &binding)
+                        .context(BindingsErrorData::config_invalid(
+                            binding_name,
+                            "Failed to serialize local Redis binding",
+                        ))?,
+                )),
+                None => Ok(None),
+            };
         }
         if resource_type == alien_core::Postgres::RESOURCE_TYPE.0 {
             // Re-reads the password live from the manager's 0600 metadata. `try_get_binding`
@@ -585,6 +615,22 @@ impl BindingsProviderApi for LocalBindingsProvider {
 
         let postgres = LocalPostgres::from_binding(binding_name, &binding)?;
         Ok(Arc::new(postgres))
+    }
+
+    async fn load_redis(
+        &self,
+        binding_name: &str,
+    ) -> alien_bindings::error::Result<Arc<dyn Redis>> {
+        let binding = self.redis_manager.get_binding(binding_name).context(
+            BindingsErrorData::config_invalid(
+                binding_name,
+                format!("Redis not found for '{}'", binding_name),
+            ),
+        )?;
+        Ok(Arc::new(ResolvedRedis::from_inline_binding(
+            binding_name,
+            &binding,
+        )?))
     }
 
     async fn load_queue(
