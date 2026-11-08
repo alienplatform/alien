@@ -23,6 +23,8 @@
 //! Needs `aws` and `docker` on the path to push the test image. Every name it creates starts
 //! with the printed resource prefix; delete those by hand if a run is interrupted.
 
+mod support;
+
 use std::{collections::HashMap, process::Command, sync::Arc, time::Duration};
 
 use alien_aws_clients::{
@@ -217,7 +219,7 @@ async fn step_until(
         );
         // Every step resumes from a reloaded checkpoint, as a restarted runner would.
         state = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
-        let result = alien_deployment::step(
+        let result = crate::support::step(
             state,
             config.clone(),
             client.clone(),

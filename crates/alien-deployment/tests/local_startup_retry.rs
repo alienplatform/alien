@@ -1,4 +1,6 @@
 //! A failed first deployment must not install a new release using its old prepared stack.
+mod support;
+
 use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus,
     EnvironmentVariablesSnapshot, ExternalBindings, Platform, ReleaseInfo, ResourceLifecycle,
@@ -44,7 +46,7 @@ async fn drive(
 ) -> DeploymentState {
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            let result = alien_deployment::step(
+            let result = crate::support::step(
                 state,
                 config.clone(),
                 client.clone(),

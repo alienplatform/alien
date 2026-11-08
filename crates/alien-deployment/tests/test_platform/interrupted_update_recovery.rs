@@ -163,7 +163,7 @@ async fn exercise_recovery(case: RecoveryTarget) {
         add_live_worker(&mut interrupted, failing);
         state.target_release = Some(release_of("rel_failed_create", interrupted.clone()));
         request_retry(&mut state);
-        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        state = crate::support::step(state, config.clone(), ClientConfig::Test, None)
             .await
             .unwrap()
             .state;
@@ -292,12 +292,12 @@ async fn exercise_recovery(case: RecoveryTarget) {
     state.target_release = Some(release_of("rel_target", target));
     request_retry(&mut state);
     // run_to_completion stops at a failed state; execute the accepted retry transition first.
-    state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+    state = crate::support::step(state, config.clone(), ClientConfig::Test, None)
         .await
         .expect("retry transition should succeed")
         .state;
     assert_eq!(state.status, DeploymentStatus::UpdatePending);
-    state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+    state = crate::support::step(state, config.clone(), ClientConfig::Test, None)
         .await
         .expect("corrective release preflights should succeed")
         .state;
@@ -310,7 +310,7 @@ async fn exercise_recovery(case: RecoveryTarget) {
                 | RecoveryTarget::DependencyDenied
         )
     {
-        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        state = crate::support::step(state, config.clone(), ClientConfig::Test, None)
             .await
             .expect("the corrective update should start")
             .state;
@@ -346,7 +346,7 @@ async fn exercise_recovery(case: RecoveryTarget) {
             let dependency_ready = state.stack_state.as_ref().unwrap().resources[awaited_id].status
                 == ResourceStatus::Running;
             let writes = test_worker_configs_deployed(&api_identifier).len();
-            state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+            state = crate::support::step(state, config.clone(), ClientConfig::Test, None)
                 .await
                 .unwrap()
                 .state;

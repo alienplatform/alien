@@ -784,7 +784,7 @@ pub async fn sync_secrets_to_vault(
     runtime_metadata.vault_credentials_revoked = false;
 
     let desired_secrets = desired_vault_secrets(stack, client_config.platform(), config);
-    let sync_hash = secrets_sync_hash(&stack_state.resource_prefix, &desired_secrets);
+    let sync_hash = secrets_sync_hash(&stack_state.resource_prefix, &desired_secrets)?;
     let desired_secret_names = desired_secrets.keys().cloned().collect::<Vec<_>>();
 
     if client_config.platform() == Platform::Machines {
@@ -1316,37 +1316,86 @@ fn runtime_monitoring_secrets_hash(monitoring: &OtlpConfig) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-/// The manager's key for digests of secret values, set once at startup.
+/// The key for digests of secret values, set once at startup.
 static SECRETS_DIGEST_KEY: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
 
 /// Sets the key that digests of secret values are computed with.
 ///
 /// Runtime metadata may be stored by a separate control plane, so the digest of
 /// the secrets last written to the vault is keyed: a plain digest would let
-/// whoever stores it test guesses for a weak secret. Every manager process that
-/// steps the same deployments must set the same key, from storage the control
-/// plane can't read. Without it, a random key for this process is used; digests
-/// then don't survive a restart, and the first sync after one rewrites the
-/// secrets. Returns false when a key was already set.
-pub fn set_secrets_digest_key(key: [u8; 32]) -> bool {
+/// whoever stores it test guesses for a weak secret. Every process that steps
+/// the same deployments must use the same key, from storage the control plane
+/// can't read. Without a key, syncing secrets fails. Setting the key that is
+/// already set is allowed; a different key is an error.
+pub fn set_secrets_digest_key(key: [u8; 32]) -> Result<()> {
+    match SECRETS_DIGEST_KEY.set(key) {
+        Ok(()) => Ok(()),
+        Err(_) if SECRETS_DIGEST_KEY.get() == Some(&key) => Ok(()),
+        Err(_) => Err(AlienError::new(ErrorData::InternalError {
+            message: "A different secrets digest key is already set for this process".to_string(),
+        })),
+    }
+}
+
+/// Sets the key unless one is already set, and returns whether this call set it.
+///
+/// For managers built several times in one process, each reading its own key
+/// file: the first key wins.
+pub fn set_secrets_digest_key_if_unset(key: [u8; 32]) -> bool {
     SECRETS_DIGEST_KEY.set(key).is_ok()
 }
 
-fn secrets_digest_key() -> &'static [u8; 32] {
-    SECRETS_DIGEST_KEY.get_or_init(|| {
-        let mut key = [0u8; 32];
-        rand::RngCore::fill_bytes(&mut rand::rng(), &mut key);
-        key
-    })
+/// Uses a random key that lives as long as this process.
+///
+/// For a process that is the only one to step its deployments and keeps no
+/// digest across restarts, such as a one-shot CLI run. After a restart the
+/// stored digest never matches, so the first sync writes the secrets again.
+pub fn set_ephemeral_secrets_digest_key() {
+    let mut key = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::rng(), &mut key);
+    let _ = SECRETS_DIGEST_KEY.set(key);
+}
+
+/// Whether a key has been set, by [`set_secrets_digest_key`] or
+/// [`set_ephemeral_secrets_digest_key`].
+pub fn secrets_digest_key_is_set() -> bool {
+    SECRETS_DIGEST_KEY.get().is_some()
 }
 
 /// Digest of the secrets last written to the vault, recorded in runtime
 /// metadata to skip unchanged syncs. Keyed per deployment (by its resource
-/// prefix) from the manager's key; see [`set_secrets_digest_key`]. A digest from
+/// prefix) from the process's key; see [`set_secrets_digest_key`]. A digest from
 /// before the key, or from another key, never matches, so it reads as changed
 /// and the secrets are written again once.
-fn secrets_sync_hash(deployment_scope: &str, desired_secrets: &BTreeMap<String, String>) -> String {
-    keyed_secrets_sync_hash(secrets_digest_key(), deployment_scope, desired_secrets)
+fn secrets_sync_hash(
+    deployment_scope: &str,
+    desired_secrets: &BTreeMap<String, String>,
+) -> Result<String> {
+    // Unit tests step deployments without an embedding process to set the key.
+    #[cfg(test)]
+    let key = SECRETS_DIGEST_KEY.get().or(Some(&[7; 32]));
+    #[cfg(not(test))]
+    let key = SECRETS_DIGEST_KEY.get();
+    configured_secrets_sync_hash(key, deployment_scope, desired_secrets)
+}
+
+fn configured_secrets_sync_hash(
+    key: Option<&[u8; 32]>,
+    deployment_scope: &str,
+    desired_secrets: &BTreeMap<String, String>,
+) -> Result<String> {
+    let key = key.ok_or_else(|| {
+        AlienError::new(ErrorData::InternalError {
+            message: "No secrets digest key is set; the embedding process must call \
+                      set_secrets_digest_key"
+                .to_string(),
+        })
+    })?;
+    Ok(keyed_secrets_sync_hash(
+        key,
+        deployment_scope,
+        desired_secrets,
+    ))
 }
 
 fn keyed_secrets_sync_hash(
@@ -2511,7 +2560,8 @@ mod tests {
         let mut config = make_config(make_snapshot(&[], &[("API_TOKEN", "secret")]));
         config.monitoring = Some(make_monitoring_with_metrics());
         let stack_state = StackState::new(Platform::Machines);
-        let expected_hash = secrets_sync_hash(&stack_state.resource_prefix, &BTreeMap::new());
+        let expected_hash =
+            secrets_sync_hash(&stack_state.resource_prefix, &BTreeMap::new()).unwrap();
         let mut runtime_metadata = RuntimeMetadata::default();
 
         let synced = sync_secrets_to_vault(
@@ -2536,7 +2586,8 @@ mod tests {
     async fn deployment_without_secrets_vault_skips_empty_reconcile_and_deletion() {
         let stack_state = StackState::new(Platform::Test);
         let config = make_config(make_snapshot(&[], &[]));
-        let expected_hash = secrets_sync_hash(&stack_state.resource_prefix, &BTreeMap::new());
+        let expected_hash =
+            secrets_sync_hash(&stack_state.resource_prefix, &BTreeMap::new()).unwrap();
         let mut runtime_metadata = RuntimeMetadata::default();
 
         let synced = sync_secrets_to_vault(
@@ -2961,6 +3012,23 @@ mod tests {
     }
 
     #[test]
+    fn a_missing_key_is_an_error_not_a_random_key() {
+        let secrets = BTreeMap::from([("API_TOKEN".to_string(), "value".to_string())]);
+        let error = configured_secrets_sync_hash(None, "deployment-a", &secrets).unwrap_err();
+        assert!(error.to_string().contains("secrets digest key"), "{error}");
+        assert!(configured_secrets_sync_hash(Some(&[1; 32]), "deployment-a", &secrets).is_ok());
+    }
+
+    #[test]
+    fn a_second_key_is_refused_but_the_same_key_is_not() {
+        set_secrets_digest_key([7; 32]).unwrap();
+        set_secrets_digest_key([7; 32]).unwrap();
+        assert!(set_secrets_digest_key([8; 32]).is_err());
+        set_ephemeral_secrets_digest_key();
+        assert!(secrets_digest_key_is_set());
+    }
+
+    #[test]
     fn sync_digests_depend_on_the_key_and_the_deployment() {
         let secrets = BTreeMap::from([("API_TOKEN".to_string(), "value".to_string())]);
         let digest = keyed_secrets_sync_hash(&[1; 32], "deployment-a", &secrets);
@@ -3159,7 +3227,8 @@ mod tests {
         ));
         token_only.environment_variables.hash = "token-only".to_string();
         let old_hash = pre_v2_snapshot_only_sync_hash(&token_only);
-        let policy_hash = secrets_sync_hash(&stack_state.resource_prefix, &BTreeMap::new());
+        let policy_hash =
+            secrets_sync_hash(&stack_state.resource_prefix, &BTreeMap::new()).unwrap();
         assert_ne!(old_hash, policy_hash);
         let mut legacy_metadata = RuntimeMetadata::default();
         legacy_metadata.last_synced_env_vars_hash = Some(old_hash);

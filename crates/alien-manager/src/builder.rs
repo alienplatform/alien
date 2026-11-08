@@ -303,13 +303,17 @@ impl AlienManagerBuilder {
         );
 
         // The vault-sync digest in runtime metadata is keyed with a secret that
-        // stays with this manager's state.
-        let digest_key =
-            load_or_create_secrets_digest_key(&state_dir_for_db.join("secrets-digest.key"))
-                .context(ErrorData::ServerInitFailed {
-                    reason: "Failed to load the secrets digest key".to_string(),
-                })?;
-        alien_deployment::set_secrets_digest_key(digest_key);
+        // stays with this manager's state. An embedder that keeps the key
+        // elsewhere sets it before building; managers built later in the same
+        // process use the key that is already set.
+        if !alien_deployment::secrets_digest_key_is_set() {
+            let digest_key =
+                load_or_create_secrets_digest_key(&state_dir_for_db.join("secrets-digest.key"))
+                    .context(ErrorData::ServerInitFailed {
+                        reason: "Failed to load the secrets digest key".to_string(),
+                    })?;
+            alien_deployment::set_secrets_digest_key_if_unset(digest_key);
+        }
 
         // --- Stores (only set if not already provided) ---
         // Channel routing joins the deployments table, so it comes with the
@@ -1423,33 +1427,86 @@ roleArn = "arn:aws:iam::123456789012:role/management"
 }
 
 /// Reads the manager's 32-byte secrets digest key, creating it (mode 0600) on
-/// first start.
+/// first start. The file appears complete or not at all, and when several
+/// processes start together the first one's key wins.
 fn load_or_create_secrets_digest_key(
     path: &std::path::Path,
 ) -> std::result::Result<[u8; 32], alien_error::AlienError> {
     use alien_error::IntoAlienError;
     use std::io::Write;
 
-    match std::fs::read(path) {
-        Ok(bytes) => bytes.try_into().map_err(|_| {
-            alien_error::AlienError::new(alien_error::GenericError {
-                message: format!("'{}' must hold exactly 32 bytes", path.display()),
+    let read = || -> std::result::Result<Option<[u8; 32]>, alien_error::AlienError> {
+        match std::fs::read(path) {
+            Ok(bytes) => bytes.try_into().map(Some).map_err(|_| {
+                alien_error::AlienError::new(alien_error::GenericError {
+                    message: format!("'{}' must hold exactly 32 bytes", path.display()),
+                })
+            }),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error).into_alien_error(),
+        }
+    };
+    if let Some(key) = read()? {
+        return Ok(key);
+    }
+
+    let mut key = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::rng(), &mut key);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).into_alien_error()?;
+    }
+    let temp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4().simple()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let written = options
+        .open(&temp)
+        .and_then(|mut file| file.write_all(&key).and_then(|()| file.sync_all()));
+    // A hard link fails when the file exists, so a key another process wrote
+    // first is never replaced.
+    let linked = written.and_then(|()| std::fs::hard_link(&temp, path));
+    let _ = std::fs::remove_file(&temp);
+    match linked {
+        Ok(()) => Ok(key),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            read()?.ok_or_else(|| {
+                alien_error::AlienError::new(alien_error::GenericError {
+                    message: format!("'{}' disappeared while it was created", path.display()),
+                })
             })
-        }),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let mut key = [0u8; 32];
-            rand::RngCore::fill_bytes(&mut rand::rng(), &mut key);
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).into_alien_error()?;
-            }
-            let mut options = std::fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-            let mut file = options.open(path).into_alien_error()?;
-            file.write_all(&key).into_alien_error()?;
-            Ok(key)
         }
         Err(error) => Err(error).into_alien_error(),
+    }
+}
+
+#[cfg(test)]
+mod secrets_digest_key_tests {
+    use super::load_or_create_secrets_digest_key;
+
+    #[test]
+    fn processes_starting_together_agree_on_one_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets-digest.key");
+        let keys: Vec<[u8; 32]> = (0..16)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || load_or_create_secrets_digest_key(&path).unwrap())
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+        assert!(keys.iter().all(|key| *key == keys[0]));
+        assert_eq!(std::fs::read(&path).unwrap(), keys[0]);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_key_file_of_the_wrong_length_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets-digest.key");
+        std::fs::write(&path, b"short").unwrap();
+        assert!(load_or_create_secrets_digest_key(&path).is_err());
     }
 }

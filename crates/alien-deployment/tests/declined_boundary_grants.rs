@@ -1,4 +1,6 @@
 //! Declined setup keys must not leave grants in the boundary of the prepared deployment.
+mod support;
+
 use alien_core::{
     permissions::ManagementPermissions, ClientConfig, DeploymentConfig, DeploymentState,
     DeploymentStatus, EnvironmentVariablesSnapshot, Key, PermissionProfile, PermissionsConfig,
@@ -209,7 +211,7 @@ async fn release_update_keeps_a_declined_key_out_of_the_pending_boundary() {
         retry_requested: false,
         protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
     };
-    let mut result = alien_deployment::step(
+    let mut result = crate::support::step(
         current,
         config(false),
         ClientConfig::Local {
