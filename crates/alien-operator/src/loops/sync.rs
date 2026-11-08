@@ -1997,11 +1997,11 @@ mod tests {
         panic!("the deployment loop kept stepping");
     }
 
-    /// An update waits for approval or failed, so the installed release is not
-    /// refreshed. The workloads still run it, and their credential Secret is
-    /// still renewed on every idle pass.
+    /// An update waits for approval, failed, or is stuck mid-rollout, so the
+    /// installed release is not refreshed. The workloads still run it, and their
+    /// credential Secret is still renewed on every pass.
     #[tokio::test]
-    async fn a_pending_or_failed_update_still_renews_workload_credentials() {
+    async fn a_pending_failed_or_stuck_update_still_renews_workload_credentials() {
         type Stored = Arc<Mutex<Option<Value>>>;
         async fn create(State(stored): State<Stored>, Json(mut body): Json<Value>) -> axum::response::Response {
             use axum::response::IntoResponse;
@@ -2043,13 +2043,25 @@ mod tests {
                 "/api/v1/namespaces/agents/secrets/agent-deploy-runtime",
                 get(read).put(replace),
             )
+            .route(
+                "/apis/apps/v1/namespaces/agents/deployments/agent-deploy",
+                get(|| async {
+                    Json(json!({
+                        "apiVersion": "apps/v1", "kind": "Deployment",
+                        "metadata": {"name": "agent-deploy", "generation": 2},
+                        "spec": {"replicas": 1, "selector": {}, "template": {}},
+                        "status": {"replicas": 2, "readyReplicas": 1, "updatedReplicas": 1,
+                            "unavailableReplicas": 1, "availableReplicas": 1, "observedGeneration": 2}
+                    }))
+                }),
+            )
             .with_state(stored.clone());
         let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap();
         let address = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await });
-        let client: Arc<dyn alien_k8s_clients::SecretsApi> = Arc::new(
+        let kubernetes = Arc::new(
             KubernetesClient::new(KubernetesClientConfig::Manual {
                 server_url: format!("http://{address}"),
                 certificate_authority_data: None,
@@ -2065,11 +2077,16 @@ mod tests {
             .await
             .unwrap(),
         );
+        let client: Arc<dyn alien_k8s_clients::SecretsApi> = kubernetes.clone();
+        let deployments: Arc<dyn DeploymentApi> = kubernetes;
         let issued = Arc::new(AtomicUsize::new(0));
         let mut provider = MockPlatformServiceProvider::new();
         provider
             .expect_get_kubernetes_secrets_client()
             .returning(move |_| Ok(client.clone()));
+        provider
+            .expect_get_kubernetes_deployment_client()
+            .returning(move |_| Ok(deployments.clone()));
         let count = issued.clone();
         provider.expect_runtime_credential().returning(move |deployment, purpose| {
             assert_eq!(deployment, "dep_pending");
@@ -2186,6 +2203,46 @@ mod tests {
             super::super::deployment::refresh_installed_deployment(&state)
                 .await
                 .expect("credentials renewed");
+            assert_eq!(telemetry_token(&stored), format!("ax_cap_v1_pass_{pass}"));
+        }
+
+        // An update stuck mid-rollout: the new pods never become ready, so the
+        // step loop keeps waiting and never refreshes the installed release.
+        // The old pods still run with the same credential Secret, which must
+        // keep being renewed. The update itself is left where it was.
+        let target = release("rel_next", "example.test/agent:2");
+        let mut rolling = stack_state.clone();
+        let agent = rolling.resources.get_mut("agent").unwrap();
+        agent.status = alien_core::ResourceStatus::Updating;
+        agent.config = alien_core::Resource::new(worker("example.test/agent:2"));
+        let controller = agent.internal_state.as_mut().unwrap();
+        controller["state"] = json!("waitingForUpdate");
+        controller["_controllerStateVersion"] = json!(1);
+        let stuck = DeploymentState {
+            platform: Platform::Kubernetes,
+            status: DeploymentStatus::Updating,
+            current_release: Some(release("rel_installed", "example.test/agent:1")),
+            target_release: Some(target.clone()),
+            stack_state: Some(rolling),
+            error: None,
+            environment_info: None,
+            runtime_metadata: Some(alien_core::RuntimeMetadata {
+                prepared_stack: Some(release("rel_installed", "example.test/agent:1").stack),
+                pending_prepared_stack: Some(target.stack.clone()),
+                pending_prepared_release_id: target.release_id.clone(),
+                ..Default::default()
+            }),
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        state.db.set_deployment_state(&stuck).await.unwrap();
+        for pass in 2..4 {
+            super::super::deployment::run_deployment_continuously(&state)
+                .await
+                .expect("the rollout keeps waiting");
+            let after = state.db.get_deployment_state().await.unwrap().unwrap();
+            assert_eq!(after.status, DeploymentStatus::Updating);
+            assert_eq!(after.target_release, stuck.target_release);
             assert_eq!(telemetry_token(&stored), format!("ax_cap_v1_pass_{pass}"));
         }
     }

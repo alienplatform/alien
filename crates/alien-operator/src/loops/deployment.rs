@@ -406,6 +406,13 @@ pub(crate) async fn run_deployment_continuously(
         .and_then(|execution| execution.claim)
         .map(|claim| claim.operation_id);
 
+    // An update can wait for a long time, for example on a rollout that never
+    // becomes ready. The step loop does not reach the workloads it is not
+    // changing, so renew the installed credentials on every pass.
+    if operation == LoopOperation::Deploy {
+        renew_installed_credentials_or_warn(state).await;
+    }
+
     let result = alien_deployment::runner::run_step_loop(
         &mut current,
         &mut enriched_config,
@@ -557,7 +564,7 @@ pub(super) async fn refresh_installed_deployment(state: &OperatorState) -> Resul
 
 /// Renew the credential Secrets of the installed workloads when the installed
 /// release cannot be refreshed: an update waits for approval, waits to retry,
-/// or failed. Workloads keep running on their old revision, so their
+/// runs, or failed. Workloads keep running on their old revision, so their
 /// credentials must not expire meanwhile.
 async fn renew_installed_credentials(state: &OperatorState) -> Result<()> {
     if !crate::daily_identity::has_runtime_identity(&state.db).await? {

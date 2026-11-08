@@ -211,7 +211,7 @@ pub(crate) async fn reconcile(
 /// Renew the credential Secrets of the installed Kubernetes workloads and
 /// republish their command leaf, without changing any workload. The Operator
 /// runs this when it cannot refresh the installed release: an update waits
-/// for approval, runs, or failed. `installed` is the stack the workloads run;
+/// for approval, runs, is stuck, or failed. Workloads being deleted are skipped. `installed` is the stack the workloads run;
 /// each resource uses the config recorded in `state`.
 pub async fn refresh_installed_credentials(
     state: &alien_core::StackState,
@@ -226,6 +226,16 @@ pub async fn refresh_installed_credentials(
     let registry = std::sync::Arc::new(crate::core::ResourceRegistry::with_built_ins());
     let mut first_error = None;
     for (resource_id, resource) in &state.resources {
+        // An update may be removing a workload. Writing its Secret would
+        // recreate what the delete flow removes.
+        if matches!(
+            resource.status,
+            alien_core::ResourceStatus::Deleting
+                | alien_core::ResourceStatus::Deleted
+                | alien_core::ResourceStatus::DeleteFailed
+        ) {
+            continue;
+        }
         let Some(internal) = resource.internal_state.as_ref() else {
             continue;
         };
@@ -640,6 +650,30 @@ mod tests {
                     // Stored controller state carries its type, as the executor writes it.
                     let mut internal = serde_json::to_value(
                         crate::KubernetesWorkerController::mock_ready("agent-deploy", "agents"),
+                    )
+                    .unwrap();
+                    internal["type"] = json!("KubernetesWorkerController");
+                    internal
+                })
+                .build(),
+        );
+        // A workload the update is removing keeps no credential Secret.
+        state.resources.insert(
+            "old".into(),
+            alien_core::StackResourceState::builder()
+                .resource_type("worker".to_string())
+                .status(alien_core::ResourceStatus::Deleting)
+                .config(Resource::new(
+                    alien_core::Worker::new("old".into())
+                        .code(alien_core::WorkerCode::Image {
+                            image: "example.test/old:1".into(),
+                        })
+                        .permissions("default".into())
+                        .build(),
+                ))
+                .internal_state({
+                    let mut internal = serde_json::to_value(
+                        crate::KubernetesWorkerController::mock_ready("old-deploy", "agents"),
                     )
                     .unwrap();
                     internal["type"] = json!("KubernetesWorkerController");
