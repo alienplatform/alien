@@ -2661,6 +2661,18 @@ impl GcpWorkerController {
                 resource_id: Some(ctx.desired_config.id().to_string()),
             })?;
 
+        // The worker's own binding names the address Cloud Run reports as its private URL. A
+        // worker recorded without it (imported, or deployed before it was kept) would otherwise
+        // fall back to its public URL, which can be a custom domain, and an update can come
+        // before any heartbeat records it. Take it from the service read for this update.
+        if let Some(address) = current_service
+            .uri
+            .clone()
+            .or_else(|| current_service.urls.first().cloned())
+        {
+            self.cloud_run_url = Some(address);
+        }
+
         // Build updated service configuration
         let mut updated_service = self.build_cloud_run_service(service_name, cfg, ctx).await?;
 
@@ -9303,6 +9315,59 @@ mod tests {
                     .unwrap()
                     .state,
                 GcpWorkerState::UpdatingService
+            );
+        }
+
+        /// A worker recorded without its Cloud Run address, behind a custom domain, is updated
+        /// before any heartbeat records the address. The update must still name the address
+        /// Cloud Run reports as the own binding's private URL, not the custom domain, since a
+        /// protected install's verifier accepts only the former.
+        #[tokio::test]
+        async fn an_update_names_the_address_cloud_run_reports_without_a_heartbeat() {
+            const ADDRESS: &str = "https://basic-func-abcd1234-uc.a.run.app";
+            let own = format!(
+                "ALIEN_{}_BINDING",
+                basic_function().id.replace('-', "_").to_uppercase()
+            );
+            let mut cloudrun = MockCloudRunApi::new();
+            let mut service = rendered_service(true).await;
+            service.uri = Some(ADDRESS.to_string());
+            serving(service, &mut cloudrun);
+            cloudrun
+                .expect_patch_service()
+                .times(1)
+                .withf(move |_, _, service, _, _, _| {
+                    let env = super::super::live_service_env(service).expect("a container");
+                    let binding: serde_json::Value =
+                        serde_json::from_str(&env[&own]).expect("the own binding is JSON");
+                    binding["privateUrl"] == ADDRESS
+                        && binding["publicUrl"] == "https://api.acme.example"
+                })
+                .returning(|_, name, _, _, _, _| Ok(create_successful_operation_response(&name)));
+            cloudrun
+                .expect_get_operation()
+                .returning(|_, name| Ok(create_completed_operation_response(&name)));
+            let mut worker = GcpWorkerController {
+                state: GcpWorkerState::UpdateStart,
+                ..GcpWorkerController::mock_ready("basic-func")
+            };
+            worker.url = Some("https://api.acme.example".to_string());
+            worker.cloud_run_url = None;
+            let mut executor = executor(
+                cloudrun,
+                worker,
+                sandbox_on(false, GcpAgentPlatformTemplateState::Ready),
+                Some(prepared_worker().await),
+            )
+            .await;
+            executor.step().await.expect("the update runs");
+            assert_eq!(
+                executor
+                    .internal_state::<GcpWorkerController>()
+                    .unwrap()
+                    .cloud_run_url
+                    .as_deref(),
+                Some(ADDRESS)
             );
         }
 
