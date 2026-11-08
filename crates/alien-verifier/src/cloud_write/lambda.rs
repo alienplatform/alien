@@ -207,6 +207,19 @@ fn image_config_row<'a>() -> Row<'a> {
     })
 }
 
+/// `Publish` on a code write: the version it numbers would carry the new image with the
+/// configuration the function still has (the previous release's env and role) until the
+/// configuration write lands, and nothing the release signs runs a numbered version.
+fn publish_row<'a>() -> Row<'a> {
+    signed("/Publish", |value| {
+        (value.is_null() || value == &Value::Bool(false))
+            .then_some(())
+            .ok_or_else(|| {
+                format!("it publishes a version before the configuration is written ({value})")
+            })
+    })
+}
+
 fn is_empty_deep(value: &Value) -> bool {
     match value {
         Value::Object(fields) => fields.values().all(is_empty_deep),
@@ -238,7 +251,7 @@ fn code_rows<'a>(facts: &'a Facts<'a>) -> Vec<Row<'a>> {
     vec![
         image_row("/ImageUri", facts),
         architecture_row(facts),
-        free("/Publish"),
+        publish_row(),
         free("/RevisionId"),
     ]
 }
@@ -868,11 +881,15 @@ mod tests {
         checked(
             release(1, function_workload()),
             None,
-            code(json!({"ImageUri": format!("{REGISTRY}/api@{DIGEST}"), "Publish": true})),
+            code(json!({"ImageUri": format!("{REGISTRY}/api@{DIGEST}"), "Publish": false})),
         )
         .await
         .unwrap();
         for (request, says) in [
+            (
+                json!({"ImageUri": format!("{REGISTRY}/api@{DIGEST}"), "Publish": true}),
+                "field /Publish must match the signed release",
+            ),
             (
                 json!({"ImageUri": format!("{REGISTRY}/api@sha256:{}", "3".repeat(64))}),
                 "field /ImageUri must match",
@@ -1144,7 +1161,7 @@ mod tests {
         };
         let write = CloudWrite::UpdateFunctionCode {
             function_name: own(),
-            request: json!({"ImageUri": format!("{REGISTRY}/api@{DIGEST}"), "Publish": true}),
+            request: json!({"ImageUri": format!("{REGISTRY}/api@{DIGEST}"), "Publish": false}),
         };
         forward(&lambda, &facts, &write, &Newest(events.clone()))
             .await

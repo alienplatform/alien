@@ -3371,9 +3371,11 @@ impl AwsWorkerController {
         if let Some(statements) = verifier::protected_statements(ctx, &current_config.id)? {
             let mut writes = Vec::new();
             if current_config.code != previous_config.code {
+                // A published version would carry the new image with the previous release's
+                // configuration until the write after this one lands.
                 let code = UpdateFunctionCodeRequest::builder()
                     .image_uri(Self::function_image_uri(ctx, &current_config)?)
-                    .publish(true)
+                    .publish(false)
                     .build();
                 writes.push(verifier::CloudWrite::UpdateFunctionCode {
                     function_name: aws_worker_name.clone(),
@@ -12415,6 +12417,11 @@ mod tests {
         assert_eq!(
             writes[0]["updateFunctionCode"]["request"]["ImageUri"],
             serde_json::json!(pinned_image('2'))
+        );
+        assert_eq!(
+            writes[0]["updateFunctionCode"]["request"]["Publish"],
+            serde_json::json!(false),
+            "a version published between the code and configuration writes would run the new image with the old env"
         );
         assert_eq!(
             writes[1]["updateFunctionConfiguration"]["request"]["MemorySize"],

@@ -371,7 +371,7 @@ class Run:
                                                                        .update({changed: "tampered"}))], changed),
             ("an unknown field", [code, config_write(lambda body: body.update(Unknown="x"))], "/Unknown"),
             ("an image the release doesn't sign", [{"updateFunctionCode": {
-                "functionName": function, "request": {"ImageUri": live_image, "Publish": True}}}],
+                "functionName": function, "request": {"ImageUri": live_image, "Publish": False}}}],
              "/ImageUri"),
         ]
         answers = {}

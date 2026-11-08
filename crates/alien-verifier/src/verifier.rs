@@ -610,7 +610,7 @@ mod tests {
                     }},
                     {"updateFunctionCode": {
                         "functionName": format!("{PREFIX}-api"),
-                        "request": {"ImageUri": code_image, "Publish": true},
+                        "request": {"ImageUri": code_image, "Publish": false},
                     }},
                     {"putFunctionConcurrency": {
                         "functionName": format!("{PREFIX}-api"),
@@ -827,7 +827,7 @@ mod tests {
                 }},
                 {"updateFunctionCode": {
                     "functionName": format!("{PREFIX}-api"),
-                    "request": {"ImageUri": format!("{REGISTRY}/api@{DIGEST}"), "Publish": true},
+                    "request": {"ImageUri": format!("{REGISTRY}/api@{DIGEST}"), "Publish": false},
                 }},
             ],
         }});
@@ -918,7 +918,7 @@ mod tests {
                 "workload": "api",
                 "writes": [{"updateFunctionCode": {
                     "functionName": format!("{PREFIX}-api"),
-                    "request": {"ImageUri": image(digit), "Publish": true},
+                    "request": {"ImageUri": image(digit), "Publish": false},
                 }}],
             }})
         };
@@ -979,7 +979,7 @@ mod tests {
                 "workload": "api",
                 "writes": [{"updateFunctionCode": {
                     "functionName": format!("{PREFIX}-api"),
-                    "request": {"ImageUri": image(digit), "Publish": true},
+                    "request": {"ImageUri": image(digit), "Publish": false},
                 }}],
             }})
         };

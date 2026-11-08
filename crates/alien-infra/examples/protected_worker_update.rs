@@ -645,7 +645,7 @@ async fn main() -> Result<(), Error> {
                     "workload": WORKER,
                     "writes": [{"updateFunctionCode": {
                         "functionName": format!("{}-{WORKER}", env("PREFIX")?),
-                        "request": {"ImageUri": image, "Publish": true},
+                        "request": {"ImageUri": image, "Publish": false},
                     }}],
                 }})
             );
