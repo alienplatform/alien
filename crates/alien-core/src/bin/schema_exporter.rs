@@ -253,6 +253,7 @@ use utoipa::OpenApi;
     AwsArtifactRegistryImportData,
     AwsComputeClusterImportData,
     AwsPostgresImportData,
+    AwsRedisImportData,
     AwsSandboxImportData,
     GcpStorageImportData,
     GcpWorkerImportData,

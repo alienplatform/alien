@@ -56,6 +56,7 @@ export type { AwsPermissionEffect } from "./zod/aws-permission-effect-schema.js"
 export type { AwsPlatformPermission } from "./zod/aws-platform-permission-schema.js";
 export type { AwsPostgresImportData } from "./zod/aws-postgres-import-data-schema.js";
 export type { AwsQueueImportData } from "./zod/aws-queue-import-data-schema.js";
+export type { AwsRedisImportData } from "./zod/aws-redis-import-data-schema.js";
 export type { AwsRemoteBindingsImportData } from "./zod/aws-remote-bindings-import-data-schema.js";
 export type { AwsRemoteStackManagementHeartbeatData } from "./zod/aws-remote-stack-management-heartbeat-data-schema.js";
 export type { AwsRemoteStackManagementImportData } from "./zod/aws-remote-stack-management-import-data-schema.js";
@@ -603,6 +604,7 @@ export { AwsPermissionEffectSchema } from "./zod/aws-permission-effect-schema.js
 export { AwsPlatformPermissionSchema } from "./zod/aws-platform-permission-schema.js";
 export { AwsPostgresImportDataSchema } from "./zod/aws-postgres-import-data-schema.js";
 export { AwsQueueImportDataSchema } from "./zod/aws-queue-import-data-schema.js";
+export { AwsRedisImportDataSchema } from "./zod/aws-redis-import-data-schema.js";
 export { AwsRemoteBindingsImportDataSchema } from "./zod/aws-remote-bindings-import-data-schema.js";
 export { AwsRemoteStackManagementHeartbeatDataSchema } from "./zod/aws-remote-stack-management-heartbeat-data-schema.js";
 export { AwsRemoteStackManagementImportDataSchema } from "./zod/aws-remote-stack-management-import-data-schema.js";

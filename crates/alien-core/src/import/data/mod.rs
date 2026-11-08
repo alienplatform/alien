@@ -11,7 +11,7 @@ pub use aws::{
     AwsAiImportData, AwsArtifactRegistryImportData, AwsBuildImportData,
     AwsComputeClusterImportData, AwsEmailDkimTokenImportData, AwsEmailDomainImportData,
     AwsEmailImportData, AwsKeyImportData, AwsKvImportData, AwsNetworkImportData,
-    AwsOpenSearchImportData, AwsPostgresImportData, AwsQueueImportData,
+    AwsOpenSearchImportData, AwsPostgresImportData, AwsQueueImportData, AwsRedisImportData,
     AwsRemoteBindingsImportData, AwsRemoteStackManagementImportData, AwsSandboxImportData,
     AwsSandboxNetwork, AwsServiceAccountImportData, AwsStorageImportData, AwsVaultImportData,
     AwsWorkerImportData,
@@ -131,6 +131,7 @@ mod schema_snapshots {
             ("aws_network", schema::<AwsNetworkImportData>()),
             ("aws_open_search", schema::<AwsOpenSearchImportData>()),
             ("aws_postgres", schema::<AwsPostgresImportData>()),
+            ("aws_redis", schema::<AwsRedisImportData>()),
             ("aws_queue", schema::<AwsQueueImportData>()),
             (
                 "aws_remote_stack_management",
