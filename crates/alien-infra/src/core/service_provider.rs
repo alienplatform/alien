@@ -74,6 +74,7 @@ use alien_gcp_clients::{
     artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient},
     cloud_kms::{CloudKmsApi, CloudKmsClient},
     cloud_sql::{CloudSqlApi, CloudSqlClient},
+    monitoring::{MonitoringApi, MonitoringClient},
     memorystore::{
         MemorystoreApi, MemorystoreClient, ServiceConnectionPolicyApi, ServiceConnectionPolicyClient,
     },
@@ -221,6 +222,7 @@ pub trait PlatformServiceProvider: Send + Sync {
     ) -> Result<Arc<dyn SecretManagerApi>>;
     fn get_gcp_cloud_sql_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudSqlApi>>;
     fn get_gcp_memorystore_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn MemorystoreApi>>;
+    fn get_gcp_monitoring_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn MonitoringApi>>;
     fn get_gcp_service_connection_policy_client(
         &self,
         config: &GcpClientConfig,
@@ -1116,6 +1118,13 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
 
     fn get_gcp_memorystore_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn MemorystoreApi>> {
         Ok(Arc::new(MemorystoreClient::new(
+            reqwest::Client::new(),
+            config.clone(),
+        )))
+    }
+
+    fn get_gcp_monitoring_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn MonitoringApi>> {
+        Ok(Arc::new(MonitoringClient::new(
             reqwest::Client::new(),
             config.clone(),
         )))
