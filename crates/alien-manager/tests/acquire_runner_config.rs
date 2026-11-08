@@ -227,6 +227,9 @@ async fn deployment_with_queued_update(record_token: bool) -> Fixture {
         bundle_signing_key: None,
         bundle_sources: None,
         log_buffer: Arc::new(alien_manager::LogBuffer::new()),
+        values: None,
+        value_access: None,
+        verify_limiter: std::sync::Arc::new(alien_manager::values::VerifyLimiter::default()),
         project_store: Arc::new(alien_manager::providers::SingleWorkspaceProjects),
     };
 

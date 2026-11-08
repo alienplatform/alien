@@ -1241,6 +1241,9 @@ mod tests {
             bundle_signing_key: None,
             bundle_sources: None,
             log_buffer: Arc::new(crate::dev::LogBuffer::new()),
+            values: None,
+            value_access: None,
+            verify_limiter: Arc::new(crate::values::VerifyLimiter::default()),
         }
     }
 

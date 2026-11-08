@@ -41,6 +41,7 @@ pub use helpers::deployment_state_error_from_headline;
 pub use helpers::{
     check_deployer_secrets, collect_environment_info, secrets_digest_key_is_set,
     set_ephemeral_secrets_digest_key, set_secrets_digest_key, set_secrets_digest_key_if_unset,
+    value_digest,
 };
 pub use observe::run_observe_pass;
 

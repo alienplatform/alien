@@ -1,0 +1,105 @@
+//! Where values are kept.
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use alien_bindings::traits::Kv;
+use alien_error::{AlienError, Context};
+use async_trait::async_trait;
+
+use super::{StoredValue, ValueScope, ValueSlot};
+use crate::error::{ErrorData, Result};
+
+/// Storage for [`super::ValueStore`]. A write is visible to the next read.
+#[async_trait]
+pub trait ValueBackend: Send + Sync {
+    async fn put(&self, scope: &ValueScope, value: &StoredValue) -> Result<()>;
+    async fn get(&self, scope: &ValueScope, slot: &ValueSlot) -> Result<Option<StoredValue>>;
+    /// Removing an empty slot succeeds.
+    async fn delete(&self, scope: &ValueScope, slot: &ValueSlot) -> Result<()>;
+    async fn list(&self, scope: &ValueScope) -> Result<Vec<StoredValue>>;
+}
+
+/// Values in the manager's key-value binding, under `val:{scope}:{slot}`.
+/// Records are written without a TTL, so the store never expires them.
+pub struct KvValueBackend {
+    kv: Arc<dyn Kv>,
+}
+
+const PAGE_SIZE: usize = 100;
+
+impl KvValueBackend {
+    pub fn new(kv: Arc<dyn Kv>) -> Self {
+        Self { kv }
+    }
+
+    fn key(scope: &ValueScope, slot: &ValueSlot) -> String {
+        format!("val:{scope}:{slot}")
+    }
+
+    fn kv_error(action: &str) -> ErrorData {
+        ErrorData::InternalError {
+            message: format!("Could not {action} in the key-value store"),
+        }
+    }
+}
+
+#[async_trait]
+impl ValueBackend for KvValueBackend {
+    async fn put(&self, scope: &ValueScope, value: &StoredValue) -> Result<()> {
+        self.kv
+            .put(&Self::key(scope, &value.slot), value.encode(), None)
+            .await
+            .context(Self::kv_error("write a value"))?;
+        Ok(())
+    }
+
+    async fn get(&self, scope: &ValueScope, slot: &ValueSlot) -> Result<Option<StoredValue>> {
+        self.kv
+            .get(&Self::key(scope, slot))
+            .await
+            .context(Self::kv_error("read a value"))?
+            .map(|entry| StoredValue::decode(slot.clone(), &entry.value))
+            .transpose()
+    }
+
+    async fn delete(&self, scope: &ValueScope, slot: &ValueSlot) -> Result<()> {
+        self.kv
+            .delete(&Self::key(scope, slot), None)
+            .await
+            .context(Self::kv_error("delete a value"))?;
+        Ok(())
+    }
+
+    async fn list(&self, scope: &ValueScope) -> Result<Vec<StoredValue>> {
+        let prefix = format!("val:{scope}:");
+        let mut found = BTreeMap::new();
+        let mut cursor = None;
+        loop {
+            let page = self
+                .kv
+                .scan_prefix(&prefix, Some(PAGE_SIZE), cursor)
+                .await
+                .context(Self::kv_error("list values"))?;
+            for entry in page.items {
+                // Scans may repeat keys across pages.
+                let Some(slot) = entry.key.strip_prefix(&prefix) else {
+                    return Err(AlienError::new(ErrorData::InternalError {
+                        message: format!(
+                            "Key-value scan returned '{}' outside '{prefix}'",
+                            entry.key
+                        ),
+                    }));
+                };
+                let slot: ValueSlot = slot.parse()?;
+                let stored = StoredValue::decode(slot.clone(), &entry.value)?;
+                found.insert(slot, stored);
+            }
+            match page.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        Ok(found.into_values().collect())
+    }
+}

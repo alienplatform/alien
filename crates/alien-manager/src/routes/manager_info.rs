@@ -44,6 +44,10 @@ pub struct ManagerCapabilities {
     pub tunnels: bool,
     /// Helm charts at `oci://<registryHost>/charts/<stack>`.
     pub charts: bool,
+    /// Deployment values held by this manager at `/v1/values/{scope}`. The
+    /// number is the version of that API; absent when values are not served.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<u32>,
 }
 
 pub fn router() -> Router<AppState> {
@@ -73,6 +77,7 @@ async fn manager_info(State(state): State<AppState>, headers: HeaderMap) -> Resp
         capabilities: ManagerCapabilities {
             tunnels: state.tunnels.is_some(),
             charts: state.charts.is_some(),
+            values: (state.values.is_some() && state.value_access.is_some()).then_some(1),
         },
         operator_image: state
             .charts

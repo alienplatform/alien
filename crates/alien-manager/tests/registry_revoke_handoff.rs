@@ -411,6 +411,9 @@ async fn handed_off_deployment(answer: Answer) -> Fixture {
         bundle_signing_key: None,
         bundle_sources: None,
         log_buffer: Arc::new(alien_manager::LogBuffer::new()),
+        values: None,
+        value_access: None,
+        verify_limiter: std::sync::Arc::new(alien_manager::values::VerifyLimiter::default()),
     };
 
     let fixture = Fixture {

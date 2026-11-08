@@ -1419,6 +1419,39 @@ fn keyed_secrets_sync_hash(
     format!("{:x}", mac.finalize().into_bytes())
 }
 
+/// Keyed digest of one value held by a manager, as lowercase hex.
+///
+/// `HMAC(K, slot || 0x00 || value)` with `K` derived from the process's key
+/// (see [`set_secrets_digest_key`]). It is not tied to a deployment, so the
+/// digest of a value stays the same when its scope moves. The control plane
+/// stores the digest to notice changes and cannot use it to test guesses.
+pub fn value_digest(slot: &str, value: &str) -> Result<String> {
+    #[cfg(test)]
+    let key = SECRETS_DIGEST_KEY.get().or(Some(&[7; 32]));
+    #[cfg(not(test))]
+    let key = SECRETS_DIGEST_KEY.get();
+    let key = key.ok_or_else(|| {
+        AlienError::new(ErrorData::InternalError {
+            message: "No secrets digest key is set; the embedding process must call \
+                      set_secrets_digest_key"
+                .to_string(),
+        })
+    })?;
+    Ok(keyed_value_digest(key, slot, value))
+}
+
+fn keyed_value_digest(key: &[u8; 32], slot: &str, value: &str) -> String {
+    let mut derive = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+    derive.update(b"alien-values\0");
+    let value_key = derive.finalize().into_bytes();
+
+    let mut mac = HmacSha256::new_from_slice(&value_key).expect("HMAC accepts any key length");
+    mac.update(slot.as_bytes());
+    mac.update(b"\0");
+    mac.update(value.as_bytes());
+    format!("{:x}", mac.finalize().into_bytes())
+}
+
 /// Interrupts all non-terminal, non-failed resources when a deployment failure is detected.
 ///
 /// When one resource fails and the deployment stops, other resources may be left in
@@ -3043,6 +3076,30 @@ mod tests {
         assert_ne!(
             digest,
             keyed_secrets_sync_hash(&[1; 32], "deployment-b", &secrets)
+        );
+    }
+
+    #[test]
+    fn value_digests_depend_on_the_key_the_slot_and_the_value() {
+        let digest = keyed_value_digest(&[1; 32], "env:API_TOKEN", "value");
+        assert_eq!(digest.len(), 64);
+        assert_eq!(
+            digest,
+            keyed_value_digest(&[1; 32], "env:API_TOKEN", "value")
+        );
+        assert_ne!(
+            digest,
+            keyed_value_digest(&[2; 32], "env:API_TOKEN", "value")
+        );
+        assert_ne!(digest, keyed_value_digest(&[1; 32], "env:OTHER", "value"));
+        assert_ne!(
+            digest,
+            keyed_value_digest(&[1; 32], "env:API_TOKEN", "other")
+        );
+        // The slot and value are separated, so moving a byte between them changes the digest.
+        assert_ne!(
+            keyed_value_digest(&[1; 32], "env:AB", "C"),
+            keyed_value_digest(&[1; 32], "env:A", "BC")
         );
     }
 

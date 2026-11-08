@@ -298,6 +298,50 @@ pub enum ErrorData {
     )]
     Forbidden { reason: String },
 
+    /// A value is larger than the manager stores.
+    #[error(
+        code = "VALUE_TOO_LARGE",
+        message = "Value for '{slot}' is {bytes} bytes; the limit is {max_bytes} bytes",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 413
+    )]
+    ValueTooLarge {
+        slot: String,
+        bytes: usize,
+        max_bytes: usize,
+    },
+
+    /// A value slot has no stored value.
+    #[error(
+        code = "VALUE_NOT_FOUND",
+        message = "No value is stored for '{slot}' in '{scope}'",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 404
+    )]
+    ValueNotFound { scope: String, slot: String },
+
+    /// The manager has no place to keep values.
+    #[error(
+        code = "VALUES_UNAVAILABLE",
+        message = "This manager cannot store values: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 501
+    )]
+    ValuesUnavailable { reason: String },
+
+    /// Too many verification attempts for a scope.
+    #[error(
+        code = "VALUE_VERIFY_RATE_LIMITED",
+        message = "Too many value verifications for '{scope}'; try again in a minute",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 429
+    )]
+    ValueVerifyRateLimited { scope: String },
+
     /// Invalid request payload
     #[error(
         code = "BAD_REQUEST",

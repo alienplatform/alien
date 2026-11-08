@@ -64,6 +64,10 @@ pub struct AlienManagerBuilder {
     bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
     /// Where bundles' charts and Operator images come from.
     bundle_sources: Option<Arc<dyn crate::traits::BundleSourceResolver>>,
+    /// Where deployment values are kept; `None` serves no values.
+    value_store: Option<Arc<crate::values::ValueStore>>,
+    /// Who may use the value endpoints; the standalone rules when unset.
+    value_access: Option<Arc<dyn crate::values::ValueAccessAuthorizer>>,
 }
 
 impl AlienManagerBuilder {
@@ -93,7 +97,28 @@ impl AlienManagerBuilder {
             release_channels: None,
             bundle_signing_key: None,
             bundle_sources: None,
+            value_store: None,
+            value_access: None,
         }
+    }
+
+    /// Keep deployment values (see [`crate::values`]) in `store`. Without
+    /// it the manager serves no values and does not advertise the
+    /// capability. Standalone defaults use the manager's own database, or
+    /// its key-value binding when one is configured.
+    pub fn value_store(mut self, store: crate::values::ValueStore) -> Self {
+        self.value_store = Some(Arc::new(store));
+        self
+    }
+
+    /// Decide who may use the value endpoints. Default: the same tokens and
+    /// deployment rights as the rest of the API.
+    pub fn value_access(
+        mut self,
+        authorizer: Arc<dyn crate::values::ValueAccessAuthorizer>,
+    ) -> Self {
+        self.value_access = Some(authorizer);
+        self
     }
 
     /// Sign air-gapped bundles with `key`. Environments pin its public key,
@@ -494,12 +519,18 @@ impl AlienManagerBuilder {
                         reason: "Failed to create KV bindings provider".to_string(),
                     },
                 )?;
-                provider
+                let kv = provider
                     .load_kv("kv")
                     .await
                     .context(ErrorData::ServerInitFailed {
                         reason: "Failed to load KV binding".to_string(),
-                    })?
+                    })?;
+                if self.value_store.is_none() {
+                    self.value_store = Some(Arc::new(crate::values::ValueStore::new(Arc::new(
+                        crate::values::KvValueBackend::new(kv.clone()),
+                    ))));
+                }
+                kv
             } else {
                 // Only the manager opens this store, so it doesn't need
                 // cross-process coordination, and it works when the state
@@ -741,6 +772,14 @@ impl AlienManagerBuilder {
             });
         }
 
+        // Without a cloud key-value binding, values stay in the encrypted
+        // database; the local key-value file is not encrypted.
+        if self.value_store.is_none() {
+            self.value_store = Some(Arc::new(crate::values::ValueStore::new(Arc::new(
+                crate::stores::sqlite::SqliteValueBackend::new(db.clone()),
+            ))));
+        }
+
         Ok(self)
     }
 
@@ -782,6 +821,15 @@ impl AlienManagerBuilder {
             .unwrap_or_else(|| Arc::new(crate::dev::LogBuffer::new()));
 
         let config = Arc::new(self.config);
+        let value_access = self.value_store.as_ref().map(|_| {
+            self.value_access.clone().unwrap_or_else(|| {
+                Arc::new(crate::values::StandaloneValueAccess::new(
+                    auth_validator.clone(),
+                    authz.clone(),
+                    deployment_store.clone(),
+                )) as Arc<dyn crate::values::ValueAccessAuthorizer>
+            })
+        });
 
         finalize(
             config,
@@ -808,6 +856,8 @@ impl AlienManagerBuilder {
             self.release_channels,
             self.bundle_signing_key,
             self.bundle_sources,
+            self.value_store,
+            value_access,
         )
         .await
     }
@@ -984,6 +1034,8 @@ async fn finalize(
     release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
     bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
     bundle_sources: Option<Arc<dyn crate::traits::BundleSourceResolver>>,
+    values: Option<Arc<crate::values::ValueStore>>,
+    value_access: Option<Arc<dyn crate::values::ValueAccessAuthorizer>>,
 ) -> crate::error::Result<AlienManager> {
     use alien_commands::server::CommandServer;
 
@@ -1030,6 +1082,9 @@ async fn finalize(
         bundle_signing_key,
         bundle_sources,
         log_buffer: log_buffer.clone(),
+        values,
+        value_access,
+        verify_limiter: Arc::new(crate::values::VerifyLimiter::default()),
     };
 
     // --- Router ---
