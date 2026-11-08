@@ -1856,9 +1856,7 @@ mod tests {
 
     /// A validator that fails every request with a fixed error, the way an
     /// embedder's validator fails when its identity service answers.
-    struct FailingValidator {
-        retryable: bool,
-    }
+    struct FailingValidator(AlienError);
 
     #[async_trait]
     impl crate::traits::AuthValidator for FailingValidator {
@@ -1866,15 +1864,19 @@ mod tests {
             &self,
             _headers: &http::HeaderMap,
         ) -> Result<Option<Subject>, AlienError> {
-            let mut error = AlienError::new(alien_error::GenericError {
-                message: "identity service answered 503 at http://identity.internal".to_string(),
-            });
-            error.retryable = self.retryable;
-            Err(error)
+            Err(self.0.clone())
         }
     }
 
     async fn list_with_failing_validator(retryable: bool) -> (StatusCode, serde_json::Value) {
+        let mut error = AlienError::new(alien_error::GenericError {
+            message: "identity service answered 503 at http://identity.internal".to_string(),
+        });
+        error.retryable = retryable;
+        list_with_validator_error(error).await
+    }
+
+    async fn list_with_validator_error(error: AlienError) -> (StatusCode, serde_json::Value) {
         // The store must not be reached when authentication fails.
         let deployment_store = MockDeploymentStore::new();
         let request = Request::builder()
@@ -1885,7 +1887,7 @@ mod tests {
             .expect("request should build");
         send_with_validator(
             deployment_store,
-            Arc::new(FailingValidator { retryable }),
+            Arc::new(FailingValidator(error)),
             request,
             true,
         )
@@ -2058,6 +2060,43 @@ mod tests {
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
         assert_eq!(body["code"], "UNAUTHORIZED", "{body}");
         assert_eq!(body["retryable"], false, "{body}");
+    }
+
+    fn refusal(code: &str, message: &str, status: u16, internal: bool) -> AlienError {
+        let mut error = AlienError::new(alien_error::GenericError {
+            message: message.to_string(),
+        });
+        error.code = code.to_string();
+        error.http_status_code = Some(status);
+        error.internal = internal;
+        error
+    }
+
+    #[tokio::test]
+    async fn a_refusal_the_validator_marks_safe_to_show_keeps_its_status_and_message() {
+        let message = "This client is too old. Upgrade it and try again.";
+        let (status, body) =
+            list_with_validator_error(refusal("CLIENT_UPGRADE_REQUIRED", message, 409, false))
+                .await;
+
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["code"], "CLIENT_UPGRADE_REQUIRED", "{body}");
+        assert_eq!(body["message"], message, "{body}");
+        assert_eq!(body["retryable"], false, "{body}");
+    }
+
+    #[tokio::test]
+    async fn an_internal_or_non_client_refusal_still_gets_a_401() {
+        for error in [
+            refusal("CLIENT_UPGRADE_REQUIRED", "secret details", 409, true),
+            refusal("UPSTREAM_FAILED", "upstream answered 502", 502, false),
+            refusal("UNAUTHORIZED", "token rejected", 401, false),
+        ] {
+            let (status, body) = list_with_validator_error(error).await;
+
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+            assert_eq!(body["code"], "UNAUTHORIZED", "{body}");
+        }
     }
 
     /// `<group>/<name>` specs send the group's name: `alien dev` names its group `local-dev`
