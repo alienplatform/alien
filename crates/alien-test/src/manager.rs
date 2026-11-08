@@ -141,14 +141,34 @@ impl TestManager {
 
         // 2. Reserve the listener before the embedded registry starts; releasing
         // the port here lets that registry (or another process) claim it.
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        // `ALIEN_TEST_MANAGER_PORT` pins the port so an operator can forward it
+        // to a tunnel that runs outside the sandbox (see the public URL below).
+        let bind_port = std::env::var("ALIEN_TEST_MANAGER_PORT")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                s.parse::<u16>()
+                    .map_err(|e| format!("ALIEN_TEST_MANAGER_PORT must be a port number: {e}"))
+            })
+            .transpose()?
+            .unwrap_or(0);
+        let listener = TcpListener::bind(("127.0.0.1", bind_port)).await?;
         let port = listener.local_addr()?.port();
         let url = format!("http://127.0.0.1:{}", port);
 
         // 2b. Start ngrok tunnel if configured. Cloud-deployed workers and
         //     Docker-hosted local runtimes need a public route back to the
         //     manager for command response and large-payload callbacks.
-        let has_ngrok_token = std::env::var("NGROK_AUTHTOKEN")
+        // `ALIEN_TEST_MANAGER_PUBLIC_URL` names a tunnel that already forwards to
+        // the manager port (for example ngrok on an operator laptop when the
+        // sandbox's egress proxy blocks the ngrok agent). It replaces the
+        // built-in ngrok tunnel.
+        let external_public_url = std::env::var("ALIEN_TEST_MANAGER_PUBLIC_URL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.trim_end_matches('/').to_string());
+        let has_ngrok_token = external_public_url.is_none()
+            && std::env::var("NGROK_AUTHTOKEN")
             .ok()
             .filter(|s| !s.is_empty())
             .is_some();
@@ -163,7 +183,10 @@ impl TestManager {
             None
         };
 
-        let base_url = if let Some(ref tunnel) = ngrok_tunnel {
+        let base_url = if let Some(ref public_url) = external_public_url {
+            info!(%public_url, "Using externally provided manager public URL");
+            public_url.clone()
+        } else if let Some(ref tunnel) = ngrok_tunnel {
             tunnel.url.clone()
         } else {
             url.clone()
