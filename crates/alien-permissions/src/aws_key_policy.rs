@@ -11,6 +11,7 @@
 //! therefore also gets an allowlist: use of the key is denied to every principal
 //! except the runtime roles that setup created for it.
 
+use crate::registry::permission_set_uses_aws_key_data;
 use alien_core::{Container, PermissionSetReference, Postgres, ServiceAccount, Stack, Storage};
 use serde_json::{json, Map, Value};
 
@@ -154,11 +155,15 @@ pub fn aws_key_policy(
     json!({ "Version": "2012-10-17", "Statement": statements })
 }
 
-/// Ids of the service accounts whose runtime roles may use the key: those whose
-/// permission profile grants anything on the key, or any `key/` permission
-/// stack-wide.
+/// Ids of the service accounts whose runtime roles may use the key: those with
+/// any grant scoped to the key, or a stack-wide grant that allows KMS key use.
+/// Stack-wide grants are judged by the actions they allow, not by their names.
 pub fn key_runtime_service_accounts(stack: &Stack, key_id: &str) -> Vec<String> {
-    let is_key_permission = |reference: &PermissionSetReference| reference.id().starts_with("key/");
+    let reference_uses_keys = |reference: &PermissionSetReference| {
+        reference
+            .resolve(|name| crate::get_permission_set(name).cloned())
+            .is_some_and(|set| permission_set_uses_aws_key_data(&set))
+    };
     stack
         .resources()
         .filter_map(|(_, entry)| entry.config.downcast_ref::<ServiceAccount>())
@@ -170,13 +175,13 @@ pub fn key_runtime_service_accounts(stack: &Stack, key_id: &str) -> Vec<String> 
                 || account
                     .stack_permission_sets
                     .iter()
-                    .any(|set| set.id.starts_with("key/"))
+                    .any(permission_set_uses_aws_key_data)
                 || profile.is_some_and(|profile| {
                     profile.0.get(key_id).is_some_and(|refs| !refs.is_empty())
                         || profile
                             .0
                             .get("*")
-                            .is_some_and(|refs| refs.iter().any(is_key_permission))
+                            .is_some_and(|refs| refs.iter().any(reference_uses_keys))
                 })
         })
         .map(|account| account.id.clone())
@@ -349,5 +354,61 @@ mod tests {
             vec!["manager-sa".to_string(), "wild-sa".to_string()]
         );
         assert!(!key_has_native_service_use(&stack, "secrets"));
+    }
+
+    #[test]
+    fn a_custom_stack_wide_grant_that_allows_decrypt_is_a_runtime_role() {
+        let custom = |id: &str, action: &str| {
+            PermissionSetReference::from_inline(
+                serde_json::from_value(json!({
+                    "id": id, "description": "test",
+                    "platforms": { "aws": [{
+                        "grant": { "actions": [action] },
+                        "binding": { "stack": { "resources": ["*"] } }
+                    }] }
+                }))
+                .unwrap(),
+            )
+        };
+        let stack = Stack::new("stack".to_string())
+            .add(
+                Key::new("secrets".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ServiceAccount::new("named-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ServiceAccount::new("custom-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ServiceAccount::new("unrelated-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .permissions(
+                alien_core::PermissionsConfig::new()
+                    .with_profile(
+                        "named",
+                        PermissionProfile::new()
+                            .global([PermissionSetReference::from_name("key/remote-cryptography")]),
+                    )
+                    .with_profile(
+                        "custom",
+                        PermissionProfile::new().global([custom("custom/crypto", "kms:Decrypt")]),
+                    )
+                    .with_profile(
+                        "unrelated",
+                        PermissionProfile::new()
+                            .global([custom("key/looks-like-a-key", "s3:GetObject")]),
+                    ),
+            )
+            .build();
+
+        assert_eq!(
+            key_runtime_service_accounts(&stack, "secrets"),
+            vec!["named-sa".to_string(), "custom-sa".to_string()]
+        );
     }
 }
