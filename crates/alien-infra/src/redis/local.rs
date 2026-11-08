@@ -40,12 +40,13 @@ fn manager(ctx: &ResourceControllerContext<'_>) -> Result<Arc<LocalRedisManager>
 /// What the local server runs with. Local has no replicas and no key management, so
 /// `highAvailability` and `encryptionKey` have nothing to configure here.
 fn spec_for(config: &Redis) -> Result<RedisSpec> {
-    let max_memory_bytes = config
-        .requested_memory_bytes()
-        .context(ErrorData::ResourceConfigInvalid {
-            message: format!("Redis '{}' has an invalid memory value", config.id),
-            resource_id: Some(config.id.clone()),
-        })?;
+    let max_memory_bytes =
+        config
+            .requested_memory_bytes()
+            .context(ErrorData::ResourceConfigInvalid {
+                message: format!("Redis '{}' has an invalid memory value", config.id),
+                resource_id: Some(config.id.clone()),
+            })?;
     if config.high_availability {
         warn!(redis_id = %config.id, "Local Redis has no replicas; highAvailability has no effect");
     }
@@ -161,7 +162,10 @@ impl LocalRedisController {
             .start_redis(&config.id, spec_for(&config)?)
             .await
             .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to apply the new settings to local Redis '{}'", config.id),
+                message: format!(
+                    "Failed to apply the new settings to local Redis '{}'",
+                    config.id
+                ),
                 resource_id: Some(config.id.clone()),
             })?;
 
@@ -309,7 +313,12 @@ mod tests {
 
     #[test]
     fn spec_without_memory_leaves_the_server_unlimited() {
-        assert_eq!(spec_for(&redis(None, true, false)).unwrap().max_memory_bytes, None);
+        assert_eq!(
+            spec_for(&redis(None, true, false))
+                .unwrap()
+                .max_memory_bytes,
+            None
+        );
     }
 
     #[test]
@@ -321,7 +330,12 @@ mod tests {
     #[test]
     fn binding_params_never_contain_the_password() {
         let controller = LocalRedisController {
-            binding: Some(RedisBinding::local("127.0.0.1", 6380, "default", "s3cr3t-value")),
+            binding: Some(RedisBinding::local(
+                "127.0.0.1",
+                6380,
+                "default",
+                "s3cr3t-value",
+            )),
             port: Some(6380),
             ..Default::default()
         };

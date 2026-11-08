@@ -194,16 +194,13 @@ impl ResourceDefinition for Redis {
     }
 
     fn validate_update(&self, new_config: &dyn ResourceDefinition) -> Result<()> {
-        let new_redis = new_config
-            .as_any()
-            .downcast_ref::<Redis>()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::UnexpectedResourceType {
-                    resource_id: self.id.clone(),
-                    expected: Self::RESOURCE_TYPE,
-                    actual: new_config.get_resource_type(),
-                })
-            })?;
+        let new_redis = new_config.as_any().downcast_ref::<Redis>().ok_or_else(|| {
+            AlienError::new(ErrorData::UnexpectedResourceType {
+                resource_id: self.id.clone(),
+                expected: Self::RESOURCE_TYPE,
+                actual: new_config.get_resource_type(),
+            })
+        })?;
 
         if self.id != new_redis.id {
             return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
@@ -302,17 +299,26 @@ mod tests {
             ("1GB", 1_000_000_000),
         ] {
             let redis = Redis::new("c".into()).memory(quantity.into()).build();
-            assert_eq!(redis.requested_memory_bytes().unwrap(), Some(bytes), "{quantity}");
+            assert_eq!(
+                redis.requested_memory_bytes().unwrap(),
+                Some(bytes),
+                "{quantity}"
+            );
         }
         assert_eq!(
-            Redis::new("c".into()).build().requested_memory_bytes().unwrap(),
+            Redis::new("c".into())
+                .build()
+                .requested_memory_bytes()
+                .unwrap(),
             None
         );
     }
 
     #[test]
     fn memory_rejects_invalid_values() {
-        for quantity in ["", "0", "0Gi", "-1Gi", "NaNGi", "infGi", "1e100Gi", "8unknown"] {
+        for quantity in [
+            "", "0", "0Gi", "-1Gi", "NaNGi", "infGi", "1e100Gi", "8unknown",
+        ] {
             let redis = Redis::new("c".into()).memory(quantity.into()).build();
             assert!(redis.requested_memory_bytes().is_err(), "{quantity}");
         }
@@ -329,10 +335,7 @@ mod tests {
             .contains("'id' field is immutable"));
 
         let keyed = Redis::new("c".to_string())
-            .encryption_key(ResourceRef::new(
-                crate::Key::RESOURCE_TYPE,
-                "k".to_string(),
-            ))
+            .encryption_key(ResourceRef::new(crate::Key::RESOURCE_TYPE, "k".to_string()))
             .build();
         assert!(original
             .validate_update(&keyed)
@@ -353,6 +356,9 @@ mod tests {
             port: 6379,
         };
         let json = serde_json::to_string(&outputs).unwrap();
-        assert_eq!(outputs, serde_json::from_str::<RedisOutputs>(&json).unwrap());
+        assert_eq!(
+            outputs,
+            serde_json::from_str::<RedisOutputs>(&json).unwrap()
+        );
     }
 }

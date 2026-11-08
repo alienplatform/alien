@@ -8,16 +8,17 @@
 
 use crate::error::Result;
 use crate::{
-    LocalArtifactRegistryManager, LocalContainerManager, LocalKvManager, LocalPostgresManager, LocalRedisManager,
-    LocalQueueManager, LocalSandboxManager, LocalStorageManager, LocalVaultManager,
-    LocalWorkerManager,
+    LocalArtifactRegistryManager, LocalContainerManager, LocalKvManager, LocalPostgresManager,
+    LocalQueueManager, LocalRedisManager, LocalSandboxManager, LocalStorageManager,
+    LocalVaultManager, LocalWorkerManager,
 };
 use alien_bindings::{
     error::ErrorData as BindingsErrorData,
     providers::{
         artifact_registry::local::LocalArtifactRegistry,
         container::LocalContainer as LocalContainerBinding, kv::local::LocalKv,
-        postgres::local::LocalPostgres, redis::ResolvedRedis, storage::local::LocalStorage, vault::local::LocalVault,
+        postgres::local::LocalPostgres, redis::ResolvedRedis, storage::local::LocalStorage,
+        vault::local::LocalVault,
     },
     traits::{
         ArtifactRegistry, BindingsProviderApi, Build, Container, Kv, Postgres, Queue, Redis,

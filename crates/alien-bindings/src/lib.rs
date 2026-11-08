@@ -11,9 +11,9 @@ pub use traits::{
     ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
     AwsServiceAccountInfo, AzureServiceAccountInfo, Binding, BindingsProviderApi, Build, Container,
     GcpServiceAccountInfo, ImpersonationRequest, InvalidPostgresCaCertificates, Key, Kv, KvEntry,
-    Postgres, PostgresConnectionParams, PostgresTlsPolicy, PutCondition, Queue, Redis, RedisConnectionParams, RedisTlsPolicy, RegistryAuthMethod,
-    RepositoryResponse, SecretPresence, ServiceAccount, ServiceAccountInfo, SslMode, Storage,
-    Vault, Worker,
+    Postgres, PostgresConnectionParams, PostgresTlsPolicy, PutCondition, Queue, Redis,
+    RedisConnectionParams, RedisTlsPolicy, RegistryAuthMethod, RepositoryResponse, SecretPresence,
+    ServiceAccount, ServiceAccountInfo, SslMode, Storage, Vault, Worker,
 };
 
 pub mod bindings;

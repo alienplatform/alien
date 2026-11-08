@@ -13,8 +13,8 @@ mod error;
 mod key;
 mod kv;
 mod postgres;
-mod redis;
 mod queue;
+mod redis;
 #[cfg(feature = "platform-sdk")]
 mod remote_storage;
 mod sandbox;
@@ -32,8 +32,8 @@ pub use container::ContainerHandle;
 pub use key::KeyHandle;
 pub use kv::KvHandle;
 pub use postgres::{PostgresConnectionJs, PostgresHandle};
-pub use redis::{RedisConnectionJs, RedisHandle};
 pub use queue::QueueHandle;
+pub use redis::{RedisConnectionJs, RedisHandle};
 #[cfg(feature = "platform-sdk")]
 pub use remote_storage::RemoteStorageHandle;
 pub use sandbox::{CommandFrameJs, CommandStreamHandle, SandboxHandle, SandboxInstanceJs};

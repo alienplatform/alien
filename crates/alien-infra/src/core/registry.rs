@@ -12,14 +12,14 @@ use alien_core::Container;
 #[cfg(any(feature = "kubernetes", feature = "local"))]
 use alien_core::Daemon;
 // Local Postgres only; cloud controllers come in via register_registry_extension.
-#[cfg(feature = "local")]
-use alien_core::{Postgres, Redis};
 use alien_core::{
     Ai, ArtifactRegistry, AwsOpenSearch, AzureContainerAppsEnvironment, AzureResourceGroup,
     AzureServiceBusNamespace, AzureStorageAccount, Build, Email, Key, Kv, Network, RemoteBindings,
     RemoteStackManagement, ServiceAccount, ServiceActivation, Storage, Vault, Worker,
 };
 use alien_core::{Platform, ResourceDefinition, ResourceType};
+#[cfg(feature = "local")]
+use alien_core::{Postgres, Redis};
 use alien_error::AlienError;
 
 /// Type for a callback that registers additional controller factories into a ResourceRegistry.

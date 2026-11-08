@@ -56,15 +56,25 @@ async fn data_survives_a_restart_when_persistence_is_on_and_rejects_bad_password
     let dir = tempfile::tempdir().unwrap();
     let manager = LocalRedisManager::new(dir.path().to_path_buf());
 
-    manager.start_redis("cache", spec(true, "volatile-lru")).await.unwrap();
+    manager
+        .start_redis("cache", spec(true, "volatile-lru"))
+        .await
+        .unwrap();
     manager.check_health("cache").await.unwrap();
     let binding = manager.get_binding("cache").unwrap();
 
     assert_eq!(command(&binding, &["SET", "k", "v"]).await, "+OK\r\n");
-    assert_eq!(command(&binding, &["CONFIG", "GET", "maxmemory-policy"]).await.contains("volatile-lru"), true);
+    assert_eq!(
+        command(&binding, &["CONFIG", "GET", "maxmemory-policy"])
+            .await
+            .contains("volatile-lru"),
+        true
+    );
 
     // A wrong password is refused.
-    let RedisBinding::Local(local) = &binding else { unreachable!() };
+    let RedisBinding::Local(local) = &binding else {
+        unreachable!()
+    };
     assert!(local.password.len() >= 32);
     let wrong = RedisBinding::Local(alien_core::bindings::LocalRedisBinding {
         password: "wrong".to_string(),
@@ -74,13 +84,21 @@ async fn data_survives_a_restart_when_persistence_is_on_and_rejects_bad_password
 
     // Stop and start again: same port and password, key still there from the AOF.
     manager.stop_redis("cache").await.unwrap();
-    manager.start_redis("cache", spec(true, "volatile-lru")).await.unwrap();
+    manager
+        .start_redis("cache", spec(true, "volatile-lru"))
+        .await
+        .unwrap();
     assert_eq!(manager.get_binding("cache").unwrap(), binding);
     assert_eq!(command(&binding, &["GET", "k"]).await, "$1\r\nv\r\n");
 
     // Changing the eviction policy restarts the server with it; data is kept.
-    manager.start_redis("cache", spec(true, "noeviction")).await.unwrap();
-    assert!(command(&binding, &["CONFIG", "GET", "maxmemory-policy"]).await.contains("noeviction"));
+    manager
+        .start_redis("cache", spec(true, "noeviction"))
+        .await
+        .unwrap();
+    assert!(command(&binding, &["CONFIG", "GET", "maxmemory-policy"])
+        .await
+        .contains("noeviction"));
     assert_eq!(command(&binding, &["GET", "k"]).await, "$1\r\nv\r\n");
 
     manager.delete_redis("cache").await.unwrap();
@@ -93,12 +111,18 @@ async fn data_is_lost_on_restart_when_persistence_is_off() {
     let dir = tempfile::tempdir().unwrap();
     let manager = LocalRedisManager::new(dir.path().to_path_buf());
 
-    manager.start_redis("cache", spec(false, "allkeys-lru")).await.unwrap();
+    manager
+        .start_redis("cache", spec(false, "allkeys-lru"))
+        .await
+        .unwrap();
     let binding = manager.get_binding("cache").unwrap();
     assert_eq!(command(&binding, &["SET", "k", "v"]).await, "+OK\r\n");
 
     manager.stop_redis("cache").await.unwrap();
-    manager.start_redis("cache", spec(false, "allkeys-lru")).await.unwrap();
+    manager
+        .start_redis("cache", spec(false, "allkeys-lru"))
+        .await
+        .unwrap();
     assert_eq!(command(&binding, &["GET", "k"]).await, "$-1\r\n");
     manager.delete_redis("cache").await.unwrap();
 }

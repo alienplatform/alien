@@ -179,7 +179,10 @@ mod tests {
         };
         assert!(external.tls);
         assert!(!format!("{binding:?}").contains("redis-credentials"));
-        assert_eq!(serde_json::to_value(&binding).unwrap()["password"], input["password"]);
+        assert_eq!(
+            serde_json::to_value(&binding).unwrap()["password"],
+            input["password"]
+        );
     }
 
     #[test]

@@ -156,7 +156,16 @@ impl LocalRedisManager {
             }
         };
         if let Some(child) = running.get_mut(id) {
-            if child.try_wait().into_alien_error().context(process_error(id, "query", "Failed to check the server process"))?.is_none() {
+            if child
+                .try_wait()
+                .into_alien_error()
+                .context(process_error(
+                    id,
+                    "query",
+                    "Failed to check the server process",
+                ))?
+                .is_none()
+            {
                 return Ok(());
             }
             running.remove(id);
@@ -203,11 +212,11 @@ impl LocalRedisManager {
                 resource_type: "redis".to_string(),
             })
         })?;
-        match child
-            .try_wait()
-            .into_alien_error()
-            .context(process_error(id, "health_check", "Failed to check the server process"))?
-        {
+        match child.try_wait().into_alien_error().context(process_error(
+            id,
+            "health_check",
+            "Failed to check the server process",
+        ))? {
             None => Ok(()),
             Some(status) => Err(AlienError::new(process_error(
                 id,
@@ -382,7 +391,9 @@ impl LocalRedisManager {
                     }
                 }
                 Ok(None) => {}
-                Err(error) => warn!(redis_id = %id, ?error, "Skipping local Redis: unreadable metadata"),
+                Err(error) => {
+                    warn!(redis_id = %id, ?error, "Skipping local Redis: unreadable metadata")
+                }
             }
         }
     }
@@ -449,28 +460,31 @@ fn render_config(metadata: &RedisMetadata, bind: &str, data_dir: &Path) -> Strin
 /// SIGTERM-equivalent stop: `kill` then reap. Valkey rewrites nothing on SIGKILL, but the
 /// AOF with `everysec` keeps all but the last second of writes.
 async fn stop_child(id: &str, child: &mut Child) -> Result<()> {
-    child
-        .kill()
-        .await
-        .into_alien_error()
-        .context(process_error(id, "stop", "Failed to stop valkey-server"))
+    child.kill().await.into_alien_error().context(process_error(
+        id,
+        "stop",
+        "Failed to stop valkey-server",
+    ))
 }
 
 async fn wait_until_listening(id: &str, port: u16, child: &mut Child) -> Result<()> {
     let deadline = tokio::time::Instant::now() + READY_TIMEOUT;
     loop {
-        if let Some(status) = child
-            .try_wait()
-            .into_alien_error()
-            .context(process_error(id, "start", "Failed to check the server process"))?
-        {
+        if let Some(status) = child.try_wait().into_alien_error().context(process_error(
+            id,
+            "start",
+            "Failed to check the server process",
+        ))? {
             return Err(AlienError::new(process_error(
                 id,
                 "start",
                 &format!("valkey-server exited during startup with {status}"),
             )));
         }
-        if tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+        {
             return Ok(());
         }
         if tokio::time::Instant::now() >= deadline {
@@ -508,9 +522,8 @@ async fn ensure_binary(state_dir: &Path) -> Result<PathBuf> {
         .clone()
         .unwrap_or_else(|| RELEASES_URL_DEFAULT.to_string());
     let archive_url = format!("{base}/v{VALKEY_VERSION}/{target}/valkey-server.tar.gz");
-    let fetch_error = |reason: String| {
-        AlienError::new(process_error("valkey", "download", &reason))
-    };
+    let fetch_error =
+        |reason: String| AlienError::new(process_error("valkey", "download", &reason));
 
     let archive = fetch_bytes(&archive_url)
         .await
@@ -554,7 +567,11 @@ async fn ensure_binary(state_dir: &Path) -> Result<PathBuf> {
     .into_alien_error()
     .context(process_error("valkey", "install", "Unpack task panicked"))?
     .into_alien_error()
-    .context(process_error("valkey", "install", "Failed to unpack the valkey-server archive"))?;
+    .context(process_error(
+        "valkey",
+        "install",
+        "Failed to unpack the valkey-server archive",
+    ))?;
 
     if !binary.exists() {
         return Err(fetch_error(

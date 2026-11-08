@@ -856,7 +856,11 @@ impl RedisConnectionParams {
     pub fn connection_url(&self) -> String {
         format!(
             "{}://{}:{}@{}:{}/0",
-            if self.tls.is_enabled() { "rediss" } else { "redis" },
+            if self.tls.is_enabled() {
+                "rediss"
+            } else {
+                "redis"
+            },
             encode_userinfo(&self.username),
             encode_userinfo(&self.password),
             self.host,

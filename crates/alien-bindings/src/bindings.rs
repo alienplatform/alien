@@ -13,7 +13,7 @@ use crate::refreshing::{
     RefreshingWorker,
 };
 use crate::traits::{
-    BindingsProviderApi, Container, Key, Kv, MessagePayload, Postgres, Queue, Redis, QueueMessage,
+    BindingsProviderApi, Container, Key, Kv, MessagePayload, Postgres, Queue, QueueMessage, Redis,
     Sandbox, Storage, Vault, Worker,
 };
 use std::collections::HashMap;

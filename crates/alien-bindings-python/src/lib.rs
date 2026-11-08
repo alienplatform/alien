@@ -15,7 +15,7 @@ use crate::error::map_alien_error;
 use alien_bindings::traits::{MessagePayload, PutCondition, PutOptions};
 #[cfg(feature = "platform-sdk")]
 use alien_bindings::RemoteBindings;
-use alien_bindings::{Bindings, BoundQueue, Container, Key, Kv, Postgres, Vault};
+use alien_bindings::{Bindings, BoundQueue, Container, Key, Kv, Postgres, Redis, Vault};
 use alien_core::bindings::{parse_binding_from_env, AiBinding};
 
 use pyo3::exceptions::PyValueError;
@@ -50,6 +50,18 @@ struct PostgresConnection {
     username: String,
     password: String,
     sslmode: String,
+    ca_certificates: Vec<String>,
+}
+
+#[pyclass(frozen, get_all, skip_from_py_object)]
+#[derive(Clone)]
+struct RedisConnection {
+    url: String,
+    host: String,
+    port: u16,
+    username: String,
+    password: String,
+    tls: bool,
     ca_certificates: Vec<String>,
 }
 
@@ -232,6 +244,15 @@ impl BindingsHandle {
         future_into_py(py, async move {
             Ok(PostgresHandle {
                 inner: bindings.postgres(&name).await.map_err(map_alien_error)?,
+            })
+        })
+    }
+
+    fn redis<'py>(&self, py: Python<'py>, name: String) -> PyResult<Bound<'py, PyAny>> {
+        let bindings = self.inner.clone();
+        future_into_py(py, async move {
+            Ok(RedisHandle {
+                inner: bindings.redis(&name).await.map_err(map_alien_error)?,
             })
         })
     }
@@ -688,6 +709,27 @@ impl PostgresHandle {
 }
 
 #[pyclass]
+struct RedisHandle {
+    inner: Arc<dyn Redis>,
+}
+
+#[pymethods]
+impl RedisHandle {
+    fn connection(&self) -> RedisConnection {
+        let value = self.inner.connection_params();
+        RedisConnection {
+            url: value.connection_url(),
+            host: value.host.clone(),
+            port: value.port,
+            username: value.username.clone(),
+            password: value.password.clone(),
+            tls: value.tls.is_enabled(),
+            ca_certificates: value.tls.ca_certificates().to_vec(),
+        }
+    }
+}
+
+#[pyclass]
 struct ContainerHandle {
     inner: Arc<dyn Container>,
 }
@@ -720,10 +762,12 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<SandboxHandle>()?;
     module.add_class::<CommandStreamHandle>()?;
     module.add_class::<PostgresHandle>()?;
+    module.add_class::<RedisHandle>()?;
     module.add_class::<ContainerHandle>()?;
     module.add_class::<AiHandle>()?;
     module.add_class::<AiConnection>()?;
     module.add_class::<PostgresConnection>()?;
+    module.add_class::<RedisConnection>()?;
     module.add_class::<KvEntry>()?;
     module.add_class::<KvPage>()?;
     module.add_class::<QueueMessage>()?;

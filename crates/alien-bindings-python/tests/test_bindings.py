@@ -22,12 +22,13 @@ from alienplatform import (
     kv,
     postgres,
     queue,
+    redis,
     sandbox,
     storage,
     vault,
     worker,
 )
-from alienplatform.bindings import AiConnection, PostgresConnection, SandboxPreview
+from alienplatform.bindings import AiConnection, PostgresConnection, RedisConnection, SandboxPreview
 
 
 @pytest.fixture(scope="session")
@@ -420,3 +421,135 @@ async def test_worker_invocation_and_public_url() -> None:
     finally:
         server.shutdown()
         thread.join()
+
+
+@pytest.mark.asyncio
+async def test_redis_connection_fields_and_client_kwargs() -> None:
+    bind(
+        "cache",
+        {
+            "service": "local-redis",
+            "host": "127.0.0.1",
+            "port": 6380,
+            "username": "default",
+            "password": "p@ss/word",
+        },
+    )
+    bind(
+        "shared",
+        {
+            "service": "external",
+            "host": "cache.internal",
+            "port": 6379,
+            "username": "app",
+            "password": "pw",
+        },
+    )
+
+    local = await redis("cache").connection()
+    assert local.url == "redis://default:p%40ss%2Fword@127.0.0.1:6380/0"
+    assert local.tls is False
+    assert local.ssl_context() is None
+    assert local.redis_kwargs() == {
+        "host": "127.0.0.1",
+        "port": 6380,
+        "username": "default",
+        "password": "p@ss/word",
+        "db": 0,
+    }
+    assert "p@ss/word" not in repr(local)
+
+    external = await redis("shared").connection()
+    assert external.url == "rediss://app:pw@cache.internal:6379/0"
+    kwargs = external.redis_kwargs()
+    assert kwargs["ssl"] is True
+    assert kwargs["ssl_check_hostname"] is True
+    assert kwargs["ssl_cert_reqs"] == "required"
+    assert "ssl_ca_data" not in kwargs  # system trust store
+    context = external.ssl_context()
+    assert context is not None and context.check_hostname is True
+
+
+def test_redis_provider_ca_certificates_reach_the_client() -> None:
+    first = "-----BEGIN CERTIFICATE-----\nA\n-----END CERTIFICATE-----"
+    second = "-----BEGIN CERTIFICATE-----\nB\n-----END CERTIFICATE-----"
+    connection = RedisConnection(
+        "rediss://default:token@10.0.0.3:6379/0",
+        "10.0.0.3",
+        6379,
+        "default",
+        "token",
+        True,
+        (first, second),
+    )
+    assert connection.redis_kwargs()["ssl_ca_data"].count("BEGIN CERTIFICATE") == 2
+
+
+VALKEY_SERVER = os.environ.get("ALIEN_TEST_VALKEY_SERVER")
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not VALKEY_SERVER, reason="set ALIEN_TEST_VALKEY_SERVER to a valkey-server binary"
+)
+async def test_redis_binding_drives_a_stock_redis_py_client(tmp_path: Path) -> None:
+    """The binding's kwargs must work unchanged with redis.asyncio against a real server."""
+    import socket
+
+    from redis.asyncio import Redis
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    server = await asyncio.create_subprocess_exec(
+        *[
+            VALKEY_SERVER,
+            "--port",
+            str(port),
+            "--bind",
+            "127.0.0.1",
+            "--requirepass",
+            "p@ss/word",
+            "--dir",
+            str(tmp_path),
+            "--save",
+            "",
+        ],
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        bind(
+            "live-cache",
+            {
+                "service": "local-redis",
+                "host": "127.0.0.1",
+                "port": port,
+                "username": "default",
+                "password": "p@ss/word",
+            },
+        )
+        connection = await redis("live-cache").connection()
+        client = Redis(**connection.redis_kwargs())
+        for _ in range(50):
+            try:
+                await client.ping()
+                break
+            except Exception:
+                await asyncio.sleep(0.1)
+        await client.set("k", "v", ex=100)
+        assert await client.get("k") == b"v"
+        # Multi-key script, as the design's workloads run.
+        script = "redis.call('set',KEYS[1],1);redis.call('set',KEYS[2],2);return ARGV[1]"
+        assert await client.eval(script, 2, "a", "b", "x") == b"x"
+        await client.xadd("s", {"f": "v"})
+        await client.xgroup_create("s", "g", id="0")
+        assert len(await client.xreadgroup("g", "c", {"s": ">"}, count=1)) == 1
+        # The URL form works too.
+        from_url = Redis.from_url(connection.url)
+        assert await from_url.get("k") == b"v"
+        await from_url.aclose()
+        await client.aclose()
+    finally:
+        server.terminate()
+        await server.wait()

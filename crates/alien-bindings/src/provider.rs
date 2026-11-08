@@ -11,9 +11,9 @@ use crate::{
 
 #[cfg(feature = "aws")]
 use crate::providers::queue::aws_sqs::{create_http_client as create_sqs_http_client, AwsSqsQueue};
+use crate::providers::redis::ResolvedRedis;
 use alien_client_config::ClientConfigExt;
 use alien_core::bindings::{PostgresBinding, RedisBinding};
-use crate::providers::redis::ResolvedRedis;
 use alien_core::{ClientConfig, Platform, StackState, ENV_OPERATOR_BASE_PLATFORM};
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
@@ -1481,16 +1481,18 @@ impl BindingsProviderApi for BindingsProvider {
     async fn load_redis(&self, binding_name: &str) -> Result<Arc<dyn Redis>> {
         let binding: RedisBinding = self.parse_binding(binding_name, "Redis")?;
         match &binding {
-            RedisBinding::Local(_) | RedisBinding::External(_) => {
-                Ok(Arc::new(ResolvedRedis::from_inline_binding(binding_name, &binding)?))
-            }
+            RedisBinding::Local(_) | RedisBinding::External(_) => Ok(Arc::new(
+                ResolvedRedis::from_inline_binding(binding_name, &binding)?,
+            )),
             // Cloud secret resolution lands with each cloud controller.
             RedisBinding::ElastiCache(_)
             | RedisBinding::Memorystore(_)
-            | RedisBinding::AzureManagedRedis(_) => Err(AlienError::new(ErrorData::config_invalid(
-                binding_name,
-                "Cloud Redis bindings are not supported by this build yet",
-            ))),
+            | RedisBinding::AzureManagedRedis(_) => {
+                Err(AlienError::new(ErrorData::config_invalid(
+                    binding_name,
+                    "Cloud Redis bindings are not supported by this build yet",
+                )))
+            }
         }
     }
 
@@ -2103,7 +2105,8 @@ impl BindingsProviderApi for BindingsProvider {
                     cpu.unwrap_or_else(|| DEFAULT_AZURE_CPU.to_string()),
                     memory.unwrap_or_else(|| DEFAULT_AZURE_MEMORY.to_string()),
                     disk,
-                ).with_agent(azure_binding.agent);
+                )
+                .with_agent(azure_binding.agent);
                 if let Some(manager) = egress_manager {
                     sandbox = sandbox.with_egress_manager(
                         manager,
