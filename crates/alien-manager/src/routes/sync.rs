@@ -596,11 +596,18 @@ async fn acquired_deployment_response(
             message: format!("Failed to build the config for deployment {}", record.id),
         })?;
 
-    let mut deployment = serde_json::to_value(record)
-        .into_alien_error()
-        .context(GenericError {
-            message: format!("Failed to serialize deployment {}", record.id),
-        })?;
+    // The record's saved state carries markers for held values; the runner's
+    // executor compares it with the config above, which carries the values.
+    let mut served = record.clone();
+    crate::values::restore_held_values(values, &record.id, served.stack_state.as_mut())
+        .await
+        .map_err(|e| e.into_generic())?;
+    let mut deployment =
+        serde_json::to_value(&served)
+            .into_alien_error()
+            .context(GenericError {
+                message: format!("Failed to serialize deployment {}", record.id),
+            })?;
     let config = serde_json::to_value(&config)
         .into_alien_error()
         .context(GenericError {
@@ -788,6 +795,17 @@ async fn reconcile(
     };
 
     // 2. Persist the step result (including any registry access changes).
+    //    Values this manager holds for the deployment stay out of what is saved.
+    let mut saved_state = final_state.clone();
+    if let Err(error) = crate::values::redact_held_values(
+        state.values.as_deref(),
+        &req.deployment_id,
+        saved_state.stack_state.as_mut(),
+    )
+    .await
+    {
+        return error.into_response();
+    }
     let result = match state
         .deployment_store
         .reconcile(
@@ -795,7 +813,7 @@ async fn reconcile(
             ReconcileData {
                 deployment_id: req.deployment_id.clone(),
                 session: req.session,
-                state: final_state.clone(),
+                state: saved_state,
                 update_heartbeat: req.update_heartbeat,
                 suggested_delay_ms: req.suggested_delay_ms,
                 heartbeats: req.heartbeats,
@@ -2973,10 +2991,20 @@ async fn agent_sync(
                         );
                     }
 
+                    let mut saved_state = agent_state.clone();
+                    if let Err(error) = crate::values::redact_held_values(
+                        state.values.as_deref(),
+                        &req.deployment_id,
+                        saved_state.stack_state.as_mut(),
+                    )
+                    .await
+                    {
+                        return error.into_response();
+                    }
                     let reconcile_data = ReconcileData {
                         deployment_id: req.deployment_id.clone(),
                         session: req.session.clone(),
-                        state: agent_state.clone(),
+                        state: saved_state,
                         update_heartbeat: true,
                         heartbeats: req.heartbeats.clone(),
                         observed_inventory_batches: req.observed_inventory_batches.clone(),

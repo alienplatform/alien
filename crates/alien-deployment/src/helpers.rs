@@ -1440,6 +1440,114 @@ pub fn value_digest(slot: &str, value: &str) -> Result<String> {
     Ok(keyed_value_digest(key, slot, value))
 }
 
+/// Fingerprint of a deployment's environment variables, as `env-<hex>`.
+///
+/// Workloads carry it (in `ALIEN_SECRETS`) so a changed variable rolls them
+/// out. It is keyed from the process's key (see [`set_secrets_digest_key`]),
+/// so a copy of the workload settings cannot be used to test guesses at the
+/// values.
+pub fn environment_snapshot_hash(variables: &[EnvironmentVariable]) -> Result<String> {
+    #[cfg(test)]
+    let key = SECRETS_DIGEST_KEY.get().or(Some(&[7; 32]));
+    #[cfg(not(test))]
+    let key = SECRETS_DIGEST_KEY.get();
+    let key = key.ok_or_else(|| {
+        AlienError::new(ErrorData::InternalError {
+            message: "No secrets digest key is set; the embedding process must call \
+                      set_secrets_digest_key"
+                .to_string(),
+        })
+    })?;
+    let mut derive = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+    derive.update(b"alien-env-snapshot\0");
+    let snapshot_key = derive.finalize().into_bytes();
+
+    let mut mac = HmacSha256::new_from_slice(&snapshot_key).expect("HMAC accepts any key length");
+    for variable in variables {
+        mac.update(variable.name.as_bytes());
+        mac.update(b"=");
+        mac.update(variable.value.as_bytes());
+        mac.update(b"\n");
+    }
+    Ok(format!("env-{:x}", mac.finalize().into_bytes()))
+}
+
+const HELD_VALUE_PREFIX: &str = "alien-held:";
+
+/// The environment of a compute resource's config, if it is one.
+fn compute_environment_mut(
+    resource: &mut alien_core::Resource,
+) -> Option<&mut HashMap<String, String>> {
+    if resource.downcast_ref::<alien_core::Worker>().is_some() {
+        return resource
+            .downcast_mut::<alien_core::Worker>()
+            .map(|r| &mut r.environment);
+    }
+    if resource.downcast_ref::<alien_core::Container>().is_some() {
+        return resource
+            .downcast_mut::<alien_core::Container>()
+            .map(|r| &mut r.environment);
+    }
+    resource
+        .downcast_mut::<alien_core::Daemon>()
+        .map(|r| &mut r.environment)
+}
+
+fn held_value_marker(name: &str, value: &str) -> Result<String> {
+    Ok(format!(
+        "{HELD_VALUE_PREFIX}{}",
+        value_digest(&format!("env:{name}"), value)?
+    ))
+}
+
+/// Replaces values a manager holds (`held`: name and value) in the compute
+/// resources' environments with `alien-held:<digest>`, so the state it hands
+/// to a control plane carries no deployment value. Environment entries that
+/// differ from the held value are left as they are.
+pub fn redact_held_values(stack_state: &mut StackState, held: &[(String, String)]) -> Result<()> {
+    rewrite_held_values(stack_state, held, |name, value, current| {
+        Ok((current == value)
+            .then(|| held_value_marker(name, value))
+            .transpose()?)
+    })
+}
+
+/// Undoes [`redact_held_values`] for the values `held` now has. A marker for
+/// a value that has since changed stays, so it differs from the desired
+/// environment and the resource is updated.
+pub fn restore_held_values(stack_state: &mut StackState, held: &[(String, String)]) -> Result<()> {
+    rewrite_held_values(stack_state, held, |name, value, current| {
+        Ok((current == held_value_marker(name, value)?).then(|| value.to_string()))
+    })
+}
+
+fn rewrite_held_values(
+    stack_state: &mut StackState,
+    held: &[(String, String)],
+    replacement: impl Fn(&str, &str, &str) -> Result<Option<String>>,
+) -> Result<()> {
+    if held.is_empty() {
+        return Ok(());
+    }
+    for resource_state in stack_state.resources.values_mut() {
+        let configs = std::iter::once(&mut resource_state.config)
+            .chain(resource_state.previous_config.as_mut());
+        for config in configs {
+            let Some(environment) = compute_environment_mut(config) else {
+                continue;
+            };
+            for (name, value) in held {
+                if let Some(current) = environment.get(name) {
+                    if let Some(next) = replacement(name, value, current)? {
+                        environment.insert(name.clone(), next);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn keyed_value_digest(key: &[u8; 32], slot: &str, value: &str) -> String {
     let mut derive = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     derive.update(b"alien-values\0");
@@ -3629,5 +3737,103 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn worker_state_with_environment(id: &str, environment: &[(&str, &str)]) -> StackResourceState {
+        let mut state = make_worker_resource_state(id, None);
+        let worker = state.config.downcast_mut::<Worker>().unwrap();
+        worker.environment = environment
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        state
+    }
+
+    fn environment_of(state: &StackState, id: &str) -> HashMap<String, String> {
+        state.resources[id]
+            .config
+            .downcast_ref::<Worker>()
+            .unwrap()
+            .environment
+            .clone()
+    }
+
+    #[test]
+    fn redacted_state_carries_no_held_value_and_restores_to_the_original() {
+        set_secrets_digest_key([7; 32]).unwrap();
+        let canary = "canary-value-7f3a".to_string();
+        let held = vec![("API_URL".to_string(), canary.clone())];
+        let mut state = StackState::new(Platform::Aws);
+        let mut worker = worker_state_with_environment(
+            "api",
+            &[("API_URL", &canary), ("OTHER", "plain"), ("SAME_NAME", "x")],
+        );
+        worker.previous_config = Some(worker.config.clone());
+        state.resources.insert("api".to_string(), worker);
+        // A resource whose variable has the held name but another value is not held.
+        state.resources.insert(
+            "other".to_string(),
+            worker_state_with_environment("other", &[("API_URL", "someone-else")]),
+        );
+        let original = serde_json::to_value(&state).unwrap();
+
+        redact_held_values(&mut state, &held).unwrap();
+
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(!json.contains(&canary), "{json}");
+        let env = environment_of(&state, "api");
+        assert!(env["API_URL"].starts_with("alien-held:"), "{env:?}");
+        assert_eq!(env["OTHER"], "plain");
+        assert_eq!(environment_of(&state, "other")["API_URL"], "someone-else");
+        assert_ne!(serde_json::to_value(&state).unwrap(), original);
+
+        restore_held_values(&mut state, &held).unwrap();
+        assert_eq!(serde_json::to_value(&state).unwrap(), original);
+    }
+
+    #[test]
+    fn a_marker_for_a_value_that_changed_is_not_restored() {
+        set_secrets_digest_key([7; 32]).unwrap();
+        let mut state = StackState::new(Platform::Aws);
+        state.resources.insert(
+            "api".to_string(),
+            worker_state_with_environment("api", &[("TOKEN", "first")]),
+        );
+        redact_held_values(&mut state, &[("TOKEN".to_string(), "first".to_string())]).unwrap();
+        let marker = environment_of(&state, "api")["TOKEN"].clone();
+
+        restore_held_values(&mut state, &[("TOKEN".to_string(), "second".to_string())]).unwrap();
+
+        // The desired environment has "second"; the stale marker differs from it.
+        assert_eq!(environment_of(&state, "api")["TOKEN"], marker);
+    }
+
+    #[test]
+    fn the_environment_snapshot_hash_is_keyed_and_follows_the_values() {
+        set_secrets_digest_key([7; 32]).unwrap();
+        let variable = |name: &str, value: &str| EnvironmentVariable {
+            name: name.to_string(),
+            value: value.to_string(),
+            var_type: EnvironmentVariableType::Secret,
+            target_resources: None,
+        };
+        let one = environment_snapshot_hash(&[variable("A", "1")]).unwrap();
+        assert_eq!(
+            one,
+            environment_snapshot_hash(&[variable("A", "1")]).unwrap()
+        );
+        assert_ne!(
+            one,
+            environment_snapshot_hash(&[variable("A", "2")]).unwrap()
+        );
+        assert_ne!(
+            one,
+            environment_snapshot_hash(&[variable("B", "1")]).unwrap()
+        );
+
+        let mut unkeyed = Sha256::new();
+        unkeyed.update(b"A=1\n");
+        assert_ne!(one, format!("env-{:x}", unkeyed.finalize()));
+        assert!(one.starts_with("env-") && one.len() == 4 + 64);
     }
 }

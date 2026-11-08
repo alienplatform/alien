@@ -1107,31 +1107,42 @@ impl DeploymentLoop {
             }
         };
         // Values the deployment keeps on this manager are loaded only for the
-        // config; the saved record never carries them.
-        let held =
-            match crate::values::hydrate_held_values(self.values.as_deref(), &deployment).await {
-                Ok(held) => held,
-                Err(error) => {
-                    warn!(
-                        deployment_id = %deployment_id,
-                        error = %error,
-                        "Held values do not match the deployment's plan"
-                    );
-                    return self
-                        .checkpoint_phase_failure(PhaseFailure {
-                            deployment: &deployment,
-                            status,
-                            deployment_stack: deployment_stack.as_ref(),
-                            target_release_id,
-                            current_release,
-                            had_credential_retry,
-                            error: error.into_generic(),
-                            session,
-                            execution_claim,
-                        })
-                        .await;
-                }
-            };
+        // config and the in-memory state; neither is saved with them.
+        let loaded = async {
+            let held =
+                crate::values::hydrate_held_values(self.values.as_deref(), &deployment).await?;
+            crate::values::restore_held_values(
+                self.values.as_deref(),
+                &deployment_id,
+                state.stack_state.as_mut(),
+            )
+            .await?;
+            Ok::<_, AlienError<crate::error::ErrorData>>(held)
+        }
+        .await;
+        let held = match loaded {
+            Ok(held) => held,
+            Err(error) => {
+                warn!(
+                    deployment_id = %deployment_id,
+                    error = %error,
+                    "Held values do not match the deployment's plan"
+                );
+                return self
+                    .checkpoint_phase_failure(PhaseFailure {
+                        deployment: &deployment,
+                        status,
+                        deployment_stack: deployment_stack.as_ref(),
+                        target_release_id,
+                        current_release,
+                        had_credential_retry,
+                        error: error.into_generic(),
+                        session,
+                        execution_claim,
+                    })
+                    .await;
+            }
+        };
         let mut config = RunnerConfigSources {
             config: &self.config,
             credential_resolver: self.credential_resolver.as_ref(),
@@ -1228,7 +1239,8 @@ impl DeploymentLoop {
             session.to_string(),
             execution_claim.clone(),
             self.config.supported_aws_regions.clone(),
-        );
+        )
+        .with_value_store(self.values.clone());
 
         let mut config = config;
         let runner_result = if options.require_heartbeats_enabled {
@@ -1919,16 +1931,10 @@ fn deployment_environment_variables(
         ),
     }
 
-    // Build deterministic hash from variable contents so the infra executor
-    // only sees a change when the actual values change.
-    let mut hasher = Sha256::new();
-    for v in &vars {
-        hasher.update(v.name.as_bytes());
-        hasher.update(b"=");
-        hasher.update(v.value.as_bytes());
-        hasher.update(b"\n");
-    }
-    let hash = format!("env-{:x}", hasher.finalize());
+    // Keyed fingerprint of the variables, so the infra executor only sees a
+    // change when the actual values change and the hash on a workload tells
+    // nothing about them.
+    let hash = alien_deployment::environment_snapshot_hash(&vars).map_err(|e| e.into_generic())?;
 
     Ok(EnvironmentVariablesSnapshot {
         variables: vars,
@@ -5738,6 +5744,7 @@ mod tests {
     /// supplied identity: it uses the record's, else resolves.
     #[tokio::test]
     async fn a_supplied_management_identity_renders_without_the_resolver() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         let identity = |tenant: &str| {
             alien_core::ManagementConfig::Azure(alien_core::AzureManagementConfig {
                 managing_tenant_id: tenant.to_string(),
@@ -5928,13 +5935,11 @@ mod tests {
             user_variable(ENV_ALIEN_DEPLOYMENT_NAME, &deployment.name),
         ];
         expected.extend(deployment.user_environment_variables.clone().unwrap());
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        for variable in &expected {
-            hasher.update(format!("{}={}\n", variable.name, variable.value));
-        }
         assert_eq!(with_inputs.variables, expected);
-        assert_eq!(with_inputs.hash, format!("env-{:x}", hasher.finalize()));
+        assert_eq!(
+            with_inputs.hash,
+            alien_deployment::environment_snapshot_hash(&expected).unwrap()
+        );
     }
 
     /// Skipping one input leaves the others as the strict resolver has them:

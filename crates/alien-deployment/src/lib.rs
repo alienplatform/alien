@@ -40,6 +40,7 @@ pub use helpers::deployment_headline_error_from_state;
 pub use helpers::deployment_state_error_from_headline;
 pub use helpers::{
     check_deployer_secrets, collect_environment_info, secrets_digest_key_is_set,
+    environment_snapshot_hash, redact_held_values, restore_held_values,
     set_ephemeral_secrets_digest_key, set_secrets_digest_key, set_secrets_digest_key_if_unset,
     value_digest,
 };

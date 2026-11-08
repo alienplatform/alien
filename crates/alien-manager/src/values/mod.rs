@@ -14,6 +14,7 @@ mod backend;
 mod hydrate;
 mod limiter;
 mod standalone;
+mod state;
 mod types;
 
 pub use access::{ValueAccess, ValueAccessAuthorizer, ValueGrant};
@@ -21,6 +22,7 @@ pub use backend::{KvValueBackend, ValueBackend};
 pub use hydrate::hydrate_held_values;
 pub use limiter::VerifyLimiter;
 pub use standalone::StandaloneValueAccess;
+pub use state::{redact_held_values, restore_held_values};
 pub use types::{
     SlotSelection, StoredValue, ValueKind, ValueMeta, ValueScope, ValueSlot, MAX_VALUE_BYTES,
 };

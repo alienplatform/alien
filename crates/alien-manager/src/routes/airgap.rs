@@ -515,6 +515,7 @@ async fn status_report(
     if !deleting {
         if let Err(error) = reconcile_report(
             state.deployment_store.as_ref(),
+            state.values.as_deref(),
             &subject,
             &deployment.id,
             report.state,
@@ -563,6 +564,7 @@ async fn status_report(
     {
         if let Err(error) = reconcile_report(
             state.deployment_store.as_ref(),
+            state.values.as_deref(),
             &subject,
             &deployment.id,
             report_state,
@@ -589,12 +591,16 @@ async fn status_report(
 
 async fn reconcile_report(
     store: &dyn crate::traits::DeploymentStore,
+    values: Option<&crate::values::ValueStore>,
     subject: &Subject,
     deployment_id: &str,
-    report: DeploymentState,
+    mut report: DeploymentState,
     heartbeats: Vec<ResourceHeartbeat>,
     applied_configuration_revision: Option<String>,
 ) -> Result<(), alien_error::AlienError> {
+    crate::values::redact_held_values(values, deployment_id, report.stack_state.as_mut())
+        .await
+        .map_err(|error| error.into_generic())?;
     let data = ReconcileData {
         deployment_id: deployment_id.to_string(),
         session: "airgap-status-report".to_string(),
@@ -1629,6 +1635,7 @@ mod tests {
                 .returning(|_, _| Err(ErrorData::internal("store reached").into_generic()));
             let error = reconcile_report(
                 &store,
+                None,
                 &Subject::system(),
                 "dep_1",
                 report.state,
