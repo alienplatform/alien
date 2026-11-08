@@ -180,6 +180,8 @@ enum Access {
     NoRoute,
     /// A platform whose manager does not store values.
     NotServed,
+    /// A platform whose manager stores values but cannot be reached.
+    Unavailable,
 }
 
 #[derive(Clone)]
@@ -217,16 +219,8 @@ async fn platform_handler(
             }))
             .into_response(),
             Access::NoRoute => old_platform_not_found(),
-            Access::NotServed => (
-                StatusCode::CONFLICT,
-                axum::Json(json!({
-                    "code": "VALUES_NOT_SERVED_BY_MANAGER",
-                    "message": "This deployment's manager does not store values.",
-                    "retryable": false,
-                    "internal": false,
-                })),
-            )
-                .into_response(),
+            Access::NotServed => not_served(),
+            Access::Unavailable => unavailable(),
         },
         ("GET", "environment-variables") => {
             let variables: Vec<Value> = platform
@@ -256,6 +250,32 @@ async fn platform_handler(
     }
 }
 
+fn not_served() -> Response {
+    (
+        StatusCode::CONFLICT,
+        axum::Json(json!({
+            "code": "VALUES_NOT_SERVED_BY_MANAGER",
+            "message": "This deployment's manager does not store values.",
+            "retryable": false,
+            "internal": false,
+        })),
+    )
+        .into_response()
+}
+
+fn unavailable() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        axum::Json(json!({
+            "code": "VALUES_MANAGER_UNAVAILABLE",
+            "message": "The deployment's manager isn't reachable. Try again.",
+            "retryable": true,
+            "internal": false,
+        })),
+    )
+        .into_response()
+}
+
 /// The 404 an older platform sends for a route it does not have, as captured
 /// from a live older deployment: status 404, `text/plain; charset=UTF-8`, and
 /// the 13 byte body `404 Not Found`.
@@ -270,6 +290,17 @@ fn old_platform_not_found() -> Response {
 
 fn create_deployment(platform: &FakePlatformState, body: &str) -> Response {
     let request: Value = serde_json::from_str(body).unwrap();
+    let names_held = request
+        .get("heldEnvNames")
+        .and_then(Value::as_array)
+        .is_some_and(|names| !names.is_empty());
+    if names_held {
+        match platform.access {
+            Access::NotServed => return not_served(),
+            Access::Unavailable => return unavailable(),
+            _ => {}
+        }
+    }
     if let Some(input) = &platform.create_requires_input {
         if request["inputValues"].get(input).is_none() {
             return (
@@ -675,20 +706,23 @@ async fn a_created_deployment_gets_its_secret_env_through_the_manager() {
     );
     for (method, path, body) in platform.requests() {
         assert!(
-            !body.contains(CANARY),
-            "{method} {path} carried the secret: {body}"
+            !body.contains(CANARY) && !body.contains("eu-west-1"),
+            "{method} {path} carried a value: {body}"
         );
     }
     let created = platform.body_of("POST", "/v1/deployments");
-    let sent = created["environmentVariables"].as_array().unwrap();
-    assert_eq!(
-        sent.len(),
-        1,
-        "the create request carries plain variables only"
+    assert!(
+        created.get("environmentVariables").is_none(),
+        "the create request carries no values: {created}"
     );
-    assert_eq!(sent[0]["name"], "REGION");
-    assert_eq!(sent[0]["value"], "eu-west-1");
-    assert_eq!(sent[0]["type"], "plain");
+    assert_eq!(created["heldEnvNames"], json!(["API_KEY", "REGION"]));
+    let patch = platform.body_of("PATCH", "environment-variables");
+    let rows = patch["variables"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "the update lists every name: {patch}");
+    assert_eq!(rows[0]["name"], "API_KEY");
+    assert_eq!(rows[0]["valueRef"]["slot"], "env:API_KEY");
+    assert_eq!(rows[1]["name"], "REGION");
+    assert_eq!(rows[1]["valueRef"]["slot"], "env:REGION");
     let stored = manager.slots().await;
     let slots: Vec<&Value> = stored["slots"]
         .as_array()
@@ -730,6 +764,151 @@ async fn an_older_platform_gets_the_secret_env_in_a_second_request() {
     let patch = platform.body_of("PATCH", "environment-variables");
     assert_eq!(patch["variables"][0]["value"], CANARY);
     assert_eq!(patch["variables"][1]["value"], "eu-west-1");
+}
+
+fn variables_plain_only() -> Vec<EnvironmentVariableConfig> {
+    serde_json::from_value(json!([
+        {"name": "REGION", "value": "eu-west-1", "type": "plain"},
+    ]))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_manager_that_does_not_store_values_gets_the_older_create_and_a_second_request() {
+    let platform = start_platform_creating(
+        Access::NotServed,
+        Value::Null,
+        "dep_0c0ffee0c0ffee0c0ffee0c0ffee",
+        None,
+    )
+    .await;
+    let mut request = serde_json::from_value(new_deployment(Some(variables()), json!({}))).unwrap();
+
+    create_deployment_with_values(
+        &platform.client,
+        WORKSPACE,
+        &WORKSPACE.try_into().unwrap(),
+        &mut request,
+    )
+    .await
+    .expect("the deployment is created");
+
+    let requests = platform.requests();
+    let bodies: Vec<Value> = requests
+        .iter()
+        .filter(|(method, path, _)| method == "POST" && path == "/v1/deployments")
+        .map(|(_, _, body)| serde_json::from_str(body).unwrap())
+        .collect();
+    assert_eq!(bodies.len(), 2, "one refused create and one retry");
+    assert_eq!(bodies[0]["heldEnvNames"], json!(["API_KEY", "REGION"]));
+    assert!(bodies[0].get("environmentVariables").is_none());
+    assert!(
+        bodies[1]
+            .get("heldEnvNames")
+            .is_none_or(|names| names == &json!([])),
+        "the retry names nothing held: {}",
+        bodies[1]
+    );
+    let sent = bodies[1]["environmentVariables"].as_array().unwrap();
+    assert_eq!(sent.len(), 1, "the retry carries plain variables only");
+    assert_eq!(sent[0]["name"], "REGION");
+    for (method, path, body) in &requests {
+        assert!(
+            !body.contains(CANARY) || method == "PATCH",
+            "{method} {path} carried the secret outside the update: {body}"
+        );
+    }
+    let patch = platform.body_of("PATCH", "environment-variables");
+    assert_eq!(patch["variables"][0]["value"], CANARY);
+    assert_eq!(patch["variables"][1]["value"], "eu-west-1");
+}
+
+#[tokio::test]
+async fn plain_variables_alone_are_created_the_older_way_when_the_manager_stores_no_values() {
+    let platform = start_platform_creating(
+        Access::NotServed,
+        Value::Null,
+        "dep_0c0ffee0c0ffee0c0ffee0c0ffee",
+        None,
+    )
+    .await;
+    let mut request =
+        serde_json::from_value(new_deployment(Some(variables_plain_only()), json!({}))).unwrap();
+
+    create_deployment_with_values(
+        &platform.client,
+        WORKSPACE,
+        &WORKSPACE.try_into().unwrap(),
+        &mut request,
+    )
+    .await
+    .expect("the deployment is created");
+
+    assert_eq!(
+        create_routes(&platform),
+        vec![
+            ("POST".to_string(), "/v1/deployments".to_string()),
+            ("POST".to_string(), "/v1/deployments".to_string()),
+        ],
+        "no second request: the retry already carries the plain variables"
+    );
+    let retry = platform.requests()[1].2.clone();
+    let retry: Value = serde_json::from_str(&retry).unwrap();
+    assert_eq!(retry["environmentVariables"][0]["name"], "REGION");
+    assert_eq!(retry["environmentVariables"][0]["value"], "eu-west-1");
+}
+
+#[tokio::test]
+async fn an_unreachable_manager_fails_the_create_and_never_falls_back() {
+    let platform = start_platform_creating(
+        Access::Unavailable,
+        Value::Null,
+        "dep_0c0ffee0c0ffee0c0ffee0c0ffee",
+        None,
+    )
+    .await;
+    let mut request = serde_json::from_value(new_deployment(Some(variables()), json!({}))).unwrap();
+
+    let error = create_deployment_with_values(
+        &platform.client,
+        WORKSPACE,
+        &WORKSPACE.try_into().unwrap(),
+        &mut request,
+    )
+    .await
+    .expect_err("the create is refused");
+
+    assert!(error.to_string().contains("isn't reachable"), "{error}");
+    assert_eq!(
+        create_routes(&platform),
+        vec![("POST".to_string(), "/v1/deployments".to_string())],
+        "no retry that would send the values elsewhere"
+    );
+    for (method, path, body) in platform.requests() {
+        assert!(!body.contains(CANARY), "{method} {path}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn an_unreachable_manager_fails_an_env_update_and_the_values_never_reach_the_platform() {
+    let platform = start_platform(Access::Unavailable, Value::Null).await;
+
+    let error = save_environment_variables(
+        &platform.client,
+        WORKSPACE,
+        "dep_0c0ffee0c0ffee0c0ffee0c0ffee",
+        &variables(),
+    )
+    .await
+    .expect_err("the update fails");
+
+    assert!(error.to_string().contains("isn't reachable"), "{error}");
+    let requests = platform.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert!(requests[0].1.ends_with("value-access"));
+    for (method, path, body) in &requests {
+        assert!(!body.contains(CANARY), "{method} {path}: {body}");
+    }
 }
 
 #[tokio::test]

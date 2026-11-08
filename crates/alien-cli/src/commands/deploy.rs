@@ -1853,6 +1853,7 @@ async fn deploy_task_with_environment(
                                 input_values: to_sdk_stack_input_values(
                                     &resolved_args.input_values,
                                 )?,
+                                held_env_names: Vec::new(),
                                 public_subdomain: None,
                                 initial_desired_release: alien_platform_api::types::NewDeploymentRequestInitialDesiredRelease::Active,
                                 setup_method: None,
@@ -3602,7 +3603,10 @@ mod tests {
         let (values, secrets) = collect_raw_input_values(
             None,
             &["region=eu".to_string(), "token=plain-now".to_string()],
-            &["api_key=s3cret".to_string(), "token=s3cret-later".to_string()],
+            &[
+                "api_key=s3cret".to_string(),
+                "token=s3cret-later".to_string(),
+            ],
         )
         .expect("inputs parse");
         assert_eq!(values["region"], serde_json::json!("eu"));

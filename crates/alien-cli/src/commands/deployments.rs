@@ -3692,59 +3692,111 @@ fn delete_confirmation_mode(yes: bool) -> Result<ConfirmationMode> {
 
 /// Creates a deployment and stores its environment variables.
 ///
-/// Secret variables never go in the create request: a deployment manager that
-/// holds values must be the only one to see them, and the hosted API would
-/// read them from the request body even if it then refused the request. The
-/// deployment is created with the plain variables, then every variable is
-/// written through the value store (which replaces the whole set). A failure
-/// to store them leaves the deployment in place and says how to retry.
+/// The create request carries the variable names and no values. Every value
+/// then goes through the value store (which replaces the whole set), so a
+/// deployment manager that holds values is the only one to see them. A
+/// manager that does not store values refuses the names with
+/// `VALUES_NOT_SERVED_BY_MANAGER`; the deployment is then created the older
+/// way, with plain variables in the request and secrets in a second request.
+/// A failure to store the values leaves the deployment in place and says how
+/// to retry.
 pub(crate) async fn create_deployment_with_values(
     client: &alien_platform_api::Client,
     workspace: &str,
     workspace_param: &CreateDeploymentWorkspace,
     request: &mut NewDeploymentRequest,
 ) -> Result<alien_platform_api::types::CreateDeploymentResponse> {
-    let all = request.environment_variables.clone().unwrap_or_default();
-    let holds_secret = all.iter().any(|variable| {
-        variable.type_ == alien_platform_api::types::EnvironmentVariableType::Secret
-    });
-    if holds_secret {
-        let plain: Vec<_> = all
-            .iter()
-            .filter(|variable| {
-                variable.type_ != alien_platform_api::types::EnvironmentVariableType::Secret
-            })
-            .cloned()
-            .collect();
-        request.environment_variables = (!plain.is_empty()).then_some(plain);
+    let all = request.environment_variables.take().unwrap_or_default();
+    if all.is_empty() {
+        return creating(send_create(client, workspace_param, request).await);
     }
+    request.held_env_names = all
+        .iter()
+        .map(|variable| {
+            alien_platform_api::types::NewDeploymentRequestHeldEnvNamesItem::try_from(
+                variable.name.as_str().to_string(),
+            )
+            .into_alien_error()
+            .context(ErrorData::ValidationError {
+                field: "env".to_string(),
+                message: format!(
+                    "'{}' is not a valid environment variable name",
+                    variable.name.as_str()
+                ),
+            })
+        })
+        .collect::<Result<_>>()?;
 
-    let response = client
-        .create_deployment()
-        .workspace(workspace_param)
-        .body(&*request)
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "creating deployment".to_string(),
-            url: None,
-        })?
-        .into_inner();
+    let mut stored_afterwards = true;
+    let response = match send_create(client, workspace_param, request).await {
+        Err(error) if error.code == VALUES_NOT_SERVED_CODE => {
+            request.held_env_names.clear();
+            let holds_secret = all.iter().any(|variable| {
+                variable.type_ == alien_platform_api::types::EnvironmentVariableType::Secret
+            });
+            stored_afterwards = holds_secret;
+            request.environment_variables = Some(
+                all.iter()
+                    .filter(|variable| {
+                        !holds_secret
+                            || variable.type_
+                                != alien_platform_api::types::EnvironmentVariableType::Secret
+                    })
+                    .cloned()
+                    .collect(),
+            )
+            .filter(|plain: &Vec<_>| !plain.is_empty());
+            creating(send_create(client, workspace_param, request).await)?
+        }
+        other => creating(other)?,
+    };
 
-    if holds_secret {
+    if stored_afterwards {
         let created_id: &str = &response.deployment.id;
         deployment_actions::save_environment_variables(client, workspace, created_id, &all)
             .await
             .context(ErrorData::ApiRequestFailed {
                 message: format!(
-                    "Deployment '{created_id}' was created, but its secret environment variables were not stored. It was not deleted. Store them with: {}",
+                    "Deployment '{created_id}' was created, but its environment variables were not stored. It was not deleted. Store them with: {}",
                     value_access::set_env_retry_command(created_id, &all)
                 ),
                 url: None,
             })?;
     }
     Ok(response)
+}
+
+/// The platform's code for a manager that does not store values.
+const VALUES_NOT_SERVED_CODE: &str = "VALUES_NOT_SERVED_BY_MANAGER";
+
+async fn send_create(
+    client: &alien_platform_api::Client,
+    workspace_param: &CreateDeploymentWorkspace,
+    request: &NewDeploymentRequest,
+) -> std::result::Result<
+    alien_platform_api::types::CreateDeploymentResponse,
+    AlienError<alien_error::GenericError>,
+> {
+    client
+        .create_deployment()
+        .workspace(workspace_param)
+        .body(request)
+        .send()
+        .await
+        .into_sdk_error()
+        .map(|response| response.into_inner())
+}
+
+fn creating(
+    result: std::result::Result<
+        alien_platform_api::types::CreateDeploymentResponse,
+        AlienError<alien_error::GenericError>,
+    >,
+) -> Result<alien_platform_api::types::CreateDeploymentResponse> {
+    result.context(ErrorData::ApiRequestFailed {
+        message: "creating deployment".to_string(),
+        url: None,
+    })
 }
 
 async fn create_deployment_task(
@@ -3910,6 +3962,7 @@ async fn create_deployment_task(
             .expect("production is a valid channel"),
         environment_info: None,
         input_values: std::collections::HashMap::new(),
+        held_env_names: Vec::new(),
         public_subdomain: None,
         initial_desired_release:
             alien_platform_api::types::NewDeploymentRequestInitialDesiredRelease::Active,

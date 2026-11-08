@@ -300,7 +300,39 @@ pub(crate) async fn store_deployment_values(
     Ok(StoredValues::Stored(refs))
 }
 
+/// The grant's token goes to whatever URL the platform names, so the URL must
+/// be a TLS endpoint, or a loopback address for a manager on this machine.
+fn checked_manager_url(manager_url: &str) -> Result<reqwest::Url> {
+    let refuse = |reason: &str| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "managerUrl".to_string(),
+            message: format!(
+                "the platform named a manager URL that is not safe to send values to ({reason})"
+            ),
+        })
+    };
+    let url = reqwest::Url::parse(manager_url).map_err(|_| refuse("it is not a URL"))?;
+    match url.scheme() {
+        "https" => Ok(url),
+        "http" => {
+            let loopback = match url.host() {
+                Some(url::Host::Domain(domain)) => domain == "localhost",
+                Some(url::Host::Ipv4(address)) => address.is_loopback(),
+                Some(url::Host::Ipv6(address)) => address.is_loopback(),
+                None => false,
+            };
+            if loopback {
+                Ok(url)
+            } else {
+                Err(refuse("plain http is allowed only for localhost"))
+            }
+        }
+        _ => Err(refuse("it is not https")),
+    }
+}
+
 fn manager_client(grant: &Grant) -> Result<alien_manager_api::Client> {
+    let manager_url = checked_manager_url(&grant.manager_url)?;
     let mut headers = reqwest::header::HeaderMap::new();
     let mut authorization =
         reqwest::header::HeaderValue::from_str(&format!("Bearer {}", grant.token))
@@ -319,7 +351,7 @@ fn manager_client(grant: &Grant) -> Result<alien_manager_api::Client> {
             message: "Failed to build HTTP client".to_string(),
         })?;
     Ok(alien_manager_api::Client::new_with_client(
-        grant.manager_url.trim_end_matches('/'),
+        manager_url.as_str().trim_end_matches('/'),
         http,
     ))
 }
@@ -506,6 +538,11 @@ mod tests {
                 503,
                 r#"{"code":"MANAGER_OFFLINE","message":"offline","retryable":true}"#.to_string(),
             ),
+            (
+                503,
+                r#"{"code":"VALUES_MANAGER_UNAVAILABLE","message":"isn't reachable","retryable":true}"#
+                    .to_string(),
+            ),
             (500, "<html>proxy</html>".to_string()),
         ];
         for (status, body) in cases {
@@ -513,6 +550,47 @@ mod tests {
                 .expect_err(&format!("{status} {body} must not select the older path"));
             assert_eq!(error.http_status_code, Some(status), "{status} {body}");
         }
+    }
+
+    #[test]
+    fn a_manager_url_must_be_https_or_loopback() {
+        for url in [
+            "https://m.example",
+            "https://m.example:8443/base",
+            "http://localhost:8080",
+            "http://127.0.0.1:9090",
+            "http://[::1]:9090",
+        ] {
+            checked_manager_url(url).unwrap_or_else(|error| panic!("{url} is allowed: {error}"));
+        }
+        for url in [
+            "http://m.example",
+            "http://10.0.0.5:8080",
+            "http://localhost.evil.example",
+            "http://127.0.0.1.evil.example",
+            "http://[::2]:80",
+            "ftp://m.example",
+            "file:///etc/passwd",
+            "m.example",
+            "",
+        ] {
+            let error = checked_manager_url(url).expect_err(&format!("{url} is refused"));
+            assert!(
+                error.to_string().contains("managerUrl")
+                    || error.to_string().contains("manager URL"),
+                "{url}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_grant_for_a_plain_http_manager_never_gets_a_client() {
+        let grant = Grant {
+            manager_url: "http://m.example".to_string(),
+            token: "canary-token".to_string(),
+        };
+        let error = manager_client(&grant).expect_err("no client for plain http");
+        assert!(!error.to_string().contains("canary-token"), "{error}");
     }
 
     #[test]
