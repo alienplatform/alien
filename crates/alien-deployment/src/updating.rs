@@ -219,17 +219,28 @@ pub async fn handle_update_pending(
     // what every later input value is held against. A gate with no recorded
     // answer was never asked, which leaves its resource in the stack for the
     // frozen-compatibility check to refuse.
-    let persisted_gate_answers = current
+    let mut persisted_gate_answers = current
         .runtime_metadata
         .as_ref()
         .map(|metadata| metadata.persisted_gate_answers.clone())
         .unwrap_or_default();
     let frozen_gating = crate::pending::frozen_gating_inputs(&target_stack, current.platform);
-    crate::pending::enforce_frozen_gate_fixity(
+    let existing_resource_ids = stack_state
+        .resources
+        .iter()
+        .filter(|(_, resource)| resource.status != alien_core::ResourceStatus::Deleted)
+        .map(|(id, _)| id.clone())
+        .collect();
+    // A gate this deployment never answered can be declined here when nothing
+    // behind it is installed; the decline is recorded below with the rest.
+    let new_declines = crate::pending::enforce_frozen_gate_fixity(
         &persisted_gate_answers,
+        &target_stack,
         &frozen_gating,
+        &existing_resource_ids,
         &config.input_values,
     )?;
+    persisted_gate_answers.extend(new_declines);
 
     // Drop gated setup resources the deployer declined, BEFORE the
     // preflights: the frozen-compatibility check compares against the

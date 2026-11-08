@@ -167,12 +167,12 @@ async fn declined_setup_key_removes_runtime_and_management_grants_before_boundar
     let declined = prepare(false, &RuntimeMetadata::default()).await;
     assert_key_grants(&declined, false);
 
-    // A later release input cannot reverse a recorded manual-setup decline.
-    // Run preparation twice to ensure derived identities do not restore the grant.
-    let repeated = prepare(true, &declined).await;
-    assert_key_grants(&repeated, false);
-    let repeated = prepare(true, &repeated).await;
-    assert_key_grants(&repeated, false);
+    // Setup run again with an explicit yes turns the declined key on; a yes is
+    // then kept even if a later run asks for no.
+    let turned_on = prepare(true, &declined).await;
+    assert_key_grants(&turned_on, true);
+    let kept = prepare(false, &turned_on).await;
+    assert_key_grants(&kept, true);
 }
 
 #[tokio::test]

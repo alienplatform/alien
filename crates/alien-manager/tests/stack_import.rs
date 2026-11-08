@@ -2344,7 +2344,7 @@ async fn an_import_carrying_a_deployer_secret_value_is_refused() {
 /// The recorded answers must survive such a write — a decline especially,
 /// since nothing in the settled state can prove one after the fact.
 #[tokio::test]
-async fn a_state_write_back_without_the_answer_map_does_not_erase_the_record() {
+async fn a_state_write_back_without_the_answer_map_does_not_erase_the_record_and_setup_can_turn_it_on() {
     let fixture = make_fixture(Some(stack_with_gated_storage("assets", "extras"))).await;
 
     // The template omitted the gated store: a decline, recorded at import.
@@ -2514,18 +2514,25 @@ async fn a_state_write_back_without_the_answer_map_does_not_erase_the_record() {
         "an agent report without the map must not erase the recorded decline"
     );
 
-    // The record still enforces: delivering the store now flips the answer.
+    // Setup delivering the store now is an explicit yes: a recorded decline
+    // becomes a yes, and the new answer is what later updates are held to.
     let accepting = aws_two_store_import_request("acme-prod", "us-east-1", "assets", "extras");
     let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &accepting).await;
     assert_eq!(
         status,
-        StatusCode::BAD_REQUEST,
-        "a frozen gate is answered once; body = {json:#}"
+        StatusCode::OK,
+        "setup may turn a recorded decline into a yes; body = {json:#}"
     );
     assert_eq!(
-        json.get("code").and_then(|code| code.as_str()),
-        Some("FROZEN_GATE_ANSWER_CHANGED"),
-        "body = {json:#}"
+        read_persisted()
+            .await
+            .runtime_metadata
+            .as_ref()
+            .expect("runtime_metadata must be persisted")
+            .persisted_gate_answers
+            .get("extrasEnabled"),
+        Some(&true),
+        "the new answer is recorded"
     );
 }
 
