@@ -153,6 +153,8 @@ pub enum ResourceHeartbeatData {
     Kv(KvHeartbeatData),
     #[serde(rename = "postgres")]
     Postgres(PostgresHeartbeatData),
+    #[serde(rename = "redis")]
+    Redis(RedisHeartbeatData),
     #[serde(rename = "vault")]
     Vault(VaultHeartbeatData),
     #[serde(rename = "service-account")]
@@ -1609,6 +1611,147 @@ impl Default for PostgresHeartbeatStatus {
             collection_issues: vec![],
         }
     }
+}
+
+/// Heartbeat data for a Redis resource. Everything comes from the cloud's
+/// management and metrics APIs; the manager never opens a Redis connection.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(tag = "backend", rename_all = "camelCase")]
+pub enum RedisHeartbeatData {
+    /// AWS ElastiCache for Valkey.
+    Elasticache(ElasticacheRedisHeartbeatData),
+    /// GCP Memorystore for Valkey.
+    Memorystore(MemorystoreRedisHeartbeatData),
+    /// Azure Managed Redis.
+    AzureManagedRedis(AzureManagedRedisHeartbeatData),
+    /// Local Valkey process.
+    Local(LocalRedisHeartbeatData),
+}
+
+/// Same fields as every other resource heartbeat status.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RedisHeartbeatStatus {
+    pub health: ObservedHealth,
+    pub lifecycle: ProviderLifecycleState,
+    pub message: Option<String>,
+    pub stale: bool,
+    pub partial: bool,
+    pub collection_issues: Vec<HeartbeatCollectionIssue>,
+}
+
+impl Default for RedisHeartbeatStatus {
+    fn default() -> Self {
+        Self {
+            health: ObservedHealth::Unknown,
+            lifecycle: ProviderLifecycleState::Unknown,
+            message: None,
+            stale: false,
+            partial: false,
+            collection_issues: vec![],
+        }
+    }
+}
+
+/// One sample of the numbers that matter for a Redis server. A field is `None`
+/// when the cloud did not return that metric in the window.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RedisMetricsSample {
+    /// Memory used as a percentage of the configured maximum (0-100).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_used_percent: Option<f64>,
+    /// Keys evicted during the sampled window.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evictions: Option<f64>,
+    /// Connected clients at the end of the window.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connected_clients: Option<f64>,
+    /// Replication lag in seconds, when a replica exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replication_lag_seconds: Option<f64>,
+}
+
+/// Configuration the controller reads back from the cloud, to compare with the
+/// desired configuration.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RedisObservedConfig {
+    /// Engine name and version as the cloud reports it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_version: Option<String>,
+    /// Node type or SKU name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eviction_policy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub persistence_enabled: Option<bool>,
+    /// Replicas behind the primary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replica_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_enabled: Option<bool>,
+    /// Azure only: true when the server accepts connections from the public internet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_network_access: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ElasticacheRedisHeartbeatData {
+    pub status: RedisHeartbeatStatus,
+    pub replication_group_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    pub config: RedisObservedConfig,
+    pub metrics: RedisMetricsSample,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct MemorystoreRedisHeartbeatData {
+    pub status: RedisHeartbeatStatus,
+    pub instance_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    pub config: RedisObservedConfig,
+    pub metrics: RedisMetricsSample,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AzureManagedRedisHeartbeatData {
+    pub status: RedisHeartbeatStatus,
+    pub cluster_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    pub config: RedisObservedConfig,
+    pub metrics: RedisMetricsSample,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct LocalRedisHeartbeatData {
+    pub status: RedisHeartbeatStatus,
+    pub name: String,
+    pub port: Option<u16>,
+    pub version: String,
+    pub process_running: bool,
 }
 
 /// Content-free telemetry about what a sandbox resource is running.
