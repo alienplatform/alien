@@ -2008,7 +2008,10 @@ mod tests {
     #[tokio::test]
     async fn a_pending_failed_or_stuck_update_still_renews_workload_credentials() {
         type Stored = Arc<Mutex<Option<Value>>>;
-        async fn create(State(stored): State<Stored>, Json(mut body): Json<Value>) -> axum::response::Response {
+        async fn create(
+            State(stored): State<Stored>,
+            Json(mut body): Json<Value>,
+        ) -> axum::response::Response {
             use axum::response::IntoResponse;
             let mut stored = stored.lock().unwrap();
             if stored.is_some() {
@@ -2031,7 +2034,11 @@ mod tests {
         }
         fn telemetry_token(stored: &Stored) -> String {
             use base64::Engine as _;
-            let secret = stored.lock().unwrap().clone().expect("runtime Secret written");
+            let secret = stored
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("runtime Secret written");
             let file = base64::engine::general_purpose::STANDARD
                 .decode(secret["data"]["telemetry.json"].as_str().unwrap())
                 .unwrap();
@@ -2093,19 +2100,23 @@ mod tests {
             .expect_get_kubernetes_deployment_client()
             .returning(move |_| Ok(deployments.clone()));
         let count = issued.clone();
-        provider.expect_runtime_credential().returning(move |deployment, purpose| {
-            assert_eq!(deployment, "dep_pending");
-            assert_eq!(purpose, json!({"type":"telemetry"}));
-            let n = count.fetch_add(1, Ordering::SeqCst);
-            Ok(alien_client_core::runtime_credentials::RuntimeCapability {
-                token: format!("ax_cap_v1_pass_{n}"),
-                expires_at: chrono::Utc::now() + chrono::Duration::minutes(30 + n as i64),
-            })
-        });
+        provider
+            .expect_runtime_credential()
+            .returning(move |deployment, purpose| {
+                assert_eq!(deployment, "dep_pending");
+                assert_eq!(purpose, json!({"type":"telemetry"}));
+                let n = count.fetch_add(1, Ordering::SeqCst);
+                Ok(alien_client_core::runtime_credentials::RuntimeCapability {
+                    token: format!("ax_cap_v1_pass_{n}"),
+                    expires_at: chrono::Utc::now() + chrono::Duration::minutes(30 + n as i64),
+                })
+            });
 
         let data_dir = tempfile::tempdir().unwrap();
         let directory = data_dir.path().to_str().unwrap();
-        let db = OperatorDb::new(directory, TEST_ENCRYPTION_KEY).await.unwrap();
+        let db = OperatorDb::new(directory, TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
         db.set_deployment_id("dep_pending").await.unwrap();
         db.write_daily_identity(&crate::daily_identity::DailyIdentityState {
             manager_url: "https://manager.example".into(),
@@ -2137,10 +2148,9 @@ mod tests {
                 .build(),
         };
         let mut stack_state = alien_core::StackState::new(Platform::Kubernetes);
-        let mut internal = serde_json::to_value(alien_infra::KubernetesWorkerController::mock_ready(
-            "agent-deploy",
-            "agents",
-        ))
+        let mut internal = serde_json::to_value(
+            alien_infra::KubernetesWorkerController::mock_ready("agent-deploy", "agents"),
+        )
         .unwrap();
         internal["type"] = json!("KubernetesWorkerController");
         stack_state.resources.insert(
@@ -2258,7 +2268,10 @@ mod tests {
     #[tokio::test]
     async fn an_operator_that_enrolled_after_a_token_install_gets_its_config_back() {
         type Shared = (Arc<Mutex<Value>>, Arc<Mutex<Vec<Value>>>);
-        async fn serve(State((response, requests)): State<Shared>, Json(body): Json<Value>) -> Json<Value> {
+        async fn serve(
+            State((response, requests)): State<Shared>,
+            Json(body): Json<Value>,
+        ) -> Json<Value> {
             requests.lock().unwrap().push(body);
             Json(response.lock().unwrap().clone())
         }
@@ -2363,9 +2376,11 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(super::super::deployment::run_deployment_continuously(&state)
-            .await
-            .is_err());
+        assert!(
+            super::super::deployment::run_deployment_continuously(&state)
+                .await
+                .is_err()
+        );
 
         // The Operator says its config is missing; the manager sends the
         // running release again, with no claim.
