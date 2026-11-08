@@ -13,6 +13,8 @@ AWS_MANAGEMENT_REGION=us-west-2
 AWS_MANAGEMENT_ACCESS_KEY_ID=your_access_key
 AWS_MANAGEMENT_SECRET_ACCESS_KEY=your_secret_key
 AWS_MANAGEMENT_ACCOUNT_ID=your_account_id
+# Only for temporary credentials:
+AWS_MANAGEMENT_SESSION_TOKEN=your_session_token
 ```
 
 ### 2. Required Permissions
@@ -89,7 +91,7 @@ impl AsyncTestContext for AutoScalingTestContext {
             credentials: alien_aws_clients::AwsCredentials::AccessKeys {
                 access_key_id: access_key,
                 secret_access_key: secret_key,
-                session_token: None,
+                session_token: std::env::var("AWS_MANAGEMENT_SESSION_TOKEN").ok(),
             },
             service_overrides: None,
         };
