@@ -279,6 +279,7 @@ fn state(status: DeploymentStatus) -> DeploymentState {
 
 /// A deployment the manager has handed to setup teardown, as a deploy CLI finds it.
 async fn handed_off_deployment(answer: Answer) -> Fixture {
+    alien_deployment::set_ephemeral_secrets_digest_key();
     let dir = tempfile::tempdir().expect("tempdir").keep();
     let db = Arc::new(
         SqliteDatabase::new(&dir.join("manager.db").to_string_lossy())

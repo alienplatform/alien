@@ -5942,6 +5942,7 @@ mod tests {
     /// snapshot for the resources its mapping targets.
     #[test]
     fn push_snapshot_includes_input_environment_mappings() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         let input = serde_json::from_value(serde_json::json!({
             "id": "databasePassword", "kind": "secret", "providedBy": ["developer"],
             "required": true, "label": "Database password", "description": "Generated",
@@ -5998,6 +5999,7 @@ mod tests {
     /// included, so a manager upgrade changes no workload.
     #[test]
     fn push_snapshot_is_unchanged_when_the_deployment_carries_every_mapped_variable() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         let stack = Stack::new("inputs-stack".to_string())
             .inputs(vec![
                 plain_input("region", "APP_REGION"),
@@ -6037,6 +6039,7 @@ mod tests {
     /// gated by another input's answer still sees that answer.
     #[test]
     fn push_snapshot_skips_only_the_input_that_does_not_resolve() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         let mut twice = plain_input("twice", "TWICE");
         twice.env.push(twice.env[0].clone());
         let enabled = alien_core::StackInputDefinition::deployer_boolean(
@@ -6083,6 +6086,7 @@ mod tests {
     /// skipped (neither value wins) and every other input still resolves.
     #[test]
     fn push_snapshot_skips_inputs_that_map_one_variable_twice() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         let stack = Stack::new("inputs-stack".to_string())
             .inputs(vec![
                 plain_input("primary", "SHARED"),
@@ -6122,6 +6126,7 @@ mod tests {
     /// the identity and command variables plus the deployment's own.
     #[tokio::test]
     async fn runner_config_replaces_control_plane_snapshot_with_manager_variables() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         let daemon = Daemon::new("debug-daemon".to_string())
             .code(DaemonCode::Image {
                 image: "daemon:latest".to_string(),

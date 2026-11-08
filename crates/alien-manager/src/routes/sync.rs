@@ -2799,6 +2799,7 @@ mod tests {
     /// runner rolls every workload again without the manager's variables.
     #[tokio::test]
     async fn acquired_config_is_the_config_the_manager_loop_runs_with() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         let api = alien_core::Container::new("api".to_string())
             .code(alien_core::ContainerCode::Image {
                 image: "api:latest".to_string(),

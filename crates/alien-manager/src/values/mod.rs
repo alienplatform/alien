@@ -217,6 +217,7 @@ mod tests {
     use alien_bindings::providers::kv::local::LocalKv;
 
     pub(crate) async fn kv_store() -> (tempfile::TempDir, ValueStore) {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         let dir = tempfile::tempdir().unwrap();
         let kv = LocalKv::single_process(dir.path().join("kv"))
             .await
