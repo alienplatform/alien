@@ -436,6 +436,25 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
             .map_err(|e| db_error(&format!("Release channel tables failed: {}", e.message)))?;
     }
 
+    // Codes made from a deployment token are marked, so they stop working once
+    // the deployment has an operator key. Older rows count as made by an admin.
+    // Tolerate the "duplicate column" failure on already-migrated databases.
+    if let Err(e) = conn
+        .execute(
+            "ALTER TABLE runtime_enrollment_codes ADD COLUMN from_token INTEGER NOT NULL DEFAULT 0",
+            (),
+        )
+        .await
+    {
+        let msg = format!("{}", e);
+        if !msg.contains("duplicate column name") {
+            return Err(db_error(&format!(
+                "Enrollment code schema upgrade failed: {}",
+                msg
+            )));
+        }
+    }
+
     let post_index_statements: &[&str] = &[
         "CREATE INDEX IF NOT EXISTS idx_releases_project ON releases(workspace_id, project_id)",
         "CREATE INDEX IF NOT EXISTS idx_deployments_project ON deployments(workspace_id, project_id)",

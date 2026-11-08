@@ -151,6 +151,17 @@ pub trait RuntimeIdentityVerifier: Send + Sync {
     ) -> Result<(String, DateTime<Utc>), AlienError> {
         Err(ErrorData::unauthorized("Enrollment unavailable").into_generic())
     }
+
+    /// Issue a code for a caller that holds only the deployment's own token.
+    /// A verifier that keeps one key per deployment refuses once the operator
+    /// has enrolled, with `ENROLLMENT_KEY_EXISTS`, so a copy of the token
+    /// cannot replace the key. By default this is [`Self::issue_enrollment_code`].
+    async fn issue_enrollment_code_for_deployment_token(
+        &self,
+        deployment: &DeploymentRecord,
+    ) -> Result<(String, DateTime<Utc>), AlienError> {
+        self.issue_enrollment_code(deployment).await
+    }
 }
 
 /// Mount the exchange with the same issuer used by the runtime auth validator.
@@ -230,10 +241,23 @@ fn credential_result<T: Serialize>(result: Result<T, AlienError>) -> Response {
     responses((status = 200, body = IdentityEnrollmentResponse), (status = 401), (status = 503))
 ))]
 pub async fn enroll(
+    State(state): State<AppState>,
     Extension(verifier): Extension<Arc<dyn RuntimeIdentityVerifier>>,
     Json(request): Json<IdentityEnrollmentRequest>,
 ) -> Response {
-    credential_result(verifier.enroll(&request).await)
+    let result = verifier.enroll(&request).await;
+    if let Err(error) = &result {
+        if is_key_exists_refusal(error) {
+            let deployment_id = error
+                .context
+                .as_ref()
+                .and_then(|context| context.get("deployment_id"))
+                .and_then(|id| id.as_str())
+                .unwrap_or("unknown");
+            record_refused_token_code(&state, deployment_id, "redeem").await;
+        }
+    }
+    credential_result(result)
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -281,7 +305,16 @@ pub async fn issue_enrollment_code(
     if !state.authz.can_update_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Cannot issue an enrollment code").into_response();
     }
-    match verifier.issue_enrollment_code(&deployment).await {
+    // A deployment token's code is issued only while the deployment has no
+    // operator key. A vendor's admin credential can always enroll again.
+    let issued = if subject.role == super::Role::DeploymentManager {
+        verifier
+            .issue_enrollment_code_for_deployment_token(&deployment)
+            .await
+    } else {
+        verifier.issue_enrollment_code(&deployment).await
+    };
+    match issued {
         Ok((code, expires_at)) => (
             [(http::header::CACHE_CONTROL, "no-store")],
             Json(IssuedEnrollmentCode {
@@ -295,6 +328,45 @@ pub async fn issue_enrollment_code(
         Err(error) if error.retryable => {
             AlienError::new(ErrorData::AuthenticationUnavailable).into_response()
         }
-        Err(error) => error.into_response(),
+        Err(error) => {
+            if is_key_exists_refusal(&error) {
+                record_refused_token_code(&state, &deployment.id, "issue").await;
+            }
+            error.into_response()
+        }
     }
+}
+
+/// Whether `error` is the refusal of a token-made code for a deployment that
+/// already has an operator key.
+fn is_key_exists_refusal(error: &AlienError) -> bool {
+    error.code == "ENROLLMENT_KEY_EXISTS"
+}
+
+/// Make a refused token-made code visible. Either the real operator was
+/// refused after a copy of the token enrolled first, or a copy of the token
+/// is trying to replace the key.
+async fn record_refused_token_code(state: &AppState, deployment_id: &str, stage: &str) {
+    tracing::warn!(
+        %deployment_id,
+        stage,
+        "Refused an enrollment code made from a deployment token: the deployment already has an operator key"
+    );
+    state
+        .log_buffer
+        .push(crate::dev::LogEntry {
+            timestamp: Utc::now(),
+            deployment_id: deployment_id.to_owned(),
+            body: format!(
+                "Refused an enrollment code made from the deployment token ({stage}): \
+                 the deployment already has an operator key"
+            ),
+            severity: "WARN".to_owned(),
+            resource_name: None,
+            attributes: vec![
+                ("event".to_owned(), "enrollment-code-refused".to_owned()),
+                ("stage".to_owned(), stage.to_owned()),
+            ],
+        })
+        .await;
 }

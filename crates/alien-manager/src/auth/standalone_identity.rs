@@ -284,12 +284,30 @@ impl RuntimeIdentityVerifier for StandaloneRuntimeIdentity {
         if !is_key_hash(&request.initial_key_hash) {
             return Err(refused());
         }
-        let state = self
+        let now = self.now();
+        let Some(state) = self
             .store
-            .enroll(&request.code, &request.initial_key_hash, self.now())
+            .enroll(&request.code, &request.initial_key_hash, now)
             .await
             .map_err(|_| unavailable())?
-            .ok_or_else(refused)?;
+        else {
+            // A code made from a deployment token, minted before the operator
+            // enrolled, must not replace the operator's key afterwards.
+            return Err(
+                match self
+                    .store
+                    .token_code_blocked_by_key(&request.code, now)
+                    .await
+                    .map_err(|_| unavailable())?
+                {
+                    Some(deployment_id) => {
+                        AlienError::new(ErrorData::EnrollmentKeyExists { deployment_id })
+                            .into_generic()
+                    }
+                    None => refused(),
+                },
+            );
+        };
         Ok(enrolled(state))
     }
 
@@ -342,6 +360,22 @@ impl RuntimeIdentityVerifier for StandaloneRuntimeIdentity {
             .issue_enrollment_code(&deployment.id, self.now())
             .await
             .map_err(|_| unavailable())
+    }
+
+    async fn issue_enrollment_code_for_deployment_token(
+        &self,
+        deployment: &DeploymentRecord,
+    ) -> Result<(String, DateTime<Utc>), AlienError> {
+        self.store
+            .issue_token_enrollment_code(&deployment.id, self.now())
+            .await
+            .map_err(|_| unavailable())?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::EnrollmentKeyExists {
+                    deployment_id: deployment.id.clone(),
+                })
+                .into_generic()
+            })
     }
 
     async fn enrollment_code_is_live(&self, code: &str) -> Result<bool, AlienError> {

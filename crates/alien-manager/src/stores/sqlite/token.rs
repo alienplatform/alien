@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sea_query::{Expr, Query, SqliteQueryBuilder};
 use std::sync::Arc;
+use turso::transaction::TransactionBehavior;
 
 use super::database::{db_error, RowParser, SqliteDatabase};
 use super::migrations::Tokens;
@@ -114,16 +115,50 @@ impl TokenStore for SqliteTokenStore {
         }
     }
 
+    /// Deleting a deployment token also deletes that deployment's unused
+    /// enrollment codes made from a deployment token, in the same transaction.
+    /// A code made from a token must not outlive the revocation of the token.
     async fn delete_token(&self, id: &str) -> Result<(), AlienError> {
-        let sql = Query::delete()
-            .from_table(Tokens::Table)
-            .and_where(Expr::col(Tokens::Id).eq(id))
-            .to_string(SqliteQueryBuilder);
-
-        let rows_affected = self.db.execute_returning_rows_affected(&sql).await?;
-        if rows_affected == 0 {
+        let failed = || GenericError {
+            message: "Token deletion failed".to_string(),
+        };
+        let mut conn = self.db.conn().lock().await;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .into_alien_error()
+            .context(failed())?;
+        let mut rows = tx
+            .query(
+                "SELECT type, deployment_id FROM tokens WHERE id = ?1",
+                [id.to_owned()],
+            )
+            .await
+            .into_alien_error()
+            .context(failed())?;
+        let Some(row) = rows.next().await.into_alien_error().context(failed())? else {
             return Err(db_error(&format!("Token {} not found", id)));
+        };
+        let p = RowParser::new(&row);
+        let token_type = p.string(0, "type")?;
+        let deployment_id = p.optional_string(1, "deployment_id")?;
+        drop(rows);
+
+        tx.execute("DELETE FROM tokens WHERE id = ?1", [id.to_owned()])
+            .await
+            .into_alien_error()
+            .context(failed())?;
+        if let (true, Some(deployment_id)) = (token_type == "deployment", deployment_id) {
+            tx.execute(
+                "DELETE FROM runtime_enrollment_codes \
+                 WHERE deployment_id = ?1 AND from_token = 1 AND initial_key_hash IS NULL",
+                [deployment_id],
+            )
+            .await
+            .into_alien_error()
+            .context(failed())?;
         }
+        tx.commit().await.into_alien_error().context(failed())?;
         Ok(())
     }
 

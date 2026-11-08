@@ -1692,6 +1692,252 @@ mod tests {
         assert!(state.error.is_none());
     }
 
+    const TOKEN_ENROLLMENT_ADMIN: &str = "ax_admin_for_enrollment";
+    const TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN: &str = "ax_deploy_before_enrollment";
+
+    /// A manager with the real router, the real standalone identity store and
+    /// two real tokens: a deployment token for `dep_test`, and an admin token.
+    struct TokenEnrollment {
+        _temp: tempfile::TempDir,
+        db: Arc<SqliteDatabase>,
+        state: AppState,
+        verifier: Arc<dyn crate::auth::identity_exchange::RuntimeIdentityVerifier>,
+        credentials: Arc<crate::auth::runtime_capability::RuntimeCredentials>,
+        identity: Arc<crate::stores::sqlite::SqliteRuntimeIdentityStore>,
+        stored: Arc<Mutex<DeploymentRecord>>,
+    }
+
+    impl TokenEnrollment {
+        async fn new() -> Self {
+            use crate::auth::runtime_capability::{RuntimeAuthValidator, RuntimeCredentials};
+            use crate::auth::standalone_identity::StandaloneRuntimeIdentity;
+            use crate::providers::token_db_validator::TokenDbValidator;
+            use crate::stores::sqlite::SqliteRuntimeIdentityStore;
+            use crate::traits::token_store::{CreateTokenParams, TokenStore, TokenType};
+
+            let temp = tempfile::tempdir().expect("test directory");
+            let db = Arc::new(
+                SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
+                    .await
+                    .expect("database"),
+            );
+            let tokens = Arc::new(SqliteTokenStore::new(db.clone()));
+            for (token_type, bearer, deployment_id) in [
+                (
+                    TokenType::Deployment,
+                    TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN,
+                    Some("dep_test".to_string()),
+                ),
+                (TokenType::Admin, TOKEN_ENROLLMENT_ADMIN, None),
+            ] {
+                tokens
+                    .create_token(CreateTokenParams {
+                        token_type,
+                        key_prefix: bearer[..12].to_string(),
+                        key_hash: crate::ids::sha256_hash(bearer),
+                        deployment_group_id: deployment_id.as_ref().map(|_| "dg_test".into()),
+                        deployment_id,
+                    })
+                    .await
+                    .expect("token");
+            }
+
+            let stored = Arc::new(Mutex::new(deployment_record_with_state("running", None)));
+            let mut store = MockDeploymentStore::new();
+            store.expect_requires_execution_claims().return_const(false);
+            let current = stored.clone();
+            store
+                .expect_get_deployment()
+                .returning(move |_, _| Ok(Some(current.lock().unwrap().clone())));
+            let current = stored.clone();
+            store.expect_reconcile().returning(move |_, data| {
+                let mut record = current.lock().unwrap().clone();
+                record.status = serde_json::to_value(data.state.status)
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+                *current.lock().unwrap() = record.clone();
+                Ok(ReconcileOutcome {
+                    record,
+                    target_operations_bundle_set: None,
+                    target_dynamic_containers: None,
+                    target_operator_image: None,
+                })
+            });
+            let store: Arc<dyn crate::traits::DeploymentStore> = Arc::new(store);
+            let resolver = Arc::new(LocalCredentialResolver::new(temp.path().to_path_buf()));
+            let identity = Arc::new(SqliteRuntimeIdentityStore::new(db.clone()));
+            let verifier: Arc<dyn crate::auth::identity_exchange::RuntimeIdentityVerifier> =
+                Arc::new(
+                    StandaloneRuntimeIdentity::new(
+                        identity.clone(),
+                        store.clone(),
+                        resolver.clone(),
+                    )
+                    .unwrap(),
+                );
+            let mut state = test_app_state(
+                temp.path(),
+                store,
+                Arc::new(SqliteReleaseStore::new(db.clone())),
+                resolver,
+                db.clone(),
+            )
+            .await;
+            let credentials =
+                Arc::new(RuntimeCredentials::new("https://manager.test".into(), [9; 32]).unwrap());
+            state.token_store = tokens.clone();
+            state.auth_validator = Arc::new(RuntimeAuthValidator::new(
+                credentials.clone(),
+                Arc::new(TokenDbValidator::new(tokens)),
+            ));
+            Self {
+                _temp: temp,
+                db,
+                state,
+                verifier,
+                credentials,
+                identity,
+                stored,
+            }
+        }
+
+        fn identity_router(&self) -> axum::Router {
+            crate::auth::identity_exchange::router(self.credentials.clone(), self.verifier.clone())
+                .with_state(self.state.clone())
+        }
+
+        async fn post(
+            router: axum::Router,
+            uri: &str,
+            bearer: Option<&str>,
+            body: Value,
+        ) -> (StatusCode, Value) {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/json");
+            if let Some(bearer) = bearer {
+                request = request.header("authorization", format!("Bearer {bearer}"));
+            }
+            let response = router
+                .oneshot(request.body(Body::from(body.to_string())).expect("request"))
+                .await
+                .expect("response");
+            let status = response.status();
+            let body = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+            (
+                status,
+                serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null),
+            )
+        }
+
+        /// `POST /v1/deployments/dep_test/enrollment-code` with `bearer`.
+        async fn enrollment_code(&self, bearer: &str) -> (StatusCode, Value) {
+            Self::post(
+                self.identity_router(),
+                "/v1/deployments/dep_test/enrollment-code",
+                Some(bearer),
+                Value::Null,
+            )
+            .await
+        }
+
+        /// `POST /v1/identity/enroll`: the operator enrolls `key` with `code`.
+        async fn enroll(&self, code: &str, key: &str) -> StatusCode {
+            Self::post(
+                self.identity_router(),
+                "/v1/identity/enroll",
+                None,
+                json!({ "code": code, "initialKeyHash": crate::ids::sha256_hash(key) }),
+            )
+            .await
+            .0
+        }
+
+        async fn mint(&self, bearer: &str) -> String {
+            let (status, issued) = self.enrollment_code(bearer).await;
+            assert_eq!(status, StatusCode::OK, "{issued}");
+            issued["code"].as_str().expect("code").to_owned()
+        }
+
+        async fn key_is_current(&self, key: &str) -> bool {
+            self.identity
+                .verify_key("dep_test", key, Utc::now())
+                .await
+                .unwrap()
+                .is_some()
+        }
+
+        /// Warn-level entries the manager shows for the deployment.
+        async fn refusals(&self) -> Vec<crate::dev::LogEntry> {
+            self.state
+                .log_buffer
+                .get_entries(Some("dep_test"), usize::MAX)
+                .await
+                .into_iter()
+                .filter(|entry| {
+                    entry.severity == "WARN"
+                        && entry
+                            .attributes
+                            .contains(&("event".to_owned(), "enrollment-code-refused".to_owned()))
+                })
+                .collect()
+        }
+
+        /// A capability for the enrolled operator, as the exchange issues it.
+        fn operator_capability(&self) -> String {
+            use crate::auth::runtime_capability::{RuntimeGrant, RuntimePurpose};
+            self.credentials
+                .issue(
+                    RuntimeGrant {
+                        workspace_id: "default".into(),
+                        project_id: "default".into(),
+                        deployment_id: "dep_test".into(),
+                        component_id: "operator".into(),
+                        purpose: RuntimePurpose::OperatorSync,
+                    },
+                    Utc::now() + chrono::Duration::hours(1),
+                )
+                .unwrap()
+                .token
+        }
+
+        /// `POST /v1/sync` as `bearer`, reporting the deployment running.
+        async fn sync(&self, bearer: &str) -> StatusCode {
+            let body = json!({
+                "deploymentId": "dep_test",
+                "maxSupportedDeploymentProtocolVersion":
+                    alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION,
+                "currentState": {
+                    "platform": "kubernetes",
+                    "status": "running",
+                    "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                },
+            });
+            let response = super::router()
+                .with_state(self.state.clone())
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/sync")
+                        .header("authorization", format!("Bearer {bearer}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .expect("request"),
+                )
+                .await
+                .expect("sync response");
+            let status = response.status();
+            if status == StatusCode::BAD_REQUEST {
+                let body = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+                panic!("{}", String::from_utf8_lossy(&body));
+            }
+            status
+        }
+    }
+
     /// An Operator on a deployment token (a self-updated old install) asks
     /// for an enrollment code with that token and enrolls with it. The token
     /// keeps working until the first rollout the enrolled Operator finishes.
@@ -1699,184 +1945,160 @@ mod tests {
     /// can no longer get a code.
     #[tokio::test]
     async fn the_deployment_token_is_revoked_after_the_first_enrolled_rollout() {
-        use crate::auth::identity_exchange::{IdentityEnrollmentRequest, RuntimeIdentityVerifier};
-        use crate::auth::runtime_capability::{
-            RuntimeAuthValidator, RuntimeCredentials, RuntimeGrant, RuntimePurpose,
-        };
-        use crate::auth::standalone_identity::StandaloneRuntimeIdentity;
-        use crate::providers::token_db_validator::TokenDbValidator;
-        use crate::stores::sqlite::SqliteRuntimeIdentityStore;
-        use crate::traits::token_store::{CreateTokenParams, TokenStore, TokenType};
-
-        let temp = tempfile::tempdir().expect("test directory");
-        let db = Arc::new(
-            SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
-                .await
-                .expect("database"),
-        );
-        let tokens = Arc::new(SqliteTokenStore::new(db.clone()));
-        let old_token = "ax_deploy_before_enrollment";
-        tokens
-            .create_token(CreateTokenParams {
-                token_type: TokenType::Deployment,
-                key_prefix: "ax_deploy_bef".into(),
-                key_hash: crate::ids::sha256_hash(old_token),
-                deployment_group_id: Some("dg_test".into()),
-                deployment_id: Some("dep_test".into()),
-            })
-            .await
-            .expect("deployment token");
-
-        let stored = Arc::new(Mutex::new(deployment_record_with_state("running", None)));
-        let mut store = MockDeploymentStore::new();
-        store.expect_requires_execution_claims().return_const(false);
-        let current = stored.clone();
-        store
-            .expect_get_deployment()
-            .returning(move |_, _| Ok(Some(current.lock().unwrap().clone())));
-        let current = stored.clone();
-        store.expect_reconcile().returning(move |_, data| {
-            let mut record = current.lock().unwrap().clone();
-            record.status = serde_json::to_value(data.state.status)
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .to_owned();
-            *current.lock().unwrap() = record.clone();
-            Ok(ReconcileOutcome {
-                record,
-                target_operations_bundle_set: None,
-                target_dynamic_containers: None,
-                target_operator_image: None,
-            })
-        });
-        let store: Arc<dyn crate::traits::DeploymentStore> = Arc::new(store);
-        let resolver = Arc::new(LocalCredentialResolver::new(temp.path().to_path_buf()));
-        let verifier: Arc<dyn RuntimeIdentityVerifier> = Arc::new(
-            StandaloneRuntimeIdentity::new(
-                Arc::new(SqliteRuntimeIdentityStore::new(db.clone())),
-                store.clone(),
-                resolver.clone(),
-            )
-            .unwrap(),
-        );
-        let mut state = test_app_state(
-            temp.path(),
-            store,
-            Arc::new(SqliteReleaseStore::new(db.clone())),
-            resolver,
-            db,
-        )
-        .await;
-        let credentials =
-            Arc::new(RuntimeCredentials::new("https://manager.test".into(), [9; 32]).unwrap());
-        state.token_store = tokens.clone();
-        state.auth_validator = Arc::new(RuntimeAuthValidator::new(
-            credentials.clone(),
-            Arc::new(TokenDbValidator::new(tokens.clone())),
-        ));
-
-        let enrollment_code = |bearer: &'static str| {
-            let router =
-                crate::auth::identity_exchange::router(credentials.clone(), verifier.clone())
-                    .with_state(state.clone());
-            async move {
-                let response = router
-                    .oneshot(
-                        Request::builder()
-                            .method("POST")
-                            .uri("/v1/deployments/dep_test/enrollment-code")
-                            .header("authorization", format!("Bearer {bearer}"))
-                            .body(Body::empty())
-                            .expect("request"),
-                    )
-                    .await
-                    .expect("enrollment code response");
-                let status = response.status();
-                let body = to_bytes(response.into_body(), 1 << 20).await.unwrap();
-                (
-                    status,
-                    serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null),
-                )
-            }
-        };
+        let manager = TokenEnrollment::new().await;
+        let old_token = TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN;
 
         // The old token gets a one-use code for its own deployment, and the
         // code enrolls the Operator's key for that deployment.
-        let (status, issued) = enrollment_code(old_token).await;
+        let (status, issued) = manager.enrollment_code(old_token).await;
         assert_eq!(status, StatusCode::OK, "{issued}");
         assert_eq!(issued["deploymentId"], "dep_test");
         assert_eq!(issued["managerAudience"], "https://manager.test");
-        let enrolled = verifier
-            .enroll(&IdentityEnrollmentRequest {
-                code: issued["code"].as_str().expect("code").to_owned(),
-                initial_key_hash: crate::ids::sha256_hash("ax_day_v1_operator"),
-            })
-            .await
-            .expect("the code enrolls");
-        assert_eq!(enrolled.deployment_id, "dep_test");
-        let operator = credentials
-            .issue(
-                RuntimeGrant {
-                    workspace_id: "default".into(),
-                    project_id: "default".into(),
-                    deployment_id: "dep_test".into(),
-                    component_id: "operator".into(),
-                    purpose: RuntimePurpose::OperatorSync,
-                },
-                Utc::now() + chrono::Duration::hours(1),
-            )
-            .unwrap()
-            .token;
-
-        let sync = |bearer: String| {
-            let state = state.clone();
-            async move {
-                let body = json!({
-                    "deploymentId": "dep_test",
-                    "maxSupportedDeploymentProtocolVersion":
-                        alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION,
-                    "currentState": {
-                        "platform": "kubernetes",
-                        "status": "running",
-                        "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
-                    },
-                });
-                let response = super::router()
-                    .with_state(state)
-                    .oneshot(
-                        Request::builder()
-                            .method("POST")
-                            .uri("/v1/sync")
-                            .header("authorization", format!("Bearer {bearer}"))
-                            .header("content-type", "application/json")
-                            .body(Body::from(body.to_string()))
-                            .expect("request"),
-                    )
-                    .await
-                    .expect("sync response");
-                let status = response.status();
-                if status == StatusCode::BAD_REQUEST {
-                    let body = to_bytes(response.into_body(), 1 << 20).await.unwrap();
-                    panic!("{}", String::from_utf8_lossy(&body));
-                }
-                status
-            }
-        };
+        assert_eq!(
+            manager
+                .enroll(issued["code"].as_str().expect("code"), "ax_day_v1_operator")
+                .await,
+            StatusCode::OK
+        );
+        assert!(manager.key_is_current("ax_day_v1_operator").await);
+        let operator = manager.operator_capability();
 
         // Enrolled, but the workloads still run the revision from before.
         // Health refreshes do not end the token.
-        assert_eq!(sync(operator.clone()).await, StatusCode::OK);
-        stored.lock().unwrap().status = "refresh-failed".into();
-        assert_eq!(sync(operator.clone()).await, StatusCode::OK);
-        assert_eq!(sync(old_token.into()).await, StatusCode::OK);
+        assert_eq!(manager.sync(&operator).await, StatusCode::OK);
+        manager.stored.lock().unwrap().status = "refresh-failed".into();
+        assert_eq!(manager.sync(&operator).await, StatusCode::OK);
+        assert_eq!(manager.sync(old_token).await, StatusCode::OK);
 
         // The enrolled Operator finishes a rollout.
-        stored.lock().unwrap().status = "update-pending".into();
-        assert_eq!(sync(operator.clone()).await, StatusCode::OK);
-        assert_eq!(sync(old_token.into()).await, StatusCode::UNAUTHORIZED);
-        assert_eq!(sync(operator).await, StatusCode::OK);
-        assert_eq!(enrollment_code(old_token).await.0, StatusCode::UNAUTHORIZED);
+        manager.stored.lock().unwrap().status = "update-pending".into();
+        assert_eq!(manager.sync(&operator).await, StatusCode::OK);
+        assert_eq!(manager.sync(old_token).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(manager.sync(&operator).await, StatusCode::OK);
+        assert_eq!(
+            manager.enrollment_code(old_token).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    /// Once the real Operator has enrolled, a copy of the deployment token
+    /// cannot get a code that replaces its key. The refusal shows in the
+    /// deployment's logs. An administrator's code still re-enrolls.
+    #[tokio::test]
+    async fn a_deployment_token_cannot_mint_a_code_once_the_operator_has_a_key() {
+        let manager = TokenEnrollment::new().await;
+        let token = TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN;
+
+        let code = manager.mint(token).await;
+        assert_eq!(
+            manager.enroll(&code, "ax_day_v1_real").await,
+            StatusCode::OK
+        );
+        assert!(manager.refusals().await.is_empty());
+
+        let (status, refused) = manager.enrollment_code(token).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+        assert_eq!(refused["code"], "ENROLLMENT_KEY_EXISTS", "{refused}");
+        assert!(
+            refused["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("administrator")),
+            "{refused}"
+        );
+        assert!(manager.key_is_current("ax_day_v1_real").await);
+        let refusals = manager.refusals().await;
+        assert_eq!(refusals.len(), 1, "{refusals:?}");
+        assert!(refusals[0]
+            .attributes
+            .contains(&("stage".to_owned(), "issue".to_owned())));
+
+        // The administrator can always enroll the Operator again.
+        let admin_code = manager.mint(TOKEN_ENROLLMENT_ADMIN).await;
+        assert_eq!(
+            manager.enroll(&admin_code, "ax_day_v1_replacement").await,
+            StatusCode::OK
+        );
+        assert!(manager.key_is_current("ax_day_v1_replacement").await);
+        assert!(!manager.key_is_current("ax_day_v1_real").await);
+        assert_eq!(
+            manager.refusals().await.len(),
+            1,
+            "an admin code is not a refusal"
+        );
+    }
+
+    /// A token-made code that is still unused when the deployment has a key
+    /// must not replace the key. (A new enrollment normally deletes the
+    /// deployment's other unused codes; this is the state that must stay
+    /// harmless if one is left over.) The real key keeps working, and the
+    /// refusal shows in the deployment's logs.
+    #[tokio::test]
+    async fn a_token_made_code_left_over_from_before_enrollment_cannot_replace_the_key() {
+        let manager = TokenEnrollment::new().await;
+        let code = manager.mint(TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN).await;
+        assert_eq!(
+            manager.enroll(&code, "ax_day_v1_real").await,
+            StatusCode::OK
+        );
+
+        let (leftover, _, hash) = crate::ids::generate_token("ax_enroll_");
+        manager
+            .db
+            .conn()
+            .lock()
+            .await
+            .execute(
+                "INSERT INTO runtime_enrollment_codes \
+                 (code_hash, deployment_id, expires_at, from_token) VALUES (?1, 'dep_test', ?2, 1)",
+                (hash, (Utc::now() + chrono::Duration::hours(1)).timestamp()),
+            )
+            .await
+            .expect("leftover token-made code");
+
+        assert_eq!(
+            manager.enroll(&leftover, "ax_day_v1_copier").await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert!(manager.key_is_current("ax_day_v1_real").await);
+        assert!(!manager.key_is_current("ax_day_v1_copier").await);
+        let refusals = manager.refusals().await;
+        assert_eq!(refusals.len(), 1, "{refusals:?}");
+        assert!(refusals[0]
+            .attributes
+            .contains(&("stage".to_owned(), "redeem".to_owned())));
+        // The operator on its real key still syncs.
+        assert_eq!(
+            manager.sync(&manager.operator_capability()).await,
+            StatusCode::OK
+        );
+    }
+
+    /// The rollout that revokes the deployment token also retires the
+    /// deployment's unused token-made codes, but not an admin's code.
+    #[tokio::test]
+    async fn revoking_the_deployment_token_retires_its_unused_codes() {
+        let manager = TokenEnrollment::new().await;
+        let token_code = manager.mint(TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN).await;
+        let admin_code = manager.mint(TOKEN_ENROLLMENT_ADMIN).await;
+        let operator = manager.operator_capability();
+
+        manager.stored.lock().unwrap().status = "update-pending".into();
+        assert_eq!(manager.sync(&operator).await, StatusCode::OK);
+        assert_eq!(
+            manager.sync(TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN).await,
+            StatusCode::UNAUTHORIZED,
+            "the rollout revoked the token"
+        );
+
+        assert_eq!(
+            manager.enroll(&token_code, "ax_day_v1_late").await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert!(!manager.key_is_current("ax_day_v1_late").await);
+        assert_eq!(
+            manager.enroll(&admin_code, "ax_day_v1_admin").await,
+            StatusCode::OK
+        );
     }
 
     /// An Operator that cleared its config in token mode and then enrolled
@@ -4153,7 +4375,9 @@ fn rollout_by_enrolled_operator_finished(
 }
 
 /// Delete the deployment's long-lived tokens. A failure is logged and retried
-/// on the next rollout; it never fails the sync.
+/// on the next rollout; it never fails the sync. Deleting a deployment token
+/// also retires the unused enrollment codes made from it, in the same
+/// transaction (see `SqliteTokenStore::delete_token`).
 async fn revoke_deployment_tokens(state: &AppState, deployment_id: &str) {
     let tokens = match state.token_store.list_tokens().await {
         Ok(tokens) => tokens,

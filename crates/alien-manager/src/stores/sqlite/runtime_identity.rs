@@ -104,8 +104,56 @@ impl SqliteRuntimeIdentityStore {
         Ok((code, expires_at))
     }
 
-    /// Consume a code and install the operator's first key. A retry with the
-    /// same code and key hash, after a lost response, gets the same answer.
+    /// Issue a code for a caller that holds only the deployment's token.
+    /// Returns `None` when the deployment already has an operator key: a copy
+    /// of the token must not be able to replace the key. The check and the
+    /// insert are one statement, so no key can appear between them.
+    pub async fn issue_token_enrollment_code(
+        &self,
+        deployment_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<(String, DateTime<Utc>)>, AlienError> {
+        let (code, _, code_hash) = generate_token("ax_enroll_");
+        let expires_at = now + CODE_LIFETIME;
+        let inserted = self
+            .run(
+                "INSERT INTO runtime_enrollment_codes (code_hash, deployment_id, expires_at, from_token) \
+                 SELECT ?1, ?2, ?3, 1 \
+                 WHERE NOT EXISTS (SELECT 1 FROM runtime_daily_keys WHERE deployment_id = ?2)",
+                (code_hash, deployment_id.to_owned(), expires_at.timestamp()),
+            )
+            .await?;
+        Ok((inserted == 1).then_some((code, expires_at)))
+    }
+
+    /// The deployment a still-unused, unexpired token-made `code` belongs to,
+    /// when that deployment now has an operator key. This is why `enroll`
+    /// refused it; no other refusal is reported here.
+    pub async fn token_code_blocked_by_key(
+        &self,
+        code: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<String>, AlienError> {
+        let Some(row) = self
+            .row(
+                "SELECT deployment_id FROM runtime_enrollment_codes \
+                 WHERE code_hash = ?1 AND from_token = 1 AND initial_key_hash IS NULL \
+                 AND expires_at > ?2 AND EXISTS \
+                 (SELECT 1 FROM runtime_daily_keys WHERE \
+                  runtime_daily_keys.deployment_id = runtime_enrollment_codes.deployment_id)",
+                (sha256_hash(code), now.timestamp()),
+            )
+            .await?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(RowParser::new(&row).string(0, "deployment_id")?))
+    }
+
+    /// Consume a code and install the operator's first key. A code made from a
+    /// deployment token is refused once the deployment has a key, even when it
+    /// was made before the key existed. A retry with the same code and key
+    /// hash, after a lost response, gets the same answer.
     /// One transaction consumes the code, installs the key and retires every
     /// other unused code of the deployment, so a crash cannot leave a used
     /// code without its key, and a leftover code cannot replace the key later.
@@ -129,7 +177,9 @@ impl SqliteRuntimeIdentityStore {
             let used = tx
                 .execute(
                     "UPDATE runtime_enrollment_codes SET initial_key_hash = ?2 \
-                     WHERE code_hash = ?1 AND initial_key_hash IS NULL AND expires_at > ?3",
+                     WHERE code_hash = ?1 AND initial_key_hash IS NULL AND expires_at > ?3 \
+                     AND (from_token = 0 OR NOT EXISTS (SELECT 1 FROM runtime_daily_keys \
+                          WHERE runtime_daily_keys.deployment_id = runtime_enrollment_codes.deployment_id))",
                     (
                         code_hash.clone(),
                         initial_key_hash.to_owned(),
@@ -463,6 +513,100 @@ mod tests {
         // Codes of other deployments are untouched.
         assert!(store
             .enroll(&other, &sha256_hash("ax_day_v1_other"), at(23))
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn a_token_made_code_works_only_while_the_deployment_has_no_key() {
+        let (store, _directory) = store().await;
+        let (first, _) = store
+            .issue_token_enrollment_code("dep-1", at(0))
+            .await
+            .unwrap()
+            .expect("no key yet");
+        let (admin, _) = store.issue_enrollment_code("dep-1", at(0)).await.unwrap();
+        // Another deployment's key does not block this one.
+        let (other, _) = store.issue_enrollment_code("dep-2", at(0)).await.unwrap();
+        store
+            .enroll(&other, &sha256_hash("ax_day_v1_other"), at(1))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            store
+                .token_code_blocked_by_key(&first, at(2))
+                .await
+                .unwrap(),
+            None
+        );
+
+        store
+            .enroll(&first, &sha256_hash("ax_day_v1_first"), at(2))
+            .await
+            .unwrap()
+            .unwrap();
+        // With the key in place, no token-made code can be issued.
+        assert!(store
+            .issue_token_enrollment_code("dep-1", at(3))
+            .await
+            .unwrap()
+            .is_none());
+        // An admin code made before enrollment was retired by it, and one
+        // made afterwards still replaces the key.
+        assert!(store
+            .enroll(&admin, &sha256_hash("ax_day_v1_stale"), at(4))
+            .await
+            .unwrap()
+            .is_none());
+        let (admin, _) = store.issue_enrollment_code("dep-1", at(5)).await.unwrap();
+        assert!(store
+            .enroll(&admin, &sha256_hash("ax_day_v1_admin"), at(6))
+            .await
+            .unwrap()
+            .is_some());
+
+        // A token-made code left unused next to a key is refused, and the
+        // refusal is told apart from an unknown or an expired code.
+        let (leftover, _, hash) = generate_token("ax_enroll_");
+        store
+            .run(
+                "INSERT INTO runtime_enrollment_codes \
+                 (code_hash, deployment_id, expires_at, from_token) VALUES (?1, 'dep-1', ?2, 1)",
+                (hash, at(3600).timestamp()),
+            )
+            .await
+            .unwrap();
+        assert!(store
+            .enroll(&leftover, &sha256_hash("ax_day_v1_copier"), at(10))
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store
+                .token_code_blocked_by_key(&leftover, at(10))
+                .await
+                .unwrap(),
+            Some("dep-1".to_owned())
+        );
+        assert_eq!(
+            store
+                .token_code_blocked_by_key(&leftover, at(3600))
+                .await
+                .unwrap(),
+            None,
+            "an expired code is just expired"
+        );
+        assert_eq!(
+            store
+                .token_code_blocked_by_key("ax_enroll_unknown", at(10))
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(store
+            .verify_key("dep-1", "ax_day_v1_admin", at(11))
             .await
             .unwrap()
             .is_some());
