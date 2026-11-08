@@ -19,7 +19,6 @@ use serde_json::{Map, Value};
 use crate::error::{ErrorData, Result};
 use crate::interaction::ConfirmationMode;
 use crate::output::{print_json, prompt_confirm};
-use crate::secret_values::{seal_environment_variables, seal_input_values, SecretValuesTarget};
 use crate::ui::{command, dim_label, make_table, print_table, success_line};
 
 /// A requested change to one machine pool. Unset fields keep the pool's current value.
@@ -532,13 +531,6 @@ pub(crate) async fn set_environment_variables_task(
         return Ok(());
     }
 
-    let variables = seal_environment_variables(
-        client,
-        Some(workspace),
-        SecretValuesTarget::Deployment(deployment_id),
-        variables,
-    )
-    .await?;
     let body: UpdateDeploymentEnvironmentVariablesRequest =
         request_body(serde_json::json!({ "variables": variables }), "env")?;
     let response = client
@@ -841,34 +833,6 @@ pub(crate) async fn set_inputs_task(
         .unwrap_or_default();
     let values = input_values_to_save(&declared, &changes)?;
     let clear = changes.clear;
-    let secret_ids: Vec<String> = current
-        .get("inputs")
-        .and_then(Value::as_array)
-        .map(|inputs| {
-            inputs
-                .iter()
-                .filter(|input| input.get("kind").and_then(Value::as_str) == Some("secret"))
-                .filter_map(|input| Some(input.get("id")?.as_str()?.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
-    // The platform decides whether the manager encrypts these values; what the
-    // earlier read said only turns a contradicting answer into an error.
-    let instance_serves = current
-        .get("secretValuesEncryptedBy")
-        .and_then(Value::as_str)
-        == Some("private-alien-instance");
-    let values: Map<String, Value> = seal_input_values(
-        client,
-        Some(workspace),
-        SecretValuesTarget::Deployment(deployment_id),
-        &values.into_iter().collect(),
-        &secret_ids,
-        instance_serves,
-    )
-    .await?
-    .into_iter()
-    .collect();
 
     let body: UpdateDeploymentInputsRequest = request_body(
         serde_json::json!({ "inputValues": values, "clearInputIds": clear }),

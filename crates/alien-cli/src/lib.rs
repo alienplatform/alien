@@ -15,7 +15,6 @@ pub mod output;
 #[cfg(feature = "platform")]
 pub mod platform_deployment_resolver;
 pub mod project_link;
-pub(crate) mod secret_values;
 pub mod ui;
 
 #[cfg(test)]
