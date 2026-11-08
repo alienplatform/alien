@@ -363,9 +363,15 @@ pub async fn sync_command(
         .await?;
     }
     if let Some(settings) = &site_side {
-        install_pending(&folder, &mut site, settings, &args).await?;
+        let installed = install_pending(&folder, &mut site, settings, &args).await;
         if !args.dry_run {
-            write_report(&folder, &site, settings).await?;
+            // A failed install still reports: after a registry switch the
+            // report is how the online side learns to carry every layer.
+            let reported = write_report(&folder, &site, settings).await;
+            installed?;
+            reported?;
+        } else {
+            installed?;
         }
         save_site(&folder, &site)?;
         if online {
