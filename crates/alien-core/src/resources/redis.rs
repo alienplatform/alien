@@ -107,6 +107,18 @@ pub const ELASTICACHE_NODE_TYPES: &[(&str, f64)] = &[
     ("cache.r7g.16xlarge", 419.09),
 ];
 
+/// Memorystore for Valkey node types in ascending order with their default usable memory in
+/// GB (decimal), from the published node specification. The CUSTOM_* types are left out: they
+/// exist only for cluster-disabled instances and have not been exercised against a real project.
+pub const MEMORYSTORE_NODE_TYPES: &[(&str, f64)] = &[
+    ("SHARED_CORE_NANO", 1.12),
+    ("STANDARD_SMALL", 5.2),
+    ("HIGHMEM_MEDIUM", 10.4),
+    ("STANDARD_LARGE", 20.8),
+    ("HIGHMEM_XLARGE", 46.4),
+    ("HIGHMEM_2XLARGE", 88.0),
+];
+
 impl Redis {
     /// The resource type identifier for Redis.
     pub const RESOURCE_TYPE: ResourceType = ResourceType::from_static("redis");
@@ -152,6 +164,27 @@ impl Redis {
                         "{} bytes exceeds the largest single-shard ElastiCache node ({})",
                         wanted,
                         ELASTICACHE_NODE_TYPES[ELASTICACHE_NODE_TYPES.len() - 1].0
+                    ),
+                })
+            })
+    }
+
+    /// The smallest Memorystore node type whose default usable memory fits the request, and
+    /// that usable memory in bytes. With no request the default is 1 GiB. Requests above the
+    /// largest node are rejected, never capped.
+    pub fn memorystore_node_type(&self) -> Result<(&'static str, u64)> {
+        let wanted = self.requested_memory_bytes()?.unwrap_or(1024_u64.pow(3));
+        MEMORYSTORE_NODE_TYPES
+            .iter()
+            .map(|(name, gb)| (*name, (gb * 1e9) as u64))
+            .find(|(_, usable)| *usable >= wanted)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::OperationNotSupported {
+                    operation: "Redis memory sizing".to_string(),
+                    reason: format!(
+                        "{} bytes exceeds the largest Memorystore node ({})",
+                        wanted,
+                        MEMORYSTORE_NODE_TYPES[MEMORYSTORE_NODE_TYPES.len() - 1].0
                     ),
                 })
             })
@@ -401,11 +434,49 @@ mod tests {
             Some(m) => Redis::new("r".into()).memory(m.into()).build(),
             None => Redis::new("r".into()).build(),
         };
-        assert_eq!(redis(None).elasticache_node_type().unwrap().0, "cache.t4g.small");
+        assert_eq!(
+            redis(None).elasticache_node_type().unwrap().0,
+            "cache.t4g.small"
+        );
         // 1.37 GiB node -> 1.0275 GiB usable: 1 GiB fits, 1.1 GiB moves up.
-        assert_eq!(redis(Some("1Gi")).elasticache_node_type().unwrap().0, "cache.t4g.small");
-        assert_eq!(redis(Some("1100Mi")).elasticache_node_type().unwrap().0, "cache.t4g.medium");
-        assert_eq!(redis(Some("300Gi")).elasticache_node_type().unwrap().0, "cache.r7g.16xlarge");
+        assert_eq!(
+            redis(Some("1Gi")).elasticache_node_type().unwrap().0,
+            "cache.t4g.small"
+        );
+        assert_eq!(
+            redis(Some("1100Mi")).elasticache_node_type().unwrap().0,
+            "cache.t4g.medium"
+        );
+        assert_eq!(
+            redis(Some("300Gi")).elasticache_node_type().unwrap().0,
+            "cache.r7g.16xlarge"
+        );
         assert!(redis(Some("400Gi")).elasticache_node_type().is_err());
+    }
+
+    #[test]
+    fn memorystore_node_type_picks_smallest_fit_and_rejects_oversize() {
+        let redis = |m: Option<&str>| match m {
+            Some(m) => Redis::new("r".into()).memory(m.into()).build(),
+            None => Redis::new("r".into()).build(),
+        };
+        assert_eq!(
+            redis(None).memorystore_node_type().unwrap().0,
+            "SHARED_CORE_NANO"
+        );
+        // 1.12 GB usable on the nano node: 1 GiB (1.07 GB) fits, 1.1 GiB (1.18 GB) does not.
+        assert_eq!(
+            redis(Some("1100Mi")).memorystore_node_type().unwrap().0,
+            "STANDARD_SMALL"
+        );
+        assert_eq!(
+            redis(Some("4Gi")).memorystore_node_type().unwrap().0,
+            "STANDARD_SMALL"
+        );
+        assert_eq!(
+            redis(Some("80Gi")).memorystore_node_type().unwrap().0,
+            "HIGHMEM_2XLARGE"
+        );
+        assert!(redis(Some("100Gi")).memorystore_node_type().is_err());
     }
 }
