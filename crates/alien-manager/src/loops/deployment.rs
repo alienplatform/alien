@@ -1238,6 +1238,7 @@ impl DeploymentLoop {
                     clusters.insert(
                         cluster_id.clone(),
                         alien_core::HorizonClusterConfig {
+                            machine_url: None,
                             cluster_id,
                             management_token: token,
                             runtime_identity: None,

@@ -407,6 +407,7 @@ mod input_values_tests {
                 clusters: HashMap::from([(
                     "compute".to_string(),
                     crate::HorizonClusterConfig {
+                        machine_url: None,
                         cluster_id: "cluster-1".to_string(),
                         management_token: "hm_test".to_string(),
                         runtime_identity: None,
