@@ -946,7 +946,6 @@ pub struct CreateAutoScalingGroupRequest {
     /// Whether instances are protected from scale in.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub new_instances_protected_from_scale_in: Option<bool>,
-    pub suspended_processes: Option<SuspendedProcessesWrapper>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1121,6 +1120,7 @@ pub struct AutoScalingGroup {
     pub capacity_rebalance: Option<bool>,
     pub default_instance_warmup: Option<i32>,
     pub new_instances_protected_from_scale_in: Option<bool>,
+    pub suspended_processes: Option<SuspendedProcessesWrapper>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
