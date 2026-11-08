@@ -3449,6 +3449,20 @@ impl AzureWorkerController {
             })
         })?;
 
+        // A protected install's apps change only through its verifier; the next state reads
+        // the app until it is gone.
+        if verifier::is_protected(ctx) {
+            let verifier = verifier::azure_verifier(ctx).await?;
+            let worker = ctx.desired_config.id().to_string();
+            let deleted =
+                verifier::delete_workload(&verifier, &worker, &container_app_name).await?;
+            info!(name=%container_app_name, existed=deleted.existed, "The verifier deleted the container app");
+            return Ok(HandlerAction::Continue {
+                state: DeletingContainerApp,
+                suggested_delay: Some(Duration::from_secs(5)),
+            });
+        }
+
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let client = ctx
             .service_provider
@@ -8386,6 +8400,66 @@ mod tests {
         apps.expect_update_container_app().never();
         apps.expect_create_or_update_container_app().never();
         setup_mock_service_provider(Arc::new(apps), None)
+    }
+
+    /// Uninstall on a protected install: the app goes through the verifier in one call, with
+    /// no delete of its own (management's roles leave out Container Apps writes), and the
+    /// controller waits until Azure answers that it is gone.
+    #[tokio::test]
+    async fn a_protected_delete_goes_through_the_verifier_alone() {
+        let (url, requests) = http_verifier_stub(
+            axum::http::StatusCode::OK,
+            serde_json::json!({"deleted": PROTECTED_APP, "existed": true}),
+        )
+        .await;
+        let mut apps = MockContainerAppsApi::new();
+        let seen = requests.clone();
+        apps.expect_get_container_app().returning(move |_, _| {
+            if seen.lock().unwrap().is_empty() {
+                Ok(create_successful_container_app_response(
+                    PROTECTED_APP,
+                    false,
+                ))
+            } else {
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceNotFound {
+                        resource_type: "ContainerApp".to_string(),
+                        resource_name: PROTECTED_APP.to_string(),
+                    },
+                ))
+            }
+        });
+        apps.expect_delete_container_app().never();
+        let mut config = AzureClientConfig::mock();
+        config.service_overrides = Some(AzureServiceOverrides {
+            endpoints: HashMap::from([("verifier".to_string(), url)]),
+        });
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(pinned_worker('1', 512))
+            .controller(AzureWorkerController::mock_ready(PROTECTED_APP))
+            .platform(Platform::Azure)
+            .client_config(ClientConfig::Azure(Box::new(config)))
+            .service_provider(setup_mock_service_provider(Arc::new(apps), None))
+            .with_test_dependencies()
+            .with_dependency(setup_identity(), setup_identity_controller())
+            .stack_settings(protected_settings())
+            .build()
+            .await
+            .unwrap();
+
+        executor.delete().unwrap();
+        executor
+            .run_until_terminal()
+            .await
+            .expect("the delete completes through the verifier");
+
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&requests[0].1).unwrap(),
+            serde_json::json!({"deleteWorkload": {"workload": PROTECTED_WORKER}})
+        );
     }
 
     async fn protected_update(

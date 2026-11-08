@@ -4397,6 +4397,19 @@ impl GcpWorkerController {
 
         info!(name=%service_name, "Deleting Cloud Run service");
 
+        // A protected install's services change only through its verifier, which deletes the
+        // service with its IAM policy; the wait reads the service until it is gone.
+        if verifier::is_protected(ctx) {
+            let verifier = verifier::gcp_verifier(ctx)?;
+            let worker = ctx.desired_config.id().to_string();
+            let deleted = verifier::delete_workload(&verifier, &worker, service_name).await?;
+            info!(name=%service_name, existed=deleted.existed, "The verifier deleted the Cloud Run service");
+            return Ok(HandlerAction::Continue {
+                state: WaitingForServiceDeletion,
+                suggested_delay: Some(Duration::from_secs(2)),
+            });
+        }
+
         // Try to delete the service, handling the case where it's already missing
         match ctx
             .service_provider
@@ -9375,6 +9388,86 @@ mod tests {
             vault_prefix: Some("test-secrets".to_string()),
             ..Default::default()
         }
+    }
+
+    /// Uninstall on a protected install: the service goes through the verifier in one call,
+    /// with no delete of its own (management has no `run.services.delete`), and the controller
+    /// waits until Cloud Run answers that it is gone.
+    #[tokio::test]
+    async fn a_protected_delete_goes_through_the_verifier_alone() {
+        let (url, requests) = http_verifier_stub(
+            axum::http::StatusCode::OK,
+            serde_json::json!({"deleted": PROTECTED_SERVICE, "existed": true}),
+        )
+        .await;
+        let mut cloudrun = MockCloudRunApi::new();
+        let seen = requests.clone();
+        cloudrun.expect_get_service().returning(move |_, _| {
+            if seen.lock().unwrap().is_empty() {
+                Ok(create_successful_service_response(PROTECTED_SERVICE))
+            } else {
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceNotFound {
+                        resource_type: "CloudRunService".to_string(),
+                        resource_name: PROTECTED_SERVICE.to_string(),
+                    },
+                ))
+            }
+        });
+        cloudrun.expect_delete_service().never();
+        cloudrun.expect_set_service_iam_policy().never();
+        let cloudrun = Arc::new(cloudrun);
+        let mut iam = MockIamApi::new();
+        iam.expect_generate_id_token().returning(|_, _| {
+            Ok(GenerateIdTokenResponse {
+                token: "management-id-token".to_string(),
+            })
+        });
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_cloudrun_client()
+            .returning(move |_| Ok(cloudrun.clone()));
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_gcp_pubsub_client()
+            .returning(|_| Ok(Arc::new(MockPubSubApi::new())));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(pinned_worker('1', 256))
+            .controller(GcpWorkerController::mock_ready(PROTECTED_SERVICE))
+            .platform(Platform::Gcp)
+            .client_config(management_client_config(&url))
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .with_dependency(setup_account(), setup_account_controller())
+            .with_dependency(setup_vault(), setup_vault_controller())
+            .stack_settings(protected_settings())
+            .management_config(alien_core::ManagementConfig::Gcp(
+                alien_core::GcpManagementConfig {
+                    service_account_email: MANAGEMENT_SA.to_string(),
+                    federation_trust: None,
+                },
+            ))
+            .build()
+            .await
+            .unwrap();
+
+        executor.delete().unwrap();
+        executor
+            .run_until_terminal()
+            .await
+            .expect("the delete completes through the verifier");
+
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].0.as_deref(), Some("Bearer management-id-token"));
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&requests[0].1).unwrap(),
+            serde_json::json!({"deleteWorkload": {"workload": PROTECTED_WORKER}})
+        );
     }
 
     /// The verifier's answer to an `applyWrite` of release `release` for the protected worker.

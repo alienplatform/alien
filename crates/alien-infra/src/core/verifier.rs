@@ -51,6 +51,12 @@ pub fn protected_statements<'a>(
         })
 }
 
+/// Whether the install is protected: its Live functions are created, changed and deleted only
+/// by its verifier.
+pub fn is_protected(ctx: &ResourceControllerContext<'_>) -> bool {
+    ctx.deployment_config.stack_settings.signing.is_some()
+}
+
 /// Env var with the secrets a protected function loads at start: the signed workload's secret
 /// names and the release digest. Unprotected functions keep `ALIEN_SECRETS`, which the
 /// deployment writes from its own variables; the verifier refuses that one on a protected
@@ -344,6 +350,23 @@ pub struct Written {
 #[serde(rename_all = "camelCase")]
 pub enum Request {
     ApplyWrite(ApplyWrite),
+    DeleteWorkload(DeleteWorkload),
+}
+
+/// Delete a Live workload's function, service or app. Deleting needs no signed statement.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteWorkload {
+    pub workload: String,
+}
+
+/// What `deleteWorkload` did.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Deleted {
+    /// The function, service or app it deleted.
+    pub deleted: String,
+    /// Whether it still existed.
+    pub existed: bool,
 }
 
 /// The code the verifier gives a refusal: the request or its statements don't allow the write.
@@ -455,6 +478,45 @@ pub async fn apply_write(
         }));
     }
     Ok(written)
+}
+
+/// Have `verifier` delete `workload`'s function, service or app, `function`, with what the cloud
+/// attaches to it. A refusal is an error carrying the verifier's reason.
+pub async fn delete_workload(
+    verifier: &dyn Verifier,
+    workload: &str,
+    function: &str,
+) -> Result<Deleted> {
+    let request = Request::DeleteWorkload(DeleteWorkload {
+        workload: workload.to_string(),
+    });
+    let answer = match verifier.call(&request).await {
+        Ok(answer) => answer,
+        Err(CallError::Answered { code, reason }) => {
+            return Err(answered(verifier, workload, code, reason))
+        }
+        Err(CallError::Failed(error)) => return Err(error),
+    };
+    let deleted: Deleted = serde_json::from_value(answer).into_alien_error().context(
+        ErrorData::CloudPlatformError {
+            message: format!(
+                "The answer of verifier '{}' to deleteWorkload is not a deletion",
+                verifier.name()
+            ),
+            resource_id: Some(workload.to_string()),
+        },
+    )?;
+    if deleted.deleted != function {
+        return Err(AlienError::new(ErrorData::CloudPlatformError {
+            message: format!(
+                "Verifier '{}' deleted '{}', not '{function}'",
+                verifier.name(),
+                deleted.deleted
+            ),
+            resource_id: Some(workload.to_string()),
+        }));
+    }
+    Ok(deleted)
 }
 
 /// The AWS verifier: Lambda `<prefix>-verifier`, invoked synchronously with the request as its

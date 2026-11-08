@@ -4924,6 +4924,15 @@ impl AwsWorkerController {
         // (Lambda permissions are removed when the worker is deleted)
         self.eventbridge_permission_statement_ids.clear();
 
+        // A protected install's functions change only through its verifier, which deletes
+        // them as they are. Lambda then releases the function's ENIs itself, which takes longer
+        // than a detach before the delete; WaitingForVpcEnisReleased waits for that.
+        if verifier::is_protected(ctx) {
+            return Ok(HandlerAction::Continue {
+                state: DeletingWorker,
+                suggested_delay: None,
+            });
+        }
         // Detach the Lambda from the VPC before deleting it. AWS otherwise
         // keeps Lambda-managed ENIs around after function deletion, which can
         // block Terraform/CloudFormation from deleting customer-owned subnets.
@@ -5058,6 +5067,17 @@ impl AwsWorkerController {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
         info!(name=%aws_worker_name, "Deleting worker itself: {}", aws_worker_name);
+
+        if verifier::is_protected(ctx) {
+            let verifier = verifier::LambdaVerifier::new(client, ctx.resource_prefix);
+            let deleted =
+                verifier::delete_workload(&verifier, &worker_config.id, &aws_worker_name).await?;
+            info!(name=%aws_worker_name, existed=deleted.existed, "The verifier deleted the function, waiting until it is gone");
+            return Ok(HandlerAction::Continue {
+                state: DeleteWaitForNotFound,
+                suggested_delay: None,
+            });
+        }
 
         let outcome = delete_tag_scoped(
             client.delete_function(&aws_worker_name, None).await,
@@ -12547,6 +12567,73 @@ mod tests {
     }
 
     /// The verifier's answer to an `applyWrite` of `operation` for the protected worker.
+    /// Uninstall on a protected install: the function goes through the verifier in one call,
+    /// with no detach from the VPC before it (UpdateFunctionConfiguration is the verifier's)
+    /// and no delete of its own. Lambda answers that the function is gone once the verifier
+    /// deleted it. No Lambda write has an expectation, so one fails the test.
+    #[tokio::test]
+    async fn a_protected_delete_goes_through_the_verifier_alone() {
+        let invocations = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let mut lambda = MockLambdaApi::new();
+        let seen = invocations.clone();
+        lambda
+            .expect_get_function_configuration()
+            .returning(move |_, _| {
+                if seen.lock().unwrap().is_empty() {
+                    Ok(create_successful_function_response(PROTECTED_WORKER_NAME))
+                } else {
+                    Err(AlienError::new(
+                        CloudClientErrorData::RemoteResourceNotFound {
+                            resource_type: "Worker".to_string(),
+                            resource_name: PROTECTED_WORKER_NAME.to_string(),
+                        },
+                    ))
+                }
+            });
+        let record = invocations.clone();
+        lambda.expect_invoke().returning(move |request| {
+            assert_eq!(request.function_name, "test-verifier");
+            record
+                .lock()
+                .unwrap()
+                .push(serde_json::from_slice(&request.payload).unwrap());
+            Ok(invoke_answer(
+                None,
+                serde_json::json!({"deleted": PROTECTED_WORKER_NAME, "existed": true}),
+            ))
+        });
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(pinned_worker('1', 256))
+            .controller(AwsWorkerController::mock_ready(PROTECTED_WORKER_NAME))
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(Arc::new(lambda), None, None))
+            .with_test_dependencies()
+            .with_dependency(setup_role(), setup_role_controller())
+            .with_dependency(setup_vault(), setup_vault_controller())
+            .with_dependency(
+                Network::new("default-network".into())
+                    .settings(NetworkSettings::UseDefault)
+                    .build(),
+                AwsNetworkController::mock_ready("vpc-test", 2),
+            )
+            .stack_settings(protected_settings())
+            .build()
+            .await
+            .unwrap();
+
+        executor.delete().unwrap();
+        executor
+            .run_until_terminal()
+            .await
+            .expect("the delete completes through the verifier");
+
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(
+            *invocations.lock().unwrap(),
+            [serde_json::json!({"deleteWorkload": {"workload": PROTECTED_WORKER}})]
+        );
+    }
+
     fn written(operation: &str) -> InvokeResponse {
         invoke_answer(
             None,
