@@ -81,7 +81,7 @@ async fn application_starts_without_a_usable_telemetry_credential() {
                     "runtime exited before application startup \
                      (provider={provider}, telemetry={telemetry}, valid={valid})"
                 );
-                if marker.exists() {
+                if std::fs::read_to_string(&marker).is_ok_and(|text| text == "started") {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -89,7 +89,6 @@ async fn application_starts_without_a_usable_telemetry_credential() {
         })
         .await
         .expect("application should start without the manager");
-        assert_eq!(std::fs::read_to_string(marker).unwrap(), "started");
         child.kill().await.unwrap();
         child.wait().await.unwrap();
     }
