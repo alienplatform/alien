@@ -86,6 +86,10 @@ pub const LOADER_ENV: &[&str] = &[
 /// exported shell functions.
 pub const LOADER_ENV_PREFIXES: &[&str] = &["LD_", "DYLD_", "BASH_FUNC_", "CORECLR_"];
 
+/// Whether the workload's runtime ships telemetry: a switch the deployment sets, which can't say
+/// where the telemetry goes.
+pub const RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";
+
 /// Whether `name` is a loader variable.
 pub fn is_loader_env(name: &str) -> bool {
     LOADER_ENV.contains(&name)
@@ -561,6 +565,7 @@ pub fn build_workload(
         })?;
         env.insert(key.clone(), value.clone());
     }
+    let own_binding = crate::binding::binding_env_name(name);
     for (key, value) in &request.env {
         // Deployer inputs come from the customer's store; whatever the
         // control plane sends for them is ignored.
@@ -579,6 +584,26 @@ pub fn build_workload(
             return Err(refuse(format!(
                 "env {key} is configurable and only a signed config statement may set it"
             )));
+        }
+        // The workload's own binding only describes the workload to itself.
+        if *key == own_binding {
+            if !crate::binding::binding_names_itself(value, name) {
+                return Err(refuse(format!(
+                    "env {key} is the workload's own binding but doesn't name '{name}'"
+                )));
+            }
+            env.insert(key.clone(), value.clone());
+            continue;
+        }
+        // Whether the runtime ships telemetry at all; where it goes is never the request's.
+        if key == RUNTIME_SEND_OTLP {
+            if value != "true" && value != "false" {
+                return Err(refuse(format!(
+                    "env {key} is a switch, true or false, not '{value}'"
+                )));
+            }
+            env.insert(key.clone(), value.clone());
+            continue;
         }
         if is_loader_env(key) || !workload.provided_env.contains(key) {
             return Err(refuse(format!("env {key} is not in the signed release")));

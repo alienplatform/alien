@@ -6,8 +6,9 @@ use std::collections::BTreeMap;
 use alien_core::{worker_runtime_environment_plan, Platform, RuntimeEnvironmentValue};
 use alien_error::{AlienError, Context};
 use alien_signing::{
-    binding_env, binding_env_name, build_workload, resolve_bindings, InstallId, LocalValues,
-    Workload, WorkloadRequest,
+    binding_env, binding_env_name, binding_names_itself, build_workload,
+    release::RUNTIME_SEND_OTLP, resolve_bindings, InstallId, LocalValues, Workload,
+    WorkloadRequest,
 };
 use serde_json::Value;
 
@@ -22,8 +23,6 @@ const TELEMETRY_FOLLOWERS: &[&str] = &["OTEL_SERVICE_NAME", "OTEL_RESOURCE_ATTRI
 /// The runtime's pointer to its own telemetry credentials, keys in the install's `secrets`
 /// vault.
 const RUNTIME_SECRETS: &str = "ALIEN_RUNTIME_SECRETS";
-/// Whether the runtime ships telemetry at all: on or off, it can't send it anywhere else.
-const RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";
 /// The install's `secrets` vault, which the runtime reads its credentials from.
 const SECRETS_VAULT: &str = "secrets";
 
@@ -111,7 +110,6 @@ pub fn check_env(
             }
         }
     }
-    rest.remove(RUNTIME_SEND_OTLP);
 
     // What the deployment provides and the verifier knows itself must be what it knows.
     for (key, expected) in derived_runtime_env(place, workload) {
@@ -248,13 +246,7 @@ fn check_runtime_secrets(name: &str, value: &str) -> Result<()> {
 
 /// The function's own binding names the function itself.
 fn check_own_binding(name: &str, own_name: &str, key: &str, value: &str) -> Result<()> {
-    let binding: Value = serde_json::from_str(value)
-        .map_err(|_| refused(format!("env {key} of workload '{name}' is not a binding")))?;
-    let names_itself = ["workerName", "serviceName", "containerAppName"]
-        .iter()
-        .filter_map(|field| binding.get(*field))
-        .any(|named| named.as_str() == Some(own_name));
-    if !names_itself {
+    if !binding_names_itself(value, own_name) {
         return Err(refused(format!(
             "env {key} of workload '{name}' doesn't describe the function {own_name}"
         )));

@@ -967,13 +967,82 @@ fn a_release_pins_no_verifier_build() {
         ("operator".to_string(), digest.clone()),
         ("machine-agent/linux-x86_64".to_string(), digest.clone()),
     ]);
-    body.validate().expect("the operator and machine agent are components");
+    body.validate()
+        .expect("the operator and machine agent are components");
     for name in ["verifier/aws", "verifier/gcp", "verifier/azure"] {
         body.components = BTreeMap::from([(name.to_string(), digest.clone())]);
-        let error = body.validate().expect_err("a verifier build is not a component");
+        let error = body
+            .validate()
+            .expect_err("a verifier build is not a component");
         assert!(
-            error.to_string().contains(&format!("'{name}' is not a component")),
+            error
+                .to_string()
+                .contains(&format!("'{name}' is not a component")),
             "{error}"
+        );
+    }
+}
+
+/// A machine container's own binding and the telemetry switch, as the control plane sends them:
+/// the binding passes when it names the workload itself, the switch when it is on or off.
+#[test]
+fn the_workloads_own_binding_and_the_telemetry_switch_pass_when_they_say_only_that() {
+    let release = release_body();
+    let none = BTreeMap::new();
+    let own = r#"{"containerName":"web","internalUrl":"http://web.svc:8080","internalUrls":{"8080":"http://web.svc:8080"}}"#;
+    let request = |pairs: &[(&str, &str)]| WorkloadRequest {
+        env: pairs
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect(),
+        ..WorkloadRequest::default()
+    };
+
+    let built = build_workload(
+        &release,
+        "web",
+        &none,
+        &local(),
+        &request(&[
+            ("ALIEN_WEB_BINDING", own),
+            ("ALIEN_RUNTIME_SEND_OTLP", "false"),
+        ]),
+    )
+    .expect("the own binding and the telemetry switch");
+    assert_eq!(built.env["ALIEN_WEB_BINDING"], own);
+    assert_eq!(built.env["ALIEN_RUNTIME_SEND_OTLP"], "false");
+
+    for (env, what) in [
+        (
+            ("ALIEN_WEB_BINDING", r#"{"containerName":"other"}"#),
+            "an own binding naming another container",
+        ),
+        (
+            (
+                "ALIEN_WEB_BINDING",
+                r#"{"internalUrl":"http://web.svc:8080"}"#,
+            ),
+            "an own binding naming nothing",
+        ),
+        (
+            ("ALIEN_WEB_BINDING", "web"),
+            "an own binding that isn't a binding",
+        ),
+        (
+            ("ALIEN_RUNTIME_SEND_OTLP", "https://collector.example"),
+            "a telemetry switch that isn't on or off",
+        ),
+    ] {
+        assert_eq!(
+            code(build_workload(
+                &release,
+                "web",
+                &none,
+                &local(),
+                &request(&[env])
+            )),
+            "SIGNING_WORKLOAD_REFUSED",
+            "{what}"
         );
     }
 }

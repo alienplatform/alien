@@ -34,7 +34,9 @@ pub mod settings;
 pub mod signer_list;
 pub mod verify;
 
-pub use binding::{binding_env, binding_env_name, resolve_bindings, BindingContext, Bindings};
+pub use binding::{
+    binding_env, binding_env_name, binding_names_itself, resolve_bindings, BindingContext, Bindings,
+};
 pub use config::ConfigBody;
 pub use envelope::{Envelope, Kind, Opened, Role, Signature, SignedStatement};
 pub use error::{ErrorData, Result};

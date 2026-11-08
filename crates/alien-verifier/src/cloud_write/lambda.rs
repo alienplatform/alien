@@ -869,6 +869,26 @@ mod tests {
         .await
         .unwrap_err();
         assert!(error.contains("has field vault"), "{error}");
+
+        // The switch only says whether to send, so it passes without an endpoint, as on or off.
+        checked(
+            release(1, function_workload()),
+            None,
+            with_env(json!({"ALIEN_RUNTIME_SEND_OTLP": "false"})),
+        )
+        .await
+        .unwrap();
+        let error = checked(
+            release(1, function_workload()),
+            None,
+            with_env(json!({"ALIEN_RUNTIME_SEND_OTLP": "https://collector.attacker.example"})),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("env ALIEN_RUNTIME_SEND_OTLP is a switch, true or false"),
+            "{error}"
+        );
     }
 
     /// Grants are the ones the signed stack implies: the API in front of a public worker, a

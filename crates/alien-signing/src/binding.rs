@@ -42,6 +42,24 @@ pub fn binding_env_name(id: &str) -> String {
     format!("ALIEN_{}_BINDING", id.replace('-', "_").to_uppercase())
 }
 
+/// Whether `value`, a workload's own binding, names `own_name`: the function, service, Container
+/// App or machine container the workload runs as. The rest of the binding only describes that
+/// one resource, so nothing else in it is checked.
+pub fn binding_names_itself(value: &str, own_name: &str) -> bool {
+    let Ok(binding) = serde_json::from_str::<serde_json::Value>(value) else {
+        return false;
+    };
+    [
+        "workerName",
+        "serviceName",
+        "containerAppName",
+        "containerName",
+    ]
+    .iter()
+    .filter_map(|field| binding.get(*field))
+    .any(|named| named.as_str() == Some(own_name))
+}
+
 /// Binding values derived from the install, and the bindings that need
 /// another source.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
