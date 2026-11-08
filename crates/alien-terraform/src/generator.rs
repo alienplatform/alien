@@ -730,7 +730,7 @@ pub(crate) fn render_terraform_module(
             setup_only,
             &options.supported_aws_regions,
             &stack_inputs,
-            alien_core::restricts_network_mode(stack, target.is_kubernetes()),
+            network_mode_names_subnets(stack, target),
             !target.is_kubernetes() && alien_core::sandbox_egress::has_sandbox_gateway(stack),
             profile,
         )?)?,
@@ -3535,6 +3535,15 @@ fn string_enum_variable_block(
 ///
 /// A restricted sandbox routes session egress through a VPC connector that must name subnets, and
 /// the account default VPC's cannot be enumerated at setup.
+/// Whether `network_mode` withholds `use-default`, so setup always names subnets: a restricted
+/// sandbox's connector needs them, and on AWS so does a protected stack's verifier, which launches
+/// machines only into subnets setup fixes (setup can't name the account default VPC's). On GCP
+/// setup names the default network's subnet, so the default stays offered there.
+fn network_mode_names_subnets(stack: &Stack, target: TerraformTarget) -> bool {
+    alien_core::restricts_network_mode(stack, target.is_kubernetes())
+        || (target == TerraformTarget::Aws && alien_core::verifier_launches_machines(stack))
+}
+
 fn network_mode_description(needs_named_subnets: bool) -> &'static str {
     if needs_named_subnets {
         "Choose whether this setup creates a new network or uses an existing one. Values: create-new, use-existing. This application's private resources require explicit subnet IDs, which setup cannot discover from the account default VPC."
@@ -5535,7 +5544,7 @@ fn readme_md(
             // Not on a Kubernetes target: the sandbox is skipped there, so no connector exists
             // to demand subnets and the restriction would explain itself with a resource the
             // module does not contain.
-            alien_core::restricts_network_mode(stack, target.is_kubernetes()),
+            network_mode_names_subnets(stack, target),
             !target.is_kubernetes() && alien_core::sandbox_egress::has_sandbox_gateway(stack),
         ));
     }

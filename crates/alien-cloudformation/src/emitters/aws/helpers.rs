@@ -508,6 +508,16 @@ pub fn availability_zone_names(ctx: &EmitContext<'_>) -> CfExpression {
     ])
 }
 
+/// Whether the template withholds `use-default` from `NetworkMode`, so setup always names subnets:
+/// a restricted sandbox's connector needs them, and so does a protected stack's verifier, which
+/// launches machines only into subnets setup fixes. CloudFormation can't resolve the account
+/// default VPC's subnets, so a protected stack with machines in it would deploy, then have every
+/// machine launch refused.
+pub(crate) fn network_mode_names_subnets(stack: &alien_core::Stack) -> bool {
+    alien_core::restricts_network_mode(stack, false)
+        || alien_core::verifier_launches_machines(stack)
+}
+
 /// The created resource when this stack builds the VPC, otherwise the bring-your-own parameter.
 ///
 /// The innermost branch exists only for use-default. A stack that cannot offer that mode collapses
@@ -517,16 +527,15 @@ fn created_or_provided(
     created: CfExpression,
     provided: CfExpression,
 ) -> CfExpression {
-    let otherwise =
-        if ctx.targets_kubernetes || alien_core::restricts_network_mode(ctx.stack, false) {
-            provided
-        } else {
-            CfExpression::if_(
-                CONDITION_NETWORK_MODE_USE_EXISTING,
-                provided,
-                CfExpression::no_value(),
-            )
-        };
+    let otherwise = if ctx.targets_kubernetes || network_mode_names_subnets(ctx.stack) {
+        provided
+    } else {
+        CfExpression::if_(
+            CONDITION_NETWORK_MODE_USE_EXISTING,
+            provided,
+            CfExpression::no_value(),
+        )
+    };
     CfExpression::if_(CONDITION_NETWORK_MODE_CREATE, created, otherwise)
 }
 

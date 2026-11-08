@@ -33,6 +33,7 @@ tar = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util"] }
 
 [dev-dependencies]
+alien-terraform = { workspace = true, features = ["test-utils"] }
 hcl-rs = { workspace = true }
 httpmock = { workspace = true }
 tempfile = { workspace = true }

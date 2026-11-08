@@ -204,7 +204,7 @@ fn when_subnets_are_named(ctx: &EmitContext<'_>, value: CfExpression) -> CfExpre
     let parameterized = named_network(ctx).is_some_and(|network| {
         matches!(network.settings, NetworkSettings::Create { .. })
             && !ctx.targets_kubernetes
-            && !alien_core::restricts_network_mode(ctx.stack, false)
+            && !crate::emitters::aws::helpers::network_mode_names_subnets(ctx.stack)
     });
     if parameterized {
         CfExpression::if_(

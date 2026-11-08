@@ -5,7 +5,7 @@
 use alien_cli_common::setup_templates::{
     render_setup_template, RenderedSetupTemplate, SetupHostingOptions, SetupRenderOptions,
 };
-use alien_cloudformation::CfRegistry;
+use alien_cloudformation::{CfEmitter, CfExpression, CfRegistry, CfResource};
 use alien_core::{
     import::EmitContext, ComputeCluster, Platform, SetupPins, Stack, StackSettings, StackSigning,
 };
@@ -43,6 +43,60 @@ impl TfEmitter for Cluster {
             ]))
         }))
     }
+}
+
+/// Stands in for a composed CLI's AWS compute-cluster emitter: it creates nothing. The AWS
+/// verifier takes its machine network from the stack's network, not from the cluster.
+struct AwsCluster;
+
+impl CfEmitter for AwsCluster {
+    fn emit_resources(&self, _ctx: &EmitContext<'_>) -> alien_core::Result<Vec<CfResource>> {
+        Ok(Vec::new())
+    }
+
+    fn emit_import_ref(&self, _ctx: &EmitContext<'_>) -> alien_core::Result<CfExpression> {
+        Ok(CfExpression::from(true))
+    }
+}
+
+impl TfEmitter for AwsCluster {
+    fn emit(&self, _ctx: &EmitContext<'_>) -> alien_core::Result<TfFragment> {
+        Ok(TfFragment::default())
+    }
+
+    fn emit_import_ref(&self, _ctx: &EmitContext<'_>) -> alien_core::Result<Expression> {
+        Ok(expr::raw("true"))
+    }
+}
+
+/// The AWS setup the CLI renders for the machines stack, protected or not.
+async fn render_aws(template: &str, protected: bool) -> RenderedSetupTemplate {
+    let signing = signing();
+    let mut terraform = TfRegistry::built_in();
+    terraform.register(ComputeCluster::RESOURCE_TYPE, Platform::Aws, AwsCluster);
+    let mut cloudformation = CfRegistry::built_in();
+    cloudformation.register(ComputeCluster::RESOURCE_TYPE, Platform::Aws, AwsCluster);
+    let helm = HelmRegistry::built_in();
+    let options = SetupRenderOptions::builder()
+        .signing(&signing)
+        .cloudformation_registry(&cloudformation)
+        .terraform_registry(&terraform)
+        .helm_registry(&helm)
+        .hosting(
+            serde_json::from_value::<SetupHostingOptions>(
+                serde_json::json!({ "registration": { "mode": "outputsFallback" } }),
+            )
+            .expect("hosting options parse"),
+        )
+        .pins(pins())
+        .build();
+    let settings = StackSettings {
+        signing: protected.then(|| signing.clone()),
+        ..Default::default()
+    };
+    render_setup_template(template, &stack(), &settings, &options)
+        .await
+        .unwrap_or_else(|error| panic!("{template} protected={protected}: {error:?}"))
 }
 
 fn pins() -> SetupPins {
@@ -438,4 +492,67 @@ fn azure_wildcards_grant_what_they_cover() {
         "Microsoft.Resources/tags/read",
         "Microsoft.Resources/tags/write"
     ));
+}
+
+/// A protected AWS install's verifier launches machines only into subnets setup fixes, and
+/// setup can't name the account default VPC's. So protected setup never offers the default VPC
+/// for a stack with machines: CloudFormation refuses the parameter value at CreateStack, before
+/// anything is created, and `terraform plan` refuses the variable. Otherwise the stack is created
+/// and then every machine launch is refused. Unprotected setup keeps offering it.
+#[tokio::test]
+async fn protected_aws_machines_are_never_set_up_in_the_default_vpc() {
+    for protected in [true, false] {
+        let rendered = render_aws("cloudformation", protected).await;
+        let template: serde_yaml::Value =
+            serde_yaml::from_slice(&rendered.bytes).expect("template is YAML");
+        let modes: Vec<&str> = template["Parameters"]["NetworkMode"]["AllowedValues"]
+            .as_sequence()
+            .expect("NetworkMode lists its values")
+            .iter()
+            .map(|mode| mode.as_str().expect("a mode is a string"))
+            .collect();
+        let expected: &[&str] = if protected {
+            &["create-new", "use-existing"]
+        } else {
+            &["create-new", "use-existing", "use-default"]
+        };
+        assert_eq!(modes, expected, "protected={protected}");
+        // `terraform plan` evaluates the module's own `network_mode` variable, as rendered.
+        let module: std::collections::BTreeMap<String, String> =
+            serde_json::from_slice(&render_aws("terraform-aws", protected).await.bytes)
+                .expect("module files");
+        let variables: hcl::Body =
+            hcl::from_str(&module["variables.tf"]).expect("variables.tf parses");
+        let network_mode = variables
+            .blocks()
+            .find(|block| {
+                block.identifier() == "variable"
+                    && block.labels().first().map(|label| label.as_str()) == Some("network_mode")
+            })
+            .expect("the module declares network_mode")
+            .clone();
+        let files = [(
+            "variables.tf".to_string(),
+            hcl::to_string(&hcl::Body::from(vec![network_mode])).expect("format"),
+        )]
+        .into_iter()
+        .collect();
+        let plan = alien_terraform::test_utils::terraform_plan_with_vars(
+            &files,
+            &[("network_mode", "use-default")],
+        );
+        if protected {
+            assert!(
+                matches!(
+                    plan.status,
+                    alien_terraform::test_utils::LinterStatus::Failed(_)
+                ) && plan
+                    .stderr
+                    .contains("network_mode must be create-new or use-existing"),
+                "{plan:?}"
+            );
+        } else {
+            plan.assert_ok("terraform plan with network_mode=use-default, unprotected");
+        }
+    }
 }

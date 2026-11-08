@@ -272,7 +272,7 @@ impl CloudFormationTarget {
 /// Setup resources that require subnet IDs cannot use implicit default networking.
 /// EKS also requires explicit subnets: this package does not discover the default VPC.
 fn restricts_network_mode(stack: &Stack, target: CloudFormationTarget) -> bool {
-    target.is_kubernetes() || alien_core::restricts_network_mode(stack, false)
+    target.is_kubernetes() || crate::emitters::aws::helpers::network_mode_names_subnets(stack)
 }
 
 /// Generate a CloudFormation template for a stack.

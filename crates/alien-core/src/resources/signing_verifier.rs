@@ -40,6 +40,17 @@ impl SigningVerifier {
     }
 }
 
+/// Whether `stack` is protected and runs machines: its verifier launches every machine, and only
+/// into the subnets setup fixes for it.
+pub fn verifier_launches_machines(stack: &crate::Stack) -> bool {
+    let has = |resource_type: ResourceType| {
+        stack
+            .resources()
+            .any(|(_, entry)| entry.config.resource_type() == resource_type)
+    };
+    has(SigningVerifier::RESOURCE_TYPE) && has(crate::ComputeCluster::RESOURCE_TYPE)
+}
+
 /// Resource outputs for the verifier.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
