@@ -174,6 +174,24 @@ pub fn check_whole(operation: &str, write: &Value, rows: &[Row<'_>]) -> Result<(
     Ok(())
 }
 
+/// What breaks in `read`, a resource as the cloud reports it: the first row whose field, read
+/// at its pointer (null where the cloud reports none), isn't what the row demands. Fields no
+/// row names, and free rows, aren't looked at.
+pub fn read_mismatch(read: &Value, rows: &[Row<'_>]) -> Option<String> {
+    rows.iter().find_map(|row| {
+        let value = read.pointer(row.field).unwrap_or(&Value::Null);
+        let broken = match &row.rule {
+            Rule::Signed(check) => check(value).err(),
+            Rule::Setup(expected) => {
+                (value != expected).then(|| format!("it is {value}, setup fixed {expected}"))
+            }
+            Rule::Empty => (!is_empty(value)).then(|| format!("it is {value}")),
+            Rule::Free => None,
+        };
+        broken.map(|reason| format!("field {} {}: {reason}", row.field, row.rule.kind()))
+    })
+}
+
 fn walk(operation: &str, value: &Value, at: &str, rows: &[Row<'_>]) -> Result<()> {
     let Value::Object(fields) = value else {
         return Err(refused(format!(

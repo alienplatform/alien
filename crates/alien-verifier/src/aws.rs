@@ -257,6 +257,14 @@ impl<L: LambdaApi, M: MachineApi> Backend for AwsBackend<L, M> {
         crate::cloud_write::lambda::check_write(facts, write)
     }
 
+    async fn check_state(&self, facts: &Facts<'_>, writes: &[CloudWrite]) -> Result<()> {
+        crate::cloud_write::lambda::check_state(&self.lambda, facts, writes).await
+    }
+
+    async fn check_applied(&self, facts: &Facts<'_>, writes: &[CloudWrite]) -> Result<()> {
+        crate::cloud_write::lambda::check_applied(&self.lambda, facts, writes).await
+    }
+
     async fn forward(
         &self,
         facts: &Facts<'_>,

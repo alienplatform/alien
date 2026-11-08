@@ -215,31 +215,44 @@ const TELEMETRY_FOLLOWERS: &[&str] = &[
     alien_core::ENV_ALIEN_RUNTIME_SECRETS,
 ];
 
-/// The digest of the signed config the step carries, if any.
-pub fn config_digest(ctx: &ResourceControllerContext<'_>) -> Result<Option<String>> {
-    ctx.deployment_config
+/// The digest of the signed statements the step carries: the release and the config, if any.
+/// A worker's env follows both (the secrets list names the release's digest), so a worker
+/// updated for another release gets its configuration written with its code. `None` on an
+/// install that isn't protected.
+pub fn statements_digest(ctx: &ResourceControllerContext<'_>) -> Result<Option<String>> {
+    let Some(statements) = &ctx.deployment_config.release_statements else {
+        return Ok(None);
+    };
+    let digest = |statement: &alien_core::SignedStatement, what: &str| {
+        statement
+            .open()
+            .map(|opened| opened.digest)
+            .context(ErrorData::ResourceConfigInvalid {
+                message: format!("The install's signed {what} can't be read"),
+                resource_id: None,
+            })
+    };
+    let release = digest(&statements.release, "release")?;
+    let config = ctx
+        .deployment_config
         .signed_config
         .as_ref()
-        .map(|statement| {
-            statement
-                .open()
-                .map(|opened| opened.digest)
-                .context(ErrorData::ResourceConfigInvalid {
-                    message: "The install's signed config can't be read".to_string(),
-                    resource_id: None,
-                })
-        })
-        .transpose()
+        .map(|statement| digest(statement, "config"))
+        .transpose()?;
+    Ok(Some(format!("{release}+{}", config.unwrap_or_default())))
 }
 
-/// Whether a protected worker that last had the signed config `applied` applied must go to the
-/// verifier again: the step carries another one. The config isn't part of the worker's own
-/// configuration, so nothing else would update it.
-pub fn config_changed(ctx: &ResourceControllerContext<'_>, applied: Option<&str>) -> Result<bool> {
+/// Whether a protected worker that last had the signed statements `applied` applied must go to
+/// the verifier again: the step carries another release or config. Neither is part of the
+/// worker's own configuration, so nothing else would update it.
+pub fn statements_changed(
+    ctx: &ResourceControllerContext<'_>,
+    applied: Option<&str>,
+) -> Result<bool> {
     if ctx.deployment_config.stack_settings.signing.is_none() {
         return Ok(false);
     }
-    Ok(config_digest(ctx)?.is_some_and(|digest| Some(digest.as_str()) != applied))
+    Ok(statements_digest(ctx)?.is_some_and(|digest| Some(digest.as_str()) != applied))
 }
 
 /// One cloud write a controller hands the verifier, exactly as it would send it to the cloud

@@ -42,6 +42,10 @@ move `api` to image B, and checks with the caller's own credentials:
      UpdateFunctionCode in the same request), and an UpdateFunctionCode to an image the release
      doesn't sign. The function's RevisionId and image stay where they were. The untampered
      request, built from the function's own configuration, is applied.
+  7. protected: release 16 changes the fixed env value SIGNED_MODE along with the image. A
+     request that updates the code only is refused, naming the configuration it leaves
+     behind, and the function keeps its image, env and revision. The same release with the
+     configuration write in the request is applied, and the function then runs both.
 
 Everything is named `<p>-...`, tagged with --tag, deleted at the end, and the run fails if
 anything named `<p>` is left.
@@ -392,6 +396,49 @@ class Run:
                     and live_image != to_image and landed == to_image,
                     f"answer={json.dumps(body)[:300]} image={landed.rsplit('@', 1)[-1][:19]}")
 
+    def config_drift(self):
+        install = f"{self.prefix}-p"
+        function = f"{install}-api"
+        live_image = self.image(install)
+        to_image = self.images["b" if live_image == self.images["a"] else "a"]
+        before = aws_json("lambda", "get-function", "--function-name", function)
+        old_mode = before["Configuration"].get("Environment", {}).get("Variables", {}).get("SIGNED_MODE")
+        new_mode = "changed-by-release-16"
+        signed = json.loads(self.driver("request", install, {"TO_IMAGE": to_image, "SEQUENCE": "16",
+                                                              "SIGNED_MODE": new_mode}).stdout)
+        code = signed["applyWrite"]["writes"][0]
+        operations = [next(iter(code))]
+        code_only = {"applyWrite": {**signed["applyWrite"], "writes": [code]}}
+        error, body = self.invoke(install, code_only)
+        reason = body.get("errorMessage", "") if isinstance(body, dict) else ""
+        after = aws_json("lambda", "get-function", "--function-name", function)
+        variables = after["Configuration"].get("Environment", {}).get("Variables", {})
+        unchanged = (after["Configuration"]["RevisionId"] == before["Configuration"]["RevisionId"]
+                     and after["Code"]["ImageUri"] == before["Code"]["ImageUri"]
+                     and variables.get("SIGNED_MODE") == old_mode)
+        (self.evidence / "config-drift-answers.json").write_text(json.dumps(
+            {"operations": operations, "code-only": body}, indent=2))
+        self.record("7 protected: a code-only request for a release that changes the env is refused and writes nothing",
+                    error is not None and body.get("errorType") == "VERIFIER_REFUSED"
+                    and "leaves the function's configuration as it is" in reason
+                    and "/Environment" in reason and unchanged and operations == ["updateFunctionCode"],
+                    f"operations={operations} reason={reason[:300]} unchanged={unchanged} "
+                    f"env-before={old_mode}")
+        # The same release with the configuration it changes, built from the function's own.
+        live = aws_json("lambda", "get-function-configuration", "--function-name", function)
+        configuration = {"Role": live["Role"], "Timeout": live["Timeout"], "MemorySize": live["MemorySize"],
+                         "Environment": {"Variables": {**live["Environment"]["Variables"],
+                                                       "SIGNED_MODE": new_mode}}}
+        write = {"updateFunctionConfiguration": {"functionName": function, "request": configuration}}
+        error, body = self.invoke(install, {"applyWrite": {**signed["applyWrite"], "writes": [code, write]}})
+        landed = aws_json("lambda", "get-function", "--function-name", function)
+        variables = landed["Configuration"].get("Environment", {}).get("Variables", {})
+        self.record("7 protected: the same release with its configuration write is applied, and the function runs both",
+                    error is None and landed["Code"]["ImageUri"] == to_image
+                    and variables.get("SIGNED_MODE") == new_mode,
+                    f"answer={json.dumps(body)[:300]} image={landed['Code']['ImageUri'].rsplit('@', 1)[-1][:19]} "
+                    f"SIGNED_MODE={variables.get('SIGNED_MODE')}")
+
     def access(self):
         install = f"{self.prefix}-p"
         management = self.management_env(install)
@@ -497,6 +544,7 @@ class Run:
             self.burst()
             self.tamper()
             self.access()
+            self.config_drift()
             self.unprotected()
         finally:
             for install in (f"{self.prefix}-p",):

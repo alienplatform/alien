@@ -39,6 +39,16 @@ pub trait Backend: Send + Sync {
             write.operation()
         )))
     }
+    /// Before any of `writes` goes out: refuse when what they leave alone isn't what the
+    /// accepted release says.
+    async fn check_state(&self, _facts: &Facts<'_>, _writes: &[CloudWrite]) -> Result<()> {
+        Ok(())
+    }
+    /// After all of `writes` went out: refuse when the whole workload doesn't run what the
+    /// accepted release and config say.
+    async fn check_applied(&self, _facts: &Facts<'_>, _writes: &[CloudWrite]) -> Result<()> {
+        Ok(())
+    }
     /// Send `write`, already checked, to the cloud unchanged, checking `newest` right before,
     /// and read back what decides what runs. Answers what the cloud answered.
     async fn forward(
@@ -235,6 +245,7 @@ impl Verifier {
                     ),
                 })?;
         }
+        self.backend.check_state(&facts, &request.writes).await?;
         // Every write passed, so the install accepts the release before the first goes out: a
         // request for an older release that arrives while these writes run is refused, and
         // can't land in the middle of them.
@@ -256,6 +267,7 @@ impl Verifier {
                 "applied the controller's checked write"
             );
         }
+        self.backend.check_applied(&facts, &request.writes).await?;
         Ok(json!({
             "release": accepted.release.sequence,
             "function": facts.own_name,
@@ -652,6 +664,134 @@ mod tests {
         empty["applyWrite"]["writes"] = json!([]);
         let reason = refusal(verifier.handle(empty).await);
         assert!(reason.contains("carries no write"), "{reason}");
+    }
+
+    /// The Lambda backend over a mocked Lambda that reads back `function`, recording what it
+    /// forwards.
+    struct Reading {
+        lambda: alien_aws_clients::lambda::MockLambdaApi,
+        forwarded: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl Backend for Reading {
+        async fn binding_reads(
+            &self,
+            _place: &Place,
+            _workload: &Workload,
+        ) -> Result<BTreeMap<String, String>> {
+            Ok(BTreeMap::new())
+        }
+        fn check_write(&self, facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
+            crate::cloud_write::lambda::check_write(facts, write)
+        }
+        async fn check_state(&self, facts: &Facts<'_>, writes: &[CloudWrite]) -> Result<()> {
+            crate::cloud_write::lambda::check_state(&self.lambda, facts, writes).await
+        }
+        async fn check_applied(&self, facts: &Facts<'_>, writes: &[CloudWrite]) -> Result<()> {
+            crate::cloud_write::lambda::check_applied(&self.lambda, facts, writes).await
+        }
+        async fn forward(
+            &self,
+            _facts: &Facts<'_>,
+            write: &CloudWrite,
+            newest: &dyn StillNewest,
+        ) -> Result<Value> {
+            newest.check().await?;
+            self.forwarded
+                .lock()
+                .unwrap()
+                .push(write.operation().to_string());
+            Ok(Value::Null)
+        }
+    }
+
+    /// The function Lambda holds, as GetFunction answers: running `image` with `mode` as the
+    /// workload's fixed `MODE`.
+    fn held(image: &str, mode: &str) -> Value {
+        json!({
+            "Configuration": {
+                "Role": crate::plan::tests::place().run_as("execution"),
+                "Environment": {"Variables": {"MODE": mode}},
+                "PackageType": "Image",
+                "Architectures": ["arm64"],
+                "State": "Active",
+                "LastUpdateStatus": "Successful",
+            },
+            "Code": {"ImageUri": image, "ResolvedImageUri": image},
+        })
+    }
+
+    /// A request for release 2, which changes the image and the fixed `MODE`, that updates
+    /// the image only is refused before it writes anything while the function still holds the
+    /// old `MODE`; and when the function doesn't hold the release after the writes, the
+    /// request fails instead of reporting success.
+    #[tokio::test]
+    async fn an_image_only_request_leaves_no_old_env_behind() {
+        let new_image = format!("{REGISTRY}/api@sha256:{}", "7".repeat(64));
+        let old_image = format!("{REGISTRY}/api@{DIGEST}");
+        let mut workload = function_workload_with(&new_image);
+        workload
+            .env
+            .insert("MODE".to_string(), "changed".to_string());
+        let request = json!({"applyWrite": {
+            "release": release(2, workload),
+            "signerLists": [signer_list()],
+            "workload": "api",
+            "writes": [{"updateFunctionCode": {
+                "functionName": format!("{PREFIX}-api"),
+                "request": {"ImageUri": new_image},
+            }}],
+        }});
+        let run = |held_before: Value, held_after: Value| {
+            let request = request.clone();
+            async move {
+                let store = Arc::new(MemoryStore::protected(&settings()));
+                let reads = Mutex::new(vec![held_after, held_before]);
+                let mut lambda = alien_aws_clients::lambda::MockLambdaApi::new();
+                lambda
+                    .expect_get_function_json()
+                    .returning(move |_| Ok(reads.lock().unwrap().pop().unwrap()));
+                let backend = Arc::new(Reading {
+                    lambda,
+                    forwarded: Mutex::new(Vec::new()),
+                });
+                let verifier = Verifier {
+                    own_name: format!("{PREFIX}-verifier"),
+                    install_id: Arc::new(|prefix| crate::aws::install_id(ACCOUNT, REGION, prefix)),
+                    store: store.clone(),
+                    backend: backend.clone(),
+                    vpc: None,
+                    machine_network: None,
+                };
+                let answer = verifier.handle(request).await;
+                let forwarded = backend.forwarded.lock().unwrap().clone();
+                (answer, forwarded, recorded_release(&store))
+            }
+        };
+
+        let (answer, forwarded, recorded) = run(held(&old_image, "signed"), Value::Null).await;
+        let reason = refusal(answer);
+        assert!(
+            reason.contains("leaves the function's configuration as it is")
+                && reason.contains("field /Environment"),
+            "{reason}"
+        );
+        assert!(forwarded.is_empty(), "nothing went out");
+        assert_eq!(recorded, None, "nothing was recorded");
+
+        let (answer, forwarded, recorded) =
+            run(held(&old_image, "changed"), held(&new_image, "changed")).await;
+        assert_eq!(answer.unwrap()["operations"], json!(["UpdateFunctionCode"]));
+        assert_eq!(forwarded, vec!["UpdateFunctionCode".to_string()]);
+        assert_eq!(recorded, Some(2));
+
+        // The write went out, and Lambda then holds the old env: not reported as done.
+        let (answer, forwarded, _) =
+            run(held(&old_image, "changed"), held(&new_image, "signed")).await;
+        let error = answer.unwrap_err();
+        assert_eq!(error.code, "VERIFIER_READ_BACK_MISMATCH", "{error}");
+        assert_eq!(forwarded, vec!["UpdateFunctionCode".to_string()]);
     }
 
     /// A cloud error partway through a recorded release leaves some writes out; the control

@@ -657,8 +657,8 @@ impl AwsWorkerController {
 
 #[controller]
 pub struct AwsWorkerController {
-    /// On a protected install, the digest of the signed config the verifier last applied to
-    /// this worker; a step carrying another one updates the worker.
+    /// On a protected install, the digest of the signed release and config the verifier last applied to
+    /// this worker; a step carrying other ones updates the worker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) applied_config: Option<String>,
     pub(crate) arn: Option<String>,
@@ -1051,7 +1051,7 @@ impl AwsWorkerController {
                     _ => return Err(error),
                 },
             };
-            self.applied_config = verifier::config_digest(ctx)?;
+            self.applied_config = verifier::statements_digest(ctx)?;
             self.worker_name = Some(aws_worker_name);
             self.wait_for_lambda_started_at = None;
             return Ok(HandlerAction::Continue {
@@ -3300,7 +3300,7 @@ impl AwsWorkerController {
         self.ensure_batch_queue_visibility(ctx, &current_config, false)
             .await?;
         // On a protected install a newly signed config changes the env too.
-        let config_changed = verifier::config_changed(ctx, self.applied_config.as_deref())?
+        let config_changed = verifier::statements_changed(ctx, self.applied_config.as_deref())?
             || current_config.permissions != previous_config.permissions
             || current_config.memory_mb != previous_config.memory_mb
             || current_config.timeout_seconds != previous_config.timeout_seconds
@@ -3403,7 +3403,7 @@ impl AwsWorkerController {
                 .await?;
             }
             if request.is_some() {
-                self.applied_config = verifier::config_digest(ctx)?;
+                self.applied_config = verifier::statements_digest(ctx)?;
             }
         } else if let Some(request) = request {
             let arn = self.arn.as_ref().ok_or_else(|| {
@@ -5403,7 +5403,7 @@ impl AwsWorkerController {
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
-        verifier::config_changed(ctx, self.applied_config.as_deref())
+        verifier::statements_changed(ctx, self.applied_config.as_deref())
     }
 
     #[handler(
@@ -12427,6 +12427,38 @@ mod tests {
         let (answer, forwarded) = run_write(aws_install(), "test", None, payload).await;
         answer.expect("the verifier's tables accept the controller's request");
         assert_eq!(forwarded.len(), 3);
+    }
+
+    /// A worker's env follows the release (the secrets list names the release's digest), so an
+    /// update for another release writes the configuration with the code even when the worker's
+    /// own settings are as they were. Code alone would leave the previous release's env behind.
+    #[tokio::test]
+    async fn a_protected_update_for_a_new_release_writes_the_configuration_with_the_code() {
+        let to = pinned_worker('2', 256);
+        let (executor, result, invocations, _) =
+            protected_update_to(to.clone(), to, None, written("Update")).await;
+
+        result.expect("the update completes through the verifier");
+        assert_eq!(invocations.len(), 1);
+        let request: serde_json::Value = serde_json::from_slice(&invocations[0].1).unwrap();
+        let writes = request["applyWrite"]["writes"].as_array().unwrap();
+        assert_eq!(
+            writes
+                .iter()
+                .map(|write| write.as_object().unwrap().keys().next().unwrap().as_str())
+                .collect::<Vec<_>>(),
+            ["updateFunctionCode", "updateFunctionConfiguration"]
+        );
+        let applied = executor
+            .internal_state::<AwsWorkerController>()
+            .unwrap()
+            .applied_config
+            .clone()
+            .expect("the update records the statements it applied");
+        assert!(
+            applied.starts_with("sha256:") && applied.contains('+'),
+            "{applied}"
+        );
     }
 
     /// The deployment injects its own telemetry env into every worker (its monitoring

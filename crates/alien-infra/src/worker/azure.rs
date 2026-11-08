@@ -488,8 +488,8 @@ fn gone_unless_failed<T>(
 
 #[controller]
 pub struct AzureWorkerController {
-    /// On a protected install, the digest of the signed config the verifier last applied to
-    /// this worker; a step carrying another one updates the worker.
+    /// On a protected install, the digest of the signed release and config the verifier last applied to
+    /// this worker; a step carrying other ones updates the worker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) applied_config: Option<String>,
     // ─────────── Persisted fields ───────────
@@ -1069,7 +1069,7 @@ impl AzureWorkerController {
                 vec![write],
             )
             .await?;
-            self.applied_config = verifier::config_digest(ctx)?;
+            self.applied_config = verifier::statements_digest(ctx)?;
             return Ok(HandlerAction::Continue {
                 state: CreatingContainerApp,
                 suggested_delay: None,
@@ -2729,7 +2729,7 @@ impl AzureWorkerController {
                 vec![write],
             )
             .await?;
-            self.applied_config = verifier::config_digest(ctx)?;
+            self.applied_config = verifier::statements_digest(ctx)?;
             return Ok(HandlerAction::Continue {
                 state: UpdatingContainerApp,
                 suggested_delay: None,
@@ -3779,7 +3779,7 @@ impl AzureWorkerController {
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
-        verifier::config_changed(ctx, self.applied_config.as_deref())
+        verifier::statements_changed(ctx, self.applied_config.as_deref())
     }
 
     // Implementation of get_outputs trait method

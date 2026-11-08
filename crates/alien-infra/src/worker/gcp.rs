@@ -312,14 +312,18 @@ fn gone_unless_failed<T>(
 
 #[controller]
 pub struct GcpWorkerController {
-    /// On a protected install, the digest of the signed config the verifier last applied to
-    /// this worker; a step carrying another one updates the worker.
+    /// On a protected install, the digest of the signed release and config the verifier last applied to
+    /// this worker; a step carrying other ones updates the worker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) applied_config: Option<String>,
     /// The Cloud Run service name
     pub(crate) service_name: Option<String>,
     /// The invocation URL of the worker, available after creation.
     pub(crate) url: Option<String>,
+    /// The address Cloud Run gives the service, which `url` is unless a public endpoint
+    /// overrides it. The worker's own binding reaches it here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) cloud_run_url: Option<String>,
     /// The operation name for long-running operations (for create, update, delete)
     pub(crate) operation_name: Option<String>,
     /// Number of targeted retries after GAR IAM propagation denied an image pull.
@@ -710,7 +714,7 @@ impl GcpWorkerController {
             };
             self.write_through_verifier(ctx, statements, &cfg.id, &service_name, vec![write])
                 .await?;
-            self.applied_config = verifier::config_digest(ctx)?;
+            self.applied_config = verifier::statements_digest(ctx)?;
             self.service_name = Some(service_name);
             return Ok(HandlerAction::Continue {
                 state: WaitingForServiceCreation,
@@ -2673,7 +2677,7 @@ impl GcpWorkerController {
             };
             self.write_through_verifier(ctx, statements, &cfg.id, service_name, vec![write])
                 .await?;
-            self.applied_config = verifier::config_digest(ctx)?;
+            self.applied_config = verifier::statements_digest(ctx)?;
             return Ok(HandlerAction::Continue {
                 state: WaitingForServiceUpdate,
                 suggested_delay: None,
@@ -4607,7 +4611,7 @@ impl GcpWorkerController {
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
-        verifier::config_changed(ctx, self.applied_config.as_deref())
+        verifier::statements_changed(ctx, self.applied_config.as_deref())
     }
 
     #[handler(

@@ -14,8 +14,10 @@ use serde_json::Value;
 use super::env::check_env;
 use super::{check_target, refused, CloudWrite, Facts};
 use crate::error::Result;
-use crate::fields::{check, check_whole, empty, free, is_empty, parse_strict, signed, Row};
-use crate::function::{default_log_group, wait_until_idle, StillNewest};
+use crate::fields::{
+    check, check_whole, empty, free, is_empty, parse_strict, read_mismatch, signed, Row,
+};
+use crate::function::{default_log_group, wait_until_idle, FunctionStore, StillNewest};
 use crate::plan::{invoke_grants, signed_worker};
 
 /// Check `write`, a Lambda write for `facts.workload`, against the table. Refuses anything that
@@ -93,6 +95,15 @@ fn image_row<'a>(field: &'static str, facts: &'a Facts<'a>) -> Row<'a> {
             Some((repository, sent)) if !repository.is_empty() && sent == digest => Ok(()),
             _ => Err(format!("image {uri} is not the signed digest {digest}")),
         }
+    })
+}
+
+/// `PackageType`: a container image.
+fn package_type_row<'a>() -> Row<'a> {
+    signed("/PackageType", |value| {
+        (value == "Image")
+            .then_some(())
+            .ok_or_else(|| format!("it is {value}, not Image"))
     })
 }
 
@@ -208,11 +219,7 @@ fn create_rows<'a>(facts: &'a Facts<'a>) -> Vec<Row<'a>> {
         signed("/FunctionName", |_| Ok(())),
         role_row(facts),
         image_row("/Code/ImageUri", facts),
-        signed("/PackageType", |value| {
-            (value == "Image")
-                .then_some(())
-                .ok_or_else(|| format!("it is {value}, not Image"))
-        }),
+        package_type_row(),
         environment_row(facts),
         architecture_row(facts),
         vpc_row(facts),
@@ -415,6 +422,102 @@ pub async fn forward<L: LambdaApi>(
         check_written(facts, write, &function)?;
     }
     Ok(answer)
+}
+
+/// Whether `writes` set the function's image and its configuration. A create sets both.
+fn parts_written(writes: &[CloudWrite]) -> (bool, bool) {
+    let image = writes.iter().any(|write| {
+        matches!(
+            write,
+            CloudWrite::CreateFunction(_) | CloudWrite::UpdateFunctionCode { .. }
+        )
+    });
+    let configuration = writes.iter().any(|write| {
+        matches!(
+            write,
+            CloudWrite::CreateFunction(_) | CloudWrite::UpdateFunctionConfiguration { .. }
+        )
+    });
+    (image, configuration)
+}
+
+/// What is wrong with `function`, as GetFunction answers, against the accepted release and
+/// config: its image when `image`, and when `configuration` its role, env, network, logging,
+/// layers, mounts, entry point and the rest of what the table fixes for a write.
+fn function_mismatch(
+    facts: &Facts<'_>,
+    function: &Value,
+    image: bool,
+    configuration: bool,
+) -> Result<Option<String>> {
+    if image {
+        let digest = signed_digest(facts)?;
+        let resolved = function["Code"]["ResolvedImageUri"]
+            .as_str()
+            .unwrap_or_default();
+        if !resolved.ends_with(&format!("@{digest}")) {
+            return Ok(Some(format!("its image resolves to {resolved}")));
+        }
+    }
+    if configuration {
+        let mut read = function["Configuration"].clone();
+        read["ImageConfig"] = read["ImageConfigResponse"]["ImageConfig"].clone();
+        let mut rows = configuration_rows(facts);
+        rows.push(architecture_row(facts));
+        rows.push(package_type_row());
+        if let Some(reason) = read_mismatch(&read, &rows) {
+            return Ok(Some(reason));
+        }
+    }
+    Ok(None)
+}
+
+/// Before any of `writes` goes out: what they leave alone has to be right already. A request
+/// that sets the image but not the configuration (or the other way round) is for a release
+/// that changes only that part, so the function as it is must already match the rest of the
+/// release, or the new image would run with what the release no longer signs.
+pub async fn check_state<L: LambdaApi>(
+    lambda: &L,
+    facts: &Facts<'_>,
+    writes: &[CloudWrite],
+) -> Result<()> {
+    let (image, configuration) = parts_written(writes);
+    if image == configuration {
+        return Ok(());
+    }
+    let function = FunctionStore::get(lambda, &facts.own_name).await?;
+    let (left, part) = if image {
+        (false, "configuration")
+    } else {
+        (true, "image")
+    };
+    match function_mismatch(facts, &function, left, !left)? {
+        None => Ok(()),
+        Some(reason) => Err(refused(format!(
+            "the request leaves the function's {part} as it is, but {reason}; a release that changes it has to write it in the same request"
+        ))),
+    }
+}
+
+/// After all of `writes` went out: the whole function runs what the accepted release and
+/// config say, whichever writes made it so.
+pub async fn check_applied<L: LambdaApi>(
+    lambda: &L,
+    facts: &Facts<'_>,
+    writes: &[CloudWrite],
+) -> Result<()> {
+    let (image, configuration) = parts_written(writes);
+    if !image && !configuration {
+        return Ok(());
+    }
+    let function = wait_until_idle(lambda, &facts.own_name).await?;
+    match function_mismatch(facts, &function, true, true)? {
+        None => Ok(()),
+        Some(reason) => Err(AlienError::new(crate::error::ErrorData::ReadBackMismatch {
+            function: facts.own_name.clone(),
+            reason,
+        })),
+    }
 }
 
 /// The `RevisionId` of function `name` as Lambda holds it now.
@@ -1136,6 +1239,189 @@ mod tests {
 
         let (answer, _) = run(format!("{REGISTRY}/api@sha256:{}", "6".repeat(64))).await;
         assert!(answer.unwrap_err().contains("its image resolves to"));
+    }
+
+    /// GetFunction as Lambda answers it for a function that was created with `create()` and
+    /// runs `image` with `env`.
+    fn running(image: &str, env: Value) -> Value {
+        json!({
+            "Configuration": {
+                "Role": role(),
+                "Environment": {"Variables": env},
+                "PackageType": "Image",
+                "Architectures": ["arm64"],
+                "VpcConfig": {"SubnetIds": [], "SecurityGroupIds": [], "VpcId": ""},
+                "LoggingConfig": {"LogFormat": "Text", "LogGroup": default_log_group(&own())},
+                "State": "Active",
+                "LastUpdateStatus": "Successful",
+            },
+            "Code": {"ImageUri": image, "ResolvedImageUri": image},
+        })
+    }
+
+    /// Release 2 of the `api` workload: a new image and a changed fixed env value.
+    fn next_release() -> (SignedStatement, String) {
+        let image = format!("{REGISTRY}/api@sha256:{}", "7".repeat(64));
+        let mut workload = function_workload_with(&image);
+        workload
+            .env
+            .insert("MODE".to_string(), "changed".to_string());
+        (release(2, workload), image)
+    }
+
+    /// `check_state` and `check_applied` over a function that reads as `function`, for the
+    /// writes `writes` of release 2. When `reads` is false the function is not read at all, and
+    /// `check_applied` is not run.
+    async fn state_checks(
+        function: Value,
+        writes: Vec<CloudWrite>,
+        reads: bool,
+    ) -> (
+        std::result::Result<(), String>,
+        std::result::Result<(), String>,
+    ) {
+        use alien_aws_clients::lambda::MockLambdaApi;
+
+        let mut lambda = MockLambdaApi::new();
+        if reads {
+            lambda
+                .expect_get_function_json()
+                .returning(move |_| Ok(function.clone()));
+        }
+        let (release, _) = next_release();
+        let accepted = accepted(release, None).await;
+        let place = place();
+        let read = Reads::default();
+        let workload = functions(&accepted.release.body).next().unwrap();
+        let facts = Facts {
+            place: &place,
+            accepted: &accepted,
+            workload,
+            reads: &read,
+            own_name: own(),
+        };
+        let before = check_state(&lambda, &facts, &writes)
+            .await
+            .map_err(|error| error.to_string());
+        let after = if reads {
+            check_applied(&lambda, &facts, &writes)
+                .await
+                .map_err(|error| error.to_string())
+        } else {
+            Ok(())
+        };
+        (before, after)
+    }
+
+    fn update_code(image: &str) -> CloudWrite {
+        CloudWrite::UpdateFunctionCode {
+            function_name: own(),
+            request: json!({"ImageUri": image}),
+        }
+    }
+
+    fn update_configuration(env: Value) -> CloudWrite {
+        CloudWrite::UpdateFunctionConfiguration {
+            function_name: own(),
+            request: json!({
+                "FunctionName": own(),
+                "Role": role(),
+                "Environment": {"Variables": env},
+            }),
+        }
+    }
+
+    /// A request that updates the image only leaves the function's env as it is, so it has to
+    /// be the env the accepted release signs; the function was created from release 1, whose
+    /// fixed `MODE` the next release changes.
+    #[tokio::test]
+    async fn an_image_only_update_over_an_env_the_release_changed_is_refused() {
+        let (_, image) = next_release();
+        let old_env = json!({"MODE": "signed", "ALIEN_DEPLOYMENT_ID": "dep_1"});
+        let old = running(&format!("{REGISTRY}/api@{DIGEST}"), old_env.clone());
+
+        let (before, _) = state_checks(old.clone(), vec![update_code(&image)], true).await;
+        let error = before.expect_err("the old env stays with the new image");
+        assert!(
+            error.contains("field /Environment must match the signed release")
+                && error.contains("leaves the function's configuration as it is"),
+            "{error}"
+        );
+
+        // The same request over an env the release does sign is fine.
+        let same = running(
+            &format!("{REGISTRY}/api@{DIGEST}"),
+            json!({"MODE": "changed", "ALIEN_DEPLOYMENT_ID": "dep_1"}),
+        );
+        let (before, _) = state_checks(same, vec![update_code(&image)], true).await;
+        before.expect("the env already is the signed one");
+
+        // Writing the configuration in the same request needs no read before.
+        let (before, _) = state_checks(
+            old,
+            vec![
+                update_code(&image),
+                update_configuration(json!({"MODE": "changed", "ALIEN_DEPLOYMENT_ID": "dep_1"})),
+            ],
+            false,
+        )
+        .await;
+        before.expect("both parts are written");
+    }
+
+    /// And the other way round: a configuration-only write leaves the image alone, which has
+    /// to be the signed one.
+    #[tokio::test]
+    async fn a_configuration_only_update_over_an_image_the_release_changed_is_refused() {
+        let (_, image) = next_release();
+        let env = json!({"MODE": "changed", "ALIEN_DEPLOYMENT_ID": "dep_1"});
+        let write = update_configuration(env.clone());
+
+        let old = running(&format!("{REGISTRY}/api@{DIGEST}"), env.clone());
+        let (before, _) = state_checks(old, vec![write.clone()], true).await;
+        let error = before.expect_err("the old image stays with the new config");
+        assert!(
+            error.contains("leaves the function's image as it is")
+                && error.contains("its image resolves to"),
+            "{error}"
+        );
+
+        let (before, _) = state_checks(running(&image, env), vec![write], true).await;
+        before.expect("the image already is the signed one");
+    }
+
+    /// After the writes, the whole function has to run the accepted release, whatever the
+    /// writes said.
+    #[tokio::test]
+    async fn the_function_after_the_writes_runs_the_whole_release() {
+        let (_, image) = next_release();
+        let env = json!({"MODE": "changed", "ALIEN_DEPLOYMENT_ID": "dep_1"});
+        let writes = vec![update_code(&image), update_configuration(env.clone())];
+
+        let (_, after) = state_checks(running(&image, env.clone()), writes.clone(), true).await;
+        after.expect("the function runs the release");
+
+        let (_, after) = state_checks(
+            running(
+                &image,
+                json!({"MODE": "signed", "ALIEN_DEPLOYMENT_ID": "dep_1"}),
+            ),
+            writes.clone(),
+            true,
+        )
+        .await;
+        let error = after.expect_err("the env is the old one");
+        assert!(error.contains("field /Environment"), "{error}");
+
+        let mut layered = running(&image, env.clone());
+        layered["Configuration"]["Layers"] = json!([{"Arn": "arn:aws:lambda:x:1:layer:l:1"}]);
+        let (_, after) = state_checks(layered, writes.clone(), true).await;
+        assert!(after.expect_err("a layer").contains("field /Layers"));
+
+        let mut other_role = running(&image, env);
+        other_role["Configuration"]["Role"] = json!("arn:aws:iam::1:role/other");
+        let (_, after) = state_checks(other_role, writes, true).await;
+        assert!(after.expect_err("another role").contains("field /Role"));
     }
 
     #[tokio::test]

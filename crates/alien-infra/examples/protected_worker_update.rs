@@ -151,9 +151,10 @@ fn stack(image: &str, deployed: bool, access: bool) -> Stack {
         .memory_mb(512)
         .build();
     // A value the release signs, which a request may not change.
-    worker
-        .environment
-        .insert("SIGNED_MODE".to_string(), "signed".to_string());
+    worker.environment.insert(
+        "SIGNED_MODE".to_string(),
+        std::env::var("SIGNED_MODE").unwrap_or_else(|_| "signed".to_string()),
+    );
     // Who may invoke the worker and how often: a schedule (once a year) and a reserved limit.
     if access {
         worker.concurrency_limit = Some(
