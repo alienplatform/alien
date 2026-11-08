@@ -93,6 +93,20 @@ pub struct Redis {
     pub encryption_key: Option<ResourceRef>,
 }
 
+/// ElastiCache node types in ascending order with their published node memory in GiB.
+/// One table for the controller, the CloudFormation emitter and the Terraform emitter.
+pub const ELASTICACHE_NODE_TYPES: &[(&str, f64)] = &[
+    ("cache.t4g.small", 1.37),
+    ("cache.t4g.medium", 3.09),
+    ("cache.m7g.large", 6.38),
+    ("cache.m7g.xlarge", 12.93),
+    ("cache.r7g.xlarge", 26.32),
+    ("cache.r7g.2xlarge", 52.82),
+    ("cache.r7g.4xlarge", 105.81),
+    ("cache.r7g.8xlarge", 209.55),
+    ("cache.r7g.16xlarge", 419.09),
+];
+
 impl Redis {
     /// The resource type identifier for Redis.
     pub const RESOURCE_TYPE: ResourceType = ResourceType::from_static("redis");
@@ -119,6 +133,28 @@ impl Redis {
                     .ok_or_else(|| self.invalid_memory(value))
             })
             .transpose()
+    }
+
+    /// The smallest ElastiCache node type whose usable data memory fits the request, and
+    /// that usable memory in bytes. Usable memory is 75% of the node's memory because
+    /// ElastiCache reserves 25% by default (`reserved-memory-percent`). With no request the
+    /// default is 1 GiB. Requests above the largest single-shard node are rejected, never capped.
+    pub fn elasticache_node_type(&self) -> Result<(&'static str, u64)> {
+        let wanted = self.requested_memory_bytes()?.unwrap_or(1024_u64.pow(3));
+        ELASTICACHE_NODE_TYPES
+            .iter()
+            .map(|(name, gib)| (*name, (gib * 0.75 * 1024_f64.powi(3)) as u64))
+            .find(|(_, usable)| *usable >= wanted)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::OperationNotSupported {
+                    operation: "Redis memory sizing".to_string(),
+                    reason: format!(
+                        "{} bytes exceeds the largest single-shard ElastiCache node ({})",
+                        wanted,
+                        ELASTICACHE_NODE_TYPES[ELASTICACHE_NODE_TYPES.len() - 1].0
+                    ),
+                })
+            })
     }
 
     fn invalid_memory(&self, value: &str) -> AlienError<ErrorData> {
@@ -357,5 +393,19 @@ mod tests {
             outputs,
             serde_json::from_str::<RedisOutputs>(&json).unwrap()
         );
+    }
+
+    #[test]
+    fn elasticache_node_type_picks_smallest_fit_and_rejects_oversize() {
+        let redis = |m: Option<&str>| match m {
+            Some(m) => Redis::new("r".into()).memory(m.into()).build(),
+            None => Redis::new("r".into()).build(),
+        };
+        assert_eq!(redis(None).elasticache_node_type().unwrap().0, "cache.t4g.small");
+        // 1.37 GiB node -> 1.0275 GiB usable: 1 GiB fits, 1.1 GiB moves up.
+        assert_eq!(redis(Some("1Gi")).elasticache_node_type().unwrap().0, "cache.t4g.small");
+        assert_eq!(redis(Some("1100Mi")).elasticache_node_type().unwrap().0, "cache.t4g.medium");
+        assert_eq!(redis(Some("300Gi")).elasticache_node_type().unwrap().0, "cache.r7g.16xlarge");
+        assert!(redis(Some("400Gi")).elasticache_node_type().is_err());
     }
 }
