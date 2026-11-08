@@ -12,6 +12,7 @@ mod dial;
 pub mod error;
 pub mod http_proxy;
 pub mod io;
+pub mod logging;
 pub mod metrics;
 pub mod policy;
 pub mod protocol;

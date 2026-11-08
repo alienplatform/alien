@@ -489,7 +489,7 @@ class After(unittest.IsolatedAsyncioTestCase):
                 "bytesUp": 1,
                 "bytesDown": 1,
                 "durationMs": 1,
-                "ts": datetime.fromtimestamp(stamp, UTC).isoformat(),
+                "timestamp": datetime.fromtimestamp(stamp, UTC).isoformat(),
             }
             for stamp in (100, 101.5, 102.5)
         ]
@@ -558,16 +558,20 @@ class After(unittest.IsolatedAsyncioTestCase):
             "bytesUp": 1,
             "bytesDown": 1,
             "durationMs": 1,
-            "ts": datetime.fromtimestamp(100.5, UTC).isoformat(),
+            "timestamp": datetime.fromtimestamp(100.5, UTC).isoformat(),
         }
         report = {"revision": "test", "cases": cases}
-        for repeated in ([event, dict(event)], [{"fields": event}, {"fields": dict(event)}]):
+        nested = {
+            "timestamp": event["timestamp"],
+            "fields": {key: value for key, value in event.items() if key != "timestamp"},
+        }
+        for repeated in ([event, dict(event)], [nested, dict(nested)]):
             self.assertEqual(
                 "unproven",
                 verify_logs.verify(report, repeated, "deployment/resource")["verdict"],
             )
         # The control: two distinct events for the two connections still pass.
-        second = dict(event, ts=datetime.fromtimestamp(100.6, UTC).isoformat())
+        second = dict(event, timestamp=datetime.fromtimestamp(100.6, UTC).isoformat())
         self.assertEqual(
             "pass",
             verify_logs.verify(report, [event, second], "deployment/resource")["verdict"],
@@ -596,7 +600,7 @@ class After(unittest.IsolatedAsyncioTestCase):
             "bytesDown": 1,
             "durationMs": 1,
             "reason": "Egress denied: address is not public",
-            "ts": datetime.fromtimestamp(100.5, UTC).isoformat(),
+            "timestamp": datetime.fromtimestamp(100.5, UTC).isoformat(),
         }
         for form, host in (("name", "private.test"), ("ip", "10.42.3.10")):
             report["cases"][0]["name"] = "floor-vpc-" + form
@@ -615,7 +619,7 @@ class After(unittest.IsolatedAsyncioTestCase):
                     {"reason": "DNS unavailable"},
                     {"reason": "policy store unavailable"},
                     {"reason": "Egress denied: target is not allowed"},
-                    {"ts": datetime.fromtimestamp(80, UTC).isoformat()},
+                    {"timestamp": datetime.fromtimestamp(80, UTC).isoformat()},
                 ):
                     with self.subTest(change=change):
                         self.assertEqual(

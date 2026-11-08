@@ -35,7 +35,7 @@ class IdentityMap(unittest.TestCase):
             "bytesUp": 1,
             "bytesDown": 1,
             "durationMs": 1,
-            "ts": "1970-01-01T00:01:40.500000+00:00",
+            "timestamp": "1970-01-01T00:01:40.500000+00:00",
         }
         mapping = {
             "revision": report["revision"],

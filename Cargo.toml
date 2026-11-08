@@ -85,7 +85,7 @@ ipnet = "2.11"
 psl = "2.1"
 proptest = "1.9"
 strip-ansi-escapes = "0.2"
-lognorm = "0.2.0"
+lognorm = "0.2.1"
 alien-commands = { path = "crates/alien-commands", version = "3.3.56", default-features = false }
 alien-commands-client = { path = "crates/alien-commands-client" }
 alien-sandbox-agent = { path = "crates/alien-sandbox-agent" }
