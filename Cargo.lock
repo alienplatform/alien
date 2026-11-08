@@ -1253,6 +1253,7 @@ dependencies = [
  "alien-core",
  "alien-error",
  "alien-permission-types",
+ "alien-permissions",
  "anyhow",
  "indexmap 2.14.1",
  "insta",

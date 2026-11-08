@@ -3,6 +3,15 @@ pub mod operations;
 
 pub use error::*;
 
+// The evaluator's source file is shared with this crate's integration tests, which load it
+// with `mod iam_policy;`. It names the crate as `alien_permissions`, so name the crate that
+// way from inside too.
+#[cfg(feature = "test-utils")]
+extern crate self as alien_permissions;
+#[cfg(feature = "test-utils")]
+#[path = "../tests/iam_policy/mod.rs"]
+pub mod iam_policy;
+
 #[cfg(feature = "infrastructure")]
 pub mod aws_resource_policies;
 #[cfg(feature = "infrastructure")]
