@@ -21,6 +21,7 @@ Your AWS credentials need these permissions:
 - `autoscaling:DeleteAutoScalingGroup`
 - `autoscaling:DescribeAutoScalingGroups`
 - `autoscaling:SetDesiredCapacity`
+- `autoscaling:SuspendProcesses`
 - `autoscaling:UpdateAutoScalingGroup`
 - `ec2:CreateLaunchTemplate`
 - `ec2:DeleteLaunchTemplate`
@@ -432,6 +433,38 @@ async fn test_auto_scaling_group_e2e(ctx: &mut AutoScalingTestContext) {
         "✅ ASG verified: min={:?}, max={:?}, desired={:?}",
         asg.min_size, asg.max_size, asg.desired_capacity
     );
+
+    // =========================================================================
+    // Step 3.2: Suspend AZRebalance and read it back
+    // =========================================================================
+    info!("⏸️ Step 3.2: Suspending AZRebalance");
+    ctx.asg_client
+        .suspend_processes(
+            SuspendProcessesRequest::builder()
+                .auto_scaling_group_name(asg_name.clone())
+                .scaling_processes(vec!["AZRebalance".to_string()])
+                .build(),
+        )
+        .await
+        .expect("Failed to suspend AZRebalance");
+
+    let suspended_response = ctx
+        .asg_client
+        .describe_auto_scaling_groups(
+            DescribeAutoScalingGroupsRequest::builder()
+                .auto_scaling_group_names(vec![asg_name.clone()])
+                .build(),
+        )
+        .await
+        .expect("Failed to describe ASG after suspending");
+    let suspended: Vec<String> = suspended_response
+        .describe_auto_scaling_groups_result
+        .auto_scaling_groups
+        .and_then(|asgs| asgs.members.into_iter().next())
+        .and_then(|asg| asg.suspended_processes)
+        .map(|w| w.members.into_iter().filter_map(|p| p.process_name).collect())
+        .unwrap_or_default();
+    assert_eq!(suspended, vec!["AZRebalance".to_string()]);
 
     // =========================================================================
     // Step 3.5: Scale to 1 instance, call GetConsoleOutput, scale back to 0
