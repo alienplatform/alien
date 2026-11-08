@@ -221,12 +221,14 @@ async fn cleanup_of_an_unregistered_reservation_removes_it() {
     assert_eq!(status, StatusCode::ACCEPTED, "{body:#}");
     assert_eq!(body["cleanupRequired"], false);
     // Left as delete-pending, it would wait for a manager that has no release to clean up with.
-    assert!(fixture
-        .deployment_store
-        .get_deployment(&alien_manager::auth::Subject::system(), &id)
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        fixture
+            .deployment_store
+            .get_deployment(&alien_manager::auth::Subject::system(), &id)
+            .await
+            .unwrap()
+            .is_none()
+    );
     // The same name can be reserved again.
     let (status, again) = create(&fixture, &fixture.dg_token, request()).await;
     assert_eq!(status, StatusCode::CREATED, "{again:#}");

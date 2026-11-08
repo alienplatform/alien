@@ -713,7 +713,14 @@ async fn reconcile(
     } else {
         None
     };
-    preserve_recorded_gate_answers(&mut final_state, &deployment, setup_gate_resources.as_ref());
+    // The stored answer flips only once every gated resource is delivered. Until then
+    // the setup run's choice goes back to it in the response alone, so it keeps creating
+    // the resources; it is never stored, and every report is checked again from scratch.
+    let pending_setup_yes = preserve_recorded_gate_answers(
+        &mut final_state,
+        &deployment,
+        setup_gate_resources.as_ref(),
+    );
     let legacy_cli = headers
         .get("user-agent")
         .and_then(|value| value.to_str().ok())
@@ -832,7 +839,13 @@ async fn reconcile(
     )
     .await;
 
-    let mut current = match serde_json::to_value(&final_state) {
+    let mut returned_state = final_state.clone();
+    if let Some(metadata) = returned_state.runtime_metadata.as_mut() {
+        for input_id in pending_setup_yes {
+            metadata.persisted_gate_answers.insert(input_id, true);
+        }
+    }
+    let mut current = match serde_json::to_value(&returned_state) {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!("Failed to serialize reconciled state: {e}");
@@ -2679,7 +2692,7 @@ mod tests {
         let mut incoming = uninitialized_state();
         incoming.runtime_metadata = Some(incoming_metadata);
 
-        preserve_recorded_gate_answers(&mut incoming, &stored, None);
+        let _ = preserve_recorded_gate_answers(&mut incoming, &stored, None);
 
         let answers = &incoming
             .runtime_metadata
@@ -2919,7 +2932,7 @@ async fn agent_sync(
                 } else {
                     // Stays below the ignore check: restoring metadata here
                     // would make an uninitialized report look initialized.
-                    preserve_recorded_gate_answers(&mut agent_state, &deployment, None);
+                    let _ = preserve_recorded_gate_answers(&mut agent_state, &deployment, None);
                     // Reconcile registry access before persisting so the flag
                     // is saved in the same DB write.
                     // Pull sync is the agent's only channel to the manager, so a pending
@@ -3629,7 +3642,7 @@ fn preserve_recorded_gate_answers(
     incoming: &mut DeploymentState,
     stored: &DeploymentRecord,
     setup_gate_resources: Option<&std::collections::HashMap<String, Vec<String>>>,
-) {
+) -> Vec<String> {
     // An installed ongoing-management grant permits setup choices to change.
     // Only the stored grant counts: a runtime report cannot confer authority.
     if stored
@@ -3637,7 +3650,7 @@ fn preserve_recorded_gate_answers(
         .as_ref()
         .is_some_and(|metadata| metadata.automatic_setup)
     {
-        return;
+        return Vec::new();
     }
     let Some(recorded) = stored
         .runtime_metadata
@@ -3645,7 +3658,7 @@ fn preserve_recorded_gate_answers(
         .map(|metadata| &metadata.persisted_gate_answers)
         .filter(|answers| !answers.is_empty())
     else {
-        return;
+        return Vec::new();
     };
     // Resources the report shows as installed: created, with state recorded.
     let delivered: std::collections::HashSet<String> = incoming
@@ -3662,6 +3675,7 @@ fn preserve_recorded_gate_answers(
         .collect();
     let metadata = incoming.runtime_metadata.get_or_insert_default();
     let mut restored = 0usize;
+    let mut pending_setup_yes = Vec::new();
     for (input_id, recorded_answer) in recorded {
         match metadata.persisted_gate_answers.get(input_id) {
             None => {
@@ -3681,6 +3695,15 @@ fn preserve_recorded_gate_answers(
                                 && resource_ids.iter().all(|id| delivered.contains(id))
                         }) => {}
             Some(incoming_answer) if incoming_answer != recorded_answer => {
+                // A setup run asking for yes with delivery incomplete: keep the record, and
+                // tell the caller the choice to hand back in the response.
+                if *incoming_answer
+                    && setup_gate_resources
+                        .and_then(|gates| gates.get(input_id))
+                        .is_some_and(|resource_ids| !resource_ids.is_empty())
+                {
+                    pending_setup_yes.push(input_id.clone());
+                }
                 tracing::warn!(
                     %input_id,
                     deployment_id = %stored.id,
@@ -3702,6 +3725,7 @@ fn preserve_recorded_gate_answers(
             "restored recorded gate answers a state write-back dropped"
         );
     }
+    pending_setup_yes
 }
 
 /// Once runtime cleanup hands off, setup owns the remaining identities and
