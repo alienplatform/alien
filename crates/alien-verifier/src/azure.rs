@@ -109,6 +109,21 @@ impl Azure {
         body: Option<&Value>,
         operation: &str,
     ) -> Result<Option<Value>> {
+        Ok(self
+            .call_with_status(method, url, resource, body, operation)
+            .await?
+            .1)
+    }
+
+    /// [`Self::call`] with the status ARM answered.
+    async fn call_with_status(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        resource: &str,
+        body: Option<&Value>,
+        operation: &str,
+    ) -> Result<(reqwest::StatusCode, Option<Value>)> {
         let mut request = self
             .http
             .request(method, url)
@@ -128,7 +143,7 @@ impl Azure {
             .into_alien_error()
             .context(failed(operation))?;
         if status == reqwest::StatusCode::NOT_FOUND {
-            return Ok(None);
+            return Ok((status, None));
         }
         if !status.is_success() {
             return Err(AlienError::new(failed(format!(
@@ -137,10 +152,10 @@ impl Azure {
             ))));
         }
         if text.trim().is_empty() {
-            return Ok(Some(Value::Null));
+            return Ok((status, Some(Value::Null)));
         }
         serde_json::from_str(&text)
-            .map(Some)
+            .map(|body| (status, Some(body)))
             .into_alien_error()
             .context(failed(format!("{operation}: the response is not JSON")))
     }
@@ -443,9 +458,9 @@ impl Backend for AzureBackend {
     /// Azure finishes the delete in the background; the controller waits for the app to be
     /// gone.
     async fn delete_workload(&self, name: &str) -> Result<bool> {
-        let deleted = self
+        let (status, _) = self
             .0
-            .call(
+            .call_with_status(
                 reqwest::Method::DELETE,
                 &self.0.app_url(name),
                 ARM,
@@ -453,7 +468,7 @@ impl Backend for AzureBackend {
                 &format!("containerApps delete {name}"),
             )
             .await?;
-        Ok(deleted.is_some())
+        Ok(delete_found_resource(status))
     }
 
     /// Deleting a scale set takes its machines with it; Azure finishes it in the background, so
@@ -573,9 +588,25 @@ impl AppStore for Azure {
     }
 }
 
+/// Whether an ARM DELETE found the resource. Container Apps answers 204, not 404, for one that
+/// isn't there; 200 and 202 mean it was, and Azure removes it in the background.
+fn delete_found_resource(status: reqwest::StatusCode) -> bool {
+    status != reqwest::StatusCode::NOT_FOUND && status != reqwest::StatusCode::NO_CONTENT
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_delete_that_answers_204_or_404_found_nothing() {
+        use reqwest::StatusCode;
+        // 204 is what real Azure answered a DELETE of a Container App that was not there.
+        assert!(!delete_found_resource(StatusCode::NO_CONTENT));
+        assert!(!delete_found_resource(StatusCode::NOT_FOUND));
+        assert!(delete_found_resource(StatusCode::OK));
+        assert!(delete_found_resource(StatusCode::ACCEPTED));
+    }
 
     #[test]
     fn a_scale_set_url_keeps_the_name_in_one_path_segment() {
