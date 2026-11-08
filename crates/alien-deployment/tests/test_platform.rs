@@ -4931,7 +4931,7 @@ async fn changing_settings_does_not_grant_automatic_setup_to_an_existing_install
 }
 
 #[tokio::test]
-async fn manual_setup_preserves_existing_gate_and_creates_new_optional_resource() {
+async fn manual_setup_turns_on_a_declined_gate_and_creates_new_optional_resource() {
     let _vault = test_vault_env().await;
     let mut stack = Stack::new("manual-new-gate".into())
         .add(
@@ -4985,17 +4985,20 @@ async fn manual_setup_preserves_existing_gate_and_creates_new_optional_resource(
     let state = run_to_completion(state, config).await;
     assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
     let resources = &state.stack_state.as_ref().unwrap().resources;
-    assert!(!resources.contains_key("old-archive"));
-    assert_eq!(
-        resources.get("new-archive").unwrap().status,
-        alien_core::ResourceStatus::Running
-    );
+    // The explicit yes for the declined gate turns it on, like the new gate.
+    for id in ["old-archive", "new-archive"] {
+        assert_eq!(
+            resources.get(id).unwrap().status,
+            alien_core::ResourceStatus::Running,
+            "{id}"
+        );
+    }
     let answers = &state
         .runtime_metadata
         .as_ref()
         .unwrap()
         .persisted_gate_answers;
-    assert_eq!(answers.get("oldEnabled"), Some(&false));
+    assert_eq!(answers.get("oldEnabled"), Some(&true));
     assert_eq!(answers.get("newEnabled"), Some(&true));
 }
 

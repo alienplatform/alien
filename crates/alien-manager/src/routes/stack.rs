@@ -318,11 +318,15 @@ async fn stack_import_as(
         Err(e) => return e.into_response(),
     };
     let frozen_gating = alien_deployment::frozen_gating_inputs(source_stack, req.platform);
-    if let Err(e) = alien_deployment::enforce_frozen_gate_fixity(
-        &imported_gate_answers,
-        &frozen_gating,
-        &req.input_values,
-    ) {
+    if let Err(e) =
+        alien_deployment::enforce_frozen_gate_fixity(alien_deployment::FrozenGateFixityCheck {
+            persisted: &imported_gate_answers,
+            stack: source_stack,
+            still_frozen_gating: &frozen_gating,
+            existing_resource_ids: &delivered_resource_ids,
+            input_values: &req.input_values,
+        })
+    {
         return e.into_response();
     }
     let existing_deployment =
@@ -683,7 +687,9 @@ async fn stack_import_as(
                 continue;
             }
             if let Some(persisted) = persisted_answers.get(input_id) {
-                if persisted != imported_answer {
+                // Setup may turn a recorded decline into a yes; it never
+                // turns a yes into a no.
+                if persisted != imported_answer && *persisted {
                     return AlienError::new(alien_deployment::ErrorData::FrozenGateAnswerChanged {
                         input_id: input_id.clone(),
                         persisted: *persisted,
@@ -1537,12 +1543,14 @@ fn reimport_runtime_metadata(
         metadata.initial_setup_authority = alien_core::InitialSetupAuthority::ImportedHandoff;
         // The route refused conflicting answers before calling this, so what
         // remains is bookkeeping: answers for inputs a new release introduces are
-        // recorded, and recorded answers are never overwritten.
+        // recorded, and a recorded decline becomes a yes when setup delivered the
+        // resource. A recorded yes is never overwritten.
         for (input_id, imported_answer) in &imported_gate_answers {
-            metadata
+            let recorded = metadata
                 .persisted_gate_answers
                 .entry(input_id.clone())
                 .or_insert(*imported_answer);
+            *recorded |= *imported_answer;
         }
     }
     let baseline_stack = metadata.prepared_stack.as_ref().ok_or_else(|| {

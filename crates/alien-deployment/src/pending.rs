@@ -37,8 +37,22 @@ pub async fn prepare_direct_setup_update(
                 }
             }
         }
+        let frozen_gating = frozen_gating_inputs(&target_stack, stack_state.platform);
         for (input, answer) in recorded {
-            gate_inputs.insert(input, serde_json::Value::Bool(answer));
+            // Setup may turn a recorded decline into an explicit yes. A default
+            // never does, and a recorded yes is never turned into a no: that
+            // would delete a frozen resource and its data, so asking for it is
+            // refused.
+            let requested = config.input_values.get(&input).and_then(gate_value_as_bool);
+            if answer && requested == Some(false) && frozen_gating.contains(&input) {
+                return Err(AlienError::new(ErrorData::FrozenGateAnswerChanged {
+                    input_id: input,
+                    persisted: true,
+                    requested: false,
+                }));
+            }
+            let turned_on = !answer && requested == Some(true);
+            gate_inputs.insert(input, serde_json::Value::Bool(answer || turned_on));
         }
     }
     let persisted_gate_answers = resolve_frozen_gate_answers_from_presence(
@@ -457,17 +471,41 @@ pub fn frozen_gating_inputs(
         .collect()
 }
 
+/// What [`enforce_frozen_gate_fixity`] holds the requested input values against.
+pub struct FrozenGateFixityCheck<'a> {
+    /// Answers recorded for the deployment.
+    pub persisted: &'a alien_core::GateAnswers,
+    /// The stack being deployed, to find the resources behind each gate.
+    pub stack: &'a Stack,
+    /// Inputs that still gate a frozen resource in `stack`.
+    pub still_frozen_gating: &'a std::collections::HashSet<String>,
+    /// Ids of the resources that are installed.
+    pub existing_resource_ids: &'a std::collections::HashSet<String>,
+    /// The input values the update requests.
+    pub input_values: &'a std::collections::HashMap<String, serde_json::Value>,
+}
+
 /// Refuse an update whose input values conflict with a persisted frozen-gate
 /// answer, for inputs that still gate a frozen resource in the declared
-/// stack. Inputs the update does not mention keep their recorded answer, and
-/// a value for a gate with no recorded answer is refused outright — it has
-/// nothing to be held against, and acting on it would decide a frozen
-/// resource's existence outside setup.
+/// stack. Inputs the update does not mention keep their recorded answer.
+///
+/// A gate with no recorded answer can only be answered "no" here, and only if
+/// no resource behind it exists in `existing_resource_ids`: declining it then
+/// changes nothing that is installed. The returned answers are those new
+/// declines; the caller must record them so the resources are stripped and
+/// later updates hold the answer fixed. A "yes" for an unanswered gate is
+/// refused, because creating a frozen resource is up to setup.
 pub fn enforce_frozen_gate_fixity(
-    persisted: &alien_core::GateAnswers,
-    still_frozen_gating: &std::collections::HashSet<String>,
-    input_values: &std::collections::HashMap<String, serde_json::Value>,
-) -> Result<()> {
+    check: FrozenGateFixityCheck<'_>,
+) -> Result<alien_core::GateAnswers> {
+    let FrozenGateFixityCheck {
+        persisted,
+        stack,
+        still_frozen_gating,
+        existing_resource_ids,
+        input_values,
+    } = check;
+    let mut new_declines = alien_core::GateAnswers::new();
     for input_id in still_frozen_gating {
         let Some(value) = input_values.get(input_id) else {
             continue;
@@ -481,12 +519,29 @@ pub fn enforce_frozen_gate_fixity(
             }));
         };
         let Some(persisted_answer) = persisted.get(input_id) else {
-            return Err(AlienError::new(ErrorData::FrozenGateAnswerUnderivable {
-                input_id: input_id.clone(),
-                reason: "this deployment records no answer for it; a frozen gate is answered \
-                         through setup"
-                    .to_string(),
-            }));
+            if requested {
+                return Err(AlienError::new(ErrorData::FrozenGateAnswerUnderivable {
+                    input_id: input_id.clone(),
+                    reason: "this deployment records no answer for it; turning it on is done \
+                             by running setup"
+                        .to_string(),
+                }));
+            }
+            if let Some(existing) = frozen_gated(stack)
+                .filter(|(_, gate)| *gate == input_id)
+                .map(|(resource_id, _)| resource_id)
+                .find(|resource_id| existing_resource_ids.contains(resource_id.as_str()))
+            {
+                return Err(AlienError::new(ErrorData::FrozenGateAnswerUnderivable {
+                    input_id: input_id.clone(),
+                    reason: format!(
+                        "the resource '{existing}' behind it already exists, so it cannot be \
+                         turned off"
+                    ),
+                }));
+            }
+            new_declines.insert(input_id.clone(), false);
+            continue;
         };
         if requested != *persisted_answer {
             return Err(
@@ -499,7 +554,7 @@ pub fn enforce_frozen_gate_fixity(
             );
         }
     }
-    Ok(())
+    Ok(new_declines)
 }
 
 /// Audit the gate-driven transitions this update requests: a live decline
@@ -1467,54 +1522,112 @@ mod tests {
             alien_core::GateAnswers::from_iter([("analyticsEnabled".to_string(), false)]);
         let still_frozen = std::collections::HashSet::from(["analyticsEnabled".to_string()]);
 
-        enforce_frozen_gate_fixity(&persisted, &still_frozen, &Default::default())
-            .expect("an unmentioned input keeps its answer");
-        enforce_frozen_gate_fixity(
-            &persisted,
-            &still_frozen,
-            &std::collections::HashMap::from([(
+        enforce_frozen_gate_fixity(FrozenGateFixityCheck {
+            persisted: &persisted,
+            stack: &analytics_stack(),
+            still_frozen_gating: &still_frozen,
+            existing_resource_ids: &Default::default(),
+            input_values: &Default::default(),
+        })
+        .expect("an unmentioned input keeps its answer");
+        enforce_frozen_gate_fixity(FrozenGateFixityCheck {
+            persisted: &persisted,
+            stack: &analytics_stack(),
+            still_frozen_gating: &still_frozen,
+            existing_resource_ids: &Default::default(),
+            input_values: &std::collections::HashMap::from([(
                 "analyticsEnabled".to_string(),
                 serde_json::json!(false),
             )]),
-        )
+        })
         .expect("a matching answer passes");
 
-        let error = enforce_frozen_gate_fixity(
-            &persisted,
-            &still_frozen,
-            &std::collections::HashMap::from([(
+        let error = enforce_frozen_gate_fixity(FrozenGateFixityCheck {
+            persisted: &persisted,
+            stack: &analytics_stack(),
+            still_frozen_gating: &still_frozen,
+            existing_resource_ids: &Default::default(),
+            input_values: &std::collections::HashMap::from([(
                 "analyticsEnabled".to_string(),
                 serde_json::json!(true),
             )]),
-        )
+        })
         .expect_err("a flipped answer is refused");
         assert_eq!(error.code, "FROZEN_GATE_ANSWER_CHANGED");
     }
 
-    /// A value for a frozen gate with no recorded answer is refused, not
-    /// acted on: nothing exists to hold it against, and letting it through
-    /// would decide a frozen resource's existence outside setup. A gate the
-    /// update does not mention stays with the compatibility check.
+    fn analytics_stack() -> Stack {
+        Stack::new("s".to_string())
+            .inputs(vec![StackInputDefinition::deployer_boolean(
+                "analyticsEnabled",
+                "Enable analytics",
+                "Whether to create analytics.",
+                Some(true),
+            )])
+            .add_enabled_when(
+                Kv::new("analytics".to_string()).build(),
+                ResourceLifecycle::Frozen,
+                "analyticsEnabled",
+            )
+            .build()
+    }
+
+    fn requested(value: bool) -> std::collections::HashMap<String, serde_json::Value> {
+        std::collections::HashMap::from([(
+            "analyticsEnabled".to_string(),
+            serde_json::json!(value),
+        )])
+    }
+
+    /// A gate with no recorded answer can be declined only while nothing
+    /// behind it exists, and never turned on: creating a frozen resource is
+    /// up to setup. A gate the update does not mention stays with the
+    /// compatibility check.
     #[test]
-    fn fixity_refuses_a_value_for_an_unrecorded_gate() {
+    fn fixity_records_a_decline_for_an_unrecorded_gate_only_when_nothing_exists() {
         let still_frozen = std::collections::HashSet::from(["analyticsEnabled".to_string()]);
+        let none = alien_core::GateAnswers::new();
+        let stack = analytics_stack();
 
-        enforce_frozen_gate_fixity(
-            &alien_core::GateAnswers::new(),
-            &still_frozen,
-            &Default::default(),
-        )
+        let unmentioned = enforce_frozen_gate_fixity(FrozenGateFixityCheck {
+            persisted: &none,
+            stack: &stack,
+            still_frozen_gating: &still_frozen,
+            existing_resource_ids: &Default::default(),
+            input_values: &Default::default(),
+        })
         .expect("an unmentioned unrecorded gate falls to the compatibility check");
+        assert!(unmentioned.is_empty());
 
-        let error = enforce_frozen_gate_fixity(
-            &alien_core::GateAnswers::new(),
-            &still_frozen,
-            &std::collections::HashMap::from([(
-                "analyticsEnabled".to_string(),
-                serde_json::json!(false),
-            )]),
-        )
-        .expect_err("a provided value with no recorded answer is refused");
+        let declined = enforce_frozen_gate_fixity(FrozenGateFixityCheck {
+            persisted: &none,
+            stack: &stack,
+            still_frozen_gating: &still_frozen,
+            existing_resource_ids: &Default::default(),
+            input_values: &requested(false),
+        })
+        .expect("nothing exists behind the gate, so the decline is allowed");
+        assert_eq!(declined.get("analyticsEnabled"), Some(&false));
+
+        let installed = std::collections::HashSet::from(["analytics".to_string()]);
+        let error = enforce_frozen_gate_fixity(FrozenGateFixityCheck {
+            persisted: &none,
+            stack: &stack,
+            still_frozen_gating: &still_frozen,
+            existing_resource_ids: &installed,
+            input_values: &requested(false),
+        })
+        .expect_err("an installed resource cannot be declined");
+        assert_eq!(error.code, "FROZEN_GATE_ANSWER_UNDERIVABLE");
+
+        let error = enforce_frozen_gate_fixity(FrozenGateFixityCheck {
+            persisted: &none,
+            stack: &stack,
+            still_frozen_gating: &still_frozen,
+            existing_resource_ids: &Default::default(),
+            input_values: &requested(true),
+        })
+        .expect_err("an update cannot turn an unanswered gate on");
         assert_eq!(error.code, "FROZEN_GATE_ANSWER_UNDERIVABLE");
     }
 
@@ -1526,14 +1639,16 @@ mod tests {
         let persisted =
             alien_core::GateAnswers::from_iter([("analyticsEnabled".to_string(), false)]);
 
-        enforce_frozen_gate_fixity(
-            &persisted,
-            &Default::default(),
-            &std::collections::HashMap::from([(
+        enforce_frozen_gate_fixity(FrozenGateFixityCheck {
+            persisted: &persisted,
+            stack: &analytics_stack(),
+            still_frozen_gating: &Default::default(),
+            existing_resource_ids: &Default::default(),
+            input_values: &std::collections::HashMap::from([(
                 "analyticsEnabled".to_string(),
                 serde_json::json!(true),
             )]),
-        )
+        })
         .expect("an input that no longer gates a frozen resource is free to change");
 
         let live_only = Stack::new("s".to_string())

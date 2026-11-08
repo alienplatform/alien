@@ -128,7 +128,13 @@ impl SsmClient {
         let result =
             crate::aws::aws_request_utils::sign_send_json(builder, &self.sign_config()).await;
 
-        Self::map_result(result, operation, resource, Some(&body))
+        // Parameters and secrets travel in these bodies, in both directions.
+        alien_client_core::redact_secret_bodies(Self::map_result(
+            result,
+            operation,
+            resource,
+            Some(&body),
+        ))
     }
 
     fn map_result<T>(
