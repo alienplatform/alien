@@ -1127,6 +1127,7 @@ mod tests {
 
     #[tokio::test]
     async fn corrective_target_with_partial_state_and_no_current_release_converges() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         let storage = alien_core::Storage::new("files".into()).build();
         let mut partial = alien_core::StackState::new(Platform::Test);
         let mut resource = alien_core::StackResourceState::new_pending(
@@ -1656,6 +1657,7 @@ mod tests {
     /// sync and deployment loops against a stub manager on the test platform.
     #[tokio::test]
     async fn a_maintenance_claim_runs_ready_on_the_installed_release() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         type Response = Arc<Mutex<Value>>;
         async fn serve(State(response): State<Response>) -> Json<Value> {
             Json(response.lock().unwrap().clone())

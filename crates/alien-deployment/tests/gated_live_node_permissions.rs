@@ -1,4 +1,6 @@
 //! Live gate edits must not rewrite the Frozen node permission baseline saved by deployment.
+mod support;
+
 use alien_core::{
     ClientConfig, ComputeCluster, DeploymentConfig, DeploymentState, DeploymentStatus,
     EnvironmentVariablesSnapshot, InitialSetupAuthority, PermissionProfile, Platform, ReleaseInfo,
@@ -127,7 +129,7 @@ async fn repeated_updates(initial_enabled: bool, saved_stack: bool) {
     };
     for enabled in [false, false, true] {
         current.status = DeploymentStatus::UpdatePending;
-        current = alien_deployment::step(current, config(enabled), client(), None)
+        current = crate::support::step(current, config(enabled), client(), None)
             .await
             .expect("update preflights must not require setup for a Live gate edit")
             .state;

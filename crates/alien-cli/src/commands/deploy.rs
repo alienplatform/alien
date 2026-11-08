@@ -2467,6 +2467,9 @@ async fn deploy_task_with_environment(
         session.clone(),
         acquired_deployment.execution_claim.clone(),
     );
+    // This process alone steps the deployment, so a key of its own is enough.
+    alien_deployment::set_ephemeral_secrets_digest_key();
+
     let policy = RunnerPolicy {
         max_steps: 400,
         operation: if setup_owned_status {
