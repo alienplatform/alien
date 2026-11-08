@@ -22,6 +22,9 @@ pub async fn prepare_direct_setup_update(
     // Automatic installations answer from the requested inputs. Manual setup
     // preserves recorded choices, but a new gate must use the setup inputs:
     // absence from the old state says nothing about a newly introduced resource.
+    // The one exception is a recorded "no" met by an explicit "yes": setup is
+    // where a frozen gate is answered, and creating the resource loses nothing.
+    // A recorded "yes" never flips, because that would delete the resource.
     let mut gate_inputs = config.input_values.clone();
     if !existing_metadata.automatic_setup {
         let mut recorded = existing_metadata.persisted_gate_answers.clone();
@@ -38,7 +41,15 @@ pub async fn prepare_direct_setup_update(
             }
         }
         for (input, answer) in recorded {
-            gate_inputs.insert(input, serde_json::Value::Bool(answer));
+            let enabled_by_setup = !answer
+                && config
+                    .input_values
+                    .get(&input)
+                    .and_then(gate_value_as_bool)
+                    .unwrap_or(false);
+            if !enabled_by_setup {
+                gate_inputs.insert(input, serde_json::Value::Bool(answer));
+            }
         }
     }
     let persisted_gate_answers = resolve_frozen_gate_answers_from_presence(

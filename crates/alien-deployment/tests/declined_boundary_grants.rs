@@ -58,7 +58,7 @@ fn declared() -> Stack {
         .build()
 }
 
-fn config(enabled: bool) -> DeploymentConfig {
+fn config(enabled: Option<bool>) -> DeploymentConfig {
     let mut config = DeploymentConfig::builder()
         .stack_settings(Default::default())
         .environment_variables(EnvironmentVariablesSnapshot {
@@ -69,13 +69,19 @@ fn config(enabled: bool) -> DeploymentConfig {
         .external_bindings(Default::default())
         .allow_frozen_changes(false)
         .build();
-    config
-        .input_values
-        .insert("keyEnabled".into(), json!(enabled));
+    if let Some(enabled) = enabled {
+        config
+            .input_values
+            .insert("keyEnabled".into(), json!(enabled));
+    }
     config
 }
 
 async fn prepare(enabled: bool, previous: &RuntimeMetadata) -> RuntimeMetadata {
+    prepare_with(Some(enabled), previous).await
+}
+
+async fn prepare_with(enabled: Option<bool>, previous: &RuntimeMetadata) -> RuntimeMetadata {
     alien_deployment::prepare_direct_setup_update(
         declared(),
         &StackState::new(Platform::Aws),
@@ -167,12 +173,19 @@ async fn declined_setup_key_removes_runtime_and_management_grants_before_boundar
     let declined = prepare(false, &RuntimeMetadata::default()).await;
     assert_key_grants(&declined, false);
 
-    // A later release input cannot reverse a recorded manual-setup decline.
-    // Run preparation twice to ensure derived identities do not restore the grant.
-    let repeated = prepare(true, &declined).await;
+    // A manual setup rerun that sets no value for the gate keeps the recorded decline, however
+    // often it runs, and derived identities do not restore the grant.
+    let repeated = prepare_with(None, &declined).await;
     assert_key_grants(&repeated, false);
-    let repeated = prepare(true, &repeated).await;
+    let repeated = prepare_with(None, &repeated).await;
     assert_key_grants(&repeated, false);
+
+    // Setup is where a frozen gate is answered: an explicit yes reverses a recorded no and
+    // restores the grants, and a later rerun that says no keeps what setup created.
+    let reversed = prepare(true, &declined).await;
+    assert_key_grants(&reversed, true);
+    let kept = prepare(false, &reversed).await;
+    assert_key_grants(&kept, true);
 }
 
 #[tokio::test]
@@ -211,7 +224,7 @@ async fn release_update_keeps_a_declined_key_out_of_the_pending_boundary() {
     };
     let mut result = alien_deployment::step(
         current,
-        config(false),
+        config(Some(false)),
         ClientConfig::Local {
             state_directory: "/unused".into(),
         },

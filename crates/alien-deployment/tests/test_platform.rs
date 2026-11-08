@@ -3642,6 +3642,138 @@ async fn an_update_introducing_a_gated_frozen_resource_refuses_instead_of_droppi
     );
 }
 
+/// A deployment that settled on a release without the gate, then receives a release that adds a
+/// frozen store behind `archiveEnabled`. `recorded` is the answer the deployment holds for the
+/// gate, if any.
+async fn settled_deployment_offered_a_gated_frozen_store(
+    recorded: Option<bool>,
+) -> (DeploymentState, Stack, DeploymentConfig) {
+    let settled_stack = create_test_stack("gated-update-stack", "test-function");
+    let mut target_stack = settled_stack.clone();
+    target_stack.inputs = vec![boolean_gate_input(
+        "archiveEnabled",
+        "Enable the archive",
+        "Whether to create the archive store.",
+    )];
+    target_stack.resources.insert(
+        "archive".to_string(),
+        ResourceEntry {
+            config: alien_core::Resource::new(Storage::new("archive".to_string()).build()),
+            lifecycle: ResourceLifecycle::Frozen,
+            dependencies: Vec::new(),
+            display_name: None,
+            description: None,
+            remote_access: false,
+            enabled_when: Some("archiveEnabled".to_string()),
+        },
+    );
+    let config = create_test_config("gated-update", false);
+    let mut state = run_to_completion(create_initial_state(settled_stack), config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
+    if let Some(answer) = recorded {
+        state
+            .runtime_metadata
+            .as_mut()
+            .expect("runtime metadata")
+            .persisted_gate_answers
+            .insert("archiveEnabled".to_string(), answer);
+    }
+    start_update(&mut state, release_of("rel_v2", target_stack.clone()));
+    (state, target_stack, config)
+}
+
+fn archive_status(state: &DeploymentState) -> Option<alien_core::ResourceStatus> {
+    state
+        .stack_state
+        .as_ref()
+        .and_then(|stack_state| stack_state.resources.get("archive"))
+        .map(|resource| resource.status)
+}
+
+/// A release adds a frozen store behind an input the deployment already answered "no". The
+/// update applies without asking for setup, and the store never exists.
+#[tokio::test]
+async fn an_update_adding_a_frozen_store_the_deployment_declined_needs_no_setup() {
+    let _vault = test_vault_env().await;
+    for sent in [None, Some(false)] {
+        let (state, _, mut config) =
+            settled_deployment_offered_a_gated_frozen_store(Some(false)).await;
+        if let Some(answer) = sent {
+            config
+                .input_values
+                .insert("archiveEnabled".to_string(), serde_json::json!(answer));
+        }
+        let state = run_to_completion(state, config).await;
+        assert_eq!(
+            state.status,
+            DeploymentStatus::Running,
+            "input sent {sent:?}: {:?}",
+            state.error
+        );
+        assert_eq!(
+            state
+                .current_release
+                .as_ref()
+                .unwrap()
+                .release_id
+                .as_deref(),
+            Some("rel_v2")
+        );
+        assert_eq!(archive_status(&state), None, "input sent {sent:?}");
+        assert_eq!(
+            state
+                .runtime_metadata
+                .as_ref()
+                .unwrap()
+                .persisted_gate_answers
+                .get("archiveEnabled"),
+            Some(&false)
+        );
+    }
+}
+
+/// The same recorded "no" is turned into "yes" by rerunning setup with the input set to true: the
+/// store is created and the deployment records the new answer.
+#[tokio::test]
+async fn rerunning_setup_with_the_input_true_creates_a_declined_frozen_store() {
+    let _vault = test_vault_env().await;
+    let (state, _, mut config) = settled_deployment_offered_a_gated_frozen_store(Some(false)).await;
+    config
+        .input_values
+        .insert("archiveEnabled".to_string(), serde_json::json!(true));
+    let state = rerun_setup(state, &config).await;
+    let state = run_to_completion(state, config).await;
+    assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
+    assert_eq!(
+        archive_status(&state),
+        Some(alien_core::ResourceStatus::Running)
+    );
+    assert_eq!(
+        state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .persisted_gate_answers
+            .get("archiveEnabled"),
+        Some(&true)
+    );
+}
+
+/// A gate nobody answered still asks for setup, and says so.
+#[tokio::test]
+async fn an_update_adding_an_unanswered_frozen_store_asks_to_rerun_setup() {
+    let _vault = test_vault_env().await;
+    let (state, _, config) = settled_deployment_offered_a_gated_frozen_store(None).await;
+    let error = alien_deployment::step(state, config, ClientConfig::Test, None)
+        .await
+        .expect_err("an unanswered frozen gate must refuse the update");
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("archive") && rendered.contains("rerunning setup"),
+        "the refusal should name the resource and say to rerun setup: {rendered}"
+    );
+}
+
 fn database_password_input() -> alien_core::StackInputDefinition {
     alien_core::StackInputDefinition {
         id: "databasePassword".to_string(),
@@ -4941,18 +5073,29 @@ async fn manual_setup_preserves_existing_gate_and_creates_new_optional_resource(
             Storage::new("old-archive".into()).build(),
             ResourceLifecycle::Frozen,
         )
+        .add(
+            Storage::new("kept-archive".into()).build(),
+            ResourceLifecycle::Frozen,
+        )
         .build();
     stack.resources.get_mut("old-archive").unwrap().enabled_when = Some("oldEnabled".into());
-    stack.inputs = vec![boolean_gate_input(
-        "oldEnabled",
-        "Old archive",
-        "Create old archive.",
-    )];
+    stack
+        .resources
+        .get_mut("kept-archive")
+        .unwrap()
+        .enabled_when = Some("keptEnabled".into());
+    stack.inputs = vec![
+        boolean_gate_input("oldEnabled", "Old archive", "Create old archive."),
+        boolean_gate_input("keptEnabled", "Kept archive", "Create kept archive."),
+    ];
     let mut config = create_test_config("manual-new-gate", false);
     config.setup_run = true;
     config
         .input_values
         .insert("oldEnabled".into(), serde_json::json!(false));
+    config
+        .input_values
+        .insert("keptEnabled".into(), serde_json::json!(true));
     let state = run_to_completion(create_initial_state(stack.clone()), config.clone()).await;
     assert_eq!(state.status, DeploymentStatus::Running);
     let mut state: DeploymentState =
@@ -4973,9 +5116,10 @@ async fn manual_setup_preserves_existing_gate_and_creates_new_optional_resource(
         "New archive",
         "Create new archive.",
     ));
+    config.input_values.remove("oldEnabled");
     config
         .input_values
-        .insert("oldEnabled".into(), serde_json::json!(true));
+        .insert("keptEnabled".into(), serde_json::json!(false));
     config
         .input_values
         .insert("newEnabled".into(), serde_json::json!(true));
@@ -4986,6 +5130,11 @@ async fn manual_setup_preserves_existing_gate_and_creates_new_optional_resource(
     let resources = &state.stack_state.as_ref().unwrap().resources;
     assert!(!resources.contains_key("old-archive"));
     assert_eq!(
+        resources.get("kept-archive").unwrap().status,
+        alien_core::ResourceStatus::Running,
+        "setup does not delete a store because the rerun says no"
+    );
+    assert_eq!(
         resources.get("new-archive").unwrap().status,
         alien_core::ResourceStatus::Running
     );
@@ -4995,6 +5144,7 @@ async fn manual_setup_preserves_existing_gate_and_creates_new_optional_resource(
         .unwrap()
         .persisted_gate_answers;
     assert_eq!(answers.get("oldEnabled"), Some(&false));
+    assert_eq!(answers.get("keptEnabled"), Some(&true));
     assert_eq!(answers.get("newEnabled"), Some(&true));
 }
 
