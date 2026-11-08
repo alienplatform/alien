@@ -4000,6 +4000,34 @@ fn release_info_from_record(
     })
 }
 
+/// The signing settings an install reports when it registers. A protected Operator reports
+/// the ones it pinned, so the manager sends it the signed config and signer lists. The manager
+/// only ever learns protection this way, never gives it up, and the install enforces its own
+/// pinned settings whatever is recorded here.
+fn reported_signing(
+    state: &AppState,
+    stack_settings: Option<&alien_core::StackSettings>,
+    helm_release: Option<&HelmRelease>,
+) -> Result<Option<alien_core::StackSigning>, AlienError<ErrorData>> {
+    let Some(signing) = stack_settings.and_then(|settings| settings.signing.as_ref()) else {
+        return Ok(None);
+    };
+    if state.signing.is_none() {
+        return Err(ErrorData::bad_request(
+            "This manager stores no signer lists, so it can't serve a protected install",
+        ));
+    }
+    let Some(release) = helm_release else {
+        return Err(ErrorData::bad_request(
+            "An install that reports signing settings names the Helm release they were found for",
+        ));
+    };
+    signing
+        .settings(&release.name)
+        .map_err(|error| ErrorData::bad_request(error.message))?;
+    Ok(Some(signing.clone()))
+}
+
 /// `POST /v1/initialize` — Inbound: deployment-group bearer (typical),
 /// or workspace bearer for self-hosted operator workflows. New deployments
 /// are created via `DeploymentStore::create_deployment(caller, …)` so
@@ -4078,6 +4106,14 @@ async fn initialize(
                 Ok(base_platform) => base_platform,
                 Err(e) => return e.into_response(),
             };
+            let reported_signing = match reported_signing(
+                &state,
+                req.stack_settings.as_ref(),
+                req.helm_release.as_ref(),
+            ) {
+                Ok(signing) => signing,
+                Err(e) => return e.into_response(),
+            };
 
             // Idempotency: if a deployment with this name already exists in the
             // group, issue a fresh deployment token and return the existing ID.
@@ -4086,6 +4122,19 @@ async fn initialize(
                 .get_deployment_by_name(&subject, &dg_id, &name)
                 .await
             {
+                // Protection is learned once, when the deployment is created. A later
+                // registration that reports other signing settings, or none, doesn't change it.
+                if existing
+                    .stack_settings
+                    .as_ref()
+                    .and_then(|settings| settings.signing.as_ref())
+                    != reported_signing.as_ref()
+                {
+                    return ErrorData::bad_request(
+                        "Deployment already uses different signing settings",
+                    )
+                    .into_response();
+                }
                 if let Some(requested) = &stack_state {
                     if existing
                         .stack_state

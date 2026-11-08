@@ -566,6 +566,7 @@ async fn run_operator_cli(
                             operator_permission.as_deref(),
                             operator_setup_method.as_deref(),
                             helm_release.as_ref(),
+                            release_signing.as_ref(),
                             InitialDesiredReleaseArg::None,
                             &stack_input_values,
                         )
@@ -618,6 +619,7 @@ async fn run_operator_cli(
                         operator_permission.as_deref(),
                         operator_setup_method.as_deref(),
                         helm_release.as_ref(),
+                        release_signing.as_ref(),
                         args.initial_desired_release,
                         &stack_input_values,
                     )
@@ -1151,6 +1153,7 @@ async fn initialize_with_manager(
     operator_permission: Option<&str>,
     operator_setup_method: Option<&str>,
     helm_release: Option<&HelmRelease>,
+    release_signing: Option<&crate::protected::ReleaseSigning>,
     initial_desired_release: InitialDesiredReleaseArg,
     input_values: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(String, Option<String>)> {
@@ -1228,6 +1231,23 @@ async fn initialize_with_manager(
     }
     if let Some(helm_release) = helm_release {
         builder = builder.body_map(|b| b.helm_release(helm_release.clone()));
+    }
+    // A protected install tells the manager what it pinned, so the manager sends it the signed
+    // config. The manager keeps this only on a deployment it creates here, and the install
+    // enforces its own settings whatever the manager believes.
+    if let Some(signing) = release_signing {
+        let stack_settings =
+            serde_json::from_value::<alien_manager_api::types::StackSettings>(serde_json::json!({
+                "signing": {
+                    "fingerprint": signing.settings.fingerprint,
+                    "channel": signing.settings.channel,
+                },
+            }))
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to describe the install's signing settings".to_string(),
+            })?;
+        builder = builder.body_map(|b| b.stack_settings(stack_settings));
     }
 
     let response =
@@ -2005,8 +2025,7 @@ mod initialize_tests {
     use axum::{routing::post, Json, Router};
     use std::sync::{Arc, Mutex};
 
-    #[tokio::test]
-    async fn helm_registration_reports_the_release_name_and_namespace() {
+    async fn register(signing: Option<&crate::protected::ReleaseSigning>) -> serde_json::Value {
         let received = Arc::new(Mutex::new(None));
         let app = Router::new().route(
             "/v1/initialize",
@@ -2042,6 +2061,7 @@ mod initialize_tests {
                 name: "shop-operator".to_string(),
                 namespace: "customer-shop".to_string(),
             }),
+            signing,
             InitialDesiredReleaseArg::Active,
             &serde_json::Map::new(),
         )
@@ -2051,10 +2071,34 @@ mod initialize_tests {
         assert_eq!(deployment_id, "dep_a");
         assert_eq!(token.as_deref(), Some("ax_dep_a"));
         let body = received.lock().unwrap().take().expect("initialize request");
+        body
+    }
+
+    #[tokio::test]
+    async fn helm_registration_reports_the_release_name_and_namespace() {
+        let body = register(None).await;
         assert_eq!(body["setupMethod"], "helm");
         assert_eq!(
             body["helmRelease"],
             serde_json::json!({"name": "shop-operator", "namespace": "customer-shop"})
+        );
+        assert!(
+            body.get("stackSettings")
+                .is_none_or(|settings| settings.get("signing").is_none()),
+            "an install without pinned signing reports none: {body:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_protected_registration_reports_the_signing_the_install_pinned() {
+        let signing = crate::protected::test_signing("shop");
+        let body = register(Some(&signing)).await;
+        assert_eq!(
+            body["stackSettings"]["signing"],
+            serde_json::json!({
+                "fingerprint": signing.settings.fingerprint,
+                "channel": "production",
+            })
         );
     }
 }

@@ -46,7 +46,7 @@ use alien_manager::routes::registry_proxy::{
 };
 use alien_manager::routes::AppState;
 use alien_manager::stores::sqlite::{
-    SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
+    SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteSigningStore, SqliteTokenStore,
 };
 use alien_manager::traits::{
     AuthValidator, CreateDeploymentGroupParams, CreateDeploymentParams,
@@ -63,6 +63,7 @@ use alien_manager::traits::{
 /// inspect the database without going through HTTP again.
 struct Fixture {
     state: AppState,
+    db: Arc<SqliteDatabase>,
     deployment_store: Arc<dyn DeploymentStore>,
     token_store: Arc<dyn TokenStore>,
     deployment_group_id: String,
@@ -222,6 +223,7 @@ async fn make_fixture_with_group_inputs(
 
     Fixture {
         state,
+        db,
         deployment_store,
         token_store,
         deployment_group_id: dg.id,
@@ -2686,6 +2688,8 @@ impl DeclinedGateDeployment {
                 version: None,
                 description: None,
                 stack: self.stack.clone(),
+                signed: None,
+                signer_lists: Vec::new(),
             }),
             target_release: None,
             stack_state,
@@ -3230,6 +3234,122 @@ async fn initialize_refuses_a_deployer_value_for_a_generated_secret() {
         .await
         .unwrap();
     assert!(existing.is_none(), "nothing is created");
+}
+
+fn protected_registration(name: &str, release_name: Option<&str>) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "name": name, "platform": "kubernetes", "initialDesiredRelease": "none",
+        "stackSettings": { "signing": {
+            "fingerprint": format!("SHA256:{}", "9f".repeat(32)),
+            "channel": "production",
+        } },
+    });
+    if let Some(release_name) = release_name {
+        body["helmRelease"] = serde_json::json!({ "name": release_name, "namespace": "shop" });
+    }
+    body
+}
+
+fn with_signing_store(fixture: &mut Fixture) {
+    fixture.state.signing = Some(Arc::new(SqliteSigningStore::new(fixture.db.clone())));
+}
+
+async fn stored_signing(fixture: &Fixture, name: &str) -> Option<alien_core::StackSigning> {
+    fixture
+        .deployment_store
+        .get_deployment_by_name(
+            &alien_manager::auth::Subject::system(),
+            &fixture.deployment_group_id,
+            name,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist")
+        .stack_settings
+        .and_then(|settings| settings.signing)
+}
+
+#[tokio::test]
+async fn a_protected_install_registers_with_the_signing_it_pinned() {
+    let mut fixture = make_fixture(None).await;
+    with_signing_store(&mut fixture);
+    let (status, body) = post_initialize(
+        &fixture,
+        protected_registration("shop-operator", Some("shop-operator")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {body:#}");
+    let signing = stored_signing(&fixture, "shop-operator")
+        .await
+        .expect("the manager records the protection the install reported");
+    assert_eq!(signing.channel, "production");
+    assert_eq!(signing.fingerprint, format!("SHA256:{}", "9f".repeat(32)));
+
+    let (status, body) = post_initialize(
+        &fixture,
+        protected_registration("shop-operator", Some("shop-operator")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "same settings again: {body:#}");
+}
+
+#[tokio::test]
+async fn a_manager_without_signer_lists_refuses_a_protected_registration() {
+    let fixture = make_fixture(None).await;
+    let (status, body) = post_initialize(
+        &fixture,
+        protected_registration("shop-operator", Some("shop-operator")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {body:#}");
+    assert!(body.to_string().contains("signer lists"), "{body:#}");
+}
+
+#[tokio::test]
+async fn a_protected_registration_must_name_its_helm_release() {
+    let mut fixture = make_fixture(None).await;
+    with_signing_store(&mut fixture);
+    let (status, body) =
+        post_initialize(&fixture, protected_registration("shop-operator", None)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {body:#}");
+    assert!(body.to_string().contains("Helm release"), "{body:#}");
+
+    let mut malformed = protected_registration("shop-operator", Some("shop-operator"));
+    malformed["stackSettings"]["signing"]["fingerprint"] = serde_json::json!("not a fingerprint");
+    let (status, body) = post_initialize(&fixture, malformed).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {body:#}");
+}
+
+#[tokio::test]
+async fn a_registration_cannot_change_the_protection_of_an_existing_deployment() {
+    let mut fixture = make_fixture(None).await;
+    with_signing_store(&mut fixture);
+    let plain = serde_json::json!({
+        "name": "plain-operator", "platform": "kubernetes", "initialDesiredRelease": "none",
+    });
+    let (status, body) = post_initialize(&fixture, plain).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {body:#}");
+
+    let (status, body) = post_initialize(
+        &fixture,
+        protected_registration("plain-operator", Some("plain-operator")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {body:#}");
+    assert_eq!(stored_signing(&fixture, "plain-operator").await, None);
+
+    let (status, _) = post_initialize(
+        &fixture,
+        protected_registration("shop-operator", Some("shop-operator")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let unprotected_again = serde_json::json!({
+        "name": "shop-operator", "platform": "kubernetes", "initialDesiredRelease": "none",
+    });
+    let (status, body) = post_initialize(&fixture, unprotected_again).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {body:#}");
+    assert!(stored_signing(&fixture, "shop-operator").await.is_some());
 }
 
 #[tokio::test]
