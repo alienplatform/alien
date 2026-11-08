@@ -1545,7 +1545,12 @@ async fn spawn_child(
                         "\nAccess ended: the manager closed this debug session \
                          (its access request was revoked or expired)."
                     );
+                    let descendants = match child.id() {
+                        Some(pid) => descendants_of(pid).await,
+                        None => Vec::new(),
+                    };
                     let _ = child.kill().await;
+                    kill_processes(&descendants).await;
                     child.wait().await
                 }
             }
@@ -1559,6 +1564,50 @@ async fn spawn_child(
             reason: "Failed to wait for debug command".to_string(),
         })
 }
+
+/// Every process below `pid`, children before their parents. Killing a shell
+/// alone leaves the commands it is running alive, still holding the terminal.
+#[cfg(unix)]
+async fn descendants_of(pid: u32) -> Vec<u32> {
+    let mut found = Vec::new();
+    let mut parents = vec![pid];
+    while let Some(parent) = parents.pop() {
+        let Ok(output) = tokio::process::Command::new("pgrep")
+            .args(["-P", &parent.to_string()])
+            .output()
+            .await
+        else {
+            break;
+        };
+        for child in String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.trim().parse::<u32>().ok())
+        {
+            found.push(child);
+            parents.push(child);
+        }
+    }
+    found.reverse();
+    found
+}
+
+#[cfg(not(unix))]
+async fn descendants_of(_pid: u32) -> Vec<u32> {
+    Vec::new()
+}
+
+#[cfg(unix)]
+async fn kill_processes(pids: &[u32]) {
+    for pid in pids {
+        let _ = tokio::process::Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .output()
+            .await;
+    }
+}
+
+#[cfg(not(unix))]
+async fn kill_processes(_pids: &[u32]) {}
 
 /// Build the program + args for an interactive debug shell, optionally
 /// writing a per-shell rc file into `cred_dir` so the prompt makes it
@@ -1810,6 +1859,56 @@ mod tests {
             .await
             .expect("stdin EOF must not cancel the remote command");
         server.await.expect("server task should finish");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn closing_the_tunnel_ends_the_commands_the_shell_is_running() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let pid_file = dir.path().join("sleeper.pid");
+        let script = format!(
+            "sleep 300 & echo $! > {}; wait",
+            pid_file.to_str().expect("utf8 path")
+        );
+        let (closed_tx, closed_rx) = tokio::sync::watch::channel(false);
+        let cred_dir = tempfile::tempdir().expect("cred dir");
+        let session_kind = SessionKind {
+            mode: SessionMode::Push,
+            provider: None,
+        };
+        let command = args(&["sh", "-c", &script]);
+        let env = BTreeMap::new();
+        let run = spawn_child(
+            "acme/prod",
+            &session_kind,
+            None,
+            &cred_dir,
+            &command,
+            &env,
+            Some(closed_rx),
+        );
+        let close_once_running = async {
+            let sleeper_pid = loop {
+                if let Ok(text) = std::fs::read_to_string(&pid_file) {
+                    if let Ok(pid) = text.trim().parse::<u32>() {
+                        break pid;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            };
+            closed_tx.send(true).expect("receiver is alive");
+            sleeper_pid
+        };
+        let (exit, sleeper_pid) = tokio::join!(run, close_once_running);
+        exit.expect("child exit is reported");
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let alive = std::process::Command::new("kill")
+            .args(["-0", &sleeper_pid.to_string()])
+            .output()
+            .expect("kill runs")
+            .status
+            .success();
+        assert!(!alive, "the command the shell was running must end with it");
     }
 
     fn args(words: &[&str]) -> Vec<String> {
