@@ -520,7 +520,14 @@ async fn acquire(
     };
     let mut deployments = Vec::with_capacity(acquire_result.deployments.len());
     for acquired in &acquire_result.deployments {
-        match acquired_deployment_response(state.release_store.as_ref(), &sources, acquired).await {
+        match acquired_deployment_response(
+            state.release_store.as_ref(),
+            state.values.as_deref(),
+            &sources,
+            acquired,
+        )
+        .await
+        {
             Ok(deployment) => deployments.push(deployment),
             Err(error) => {
                 // The caller never learns it holds these leases, so give them
@@ -559,6 +566,7 @@ async fn acquire(
 /// workloads anyway.
 async fn acquired_deployment_response(
     release_store: &dyn crate::traits::ReleaseStore,
+    values: Option<&crate::values::ValueStore>,
     sources: &RunnerConfigSources<'_>,
     acquired: &crate::traits::deployment_store::AcquiredDeployment,
 ) -> Result<AcquiredDeploymentResponse, AlienError> {
@@ -578,8 +586,11 @@ async fn acquired_deployment_response(
         ManagementRenderer::Runner,
     )
     .await?;
+    let held = crate::values::hydrate_held_values(values, record)
+        .await
+        .map_err(|e| e.into_generic())?;
     let config = sources
-        .deployment_config(record, deployment_stack.as_ref(), management_config)
+        .deployment_config(&held, deployment_stack.as_ref(), management_config)
         .await
         .context(GenericError {
             message: format!("Failed to build the config for deployment {}", record.id),
@@ -2490,6 +2501,7 @@ mod tests {
             deployment_token: None,
             native_image_host: None,
             volume_restores: Vec::new(),
+            value_slots: Vec::new(),
             deletion_policy: Default::default(),
         }
     }
@@ -2630,6 +2642,7 @@ mod tests {
 
         let response = acquired_deployment_response(
             &release_store,
+            None,
             &sources,
             &crate::traits::deployment_store::AcquiredDeployment {
                 deployment: record.clone(),
@@ -3448,6 +3461,11 @@ pub(crate) async fn build_pull_target(
     // Only AWS Lambda and GCP Cloud Run pull directly from native registries.
 
     let manager_url = state.config.base_url();
+
+    let held = crate::values::hydrate_held_values(state.values.as_deref(), deployment)
+        .await
+        .map_err(|e| e.into_response())?;
+    let deployment: &DeploymentRecord = &held;
 
     // Derive native image host for Lambda/Cloud Run so controllers
     // can resolve proxy URIs to native ECR/GAR URIs.

@@ -185,13 +185,7 @@ pub(crate) async fn put_values(
 
         // Check every value before writing any, so a rejected batch changes nothing.
         for value in &request.values {
-            if value.value.len() > crate::values::MAX_VALUE_BYTES {
-                return Err(alien_error::AlienError::new(ErrorData::ValueTooLarge {
-                    slot: value.slot.to_string(),
-                    bytes: value.value.len(),
-                    max_bytes: crate::values::MAX_VALUE_BYTES,
-                }));
-            }
+            crate::values::check_incoming(&value.slot, &value.value)?;
         }
         let mut slots = Vec::with_capacity(request.values.len());
         for value in request.values {

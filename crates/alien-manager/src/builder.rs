@@ -1082,7 +1082,7 @@ async fn finalize(
         bundle_signing_key,
         bundle_sources,
         log_buffer: log_buffer.clone(),
-        values,
+        values: values.clone(),
         value_access,
         verify_limiter: Arc::new(crate::values::VerifyLimiter::default()),
     };
@@ -1122,6 +1122,7 @@ async fn finalize(
         dev_status_tx,
         log_buffer,
         command_server,
+        values,
     })
 }
 

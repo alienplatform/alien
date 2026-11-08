@@ -324,6 +324,27 @@ async fn limits_and_bad_requests_are_refused_without_changing_anything() {
         .put(json!([{ "slot": "NOT_A_SLOT", "value": "v", "kind": "plain" }]))
         .await;
     assert!((400..500).contains(&status), "{status}");
+
+    // An input is read back as JSON, so text that is not JSON is refused whole.
+    let (status, error) = server
+        .put(json!([
+            { "slot": "env:FINE", "value": "ok", "kind": "plain" },
+            { "slot": "input:size", "value": "not json", "kind": "plain" },
+        ]))
+        .await;
+    assert_eq!(status, 400, "{error}");
+    let (status, _) = server
+        .put(json!([{ "slot": "input:size", "value": "{\"n\":3}", "kind": "plain" }]))
+        .await;
+    assert_eq!(status, 200);
+    let (_, listed) = server.get().await;
+    let slots: Vec<_> = listed["slots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["slot"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(slots, ["env:BIG", "input:size"], "FINE must not have been written");
 }
 
 #[tokio::test]

@@ -332,6 +332,26 @@ pub enum ErrorData {
     )]
     ValuesUnavailable { reason: String },
 
+    /// A deployment's held value differs from the digest its update was planned with.
+    #[error(
+        code = "DEPLOYMENT_VALUES_CHANGED",
+        message = "The value for '{slot}' changed since the update was planned; plan the update again",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    DeploymentValuesChanged { deployment_id: String, slot: String },
+
+    /// A deployment names a held value that the store does not have.
+    #[error(
+        code = "DEPLOYMENT_VALUE_MISSING",
+        message = "No value is stored for '{slot}' on this manager; set it again",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    DeploymentValueMissing { deployment_id: String, slot: String },
+
     /// Too many verification attempts for a scope.
     #[error(
         code = "VALUE_VERIFY_RATE_LIMITED",

@@ -228,6 +228,8 @@ pub struct DeploymentLoop {
     /// Acquisition backoff shared by deployment and heartbeat ticks. The retry
     /// deadline itself comes from persisted retry state, never from this cache.
     deferred: Mutex<HashMap<String, DeferredDeployment>>,
+    /// Holds the values of deployments whose config carries `valueSlots`.
+    values: Option<Arc<crate::values::ValueStore>>,
 }
 
 /// A phase that can't start, to be saved as the deployment's failure.
@@ -316,7 +318,14 @@ impl DeploymentLoop {
             local_bindings_cache: Mutex::new(HashMap::new()),
             settled_stack_cache: Mutex::new(HashMap::new()),
             deferred: Mutex::new(HashMap::new()),
+            values: None,
         }
+    }
+
+    /// Load deployments' held values from `values` before they step.
+    pub fn with_value_store(mut self, values: Option<Arc<crate::values::ValueStore>>) -> Self {
+        self.values = values;
+        self
     }
 
     /// Add acquisition exclusions without enumerating a possibly capped candidate list.
@@ -1097,14 +1106,41 @@ impl DeploymentLoop {
                     .await;
             }
         };
+        // Values the deployment keeps on this manager are loaded only for the
+        // config; the saved record never carries them.
+        let held =
+            match crate::values::hydrate_held_values(self.values.as_deref(), &deployment).await {
+                Ok(held) => held,
+                Err(error) => {
+                    warn!(
+                        deployment_id = %deployment_id,
+                        error = %error,
+                        "Held values do not match the deployment's plan"
+                    );
+                    return self
+                        .checkpoint_phase_failure(PhaseFailure {
+                            deployment: &deployment,
+                            status,
+                            deployment_stack: deployment_stack.as_ref(),
+                            target_release_id,
+                            current_release,
+                            had_credential_retry,
+                            error: error.into_generic(),
+                            session,
+                            execution_claim,
+                        })
+                        .await;
+                }
+            };
         let mut config = RunnerConfigSources {
             config: &self.config,
             credential_resolver: self.credential_resolver.as_ref(),
             bindings_provider: &self.server_bindings.bindings_provider,
             target_bindings_providers: &self.server_bindings.target_bindings_providers,
         }
-        .deployment_config(&deployment, deployment_stack.as_ref(), management_config)
+        .deployment_config(&held, deployment_stack.as_ref(), management_config)
         .await?;
+        drop(held);
 
         // Standalone-mode bridge: inject a BYO Horizon backend from env vars
         // when an external control plane did not supply one. It stays out of
@@ -1695,6 +1731,7 @@ impl RunnerConfigSources<'_> {
                 deployment_token: deployment.deployment_token.clone(),
                 native_image_host,
                 volume_restores: Vec::new(),
+                value_slots: Vec::new(),
                 deletion_policy: Default::default(),
             }
         };
@@ -3094,6 +3131,7 @@ mod tests {
                     self.manager.server_bindings.clone(),
                     None,
                 )
+                .with_value_store(self.manager.values.clone())
             }
 
             async fn record(&self) -> DeploymentRecord {
@@ -3106,6 +3144,15 @@ mod tests {
             }
 
             async fn process(&self, runner: &DeploymentLoop) {
+                self.process_with(runner, |_| {}).await
+            }
+
+            /// Like `process`, with `change` applied to the record the loop receives.
+            async fn process_with(
+                &self,
+                runner: &DeploymentLoop,
+                change: impl FnOnce(&mut DeploymentRecord),
+            ) {
                 let acquired = self
                     .manager
                     .deployment_store
@@ -3127,6 +3174,7 @@ mod tests {
                 // Only the deployment state itself is a durable clock for retries.
                 item.deployment.created_at = Utc::now();
                 item.deployment.updated_at = None;
+                change(&mut item.deployment);
                 runner
                     .process_deployment(
                         item.deployment,
@@ -3238,6 +3286,127 @@ mod tests {
             let saved: AlienError =
                 serde_json::from_value(record.error.expect("saved error")).unwrap();
             assert_eq!(saved.source.expect("resolver error").message, cause.message);
+        }
+
+        fn config_naming_slots(
+            slots: Vec<alien_core::ValueSlotRef>,
+        ) -> alien_core::DeploymentConfig {
+            let mut config = alien_core::DeploymentConfig::builder()
+                .deployment_name("credential-retry".to_string())
+                .stack_settings(Default::default())
+                .input_values(Default::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: Vec::new(),
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .allow_frozen_changes(false)
+                .external_bindings(Default::default())
+                .build();
+            config.value_slots = slots;
+            config
+        }
+
+        /// A value changed on the manager after the sender planned the step is never
+        /// run: the update ends failed, saying which slot, without showing either value.
+        #[tokio::test]
+        async fn a_held_value_changed_after_planning_fails_the_update() {
+            alien_deployment::set_ephemeral_secrets_digest_key();
+            let fixture = Fixture::new(DeploymentStatus::UpdatePending, transient_error()).await;
+            fixture
+                .credentials
+                .unavailable
+                .store(false, Ordering::SeqCst);
+            let store = fixture
+                .manager
+                .values
+                .clone()
+                .expect("standalone value store");
+            let scope = crate::values::ValueScope::deployment(&fixture.id).unwrap();
+            let slot: crate::values::ValueSlot = "env:API_TOKEN".parse().unwrap();
+            let planned = store
+                .put(
+                    &scope,
+                    &slot,
+                    crate::values::ValueKind::Secret,
+                    "first-s3cret-A".into(),
+                )
+                .await
+                .unwrap();
+            store
+                .put(
+                    &scope,
+                    &slot,
+                    crate::values::ValueKind::Secret,
+                    "second-s3cret-B".into(),
+                )
+                .await
+                .unwrap();
+            let config = config_naming_slots(vec![alien_core::ValueSlotRef {
+                slot: "env:API_TOKEN".to_string(),
+                kind: alien_core::EnvironmentVariableType::Secret,
+                digest: planned.digest,
+                env_name: None,
+                targets: None,
+            }]);
+
+            fixture
+                .process_with(&fixture.runner(), |record| {
+                    record.deployment_config = Some(config)
+                })
+                .await;
+
+            let record = fixture.record().await;
+            assert_eq!(record.status, "update-failed");
+            let saved: AlienError =
+                serde_json::from_value(record.error.expect("saved error")).unwrap();
+            assert_eq!(saved.code, "DEPLOYMENT_VALUES_CHANGED");
+            assert!(saved.message.contains("env:API_TOKEN"), "{}", saved.message);
+            let saved_text = serde_json::to_string(&saved).unwrap();
+            assert!(!saved_text.contains("s3cret"), "{saved_text}");
+        }
+
+        /// A held value that still matches its digest does not stop the step.
+        #[tokio::test]
+        async fn a_held_value_that_matches_its_digest_does_not_stop_the_update() {
+            alien_deployment::set_ephemeral_secrets_digest_key();
+            let fixture = Fixture::new(DeploymentStatus::UpdatePending, transient_error()).await;
+            fixture
+                .credentials
+                .unavailable
+                .store(false, Ordering::SeqCst);
+            let store = fixture
+                .manager
+                .values
+                .clone()
+                .expect("standalone value store");
+            let scope = crate::values::ValueScope::deployment(&fixture.id).unwrap();
+            let planned = store
+                .put(
+                    &scope,
+                    &"env:API_TOKEN".parse().unwrap(),
+                    crate::values::ValueKind::Secret,
+                    "s3cret".into(),
+                )
+                .await
+                .unwrap();
+            let config = config_naming_slots(vec![alien_core::ValueSlotRef {
+                slot: "env:API_TOKEN".to_string(),
+                kind: alien_core::EnvironmentVariableType::Secret,
+                digest: planned.digest,
+                env_name: None,
+                targets: None,
+            }]);
+
+            fixture
+                .process_with(&fixture.runner(), |record| {
+                    record.deployment_config = Some(config)
+                })
+                .await;
+
+            let record = fixture.record().await;
+            assert_ne!(record.status, "update-failed", "{:?}", record.error);
+            assert!(record.error.is_none(), "{:?}", record.error);
         }
 
         /// Deletion removes what is installed and never renders setup, so it needs no

@@ -11,12 +11,14 @@
 
 mod access;
 mod backend;
+mod hydrate;
 mod limiter;
 mod standalone;
 mod types;
 
 pub use access::{ValueAccess, ValueAccessAuthorizer, ValueGrant};
 pub use backend::{KvValueBackend, ValueBackend};
+pub use hydrate::hydrate_held_values;
 pub use limiter::VerifyLimiter;
 pub use standalone::StandaloneValueAccess;
 pub use types::{
@@ -97,6 +99,18 @@ fn check_size(slot: &ValueSlot, value: &str) -> Result<()> {
             bytes: value.len(),
             max_bytes: MAX_VALUE_BYTES,
         }));
+    }
+    Ok(())
+}
+
+/// Checks a value arriving over the API: within the size limit, and JSON text
+/// for `input:` slots (the deployment reads those back as JSON).
+pub(crate) fn check_incoming(slot: &ValueSlot, value: &str) -> Result<()> {
+    check_size(slot, value)?;
+    if slot.input_id().is_some() && serde_json::from_str::<serde_json::Value>(value).is_err() {
+        return Err(ErrorData::bad_request(format!(
+            "The value for '{slot}' must be JSON text"
+        )));
     }
     Ok(())
 }
