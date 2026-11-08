@@ -1,0 +1,1 @@
+{"type":"string","description":"What a Redis server does when it reaches its memory limit.","enum":["noeviction","allkeys-lru","allkeys-lfu","allkeys-random","volatile-lru","volatile-lfu","volatile-random","volatile-ttl"],"x-readme-ref-name":"RedisEvictionPolicy"}
