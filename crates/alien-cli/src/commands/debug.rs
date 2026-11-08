@@ -1363,6 +1363,7 @@ async fn exec_with_session(
     }
 
     let region = extract_region_from_env(&env, session_kind.provider);
+    let tunnel_closed = _push_tunnel_guard.as_ref().and_then(|guard| guard.closed());
     let status = spawn_child(
         deployment_label,
         &session_kind,
@@ -1370,6 +1371,7 @@ async fn exec_with_session(
         &cred_dir,
         cmd,
         &env,
+        tunnel_closed,
     )
     .await?;
 
@@ -1504,6 +1506,7 @@ async fn spawn_child(
     cred_dir: &TempDir,
     cmd: &[String],
     env: &BTreeMap<String, String>,
+    tunnel_closed: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> Result<std::process::ExitStatus> {
     let (program, args): (String, Vec<String>) = if cmd.is_empty() {
         // No user command — drop into an interactive shell with a branded
@@ -1531,9 +1534,25 @@ async fn spawn_child(
             reason: "Failed to spawn debug command. Is it installed and on PATH?".to_string(),
         })?;
 
-    child
-        .wait()
-        .await
+    // The manager closes a push tunnel when its access request is revoked or
+    // expires; the command can't reach the cloud any more, so end it.
+    let waited = match tunnel_closed {
+        Some(mut closed) => {
+            tokio::select! {
+                status = child.wait() => status,
+                _ = closed.wait_for(|closed| *closed) => {
+                    eprintln!(
+                        "\nAccess ended: the manager closed this debug session \
+                         (its access request was revoked or expired)."
+                    );
+                    let _ = child.kill().await;
+                    child.wait().await
+                }
+            }
+        }
+        None => child.wait().await,
+    };
+    waited
         .into_alien_error()
         .context(ErrorData::LocalServiceFailed {
             service: program,
