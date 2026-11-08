@@ -63,6 +63,55 @@ fn scrub_request_body(context: Option<&mut serde_json::Value>) {
     }
 }
 
+const HTTP_RESPONSE_TEXT_CONTEXT_KEY: &str = "http_response_text";
+const HTTP_STATUS_CONTEXT_KEY: &str = "http_status";
+
+/// Strips the body of a successful (2xx) response from every layer of an error chain.
+///
+/// Calls such as KMS Decrypt or Secrets Manager GetSecretValue answer with plaintext. If that
+/// answer cannot be parsed, the transport records it as the response text of an
+/// [`ErrorData::HttpResponseError`], and the chain is serialized into logs and durable state.
+/// Error responses (non-2xx) never carry the secret, so their text stays as a diagnostic.
+/// Apply to the raw transport result of any request whose success response holds a secret.
+pub fn redact_response_body<T>(result: Result<T>) -> Result<T> {
+    result.map_err(|mut e| {
+        if let Some(ErrorData::HttpResponseError {
+            http_status,
+            http_response_text,
+            ..
+        }) = e.error.as_mut()
+        {
+            if (200..300).contains(http_status) {
+                *http_response_text = None;
+            }
+        }
+        scrub_success_response_body(e.context.as_mut());
+        let mut layer = e.source.as_deref_mut();
+        while let Some(err) = layer {
+            scrub_success_response_body(err.context.as_mut());
+            layer = err.source.as_deref_mut();
+        }
+        e
+    })
+}
+
+fn scrub_success_response_body(context: Option<&mut serde_json::Value>) {
+    if let Some(serde_json::Value::Object(map)) = context {
+        let succeeded = map
+            .get(HTTP_STATUS_CONTEXT_KEY)
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|status| (200..300).contains(&status));
+        if succeeded {
+            map.remove(HTTP_RESPONSE_TEXT_CONTEXT_KEY);
+        }
+    }
+}
+
+/// Redacts both bodies of a call whose request and success response hold secrets.
+pub fn redact_secret_bodies<T>(result: Result<T>) -> Result<T> {
+    redact_response_body(redact_request_body(result))
+}
+
 /// Helper to build request and extract body before sending
 fn build_and_extract_body(
     builder: reqwest::RequestBuilder,
@@ -785,5 +834,44 @@ mod tests {
             json.contains("DBClusterAlreadyExists"),
             "response text dropped: {json}"
         );
+    }
+
+    fn http_error_with_status(status: u16, response_text: &str) -> AlienError<ErrorData> {
+        AlienError::new(ErrorData::HttpResponseError {
+            message: "Invalid JSON response".to_string(),
+            url: "https://example.test/".to_string(),
+            http_status: status,
+            http_request_text: None,
+            http_response_text: Some(response_text.to_string()),
+        })
+    }
+
+    #[test]
+    fn redacts_the_body_of_an_unparsable_success_response() {
+        let wrapped = http_error_with_status(200, SECRET).context(ErrorData::GenericError {
+            message: "decrypt failed".to_string(),
+        });
+        let before = serde_json::to_string(&wrapped).unwrap();
+        assert!(before.contains(SECRET), "precondition: the chain holds it");
+
+        let err = redact_response_body::<()>(Err(wrapped)).unwrap_err();
+        let json = serde_json::to_string(&err).unwrap();
+        assert!(!json.contains(SECRET), "response body leaked: {json}");
+        assert!(json.contains("decrypt failed"), "chain dropped: {json}");
+
+        let head =
+            redact_response_body::<()>(Err(http_error_with_status(200, SECRET))).unwrap_err();
+        assert!(!serde_json::to_string(&head).unwrap().contains(SECRET));
+    }
+
+    #[test]
+    fn keeps_the_body_of_an_error_response() {
+        let err = redact_response_body::<()>(Err(http_error_with_status(
+            403,
+            "AccessDeniedException: kms:Decrypt",
+        )))
+        .unwrap_err();
+        let json = serde_json::to_string(&err).unwrap();
+        assert!(json.contains("AccessDeniedException"), "{json}");
     }
 }
