@@ -528,6 +528,10 @@ pub struct ReconcileOutcome {
     pub target_operations_bundle_set: Option<alien_core::sync::TargetOperationsBundleSet>,
     /// Complete container target set supplied by a multi-tenant embedder.
     pub target_dynamic_containers: Option<Vec<alien_core::sync::TargetDynamicContainer>>,
+    /// Operator image this deployment's Operator should run, supplied by a
+    /// multi-tenant embedder. The sync response sends it only when this
+    /// manager serves no charts of its own.
+    pub target_operator_image: Option<String>,
 }
 
 /// Persistence for deployments and deployment groups.

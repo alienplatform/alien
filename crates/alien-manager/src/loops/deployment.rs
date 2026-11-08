@@ -3425,6 +3425,7 @@ mod tests {
                         record: record.clone(),
                         target_operations_bundle_set: None,
                         target_dynamic_containers: None,
+                        target_operator_image: None,
                     })
                 });
                 store
@@ -3513,6 +3514,7 @@ mod tests {
                     record: record.clone(),
                     target_operations_bundle_set: None,
                     target_dynamic_containers: None,
+                    target_operator_image: None,
                 })
             });
             // The deferred deployment is unchanged, so it stays in backoff.
@@ -3628,6 +3630,7 @@ mod tests {
                     record: record.clone(),
                     target_operations_bundle_set: None,
                     target_dynamic_containers: None,
+                    target_operator_image: None,
                 })
             });
             store
@@ -3874,6 +3877,7 @@ mod tests {
                         record,
                         target_operations_bundle_set: None,
                         target_dynamic_containers: None,
+                        target_operator_image: None,
                     })
                 });
                 let mut runner = fixture.runner();
@@ -3959,6 +3963,7 @@ mod tests {
                             record: returned,
                             target_operations_bundle_set: None,
                             target_dynamic_containers: None,
+                            target_operator_image: None,
                         })
                     });
                 let mut runner = fixture.runner();

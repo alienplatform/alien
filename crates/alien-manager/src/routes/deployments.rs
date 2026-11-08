@@ -1613,6 +1613,7 @@ mod tests {
                         record: returned,
                         target_operations_bundle_set: None,
                         target_dynamic_containers: None,
+                        target_operator_image: None,
                     })
                 });
             let request = Request::builder()

@@ -1111,6 +1111,16 @@ mod tests {
         record: DeploymentRecord,
         installed_config_missing: bool,
     ) -> (Value, Vec<ReconcileData>) {
+        sync_operator_with_reconciled_image(record, installed_config_missing, None).await
+    }
+
+    /// Like [`sync_operator_without_claim_reporting`], where the store's
+    /// reconcile answers with `reconciled_image` as the Operator's target image.
+    async fn sync_operator_with_reconciled_image(
+        record: DeploymentRecord,
+        installed_config_missing: bool,
+        reconciled_image: Option<&str>,
+    ) -> (Value, Vec<ReconcileData>) {
         let temp = tempfile::tempdir().expect("test directory");
         let db = Arc::new(
             SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
@@ -1151,6 +1161,7 @@ mod tests {
             .times(1)
             .returning(|_, _, _, _| Ok(Vec::new()));
         let received = reconciled.clone();
+        let reconciled_image = reconciled_image.map(str::to_owned);
         let reconciled_record = record.clone();
         store.expect_reconcile().returning(move |_, data| {
             received.lock().expect("reconcile log").push(data);
@@ -1158,6 +1169,7 @@ mod tests {
                 record: reconciled_record.clone(),
                 target_operations_bundle_set: None,
                 target_dynamic_containers: None,
+                target_operator_image: reconciled_image.clone(),
             })
         });
 
@@ -1396,6 +1408,7 @@ mod tests {
                 record: reconciled_record.clone(),
                 target_operations_bundle_set: None,
                 target_dynamic_containers: None,
+                target_operator_image: None,
             })
         });
         let gave_back = released.clone();
@@ -1734,6 +1747,7 @@ mod tests {
                 record,
                 target_operations_bundle_set: None,
                 target_dynamic_containers: None,
+                target_operator_image: None,
             })
         });
         let store: Arc<dyn crate::traits::DeploymentStore> = Arc::new(store);
@@ -1887,6 +1901,29 @@ mod tests {
         updating.desired_release_id = Some("rel_target".to_string());
         let (response, _) = sync_operator_without_claim_reporting(updating, true).await;
         assert!(response.get("target").is_none(), "{response}");
+    }
+
+    /// A manager that serves no charts names no Operator image itself. The
+    /// image its store reports for the deployment reaches the Operator, and a
+    /// store that reports none sends none.
+    #[tokio::test]
+    async fn a_manager_without_charts_sends_the_image_its_store_reports() {
+        let record =
+            pull_record_in_cluster("running", alien_core::KubernetesClusterOwnership::Existing);
+
+        let (response, _) = sync_operator_with_reconciled_image(
+            record.clone(),
+            false,
+            Some("registry.example.com/operator:2.0.0"),
+        )
+        .await;
+        assert_eq!(
+            response["targetOperatorImage"], "registry.example.com/operator:2.0.0",
+            "{response}"
+        );
+
+        let (response, _) = sync_operator_with_reconciled_image(record, false, None).await;
+        assert!(response.get("targetOperatorImage").is_none(), "{response}");
     }
 
     #[tokio::test]
@@ -3139,6 +3176,7 @@ async fn agent_sync(
     let mut reported_claim_is_terminal = false;
     let mut target_operations_bundle_set = None;
     let mut target_dynamic_containers = None;
+    let mut reconciled_operator_image = None;
     // A target-bearing row without an echoed claim belongs to work the agent
     // has not accepted yet. Do not let its idle state acknowledge that target.
     let reported_state_owns_target =
@@ -3244,6 +3282,7 @@ async fn agent_sync(
                             }
                             target_operations_bundle_set = outcome.target_operations_bundle_set;
                             target_dynamic_containers = outcome.target_dynamic_containers;
+                            reconciled_operator_image = outcome.target_operator_image;
                             if let Err(error) =
                                 crate::registry_access::cleanup_deleted_registry_access(
                                     state.deployment_store.as_ref(),
@@ -3532,6 +3571,7 @@ async fn agent_sync(
                         Ok(outcome) => {
                             target_operations_bundle_set = outcome.target_operations_bundle_set;
                             target_dynamic_containers = outcome.target_dynamic_containers;
+                            reconciled_operator_image = outcome.target_operator_image;
                         }
                     }
                 }
@@ -3582,10 +3622,13 @@ async fn agent_sync(
         target_operations_bundle_set,
         target_dynamic_containers,
         tunnel_url: state.tunnels.as_ref().map(|_| state.config.base_url()),
+        // Charts this manager serves name the image. A manager without charts
+        // uses the one its store reported for this deployment.
         target_operator_image: state
             .charts
             .as_ref()
-            .map(|charts| charts.deployed_operator_image(&state.config.base_url())),
+            .map(|charts| charts.deployed_operator_image(&state.config.base_url()))
+            .or(reconciled_operator_image),
     })
     .into_response()
 }

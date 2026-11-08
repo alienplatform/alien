@@ -1910,6 +1910,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 record: installed_record.clone(),
                 target_operations_bundle_set: None,
                 target_dynamic_containers: None,
+                target_operator_image: None,
             });
         }
         let installed_grant = deployment
@@ -2131,6 +2132,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             record,
             target_operations_bundle_set: None,
             target_dynamic_containers: None,
+            target_operator_image: None,
         })
     }
 
