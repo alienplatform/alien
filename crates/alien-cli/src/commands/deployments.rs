@@ -2,9 +2,9 @@ use std::future::Future;
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
-use crate::commands::deployment_actions;
 use crate::commands::destroy::{kept_deployer_secrets, print_kept_deployer_secrets};
 use crate::commands::event_display::{print_event_table, EventDisplayRow};
+use crate::commands::{deployment_actions, value_access};
 use crate::deployment_tracking::DeploymentTracker;
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -3690,6 +3690,63 @@ fn delete_confirmation_mode(yes: bool) -> Result<ConfirmationMode> {
 // Platform API operations (create, pin, token — need platform-level features)
 // ---------------------------------------------------------------------------
 
+/// Creates a deployment and stores its environment variables.
+///
+/// Secret variables never go in the create request: a deployment manager that
+/// holds values must be the only one to see them, and the hosted API would
+/// read them from the request body even if it then refused the request. The
+/// deployment is created with the plain variables, then every variable is
+/// written through the value store (which replaces the whole set). A failure
+/// to store them leaves the deployment in place and says how to retry.
+pub(crate) async fn create_deployment_with_values(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    workspace_param: &CreateDeploymentWorkspace,
+    request: &mut NewDeploymentRequest,
+) -> Result<alien_platform_api::types::CreateDeploymentResponse> {
+    let all = request.environment_variables.clone().unwrap_or_default();
+    let holds_secret = all.iter().any(|variable| {
+        variable.type_ == alien_platform_api::types::EnvironmentVariableType::Secret
+    });
+    if holds_secret {
+        let plain: Vec<_> = all
+            .iter()
+            .filter(|variable| {
+                variable.type_ != alien_platform_api::types::EnvironmentVariableType::Secret
+            })
+            .cloned()
+            .collect();
+        request.environment_variables = (!plain.is_empty()).then_some(plain);
+    }
+
+    let response = client
+        .create_deployment()
+        .workspace(workspace_param)
+        .body(&*request)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "creating deployment".to_string(),
+            url: None,
+        })?
+        .into_inner();
+
+    if holds_secret {
+        let created_id: &str = &response.deployment.id;
+        deployment_actions::save_environment_variables(client, workspace, created_id, &all)
+            .await
+            .context(ErrorData::ApiRequestFailed {
+                message: format!(
+                    "Deployment '{created_id}' was created, but its secret environment variables were not stored. It was not deleted. Store them with: {}",
+                    value_access::set_env_retry_command(created_id, &all)
+                ),
+                url: None,
+            })?;
+    }
+    Ok(response)
+}
+
 async fn create_deployment_task(
     ctx: &ExecutionMode,
     client: &alien_platform_api::Client,
@@ -3809,7 +3866,7 @@ async fn create_deployment_task(
     };
 
     let environment_variable_count = variables.len();
-    let request = NewDeploymentRequest {
+    let mut request = NewDeploymentRequest {
         deployment_group_external_id: None,
         installation: None,
         base_platform: None,
@@ -3871,19 +3928,8 @@ async fn create_deployment_task(
             message: "workspace name format is invalid".to_string(),
         })?;
 
-    let response = client
-        .create_deployment()
-        .workspace(&workspace_param)
-        .body(&request)
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "creating deployment".to_string(),
-            url: None,
-        })?;
-
-    let deployment_response = response.into_inner();
+    let deployment_response =
+        create_deployment_with_values(client, workspace, &workspace_param, &mut request).await?;
 
     let deployment = &deployment_response.deployment;
     let token = deployment_response.token.as_ref();

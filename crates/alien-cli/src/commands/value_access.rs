@@ -101,6 +101,66 @@ fn interpret_reply(status: u16, body: &str) -> Result<Reply> {
     }
 }
 
+/// The platform refuses values it must not hold with this code, before it
+/// writes anything. The context names the input when an input caused it.
+const HELD_VALUE_REFUSAL_CODE: &str = "ALIEN_CLI_UPGRADE_REQUIRED";
+
+/// True when a create call was refused because the deployment's manager stores
+/// the values it carried and the platform must not hold them.
+pub(crate) fn is_held_value_refusal(error: &AlienError<GenericError>) -> bool {
+    error.code == HELD_VALUE_REFUSAL_CODE
+}
+
+/// The input a refused create names, or `None` when the refusal is about
+/// environment variables.
+pub(crate) fn refused_input(error: &AlienError<GenericError>) -> Option<String> {
+    error
+        .context
+        .as_ref()
+        .and_then(|context| context.get("input"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// The command that stores `variables` on a deployment that was created
+/// without them. Values stay out of the text; the user fills them in.
+pub(crate) fn set_env_retry_command(
+    deployment_id: &str,
+    variables: &[alien_platform_api::types::EnvironmentVariableConfig],
+) -> String {
+    let mut command = format!("alien deployments set-env {deployment_id} --yes");
+    for variable in variables {
+        let secret = matches!(
+            variable.type_,
+            alien_platform_api::types::EnvironmentVariableType::Secret
+        );
+        let targets = variable
+            .target_resources
+            .as_ref()
+            .filter(|targets| !targets.is_empty())
+            .map(|targets| {
+                let names: Vec<String> = targets
+                    .iter()
+                    .filter_map(|target| serde_json::to_value(target).ok())
+                    .filter_map(|target| target.as_str().map(str::to_string))
+                    .collect();
+                format!(":{}", names.join(","))
+            });
+        let flag = match (secret, targets.is_some()) {
+            (false, false) => "--env",
+            (true, false) => "--secret",
+            (false, true) => "--env-targeted",
+            (true, true) => "--secret-targeted",
+        };
+        command.push_str(&format!(
+            " {flag} {}=<value>{}",
+            variable.name.as_str(),
+            targets.unwrap_or_default()
+        ));
+    }
+    command
+}
+
 /// The platform's error answer, keeping its code, message and retry hint.
 pub(crate) fn platform_error(status: u16, body: &str) -> AlienError<GenericError> {
     let parsed: Option<Value> = serde_json::from_str(body).ok();
@@ -240,11 +300,7 @@ pub(crate) async fn store_deployment_values(
     Ok(StoredValues::Stored(refs))
 }
 
-async fn put_values(
-    grant: &Grant,
-    deployment_id: &str,
-    writes: &[ValueWrite],
-) -> Result<Vec<ValueRef>> {
+fn manager_client(grant: &Grant) -> Result<alien_manager_api::Client> {
     let mut headers = reqwest::header::HeaderMap::new();
     let mut authorization =
         reqwest::header::HeaderValue::from_str(&format!("Bearer {}", grant.token))
@@ -262,8 +318,68 @@ async fn put_values(
         .context(ErrorData::ConfigurationError {
             message: "Failed to build HTTP client".to_string(),
         })?;
-    let manager =
-        alien_manager_api::Client::new_with_client(grant.manager_url.trim_end_matches('/'), http);
+    Ok(alien_manager_api::Client::new_with_client(
+        grant.manager_url.trim_end_matches('/'),
+        http,
+    ))
+}
+
+/// Removes slots from the manager of a deployment after the platform stopped
+/// referring to them. This only makes the removal faster: the platform removes
+/// them too. A failure prints a warning and changes nothing else.
+pub(crate) async fn delete_values_best_effort(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    deployment_id: &str,
+    slots: &[String],
+) {
+    if slots.is_empty() {
+        return;
+    }
+    if let Err(error) = delete_values(client, workspace, deployment_id, slots).await {
+        eprintln!(
+            "Warning: could not remove {} from the manager of deployment '{deployment_id}': {error}. The platform removes them too.",
+            slots.join(", ")
+        );
+    }
+}
+
+async fn delete_values(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    deployment_id: &str,
+    slots: &[String],
+) -> Result<()> {
+    let slot_refs: Vec<&str> = slots.iter().map(String::as_str).collect();
+    let grant = match request_access(client, workspace, deployment_id, &slot_refs).await? {
+        Reply::Granted(grant) => grant,
+        Reply::OldPath => return Ok(()),
+    };
+    let manager = manager_client(&grant)?;
+    let scope = format!("dep:{deployment_id}");
+    for slot in slots {
+        manager
+            .delete_value()
+            .scope(&scope)
+            .slot(slot)
+            .send()
+            .await
+            .into_sdk_error()
+            .await
+            .context(ErrorData::ApiRequestFailed {
+                message: format!("removing {slot}"),
+                url: None,
+            })?;
+    }
+    Ok(())
+}
+
+async fn put_values(
+    grant: &Grant,
+    deployment_id: &str,
+    writes: &[ValueWrite],
+) -> Result<Vec<ValueRef>> {
+    let manager = manager_client(grant)?;
     let scope = format!("dep:{deployment_id}");
 
     let mut refs = Vec::with_capacity(writes.len());

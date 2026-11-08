@@ -17,7 +17,7 @@ use alien_platform_api::SdkResultExt as _;
 use serde_json::{Map, Value};
 
 use crate::commands::value_access::{
-    platform_json, store_deployment_values, StoredValues, ValueWrite,
+    self, platform_json, store_deployment_values, StoredValues, ValueWrite,
 };
 use crate::error::{ErrorData, Result};
 use crate::interaction::ConfirmationMode;
@@ -534,7 +534,14 @@ pub(crate) async fn set_environment_variables_task(
         return Ok(());
     }
 
+    let previous = current_environment_names(client, workspace, deployment_id).await;
     let message = save_environment_variables(client, workspace, deployment_id, &variables).await?;
+    let dropped: Vec<String> = previous
+        .into_iter()
+        .filter(|name| !names.contains(name))
+        .map(|name| format!("env:{name}"))
+        .collect();
+    value_access::delete_values_best_effort(client, workspace, deployment_id, &dropped).await;
 
     if json {
         return print_json(&serde_json::json!({
@@ -564,6 +571,34 @@ pub(crate) async fn set_environment_variables_task(
 /// When the deployment's manager stores values, the values go there and the
 /// platform receives only a reference to each. Otherwise the platform receives
 /// the values, as it did before managers stored them.
+/// The variable names the deployment has now. Empty when they cannot be read:
+/// removing their manager copies is best effort.
+async fn current_environment_names(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    deployment_id: &str,
+) -> Vec<String> {
+    let current = platform_json(
+        client,
+        reqwest::Method::GET,
+        &format!("/v1/deployments/{deployment_id}/environment-variables"),
+        workspace,
+        None,
+        &format!("reading environment variables of deployment '{deployment_id}'"),
+    )
+    .await;
+    current
+        .ok()
+        .and_then(|body| {
+            body.get("variables")?.as_array().map(|rows| {
+                rows.iter()
+                    .filter_map(|row| row.get("name")?.as_str().map(str::to_string))
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
+}
+
 pub(crate) async fn save_environment_variables(
     client: &alien_platform_api::Client,
     workspace: &str,
@@ -934,28 +969,19 @@ pub(crate) async fn inputs_task(
     Ok(())
 }
 
-pub(crate) async fn set_inputs_task(
+/// Saves input values and resets `clear` on a deployment, and returns the platform's answer.
+///
+/// `current` is the deployment's `GET .../inputs` answer. Inputs its manager holds go to the
+/// manager and the platform receives a reference; the rest go to the platform.
+pub(crate) async fn save_inputs(
     client: &alien_platform_api::Client,
     workspace: &str,
     deployment_id: &str,
-    changes: InputChanges,
-    json: bool,
-) -> Result<()> {
-    let current = fetch_inputs(client, workspace, deployment_id).await?;
-    let declared: Vec<&str> = current
-        .get("inputs")
-        .and_then(Value::as_array)
-        .map(|inputs| {
-            inputs
-                .iter()
-                .filter_map(|input| input.get("id")?.as_str())
-                .collect()
-        })
-        .unwrap_or_default();
-    let values = input_values_to_save(&declared, &changes)?;
-    let clear = changes.clear;
-
-    let (writes, mut platform_values) = split_held_inputs(&current, &values)?;
+    current: &Value,
+    values: &Map<String, Value>,
+    clear: &[String],
+) -> Result<Value> {
+    let (writes, mut platform_values) = split_held_inputs(current, values)?;
     let mut value_refs = Map::new();
     match store_deployment_values(client, workspace, deployment_id, &writes).await? {
         StoredValues::Stored(refs) => {
@@ -983,6 +1009,56 @@ pub(crate) async fn set_inputs_task(
         workspace,
         Some(&request),
         &format!("updating stack inputs for deployment '{deployment_id}'"),
+    )
+    .await?;
+    let held = held_input_ids(current);
+    let dropped: Vec<String> = clear
+        .iter()
+        .filter(|id| held.contains(&id.as_str()))
+        .map(|id| format!("input:{id}"))
+        .collect();
+    value_access::delete_values_best_effort(client, workspace, deployment_id, &dropped).await;
+    Ok(response)
+}
+
+/// Stores the answers a platform refused at creation on the deployment that was created without them.
+pub(crate) async fn store_created_inputs(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    deployment_id: &str,
+    values: &Map<String, Value>,
+) -> Result<()> {
+    let current = fetch_inputs(client, workspace, deployment_id).await?;
+    save_inputs(client, workspace, deployment_id, &current, values, &[]).await?;
+    Ok(())
+}
+
+pub(crate) async fn set_inputs_task(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    deployment_id: &str,
+    changes: InputChanges,
+    json: bool,
+) -> Result<()> {
+    let current = fetch_inputs(client, workspace, deployment_id).await?;
+    let declared: Vec<&str> = current
+        .get("inputs")
+        .and_then(Value::as_array)
+        .map(|inputs| {
+            inputs
+                .iter()
+                .filter_map(|input| input.get("id")?.as_str())
+                .collect()
+        })
+        .unwrap_or_default();
+    let values = input_values_to_save(&declared, &changes)?;
+    let response = save_inputs(
+        client,
+        workspace,
+        deployment_id,
+        &current,
+        &values,
+        &changes.clear,
     )
     .await?;
 

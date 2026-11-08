@@ -111,6 +111,21 @@ alien dev --secret-file API_TOKEN="$HOME/.config/example/api-token:api,worker"
 
 `--secret-file` removes one trailing line ending (`\n` or `\r\n`), which supports files created by common secret managers. The CLI reports the destination key and source on errors, but does not render the loaded value.
 
+### Deployment values held by the manager
+
+When a deployment's manager holds its values, `alien deploy`, `alien deployments
+create`, `set-env` and `set-inputs` send secret environment variables and secret
+inputs to that manager, not to the hosted API. The CLI creates the deployment
+without them, asks for short-lived write access to the deployment's value slots,
+writes the values to the manager, then tells the API only which slots it wrote.
+
+If a later step fails, the deployment is kept. The error names the deployment ID
+and the command that stores the values again. Values removed by `set-env` or
+`set-inputs --clear` are also deleted from the manager; a failure to delete only
+prints a warning. A hosted API that does not offer this (it answers 404 or 409 to
+the access request) gets the values the older way, in a second request after the
+deployment exists.
+
 ## Features
 
 - `otlp` (default) — OpenTelemetry forwarding

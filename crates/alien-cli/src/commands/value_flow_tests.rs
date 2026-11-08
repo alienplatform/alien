@@ -22,9 +22,12 @@ use axum::Router;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::commands::deploy::create_deployment_with_answers;
 use crate::commands::deployment_actions::{
-    save_environment_variables, set_inputs_task, InputChanges,
+    save_environment_variables, set_environment_variables_task, set_inputs_task, InputChanges,
 };
+use crate::commands::deployments::create_deployment_with_values;
+use std::collections::{HashMap, HashSet};
 
 const CANARY: &str = "canary-3b9e61d0-not-a-real-secret";
 const WORKSPACE: &str = "acme";
@@ -183,6 +186,9 @@ enum Access {
 struct FakePlatformState {
     access: Access,
     inputs: Value,
+    created_id: String,
+    create_requires_input: Option<String>,
+    environment_names: Arc<Mutex<Vec<String>>>,
     requests: Arc<Mutex<Vec<(String, String, String)>>>,
 }
 
@@ -197,7 +203,7 @@ async fn platform_handler(
         .requests
         .lock()
         .unwrap()
-        .push((method.to_string(), route.clone(), body));
+        .push((method.to_string(), route.clone(), body.clone()));
     match (
         method.as_str(),
         route.rsplit('/').next().unwrap_or_default(),
@@ -210,7 +216,7 @@ async fn platform_handler(
                 "expiresAt": "2099-01-01T00:00:00Z",
             }))
             .into_response(),
-            Access::NoRoute => (StatusCode::NOT_FOUND, "404 Not Found").into_response(),
+            Access::NoRoute => old_platform_not_found(),
             Access::NotServed => (
                 StatusCode::CONFLICT,
                 axum::Json(json!({
@@ -222,6 +228,16 @@ async fn platform_handler(
             )
                 .into_response(),
         },
+        ("GET", "environment-variables") => {
+            let variables: Vec<Value> = platform
+                .environment_names
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|name| json!({"name": name, "type": "secret", "targetResources": null}))
+                .collect();
+            axum::Json(json!({ "variables": variables })).into_response()
+        }
         ("PATCH", "environment-variables") => (
             StatusCode::ACCEPTED,
             axum::Json(json!({ "message": "Environment variables updated." })),
@@ -235,22 +251,91 @@ async fn platform_handler(
             "runtimeUpdateRequested": false,
         }))
         .into_response(),
-        _ => (StatusCode::NOT_FOUND, "404 Not Found").into_response(),
+        ("POST", "deployments") => create_deployment(&platform, &body),
+        _ => old_platform_not_found(),
     }
+}
+
+/// The 404 an older platform sends for a route it does not have, as captured
+/// from a live older deployment: status 404, `text/plain; charset=UTF-8`, and
+/// the 13 byte body `404 Not Found`.
+fn old_platform_not_found() -> Response {
+    let mut response = (StatusCode::NOT_FOUND, "404 Not Found").into_response();
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("text/plain; charset=UTF-8"),
+    );
+    response
+}
+
+fn create_deployment(platform: &FakePlatformState, body: &str) -> Response {
+    let request: Value = serde_json::from_str(body).unwrap();
+    if let Some(input) = &platform.create_requires_input {
+        if request["inputValues"].get(input).is_none() {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(json!({
+                    "code": "INPUT_REQUIRED",
+                    "message": format!("Input '{input}' is required."),
+                    "retryable": false,
+                    "internal": false,
+                })),
+            )
+                .into_response();
+        }
+    }
+    axum::Json(json!({
+        "deployment": {
+            "id": platform.created_id,
+            "name": "customer",
+            "status": "pending",
+            "projectId": "prj_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+            "platform": "aws",
+            "deploymentProtocolVersion": alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            "deploymentGroupId": "dg_r27ict8c7vcgsumpj90ackf7bnwt",
+            "purpose": "application",
+            "stackSettings": {},
+            "releaseChannel": "stable",
+            "retryRequested": false,
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:00:00Z",
+            "managerId": "mgr_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+            "workspaceId": "ws_It13CUaGEhLLAB87simX07Xb",
+        },
+        "deploymentModel": "push",
+        "token": "ax_dep_not-a-real-token",
+    }))
+    .into_response()
 }
 
 struct FakePlatform {
     client: alien_platform_api::Client,
+    environment_names: Arc<Mutex<Vec<String>>>,
     requests: Arc<Mutex<Vec<(String, String, String)>>>,
 }
 
 async fn start_platform(access: Access, inputs: Value) -> FakePlatform {
+    start_platform_creating(access, inputs, "dep_0c0ffee0c0ffee0c0ffee0c0ffee", None).await
+}
+
+/// A fake platform whose create route answers with `created_id`, and rejects
+/// the create unless `create_requires_input` is among the input values.
+async fn start_platform_creating(
+    access: Access,
+    inputs: Value,
+    created_id: &str,
+    create_requires_input: Option<&str>,
+) -> FakePlatform {
     let requests = Arc::default();
+    let environment_names = Arc::<Mutex<Vec<String>>>::default();
     let app = Router::new()
         .fallback(any(platform_handler))
         .with_state(FakePlatformState {
             access,
             inputs,
+            created_id: created_id.to_string(),
+            create_requires_input: create_requires_input.map(str::to_string),
+            environment_names: Arc::clone(&environment_names),
             requests: Arc::clone(&requests),
         });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -258,6 +343,7 @@ async fn start_platform(access: Access, inputs: Value) -> FakePlatform {
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     FakePlatform {
         client: alien_platform_api::Client::new(&url),
+        environment_names,
         requests,
     }
 }
@@ -522,4 +608,494 @@ async fn inputs_the_manager_does_not_hold_stay_on_the_platform() {
         .requests()
         .iter()
         .all(|(_, path, _)| !path.ends_with("value-access")));
+}
+
+fn new_deployment(variables: Option<Vec<EnvironmentVariableConfig>>, inputs: Value) -> Value {
+    let mut request = json!({
+        "name": "customer",
+        "platform": "aws",
+        "project": "prj_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+        "inputValues": inputs,
+    });
+    if let Some(variables) = variables {
+        request["environmentVariables"] = serde_json::to_value(variables).unwrap();
+    }
+    request
+}
+
+fn create_routes(platform: &FakePlatform) -> Vec<(String, String)> {
+    platform
+        .requests()
+        .into_iter()
+        .map(|(method, path, _)| (method, path))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_created_deployment_gets_its_secret_env_through_the_manager() {
+    let manager = start_manager().await;
+    let platform = start_platform_creating(
+        Access::Grant {
+            manager_url: manager.url.clone(),
+            token: manager.admin.clone(),
+        },
+        Value::Null,
+        &manager.deployment_id,
+        None,
+    )
+    .await;
+    let mut request = serde_json::from_value(new_deployment(Some(variables()), json!({}))).unwrap();
+
+    let response = create_deployment_with_values(
+        &platform.client,
+        WORKSPACE,
+        &WORKSPACE.try_into().unwrap(),
+        &mut request,
+    )
+    .await
+    .expect("the deployment is created");
+    assert_eq!(response.deployment.id.as_str(), manager.deployment_id);
+
+    assert_eq!(
+        create_routes(&platform),
+        vec![
+            ("POST".to_string(), "/v1/deployments".to_string()),
+            (
+                "POST".to_string(),
+                format!("/v1/deployments/{}/value-access", manager.deployment_id)
+            ),
+            (
+                "PATCH".to_string(),
+                format!(
+                    "/v1/deployments/{}/environment-variables",
+                    manager.deployment_id
+                )
+            ),
+        ]
+    );
+    for (method, path, body) in platform.requests() {
+        assert!(
+            !body.contains(CANARY),
+            "{method} {path} carried the secret: {body}"
+        );
+    }
+    let created = platform.body_of("POST", "/v1/deployments");
+    let sent = created["environmentVariables"].as_array().unwrap();
+    assert_eq!(
+        sent.len(),
+        1,
+        "the create request carries plain variables only"
+    );
+    assert_eq!(sent[0]["name"], "REGION");
+    assert_eq!(sent[0]["value"], "eu-west-1");
+    assert_eq!(sent[0]["type"], "plain");
+    let stored = manager.slots().await;
+    let slots: Vec<&Value> = stored["slots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| &entry["slot"])
+        .collect();
+    assert_eq!(slots, vec!["env:API_KEY", "env:REGION"]);
+    assert!(!stored.to_string().contains(CANARY));
+}
+
+#[tokio::test]
+async fn an_older_platform_gets_the_secret_env_in_a_second_request() {
+    let platform = start_platform_creating(
+        Access::NoRoute,
+        Value::Null,
+        "dep_0c0ffee0c0ffee0c0ffee0c0ffee",
+        None,
+    )
+    .await;
+    let mut request = serde_json::from_value(new_deployment(Some(variables()), json!({}))).unwrap();
+
+    create_deployment_with_values(
+        &platform.client,
+        WORKSPACE,
+        &WORKSPACE.try_into().unwrap(),
+        &mut request,
+    )
+    .await
+    .expect("the deployment is created");
+
+    assert_eq!(
+        create_routes(&platform)
+            .iter()
+            .map(|(_, path)| path.rsplit('/').next().unwrap().to_string())
+            .collect::<Vec<_>>(),
+        vec!["deployments", "value-access", "environment-variables"]
+    );
+    let patch = platform.body_of("PATCH", "environment-variables");
+    assert_eq!(patch["variables"][0]["value"], CANARY);
+    assert_eq!(patch["variables"][1]["value"], "eu-west-1");
+}
+
+#[tokio::test]
+async fn a_failed_value_write_keeps_the_deployment_and_names_the_retry() {
+    let manager = start_manager().await;
+    let platform = start_platform_creating(
+        Access::Grant {
+            manager_url: manager.url.clone(),
+            token: "ax_dep_not-a-real-token".to_string(),
+        },
+        Value::Null,
+        "dep_0c0ffee0c0ffee0c0ffee0c0ffee",
+        None,
+    )
+    .await;
+    let mut request = serde_json::from_value(new_deployment(Some(variables()), json!({}))).unwrap();
+
+    let error = create_deployment_with_values(
+        &platform.client,
+        WORKSPACE,
+        &WORKSPACE.try_into().unwrap(),
+        &mut request,
+    )
+    .await
+    .expect_err("the value write is refused");
+
+    let message = error.to_string();
+    assert!(
+        message.contains("dep_0c0ffee0c0ffee0c0ffee0c0ffee"),
+        "{message}"
+    );
+    assert!(
+        message.contains("alien deployments set-env dep_0c0ffee0c0ffee0c0ffee0c0ffee"),
+        "{message}"
+    );
+    assert!(message.contains("--secret API_KEY="), "{message}");
+    assert!(
+        !message.contains(CANARY),
+        "the retry must not print the value: {message}"
+    );
+    assert!(
+        platform
+            .requests()
+            .iter()
+            .all(|(method, _, _)| method != "DELETE"),
+        "the deployment is not deleted"
+    );
+    for (method, path, body) in platform.requests() {
+        assert!(!body.contains(CANARY), "{method} {path}: {body}");
+    }
+}
+
+fn secret_answers() -> (HashMap<String, Value>, HashSet<String>) {
+    (
+        HashMap::from([
+            ("api_key".to_string(), json!(CANARY)),
+            ("region".to_string(), json!("eu")),
+        ]),
+        HashSet::from(["api_key".to_string()]),
+    )
+}
+
+fn deploy_request(
+    answers: &HashMap<String, Value>,
+) -> alien_platform_api::types::NewDeploymentRequest {
+    serde_json::from_value(new_deployment(None, json!(answers))).unwrap()
+}
+
+#[tokio::test]
+async fn a_created_deployment_gets_its_secret_answers_through_the_manager() {
+    let manager = start_manager().await;
+    let inputs = json!({
+        "inputs": [
+            {"id": "api_key", "kind": "secret", "required": true},
+            {"id": "region", "kind": "string", "required": false},
+        ],
+        "providedInputIds": [],
+        "heldInputIds": ["api_key"],
+        "values": {},
+    });
+    let platform = start_platform_creating(
+        Access::Grant {
+            manager_url: manager.url.clone(),
+            token: manager.admin.clone(),
+        },
+        inputs,
+        &manager.deployment_id,
+        None,
+    )
+    .await;
+    let (answers, secrets) = secret_answers();
+    let mut request = deploy_request(&answers);
+
+    create_deployment_with_answers(
+        &platform.client,
+        WORKSPACE,
+        &mut request,
+        &answers,
+        &secrets,
+    )
+    .await
+    .expect("the deployment is created");
+
+    for (method, path, body) in platform.requests() {
+        assert!(
+            !body.contains(CANARY),
+            "{method} {path} carried the secret: {body}"
+        );
+    }
+    let created = platform.body_of("POST", "/v1/deployments");
+    assert_eq!(created["inputValues"], json!({"region": "eu"}));
+    assert_eq!(
+        platform.body_of("POST", "value-access"),
+        json!({"slots": ["input:api_key"], "access": "write"})
+    );
+    let patch = platform.body_of("PATCH", "inputs");
+    assert_eq!(patch["inputValueRefs"]["api_key"]["slot"], "input:api_key");
+    assert_eq!(manager.slots().await["slots"][0]["slot"], "input:api_key");
+}
+
+#[tokio::test]
+async fn a_platform_that_needs_the_secret_answer_in_the_create_gets_it_there() {
+    let inputs = json!({
+        "inputs": [{"id": "api_key", "kind": "secret", "required": true}],
+        "providedInputIds": [],
+        "values": {},
+    });
+    let platform = start_platform_creating(
+        Access::NoRoute,
+        inputs,
+        "dep_0c0ffee0c0ffee0c0ffee0c0ffee",
+        Some("api_key"),
+    )
+    .await;
+    let (answers, secrets) = secret_answers();
+    let mut request = deploy_request(&answers);
+
+    create_deployment_with_answers(
+        &platform.client,
+        WORKSPACE,
+        &mut request,
+        &answers,
+        &secrets,
+    )
+    .await
+    .expect("the retry with the answer succeeds");
+
+    let creates: Vec<Value> = platform
+        .requests()
+        .iter()
+        .filter(|(method, path, _)| method == "POST" && path == "/v1/deployments")
+        .map(|(_, _, body)| serde_json::from_str(body).unwrap())
+        .collect();
+    assert_eq!(creates.len(), 2, "{creates:?}");
+    assert!(creates[0]["inputValues"].get("api_key").is_none());
+    assert_eq!(creates[1]["inputValues"]["api_key"], CANARY);
+    assert!(
+        platform
+            .requests()
+            .iter()
+            .all(|(_, path, _)| !path.ends_with("value-access")),
+        "nothing was withheld, so there is nothing to store"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_answer_write_keeps_the_deployment_and_names_the_retry() {
+    let manager = start_manager().await;
+    let inputs = json!({
+        "inputs": [{"id": "api_key", "kind": "secret", "required": true}],
+        "providedInputIds": [],
+        "heldInputIds": ["api_key"],
+        "values": {},
+    });
+    let platform = start_platform_creating(
+        Access::Grant {
+            manager_url: manager.url.clone(),
+            token: "ax_dep_not-a-real-token".to_string(),
+        },
+        inputs,
+        "dep_0c0ffee0c0ffee0c0ffee0c0ffee",
+        None,
+    )
+    .await;
+    let (answers, secrets) = secret_answers();
+    let mut request = deploy_request(&answers);
+
+    let error = create_deployment_with_answers(
+        &platform.client,
+        WORKSPACE,
+        &mut request,
+        &answers,
+        &secrets,
+    )
+    .await
+    .expect_err("the answer write is refused");
+
+    let message = error.to_string();
+    assert!(
+        message.contains("dep_0c0ffee0c0ffee0c0ffee0c0ffee"),
+        "{message}"
+    );
+    assert!(
+        message.contains("alien deployments set-inputs"),
+        "{message}"
+    );
+    assert!(message.contains("api_key"), "{message}");
+    assert!(!message.contains(CANARY), "{message}");
+    for (method, path, body) in platform.requests() {
+        assert!(!body.contains(CANARY), "{method} {path}: {body}");
+    }
+}
+
+impl Manager {
+    async fn slot_names(&self) -> Vec<String> {
+        self.slots().await["slots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["slot"].as_str().unwrap().to_string())
+            .collect()
+    }
+}
+
+#[tokio::test]
+async fn variables_dropped_by_a_replace_are_removed_from_the_manager() {
+    let manager = start_manager().await;
+    let platform = start_platform(
+        Access::Grant {
+            manager_url: manager.url.clone(),
+            token: manager.admin.clone(),
+        },
+        Value::Null,
+    )
+    .await;
+    let mut before = variables();
+    before.push(
+        serde_json::from_value(json!({"name": "OLD_TOKEN", "value": CANARY, "type": "secret"}))
+            .unwrap(),
+    );
+    save_environment_variables(&platform.client, WORKSPACE, &manager.deployment_id, &before)
+        .await
+        .unwrap();
+    assert_eq!(
+        manager.slot_names().await,
+        vec!["env:API_KEY", "env:OLD_TOKEN", "env:REGION"]
+    );
+    *platform.environment_names.lock().unwrap() =
+        vec!["API_KEY".into(), "OLD_TOKEN".into(), "REGION".into()];
+    let deployment: alien_platform_api::types::DeploymentDetailResponse =
+        serde_json::from_value(json!({
+            "id": manager.deployment_id,
+            "name": "customer",
+            "status": "running",
+            "projectId": "prj_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+            "platform": "aws",
+            "deploymentProtocolVersion": alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            "deploymentGroupId": "dg_r27ict8c7vcgsumpj90ackf7bnwt",
+            "purpose": "application",
+            "stackSettings": {},
+            "releaseChannel": "stable",
+            "retryRequested": false,
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:00:00Z",
+            "managerId": "mgr_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+            "workspaceId": "ws_It13CUaGEhLLAB87simX07Xb",
+        }))
+        .expect("a deployment detail");
+
+    set_environment_variables_task(
+        &platform.client,
+        WORKSPACE,
+        &deployment,
+        variables(),
+        crate::interaction::ConfirmationMode::Skip,
+        true,
+    )
+    .await
+    .expect("the variables are replaced");
+
+    assert_eq!(
+        manager.slot_names().await,
+        vec!["env:API_KEY", "env:REGION"]
+    );
+}
+
+#[tokio::test]
+async fn a_cleared_held_input_is_removed_from_the_manager() {
+    let manager = start_manager().await;
+    let inputs = json!({
+        "inputs": [{"id": "api_key", "kind": "secret", "required": false}],
+        "providedInputIds": ["api_key"],
+        "heldInputIds": ["api_key"],
+        "values": {},
+    });
+    let platform = start_platform(
+        Access::Grant {
+            manager_url: manager.url.clone(),
+            token: manager.admin.clone(),
+        },
+        inputs,
+    )
+    .await;
+    set_inputs_task(
+        &platform.client,
+        WORKSPACE,
+        &manager.deployment_id,
+        InputChanges {
+            secret_inputs: vec![format!("api_key={CANARY}")],
+            ..Default::default()
+        },
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(manager.slot_names().await, vec!["input:api_key"]);
+
+    set_inputs_task(
+        &platform.client,
+        WORKSPACE,
+        &manager.deployment_id,
+        InputChanges {
+            clear: vec!["api_key".to_string()],
+            ..Default::default()
+        },
+        true,
+    )
+    .await
+    .unwrap();
+
+    assert!(manager.slot_names().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_removal_is_a_warning_and_the_command_still_succeeds() {
+    let manager = start_manager().await;
+    let inputs = json!({
+        "inputs": [{"id": "api_key", "kind": "secret", "required": false}],
+        "providedInputIds": ["api_key"],
+        "heldInputIds": ["api_key"],
+        "values": {},
+    });
+    let platform = start_platform(
+        Access::Grant {
+            manager_url: manager.url.clone(),
+            token: "ax_dep_not-a-real-token".to_string(),
+        },
+        inputs,
+    )
+    .await;
+
+    set_inputs_task(
+        &platform.client,
+        WORKSPACE,
+        &manager.deployment_id,
+        InputChanges {
+            clear: vec!["api_key".to_string()],
+            ..Default::default()
+        },
+        true,
+    )
+    .await
+    .expect("the platform change is made even when the manager cannot be reached for removal");
+
+    assert_eq!(
+        platform.body_of("PATCH", "inputs")["clearInputIds"],
+        json!(["api_key"])
+    );
 }

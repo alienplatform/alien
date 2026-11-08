@@ -11,7 +11,7 @@ mod setup_validation;
 use crate::commands::deployments::{parse_resource_prefix, MonitoringMode};
 
 use crate::commands::{
-    create_initial_deployment, fetch_dev_deployment_live_state,
+    create_initial_deployment, deployment_actions, fetch_dev_deployment_live_state, value_access,
     wait_for_dev_deployment_ready_with_progress,
 };
 use crate::deployment_tracking::{
@@ -47,7 +47,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Parser;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -211,6 +211,8 @@ struct ResolvedDeployArgs {
     compute_settings: Option<ComputeSettings>,
     domain_settings: Option<alien_core::DomainSettings>,
     input_values: HashMap<String, serde_json::Value>,
+    /// Inputs the user gave as secrets (`--secret-input`, `secretInputs`).
+    secret_input_ids: HashSet<String>,
     public_subdomain: Option<String>,
 }
 
@@ -387,7 +389,7 @@ fn resolve_deploy_args(args: &DeployArgs) -> Result<ResolvedDeployArgs> {
     }
     let compute_settings = config.as_ref().and_then(|config| config.compute.clone());
     validate_compute_settings(compute_settings.as_ref())?;
-    let input_values = collect_raw_input_values(
+    let (input_values, secret_input_ids) = collect_raw_input_values(
         config.as_ref(),
         &args.input_values,
         &args.secret_input_values,
@@ -410,6 +412,7 @@ fn resolve_deploy_args(args: &DeployArgs) -> Result<ResolvedDeployArgs> {
         compute_settings,
         domain_settings: config.as_ref().and_then(|config| config.domains.clone()),
         input_values,
+        secret_input_ids,
         public_subdomain: args.public_subdomain.clone(),
     })
 }
@@ -486,8 +489,9 @@ fn collect_raw_input_values(
     config: Option<&DeployConfigFile>,
     input_values: &[String],
     secret_input_values: &[String],
-) -> Result<HashMap<String, serde_json::Value>> {
+) -> Result<(HashMap<String, serde_json::Value>, HashSet<String>)> {
     let mut values = HashMap::new();
+    let mut secret_ids = HashSet::new();
 
     if let Some(config_inputs) = config.and_then(|config| config.inputs.as_ref()) {
         for (id, value) in config_inputs {
@@ -497,18 +501,21 @@ fn collect_raw_input_values(
     if let Some(config_inputs) = config.and_then(|config| config.secret_inputs.as_ref()) {
         for (id, value) in config_inputs {
             values.insert(id.clone(), serde_json::Value::String(value.clone()));
+            secret_ids.insert(id.clone());
         }
     }
     for input in input_values {
         let (id, value) = parse_stack_input_arg(input, "--input")?;
+        secret_ids.remove(&id);
         values.insert(id, parse_raw_stack_input_value(&value));
     }
     for input in secret_input_values {
         let (id, value) = parse_stack_input_arg(input, "--secret-input")?;
+        secret_ids.insert(id.clone());
         values.insert(id, serde_json::Value::String(value));
     }
 
-    Ok(values)
+    Ok((values, secret_ids))
 }
 
 pub(crate) fn parse_raw_stack_input_value(value: &str) -> serde_json::Value {
@@ -1383,6 +1390,96 @@ where
     Ok(typed)
 }
 
+/// Creates a deployment with the stack input answers given to `alien deploy`.
+///
+/// Answers the user gave as secrets are kept out of the create request: a
+/// deployment manager that holds values must be the only one to see them, and
+/// the hosted API would read them from the request body even if it refused the
+/// request. They are written to the manager after the deployment exists. When
+/// the platform rejects the create naming one of those inputs (it stores them
+/// itself), they are put back and the create is retried. A failure to store
+/// them leaves the deployment in place and says how to retry.
+pub(crate) async fn create_deployment_with_answers(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    request: &mut alien_platform_api::types::NewDeploymentRequest,
+    answers: &HashMap<String, serde_json::Value>,
+    secret_ids: &HashSet<String>,
+) -> Result<alien_platform_api::types::CreateDeploymentResponse> {
+    let failed = |message: &str| ErrorData::ConfigurationError {
+        message: message.to_string(),
+    };
+    let mut withheld = serde_json::Map::new();
+    for id in secret_ids {
+        if request.input_values.remove(id).is_some() {
+            if let Some(value) = answers.get(id) {
+                withheld.insert(id.clone(), value.clone());
+            }
+        }
+    }
+    let mut restored = false;
+    let response = loop {
+        match client
+            .create_deployment()
+            .workspace(workspace)
+            .body(&*request)
+            .send()
+            .await
+            .into_sdk_error()
+        {
+            Ok(response) => break response.into_inner(),
+            Err(error) if value_access::is_held_value_refusal(&error) => {
+                let Some(input) = value_access::refused_input(&error)
+                    .filter(|input| request.input_values.contains_key(input))
+                else {
+                    return Err(error).context(failed(
+                        "Failed to create deployment with deployment group token",
+                    ));
+                };
+                request.input_values.remove(&input);
+                if let Some(value) = answers.get(&input) {
+                    withheld.insert(input, value.clone());
+                }
+            }
+            Err(error)
+                if !restored
+                    && error.http_status_code == Some(400)
+                    && withheld
+                        .keys()
+                        .any(|id| error.message.contains(id.as_str())) =>
+            {
+                restored = true;
+                for (id, value) in std::mem::take(&mut withheld) {
+                    if let Ok(value) = serde_json::from_value(value) {
+                        request.input_values.insert(id, value);
+                    }
+                }
+            }
+            Err(error) => {
+                return Err(error).context(failed(
+                    "Failed to create deployment with deployment group token",
+                ));
+            }
+        }
+    };
+
+    if !withheld.is_empty() {
+        let created_id: &str = &response.deployment.id;
+        let mut ids: Vec<&str> = withheld.keys().map(String::as_str).collect();
+        ids.sort_unstable();
+        deployment_actions::store_created_inputs(client, workspace, created_id, &withheld)
+            .await
+            .context(ErrorData::ApiRequestFailed {
+                message: format!(
+                    "Deployment '{created_id}' was created, but the answers for {} were not stored. It was not deleted. Store them with `alien deployments set-inputs {created_id}` (--secret-input ID=<value> for each).",
+                    ids.join(", ")
+                ),
+                url: None,
+            })?;
+    }
+    Ok(response)
+}
+
 async fn create_standalone_deployment(
     token: &str,
     base_url: &str,
@@ -1697,10 +1794,7 @@ async fn deploy_task_with_environment(
                         }
 
                         let response_json = if ctx.is_platform() {
-                            let create_response = sdk_client
-                            .create_deployment()
-                            .workspace(&workspace_name)
-                            .body(alien_platform_api::types::NewDeploymentRequest {
+                            let mut request = alien_platform_api::types::NewDeploymentRequest {
                                 deployment_group_external_id: None,
                                 installation: None,
         base_platform: None,
@@ -1767,15 +1861,15 @@ async fn deploy_task_with_environment(
                                 cloud_account_id: None,
                                 region: None,
                                 dedicated_account: None,
-                            })
-                            .send()
-                            .await
-                            .into_alien_error()
-                            .context(ErrorData::ConfigurationError {
-                                message: "Failed to create deployment with deployment group token"
-                                    .to_string(),
-                            })?
-                            .into_inner();
+                            };
+                            let create_response = create_deployment_with_answers(
+                                &sdk_client,
+                                &workspace_name,
+                                &mut request,
+                                &resolved_args.input_values,
+                                &resolved_args.secret_input_ids,
+                            )
+                            .await?;
 
                             serde_json::to_value(&create_response)
                                 .into_alien_error()
@@ -3504,6 +3598,21 @@ async fn request_deployment_retry(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn inputs_given_as_secrets_are_listed_so_the_create_request_can_withhold_them() {
+        let (values, secrets) = collect_raw_input_values(
+            None,
+            &["region=eu".to_string(), "token=plain-now".to_string()],
+            &["api_key=s3cret".to_string(), "token=s3cret-later".to_string()],
+        )
+        .expect("inputs parse");
+        assert_eq!(values["region"], serde_json::json!("eu"));
+        assert_eq!(values["api_key"], serde_json::json!("s3cret"));
+        let mut secrets: Vec<_> = secrets.into_iter().collect();
+        secrets.sort();
+        assert_eq!(secrets, vec!["api_key", "token"]);
+    }
+
+    #[test]
     fn machines_join_token_response_preserves_capacity_requirements() {
         let response = serde_json::from_value(serde_json::json!({
             "joinToken": "hj_secret",
@@ -5039,6 +5148,7 @@ mod tests {
                 then.status(409).json_body(serde_json::json!({"code":"CONFLICT", "message":"Synthetic creation rejection"}));
             }).await;
             let resolved = ResolvedDeployArgs {
+                secret_input_ids: Default::default(),
                 name: "test".to_string(),
                 platform: "aws".to_string(),
                 platform_enum: Platform::Aws,
@@ -5094,6 +5204,7 @@ machine = "m8i.2xlarge"
         validate_compute_settings(config.compute.as_ref()).expect("selection should be valid");
 
         let resolved = ResolvedDeployArgs {
+            secret_input_ids: Default::default(),
             name: config.name.expect("name"),
             platform: config.platform.expect("platform"),
             platform_enum: Platform::Aws,
@@ -5197,6 +5308,7 @@ max = 1
             })
             .await;
         let resolved = ResolvedDeployArgs {
+            secret_input_ids: Default::default(),
             name: "test".to_string(),
             platform: "aws".to_string(),
             platform_enum: Platform::Aws,
@@ -5242,6 +5354,7 @@ max = 1
             })
             .await;
         let resolved = ResolvedDeployArgs {
+            secret_input_ids: Default::default(),
             name: "test".to_string(),
             platform: "machines".to_string(),
             platform_enum: Platform::Machines,
@@ -5358,6 +5471,7 @@ max = 1
     #[test]
     fn first_party_creation_preserves_requested_release_channel() {
         let resolved_args = ResolvedDeployArgs {
+            secret_input_ids: Default::default(),
             name: "preview".to_string(),
             platform: "aws".to_string(),
             platform_enum: Platform::Aws,
