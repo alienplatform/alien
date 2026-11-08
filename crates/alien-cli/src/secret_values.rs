@@ -32,6 +32,12 @@ pub(crate) enum SecretValuesTarget<'a> {
         id: &'a str,
         platforms: &'a [String],
     },
+    /// A setup link created together with its deployment group, on these
+    /// platforms.
+    Project {
+        id_or_name: &'a str,
+        platforms: &'a [String],
+    },
 }
 
 /// One value to encrypt: its slot (`input:<id>`, `env:<name>`) and value.
@@ -103,6 +109,25 @@ pub(crate) async fn encrypt_with_manager(
                         serde_json::json!({ "platforms": platforms, "slots": slots }),
                     )?,
                 );
+            match workspace {
+                Some(workspace) => request.workspace(workspace),
+                None => request,
+            }
+            .send()
+            .await
+            .into_sdk_error()
+            .map(|response| serde_json::to_value(response.into_inner()))
+        }
+        SecretValuesTarget::Project {
+            id_or_name,
+            platforms,
+        } => {
+            let request = client
+                .create_project_secret_access()
+                .id_or_name(*id_or_name)
+                .body(json_body::<types::CreateProjectSecretAccessRequest>(
+                    serde_json::json!({ "platforms": platforms, "slots": slots }),
+                )?);
             match workspace {
                 Some(workspace) => request.workspace(workspace),
                 None => request,
@@ -266,4 +291,141 @@ pub(crate) async fn seal_input_values(
             (id.clone(), value)
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use httpmock::{Method::POST, MockServer};
+
+    fn platform(server: &MockServer) -> alien_platform_api::Client {
+        alien_platform_api::Client::new_with_client(
+            &server.base_url(),
+            http_client::client().expect("client"),
+        )
+    }
+
+    fn variables() -> Vec<types::EnvironmentVariableConfig> {
+        serde_json::from_value(serde_json::json!([
+            { "name": "API_TOKEN", "value": "canary-cli-secret", "type": "secret" },
+            { "name": "LOG_LEVEL", "value": "debug", "type": "plain" }
+        ]))
+        .expect("variables")
+    }
+
+    /// The platform gets slot names only; the value goes to the manager, and
+    /// what the caller submits afterwards is the manager's ciphertext.
+    #[tokio::test]
+    async fn secret_values_go_to_the_manager_and_only_ciphertext_comes_back() {
+        let platform_server = MockServer::start_async().await;
+        let manager = MockServer::start_async().await;
+        let access = platform_server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/deployments/dep_123456789012345678901234567a/secret-access")
+                    .json_body(serde_json::json!({ "slots": ["env:API_TOKEN"] }));
+                then.status(200).json_body(serde_json::json!({
+                    "managerUrl": manager.base_url(),
+                    "accessToken": "short-lived",
+                    "expiresIn": 300,
+                    "slots": ["env:API_TOKEN"]
+                }));
+            })
+            .await;
+        let encrypt = manager
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/secret-values/encrypt")
+                    .header("authorization", "Bearer short-lived")
+                    .json_body(serde_json::json!({
+                        "values": [{ "slot": "env:API_TOKEN", "value": "canary-cli-secret" }]
+                    }));
+                then.status(200).json_body(serde_json::json!({
+                    "values": [{ "slot": "env:API_TOKEN", "ciphertext": "aiv1:key:sealed" }]
+                }));
+            })
+            .await;
+
+        let sealed = seal_environment_variables(
+            &platform(&platform_server),
+            Some("acme"),
+            SecretValuesTarget::Deployment("dep_123456789012345678901234567a"),
+            variables(),
+        )
+        .await
+        .expect("sealed");
+
+        access.assert_async().await;
+        encrypt.assert_async().await;
+        let sealed = serde_json::to_value(sealed).unwrap();
+        assert_eq!(sealed[0]["value"], "aiv1:key:sealed");
+        assert_eq!(sealed[1]["value"], "debug");
+    }
+
+    #[tokio::test]
+    async fn values_the_platform_encrypts_are_left_as_they_are() {
+        let platform_server = MockServer::start_async().await;
+        platform_server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/deployments/dep_123456789012345678901234567a/secret-access");
+                then.status(409).json_body(serde_json::json!({
+                    "code": "SECRET_VALUES_NOT_SERVED_BY_INSTANCE",
+                    "message": "Send its secret values to the Platform API.",
+                    "retryable": false,
+                    "internal": false
+                }));
+            })
+            .await;
+
+        let unchanged = seal_environment_variables(
+            &platform(&platform_server),
+            Some("acme"),
+            SecretValuesTarget::Deployment("dep_123456789012345678901234567a"),
+            variables(),
+        )
+        .await
+        .expect("unchanged");
+        assert_eq!(
+            serde_json::to_value(unchanged).unwrap()[0]["value"],
+            "canary-cli-secret"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_manager_that_refuses_stops_the_command() {
+        let platform_server = MockServer::start_async().await;
+        let manager = MockServer::start_async().await;
+        platform_server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/deployments/dep_123456789012345678901234567a/secret-access");
+                then.status(200).json_body(serde_json::json!({
+                    "managerUrl": manager.base_url(),
+                    "accessToken": "short-lived",
+                    "expiresIn": 300,
+                    "slots": ["env:API_TOKEN"]
+                }));
+            })
+            .await;
+        manager
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/secret-values/encrypt");
+                then.status(503).json_body(serde_json::json!({
+                    "code": "INSTANCE_KEY_UNAVAILABLE",
+                    "message": "The key is disabled"
+                }));
+            })
+            .await;
+
+        let error = seal_environment_variables(
+            &platform(&platform_server),
+            Some("acme"),
+            SecretValuesTarget::Deployment("dep_123456789012345678901234567a"),
+            variables(),
+        )
+        .await
+        .expect_err("a refused value must not fall back to plaintext");
+        assert!(error.message.contains("503"), "{}", error.message);
+    }
 }

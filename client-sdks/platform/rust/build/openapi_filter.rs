@@ -49,6 +49,7 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "createDeployment",
     "createDeploymentSecretAccess",
     "createDeploymentGroupSecretAccess",
+    "createProjectSecretAccess",
     "planDeploymentCompute",
     "prepareDeploymentStack",
     "createDeploymentGroup",
