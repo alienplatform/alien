@@ -1710,6 +1710,9 @@ mod tests {
         credentials: Arc<crate::auth::runtime_capability::RuntimeCredentials>,
         identity: Arc<crate::stores::sqlite::SqliteRuntimeIdentityStore>,
         stored: Arc<Mutex<DeploymentRecord>>,
+        /// The pull-Secret flag of every sync that reached the store as a
+        /// reconcile request, in order.
+        pull_secret_reports: Arc<Mutex<Vec<bool>>>,
     }
 
     impl TokenEnrollment {
@@ -1748,14 +1751,14 @@ mod tests {
             }
 
             let stored = Arc::new(Mutex::new(deployment_record_with_state("running", None)));
+            let pull_secret_reports = Arc::new(Mutex::new(Vec::new()));
             let mut store = MockDeploymentStore::new();
             store.expect_requires_execution_claims().return_const(false);
             let current = stored.clone();
             store
                 .expect_get_deployment()
                 .returning(move |_, _| Ok(Some(current.lock().unwrap().clone())));
-            let current = stored.clone();
-            store.expect_reconcile().returning(move |_, data| {
+            let apply = |current: &Mutex<DeploymentRecord>, data: ReconcileData| {
                 let mut record = current.lock().unwrap().clone();
                 record.status = serde_json::to_value(data.state.status)
                     .unwrap()
@@ -1769,7 +1772,24 @@ mod tests {
                     target_dynamic_containers: None,
                     target_operator_image: None,
                 })
-            });
+            };
+            let current = stored.clone();
+            store
+                .expect_reconcile()
+                .returning(move |_, data| apply(&current, data));
+            // A sync that carries a receipt reaches the store as a request.
+            let current = stored.clone();
+            let received = pull_secret_reports.clone();
+            store
+                .expect_reconcile_request()
+                .returning(move |_, request| {
+                    received
+                        .lock()
+                        .unwrap()
+                        .push(request.pull_secret_refreshed());
+                    let (data, _) = request.into_parts();
+                    apply(&current, data)
+                });
             let store: Arc<dyn crate::traits::DeploymentStore> = Arc::new(store);
             let resolver = Arc::new(LocalCredentialResolver::new(temp.path().to_path_buf()));
             let identity = Arc::new(SqliteRuntimeIdentityStore::new(db.clone()));
@@ -1805,6 +1825,7 @@ mod tests {
                 credentials,
                 identity,
                 stored,
+                pull_secret_reports,
             }
         }
 
@@ -2162,6 +2183,24 @@ mod tests {
             .exists(&super::token_hold_key("dep_test"))
             .await
             .unwrap());
+    }
+
+    /// The report reaches the deployment store with the reconcile, so a store
+    /// that revokes the deployment's tokens elsewhere can wait for it too. A
+    /// sync without the report does not send one.
+    #[tokio::test]
+    async fn the_pull_secret_report_reaches_the_deployment_store() {
+        let manager = TokenEnrollment::new().await;
+        let operator = manager.operator_capability();
+
+        assert_eq!(manager.sync(&operator).await, StatusCode::OK);
+        assert!(manager.pull_secret_reports.lock().unwrap().is_empty());
+
+        assert_eq!(
+            manager.sync_with_refreshed_pull_secret(&operator).await,
+            StatusCode::OK
+        );
+        assert_eq!(*manager.pull_secret_reports.lock().unwrap(), vec![true]);
     }
 
     /// A report alone does not end the token. Workloads deployed before the
@@ -3280,6 +3319,7 @@ mod tests {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn reconcile_agent_report(
     store: &dyn crate::traits::DeploymentStore,
     subject: &crate::auth::Subject,
@@ -3288,11 +3328,13 @@ async fn reconcile_agent_report(
     application: Option<ObservedApplicationReport>,
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
     operations_config: Option<alien_core::OperationsConfig>,
+    pull_secret_refreshed: bool,
 ) -> Result<crate::traits::ReconcileOutcome, AlienError> {
     if operator_image.is_none()
         && application.is_none()
         && dynamic_containers.is_none()
         && operations_config.is_none()
+        && !pull_secret_refreshed
     {
         return store.reconcile(subject, data).await;
     }
@@ -3309,7 +3351,12 @@ async fn reconcile_agent_report(
     if let Some(config) = operations_config {
         request = request.operations_config(config);
     }
-    store.reconcile_request(subject, request.build()).await
+    store
+        .reconcile_request(
+            subject,
+            request.pull_secret_refreshed(pull_secret_refreshed).build(),
+        )
+        .await
 }
 
 /// A completed receipt grants no authority to replay a report or take new work.
@@ -3552,6 +3599,7 @@ async fn agent_sync(
                         application.clone(),
                         dynamic_containers.clone(),
                         operations_config.clone(),
+                        pull_secret_refreshed,
                     )
                     .await;
 
@@ -3862,6 +3910,7 @@ async fn agent_sync(
                         application.clone(),
                         dynamic_containers.clone(),
                         operations_config.clone(),
+                        pull_secret_refreshed,
                     )
                     .await;
 

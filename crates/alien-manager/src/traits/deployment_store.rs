@@ -426,6 +426,7 @@ pub struct ReconcileInput {
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
     operations_config: Option<alien_core::OperationsConfig>,
     applied_configuration_revision: Option<String>,
+    pull_secret_refreshed: bool,
 }
 
 impl ReconcileInput {
@@ -437,7 +438,15 @@ impl ReconcileInput {
             dynamic_containers: None,
             operations_config: None,
             applied_configuration_revision: None,
+            pull_secret_refreshed: false,
         }
+    }
+
+    /// The Operator reported that the pull Secret its Deployment references
+    /// holds its own registry credential, or that no such Secret needs one.
+    /// Embedders that revoke the deployment's static tokens wait for it.
+    pub fn pull_secret_refreshed(&self) -> bool {
+        self.pull_secret_refreshed
     }
 
     /// Approved configuration revision confirmed Running by an offline site.
@@ -475,6 +484,7 @@ pub struct ReconcileInputBuilder {
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
     operations_config: Option<alien_core::OperationsConfig>,
     applied_configuration_revision: Option<String>,
+    pull_secret_refreshed: bool,
 }
 
 impl ReconcileInputBuilder {
@@ -486,6 +496,12 @@ impl ReconcileInputBuilder {
 
     pub fn operations_config(mut self, config: alien_core::OperationsConfig) -> Self {
         self.operations_config = Some(config);
+        self
+    }
+
+    /// Attach the Operator's report that its pull Secret holds its own credential.
+    pub fn pull_secret_refreshed(mut self, refreshed: bool) -> Self {
+        self.pull_secret_refreshed = refreshed;
         self
     }
 
@@ -515,6 +531,7 @@ impl ReconcileInputBuilder {
             dynamic_containers: self.dynamic_containers,
             operations_config: self.operations_config,
             applied_configuration_revision: self.applied_configuration_revision,
+            pull_secret_refreshed: self.pull_secret_refreshed,
         }
     }
 }
