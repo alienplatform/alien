@@ -127,6 +127,28 @@ fn rejection_reason(body: &str) -> String {
     reason.chars().take(MAX_REASON_CHARS).collect()
 }
 
+/// Read the start of a rejection body for the log line. Bounded in time and
+/// size so a stalled or oversized body can't hold up the rows behind it; a
+/// failed read just leaves the reason empty.
+async fn read_rejection_body(mut response: reqwest::Response) -> String {
+    const MAX_BODY_BYTES: usize = 4096;
+    const READ_TIMEOUT: Duration = Duration::from_secs(5);
+
+    let mut body = Vec::new();
+    let read = async {
+        while body.len() < MAX_BODY_BYTES {
+            match response.chunk().await {
+                Ok(Some(chunk)) => body.extend_from_slice(&chunk),
+                Ok(None) | Err(_) => break,
+            }
+        }
+    };
+    // On timeout, keep what arrived so far.
+    let _ = tokio::time::timeout(READ_TIMEOUT, read).await;
+    body.truncate(MAX_BODY_BYTES);
+    String::from_utf8_lossy(&body).into_owned()
+}
+
 async fn push_telemetry(
     state: &OperatorState,
     client: &reqwest::Client,
@@ -192,7 +214,7 @@ async fn push_pending_telemetry(
             }
             Ok(response) if is_permanent_rejection(response.status()) => {
                 let status = response.status().as_u16();
-                let body = response.text().await.unwrap_or_default();
+                let body = read_rejection_body(response).await;
                 // Retrying can't help, and the row would keep its place among
                 // the oldest rows read each pass. Drop it so the rows behind
                 // it can be pushed.
@@ -340,6 +362,8 @@ mod tests {
     #[tokio::test]
     async fn rejected_row_is_dropped_once_and_later_rows_are_delivered() {
         let h = harness().await;
+        // The status the manager answers with for records it rejects.
+        h.stub.bad_status.store(422, Ordering::SeqCst);
         h.db.store_telemetry("logs", b"first").await.unwrap();
         h.db.store_telemetry("logs", BAD).await.unwrap();
         h.db.store_telemetry("logs", b"last").await.unwrap();
