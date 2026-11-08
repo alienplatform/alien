@@ -207,8 +207,15 @@ pub fn check_own_binding(value: &str, facts: &OwnBindingFacts) -> std::result::R
                 "internalUrls",
                 "publicUrl",
             ])?;
-            if object.contains_key("service") {
-                expect("service", "horizon")?;
+            // The backend's name, not an address: any plain identifier is fine.
+            if let Some(service) = object.get("service") {
+                let plain = service.as_str().is_some_and(|found| {
+                    !found.is_empty()
+                        && found.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                });
+                if !plain {
+                    return Err(format!("field service is {service}, not a plain name"));
+                }
             }
             expect("containerName", name)?;
             // A machine container is reached at `<name>.svc` inside its cluster.

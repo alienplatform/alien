@@ -168,6 +168,13 @@ fn a_binding_that_points_anywhere_else_is_refused() {
         (
             "machines",
             machines(),
+            "service",
+            json!("https://attacker.example"),
+            "service",
+        ),
+        (
+            "machines",
+            machines(),
             "internalUrl",
             json!("http://other.svc:8080"),
             "internalUrl",
