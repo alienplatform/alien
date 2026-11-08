@@ -257,6 +257,7 @@ export type { GcpFirestoreKvHeartbeatData } from "./zod/gcp-firestore-kv-heartbe
 export type { GcpKeyImportData } from "./zod/gcp-key-import-data-schema.js";
 export type { GcpKvImportData } from "./zod/gcp-kv-import-data-schema.js";
 export type { GcpManagementConfig } from "./zod/gcp-management-config-schema.js";
+export type { GcpMemorystoreImportData } from "./zod/gcp-memorystore-import-data-schema.js";
 export type { GcpNetworkImportData } from "./zod/gcp-network-import-data-schema.js";
 export type { GcpPlatformPermission } from "./zod/gcp-platform-permission-schema.js";
 export type { GcpPostgresImportData } from "./zod/gcp-postgres-import-data-schema.js";
@@ -806,6 +807,7 @@ export { GcpFirestoreKvHeartbeatDataSchema } from "./zod/gcp-firestore-kv-heartb
 export { GcpKeyImportDataSchema } from "./zod/gcp-key-import-data-schema.js";
 export { GcpKvImportDataSchema } from "./zod/gcp-kv-import-data-schema.js";
 export { GcpManagementConfigSchema } from "./zod/gcp-management-config-schema.js";
+export { GcpMemorystoreImportDataSchema } from "./zod/gcp-memorystore-import-data-schema.js";
 export { GcpNetworkImportDataSchema } from "./zod/gcp-network-import-data-schema.js";
 export { GcpPlatformPermissionSchema } from "./zod/gcp-platform-permission-schema.js";
 export { GcpPostgresImportDataSchema } from "./zod/gcp-postgres-import-data-schema.js";

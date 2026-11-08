@@ -270,6 +270,7 @@ use utoipa::OpenApi;
     GcpArtifactRegistryImportData,
     GcpComputeClusterImportData,
     GcpPostgresImportData,
+    GcpMemorystoreImportData,
     GcpSandboxImportData,
     GcpAgentPlatformEngineImportData,
     AzureStorageImportData,

@@ -257,6 +257,7 @@ export type { GcpFirestoreKvHeartbeatData } from "./gcp-firestore-kv-heartbeat-d
 export type { GcpKeyImportData } from "./gcp-key-import-data-schema.js";
 export type { GcpKvImportData } from "./gcp-kv-import-data-schema.js";
 export type { GcpManagementConfig } from "./gcp-management-config-schema.js";
+export type { GcpMemorystoreImportData } from "./gcp-memorystore-import-data-schema.js";
 export type { GcpNetworkImportData } from "./gcp-network-import-data-schema.js";
 export type { GcpPlatformPermission } from "./gcp-platform-permission-schema.js";
 export type { GcpPostgresImportData } from "./gcp-postgres-import-data-schema.js";
@@ -806,6 +807,7 @@ export { GcpFirestoreKvHeartbeatDataSchema } from "./gcp-firestore-kv-heartbeat-
 export { GcpKeyImportDataSchema } from "./gcp-key-import-data-schema.js";
 export { GcpKvImportDataSchema } from "./gcp-kv-import-data-schema.js";
 export { GcpManagementConfigSchema } from "./gcp-management-config-schema.js";
+export { GcpMemorystoreImportDataSchema } from "./gcp-memorystore-import-data-schema.js";
 export { GcpNetworkImportDataSchema } from "./gcp-network-import-data-schema.js";
 export { GcpPlatformPermissionSchema } from "./gcp-platform-permission-schema.js";
 export { GcpPostgresImportDataSchema } from "./gcp-postgres-import-data-schema.js";

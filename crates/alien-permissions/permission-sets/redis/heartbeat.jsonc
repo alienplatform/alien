@@ -67,6 +67,44 @@
           "stack": { "scope": "projects/${projectName}" },
           "resource": { "scope": "projects/${projectName}" }
         }
+      },
+      {
+        // Memorystore generates the auth token; a setup-created instance has no secret value
+        // yet. The management identity reads the token to copy it into the stack's secret so
+        // workloads can read it there.
+        "label": "read-generated-auth-token",
+        "description": "Read the server-generated auth token of the Redis instance.",
+        "grant": {
+          "permissions": ["memorystore.tokenAuthUsers.list", "memorystore.authTokens.list"]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      },
+      {
+        // Add versions only (never access them) to this stack's Redis secrets.
+        "label": "write-auth-token-secret",
+        "description": "Write the auth token as a new version of this Redis resource's secret.",
+        "grant": {
+          "permissions": ["secretmanager.versions.add"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "StackRedisTokenWrite",
+              "expression": "resource.type == \"secretmanager.googleapis.com/Secret\" && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "ResourceRedisTokenWrite",
+              "expression": "resource.type == \"secretmanager.googleapis.com/Secret\" && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+            }
+          }
+        }
       }
     ],
     "azure": [

@@ -30,9 +30,10 @@ pub use azure::{
 pub use gcp::{
     GcpAgentPlatformEngineImportData, GcpAiImportData, GcpArtifactRegistryImportData,
     GcpBuildImportData, GcpComputeClusterImportData, GcpKeyImportData, GcpKvImportData,
-    GcpNetworkImportData, GcpPostgresImportData, GcpQueueImportData, GcpRemoteBindingsImportData,
-    GcpRemoteStackManagementImportData, GcpSandboxImportData, GcpServiceAccountImportData,
-    GcpServiceActivationImportData, GcpStorageImportData, GcpVaultImportData, GcpWorkerImportData,
+    GcpMemorystoreImportData, GcpNetworkImportData, GcpPostgresImportData, GcpQueueImportData,
+    GcpRemoteBindingsImportData, GcpRemoteStackManagementImportData, GcpSandboxImportData,
+    GcpServiceAccountImportData, GcpServiceActivationImportData, GcpStorageImportData,
+    GcpVaultImportData, GcpWorkerImportData,
 };
 pub use kubernetes_cluster::{
     AzureApplicationGatewayForContainersBootstrap, KubernetesClusterImportData,
@@ -214,6 +215,7 @@ mod schema_snapshots {
             ("gcp_key", schema::<GcpKeyImportData>()),
             ("gcp_network", schema::<GcpNetworkImportData>()),
             ("gcp_postgres", schema::<GcpPostgresImportData>()),
+            ("gcp_redis", schema::<GcpMemorystoreImportData>()),
             ("gcp_queue", schema::<GcpQueueImportData>()),
             (
                 "gcp_remote_stack_management",
