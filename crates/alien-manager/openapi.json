@@ -2399,7 +2399,7 @@
           {
             "name": "slot",
             "in": "path",
-            "description": "env:<NAME> or input:<id>",
+            "description": "env:<NAME>, input:<id> or cenv.<containerName>.<NAME>",
             "required": true,
             "schema": {
               "type": "string"
@@ -16456,7 +16456,7 @@
           },
           "slot": {
             "type": "string",
-            "description": "`env:<NAME>` or `input:<id>`."
+            "description": "`env:<NAME>`, `input:<id>` or `cenv.<containerName>.<NAME>`."
           },
           "value": {
             "type": "string"

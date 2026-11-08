@@ -43,7 +43,8 @@ pub fn router() -> Router<AppState> {
 }
 
 /// The request body, or the error to answer with. A body over the limit
-/// gets a 413 that states the limits.
+/// gets a 413 that states the limits; a body with a malformed value, such as
+/// a slot outside the grammar, gets a 400.
 fn read_body<T>(
     body: std::result::Result<Json<T>, JsonRejection>,
 ) -> std::result::Result<T, Response> {
@@ -51,6 +52,9 @@ fn read_body<T>(
         Ok(Json(body)) => Ok(body),
         Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
             Err(request_too_large().into_response())
+        }
+        Err(rejection) if rejection.status() == StatusCode::UNPROCESSABLE_ENTITY => {
+            Err(ErrorData::bad_request(rejection.body_text()).into_response())
         }
         Err(rejection) => Err(rejection.into_response()),
     }
@@ -83,7 +87,7 @@ pub struct PutValuesRequest {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct PutValue {
-    /// `env:<NAME>` or `input:<id>`.
+    /// `env:<NAME>`, `input:<id>` or `cenv.<containerName>.<NAME>`.
     #[cfg_attr(feature = "openapi", schema(value_type = String))]
     pub slot: ValueSlot,
     pub value: String,
@@ -303,7 +307,7 @@ pub(crate) async fn list_values(
     tag = "values",
     params(
         ("scope" = String, Path, description = "dep:<deploymentId>"),
-        ("slot" = String, Path, description = "env:<NAME> or input:<id>")
+        ("slot" = String, Path, description = "env:<NAME>, input:<id> or cenv.<containerName>.<NAME>")
     ),
     responses((status = 204, description = "Deleted, or there was nothing to delete")),
     security(("bearer" = []))

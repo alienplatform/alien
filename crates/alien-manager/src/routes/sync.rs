@@ -1122,6 +1122,16 @@ mod tests {
     ///
     /// Returns the response and every reconcile the store received.
     async fn sync_operator_without_claim(record: DeploymentRecord) -> (Value, Vec<ReconcileData>) {
+        sync_operator_with_targets(record, None, None).await
+    }
+
+    /// Like [`sync_operator_without_claim`], with the control plane answering
+    /// every reconcile with `targets` and the manager holding `values`.
+    async fn sync_operator_with_targets(
+        record: DeploymentRecord,
+        targets: Option<Vec<alien_core::sync::TargetDynamicContainer>>,
+        values: Option<Arc<crate::values::ValueStore>>,
+    ) -> (Value, Vec<ReconcileData>) {
         let temp = tempfile::tempdir().expect("test directory");
         let db = Arc::new(
             SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
@@ -1168,11 +1178,11 @@ mod tests {
             Ok(ReconcileOutcome {
                 record: reconciled_record.clone(),
                 target_operations_bundle_set: None,
-                target_dynamic_containers: None,
+                target_dynamic_containers: targets.clone(),
             })
         });
 
-        let state = test_app_state(
+        let mut state = test_app_state(
             temp.path(),
             Arc::new(store),
             release_store,
@@ -1180,6 +1190,7 @@ mod tests {
             db,
         )
         .await;
+        state.values = values;
 
         // The Operator's report claims the pending target is already running.
         // Accepting it would acknowledge work the Operator never received.
@@ -1688,6 +1699,85 @@ mod tests {
             DeploymentStatus::Running,
         );
         assert!(state.error.is_none());
+    }
+
+    fn dynamic_container(name: &str) -> alien_core::sync::TargetDynamicContainer {
+        alien_core::sync::TargetDynamicContainer {
+            name: name.to_string(),
+            generation: 1,
+            image: "registry.example.com/app@sha256:abc".to_string(),
+            cpu: "0.5".to_string(),
+            memory: "512Mi".to_string(),
+            replicas: 1,
+            ports: vec![8080],
+            deleted: false,
+            env: Default::default(),
+            secret_env: Default::default(),
+            health_check: None,
+            suspended_reason: None,
+        }
+    }
+
+    /// The Operator gets a dynamic container's stored variables in its sync
+    /// response, and the control plane's reconcile never sees them.
+    #[tokio::test]
+    async fn dynamic_container_values_reach_the_operator_and_not_the_control_plane() {
+        use crate::values::{ValueKind, ValueScope, ValueSlot};
+        const CANARY: &str = "canary-3b9e7d51-not-a-real-secret";
+
+        let dir = tempfile::tempdir().expect("values directory");
+        let values = Arc::new(crate::values::fixtures::kv_store(dir.path()).await);
+        let scope = ValueScope::deployment("dep_test").expect("scope");
+        for (container, name, kind, value) in [
+            ("api", "TOKEN", ValueKind::Secret, CANARY),
+            ("api", "LEVEL", ValueKind::Plain, "debug"),
+            ("api.worker", "TOKEN", ValueKind::Secret, "the-worker-token"),
+        ] {
+            values
+                .put(
+                    &scope,
+                    &ValueSlot::container_env(container, name).expect("slot"),
+                    kind,
+                    value.to_string(),
+                )
+                .await
+                .expect("stored");
+        }
+        let mut record = deployment_record_with_state("running", None);
+        record.desired_release_id = Some("rel_target".to_string());
+        let mut api = dynamic_container("api");
+        api.env.insert("KEPT".to_string(), "kept".to_string());
+        let mut deleted = dynamic_container("api.worker");
+        deleted.deleted = true;
+        let targets = vec![api, dynamic_container("web"), deleted];
+
+        let (response, reconciled) =
+            sync_operator_with_targets(record, Some(targets), Some(values)).await;
+
+        let targets = response["targetDynamicContainers"]
+            .as_array()
+            .expect("targets in the response");
+        let by_name = |name: &str| {
+            targets
+                .iter()
+                .find(|t| t["name"] == name)
+                .expect("target present")
+        };
+        assert_eq!(by_name("api")["secretEnv"], json!({ "TOKEN": CANARY }));
+        assert_eq!(
+            by_name("api")["env"],
+            json!({ "KEPT": "kept", "LEVEL": "debug" })
+        );
+        assert_eq!(by_name("web")["env"], json!({}));
+        assert_eq!(by_name("web")["secretEnv"], json!({}));
+        assert_eq!(by_name("api.worker")["secretEnv"], json!({}));
+
+        assert!(!reconciled.is_empty(), "the control plane was reconciled");
+        for data in &reconciled {
+            let seen = format!("{data:?}{}", serde_json::to_string(&data.state).unwrap());
+            assert!(!seen.contains(CANARY), "{seen}");
+            assert!(!seen.contains("the-worker-token"), "{seen}");
+        }
     }
 
     #[tokio::test]
@@ -3348,6 +3438,15 @@ async fn agent_sync(
     } else {
         None
     };
+
+    if let (Some(values), Some(targets)) = (state.values.as_deref(), &mut target_dynamic_containers)
+    {
+        if let Err(error) =
+            crate::values::load_container_env(values, &req.deployment_id, targets).await
+        {
+            return error.into_response();
+        }
+    }
 
     Json(AgentSyncResponse {
         execution_claim,

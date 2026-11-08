@@ -12,6 +12,7 @@
 mod access;
 mod backend;
 mod cipher;
+mod container_env;
 mod digest_key;
 mod durability;
 mod hydrate;
@@ -23,6 +24,7 @@ mod types;
 pub use access::{ValueAccess, ValueAccessAuthorizer, ValueGrant};
 pub use backend::{KvValueBackend, ValueBackend};
 pub use cipher::{EnvelopeCipher, ValueCipher, DATA_KEY_CACHE_TTL};
+pub use container_env::load_container_env;
 pub use digest_key::{load_or_create_digest_key, DIGEST_KEY_NAME};
 pub use durability::state_dir_is_ephemeral;
 pub use hydrate::hydrate_held_values;
@@ -110,6 +112,17 @@ impl ValueStore {
         Ok(values)
     }
 
+    /// The scope's values whose slot starts with `slot_prefix`, sorted by slot.
+    pub async fn list_prefix(
+        &self,
+        scope: &ValueScope,
+        slot_prefix: &str,
+    ) -> Result<Vec<StoredValue>> {
+        let mut values = self.backend.list_prefix(scope, slot_prefix).await?;
+        values.sort_by(|a, b| a.slot.cmp(&b.slot));
+        Ok(values)
+    }
+
     /// Whether `candidate` equals the stored value. A missing slot is no match.
     pub async fn matches(
         &self,
@@ -152,6 +165,21 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         return false;
     }
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+#[cfg(test)]
+pub(crate) mod fixtures {
+    use super::*;
+    use alien_bindings::providers::kv::local::LocalKv;
+
+    /// A sealed store over a local key-value file in `dir`, with a digest key set.
+    pub async fn kv_store(dir: &std::path::Path) -> ValueStore {
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        let kv = LocalKv::single_process(dir.join("values-kv"))
+            .await
+            .unwrap();
+        ValueStore::new(Arc::new(cipher::fixtures::sealed_backend(Arc::new(kv)).1))
+    }
 }
 
 #[cfg(test)]
@@ -265,6 +293,44 @@ mod tests {
         let first = store.list(&scope("dep:dep_1")).await.unwrap();
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].slot.to_string(), "env:A");
+    }
+
+    /// A scan prefix is `val:{scope}:`. Scope ids hold no ':', so no other
+    /// scope's keys can start with it, whatever else their ids look like.
+    #[tokio::test]
+    async fn no_scope_scan_sees_another_scopes_container_values() {
+        let (_dir, store) = kv_store().await;
+        let scopes = [
+            "dep:x",
+            "dep:x.y",
+            "dep:x-1",
+            "dep:x_",
+            "dep:x.cenv",
+            "dep:xcenv.a",
+        ];
+        for (n, id) in scopes.iter().enumerate() {
+            for slot_name in ["cenv.a.X", "cenv.a.b.X", "env:A", "input:a.b"] {
+                store
+                    .put(
+                        &scope(id),
+                        &slot(slot_name),
+                        ValueKind::Secret,
+                        format!("\"{n}\""),
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+        for (n, id) in scopes.iter().enumerate() {
+            let own = store.list(&scope(id)).await.unwrap();
+            let slots: Vec<_> = own.iter().map(|v| v.slot.to_string()).collect();
+            assert_eq!(
+                slots,
+                ["cenv.a.X", "cenv.a.b.X", "env:A", "input:a.b"],
+                "{id}"
+            );
+            assert!(own.iter().all(|v| v.value == format!("\"{n}\"")), "{id}");
+        }
     }
 
     #[tokio::test]
