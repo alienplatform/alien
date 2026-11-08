@@ -13,6 +13,7 @@ use alien_core::{
 use alien_error::{AlienError, Context};
 use alien_permissions::{
     generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
+    key_access::{cryptography_service_accounts, REMOTE_CRYPTOGRAPHY},
     BindingTarget,
 };
 use hcl::expr::Expression;
@@ -261,17 +262,31 @@ fn emit_management_access(
     Ok(())
 }
 
+/// Encrypt and decrypt on the key for the remote-bindings identity and for each service
+/// account whose permission profile grants `key/remote-cryptography` on it.
 fn emit_remote_access(ctx: &EmitContext<'_>, label: &str, fragment: &mut TfFragment) -> Result<()> {
-    if alien_core::remote_bindings::remote_binding_for_entry(ctx.resource).is_none() {
+    let mut principals = Vec::new();
+    if alien_core::remote_bindings::remote_binding_for_entry(ctx.resource).is_some() {
+        let access_label = remote_bindings_label(ctx).ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: "remote Key has no Remote Bindings identity".to_string(),
+            })
+        })?;
+        principals.push((access_label, "access".to_string()));
+    }
+    for (index, account_id) in cryptography_service_accounts(ctx.stack, ctx.resource_id)
+        .into_iter()
+        .enumerate()
+    {
+        if let Some(account_label) = ctx.name_for(&account_id) {
+            principals.push((account_label, format!("runtime_{index}")));
+        }
+    }
+    if principals.is_empty() {
         return Ok(());
     }
-    let access_label = remote_bindings_label(ctx).ok_or_else(|| {
-        AlienError::new(ErrorData::GenericError {
-            message: "remote Key has no Remote Bindings identity".to_string(),
-        })
-    })?;
-    let permission_set = alien_permissions::get_permission_set("key/remote-cryptography")
-        .ok_or_else(|| {
+    let permission_set =
+        alien_permissions::get_permission_set(REMOTE_CRYPTOGRAPHY).ok_or_else(|| {
             AlienError::new(ErrorData::GenericError {
                 message: "key/remote-cryptography permission set is not registered".to_string(),
             })
@@ -286,51 +301,53 @@ fn emit_remote_access(ctx: &EmitContext<'_>, label: &str, fragment: &mut TfFragm
         })?;
 
     emit_remote_bindings_role_definitions(fragment, permission_set)?;
-    for (index, binding) in plan.bindings.iter().enumerate() {
-        let role_definition_id = match &binding.role_definition {
-            AzureRoleDefinitionRef::Predefined { role_definition_id } => {
-                expr::template(role_definition_id.clone())
-            }
-            AzureRoleDefinitionRef::Custom { key } => {
-                let custom_index = plan
-                    .custom_roles
-                    .iter()
-                    .position(|role| &role.key == key)
-                    .ok_or_else(|| {
+    for (principal_label, owner) in principals {
+        for (index, binding) in plan.bindings.iter().enumerate() {
+            let role_definition_id = match &binding.role_definition {
+                AzureRoleDefinitionRef::Predefined { role_definition_id } => {
+                    expr::template(role_definition_id.clone())
+                }
+                AzureRoleDefinitionRef::Custom { key } => {
+                    let custom_index = plan
+                        .custom_roles
+                        .iter()
+                        .position(|role| &role.key == key)
+                        .ok_or_else(|| {
                         AlienError::new(ErrorData::GenericError {
                             message: format!("missing generated Azure role '{key}'"),
                         })
                     })?;
-                let role_label = remote_bindings_role_label(&binding.role_name, custom_index);
-                expr::traversal([
-                    "azurerm_role_definition",
-                    role_label.as_str(),
-                    "role_definition_resource_id",
-                ])
-            }
-        };
-        fragment.resource_blocks.push(resource_block(
-            "azurerm_role_assignment",
-            &format!("{label}_access_{index}"),
-            [
-                attr(
-                    "name",
-                    expr::raw(format!(
-                        "uuidv5(\"oid\", \"deployment:azure:key-access:${{local.resource_prefix}}:{label}:{index}\")"
-                    )),
-                ),
-                attr("scope", expr::template(binding.scope.clone())),
-                attr("role_definition_id", role_definition_id),
-                attr(
-                    "principal_id",
+                    let role_label = remote_bindings_role_label(&binding.role_name, custom_index);
                     expr::traversal([
-                        "azurerm_user_assigned_identity",
-                        access_label,
+                        "azurerm_role_definition",
+                        role_label.as_str(),
+                        "role_definition_resource_id",
+                    ])
+                }
+            };
+            fragment.resource_blocks.push(resource_block(
+                "azurerm_role_assignment",
+                &format!("{label}_{owner}_{index}"),
+                [
+                    attr(
+                        "name",
+                        expr::raw(format!(
+                            "uuidv5(\"oid\", \"deployment:azure:key-{owner}:${{local.resource_prefix}}:{label}:{index}\")"
+                        )),
+                    ),
+                    attr("scope", expr::template(binding.scope.clone())),
+                    attr("role_definition_id", role_definition_id),
+                    attr(
                         "principal_id",
-                    ]),
-                ),
-            ],
-        ));
+                        expr::traversal([
+                            "azurerm_user_assigned_identity",
+                            principal_label,
+                            "principal_id",
+                        ]),
+                    ),
+                ],
+            ));
+        }
     }
 
     Ok(())

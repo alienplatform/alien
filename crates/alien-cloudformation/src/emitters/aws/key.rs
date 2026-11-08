@@ -10,6 +10,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
     aws_key_policy::{aws_key_policy, key_has_native_service_use, key_runtime_service_accounts},
     generators::AwsCloudFormationPermissionsGenerator,
+    key_access::{cryptography_service_accounts, REMOTE_CRYPTOGRAPHY},
     BindingTarget,
 };
 
@@ -41,6 +42,7 @@ impl CfEmitter for AwsKeyEmitter {
         if alien_core::remote_bindings::remote_binding_for_entry(ctx.resource).is_some() {
             resources.push(remote_access_policy(ctx, logical_id)?);
         }
+        resources.extend(runtime_access_policies(ctx, logical_id)?);
         Ok(resources)
     }
 
@@ -218,7 +220,46 @@ fn remote_access_policy(ctx: &EmitContext<'_>, key_id: &str) -> Result<CfResourc
             message: "remote Key has no Remote Bindings identity".to_string(),
         })
     })?;
-    let actions = alien_permissions::get_permission_set("key/remote-cryptography")
+    key_access_policy(
+        ctx,
+        key_id,
+        format!("{key_id}RemoteCryptographyPolicy"),
+        format!("${{AWS::StackName}}-{}-key-access", ctx.resource_id),
+        access_role_id,
+    )
+}
+
+/// Encrypt and decrypt on this key for each service account whose permission profile
+/// grants `key/remote-cryptography` on it. The key policy already lets these roles in,
+/// but a key policy that delegates to IAM still needs the role's own Allow.
+fn runtime_access_policies(ctx: &EmitContext<'_>, key_id: &str) -> Result<Vec<CfResource>> {
+    cryptography_service_accounts(ctx.stack, ctx.resource_id)
+        .into_iter()
+        .filter_map(|account_id| ctx.name_for(&account_id).map(|name| format!("{name}Role")))
+        .enumerate()
+        .map(|(index, role_id)| {
+            key_access_policy(
+                ctx,
+                key_id,
+                format!("{key_id}{role_id}CryptographyPolicy"),
+                format!(
+                    "${{AWS::StackName}}-{}-key-runtime-{index}",
+                    ctx.resource_id
+                ),
+                role_id,
+            )
+        })
+        .collect()
+}
+
+fn key_access_policy(
+    ctx: &EmitContext<'_>,
+    key_id: &str,
+    logical_id: String,
+    policy_name: String,
+    role_id: String,
+) -> Result<CfResource> {
+    let actions = alien_permissions::get_permission_set(REMOTE_CRYPTOGRAPHY)
         .and_then(|set| set.platforms.aws.as_ref())
         .into_iter()
         .flatten()
@@ -227,24 +268,17 @@ fn remote_access_policy(ctx: &EmitContext<'_>, key_id: &str) -> Result<CfResourc
         .collect::<Vec<_>>();
     if actions.is_empty() {
         return Err(AlienError::new(ErrorData::GenericError {
-            message: "key/remote-cryptography has no AWS actions".to_string(),
+            message: format!("{REMOTE_CRYPTOGRAPHY} has no AWS actions"),
         }));
     }
 
-    let mut policy = CfResource::new(
-        format!("{key_id}RemoteCryptographyPolicy"),
-        "AWS::IAM::Policy".to_string(),
-    );
-    policy.properties.insert(
-        "PolicyName".to_string(),
-        CfExpression::sub(format!(
-            "${{AWS::StackName}}-{}-key-access",
-            ctx.resource_id
-        )),
-    );
+    let mut policy = CfResource::new(logical_id, "AWS::IAM::Policy".to_string());
+    policy
+        .properties
+        .insert("PolicyName".to_string(), CfExpression::sub(policy_name));
     policy.properties.insert(
         "Roles".to_string(),
-        CfExpression::list([CfExpression::ref_(access_role_id)]),
+        CfExpression::list([CfExpression::ref_(&role_id)]),
     );
     policy.properties.insert(
         "PolicyDocument".to_string(),

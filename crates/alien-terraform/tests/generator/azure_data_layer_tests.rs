@@ -12,7 +12,8 @@
 //! self-contained.
 
 use super::helpers::{
-    assert_terraform_valid, linter_files, render, snapshot_module, test_utils, try_render,
+    assert_terraform_valid, linter_files, render, resource_attributes, snapshot_module, test_utils,
+    try_render,
 };
 use alien_core::{
     Ai, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
@@ -39,6 +40,73 @@ fn storage_account() -> AzureStorageAccount {
 
 fn service_bus_namespace() -> AzureServiceBusNamespace {
     AzureServiceBusNamespace::new("default-service-bus-namespace".to_string()).build()
+}
+
+#[test]
+fn azure_runtime_only_key_is_usable_by_the_granted_identity_and_no_other() {
+    let mut stack = Stack::new("instance-secrets".to_string())
+        .permissions(alien_core::PermissionsConfig::new().with_profile(
+            "manager",
+            PermissionProfile::new().resource("secrets", ["key/remote-cryptography"]),
+        ))
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            Key::new("secrets".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("manager-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("bystander-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    stack.resources.get_mut("secrets").unwrap().dependencies = vec![ResourceRef::new(
+        AzureResourceGroup::RESOURCE_TYPE,
+        "default-resource-group",
+    )];
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+
+    let assignments = resource_attributes(&module, "azurerm_role_assignment");
+    let for_key: Vec<_> = assignments
+        .iter()
+        .filter(|(label, _)| label.starts_with("secrets_runtime_"))
+        .collect();
+    assert!(
+        !for_key.is_empty(),
+        "{:?}",
+        assignments
+            .iter()
+            .map(|(l, a)| (l, &a["principal_id"], &a["scope"]))
+            .collect::<Vec<_>>()
+    );
+    for (label, assignment) in &for_key {
+        assert!(
+            assignment["principal_id"].contains("azurerm_user_assigned_identity.manager_sa."),
+            "{label}: {assignment:?}"
+        );
+    }
+    assert!(
+        assignments
+            .iter()
+            .all(|(_, assignment)| !assignment["principal_id"].contains("bystander")),
+        "the bystander identity is granted nothing: {assignments:?}"
+    );
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let role = rendered
+        .find("Encrypt And Decrypt [manager]")
+        .expect("the manager gets its own encrypt/decrypt role definition");
+    let role = &rendered[role..role + 1200];
+    assert!(role.contains("keys/encrypt/action"), "{role}");
+    assert!(role.contains("keys/decrypt/action"), "{role}");
+    assert_terraform_valid(&module, "azure_runtime_only_key_grant");
 }
 
 #[test]
