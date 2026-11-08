@@ -20,9 +20,10 @@ pub use azure::{
     AzureAiImportData, AzureArtifactRegistryImportData, AzureBuildImportData,
     AzureComputeClusterImportData, AzureContainerAppsEnvironmentImportData,
     AzureFlexibleServerPostgresImportData, AzureKeyImportData, AzureKvImportData,
-    AzureNetworkImportData, AzureQueueImportData, AzureRemoteBindingsImportData,
-    AzureRemoteStackManagementImportData, AzureResourceGroupImportData, AzureSandboxImportData,
-    AzureSandboxNetwork, AzureServiceAccountImportData, AzureServiceActivationImportData,
+    AzureManagedRedisImportData, AzureNetworkImportData, AzureQueueImportData,
+    AzureRemoteBindingsImportData, AzureRemoteStackManagementImportData,
+    AzureResourceGroupImportData, AzureSandboxImportData, AzureSandboxNetwork,
+    AzureServiceAccountImportData, AzureServiceActivationImportData,
     AzureServiceBusNamespaceImportData, AzureStorageAccountImportData, AzureStorageImportData,
     AzureVaultImportData, AzureWorkerImportData,
 };
@@ -167,6 +168,7 @@ mod schema_snapshots {
                 schema::<AzureFlexibleServerPostgresImportData>(),
             ),
             ("azure_queue", schema::<AzureQueueImportData>()),
+            ("azure_redis", schema::<AzureManagedRedisImportData>()),
             (
                 "azure_remote_stack_management",
                 schema::<AzureRemoteStackManagementImportData>(),

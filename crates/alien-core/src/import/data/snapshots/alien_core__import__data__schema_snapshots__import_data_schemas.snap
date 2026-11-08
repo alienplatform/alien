@@ -1477,6 +1477,58 @@ expression: schemas
     "title": "AzureQueueImportData",
     "type": "object"
   },
+  "azure_redis": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "Azure Managed Redis registration data: the handles by which a setup-created cluster is registered as a Frozen Redis resource. Setup owns the cluster, Alien refreshes and heartbeats it. The access key is never carried; workloads list it from the database.",
+    "properties": {
+      "clusterName": {
+        "description": "Cluster name.",
+        "type": "string"
+      },
+      "clusterResourceId": {
+        "description": "Full ARM resource ID of the cluster.",
+        "type": "string"
+      },
+      "highAvailability": {
+        "default": false,
+        "description": "Whether high availability is on.",
+        "type": "boolean"
+      },
+      "host": {
+        "description": "Endpoint host name (resolves to the private endpoint inside the VNet).",
+        "type": "string"
+      },
+      "port": {
+        "description": "Listening port.",
+        "format": "uint16",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "privateEndpointName": {
+        "description": "Private endpoint that fronts the cluster.",
+        "type": "string"
+      },
+      "resourceGroup": {
+        "description": "Resource group of the cluster.",
+        "type": "string"
+      },
+      "sku": {
+        "description": "SKU the cluster runs, such as `Balanced_B1`.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "clusterName",
+      "clusterResourceId",
+      "host",
+      "port",
+      "privateEndpointName",
+      "resourceGroup",
+      "sku"
+    ],
+    "title": "AzureManagedRedisImportData",
+    "type": "object"
+  },
   "azure_remote_stack_management": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "description": "Azure RemoteStackManagement ImportData — UAMI + Federated Identity Credential the manager uses to act on this stack via Azure AD.",

@@ -291,6 +291,7 @@ use utoipa::OpenApi;
     AzureServiceBusNamespaceImportData,
     AzureStorageAccountImportData,
     AzureFlexibleServerPostgresImportData,
+    AzureManagedRedisImportData,
     AzureSandboxImportData,
     ReportedOperation,
     OperationsReport,
