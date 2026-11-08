@@ -69,20 +69,10 @@ fn is_public(facts: &Facts<'_>) -> std::result::Result<bool, String> {
     .map_err(|error| error.to_string())
 }
 
-/// The install's resource group, as Azure resource ids name it.
-fn resource_group(facts: &Facts<'_>) -> String {
-    match &facts.place.install {
-        alien_signing::InstallId::Azure {
-            subscription,
-            resource_group,
-        } => format!("/subscriptions/{subscription}/resourceGroups/{resource_group}"),
-        _ => String::new(),
-    }
-}
-
 fn app_rows<'a>(facts: &'a Facts<'a>, environment: Option<&'a str>) -> Vec<Row<'a>> {
     vec![
-        // It runs as the workload's identity, plus only the install's own identities.
+        // It runs as the workload's identity and no other: the install's other identities (the
+        // verifier's, setup's) carry grants a worker must never have.
         signed("/identity", move |value| {
             if value["type"].as_str() != Some("UserAssigned") {
                 return Err(format!("its identity type is {}", value["type"]));
@@ -383,9 +373,11 @@ mod tests {
     }
 
     fn azure_release() -> SignedStatement {
-        let mut body = release_body(vec![function_workload_with(&format!(
-            "{IMAGE_HOST}/api@{DIGEST}"
-        ))]);
+        let mut workload = function_workload_with(&format!("{IMAGE_HOST}/api@{DIGEST}"));
+        workload
+            .provided_env
+            .push("ALIEN_PUBLIC_ENDPOINTS_JSON".to_string());
+        let mut body = release_body(vec![workload]);
         body.platform = "azure".to_string();
         signed_release(1, &body)
     }
@@ -461,6 +453,11 @@ mod tests {
         cased["properties"]["managedEnvironmentId"] =
             json!(ENVIRONMENT.replace("resourceGroups", "resourcegroups"));
         checked(create(cased)).await.unwrap();
+        let mut upper = app();
+        upper["identity"]["userAssignedIdentities"] = json!({
+            place().run_as("execution").to_uppercase(): {}
+        });
+        checked(create(upper)).await.unwrap();
     }
 
     /// The install's subscription and the Container Apps transport, which the deployment
