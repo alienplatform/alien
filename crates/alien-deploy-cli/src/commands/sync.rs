@@ -3816,12 +3816,25 @@ async fn collect_report(
         None,
     )
     .await?;
-    report_from_status(site, record, status, telemetry, dropped).map(Some)
+    report_from_status(
+        site,
+        record,
+        &settings.registry,
+        status,
+        telemetry,
+        dropped,
+    )
+    .map(Some)
 }
 
+/// `registry` is where the site pushes images now. The record's inventory
+/// lists layers in the registry the release was installed from, so after a
+/// registry switch it describes the wrong place and is reported empty: the
+/// next bundle then carries every layer.
 fn report_from_status(
     site: &SiteState,
     record: &InstalledBundle,
+    registry: &str,
     status: serde_json::Value,
     telemetry: Vec<ReportedBatch>,
     dropped: u64,
@@ -3830,6 +3843,10 @@ fn report_from_status(
         && status["sequence"].as_u64() == record.sequence
         && status["state"]["status"] == "running"
         && current_release(&status).as_deref() == Some(record.release_id.as_str());
+    let registry_changed = record
+        .registry
+        .as_deref()
+        .is_some_and(|installed| installed.trim_end_matches('/') != registry.trim_end_matches('/'));
     let report = SiteReport {
         deployment_id: site.deployment_id.clone(),
         capabilities: SiteCapabilities::default(),
@@ -3853,7 +3870,11 @@ fn report_from_status(
         .context(config_error("reading resource heartbeats"))?,
         telemetry,
         dropped,
-        inventory: record.inventory.clone(),
+        inventory: if registry_changed {
+            BTreeSet::new()
+        } else {
+            record.inventory.clone()
+        },
     };
     Ok(report)
 }
@@ -3875,7 +3896,7 @@ fn save_report(folder: &Path, report: &SiteReport) -> Result<()> {
     .into_alien_error()
     .context(config_error("writing the report"))?;
     println!(
-        "Wrote a report for the vendor ({} telemetry batches).",
+        "Wrote a status report ({} telemetry batches).",
         report.telemetry.len()
     );
     Ok(())
@@ -7128,6 +7149,47 @@ stringData:
     }
 
     #[test]
+    fn report_inventory_follows_the_registry_the_site_pushes_to() {
+        let layer = airgap::inventory_key("vendor/operator", "sha256:aaaa");
+        let record = InstalledBundle {
+            rollout_succeeded: true,
+            sequence: Some(1),
+            target_hash: None,
+            configuration_revision: None,
+            release_id: "rel_1".into(),
+            stack_id: "app".into(),
+            chart: "app.tgz".into(),
+            chart_images: BTreeMap::new(),
+            telemetry_ack: None,
+            inventory: BTreeSet::from([layer.clone()]),
+            registry: Some("registry-a.internal/vendor".into()),
+        };
+        let site = SiteState::default();
+        let status = serde_json::json!({"writtenAt": "now", "sequence": 1,
+            "state": {"status": "running", "currentRelease": {"releaseId": "rel_1"}}});
+        let inventory = |registry: &str| {
+            report_from_status(&site, &record, registry, status.clone(), vec![], 0)
+                .unwrap()
+                .inventory
+        };
+
+        assert_eq!(
+            inventory("registry-a.internal/vendor"),
+            BTreeSet::from([layer.clone()]),
+            "the same registry keeps the inventory"
+        );
+        assert_eq!(
+            inventory("registry-a.internal/vendor/"),
+            BTreeSet::from([layer]),
+            "a trailing slash is the same registry"
+        );
+        assert!(
+            inventory("registry-b.internal/vendor").is_empty(),
+            "layers recorded for registry A say nothing about registry B"
+        );
+    }
+
+    #[test]
     fn report_confirms_configuration_only_for_the_running_bundle_sequence() {
         let mut record = InstalledBundle {
             rollout_succeeded: true,
@@ -7146,7 +7208,7 @@ stringData:
         let mut status = serde_json::json!({"writtenAt": "now", "sequence": 7,
             "state": {"status": "running", "currentRelease": {"releaseId": "rel_1"}}});
         let report = |record: &InstalledBundle, status: &serde_json::Value| {
-            let report = report_from_status(&site, record, status.clone(), vec![], 0).unwrap();
+            let report = report_from_status(&site, record, "", status.clone(), vec![], 0).unwrap();
             (
                 report.installed_target_hash,
                 report.applied_configuration_revision,
@@ -7365,7 +7427,7 @@ stringData:
             ..Default::default()
         };
         let mut status = serde_json::json!({"writtenAt": "2026-01-01T00:00:00Z", "state": {"status": "running"}, "heartbeats": [heartbeat.clone()]});
-        let report = report_from_status(&site, &record, status.clone(), Vec::new(), 0).unwrap();
+        let report = report_from_status(&site, &record, "", status.clone(), Vec::new(), 0).unwrap();
         assert_eq!(report.written_at, "2026-01-01T00:00:00Z");
         assert_eq!(
             report.heartbeats,
@@ -7373,13 +7435,13 @@ stringData:
         );
         status.as_object_mut().unwrap().remove("heartbeats");
         assert!(
-            report_from_status(&site, &record, status.clone(), Vec::new(), 0)
+            report_from_status(&site, &record, "", status.clone(), Vec::new(), 0)
                 .unwrap()
                 .heartbeats
                 .is_empty()
         );
         status["heartbeats"] = serde_json::json!([{"invalid": true}]);
-        assert!(report_from_status(&site, &record, status, Vec::new(), 0).is_err());
+        assert!(report_from_status(&site, &record, "", status, Vec::new(), 0).is_err());
     }
 
     #[tokio::test]
