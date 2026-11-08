@@ -266,6 +266,24 @@ impl<L: LambdaApi, M: MachineApi> Backend for AwsBackend<L, M> {
         crate::cloud_write::lambda::forward(&self.lambda, facts, write, newest).await
     }
 
+    /// Deleting the function takes its concurrency, URL, aliases and invoke grants with it.
+    async fn delete_workload(&self, name: &str) -> Result<bool> {
+        match self.lambda.delete_function(name, None).await {
+            Ok(()) => Ok(true),
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error).context(ErrorData::CloudCallFailed {
+                operation: format!("lambda:DeleteFunction {name}"),
+            }),
+        }
+    }
+
     async fn roll(
         &self,
         place: &Place,

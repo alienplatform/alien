@@ -584,6 +584,21 @@ impl Backend for GcpBackend {
         self.0.resize_group(target, zone, size).await
     }
 
+    /// Deleting the service takes its IAM policy with it. Cloud Run finishes the delete in the
+    /// background; the controller waits for the service to be gone.
+    async fn delete_workload(&self, name: &str) -> Result<bool> {
+        let deleted = self
+            .0
+            .call(
+                reqwest::Method::DELETE,
+                &self.0.service_url(name),
+                None,
+                &format!("run.services.delete {name}"),
+            )
+            .await?;
+        Ok(deleted.is_some())
+    }
+
     async fn remove(
         &self,
         _place: &Place,

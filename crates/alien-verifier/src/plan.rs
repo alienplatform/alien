@@ -33,6 +33,18 @@ pub enum Request {
     /// Delete named machines of a group, never below its signed minimum
     /// (GCP, Azure).
     RemoveMachines(crate::machines::RemoveMachines),
+    /// Delete a Live workload's function, service or app (uninstall).
+    DeleteWorkload(DeleteWorkload),
+}
+
+/// Delete the function, Cloud Run service or Container App of a Live workload, with everything
+/// the cloud attaches to it. No statement is needed: a delete can only cause an outage, which
+/// a control plane can already cause by not deploying.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeleteWorkload {
+    /// The workload, whose cloud resource is `<prefix>-<workload>`.
+    pub workload: String,
 }
 
 /// Where the verifier runs, as it learned from its own identity: what it

@@ -14,7 +14,7 @@ use crate::cloud_write::{own_workload, ApplyWrite, CloudWrite, Facts};
 use crate::error::{ErrorData, Result};
 use crate::function::StillNewest;
 use crate::machines::{self, RemoveMachines, RollMachines, Scale};
-use crate::plan::{Place, Reads, Request, SetupNetwork};
+use crate::plan::{DeleteWorkload, Place, Reads, Request, SetupNetwork};
 use crate::trust::{accept, find_install, store_ledger, Floor, Install, InstallStore};
 
 /// The cloud writes one verifier makes.
@@ -78,6 +78,11 @@ pub trait Backend: Send + Sync {
             "on AWS management terminates machines and AWS holds the signed bounds",
         ))
     }
+    /// Delete the function, service or app `name` with what the cloud attaches to it. Answers
+    /// whether it existed.
+    async fn delete_workload(&self, name: &str) -> Result<bool> {
+        Err(refused(format!("this cloud deletes no workload ({name})")))
+    }
 }
 
 fn refused(reason: impl Into<String>) -> AlienError<ErrorData> {
@@ -131,7 +136,24 @@ impl Verifier {
             Request::RollMachines(request) => self.roll(&request).await,
             Request::Scale(request) => self.scale(&request).await,
             Request::RemoveMachines(request) => self.remove(&request).await,
+            Request::DeleteWorkload(request) => self.delete_workload(&request).await,
         }
+    }
+
+    /// Delete a Live workload's resource. The name is the install's `<prefix>-<workload>` and
+    /// never the verifier's own, which only setup's teardown removes.
+    async fn delete_workload(&self, request: &DeleteWorkload) -> Result<Value> {
+        let (_, place) = self.install().await?;
+        let name = place.function_name(&request.workload)?;
+        if name == self.own_name || name == format!("{}-verifier", place.prefix) {
+            return Err(refused(format!(
+                "workload '{}' would be the install's verifier",
+                request.workload
+            )));
+        }
+        let existed = self.backend.delete_workload(&name).await?;
+        info!(name = %name, existed, "deleted a Live workload");
+        Ok(json!({"deleted": name, "existed": existed}))
     }
 
     async fn write(&self, request: &ApplyWrite) -> Result<Value> {
@@ -842,5 +864,74 @@ mod tests {
             "{reason}"
         );
         assert!(backend.0.lock().unwrap().is_empty());
+    }
+
+    /// A backend that records each workload delete.
+    #[derive(Default)]
+    struct Deletes(Mutex<Vec<String>>);
+
+    #[async_trait]
+    impl Backend for Deletes {
+        async fn binding_reads(
+            &self,
+            _place: &Place,
+            _workload: &Workload,
+        ) -> Result<BTreeMap<String, String>> {
+            Ok(BTreeMap::new())
+        }
+        async fn delete_workload(&self, name: &str) -> Result<bool> {
+            self.0.lock().unwrap().push(name.to_string());
+            Ok(true)
+        }
+    }
+
+    /// Uninstall deletes a Live workload by the name the install gives it, with no statement,
+    /// and never the verifier or a name outside the install's own.
+    #[tokio::test]
+    async fn a_delete_removes_only_the_installs_own_workload_and_never_the_verifier() {
+        let list = signer_list_of(PROJECT, &ci(), Utc::now());
+        let backend = Arc::new(Deletes::default());
+        let verifier = Verifier {
+            own_name: format!("{PREFIX}-verifier"),
+            install_id: Arc::new(|prefix| InstallId::Gcp {
+                project: "shop-prod".to_string(),
+                prefix: prefix.to_string(),
+            }),
+            store: Arc::new(MemoryStore::protected(&settings_for(
+                &list, PREFIX, CHANNEL,
+            ))),
+            backend: backend.clone(),
+            vpc: None,
+            machine_network: None,
+        };
+
+        let answer = verifier
+            .handle(json!({"deleteWorkload": {"workload": "api"}}))
+            .await
+            .unwrap();
+        assert_eq!(answer, json!({"deleted": "acme-prod-api", "existed": true}));
+
+        for (workload, why) in [
+            ("verifier", "would be the install's verifier"),
+            ("api/../other", "is not one setup creates as is"),
+            ("api?x=1", "is not one setup creates as is"),
+            ("", "is not one setup creates as is"),
+        ] {
+            let reason = refusal(
+                verifier
+                    .handle(json!({"deleteWorkload": {"workload": workload}}))
+                    .await,
+            );
+            assert!(reason.contains(why), "{workload}: {reason}");
+        }
+        let reason = refusal(
+            verifier
+                .handle(
+                    json!({"deleteWorkload": {"workload": "api", "name": "acme-prod-verifier"}}),
+                )
+                .await,
+        );
+        assert!(reason.contains("unknown field"), "{reason}");
+        assert_eq!(*backend.0.lock().unwrap(), ["acme-prod-api"]);
     }
 }

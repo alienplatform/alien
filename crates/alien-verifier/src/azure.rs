@@ -440,6 +440,22 @@ impl Backend for AzureBackend {
         .await
     }
 
+    /// Azure finishes the delete in the background; the controller waits for the app to be
+    /// gone.
+    async fn delete_workload(&self, name: &str) -> Result<bool> {
+        let deleted = self
+            .0
+            .call(
+                reqwest::Method::DELETE,
+                &self.0.app_url(name),
+                ARM,
+                None,
+                &format!("containerApps delete {name}"),
+            )
+            .await?;
+        Ok(deleted.is_some())
+    }
+
     async fn roll(
         &self,
         place: &Place,

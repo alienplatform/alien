@@ -232,6 +232,16 @@ pub fn aws_verifier_policy(prefix: &str, account: &str, region: &str, publisher:
                 ]
             },
             {
+                // Uninstall deletes a Live workload through the verifier, which takes its
+                // concurrency, URL, aliases and grants along.
+                "Sid": "DeleteThisInstallsFunctions",
+                "Effect": "Allow",
+                "Action": "lambda:DeleteFunction",
+                "Resource": [
+                    format!("arn:aws:lambda:{region}:{account}:function:{prefix}-*")
+                ]
+            },
+            {
                 // It creates the install's functions with the tags management's grants on
                 // runtime resources are scoped to.
                 "Sid": "TagThisInstallsFunctions",
@@ -244,7 +254,7 @@ pub fn aws_verifier_policy(prefix: &str, account: &str, region: &str, publisher:
             {
                 "Sid": "VerifierNeverChangesItself",
                 "Effect": "Deny",
-                "Action": lambda_writes(),
+                "Action": lambda_writes().into_iter().chain(["lambda:DeleteFunction"]).collect::<Vec<_>>(),
                 "Resource": [
                     format!("arn:aws:lambda:{region}:{account}:function:{verifier}"),
                     format!("arn:aws:lambda:{region}:{account}:function:{verifier}:*")
@@ -443,6 +453,30 @@ mod tests {
             &policy,
             "lambda:UpdateFunctionConfiguration",
             "arn:aws:lambda:us-east-1:111122223333:function:orders-api"
+        ));
+    }
+
+    /// Uninstall deletes the install's Live functions through the verifier; the verifier never
+    /// deletes itself or another install's function.
+    #[test]
+    fn the_verifier_deletes_the_installs_functions_but_never_itself() {
+        let policy = aws_verifier_policy("orders", "111122223333", "us-east-1", "444455556666");
+        let function =
+            |name: &str| format!("arn:aws:lambda:us-east-1:111122223333:function:{name}");
+        assert!(allows(
+            &policy,
+            "lambda:DeleteFunction",
+            &function("orders-api")
+        ));
+        assert!(denies(
+            &policy,
+            "lambda:DeleteFunction",
+            &function("orders-verifier")
+        ));
+        assert!(!allows(
+            &policy,
+            "lambda:DeleteFunction",
+            &function("billing-api")
         ));
     }
 
