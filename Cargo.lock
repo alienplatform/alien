@@ -432,6 +432,7 @@ dependencies = [
  "alien-error",
  "alien-preflights",
  "async-trait",
+ "axum 0.8.9",
  "base64 0.22.1",
  "container-registry 0.3.1 (git+https://github.com/alienplatform/container_registry-rs.git?rev=fd28e7c)",
  "dirs 5.0.1",
@@ -7514,8 +7515,6 @@ dependencies = [
 [[package]]
 name = "oci-client"
 version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b74df13319e08bc386d333d3dc289c774c88cc543cae31f5347db07b5ec2172"
 dependencies = [
  "bytes",
  "chrono",

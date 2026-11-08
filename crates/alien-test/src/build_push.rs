@@ -13,7 +13,9 @@ use alien_aws_clients::{
     aws::ecr::{BatchGetImageRequest, ImageIdentifier},
     EcrApi, EcrClient,
 };
-use alien_build::settings::{BuildSettings, PlatformBuildSettings, PushSettings};
+use alien_build::settings::{
+    registry_proxy_push_policy, BuildSettings, PlatformBuildSettings, PushSettings,
+};
 use alien_core::{
     AwsClientConfig, AwsCredentials, Container, ContainerCode, Daemon, DaemonCode, Platform,
     Sandbox, SandboxCode, Worker, WorkerCode,
@@ -163,10 +165,7 @@ async fn create_proxy_push_settings(
         options: PushOptions {
             auth: RegistryAuth::Basic("token".to_string(), manager.admin_token.clone()),
             protocol,
-            // Always use monolithic push through the proxy. The proxy doesn't
-            // know the upstream registry type, and some registries (GAR) reject
-            // chunked PATCH uploads. Monolithic works with all registries.
-            monolithic_push: dockdash::MonolithicPushPolicy::Always,
+            monolithic_push: registry_proxy_push_policy(platform),
             ..Default::default()
         },
     })

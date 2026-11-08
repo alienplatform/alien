@@ -1,4 +1,5 @@
 [workspace]
+exclude = ["vendor/oci-client"]
 members = [
   "crates/alien-commands",
   "crates/alien-commands-client",
@@ -288,9 +289,15 @@ mockall = { version = "0.15.0" }
 hcl-rs = "0.19"
 crossterm = "0.29"
 
+# --- Patched dependencies ---
+# oci-client with chunked uploads that work against Amazon ECR; vendor/oci-client/Cargo.toml
+# says what changed. Drop this once an upstream release carries both changes.
+[patch.crates-io]
+oci-client = { path = "vendor/oci-client" }
+
 # --- Local development overrides ---
-# Uncomment a `[patch.crates-io]` block here to use local checkouts of any
-# dependency instead of the published version. Do NOT commit this uncommented.
+# Add an entry to `[patch.crates-io]` above to use a local checkout of any dependency
+# instead of the published version. Do NOT commit such an entry.
 
 [profile.dev]
 debug = 1
