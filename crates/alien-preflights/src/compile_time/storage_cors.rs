@@ -98,6 +98,8 @@ fn origin_error(origin: &str, platform: Platform) -> Option<String> {
     if authority.chars().any(|c| c.is_ascii_uppercase()) {
         return Some("has uppercase letters; browsers send the host in lowercase".to_string());
     }
+    // Browsers send IDN hosts as punycode, and these characters can't appear in a host
+    // (the WHATWG URL forbidden host code points that remain after the checks above).
     let valid_host = match host.strip_prefix('[') {
         Some(ipv6) => ipv6.strip_suffix(']').is_some_and(|ip| {
             !ip.is_empty()
@@ -108,13 +110,13 @@ fn origin_error(origin: &str, platform: Platform) -> Option<String> {
         None => {
             !host.is_empty()
                 && host.chars().all(|c| {
-                    c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '-' | '*')
+                    c.is_ascii() && !matches!(c, '\\' | '<' | '>' | '^' | '|' | '%' | '[' | ']')
                 })
         }
     };
     if !valid_host {
         return Some(
-            "has no valid host; use letters, digits, dots and hyphens, or a bracketed IPv6 address"
+            "has no valid host; use an ASCII (punycode) host name or a bracketed IPv6 address"
                 .to_string(),
         );
     }
@@ -175,7 +177,8 @@ mod tests {
                         "https://app.example.com",
                         "http://localhost:5173",
                         "http://[::1]:8080",
-                        "http://[::1]"
+                        "http://[::1]",
+                        "https://internal_app.corp.example"
                     ],
                     platform
                 )
@@ -203,7 +206,7 @@ mod tests {
                         "https://App.Example.com",
                         "https://:443",
                         "https://app.example.com\\upload",
-                        "https://app_example.com",
+                        "https://bücher.example",
                     ],
                     platform
                 )
@@ -218,9 +221,9 @@ mod tests {
                     "Storage 'st': corsUploadOrigins[6] 'https://app.example.com:' has a port that is not a number",
                     "Storage 'st': corsUploadOrigins[7] 'https://app.example.com:http' has a port that is not a number",
                     "Storage 'st': corsUploadOrigins[8] 'https://App.Example.com' has uppercase letters; browsers send the host in lowercase",
-                    "Storage 'st': corsUploadOrigins[9] 'https://:443' has no valid host; use letters, digits, dots and hyphens, or a bracketed IPv6 address",
-                    "Storage 'st': corsUploadOrigins[10] 'https://app.example.com\\upload' has no valid host; use letters, digits, dots and hyphens, or a bracketed IPv6 address",
-                    "Storage 'st': corsUploadOrigins[11] 'https://app_example.com' has no valid host; use letters, digits, dots and hyphens, or a bracketed IPv6 address",
+                    "Storage 'st': corsUploadOrigins[9] 'https://:443' has no valid host; use an ASCII (punycode) host name or a bracketed IPv6 address",
+                    "Storage 'st': corsUploadOrigins[10] 'https://app.example.com\\upload' has no valid host; use an ASCII (punycode) host name or a bracketed IPv6 address",
+                    "Storage 'st': corsUploadOrigins[11] 'https://bücher.example' has no valid host; use an ASCII (punycode) host name or a bracketed IPv6 address",
                 ],
                 "{platform:?}"
             );
