@@ -6,6 +6,7 @@ pub mod artifactregistry;
 pub mod cloud_kms;
 pub mod cloud_quotas;
 pub mod cloud_sql;
+pub mod memorystore;
 pub mod cloudasset;
 pub mod cloudbuild;
 pub mod cloudrun;
