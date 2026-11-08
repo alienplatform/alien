@@ -331,10 +331,11 @@ impl DeploymentLoop {
         self
     }
 
-    /// Give a protected deployment's step what its enforcers verify: the target release's
-    /// signed statement for this platform, the project's signer list chain and the deployment's
-    /// newest signed config. Controllers hand them over unchanged; the enforcers check them
-    /// against the install's own trust. Unprotected deployments are left as they are.
+    /// Give a protected deployment's step what its enforcers verify: each release the step
+    /// carries (the target being deployed, the current one being looked after or deleted) with
+    /// its signed statement for this platform and the project's signer list chain, and the
+    /// deployment's newest signed config. Controllers hand them over unchanged; the enforcers
+    /// check them against the install's own trust. Unprotected deployments are left as they are.
     async fn add_signed_statements(
         &self,
         deployment: &DeploymentRecord,
@@ -344,12 +345,14 @@ impl DeploymentLoop {
         if config.stack_settings.signing.is_none() {
             return Ok(());
         }
-        let Some(target) = state.target_release.as_mut() else {
-            return Ok(());
+        let has_release = |release: &Option<ReleaseInfo>| {
+            release
+                .as_ref()
+                .is_some_and(|release| release.release_id.is_some())
         };
-        let Some(release_id) = target.release_id.clone() else {
+        if !has_release(&state.target_release) && !has_release(&state.current_release) {
             return Ok(());
-        };
+        }
         let signing = self.signing.as_ref().ok_or_else(|| {
             AlienError::new(GenericError {
                 message: format!(
@@ -358,22 +361,33 @@ impl DeploymentLoop {
                 ),
             })
         })?;
-        let release = self
-            .release_store
-            .get_release(&Subject::system(), &release_id)
-            .await?
-            .ok_or_else(|| {
-                AlienError::new(GenericError {
-                    message: format!("Release {release_id} not found"),
-                })
-            })?;
-        target.signed = release.signed_stacks.get(&deployment.platform).cloned();
-        target.signer_lists = signing
-            .signer_lists(&release.project_id)
-            .await?
-            .into_iter()
-            .map(|record| record.statement)
-            .collect();
+        for release in [
+            state.target_release.as_mut(),
+            state.current_release.as_mut(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let Some(release_id) = release.release_id.clone() else {
+                continue;
+            };
+            let stored = self
+                .release_store
+                .get_release(&Subject::system(), &release_id)
+                .await?
+                .ok_or_else(|| {
+                    AlienError::new(GenericError {
+                        message: format!("Release {release_id} not found"),
+                    })
+                })?;
+            release.signed = stored.signed_stacks.get(&deployment.platform).cloned();
+            release.signer_lists = signing
+                .signer_lists(&stored.project_id)
+                .await?
+                .into_iter()
+                .map(|record| record.statement)
+                .collect();
+        }
         config.signed_config = signing.latest_config_statement(&deployment.id).await?;
         Ok(())
     }
@@ -4016,6 +4030,122 @@ mod tests {
                     )
                     .await
                     .unwrap();
+            }
+        }
+
+        /// A protected install that is running or being deleted needs the signed release it
+        /// runs, not only the one being deployed: its machines are checked, replaced and deleted
+        /// only through the verifier, against that release.
+        #[tokio::test]
+        async fn a_protected_installs_running_release_carries_its_signed_statement() {
+            for status in [
+                DeploymentStatus::Running,
+                DeploymentStatus::Deleting,
+                DeploymentStatus::DeletePending,
+            ] {
+                let fixture = Fixture::new(status, transient_error()).await;
+                fixture
+                    .credentials
+                    .unavailable
+                    .store(false, Ordering::SeqCst);
+                let signed = SignedStatement::new(br#"{"type":"release/v2","platform":"local"}"#);
+                let release = fixture
+                    .manager
+                    .release_store
+                    .create_release(
+                        &Subject::system(),
+                        crate::traits::release_store::CreateReleaseParams {
+                            project_id: "default".to_string(),
+                            stacks: HashMap::from([(
+                                Platform::Local,
+                                Stack::new("test".to_string()).build(),
+                            )]),
+                            git_commit_sha: None,
+                            git_commit_ref: None,
+                            git_commit_message: None,
+                            signed_stacks: HashMap::from([(Platform::Local, signed.clone())]),
+                            setup_templates: Default::default(),
+                        },
+                    )
+                    .await
+                    .unwrap();
+                let signer_list = SignedStatement::new(br#"{"type":"signer-list/v1"}"#);
+                let signing = Arc::new(SqliteSigningStore::new(fixture.db.clone()));
+                signing
+                    .add_signer_list(
+                        "default",
+                        &SignerListRecord {
+                            version: 1,
+                            statement: signer_list.clone(),
+                            created_by: "ci".to_string(),
+                            created_at: chrono::Utc::now(),
+                        },
+                    )
+                    .await
+                    .unwrap();
+                let protected = serde_json::to_string(&StackSettings {
+                    deployment_model: alien_core::DeploymentModel::Push,
+                    signing: Some(StackSigning {
+                        fingerprint: format!("SHA256:{}", "a".repeat(64)),
+                        channel: "production".to_string(),
+                    }),
+                    ..Default::default()
+                })
+                .unwrap();
+                fixture
+                    .db
+                    .execute(&format!(
+                        "UPDATE deployments SET stack_settings = '{protected}', current_release_id = '{0}', desired_release_id = '{0}' WHERE id = '{1}'",
+                        release.id, fixture.id
+                    ))
+                    .await
+                    .unwrap();
+
+                let record = fixture.record().await;
+                let mut returned = record.clone();
+                let seen = Arc::new(Mutex::new(Vec::new()));
+                let recorded = seen.clone();
+                let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+                store
+                    .expect_reconcile()
+                    .times(1..)
+                    .returning(move |_, data| {
+                        recorded
+                            .lock()
+                            .unwrap()
+                            .push(data.state.current_release.clone());
+                        returned.runtime_metadata = data.state.runtime_metadata;
+                        Ok(crate::traits::deployment_store::ReconcileOutcome {
+                            record: returned.clone(),
+                            target_operations_bundle_set: None,
+                            target_dynamic_containers: None,
+                        })
+                    });
+                store.expect_delete_deployment().returning(|_, _| Ok(()));
+                let mut runner = fixture.runner().with_signing(Some(signing));
+                runner.deployment_store = Arc::new(store);
+                runner
+                    .process_deployment_inner(
+                        record,
+                        None,
+                        "test-session",
+                        ProcessOptions::heartbeat_tick(),
+                    )
+                    .await
+                    .unwrap();
+
+                let seen = seen.lock().unwrap();
+                assert!(!seen.is_empty(), "{status:?}: the step is checkpointed");
+                for current in seen.iter() {
+                    let current = current.as_ref().expect("the running release is carried");
+                    assert_eq!(current.release_id.as_deref(), Some(release.id.as_str()));
+                    assert_eq!(current.signed, Some(signed.clone()), "{status:?}");
+                    assert_eq!(
+                        current.signer_lists,
+                        vec![signer_list.clone()],
+                        "{status:?}"
+                    );
+                }
             }
         }
 

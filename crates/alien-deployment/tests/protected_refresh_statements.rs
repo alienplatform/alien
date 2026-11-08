@@ -1,8 +1,10 @@
-//! A protected install's health checks hand controllers the signed release that is running.
+//! A protected install's health checks and deletion hand controllers the signed release that is
+//! running.
 //!
-//! On a protected install a machines controller's Ready handler talks to the install's verifier
-//! (a replacement machine is admitted only against the signed release), so the release
-//! statements must reach it on every health tick, not only while provisioning or updating.
+//! On a protected install a machines controller's Ready and Delete handlers talk to the
+//! install's verifier (a replacement machine is admitted, and the machines are deleted, only
+//! against the signed release), so the release statements must reach them on every health tick
+//! and every deletion step, not only while provisioning or updating.
 
 use std::sync::Mutex;
 
@@ -31,6 +33,8 @@ use alien_infra::Result;
 
 /// The release statement each Ready handler was handed, in order.
 static SEEN: Mutex<Vec<Option<SignedStatement>>> = Mutex::new(Vec::new());
+/// The release statement each Delete handler was handed, in order.
+static SEEN_ON_DELETE: Mutex<Vec<Option<SignedStatement>>> = Mutex::new(Vec::new());
 
 /// Stands in for a machines controller: its Ready handler needs the signed release on a
 /// protected install, as the cloud machines controllers do to admit a replacement machine.
@@ -71,6 +75,26 @@ impl ProtectedMachinesProbe {
         })
     }
 
+    #[flow_entry(Delete)]
+    #[handler(
+        state = Deleting,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting
+    )]
+    async fn deleting(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        let statements = alien_infra::verifier::protected_statements(ctx, "machines")?;
+        SEEN_ON_DELETE
+            .lock()
+            .unwrap()
+            .push(statements.map(|statements| statements.release.clone()));
+        Ok(HandlerAction::Continue {
+            state: Deleted,
+            suggested_delay: None,
+        })
+    }
+
+    terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
+    terminal_state!(state = DeleteFailed, status = ResourceStatus::DeleteFailed);
     terminal_state!(
         state = ProvisionFailed,
         status = ResourceStatus::ProvisionFailed
@@ -156,24 +180,43 @@ async fn step(state: DeploymentState, config: &DeploymentConfig) -> DeploymentSt
         .state
 }
 
-#[tokio::test]
-async fn a_protected_install_s_health_check_hands_controllers_the_running_release() {
-    // Controllers outside alien-infra register how their saved state is read back.
-    register_controller_deserializer_extension(Box::new(|type_tag, value| match type_tag {
-        "ProtectedMachinesProbe" => Ok(Some(Box::new(serde_json::from_value::<
-            ProtectedMachinesProbe,
-        >(value)?))),
-        _ => Ok(None),
-    }));
-    register_registry_extension(Box::new(|registry| {
-        registry
-            .register::<ComputeCluster>(ComputeCluster::RESOURCE_TYPE)
-            .with_controller::<ProtectedMachinesProbe>(Platform::Test);
-    }));
-    let release = SignedStatement::new(br#"{"kind":"release/v2"}"#);
-    let signer_list = SignedStatement::new(br#"{"kind":"signers/v1"}"#);
+/// Both tests share the controller's recordings and the global registry.
+static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-    // Arrange: the install is deployed and running its signed release.
+fn protected_settings() -> StackSettings {
+    StackSettings {
+        signing: Some(StackSigning {
+            fingerprint: format!("SHA256:{}", "9f".repeat(32)),
+            channel: "production".to_string(),
+        }),
+        ..StackSettings::default()
+    }
+}
+
+fn register_probe() {
+    static REGISTERED: std::sync::Once = std::sync::Once::new();
+    REGISTERED.call_once(|| {
+        // Controllers outside alien-infra register how their saved state is read back.
+        register_controller_deserializer_extension(Box::new(|type_tag, value| match type_tag {
+            "ProtectedMachinesProbe" => Ok(Some(Box::new(serde_json::from_value::<
+                ProtectedMachinesProbe,
+            >(value)?))),
+            _ => Ok(None),
+        }));
+        register_registry_extension(Box::new(|registry| {
+            registry
+                .register::<ComputeCluster>(ComputeCluster::RESOURCE_TYPE)
+                .with_controller::<ProtectedMachinesProbe>(Platform::Test);
+        }));
+    });
+}
+
+/// An install that was deployed unprotected and now runs `release`.
+async fn running_install(
+    release: &SignedStatement,
+    signer_list: &SignedStatement,
+) -> DeploymentState {
+    register_probe();
     let mut state = DeploymentState {
         status: DeploymentStatus::Pending,
         platform: Platform::Test,
@@ -205,18 +248,23 @@ async fn a_protected_install_s_health_check_hands_controllers_the_running_releas
         .current_release
         .as_ref()
         .expect("the release is current");
-    assert_eq!(current.signed.as_ref(), Some(&release));
+    assert_eq!(current.signed.as_ref(), Some(release));
     assert!(state.target_release.is_none());
+    state
+}
+
+#[tokio::test]
+async fn a_protected_install_s_health_check_hands_controllers_the_running_release() {
+    let _serial = SERIAL.lock().await;
+    let release = SignedStatement::new(br#"{"kind":"release/v2"}"#);
+    let signer_list = SignedStatement::new(br#"{"kind":"signers/v1"}"#);
+
+    // Arrange: the install is deployed and running its signed release.
+    let mut state = running_install(&release, &signer_list).await;
     SEEN.lock().unwrap().clear();
 
     // Act: the same install, protected, takes its health checks.
-    let protected = config(StackSettings {
-        signing: Some(StackSigning {
-            fingerprint: format!("SHA256:{}", "9f".repeat(32)),
-            channel: "production".to_string(),
-        }),
-        ..StackSettings::default()
-    });
+    let protected = config(protected_settings());
     for _ in 0..2 {
         state = step(state, &protected).await;
         // Assert: each tick stays healthy, and the controller got the running release.
@@ -231,5 +279,45 @@ async fn a_protected_install_s_health_check_hands_controllers_the_running_releas
     assert_eq!(
         *SEEN.lock().unwrap(),
         vec![Some(release.clone()), Some(release.clone()), Some(release)]
+    );
+}
+
+#[tokio::test]
+async fn a_protected_install_s_deletion_hands_controllers_the_running_release() {
+    let _serial = SERIAL.lock().await;
+    let release = SignedStatement::new(br#"{"kind":"release/v2"}"#);
+    let signer_list = SignedStatement::new(br#"{"kind":"signers/v1"}"#);
+
+    // Arrange: a running install, whose deletion has been requested.
+    let mut state = running_install(&release, &signer_list).await;
+    SEEN_ON_DELETE.lock().unwrap().clear();
+    state.status = DeploymentStatus::DeletePending;
+
+    // Act: the protected install is deleted, one step at a time.
+    let protected = config(protected_settings());
+    for _ in 0..20 {
+        if !matches!(
+            state.status,
+            DeploymentStatus::DeletePending | DeploymentStatus::Deleting
+        ) {
+            break;
+        }
+        state = step(state, &protected).await;
+        assert!(state.error.is_none(), "{:?}", state.error);
+    }
+
+    // Assert: the delete handler got the release the install runs, and the deletion finished.
+    assert_eq!(
+        *SEEN_ON_DELETE.lock().unwrap(),
+        vec![Some(release)],
+        "the machines are deleted against the running release"
+    );
+    assert!(
+        matches!(
+            state.status,
+            DeploymentStatus::Deleted | DeploymentStatus::RetentionRequired
+        ),
+        "{:?}",
+        state.status
     );
 }

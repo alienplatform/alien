@@ -5,11 +5,12 @@ use alien_core::{
     deployer_secret_environment, deployer_secret_location, deployer_secret_slots,
     AwsEnvironmentInfo, AzureEnvironmentInfo, AzureResourceGroupOutputs, ClientConfig, ComputeKind,
     DeployerSecretEnv, DeployerSecretLocationContext, DeployerSecretReport, DeployerSecretStatus,
-    DeploymentConfig, EnvironmentInfo, EnvironmentVariable, EnvironmentVariableType,
-    EnvironmentVariablesSnapshot, GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform,
-    ResourceLifecycle, ResourceStatus, RuntimeMetadata, SecretDelivery, Stack, StackResourceState,
-    StackState, TestEnvironmentInfo, Vault, VaultBinding, Worker, ENV_ALIEN_COMMANDS_TOKEN,
-    ENV_ALIEN_DEPLOYER_SECRETS, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, SECRETS_VAULT_ID,
+    DeploymentConfig, DeploymentState, EnvironmentInfo, EnvironmentVariable,
+    EnvironmentVariableType, EnvironmentVariablesSnapshot, GcpEnvironmentInfo,
+    LocalEnvironmentInfo, OtlpConfig, Platform, ResourceLifecycle, ResourceStatus, RuntimeMetadata,
+    SecretDelivery, Stack, StackResourceState, StackState, TestEnvironmentInfo, Vault,
+    VaultBinding, Worker, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_DEPLOYER_SECRETS,
+    ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, SECRETS_VAULT_ID,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
@@ -44,6 +45,20 @@ pub(crate) fn release_statements(
         release: release.signed.clone()?,
         signer_lists: release.signer_lists.clone(),
     })
+}
+
+/// The statements of the release an installed deployment runs, for the steps that look after
+/// it (health checks, deletion). A deletion step has no target release, and an install that
+/// was never updated has only a target one.
+pub(crate) fn installed_release_statements(
+    current: &DeploymentState,
+) -> Option<alien_core::ReleaseStatements> {
+    release_statements(
+        current
+            .current_release
+            .as_ref()
+            .or(current.target_release.as_ref()),
+    )
 }
 
 pub(crate) fn injected_target_stack(

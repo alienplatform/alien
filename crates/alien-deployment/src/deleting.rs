@@ -693,8 +693,11 @@ fn deletion_executor(
     client_config: alien_core::ClientConfig,
     service_provider: std::sync::Arc<dyn PlatformServiceProvider>,
 ) -> Result<StackExecutor> {
+    // A protected install's controllers delete its workloads through its verifier, which takes
+    // the signed release the install runs.
     let config = &DeploymentConfig {
         deletion_policy: deletion_policy(current),
+        release_statements: crate::helpers::installed_release_statements(current),
         ..config.clone()
     };
     let executor = if owns_runtime_setup(current.platform, service_provider.as_ref()) {

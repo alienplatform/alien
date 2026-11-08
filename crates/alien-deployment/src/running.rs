@@ -23,8 +23,7 @@ pub async fn handle_running(
     // A protected install's controllers check what runs against the signed release on every
     // tick (a machine that replaces another is admitted only through the verifier), so they get
     // the running release's statements, as provisioning and updates get the target's.
-    config.release_statements =
-        crate::helpers::release_statements(current.current_release.as_ref());
+    config.release_statements = crate::helpers::installed_release_statements(&current);
 
     // Clone current first before moving any fields
     let mut next = current.clone();
