@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/bindings",
-  "version": "3.3.55",
+  "version": "3.3.56",
   "type": "module",
   "sideEffects": false,
   "types": "./dist/index.d.ts",
