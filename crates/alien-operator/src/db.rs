@@ -158,9 +158,23 @@ pub struct OperatorDb {
             Arc<alien_client_core::runtime_credentials::RuntimeCredentials>,
         >,
     >,
+    /// Whether the last pull Secret refresh of this process left the Secret
+    /// holding the Operator's own credential. Kept in memory: the refresh
+    /// runs again on the first sync after a restart.
+    pull_secret_refreshed: std::sync::atomic::AtomicBool,
 }
 
 impl OperatorDb {
+    pub(crate) fn pull_secret_refreshed(&self) -> bool {
+        self.pull_secret_refreshed
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(crate) fn set_pull_secret_refreshed(&self, refreshed: bool) {
+        self.pull_secret_refreshed
+            .store(refreshed, std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub(crate) async fn read_daily_identity(
         &self,
     ) -> Result<Option<crate::daily_identity::DailyIdentityState>> {
@@ -339,6 +353,7 @@ impl OperatorDb {
             daily_identity_operation: Arc::new(Mutex::new(())),
             published_runtime_credentials: Mutex::new(std::collections::HashMap::new()),
             runtime_credentials: Mutex::new(std::collections::HashMap::new()),
+            pull_secret_refreshed: std::sync::atomic::AtomicBool::new(false),
         })
     }
 

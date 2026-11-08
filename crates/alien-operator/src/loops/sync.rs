@@ -402,8 +402,9 @@ async fn sync_with_manager(
         operations_report,
         operations_config: Some(reported_operations_config(state.config.operations.as_ref())),
     };
-    let mut sync_input =
-        SyncInput::builder(sync_request).installed_config_missing(installed_config_missing);
+    let mut sync_input = SyncInput::builder(sync_request)
+        .installed_config_missing(installed_config_missing)
+        .pull_secret_refreshed(state.db.pull_secret_refreshed());
     if let Some(operator_image) = operator_image.cloned() {
         sync_input = sync_input.operator_image(operator_image);
     }
