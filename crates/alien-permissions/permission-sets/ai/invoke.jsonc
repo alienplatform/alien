@@ -23,9 +23,9 @@
         // project id, so requests use the account's system default project; scope the
         // grant to that one project (project/default) rather than project/*, which
         // would also cover any user-created bedrock-mantle project.
-        // ListModels is read-only: on the same project it lists the models the
-        // endpoint serves (its OpenAI-compatible GET /models), so an app can discover
-        // what it may invoke instead of hard-coding model ids.
+        // ListModels is read-only: it lists the models available on the same project
+        // (the endpoint's OpenAI-compatible GET /models), so an app can discover them
+        // instead of hard-coding model ids.
         "binding": {
           "stack": {
             "resources": [
