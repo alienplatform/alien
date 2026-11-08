@@ -1,4 +1,3 @@
-use crate::secret_values::{seal_environment_variables, SecretValuesTarget};
 use std::future::Future;
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
@@ -3843,18 +3842,7 @@ async fn create_deployment_task(
         environment_variables: if variables.is_empty() {
             None
         } else {
-            Some(
-                seal_environment_variables(
-                    client,
-                    Some(workspace),
-                    SecretValuesTarget::DeploymentGroup {
-                        id: deployment_group_id,
-                        platforms: &[platform.to_string()],
-                    },
-                    variables,
-                )
-                .await?,
-            )
+            Some(variables)
         },
         manager_id: None,
         operator_permission: None,
