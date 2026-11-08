@@ -785,6 +785,7 @@ async fn terraform_management_policies_require_numeric_asg_versions() {
             "autoscaling:DeleteAutoScalingGroup",
             "autoscaling:SetDesiredCapacity",
             "autoscaling:TerminateInstanceInAutoScalingGroup",
+            "autoscaling:SuspendProcesses",
             "autoscaling:StartInstanceRefresh",
         ] {
             assert_eq!(
