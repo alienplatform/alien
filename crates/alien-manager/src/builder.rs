@@ -302,6 +302,15 @@ impl AlienManagerBuilder {
             })?,
         );
 
+        // The vault-sync digest in runtime metadata is keyed with a secret that
+        // stays with this manager's state.
+        let digest_key =
+            load_or_create_secrets_digest_key(&state_dir_for_db.join("secrets-digest.key"))
+                .context(ErrorData::ServerInitFailed {
+                    reason: "Failed to load the secrets digest key".to_string(),
+                })?;
+        alien_deployment::set_secrets_digest_key(digest_key);
+
         // --- Stores (only set if not already provided) ---
         // Channel routing joins the deployments table, so it comes with the
         // SQLite deployment store.
@@ -1410,5 +1419,37 @@ roleArn = "arn:aws:iam::123456789012:role/management"
         assert_eq!(azure.managing_tenant_id, "managing-tenant");
         assert_eq!(azure.oidc_issuer, "https://issuer.example.com");
         assert_eq!(azure.oidc_subject, "system:serviceaccount:manager:manager");
+    }
+}
+
+/// Reads the manager's 32-byte secrets digest key, creating it (mode 0600) on
+/// first start.
+fn load_or_create_secrets_digest_key(
+    path: &std::path::Path,
+) -> std::result::Result<[u8; 32], alien_error::AlienError> {
+    use alien_error::IntoAlienError;
+    use std::io::Write;
+
+    match std::fs::read(path) {
+        Ok(bytes) => bytes.try_into().map_err(|_| {
+            alien_error::AlienError::new(alien_error::GenericError {
+                message: format!("'{}' must hold exactly 32 bytes", path.display()),
+            })
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let mut key = [0u8; 32];
+            rand::RngCore::fill_bytes(&mut rand::rng(), &mut key);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).into_alien_error()?;
+            }
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            let mut file = options.open(path).into_alien_error()?;
+            file.write_all(&key).into_alien_error()?;
+            Ok(key)
+        }
+        Err(error) => Err(error).into_alien_error(),
     }
 }

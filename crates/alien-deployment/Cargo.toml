@@ -42,6 +42,8 @@ uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
 hostname = "0.4"
 sha2 = { workspace = true }
+hmac = { workspace = true }
+rand = { workspace = true }
 hex = { workspace = true }
 
 # OpenAPI (optional)
