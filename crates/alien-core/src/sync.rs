@@ -397,6 +397,13 @@ pub struct SyncInput {
     /// rebuild its config. Older managers ignore it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     installed_config_missing: bool,
+    /// Set while the pull Secret the Operator's Deployment references holds
+    /// the Operator's own registry pull credential, or no such Secret needs
+    /// one. The manager keeps the Operator's old deployment token until it
+    /// sees this, because that token may still be the Secret's content.
+    /// Older managers ignore it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pull_secret_refreshed: bool,
 }
 
 impl SyncInput {
@@ -409,6 +416,7 @@ impl SyncInput {
             application: None,
             dynamic_containers: None,
             installed_config_missing: false,
+            pull_secret_refreshed: false,
         }
     }
 }
@@ -421,6 +429,7 @@ pub struct SyncInputBuilder {
     application: Option<ObservedApplicationReport>,
     dynamic_containers: Option<Vec<DynamicContainerReport>>,
     installed_config_missing: bool,
+    pull_secret_refreshed: bool,
 }
 
 impl SyncInputBuilder {
@@ -447,6 +456,12 @@ impl SyncInputBuilder {
         self
     }
 
+    /// Tell the manager the Operator's pull Secret holds its own credential.
+    pub fn pull_secret_refreshed(mut self, refreshed: bool) -> Self {
+        self.pull_secret_refreshed = refreshed;
+        self
+    }
+
     /// Finish the serializable sync payload.
     pub fn build(self) -> SyncInput {
         SyncInput {
@@ -457,6 +472,7 @@ impl SyncInputBuilder {
             application: self.application,
             dynamic_containers: self.dynamic_containers,
             installed_config_missing: self.installed_config_missing,
+            pull_secret_refreshed: self.pull_secret_refreshed,
         }
     }
 }

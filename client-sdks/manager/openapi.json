@@ -2690,6 +2690,10 @@
                     "description": "Exact immutable Operator image identity reported by the running process."
                   }
                 ]
+              },
+              "pullSecretRefreshed": {
+                "type": "boolean",
+                "description": "The Operator rewrote the pull Secret its Deployment references from\nits own registry pull credential. Sent on every sync while that holds.\nThe manager keeps the deployment token until it sees this."
               }
             }
           }

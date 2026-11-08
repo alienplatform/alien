@@ -2273,6 +2273,10 @@
                     "$ref": "#/components/schemas/OperatorImageReport"
                   }
                 ]
+              },
+              "pullSecretRefreshed": {
+                "type": "boolean",
+                "description": "The Operator rewrote the pull Secret its Deployment references from\nits own registry pull credential. Sent on every sync while that holds.\nThe manager keeps the deployment token until it sees this."
               }
             }
           }

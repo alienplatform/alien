@@ -209,6 +209,11 @@ struct AgentSyncWireRequest {
     /// it in token mode, then enrolled). Answered with the current release.
     #[serde(default)]
     installed_config_missing: bool,
+    /// The Operator rewrote the pull Secret its Deployment references from
+    /// its own registry pull credential. Sent on every sync while that holds.
+    /// The manager keeps the deployment token until it sees this.
+    #[serde(default)]
+    pull_secret_refreshed: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1906,7 +1911,17 @@ mod tests {
 
         /// `POST /v1/sync` as `bearer`, reporting the deployment running.
         async fn sync(&self, bearer: &str) -> StatusCode {
-            let body = json!({
+            self.sync_reporting(bearer, false).await
+        }
+
+        /// The same, with the Operator reporting that its pull Secret holds
+        /// its own credential.
+        async fn sync_with_refreshed_pull_secret(&self, bearer: &str) -> StatusCode {
+            self.sync_reporting(bearer, true).await
+        }
+
+        async fn sync_reporting(&self, bearer: &str, pull_secret_refreshed: bool) -> StatusCode {
+            let mut body = json!({
                 "deploymentId": "dep_test",
                 "maxSupportedDeploymentProtocolVersion":
                     alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION,
@@ -1916,6 +1931,9 @@ mod tests {
                     "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                 },
             });
+            if pull_secret_refreshed {
+                body["pullSecretRefreshed"] = json!(true);
+            }
             let response = super::router()
                 .with_state(self.state.clone())
                 .oneshot(
@@ -1970,9 +1988,13 @@ mod tests {
         assert_eq!(manager.sync(&operator).await, StatusCode::OK);
         assert_eq!(manager.sync(old_token).await, StatusCode::OK);
 
-        // The enrolled Operator finishes a rollout.
+        // The enrolled Operator finishes a rollout and reports that its pull
+        // Secret no longer holds the token.
         manager.stored.lock().unwrap().status = "update-pending".into();
-        assert_eq!(manager.sync(&operator).await, StatusCode::OK);
+        assert_eq!(
+            manager.sync_with_refreshed_pull_secret(&operator).await,
+            StatusCode::OK
+        );
         assert_eq!(manager.sync(old_token).await, StatusCode::UNAUTHORIZED);
         assert_eq!(manager.sync(&operator).await, StatusCode::OK);
         assert_eq!(
@@ -2083,7 +2105,10 @@ mod tests {
         let operator = manager.operator_capability();
 
         manager.stored.lock().unwrap().status = "update-pending".into();
-        assert_eq!(manager.sync(&operator).await, StatusCode::OK);
+        assert_eq!(
+            manager.sync_with_refreshed_pull_secret(&operator).await,
+            StatusCode::OK
+        );
         assert_eq!(
             manager.sync(TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN).await,
             StatusCode::UNAUTHORIZED,
@@ -2097,6 +2122,61 @@ mod tests {
         assert!(!manager.key_is_current("ax_day_v1_late").await);
         assert_eq!(
             manager.enroll(&admin_code, "ax_day_v1_admin").await,
+            StatusCode::OK
+        );
+    }
+
+    /// The pull Secret of an Operator installed with the deployment token
+    /// still holds that token. Revoking it first would leave the Operator pod
+    /// unable to pull its image on a new node, so the token stays until the
+    /// Operator reports that it rewrote the Secret, even when that report
+    /// comes after the rollout, or after the manager restarted.
+    #[tokio::test]
+    async fn the_deployment_token_is_kept_until_the_operator_reports_its_pull_secret() {
+        let manager = TokenEnrollment::new().await;
+        let old_token = TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN;
+        let operator = manager.operator_capability();
+
+        // The rollout finishes, and the Operator has not reported.
+        manager.stored.lock().unwrap().status = "update-pending".into();
+        assert_eq!(manager.sync(&operator).await, StatusCode::OK);
+        assert_eq!(manager.sync(old_token).await, StatusCode::OK);
+        assert_eq!(manager.sync(&operator).await, StatusCode::OK);
+        assert_eq!(manager.sync(old_token).await, StatusCode::OK);
+        assert!(manager
+            .state
+            .kv
+            .exists(&super::token_hold_key("dep_test"))
+            .await
+            .unwrap());
+
+        // The report on a later sync, with no rollout in it, revokes.
+        assert_eq!(
+            manager.sync_with_refreshed_pull_secret(&operator).await,
+            StatusCode::OK
+        );
+        assert_eq!(manager.sync(old_token).await, StatusCode::UNAUTHORIZED);
+        assert!(!manager
+            .state
+            .kv
+            .exists(&super::token_hold_key("dep_test"))
+            .await
+            .unwrap());
+    }
+
+    /// A report alone does not end the token. Workloads deployed before the
+    /// Operator enrolled may still use it until the first rollout is done.
+    #[tokio::test]
+    async fn the_pull_secret_report_does_not_revoke_before_the_first_rollout() {
+        let manager = TokenEnrollment::new().await;
+        let operator = manager.operator_capability();
+
+        assert_eq!(
+            manager.sync_with_refreshed_pull_secret(&operator).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            manager.sync(TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN).await,
             StatusCode::OK
         );
     }
@@ -3294,6 +3374,7 @@ async fn agent_sync(
         dynamic_containers,
         operations_config,
         installed_config_missing,
+        pull_secret_refreshed,
     }): Json<AgentSyncWireRequest>,
 ) -> Response {
     let subject = match auth::require_auth(&state, &headers).await {
@@ -3495,13 +3576,15 @@ async fn agent_sync(
                             tracing::warn!(deployment_id = %req.deployment_id, error = %e, "Failed to reconcile agent-reported state");
                         }
                         Ok(outcome) => {
-                            if rollout_by_enrolled_operator_finished(
+                            settle_deployment_token(
+                                &state,
+                                &req.deployment_id,
                                 &subject,
                                 &deployment,
                                 &outcome.record,
-                            ) {
-                                revoke_deployment_tokens(&state, &req.deployment_id).await;
-                            }
+                                pull_secret_refreshed,
+                            )
+                            .await;
                             target_operations_bundle_set = outcome.target_operations_bundle_set;
                             target_dynamic_containers = outcome.target_dynamic_containers;
                             reconciled_operator_image = outcome.target_operator_image;
@@ -4361,8 +4444,9 @@ fn deployment_needs_target(deployment: &DeploymentRecord) -> bool {
 
 /// An enrolled Operator reported the end of a rollout. Every workload now
 /// runs a revision it built with capability files, so nothing needs the
-/// deployment token any more. A refresh (from Running or RefreshFailed) is
-/// not a rollout: workloads deployed before enrollment may still use it.
+/// deployment token to run its workloads any more. A refresh (from Running or
+/// RefreshFailed) is not a rollout: workloads deployed before enrollment may
+/// still use it.
 fn rollout_by_enrolled_operator_finished(
     subject: &crate::auth::Subject,
     before: &DeploymentRecord,
@@ -4374,18 +4458,83 @@ fn rollout_by_enrolled_operator_finished(
         && after.status == "running"
 }
 
-/// Delete the deployment's long-lived tokens. A failure is logged and retried
-/// on the next rollout; it never fails the sync. Deleting a deployment token
-/// also retires the unused enrollment codes made from it, in the same
-/// transaction (see `SqliteTokenStore::delete_token`).
-async fn revoke_deployment_tokens(state: &AppState, deployment_id: &str) {
+/// Durable mark that an enrolled Operator's first rollout finished while its
+/// deployment token waits for the pull-Secret report. A running Operator
+/// repeats the report on every sync, so the report itself needs no storage.
+fn token_hold_key(deployment_id: &str) -> String {
+    format!("deployment-token-held:{deployment_id}")
+}
+
+/// Revoke the deployment token once the enrolled Operator's first rollout is
+/// done and it has reported that its pull Secret holds its own credential. A
+/// Secret that still holds the token would stop the Operator pod from pulling
+/// its image on a new node, so the token stays until the report arrives. An
+/// Operator that never reports keeps its token; that is logged once, with the
+/// deployment id. Neither case fails the sync.
+async fn settle_deployment_token(
+    state: &AppState,
+    deployment_id: &str,
+    subject: &crate::auth::Subject,
+    before: &DeploymentRecord,
+    after: &DeploymentRecord,
+    pull_secret_refreshed: bool,
+) {
+    if !matches!(subject.role, crate::auth::Role::OperatorSync)
+        || !crate::auth::runtime_capability::is_runtime_capability(&subject.bearer_token)
+    {
+        return;
+    }
+    let key = token_hold_key(deployment_id);
+    let rolled_out = rollout_by_enrolled_operator_finished(subject, before, after);
+    if !pull_secret_refreshed {
+        if rolled_out {
+            if let Err(error) = state
+                .kv
+                .put(
+                    &key,
+                    chrono::Utc::now().timestamp().to_string().into_bytes(),
+                    None,
+                )
+                .await
+            {
+                tracing::error!(%deployment_id, %error, "Cannot record the held deployment token");
+            }
+            tracing::warn!(
+                %deployment_id,
+                "Kept the deployment token: the Operator has not reported that its pull Secret is refreshed"
+            );
+        }
+        return;
+    }
+    let held = rolled_out
+        || match state.kv.exists(&key).await {
+            Ok(held) => held,
+            Err(error) => {
+                tracing::warn!(%deployment_id, %error, "Cannot read the held deployment token mark");
+                false
+            }
+        };
+    if held && revoke_deployment_tokens(state, deployment_id).await {
+        if let Err(error) = state.kv.delete(&key, None).await {
+            tracing::warn!(%deployment_id, %error, "Cannot clear the held deployment token mark");
+        }
+    }
+}
+
+/// Delete the deployment's long-lived tokens. A failure is logged, returns
+/// `false` and is retried on the next sync that reports the pull Secret; it
+/// never fails the sync. Deleting a deployment token also retires the unused
+/// enrollment codes made from it, in the same transaction (see
+/// `SqliteTokenStore::delete_token`).
+async fn revoke_deployment_tokens(state: &AppState, deployment_id: &str) -> bool {
     let tokens = match state.token_store.list_tokens().await {
         Ok(tokens) => tokens,
         Err(error) => {
             tracing::warn!(%deployment_id, %error, "Cannot list deployment tokens to revoke");
-            return;
+            return false;
         }
     };
+    let mut revoked_all = true;
     for token in tokens.into_iter().filter(|token| {
         token.token_type == crate::traits::token_store::TokenType::Deployment
             && token.deployment_id.as_deref() == Some(deployment_id)
@@ -4397,10 +4546,12 @@ async fn revoke_deployment_tokens(state: &AppState, deployment_id: &str) {
                 "Revoked the deployment token after the first rollout of the enrolled Operator"
             ),
             Err(error) => {
+                revoked_all = false;
                 tracing::warn!(%deployment_id, %error, "Cannot revoke a deployment token")
             }
         }
     }
+    revoked_all
 }
 
 /// The release a settled deployment runs, when no other work is pending.
