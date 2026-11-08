@@ -1116,16 +1116,22 @@ impl DeploymentLoop {
                 state.stack_state.as_mut(),
             )
             .await?;
-            Ok::<_, AlienError<crate::error::ErrorData>>(held)
+            let (held, generated) = crate::values::with_generated_inputs(
+                self.values.as_deref(),
+                deployment_stack.as_ref(),
+                held,
+            )
+            .await?;
+            Ok::<_, AlienError<crate::error::ErrorData>>((held, generated.slots))
         }
         .await;
-        let held = match loaded {
-            Ok(held) => held,
+        let (held, generated_slots) = match loaded {
+            Ok(loaded) => loaded,
             Err(error) => {
                 warn!(
                     deployment_id = %deployment_id,
                     error = %error,
-                    "Held values do not match the deployment's plan"
+                    "Held values could not be loaded for the deployment"
                 );
                 return self
                     .checkpoint_phase_failure(PhaseFailure {
@@ -1239,7 +1245,8 @@ impl DeploymentLoop {
             execution_claim.clone(),
             self.config.supported_aws_regions.clone(),
         )
-        .with_value_store(self.values.clone());
+        .with_value_store(self.values.clone())
+        .with_generated_slots(generated_slots);
 
         let mut config = config;
         let runner_result = if options.require_heartbeats_enabled {
@@ -3030,6 +3037,21 @@ mod tests {
                 error: AlienError,
                 platform: Platform,
             ) -> Self {
+                Self::new_with_inputs(status, error, platform, Vec::new()).await
+            }
+
+            /// A fixture whose release stack declares `inputs`.
+            async fn new_with_inputs(
+                status: DeploymentStatus,
+                error: AlienError,
+                platform: Platform,
+                inputs: Vec<alien_core::StackInputDefinition>,
+            ) -> Self {
+                let release_stack = {
+                    let mut stack = Stack::new("test".to_string()).build();
+                    stack.inputs = inputs;
+                    stack
+                };
                 let directory = TempDir::new().unwrap();
                 let db_path = directory.path().join("manager.db");
                 let credentials = Arc::new(Credentials {
@@ -3064,10 +3086,7 @@ mod tests {
                         &caller,
                         crate::traits::release_store::CreateReleaseParams {
                             project_id: "default".to_string(),
-                            stacks: HashMap::from([(
-                                platform,
-                                Stack::new("test".to_string()).build(),
-                            )]),
+                            stacks: HashMap::from([(platform, release_stack.clone())]),
                             git_commit_sha: None,
                             git_commit_ref: None,
                             git_commit_message: None,
@@ -3104,7 +3123,7 @@ mod tests {
                     deployment_status_str(status), release.id, release.id, deployment.id,
                 )).await.unwrap();
                 let metadata = serde_json::to_string(&alien_core::RuntimeMetadata {
-                    prepared_stack: Some(Stack::new("test".to_string()).build()),
+                    prepared_stack: Some(release_stack),
                     ..Default::default()
                 })
                 .unwrap();
@@ -3412,6 +3431,78 @@ mod tests {
             let record = fixture.record().await;
             assert_ne!(record.status, "update-failed", "{:?}", record.error);
             assert!(record.error.is_none(), "{:?}", record.error);
+        }
+
+        fn generated_signing_key(length: u32) -> alien_core::StackInputDefinition {
+            alien_core::StackInputDefinition {
+                id: "signingKey".to_string(),
+                kind: alien_core::StackInputKind::Secret,
+                when: None,
+                provided_by: vec![alien_core::StackInputProvider::Developer],
+                required: true,
+                label: "Signing key".to_string(),
+                description: "Key the service signs internal tokens with.".to_string(),
+                placeholder: None,
+                default: None,
+                platforms: None,
+                validation: None,
+                generate: Some(alien_core::StackInputGenerate { length }),
+                env: vec![],
+            }
+        }
+
+        /// The first step generates a secret input on the manager and keeps it there:
+        /// nothing the control plane stores holds the value, and a later step reuses it.
+        #[tokio::test]
+        async fn a_generated_secret_input_is_made_once_and_stays_on_the_manager() {
+            alien_deployment::set_ephemeral_secrets_digest_key();
+            let fixture = Fixture::new_with_inputs(
+                DeploymentStatus::UpdatePending,
+                transient_error(),
+                Platform::Local,
+                vec![generated_signing_key(48)],
+            )
+            .await;
+            fixture
+                .credentials
+                .unavailable
+                .store(false, Ordering::SeqCst);
+            let store = fixture
+                .manager
+                .values
+                .clone()
+                .expect("standalone value store");
+            let scope = crate::values::ValueScope::deployment(&fixture.id).unwrap();
+            let slot: crate::values::ValueSlot = "input:signingKey".parse().unwrap();
+            assert!(store.get(&scope, &slot).await.unwrap().is_none());
+
+            fixture.process(&fixture.runner()).await;
+
+            let first = store
+                .get(&scope, &slot)
+                .await
+                .unwrap()
+                .expect("the first step generates the input");
+            assert_eq!(first.kind, crate::values::ValueKind::Secret);
+            let value: String =
+                serde_json::from_str(&first.value).expect("stored as a JSON string");
+            assert_eq!(value.len(), 48);
+            assert!(value.bytes().all(|byte| byte.is_ascii_alphanumeric()));
+            let record = fixture.record().await;
+            assert_ne!(record.status, "update-failed", "{:?}", record.error);
+            let control_plane_view = serde_json::to_string(&record).unwrap();
+            assert!(
+                !control_plane_view.contains(&value),
+                "the deployment record the control plane keeps holds the value"
+            );
+
+            fixture.process(&fixture.runner()).await;
+
+            let second = store.get(&scope, &slot).await.unwrap().unwrap();
+            assert_eq!(second.value, first.value, "a later step keeps the value");
+            assert_eq!(second.updated_at, first.updated_at);
+            let control_plane_view = serde_json::to_string(&fixture.record().await).unwrap();
+            assert!(!control_plane_view.contains(&value));
         }
 
         /// Deletion removes what is installed and never renders setup, so it needs no

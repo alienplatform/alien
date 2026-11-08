@@ -50,6 +50,13 @@ impl SqliteValueBackend {
         Ok(out)
     }
 
+    fn kind_name(kind: ValueKind) -> &'static str {
+        match kind {
+            ValueKind::Plain => "plain",
+            ValueKind::Secret => "secret",
+        }
+    }
+
     fn parse(row: &turso::Row) -> Result<StoredValue> {
         let p = RowParser::new(row);
         let read = |e: alien_error::AlienError| ErrorData::internal(e.message);
@@ -79,10 +86,6 @@ impl SqliteValueBackend {
 #[async_trait]
 impl ValueBackend for SqliteValueBackend {
     async fn put(&self, scope: &ValueScope, value: &StoredValue) -> Result<()> {
-        let kind = match value.kind {
-            ValueKind::Plain => "plain",
-            ValueKind::Secret => "secret",
-        };
         let conn = self.db.conn().lock().await;
         conn.execute(
             "INSERT INTO deployment_values (scope, slot, kind, value, updated_at)
@@ -94,7 +97,7 @@ impl ValueBackend for SqliteValueBackend {
             (
                 scope.as_str(),
                 value.slot.as_str(),
-                kind,
+                Self::kind_name(value.kind),
                 value.value.as_str(),
                 value.updated_at.timestamp_millis(),
             ),
@@ -103,6 +106,27 @@ impl ValueBackend for SqliteValueBackend {
         .into_alien_error()
         .context(Self::query_error("write a value"))?;
         Ok(())
+    }
+
+    async fn put_if_absent(&self, scope: &ValueScope, value: &StoredValue) -> Result<bool> {
+        let conn = self.db.conn().lock().await;
+        let written = conn
+            .execute(
+                "INSERT INTO deployment_values (scope, slot, kind, value, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT (scope, slot) DO NOTHING",
+                (
+                    scope.as_str(),
+                    value.slot.as_str(),
+                    Self::kind_name(value.kind),
+                    value.value.as_str(),
+                    value.updated_at.timestamp_millis(),
+                ),
+            )
+            .await
+            .into_alien_error()
+            .context(Self::query_error("write a value"))?;
+        Ok(written == 1)
     }
 
     async fn get(&self, scope: &ValueScope, slot: &ValueSlot) -> Result<Option<StoredValue>> {
