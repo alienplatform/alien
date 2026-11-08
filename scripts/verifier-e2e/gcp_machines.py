@@ -219,8 +219,9 @@ class Run:
                     and template["disks"][0]["initializeParams"]["sourceImage"].endswith(self.image)
                     and template["networkInterfaces"][0]["subnetwork"].endswith(self.subnetwork)
                     and template["serviceAccounts"][0]["email"] == self.email and template["tags"]["items"] == [self.tag]
-                    and metadata.get("block-project-ssh-keys") == "true" and "user-data" not in metadata and "startup-script" not in metadata
-                    and len(metadata) == 2, json.dumps(template)[:700])
+                    and metadata.get("block-project-ssh-keys") == "true" and metadata.get("alien-signed") == "true"
+                    and "user-data" not in metadata and "startup-script" not in metadata
+                    and len(metadata) == 3, json.dumps({"metadata": metadata, "template": template})[:1500])
         mig = self.mig()
         self.record("1 the MIG starts at the signed minimum", mig is not None and mig["targetSize"] == 1
                     and mig["instanceTemplate"].endswith(f"instanceTemplates/{self.group}-1") and mig["updatePolicy"]["type"] == "OPPORTUNISTIC",
