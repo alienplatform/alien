@@ -3816,15 +3816,7 @@ async fn collect_report(
         None,
     )
     .await?;
-    report_from_status(
-        site,
-        record,
-        &settings.registry,
-        status,
-        telemetry,
-        dropped,
-    )
-    .map(Some)
+    report_from_status(site, record, &settings.registry, status, telemetry, dropped).map(Some)
 }
 
 /// `registry` is where the site pushes images now. The record's inventory
