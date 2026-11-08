@@ -337,7 +337,11 @@ class Run:
     def tamper(self):
         install = f"{self.prefix}-p"
         function = f"{install}-api"
-        signed = json.loads(self.driver("request", install, {"TO_IMAGE": self.images["a"],
+        # The release moves the function to the image it doesn't run, so a refused batch shows
+        # in both its image and its config staying where they were.
+        live_image = self.image(install)
+        to_image = self.images["b" if live_image == self.images["a"] else "a"]
+        signed = json.loads(self.driver("request", install, {"TO_IMAGE": to_image,
                                                               "SEQUENCE": "14"}).stdout)
         live = aws_json("lambda", "get-function-configuration", "--function-name", function)
         variables = live.get("Environment", {}).get("Variables", {})
@@ -363,7 +367,7 @@ class Run:
                                                                        .update({changed: "tampered"}))], changed),
             ("an unknown field", [code, config_write(lambda body: body.update(Unknown="x"))], "/Unknown"),
             ("an image the release doesn't sign", [{"updateFunctionCode": {
-                "functionName": function, "request": {"ImageUri": self.images["b"], "Publish": True}}}],
+                "functionName": function, "request": {"ImageUri": live_image, "Publish": True}}}],
              "/ImageUri"),
         ]
         answers = {}
@@ -382,9 +386,11 @@ class Run:
         error, body = self.invoke(install, request([code, config_write(lambda body: None)]))
         answers["untampered"] = body
         (self.evidence / "tamper-answers.json").write_text(json.dumps(answers, indent=2))
+        landed = self.image(install)
         self.record("6 protected: the same request untampered is applied",
-                    error is None and body.get("operations") == ["UpdateFunctionCode", "UpdateFunctionConfiguration"],
-                    f"answer={json.dumps(body)[:300]}")
+                    error is None and body.get("operations") == ["UpdateFunctionCode", "UpdateFunctionConfiguration"]
+                    and live_image != to_image and landed == to_image,
+                    f"answer={json.dumps(body)[:300]} image={landed.rsplit('@', 1)[-1][:19]}")
 
     def access(self):
         install = f"{self.prefix}-p"
@@ -394,7 +400,8 @@ class Run:
         # Lambda keeps 10 executions unreserved; an account with no room above that reserves 0.
         room = aws_json("lambda", "get-account-settings")["AccountLimit"]["UnreservedConcurrentExecutions"] - 10
         reservation = 2 if room >= 2 else 0
-        update = {**management, "FROM_IMAGE": self.images["a"], "TO_IMAGE": self.images["a"], "PROTECTED": "1",
+        live = self.image(install)
+        update = {**management, "FROM_IMAGE": live, "TO_IMAGE": live, "PROTECTED": "1",
                   "SEQUENCE": "15", "ACCESS": "1", "ACCESS_CONCURRENCY": str(reservation)}
         result = self.driver("update", install, update, check=False)
         outcome = json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {}
