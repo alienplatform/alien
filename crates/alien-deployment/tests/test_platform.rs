@@ -5087,3 +5087,140 @@ async fn automatic_azure_setup_rejects_missing_management_before_cloud_access() 
     assert_eq!(error.code, "MISSING_CONFIGURATION");
     assert!(error.to_string().contains("install its runtime identity"));
 }
+
+/// The `ALIEN_SECRETS` hash of the deployed worker's saved config.
+fn stored_secrets_hash(state: &DeploymentState, worker_id: &str) -> String {
+    let worker = state.stack_state.as_ref().unwrap().resources[worker_id]
+        .config
+        .downcast_ref::<Worker>()
+        .unwrap();
+    let secrets: serde_json::Value =
+        serde_json::from_str(&worker.environment["ALIEN_SECRETS"]).expect("ALIEN_SECRETS is JSON");
+    secrets["hash"].as_str().expect("hash").to_string()
+}
+
+/// Gives the deployed worker the hash an older manager saved: a plain SHA-256 of the variables.
+fn save_with_the_unkeyed_hash(state: &mut DeploymentState, worker_id: &str, unkeyed: &str) {
+    let worker = state
+        .stack_state
+        .as_mut()
+        .unwrap()
+        .resources
+        .get_mut(worker_id)
+        .unwrap()
+        .config
+        .downcast_mut::<Worker>()
+        .unwrap();
+    let mut secrets: serde_json::Value =
+        serde_json::from_str(&worker.environment["ALIEN_SECRETS"]).unwrap();
+    secrets["hash"] = serde_json::json!(unkeyed);
+    worker
+        .environment
+        .insert("ALIEN_SECRETS".to_string(), secrets.to_string());
+}
+
+fn unkeyed_hash_of(variables: &[EnvironmentVariable]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for variable in variables {
+        hasher.update(format!("{}={}\n", variable.name, variable.value));
+    }
+    format!("env-{:x}", hasher.finalize())
+}
+
+fn keyed_config(secret_value: &str) -> DeploymentConfig {
+    alien_deployment::set_ephemeral_secrets_digest_key();
+    let mut config = create_test_config("replaced below", true);
+    config
+        .environment_variables
+        .variables
+        .iter_mut()
+        .find(|variable| variable.name == "SECRET_VAR")
+        .unwrap()
+        .value = secret_value.to_string();
+    config.environment_variables.hash =
+        alien_deployment::environment_snapshot_hash(&config.environment_variables.variables)
+            .unwrap();
+    config
+}
+
+/// Deploys a worker that carries a secret, then saves it with the hash an older manager wrote.
+async fn running_with_the_old_hash(worker_id: &str) -> DeploymentState {
+    let config = keyed_config("secret_value");
+    let stack = create_test_stack(&format!("{worker_id}-stack"), worker_id);
+    let mut state = run_to_completion(create_initial_state(stack), config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert_eq!(
+        stored_secrets_hash(&state, worker_id),
+        config.environment_variables.hash
+    );
+    save_with_the_unkeyed_hash(
+        &mut state,
+        worker_id,
+        &unkeyed_hash_of(&config.environment_variables.variables),
+    );
+    state
+}
+
+/// A deployment saved before the hash was keyed, with unchanged values, is not updated by the
+/// next release step; its saved hash becomes the keyed one.
+#[tokio::test]
+async fn an_unchanged_environment_saved_with_the_old_hash_is_not_rolled() {
+    let _vault = test_vault_env().await;
+    let worker_id = "old-hash-unchanged-worker";
+    let mut state = running_with_the_old_hash(worker_id).await;
+    let config = keyed_config("secret_value");
+    let sent_before =
+        alien_infra::test_worker_configs_deployed(&format!("test:worker:{worker_id}"));
+
+    let stack = create_test_stack(&format!("{worker_id}-stack"), worker_id);
+    start_update(&mut state, release_of("rel_v2", stack));
+    state = run_to_completion(state, config.clone()).await;
+
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert_eq!(
+        state
+            .current_release
+            .as_ref()
+            .unwrap()
+            .release_id
+            .as_deref(),
+        Some("rel_v2")
+    );
+    assert_eq!(
+        alien_infra::test_worker_configs_deployed(&format!("test:worker:{worker_id}")).len(),
+        sent_before.len(),
+        "no update operation reached the worker"
+    );
+    assert_eq!(
+        stored_secrets_hash(&state, worker_id),
+        config.environment_variables.hash,
+        "the saved hash is now the keyed one"
+    );
+}
+
+/// The same deployment with a changed secret does roll.
+#[tokio::test]
+async fn a_changed_value_saved_with_the_old_hash_is_rolled() {
+    let _vault = test_vault_env().await;
+    let worker_id = "old-hash-changed-worker";
+    let mut state = running_with_the_old_hash(worker_id).await;
+    let config = keyed_config("rotated_value");
+    let sent_before =
+        alien_infra::test_worker_configs_deployed(&format!("test:worker:{worker_id}"));
+
+    let stack = create_test_stack(&format!("{worker_id}-stack"), worker_id);
+    start_update(&mut state, release_of("rel_v2", stack));
+    state = run_to_completion(state, config.clone()).await;
+
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert_eq!(
+        alien_infra::test_worker_configs_deployed(&format!("test:worker:{worker_id}")).len(),
+        sent_before.len() + 1,
+        "one update operation reached the worker"
+    );
+    assert_eq!(
+        stored_secrets_hash(&state, worker_id),
+        config.environment_variables.hash
+    );
+}

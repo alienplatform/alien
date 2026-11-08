@@ -1473,6 +1473,69 @@ pub fn environment_snapshot_hash(variables: &[EnvironmentVariable]) -> Result<St
     Ok(format!("env-{:x}", mac.finalize().into_bytes()))
 }
 
+/// Deploy 1 upgrade check: delete it, with the old hash function below, in Deploy 2.
+///
+/// Before the hash was keyed it was a plain SHA-256 of the variables. A workload saved with that
+/// hash and an unchanged environment must not roll because the hash is now keyed. For each
+/// compute resource whose `ALIEN_SECRETS` carries the old hash of these variables, this
+/// rewrites it to the snapshot's keyed hash, so the resource compares equal to its desired
+/// config. A hash that matches neither is left alone: its values changed and it rolls.
+/// Returns the number of resources rewritten.
+pub(crate) fn adopt_unkeyed_environment_hash(
+    stack_state: &mut StackState,
+    snapshot: &EnvironmentVariablesSnapshot,
+) -> Result<usize> {
+    let unkeyed = unkeyed_environment_snapshot_hash(&snapshot.variables);
+    if unkeyed == snapshot.hash {
+        return Ok(0);
+    }
+    let mut adopted = 0;
+    for resource_state in stack_state.resources.values_mut() {
+        let configs = std::iter::once(&mut resource_state.config)
+            .chain(resource_state.previous_config.as_mut());
+        for config in configs {
+            let Some(environment) = compute_environment_mut(config) else {
+                continue;
+            };
+            let Some(stored) = environment.get_mut(ENV_ALIEN_SECRETS) else {
+                continue;
+            };
+            let Ok(mut parsed) = serde_json::from_str::<AlienSecretsConfig>(stored) else {
+                continue;
+            };
+            if parsed.hash != unkeyed {
+                continue;
+            }
+            parsed.hash = snapshot.hash.clone();
+            *stored = serde_json::to_string(&parsed).into_alien_error().context(
+                ErrorData::InternalError {
+                    message: "Failed to serialize ALIEN_SECRETS config".to_string(),
+                },
+            )?;
+            adopted += 1;
+        }
+    }
+    if adopted > 0 {
+        info!(
+            adopted,
+            "Rewrote the unkeyed environment hash of unchanged workloads to the keyed hash"
+        );
+    }
+    Ok(adopted)
+}
+
+/// The hash before it was keyed. Used only by [`adopt_unkeyed_environment_hash`].
+fn unkeyed_environment_snapshot_hash(variables: &[EnvironmentVariable]) -> String {
+    let mut hasher = Sha256::new();
+    for variable in variables {
+        hasher.update(variable.name.as_bytes());
+        hasher.update(b"=");
+        hasher.update(variable.value.as_bytes());
+        hasher.update(b"\n");
+    }
+    format!("env-{:x}", hasher.finalize())
+}
+
 const HELD_VALUE_PREFIX: &str = "alien-held:";
 
 /// The environment of a compute resource's config, if it is one.
