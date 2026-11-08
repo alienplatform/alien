@@ -4,6 +4,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use alien_bindings::providers::kv::local::LocalKv;
+use alien_bindings::traits::{Binding, Key, Kv};
 use alien_core::Platform;
 use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::config::ManagerConfig;
@@ -12,7 +14,9 @@ use alien_manager::traits::{
     CreateDeploymentGroupParams, CreateDeploymentParams, CreateTokenParams, DeploymentStore,
     TokenStore, TokenType,
 };
+use alien_manager::values::{EnvelopeCipher, KvValueBackend, ValueStore};
 use alien_manager::AlienManagerBuilder;
+use async_trait::async_trait;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -43,11 +47,51 @@ fn hash_token(raw: &str) -> (String, String) {
     (raw[..12].to_string(), format!("{:x}", hasher.finalize()))
 }
 
+/// Where the manager under test keeps values.
+#[derive(Clone, Copy, Debug)]
+enum Backend {
+    /// The standalone default: the encrypted database.
+    Sqlite,
+    /// A key-value store with envelope encryption, as a manager with
+    /// `commands.kv` and `commands.values-key` uses.
+    SealedKv,
+}
+
+/// Wraps data keys as they are. Whether the wrap is strong is not what these
+/// tests are about; the store's behavior over a key-value backend is.
+#[derive(Debug)]
+struct IdentityKey;
+
+impl Binding for IdentityKey {}
+
+#[async_trait]
+impl Key for IdentityKey {
+    async fn encrypt(
+        &self,
+        plaintext: &[u8],
+        _context: Option<&std::collections::BTreeMap<String, String>>,
+    ) -> alien_bindings::error::Result<Vec<u8>> {
+        Ok(plaintext.to_vec())
+    }
+
+    async fn decrypt(
+        &self,
+        ciphertext: &[u8],
+        _context: Option<&std::collections::BTreeMap<String, String>>,
+    ) -> alien_bindings::error::Result<Vec<u8>> {
+        Ok(ciphertext.to_vec())
+    }
+}
+
 async fn start() -> Server {
     start_with(false).await
 }
 
 async fn start_with(ephemeral_state_dir: bool) -> Server {
+    start_on(ephemeral_state_dir, Backend::Sqlite).await
+}
+
+async fn start_on(ephemeral_state_dir: bool, backend: Backend) -> Server {
     let dir = tempfile::tempdir().unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -126,9 +170,19 @@ async fn start_with(ephemeral_state_dir: bool) -> Server {
         allowed_origins: None,
         response_signing_key: b"test-signing-key".to_vec(),
     };
-    let manager = AlienManagerBuilder::new(config)
+    let mut builder = AlienManagerBuilder::new(config)
         .token_store(token_store)
-        .ephemeral_state_dir(ephemeral_state_dir)
+        .ephemeral_state_dir(ephemeral_state_dir);
+    if let Backend::SealedKv = backend {
+        let kv: Arc<dyn Kv> = Arc::new(
+            LocalKv::single_process(dir.path().join("values-kv"))
+                .await
+                .unwrap(),
+        );
+        let cipher = Arc::new(EnvelopeCipher::new(Arc::new(IdentityKey), kv.clone()));
+        builder = builder.value_store(ValueStore::new(Arc::new(KvValueBackend::new(kv, cipher))));
+    }
+    let manager = builder
         .with_standalone_defaults(&Default::default())
         .await
         .unwrap()
@@ -193,6 +247,28 @@ impl Server {
             Some(json!({ "values": values })),
         )
         .await
+    }
+
+    /// A PUT with `If-None-Match: *`, or with `condition` as the header value.
+    async fn put_if_absent(&self, values: Value) -> (u16, Value) {
+        self.put_with_condition(values, "*").await
+    }
+
+    async fn put_with_condition(&self, values: Value, condition: &str) -> (u16, Value) {
+        let response = reqwest::Client::new()
+            .put(format!("{}/v1/values/{}", self.url, self.scope()))
+            .bearer_auth(&self.admin)
+            .header(reqwest::header::IF_NONE_MATCH, condition)
+            .json(&json!({ "values": values }))
+            .send()
+            .await
+            .unwrap();
+        let status = response.status().as_u16();
+        let text = response.text().await.unwrap();
+        (
+            status,
+            serde_json::from_str(&text).unwrap_or(Value::String(text)),
+        )
     }
 
     async fn get(&self) -> (u16, Value) {
@@ -557,4 +633,141 @@ async fn a_malformed_dynamic_container_slot_is_a_400_and_writes_nothing() {
     }
     let (_, listed) = server.get().await;
     assert!(listed["slots"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn platform_style_and_dotted_container_names_are_accepted() {
+    let server = start().await;
+
+    let (status, put) = server
+        .put(json!([
+            { "slot": "cenv.web-1.TOKEN", "value": "a", "kind": "plain" },
+            { "slot": "cenv.a.b.X", "value": "b", "kind": "plain" },
+        ]))
+        .await;
+    assert_eq!(status, 200, "{put}");
+
+    let (_, listed) = server.get().await;
+    let names: Vec<_> = listed["slots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["slot"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["cenv.a.b.X", "cenv.web-1.TOKEN"]);
+}
+
+/// A conditional PUT on every backend a manager can advertise values with:
+/// it writes only an empty slot, leaves a held value untouched, and of many
+/// concurrent writers exactly one wins.
+async fn conditional_puts_never_overwrite(backend: Backend) {
+    let server = start_on(false, backend).await;
+    let (status, info) = server
+        .call(
+            reqwest::Method::GET,
+            "/v1/manager",
+            Some(&server.admin),
+            None,
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(info["capabilities"]["values"], 1, "{backend:?}");
+
+    // An empty slot is written.
+    let (status, put) = server
+        .put_if_absent(json!([{ "slot": "env:REGION", "value": "eu-west-1", "kind": "plain" }]))
+        .await;
+    assert_eq!(status, 200, "{backend:?}: {put}");
+    assert_eq!(put["slots"][0]["slot"], "env:REGION");
+    let (_, listed) = server.get().await;
+    let region = listed["slots"][0].clone();
+    assert_eq!(region["value"], "eu-west-1");
+
+    // A held slot answers 412 and keeps its value, kind and timestamp.
+    let (status, error) = server
+        .put_if_absent(json!([{ "slot": "env:REGION", "value": "us-east-1", "kind": "secret" }]))
+        .await;
+    assert_eq!(status, 412, "{backend:?}: {error}");
+    assert_eq!(error["code"], "VALUE_ALREADY_EXISTS");
+    assert!(!error.to_string().contains("us-east-1"));
+    let (_, listed) = server.get().await;
+    assert_eq!(listed["slots"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["slots"][0], region, "{backend:?}");
+
+    // Without the header the slot is replaced, as before.
+    let (status, put) = server
+        .put(json!([{ "slot": "env:REGION", "value": "us-east-1", "kind": "plain" }]))
+        .await;
+    assert_eq!(status, 200, "{backend:?}: {put}");
+    let (_, listed) = server.get().await;
+    assert_eq!(listed["slots"][0]["value"], "us-east-1");
+
+    // Exactly one value is required, and nothing is written otherwise.
+    for values in [
+        json!([]),
+        json!([
+            { "slot": "env:ONE", "value": "1", "kind": "plain" },
+            { "slot": "env:TWO", "value": "2", "kind": "plain" },
+        ]),
+    ] {
+        let (status, error) = server.put_if_absent(values).await;
+        assert_eq!(status, 400, "{backend:?}: {error}");
+        assert_eq!(error["code"], "VALUES_CONDITION_SINGLE_SLOT");
+    }
+    // Any other condition is refused instead of ignored.
+    let (status, error) = server
+        .put_with_condition(
+            json!([{ "slot": "env:ONE", "value": "1", "kind": "plain" }]),
+            "\"abc\"",
+        )
+        .await;
+    assert_eq!(status, 400, "{backend:?}: {error}");
+    assert_eq!(error["code"], "BAD_REQUEST");
+    let (_, listed) = server.get().await;
+    assert_eq!(listed["slots"].as_array().unwrap().len(), 1);
+
+    // Sixteen writers race for one empty slot: one wins, the rest get 412,
+    // and the stored value is the winner's.
+    let server = Arc::new(server);
+    let writers: Vec<_> = (0..16)
+        .map(|n| {
+            let server = server.clone();
+            tokio::spawn(async move {
+                let (status, body) = server
+                    .put_if_absent(json!([
+                        { "slot": "env:RACE", "value": format!("writer-{n}"), "kind": "plain" }
+                    ]))
+                    .await;
+                (n, status, body)
+            })
+        })
+        .collect();
+    let mut winners = Vec::new();
+    for writer in writers {
+        let (n, status, body) = writer.await.unwrap();
+        match status {
+            200 => winners.push(n),
+            412 => assert_eq!(body["code"], "VALUE_ALREADY_EXISTS"),
+            other => panic!("{backend:?}: writer {n} got {other}: {body}"),
+        }
+    }
+    assert_eq!(winners.len(), 1, "{backend:?}: winners {winners:?}");
+    let (_, listed) = server.get().await;
+    let race = listed["slots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["slot"] == "env:RACE")
+        .unwrap();
+    assert_eq!(race["value"], format!("writer-{}", winners[0]));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn conditional_puts_never_overwrite_in_the_sqlite_store() {
+    conditional_puts_never_overwrite(Backend::Sqlite).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn conditional_puts_never_overwrite_in_the_sealed_kv_store() {
+    conditional_puts_never_overwrite(Backend::SealedKv).await;
 }

@@ -332,6 +332,26 @@ pub enum ErrorData {
     )]
     ValueNotFound { scope: String, slot: String },
 
+    /// A conditional PUT carries more or fewer than one value.
+    #[error(
+        code = "VALUES_CONDITION_SINGLE_SLOT",
+        message = "A PUT with 'If-None-Match: *' must carry exactly one value, got {count}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    ValuesConditionSingleSlot { count: usize },
+
+    /// A conditional PUT found the slot already holding a value.
+    #[error(
+        code = "VALUE_ALREADY_EXISTS",
+        message = "A value is already stored for '{slot}' in '{scope}'",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 412
+    )]
+    ValueAlreadyExists { scope: String, slot: String },
+
     /// There is no place to keep values.
     #[error(
         code = "VALUES_UNAVAILABLE",

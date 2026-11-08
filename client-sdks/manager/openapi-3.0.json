@@ -1926,6 +1926,7 @@
         "tags": [
           "values"
         ],
+        "description": "Stores the values, replacing any held in the same slots. With the header `If-None-Match: *` the request must carry exactly one value, and it is written only when its slot is empty, atomically: of several concurrent conditional writes to one slot exactly one succeeds. A manager that serves values (`capabilities.values` = 1) honours this header.",
         "operationId": "put_values",
         "parameters": [
           {
@@ -1935,6 +1936,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "`*` writes only when the slot is empty",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
             }
           }
         ],

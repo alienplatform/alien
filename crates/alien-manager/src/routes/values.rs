@@ -6,7 +6,7 @@
 
 use axum::{
     extract::{rejection::JsonRejection, DefaultBodyLimit, Path, State},
-    http::{HeaderMap, StatusCode},
+    http::{header::IF_NONE_MATCH, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
@@ -200,16 +200,37 @@ async fn authorize(
     Ok(grant)
 }
 
+/// Whether the request asks to write only into empty slots. Only the
+/// `If-None-Match: *` form is understood; any other value is refused rather
+/// than ignored, so a caller never believes it got a guard it did not.
+fn only_if_absent(headers: &HeaderMap) -> Result<bool> {
+    let Some(header) = headers.get(IF_NONE_MATCH) else {
+        return Ok(false);
+    };
+    if header.as_bytes() == b"*" {
+        return Ok(true);
+    }
+    Err(ErrorData::bad_request(
+        "If-None-Match on a values PUT must be '*'".to_string(),
+    ))
+}
+
 #[cfg_attr(feature = "openapi", utoipa::path(
     put,
     path = "/v1/values/{scope}",
     operation_id = "put_values",
     tag = "values",
-    params(("scope" = String, Path, description = "dep:<deploymentId>")),
+    description = "Stores the values, replacing any held in the same slots. With the header `If-None-Match: *` the request must carry exactly one value, and it is written only when its slot is empty, atomically: of several concurrent conditional writes to one slot exactly one succeeds. A manager that serves values (`capabilities.values` = 1) honours this header.",
+    params(
+        ("scope" = String, Path, description = "dep:<deploymentId>"),
+        ("If-None-Match" = Option<String>, Header, description = "`*` writes only when the slot is empty")
+    ),
     request_body = PutValuesRequest,
     responses(
         (status = 200, description = "Metadata of the stored values", body = ValueSlotsResponse),
+        (status = 400, description = "With `If-None-Match: *`, the request does not carry exactly one value (VALUES_CONDITION_SINGLE_SLOT)"),
         (status = 403, description = "A slot is outside the caller's access"),
+        (status = 412, description = "With `If-None-Match: *`, the slot already holds a value; nothing was written (VALUE_ALREADY_EXISTS)"),
         (status = 413, description = "A value is larger than 24,000 bytes, or the request carries more than 100 values or 8 MiB")
     ),
     security(("bearer" = []))
@@ -232,6 +253,14 @@ pub(crate) async fn put_values(
             SlotSelection::Slots(request.values.iter().map(|v| v.slot.clone()).collect());
         authorize(&values, headers, &scope, ValueAccess::Write, &selection).await?;
         check_item_count(request.values.len())?;
+        let only_if_absent = only_if_absent(headers)?;
+        if only_if_absent && request.values.len() != 1 {
+            return Err(alien_error::AlienError::new(
+                ErrorData::ValuesConditionSingleSlot {
+                    count: request.values.len(),
+                },
+            ));
+        }
 
         // Check every value before writing any, so a rejected batch changes nothing.
         for value in &request.values {
@@ -239,10 +268,23 @@ pub(crate) async fn put_values(
         }
         let mut slots = Vec::with_capacity(request.values.len());
         for value in request.values {
-            let meta = values
-                .store
-                .put(&scope, &value.slot, value.kind, value.value)
-                .await?;
+            let meta = if only_if_absent {
+                values
+                    .store
+                    .put_if_absent(&scope, &value.slot, value.kind, value.value)
+                    .await?
+                    .ok_or_else(|| {
+                        alien_error::AlienError::new(ErrorData::ValueAlreadyExists {
+                            scope: scope.to_string(),
+                            slot: value.slot.to_string(),
+                        })
+                    })?
+            } else {
+                values
+                    .store
+                    .put(&scope, &value.slot, value.kind, value.value)
+                    .await?
+            };
             slots.push(meta.into());
         }
         Ok(ValueSlotsResponse { slots })

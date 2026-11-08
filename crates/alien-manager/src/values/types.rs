@@ -371,6 +371,10 @@ mod tests {
                 .map(|(container, name)| (container.to_string(), name.to_string()))
         };
         assert_eq!(parts("cenv.a.X"), Some(("a".into(), "X".into())));
+        assert_eq!(
+            parts("cenv.web-1.TOKEN"),
+            Some(("web-1".into(), "TOKEN".into()))
+        );
         assert_eq!(parts("cenv.a.b.X"), Some(("a.b".into(), "X".into())));
         assert_eq!(parts("cenv.a.b.c.X"), Some(("a.b.c".into(), "X".into())));
         assert_eq!(parts("env:X"), None);

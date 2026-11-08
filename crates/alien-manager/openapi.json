@@ -2284,6 +2284,7 @@
         "tags": [
           "values"
         ],
+        "description": "Stores the values, replacing any held in the same slots. With the header `If-None-Match: *` the request must carry exactly one value, and it is written only when its slot is empty, atomically: of several concurrent conditional writes to one slot exactly one succeeds. A manager that serves values (`capabilities.values` = 1) honours this header.",
         "operationId": "put_values",
         "parameters": [
           {
@@ -2293,6 +2294,18 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "`*` writes only when the slot is empty",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         ],
@@ -2317,8 +2330,14 @@
               }
             }
           },
+          "400": {
+            "description": "With `If-None-Match: *`, the request does not carry exactly one value (VALUES_CONDITION_SINGLE_SLOT)"
+          },
           "403": {
             "description": "A slot is outside the caller's access"
+          },
+          "412": {
+            "description": "With `If-None-Match: *`, the slot already holds a value; nothing was written (VALUE_ALREADY_EXISTS)"
           },
           "413": {
             "description": "A value is larger than 24,000 bytes, or the request carries more than 100 values or 8 MiB"
