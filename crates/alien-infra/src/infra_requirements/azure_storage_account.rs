@@ -1484,7 +1484,7 @@ mod shared_settings_tests {
                 {
                     "allowedOrigins": ["https://one.example"],
                     "allowedMethods": ["PUT"],
-                    "allowedHeaders": ["Content-Type", "Content-MD5", "x-ms-blob-type", "x-ms-blob-content-type"],
+                    "allowedHeaders": ["Content-Type", "Content-MD5", "x-ms-*"],
                     "exposedHeaders": ["ETag"],
                     "maxAgeInSeconds": 3600
                 }
@@ -1494,7 +1494,7 @@ mod shared_settings_tests {
             cors_settings_size(&cors),
             cors_settings_size(&read_only)
                 + "https://one.example".len()
-                + "PUTContent-Type,Content-MD5,x-ms-blob-type,x-ms-blob-content-typeETag3600".len()
+                + "PUTContent-Type,Content-MD5,x-ms-*ETag3600".len()
         );
 
         let upload_only = SharedCapabilities {

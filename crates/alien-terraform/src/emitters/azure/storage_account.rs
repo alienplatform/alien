@@ -223,8 +223,9 @@ impl TfEmitter for AzureStorageAccountEmitter {
     }
 }
 
-/// Azure CORS is shared by every container. Union enabled contributors into a
-/// single read-only rule, rather than competing account-wide configurations.
+/// Azure CORS is shared by every container. Union the origins enabled contributors
+/// declare for one rule (read or signed upload), rather than competing account-wide
+/// configurations.
 fn storage_cors_origins(
     ctx: &EmitContext<'_>,
     declared: impl Fn(&Storage) -> &Vec<String>,

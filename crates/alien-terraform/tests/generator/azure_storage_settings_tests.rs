@@ -257,7 +257,7 @@ fn signed_upload_cors_adds_a_gated_put_rule_within_the_account_budget() {
     error_message = "Each declared kind of browser access gets one account rule."
   }}
   assert {{
-    condition = length([for rule in azurerm_storage_account.default_storage_account.blob_properties[0].cors_rule : rule if rule.allowed_methods == tolist(["PUT"]) && rule.allowed_origins == tolist(["https://app.example.test"]) && rule.allowed_headers == tolist(["Content-Type", "Content-MD5", "x-ms-blob-type", "x-ms-blob-content-type"]) && rule.exposed_headers == tolist(["ETag"]) && rule.max_age_in_seconds == 3600]) == 1
+    condition = length([for rule in azurerm_storage_account.default_storage_account.blob_properties[0].cors_rule : rule if rule.allowed_methods == tolist(["PUT"]) && rule.allowed_origins == tolist(["https://app.example.test"]) && rule.allowed_headers == tolist(["Content-Type", "Content-MD5", "x-ms-*"]) && rule.exposed_headers == tolist(["ETag"]) && rule.max_age_in_seconds == 3600]) == 1
     error_message = "Signed uploads need PUT with the headers SAS uploads send, and ETag exposed."
   }}
   assert {{

@@ -50,6 +50,17 @@ fn azure_permission_scope_and_context(
     Ok((resource_scope, permission_context))
 }
 
+/// Whether an Azure CORS allowed-header entry covers `header`. Entries are exact names,
+/// `*`, or a prefix ending in `*` (such as `x-ms-meta*`); names are case-insensitive.
+fn header_allowed(allowed: &str, header: &str) -> bool {
+    let header = header.to_ascii_lowercase();
+    let allowed = allowed.to_ascii_lowercase();
+    match allowed.strip_suffix('*') {
+        Some(prefix) => header.starts_with(prefix),
+        None => allowed == header,
+    }
+}
+
 /// Whether the account's CORS lets a browser on `origin` PUT a blob with a signed URL.
 fn allows_signed_upload(cors: Option<&CorsRules>, origin: &str) -> bool {
     cors.is_some_and(|cors| {
@@ -64,7 +75,7 @@ fn allows_signed_upload(cors: Option<&CorsRules>, origin: &str) -> bool {
                 && AZURE_SIGNED_UPLOAD_HEADERS.iter().all(|header| {
                     rule.allowed_headers
                         .iter()
-                        .any(|allowed| allowed == "*" || allowed.eq_ignore_ascii_case(header))
+                        .any(|allowed| header_allowed(allowed, header))
                 })
                 && SIGNED_UPLOAD_EXPOSED_HEADERS.iter().all(|header| {
                     rule.exposed_headers
@@ -2219,7 +2230,7 @@ mod tests {
         let upload = serde_json::json!({
             "allowedOrigins": ["https://app.example.com"],
             "allowedMethods": ["PUT"],
-            "allowedHeaders": ["Content-Type", "Content-MD5", "x-ms-blob-type", "x-ms-blob-content-type"],
+            "allowedHeaders": ["Content-Type", "Content-MD5", "x-ms-*"],
             "exposedHeaders": ["ETag"],
             "maxAgeInSeconds": 3600
         });
@@ -2246,10 +2257,20 @@ mod tests {
             origin
         ));
 
-        let mut no_blob_type = upload.clone();
-        no_blob_type["allowedHeaders"] = serde_json::json!(["Content-Type", "Content-MD5"]);
+        let mut broader_prefix = upload.clone();
+        broader_prefix["allowedHeaders"] =
+            serde_json::json!(["content-type", "Content-MD5", "x-*"]);
+        assert!(super::allows_signed_upload(
+            Some(&rules(broader_prefix)),
+            origin
+        ));
+
+        // Without x-ms-* the SDK's x-ms-version header fails the preflight.
+        let mut named_headers = upload.clone();
+        named_headers["allowedHeaders"] =
+            serde_json::json!(["Content-Type", "Content-MD5", "x-ms-blob-type"]);
         assert!(!super::allows_signed_upload(
-            Some(&rules(no_blob_type)),
+            Some(&rules(named_headers)),
             origin
         ));
 

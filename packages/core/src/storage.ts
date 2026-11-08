@@ -107,7 +107,8 @@ export class Storage extends ResourceBuilder {
   /**
    * Allows browser uploads from the listed origins through signed `PUT` URLs.
    * Providers enable `PUT` with the headers their signed uploads send
-   * (such as `Content-Type`, `x-amz-checksum-*` and `x-ms-blob-type`) and expose `ETag`.
+   * (content headers, plus `x-amz-*` on AWS and `x-ms-*` on Azure) and expose `ETag`.
+   * Uploads that start with `POST`, such as multipart create and complete, are not covered.
    * Each origin is `*` or `scheme://host[:port]`; AWS also accepts one `*` wildcard,
    * such as `https://*.example.com`.
    * @param origins Allowed browser origins.

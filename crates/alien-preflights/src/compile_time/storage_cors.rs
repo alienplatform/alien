@@ -78,11 +78,23 @@ fn origin_error(origin: &str, platform: Platform) -> Option<String> {
     else {
         return Some("must be '*' or start with https:// or http://".to_string());
     };
-    if authority.is_empty() || authority.contains(['/', '?', '#']) {
+    if authority.is_empty() || authority.contains(['/', '?', '#', '@']) {
         return Some(
-            "must be scheme://host[:port] with no path or trailing slash, as browsers send it"
+            "must be scheme://host[:port] with no path, trailing slash or user name, as browsers send it"
                 .to_string(),
         );
+    }
+    // A bracketed IPv6 host without a port ends in `]`.
+    if let Some((_, port)) = authority
+        .rsplit_once(':')
+        .filter(|_| !authority.ends_with(']'))
+    {
+        if port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()) {
+            return Some("has a port that is not a number".to_string());
+        }
+    }
+    if authority.chars().any(|c| c.is_ascii_uppercase()) {
+        return Some("has uppercase letters; browsers send the host in lowercase".to_string());
     }
     let wildcards = authority.matches('*').count();
     match platform {
@@ -136,7 +148,12 @@ mod tests {
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
             assert_eq!(
                 errors(
-                    &["*", "https://app.example.com", "http://localhost:5173"],
+                    &[
+                        "*",
+                        "https://app.example.com",
+                        "http://localhost:5173",
+                        "http://[::1]:8080"
+                    ],
                     platform
                 )
                 .await,
@@ -157,16 +174,24 @@ mod tests {
                         "app.example.com",
                         "https://a.example.com,https://b.example.com",
                         "",
+                        "https://user@app.example.com",
+                        "https://app.example.com:",
+                        "https://app.example.com:http",
+                        "https://App.Example.com",
                     ],
                     platform
                 )
                 .await,
                 vec![
-                    "Storage 'st': corsUploadOrigins[0] 'https://app.example.com/' must be scheme://host[:port] with no path or trailing slash, as browsers send it",
-                    "Storage 'st': corsUploadOrigins[1] 'https://app.example.com/upload' must be scheme://host[:port] with no path or trailing slash, as browsers send it",
+                    "Storage 'st': corsUploadOrigins[0] 'https://app.example.com/' must be scheme://host[:port] with no path, trailing slash or user name, as browsers send it",
+                    "Storage 'st': corsUploadOrigins[1] 'https://app.example.com/upload' must be scheme://host[:port] with no path, trailing slash or user name, as browsers send it",
                     "Storage 'st': corsUploadOrigins[2] 'app.example.com' must be '*' or start with https:// or http://",
                     "Storage 'st': corsUploadOrigins[3] 'https://a.example.com,https://b.example.com' contains a comma, whitespace or a control character",
                     "Storage 'st': corsUploadOrigins[4] '' must be '*' or start with https:// or http://",
+                    "Storage 'st': corsUploadOrigins[5] 'https://user@app.example.com' must be scheme://host[:port] with no path, trailing slash or user name, as browsers send it",
+                    "Storage 'st': corsUploadOrigins[6] 'https://app.example.com:' has a port that is not a number",
+                    "Storage 'st': corsUploadOrigins[7] 'https://app.example.com:http' has a port that is not a number",
+                    "Storage 'st': corsUploadOrigins[8] 'https://App.Example.com' has uppercase letters; browsers send the host in lowercase",
                 ],
                 "{platform:?}"
             );

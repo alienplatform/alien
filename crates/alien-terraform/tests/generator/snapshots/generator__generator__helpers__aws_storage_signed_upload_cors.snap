@@ -528,8 +528,10 @@ resource "aws_s3_bucket_cors_configuration" "uploads" {
     allowed_headers = [
       "Content-Type",
       "Content-MD5",
-      "x-amz-checksum-*",
-      "x-amz-sdk-checksum-algorithm"
+      "Content-Disposition",
+      "Content-Encoding",
+      "Cache-Control",
+      "x-amz-*"
     ]
     expose_headers = [
       "ETag"

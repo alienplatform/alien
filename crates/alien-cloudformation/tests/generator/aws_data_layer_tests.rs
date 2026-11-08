@@ -686,7 +686,7 @@ fn aws_storage_emits_a_signed_upload_rule_after_the_read_rule() {
             }));
         }
         expected.push(serde_json::json!({
-            "AllowedHeaders": ["Content-Type", "Content-MD5", "x-amz-checksum-*", "x-amz-sdk-checksum-algorithm"],
+            "AllowedHeaders": ["Content-Type", "Content-MD5", "Content-Disposition", "Content-Encoding", "Cache-Control", "x-amz-*"],
             "AllowedMethods": ["PUT"],
             "AllowedOrigins": upload,
             "ExposedHeaders": ["ETag"],

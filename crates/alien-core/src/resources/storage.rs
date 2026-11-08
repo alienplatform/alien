@@ -23,26 +23,35 @@ pub const AWS_LIFECYCLE_RULE_LIMIT: usize = 1000;
 pub const AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID: &str = "abort-incomplete-uploads";
 
 /// Request headers an S3 CORS rule lets a browser send with a signed upload (`PUT` to a
-/// presigned URL): the content type and the checksums AWS SDKs sign into upload URLs.
+/// presigned URL): the content headers a signer may bind, and `x-amz-*`, which covers the
+/// checksums AWS SDKs add and `x-amz-meta-*`. S3 allows one `*` per header.
 pub const AWS_SIGNED_UPLOAD_HEADERS: &[&str] = &[
     "Content-Type",
     "Content-MD5",
-    "x-amz-checksum-*",
-    "x-amz-sdk-checksum-algorithm",
+    "Content-Disposition",
+    "Content-Encoding",
+    "Cache-Control",
+    "x-amz-*",
 ];
 
 /// Headers a GCS CORS rule lists for a signed upload. GCS uses one list (`responseHeader`)
-/// for both the request headers a browser may send and the response headers it may read.
-pub const GCP_SIGNED_UPLOAD_HEADERS: &[&str] = &["Content-Type", "Content-MD5", "ETag"];
-
-/// Request headers an Azure Blob CORS rule lets a browser send with a signed upload (`PUT`
-/// to a SAS URL). Put Blob requires `x-ms-blob-type`.
-pub const AZURE_SIGNED_UPLOAD_HEADERS: &[&str] = &[
+/// for both the request headers a browser may send and the response headers it may read,
+/// and matches each name exactly, so `x-goog-meta-*` headers can't be listed.
+pub const GCP_SIGNED_UPLOAD_HEADERS: &[&str] = &[
     "Content-Type",
     "Content-MD5",
-    "x-ms-blob-type",
-    "x-ms-blob-content-type",
+    "Content-Disposition",
+    "Content-Encoding",
+    "Cache-Control",
+    "x-goog-content-length-range",
+    "ETag",
 ];
+
+/// Request headers an Azure Blob CORS rule lets a browser send with a signed upload (`PUT`
+/// to a SAS URL). `x-ms-*` covers `x-ms-blob-type`, which Put Blob requires, the
+/// `x-ms-blob-content-*` and `x-ms-meta-*` headers, and the `x-ms-version` and
+/// `x-ms-client-request-id` headers the Azure SDK sends.
+pub const AZURE_SIGNED_UPLOAD_HEADERS: &[&str] = &["Content-Type", "Content-MD5", "x-ms-*"];
 
 /// Response headers a browser may read after a signed upload.
 pub const SIGNED_UPLOAD_EXPOSED_HEADERS: &[&str] = &["ETag"];
@@ -147,10 +156,16 @@ pub struct Storage {
 
     /// Browser origins allowed to upload objects through signed URLs.
     ///
-    /// When non-empty, providers also configure CORS for `PUT` requests from these origins,
-    /// allow the request headers signed uploads send (the content type, checksums, and on
-    /// Azure `x-ms-blob-type`), and expose `ETag`. Each origin is `*` or an exact origin such
-    /// as `https://app.example.com`, which every provider supports the same way.
+    /// When non-empty, providers also configure CORS for single-request `PUT` uploads from
+    /// these origins (a presigned or SAS URL, or one presigned multipart part) and expose
+    /// `ETag`. Allowed request headers: `Content-Type` and `Content-MD5` everywhere;
+    /// `Content-Disposition`, `Content-Encoding`, `Cache-Control` and `x-amz-*` on S3;
+    /// the same content headers and `x-goog-content-length-range` on Cloud Storage, which
+    /// can't allow `x-goog-meta-*`; `x-ms-*` on Azure. Uploads that start with `POST`, such
+    /// as multipart create and complete or resumable uploads, are not covered.
+    ///
+    /// Each origin is `*` or `scheme://host[:port]`; S3 also accepts one `*` wildcard, such
+    /// as `https://*.example.com`.
     /// Omitted when empty to preserve existing serialized configurations and setup digests.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[builder(default)]

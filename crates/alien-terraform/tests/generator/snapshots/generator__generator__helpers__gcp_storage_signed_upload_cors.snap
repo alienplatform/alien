@@ -532,6 +532,10 @@ resource "google_storage_bucket" "uploads" {
     response_header = [
       "Content-Type",
       "Content-MD5",
+      "Content-Disposition",
+      "Content-Encoding",
+      "Cache-Control",
+      "x-goog-content-length-range",
       "ETag"
     ]
     max_age_seconds = 3600

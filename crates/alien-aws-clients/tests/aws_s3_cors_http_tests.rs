@@ -84,8 +84,9 @@ async fn upload_cors_adds_a_signed_put_rule_after_the_read_rule() {
         "<MaxAgeSeconds>3600</MaxAgeSeconds></CORSRule>",
         "<CORSRule><AllowedOrigin>https://upload.example.com</AllowedOrigin>",
         "<AllowedMethod>PUT</AllowedMethod><AllowedHeader>Content-Type</AllowedHeader>",
-        "<AllowedHeader>Content-MD5</AllowedHeader><AllowedHeader>x-amz-checksum-*</AllowedHeader>",
-        "<AllowedHeader>x-amz-sdk-checksum-algorithm</AllowedHeader>",
+        "<AllowedHeader>Content-MD5</AllowedHeader><AllowedHeader>Content-Disposition</AllowedHeader>",
+        "<AllowedHeader>Content-Encoding</AllowedHeader><AllowedHeader>Cache-Control</AllowedHeader>",
+        "<AllowedHeader>x-amz-*</AllowedHeader>",
         "<ExposeHeader>ETag</ExposeHeader><MaxAgeSeconds>3600</MaxAgeSeconds></CORSRule>",
         "</CORSConfiguration>"
     );
@@ -93,8 +94,9 @@ async fn upload_cors_adds_a_signed_put_rule_after_the_read_rule() {
         "<CORSConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">",
         "<CORSRule><AllowedOrigin>*</AllowedOrigin>",
         "<AllowedMethod>PUT</AllowedMethod><AllowedHeader>Content-Type</AllowedHeader>",
-        "<AllowedHeader>Content-MD5</AllowedHeader><AllowedHeader>x-amz-checksum-*</AllowedHeader>",
-        "<AllowedHeader>x-amz-sdk-checksum-algorithm</AllowedHeader>",
+        "<AllowedHeader>Content-MD5</AllowedHeader><AllowedHeader>Content-Disposition</AllowedHeader>",
+        "<AllowedHeader>Content-Encoding</AllowedHeader><AllowedHeader>Cache-Control</AllowedHeader>",
+        "<AllowedHeader>x-amz-*</AllowedHeader>",
         "<ExposeHeader>ETag</ExposeHeader><MaxAgeSeconds>3600</MaxAgeSeconds></CORSRule>",
         "</CORSConfiguration>"
     );

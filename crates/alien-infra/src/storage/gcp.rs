@@ -1953,7 +1953,7 @@ mod lifecycle_prefix_tests {
                 "responseHeader": ["ETag", "Content-Range", "Accept-Ranges", "Range", "If-Range"], "maxAgeSeconds": 3600
             }, {
                 "origin": ["https://upload.example"], "method": ["PUT"],
-                "responseHeader": ["Content-Type", "Content-MD5", "ETag"], "maxAgeSeconds": 3600
+                "responseHeader": ["Content-Type", "Content-MD5", "Content-Disposition", "Content-Encoding", "Cache-Control", "x-goog-content-length-range", "ETag"], "maxAgeSeconds": 3600
             }])
         );
         config.cors_allowed_origins.clear();
@@ -1964,7 +1964,7 @@ mod lifecycle_prefix_tests {
             bodies.lock().unwrap().last().unwrap()["cors"],
             json!([{
                 "origin": ["*"], "method": ["PUT"],
-                "responseHeader": ["Content-Type", "Content-MD5", "ETag"], "maxAgeSeconds": 3600
+                "responseHeader": ["Content-Type", "Content-MD5", "Content-Disposition", "Content-Encoding", "Cache-Control", "x-goog-content-length-range", "ETag"], "maxAgeSeconds": 3600
             }])
         );
         assert_eq!(run.status(), ResourceStatus::Running);
