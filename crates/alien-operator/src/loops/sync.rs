@@ -2008,6 +2008,7 @@ mod tests {
     /// credential Secret is still renewed on every pass.
     #[tokio::test]
     async fn a_pending_failed_or_stuck_update_still_renews_workload_credentials() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         type Stored = Arc<Mutex<Option<Value>>>;
         async fn create(
             State(stored): State<Stored>,
@@ -2268,6 +2269,7 @@ mod tests {
     /// asks for it, and refreshes the release the manager sends again in place.
     #[tokio::test]
     async fn an_operator_that_enrolled_after_a_token_install_gets_its_config_back() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         type Shared = (Arc<Mutex<Value>>, Arc<Mutex<Vec<Value>>>);
         async fn serve(
             State((response, requests)): State<Shared>,
@@ -2425,6 +2427,7 @@ mod tests {
     /// UpdatePending and back every sync interval.
     #[tokio::test]
     async fn a_target_without_a_claim_is_applied_once() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         async fn serve(State(response): State<Arc<Mutex<Value>>>) -> Json<Value> {
             Json(response.lock().unwrap().clone())
         }
