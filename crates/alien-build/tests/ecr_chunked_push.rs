@@ -1,15 +1,16 @@
-//! Pushing an AWS image through a manager's registry proxy, whose upstream is Amazon ECR.
-//!
-//! The proxy forwards upload requests unchanged, so the fake registry here answers the way ECR
-//! does. Each behaviour was measured against ECR:
+//! Pushing an AWS image with the push options `alien release` uses for a manager's registry
+//! proxy. The proxy forwards upload requests to Amazon ECR unchanged (it only rewrites
+//! `Location`), so the fake registry here stands in for ECR and answers the way ECR does. Each
+//! behaviour was measured against ECR:
 //!
 //! - a chunk PATCH gets 201 Created (the OCI spec says 202 Accepted);
 //! - completing an upload whose parts, other than the last, are under 5 MB is refused;
-//! - a large blob sent in one PUT is refused with 413. ECR accepted 180 MiB and refused
-//!   300 MiB; the fake refuses anything over 12 MiB so the test stays fast.
+//! - a large blob sent in one PUT is refused with 413: 180 MiB passed, a 440 MB layer did
+//!   not. The fake refuses anything over 12 MiB so the test stays fast.
 //!
-//! To check the real thing, push an image with a layer over 300 MiB to an ECR repository with
-//! these push options and confirm it completes (it fails with 413 under monolithic uploads).
+//! The proxy itself is not in this test. To check the real thing, push an image with a layer
+//! over 300 MiB to an ECR repository with these push options and confirm it completes (it
+//! fails with 413 under monolithic uploads).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -29,13 +30,22 @@ const MONOLITHIC_LIMIT_BYTES: usize = 12 * 1024 * 1024;
 const LAYER_FILE_BYTES: usize = 20 * 1024 * 1024;
 
 #[derive(Default)]
+struct Upload {
+    parts: Vec<Vec<u8>>,
+    /// Changes with every chunk; a request must use the `Location` of the previous answer.
+    state: u64,
+}
+
+#[derive(Default)]
 struct FakeEcr {
     next_upload: u64,
-    uploads: HashMap<String, Vec<Vec<u8>>>,
+    uploads: HashMap<String, Upload>,
     blobs: HashMap<String, usize>,
     manifests: Vec<String>,
     /// Body size of every chunk PATCH, in order.
     chunks: Vec<usize>,
+    /// Parts of every completed upload, by blob digest.
+    completed_parts: HashMap<String, Vec<usize>>,
     /// Body size of every PUT that carried the blob itself (a monolithic upload).
     monolithic_puts: Vec<usize>,
 }
@@ -64,22 +74,42 @@ async fn handle(
     let mut registry = registry.lock().unwrap();
 
     if let Some((name, upload)) = rest.split_once("/blobs/uploads/") {
-        let location = format!("/v2/{name}/blobs/uploads/{upload}");
+        let query = uri.query().unwrap_or_default();
+        if method != Method::POST {
+            let Some(current) = registry.uploads.get(upload) else {
+                return ecr_error(
+                    StatusCode::NOT_FOUND,
+                    "BLOB_UPLOAD_UNKNOWN",
+                    "unknown upload",
+                );
+            };
+            let state = format!("_state={}", current.state);
+            if !query.split('&').any(|pair| pair == state) {
+                return ecr_error(
+                    StatusCode::BAD_REQUEST,
+                    "BLOB_UPLOAD_INVALID",
+                    "request does not use the latest upload location",
+                );
+            }
+        }
         return match method {
             // A new upload, and also the answer to a cross-repository mount request: ECR
             // doesn't mount here, it starts an upload instead.
             Method::POST => {
                 registry.next_upload += 1;
                 let id = format!("upload-{}", registry.next_upload);
-                registry.uploads.insert(id.clone(), Vec::new());
+                registry.uploads.insert(id.clone(), Upload::default());
                 (
                     StatusCode::ACCEPTED,
-                    [(header::LOCATION, format!("/v2/{name}/blobs/uploads/{id}"))],
+                    [(
+                        header::LOCATION,
+                        format!("/v2/{name}/blobs/uploads/{id}?_state=0"),
+                    )],
                 )
                     .into_response()
             }
             Method::PATCH => {
-                let received: usize = registry.uploads[upload].iter().map(Vec::len).sum();
+                let received: usize = registry.uploads[upload].parts.iter().map(Vec::len).sum();
                 let start = headers
                     .get(header::CONTENT_RANGE)
                     .and_then(|value| value.to_str().ok())
@@ -93,8 +123,11 @@ async fn handle(
                     );
                 }
                 registry.chunks.push(body.len());
-                let parts = registry.uploads.get_mut(upload).unwrap();
-                parts.push(body.to_vec());
+                let current = registry.uploads.get_mut(upload).unwrap();
+                current.parts.push(body.to_vec());
+                current.state += 1;
+                let location =
+                    format!("/v2/{name}/blobs/uploads/{upload}?_state={}", current.state);
                 let end = received + body.len() - 1;
                 (
                     StatusCode::CREATED,
@@ -116,9 +149,10 @@ async fn handle(
                         .uploads
                         .get_mut(upload)
                         .unwrap()
+                        .parts
                         .push(body.to_vec());
                 }
-                let parts = registry.uploads.remove(upload).unwrap();
+                let parts = registry.uploads.remove(upload).unwrap().parts;
                 if parts
                     .split_last()
                     .is_some_and(|(_, earlier)| earlier.iter().any(|p| p.len() < MIN_PART_BYTES))
@@ -131,9 +165,7 @@ async fn handle(
                 }
                 let blob = parts.concat();
                 let digest = format!("sha256:{:x}", Sha256::digest(&blob));
-                let requested = uri
-                    .query()
-                    .unwrap_or_default()
+                let requested = query
                     .split('&')
                     .find_map(|pair| pair.strip_prefix("digest="))
                     .map(|value| value.replace("%3A", ":"));
@@ -141,6 +173,9 @@ async fn handle(
                     return ecr_error(StatusCode::BAD_REQUEST, "DIGEST_INVALID", "digest mismatch");
                 }
                 registry.blobs.insert(digest.clone(), blob.len());
+                registry
+                    .completed_parts
+                    .insert(digest.clone(), parts.iter().map(Vec::len).collect());
                 (
                     StatusCode::CREATED,
                     [(header::LOCATION, format!("/v2/{name}/blobs/{digest}"))],
@@ -208,7 +243,7 @@ fn incompressible(len: usize) -> Vec<u8> {
 }
 
 #[tokio::test]
-async fn an_aws_push_through_the_registry_proxy_uploads_a_large_layer_in_chunks() {
+async fn an_aws_push_uploads_a_large_layer_to_ecr_in_chunks() {
     let (host, registry) = start_fake_ecr().await;
     let output = tempfile::tempdir().unwrap();
 
@@ -242,19 +277,23 @@ async fn an_aws_push_through_the_registry_proxy_uploads_a_large_layer_in_chunks(
     image
         .push(&format!("{host}/artifacts/prj-a/app:v1"), &options)
         .await
-        .expect("an AWS push of a large layer through the registry proxy must succeed");
+        .expect("an AWS push of a large layer to ECR must succeed");
 
     let registry = registry.lock().unwrap();
     assert_eq!(registry.manifests, ["artifacts/prj-a/app:v1"]);
     assert_eq!(registry.blobs.get(&layer_digest), Some(&layer_size));
     assert!(
+        registry.blobs.contains_key(image.config_digest()),
+        "the image config must be uploaded too"
+    );
+    assert!(
         registry.monolithic_puts.is_empty(),
         "no blob may be sent in one PUT, got PUT bodies of {:?} bytes",
         registry.monolithic_puts
     );
+    let layer_parts = &registry.completed_parts[&layer_digest];
     assert!(
-        registry.chunks.iter().sum::<usize>() > layer_size,
-        "the layer and the config both go up in chunks, got chunks of {:?} bytes",
-        registry.chunks
+        layer_parts.len() >= 3,
+        "a {layer_size}-byte layer goes up in several chunks, got parts of {layer_parts:?} bytes"
     );
 }

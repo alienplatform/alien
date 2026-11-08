@@ -122,8 +122,8 @@ pub struct PushSettings {
 /// The proxy forwards each upload request unchanged to the registry the manager keeps for the
 /// platform, and the push client can't see which registry that is, so the platform decides:
 ///
-/// - AWS images go to Amazon ECR, which refuses a large blob sent in one request (HTTP 413; a
-///   426 MB layer failed where 177 MB passed) and accepts chunked uploads.
+/// - AWS images go to Amazon ECR, which refuses a large blob sent in one request (HTTP 413 for a
+///   440 MB layer; 180 MiB passed) and accepts chunked uploads.
 /// - GCP images go to Google Artifact Registry, which needs monolithic uploads.
 /// - Azure keeps the monolithic uploads it has always used.
 /// - Kubernetes, Machines and Local images go to the manager's default registry, which can be

@@ -7,13 +7,17 @@
 # - Chunks are 8 MiB instead of 4 MiB. ECR refuses to complete an upload whose parts,
 #   other than the last, are under 5 MB.
 #
+# Only `push_chunk` and the chunk size changed; starting an upload still expects 202.
 # The workspace uses it through `[patch.crates-io]` in the root Cargo.toml. The
-# published crate's examples, integration tests and dev-dependencies are left out.
+# published crate's examples, integration tests and dev-dependencies are left out, so
+# the unit tests inside src/ don't build here; the workspace tests the patched push
+# path in crates/alien-build/tests/ecr_chunked_push.rs.
 
 [package]
 edition = "2021"
 name = "oci-client"
 version = "0.15.0"
+publish = false
 authors = [
     "Matt Butcher <matt.butcher@microsoft.com>",
     "Matthew Fisher <matt.fisher@microsoft.com>",
