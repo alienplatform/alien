@@ -524,8 +524,9 @@ impl MemorystoreApi for MemorystoreClient {
             self.instance_path(location, instance_id),
             user
         );
-        // The response body is the secret. Strip any captured body from an error.
-        let response: ListAuthTokensResponse = alien_client_core::redact_request_body(
+        // The response body is the secret: a 2xx response that fails to parse must not leave its
+        // text in the error.
+        let response: ListAuthTokensResponse = alien_client_core::redact_response_body(
             self.base
                 .execute_request(Method::GET, &path, None, Option::<()>::None, user)
                 .await,
@@ -683,5 +684,51 @@ mod tests {
         .unwrap();
         assert_eq!(tokens.auth_tokens[0].token, "s3cret");
         assert!(!format!("{:?}", tokens.auth_tokens[0]).contains("s3cret"));
+    }
+
+    /// A 2xx token list that doesn't parse must not leave the plaintext tokens in the error
+    /// chain, which callers log and persist.
+    #[tokio::test]
+    async fn an_unparseable_token_list_does_not_leak_the_token() {
+        use alien_core::{GcpClientConfig, GcpCredentials, GcpServiceOverrides};
+        use httpmock::prelude::*;
+
+        let server = MockServer::start_async().await;
+        // `authTokens` is an object instead of a list, so parsing fails after the 200.
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path(
+                    "/projects/p/locations/us-east4/instances/i/tokenAuthUsers/default/authTokens",
+                );
+                then.status(200)
+                    .body(r#"{"authTokens":{"token":"PLAINTEXT-TOKEN-VALUE"}}"#);
+            })
+            .await;
+        let client = MemorystoreClient::new(
+            Client::new(),
+            GcpClientConfig {
+                project_id: "p".to_string(),
+                region: "us-east4".to_string(),
+                credentials: GcpCredentials::AccessToken {
+                    token: "test-token".to_string(),
+                },
+                service_overrides: Some(GcpServiceOverrides {
+                    endpoints: std::collections::HashMap::from([(
+                        "memorystore".to_string(),
+                        server.base_url(),
+                    )]),
+                }),
+                project_number: None,
+            },
+        );
+        let error = client
+            .list_auth_tokens("us-east4", "i", "default")
+            .await
+            .expect_err("the response does not parse");
+        let rendered = format!("{error:?} {}", serde_json::to_string(&error).unwrap());
+        assert!(
+            !rendered.contains("PLAINTEXT-TOKEN-VALUE"),
+            "token leaked into the error: {rendered}"
+        );
     }
 }

@@ -11,9 +11,7 @@
         "label": "create-redis-group",
         "description": "Create the replication group.",
         "grant": {
-          "actions": [
-            "elasticache:CreateReplicationGroup"
-          ]
+          "actions": ["elasticache:CreateReplicationGroup"]
         },
         "binding": {
           "stack": {
@@ -45,10 +43,7 @@
         "label": "create-redis-groups",
         "description": "Create the cache subnet group and parameter group.",
         "grant": {
-          "actions": [
-            "elasticache:CreateCacheSubnetGroup",
-            "elasticache:CreateCacheParameterGroup"
-          ]
+          "actions": ["elasticache:CreateCacheSubnetGroup", "elasticache:CreateCacheParameterGroup"]
         },
         "binding": {
           "stack": {
@@ -127,10 +122,7 @@
         "label": "manage-redis-group",
         "description": "Change and delete this application's replication group.",
         "grant": {
-          "actions": [
-            "elasticache:ModifyReplicationGroup",
-            "elasticache:DeleteReplicationGroup"
-          ]
+          "actions": ["elasticache:ModifyReplicationGroup", "elasticache:DeleteReplicationGroup"]
         },
         "binding": {
           "stack": {
@@ -165,9 +157,7 @@
         "label": "tag-redis-resources",
         "description": "Tag the ElastiCache objects this application creates.",
         "grant": {
-          "actions": [
-            "elasticache:AddTagsToResource"
-          ]
+          "actions": ["elasticache:AddTagsToResource"]
         },
         "binding": {
           "stack": {
@@ -208,9 +198,7 @@
         "label": "untag-redis-resources",
         "description": "Remove tags from this application's ElastiCache objects.",
         "grant": {
-          "actions": [
-            "elasticache:RemoveTagsFromResource"
-          ]
+          "actions": ["elasticache:RemoveTagsFromResource"]
         },
         "binding": {
           "stack": {
@@ -225,11 +213,7 @@
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}"
               },
               "ForAllValues:StringNotEquals": {
-                "aws:TagKeys": [
-                  "${stackTag}",
-                  "${resourceTag}",
-                  "${managedByTag}"
-                ]
+                "aws:TagKeys": ["${stackTag}", "${resourceTag}", "${managedByTag}"]
               }
             }
           },
@@ -246,11 +230,7 @@
                 "aws:ResourceTag/${resourceTag}": "${resourceName}"
               },
               "ForAllValues:StringNotEquals": {
-                "aws:TagKeys": [
-                  "${stackTag}",
-                  "${resourceTag}",
-                  "${managedByTag}"
-                ]
+                "aws:TagKeys": ["${stackTag}", "${resourceTag}", "${managedByTag}"]
               }
             }
           }
@@ -295,9 +275,7 @@
         "label": "create-auth-secret",
         "description": "Create the AUTH-token secret with this stack's tags.",
         "grant": {
-          "actions": [
-            "secretsmanager:CreateSecret"
-          ]
+          "actions": ["secretsmanager:CreateSecret"]
         },
         "binding": {
           "stack": {
@@ -327,10 +305,7 @@
         "label": "manage-auth-secret",
         "description": "Overwrite and delete this stack's tagged AUTH-token secret.",
         "grant": {
-          "actions": [
-            "secretsmanager:DeleteSecret",
-            "secretsmanager:PutSecretValue"
-          ]
+          "actions": ["secretsmanager:DeleteSecret", "secretsmanager:PutSecretValue"]
         },
         "binding": {
           "stack": {
@@ -364,9 +339,7 @@
         "label": "tag-auth-secret",
         "description": "Tag the AUTH-token secret.",
         "grant": {
-          "actions": [
-            "secretsmanager:TagResource"
-          ]
+          "actions": ["secretsmanager:TagResource"]
         },
         "binding": {
           "stack": {
@@ -406,9 +379,7 @@
         "label": "create-redis-security-group",
         "description": "Create the dedicated Redis security group.",
         "grant": {
-          "actions": [
-            "ec2:CreateSecurityGroup"
-          ]
+          "actions": ["ec2:CreateSecurityGroup"]
         },
         "binding": {
           "stack": {
@@ -429,15 +400,11 @@
         "label": "tag-redis-security-group",
         "description": "Stamp the ownership tags on the Redis security group at creation.",
         "grant": {
-          "actions": [
-            "ec2:CreateTags"
-          ]
+          "actions": ["ec2:CreateTags"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
             "condition": {
               "StringEquals": {
                 "ec2:CreateAction": "CreateSecurityGroup",
@@ -447,9 +414,7 @@
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
             "condition": {
               "StringEquals": {
                 "ec2:CreateAction": "CreateSecurityGroup",
@@ -476,9 +441,7 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -487,9 +450,7 @@
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -506,9 +467,7 @@
         "label": "create-elasticache-service-linked-role",
         "description": "Allow ElastiCache to create its service-linked role in a new account.",
         "grant": {
-          "actions": [
-            "iam:CreateServiceLinkedRole"
-          ]
+          "actions": ["iam:CreateServiceLinkedRole"]
         },
         "binding": {
           "stack": {
@@ -595,9 +554,7 @@
         "label": "create-auth-secret",
         "description": "Create the secret container that holds the Redis auth token.",
         "grant": {
-          "permissions": [
-            "secretmanager.secrets.create"
-          ]
+          "permissions": ["secretmanager.secrets.create"]
         },
         "binding": {
           "stack": {
@@ -612,10 +569,7 @@
         "label": "write-auth-secret",
         "description": "Delete the auth-token secret and add versions to it. Never reads a version.",
         "grant": {
-          "permissions": [
-            "secretmanager.secrets.delete",
-            "secretmanager.versions.add"
-          ]
+          "permissions": ["secretmanager.secrets.delete", "secretmanager.versions.add"]
         },
         "binding": {
           "stack": {
@@ -644,10 +598,7 @@
         "label": "read-generated-auth-token",
         "description": "Read the server-generated auth token of the Redis instance so it can be copied to Secret Manager.",
         "grant": {
-          "permissions": [
-            "memorystore.tokenAuthUsers.list",
-            "memorystore.authTokens.list"
-          ]
+          "permissions": ["memorystore.tokenAuthUsers.list", "memorystore.authTokens.list"]
         },
         "binding": {
           "stack": {

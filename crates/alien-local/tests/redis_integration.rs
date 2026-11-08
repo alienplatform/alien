@@ -126,3 +126,20 @@ async fn data_is_lost_on_restart_when_persistence_is_off() {
     assert_eq!(command(&binding, &["GET", "k"]).await, "$-1\r\n");
     manager.delete_redis("cache").await.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "needs ALIEN_VALKEY_RELEASES_URL pointing at a Valkey release directory"]
+async fn starts_when_the_state_directory_has_spaces_and_quotes() {
+    let parent = tempfile::tempdir().unwrap();
+    let state = parent.path().join("my state \"dir\"");
+    std::fs::create_dir_all(&state).unwrap();
+    let manager = LocalRedisManager::new(state);
+
+    manager
+        .start_redis("cache", spec(true, "volatile-lru"))
+        .await
+        .unwrap();
+    let binding = manager.get_binding("cache").unwrap();
+    assert_eq!(command(&binding, &["SET", "k", "v"]).await, "+OK\r\n");
+    manager.delete_redis("cache").await.unwrap();
+}

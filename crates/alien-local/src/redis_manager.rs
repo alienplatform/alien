@@ -168,7 +168,8 @@ impl LocalRedisManager {
             {
                 return Ok(());
             }
-            running.remove(id);
+            // Leave the exited child in place: if the boot below fails, the monitor still
+            // sees it as exited and retries on its next pass.
         }
         let child = self.boot(&metadata).await?;
         running.insert(id.to_string(), child);
@@ -447,7 +448,7 @@ fn render_config(metadata: &RedisMetadata, bind: &str, data_dir: &Path) -> Strin
          save \"\"\nappendonly {}\nappendfsync everysec\ndaemonize no\n",
         metadata.port,
         metadata.password,
-        data_dir.display(),
+        quote_config_value(&data_dir.display().to_string()),
         spec.eviction_policy,
         if spec.persistence { "yes" } else { "no" },
     );
@@ -455,6 +456,25 @@ fn render_config(metadata: &RedisMetadata, bind: &str, data_dir: &Path) -> Strin
         config.push_str(&format!("maxmemory {bytes}\n"));
     }
     config
+}
+
+/// Quotes a config value the way the Valkey config parser reads it, so a path with spaces,
+/// quotes or backslashes stays one argument.
+fn quote_config_value(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('"');
+    for c in value.chars() {
+        match c {
+            '\\' | '"' => {
+                quoted.push('\\');
+                quoted.push(c);
+            }
+            '\n' => quoted.push_str("\\n"),
+            _ => quoted.push(c),
+        }
+    }
+    quoted.push('"');
+    quoted
 }
 
 /// SIGTERM-equivalent stop: `kill` then reap. Valkey rewrites nothing on SIGKILL, but the
@@ -618,4 +638,15 @@ fn allocate_port(id: &str) -> Result<u16> {
             service_name: format!("redis/{id}"),
         })?
         .port())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quote_config_value;
+
+    #[test]
+    fn config_values_with_spaces_quotes_and_backslashes_stay_one_argument() {
+        assert_eq!(quote_config_value("/a b/data"), "\"/a b/data\"");
+        assert_eq!(quote_config_value("/a\"b\\c"), "\"/a\\\"b\\\\c\"");
+    }
 }

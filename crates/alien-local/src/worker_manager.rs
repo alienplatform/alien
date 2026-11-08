@@ -61,8 +61,8 @@ struct WorkerRuntime {
     metadata: WorkerMetadata,
 }
 
-/// A linked resource whose binding carries a runtime-only secret (a local Postgres password, a
-/// local BYO-key AI binding). The name locates the binding env var; the resource type routes live
+/// A linked resource whose binding carries a runtime-only secret (a local Postgres or Redis
+/// password, a local BYO-key AI binding). The name locates the binding env var; the resource type routes live
 /// re-resolution to the right local source.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -81,6 +81,7 @@ impl RuntimeOnlyBindingRef {
             .iter()
             .filter(|link| {
                 link.resource_type() == &alien_core::Postgres::RESOURCE_TYPE
+                    || link.resource_type() == &alien_core::Redis::RESOURCE_TYPE
                     || link.resource_type() == &alien_core::Ai::RESOURCE_TYPE
                     || link.resource_type() == &alien_core::Queue::RESOURCE_TYPE
             })
@@ -1410,6 +1411,22 @@ fn select_host_tarball(tarball_files: &[PathBuf]) -> Result<&PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A linked Redis binding is stored without its password, so startup must re-resolve it.
+    #[test]
+    fn redis_links_are_re_resolved_at_startup() {
+        let links = vec![
+            alien_core::ResourceRef::new(alien_core::Redis::RESOURCE_TYPE, "cache"),
+            alien_core::ResourceRef::new(alien_core::Storage::RESOURCE_TYPE, "files"),
+        ];
+        assert_eq!(
+            RuntimeOnlyBindingRef::from_links(&links),
+            vec![RuntimeOnlyBindingRef {
+                name: "cache".to_string(),
+                resource_type: "redis".to_string(),
+            }]
+        );
+    }
 
     /// A resolved runtime-only binding's password reaches the live env but is stripped from the
     /// persisted metadata we write.

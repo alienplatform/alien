@@ -463,7 +463,22 @@ impl ManagedRedisApi for AzureManagedRedisClient {
             .base
             .execute_request(req, "ListManagedRedisKeys", cluster_name)
             .await?;
-        Self::read_json(response, "ListManagedRedisKeys").await
+        // The body holds the access keys, and serde's parse errors can quote the offending value:
+        // report only that the parse failed.
+        let body = response
+            .text()
+            .await
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: "Azure ListManagedRedisKeys: failed to read response body".to_string(),
+            })?;
+        serde_json::from_str(&body).map_err(|_| {
+            alien_error::AlienError::new(ErrorData::SerializationError {
+                message: "Azure ListManagedRedisKeys: the response did not parse (body withheld \
+                          because it holds access keys)"
+                    .to_string(),
+            })
+        })
     }
 
     async fn regenerate_key(

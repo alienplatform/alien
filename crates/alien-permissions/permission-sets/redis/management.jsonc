@@ -7,9 +7,7 @@
         "label": "write-auth-secret",
         "description": "Add versions to the auth-token secret. Never reads a version.",
         "grant": {
-          "permissions": [
-            "secretmanager.versions.add"
-          ]
+          "permissions": ["secretmanager.versions.add"]
         },
         "binding": {
           "stack": {
@@ -38,10 +36,7 @@
         "label": "read-generated-auth-token",
         "description": "Read the server-generated auth token of the Redis instance so it can be copied to Secret Manager.",
         "grant": {
-          "permissions": [
-            "memorystore.tokenAuthUsers.list",
-            "memorystore.authTokens.list"
-          ]
+          "permissions": ["memorystore.tokenAuthUsers.list", "memorystore.authTokens.list"]
         },
         "binding": {
           "stack": {

@@ -337,7 +337,7 @@ fn aws_data_key_exempts_only_native_encryption_services_for_management() {
     assert_eq!(
         direct["Condition"]["StringNotLike"],
         serde_json::json!({
-            "kms:ViaService": ["ec2.*.amazonaws.com", "rds.*.amazonaws.com", "s3.*.amazonaws.com"]
+            "kms:ViaService": ["ec2.*.amazonaws.com", "elasticache.*.amazonaws.com", "rds.*.amazonaws.com", "s3.*.amazonaws.com"]
         })
     );
 }

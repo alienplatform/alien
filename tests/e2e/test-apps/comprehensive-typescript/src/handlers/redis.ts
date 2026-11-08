@@ -159,7 +159,9 @@ app.post("/redis-test/:bindingName", async c => {
 })
 
 function timeout(ms: number): Promise<never> {
-  return new Promise((_, reject) => setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms))
+  return new Promise((_, reject) =>
+    setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms),
+  )
 }
 
 export default app
