@@ -256,6 +256,9 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
     cancel: CancellationToken,
     runtime_options: OperatorRuntimeOptions,
 ) -> error::Result<()> {
+    // This process alone steps its deployments, so a key of its own is enough.
+    // A key the embedder already set wins.
+    alien_deployment::set_ephemeral_secrets_digest_key();
     info!(
         sync_configured = config.sync.is_some(),
         deployment_approval = config.requires_deployment_approval(),
