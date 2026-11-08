@@ -271,8 +271,8 @@ fn resources_requiring_domain_metadata(stack: &Stack, config: &DeploymentConfig)
 
 fn external_binding_required_types(platform: Platform) -> &'static [&'static str] {
     match platform {
-        Platform::Kubernetes => &["storage", "queue", "kv", "artifact-registry"],
-        Platform::Machines => &["storage", "queue", "kv", "vault", "postgres"],
+        Platform::Kubernetes => &["storage", "queue", "kv", "artifact-registry", "redis"],
+        Platform::Machines => &["storage", "queue", "kv", "vault", "postgres", "redis"],
         _ => &[],
     }
 }
@@ -769,6 +769,13 @@ fn postgres_password_is_reference(binding: &alien_core::ExternalBinding) -> bool
     )
 }
 
+fn redis_password_is_reference(binding: &alien_core::ExternalBinding) -> bool {
+    matches!(binding,
+        alien_core::ExternalBinding::Redis(alien_core::bindings::RedisBinding::External(server))
+            if !matches!(server.password, alien_core::BindingValue::Value(_))
+    )
+}
+
 /// Validates that provided external bindings match their resource types.
 pub struct ExternalBindingsTypeCheck;
 
@@ -793,7 +800,9 @@ impl DeploymentPrerequisiteCheck for ExternalBindingsTypeCheck {
                 .external_bindings
                 .0
                 .values()
-                .any(postgres_password_is_reference)
+                .any(|binding| {
+                    postgres_password_is_reference(binding) || redis_password_is_reference(binding)
+                })
     }
 
     async fn check(
@@ -817,6 +826,9 @@ impl DeploymentPrerequisiteCheck for ExternalBindingsTypeCheck {
             for (id, binding) in &config.external_bindings.0 {
                 if postgres_password_is_reference(binding) {
                     errors.push(format!("Postgres binding '{id}' uses a password Secret reference, which requires Kubernetes; provide a string password for {}.", stack_state.platform));
+                }
+                if redis_password_is_reference(binding) {
+                    errors.push(format!("Redis binding '{id}' uses a password Secret reference, which requires Kubernetes; provide a string password for {}.", stack_state.platform));
                 }
             }
         }
@@ -987,6 +999,51 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn redis_password_references_require_kubernetes() {
+        let stack = Stack::new("cache-stack".into())
+            .add(
+                alien_core::Redis::new("cache".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let mut config = deployment_config();
+        config.external_bindings = serde_json::from_value(serde_json::json!({
+            "cache":{"type":"redis","service":"external","host":"cache.example.com","port":6379,"username":"default","password":{"secretRef":{"name":"credentials","key":"password"}}}
+        })).unwrap();
+        for platform in [Platform::Aws, Platform::Local, Platform::Kubernetes] {
+            let state = stack_state(platform);
+            let check = ExternalBindingsTypeCheck;
+            assert!(check.should_run(&stack, &state, &config));
+            assert_eq!(
+                check.check(&stack, &state, &config).await.unwrap().success,
+                platform == Platform::Kubernetes,
+                "{platform:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn redis_needs_an_external_binding_on_kubernetes_and_machines() {
+        let stack = Stack::new("cache-stack".into())
+            .add(
+                alien_core::Redis::new("cache".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let config = deployment_config();
+        for platform in [Platform::Kubernetes, Platform::Machines] {
+            let state = stack_state(platform);
+            let result = ExternalBindingsRequiredCheck
+                .check(&stack, &state, &config)
+                .await
+                .unwrap();
+            assert!(!result.success, "{platform:?} must require a binding for Redis");
+        }
+        // A cloud platform provisions its own server.
+        assert!(!ExternalBindingsRequiredCheck.should_run(&stack, &stack_state(Platform::Aws), &config));
     }
 
     #[tokio::test]
