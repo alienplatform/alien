@@ -233,6 +233,7 @@ mod tests {
         ("email", false),
         ("kv", false),
         ("postgres", false),
+        ("redis", false),
         ("ai", false),
         ("network", false),
         ("service-account", false),

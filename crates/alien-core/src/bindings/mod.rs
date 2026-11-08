@@ -22,6 +22,7 @@ mod container_apps_environment;
 mod key;
 mod kv;
 mod postgres;
+mod redis;
 mod queue;
 mod sandbox;
 mod service_account;
@@ -45,6 +46,10 @@ pub use key::{AwsKmsKeyBinding, AzureKeyVaultKeyBinding, GcpCloudKmsKeyBinding, 
 pub use kv::{
     DynamodbKvBinding, FirestoreKvBinding, KvBinding, LocalKvBinding, RedisKvBinding,
     TableStorageKvBinding,
+};
+pub use redis::{
+    AzureManagedRedisBinding, ElastiCacheRedisBinding, ExternalRedisBinding, LocalRedisBinding,
+    MemorystoreRedisBinding, RedisBinding,
 };
 pub use postgres::{
     AuroraPostgresBinding, CloudSqlPostgresBinding, ExternalPostgresBinding,

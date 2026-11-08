@@ -142,7 +142,7 @@ pub fn ownership_policy_for_resource_type(resource_type: &str) -> ResourceOwners
         // Durable search state, setup-owned only: there is no runtime
         // controller that could provision or replace the collection.
         "experimental/aws-opensearch" => frozen_only(),
-        "storage" | "queue" | "kv" | "vault" | "postgres" | "ai" => user_choice(),
+        "storage" | "queue" | "kv" | "vault" | "postgres" | "redis" | "ai" => user_choice(),
         _ => user_choice(),
     }
 }
@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn data_resources_can_be_frozen_or_live() {
-        for resource_type in ["storage", "queue", "kv", "vault", "postgres", "ai"] {
+        for resource_type in ["storage", "queue", "kv", "vault", "postgres", "redis", "ai"] {
             let policy = ownership_policy_for_resource_type(resource_type);
             assert_eq!(policy.default_lifecycle(), ResourceLifecycle::Frozen);
             assert!(policy.allows_lifecycle(ResourceLifecycle::Frozen));
