@@ -10,42 +10,61 @@ the cluster.
     python3 scripts/signed-release-e2e/run.py --mode protected
     python3 scripts/signed-release-e2e/run.py --mode unprotected
 
-`protected` installs the Operator with the release key pinned and expects
+Signing is set up the way a team sets it up. A TPM simulator (swtpm) holds the
+developer's device key. The first `alien release` in a terminal turns signing
+on, and `alien devices add-ci` (with a stand-in `gh`) makes the CI key. Every
+later release is signed by the CI key through the real CLI.
+
+`protected` installs the Operator from the signed chart the release carries
+(the chart pins the Operator build and the signing fingerprint) and expects
 every attack to be refused with nothing in the cluster changed. `unprotected`
-publishes the same signed releases but installs the Operator without the key,
-and expects every attack to take effect: that is what shows the attacks are
-real. Either way, a normal signed release and a
-rollback by re-release must still roll out.
+publishes the same signed releases but installs the ordinary chart, and
+expects every attack to take effect: that is what shows the attacks are real.
+Either way, a normal signed release and a rollback by re-release must still
+roll out.
 
-In protected mode the suite first installs without the key, lets the manager
-start a dynamic container, and then upgrades the installation to protected
-mode: the container must be removed. `--only protection-turned-on` runs just
-that step, for example against an older build with `--binaries`.
+In protected mode the suite ends with a second deployment: it installs the
+ordinary chart, lets the manager start a dynamic container, and then replaces
+the installation with the signed chart. The container must be removed.
+`--only protection-turned-on` runs just that step. (It runs last because the
+manager decides whether a deployment is protected when it registers.)
 
-Needs docker, kind, kubectl and helm on PATH, and debug builds of `alien`,
-`alien-manager` and `alien-operator` (`cargo build -p alien-cli -p
-alien-manager -p alien-operator`), from target/debug or --binaries. Evidence (logs, snapshots, the summary)
-goes to --evidence. Everything it creates is named `sign-e2e*`; `--down`
-removes it.
+The CLI refuses to sign a developer's input against a standalone manager, so the
+suite signs `config/v1` statements itself with the CI key and keeps the CLI's
+refusal as evidence.
+
+Needs docker, kind, kubectl, helm, swtpm, tpm2-tools and script on PATH, and
+debug builds of `alien-manager` and `alien-operator` (`cargo build -p
+alien-manager -p alien-operator`) in target/debug or --binaries. The CLI has
+to carry the Operator pin of the image the suite publishes, so the suite
+builds it with `cargo build -p alien-cli --features test-device-env`, with the
+pin written into two tracked files for the build and restored afterwards (or
+pass a CLI built that way with --alien). Evidence (logs, snapshots, the
+summary) goes to --evidence. Everything it creates is named `sign-e2e*`;
+`--down` removes it.
 """
 
 import argparse
+import atexit
 import base64
-
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
 import copy
 import hashlib
 import json
 import os
 import re
 import secrets
+import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
+
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
@@ -72,6 +91,11 @@ PROXY_IMAGE = "python:3.12-alpine"
 NAMESPACE = "customer"
 RELEASE_NAME = "signed-e2e"
 CUSTOMER_DATABASE_URL = "postgres://db.customer.internal/app"
+PROJECT = "default"
+# The PIN the swtpm-backed device key is created with (read from the
+# environment by test builds of the CLI).
+DEVICE_PIN = "4321"
+CI_REPOSITORY = "acme/app"
 
 
 def log(message):
@@ -111,6 +135,20 @@ def wait_until(what, predicate, timeout=180, interval=3):
         time.sleep(interval)
 
 
+def public_key_text(private_key):
+    """A signer list key: `ecdsa-p256:` and the base64 DER public key."""
+    return "ecdsa-p256:" + base64.b64encode(private_key.public_key().public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)).decode()
+
+
+def sign_statement(document, private_key, signer):
+    """A signed statement: the payload bytes, base64, and `signer`'s signature over them."""
+    payload = json.dumps(document, separators=(",", ":")).encode()
+    signature = private_key.sign(payload, ec.ECDSA(hashes.SHA256()))
+    return {"payload": base64.b64encode(payload).decode(),
+            "signatures": [{"signer": signer, "sig": base64.b64encode(signature).decode()}]}
+
+
 class Suite:
     def __init__(self, args):
         self.mode = args.mode
@@ -118,39 +156,151 @@ class Suite:
         self.evidence = Path(args.evidence).resolve()
         self.evidence.mkdir(parents=True, exist_ok=True)
         self.work = self.evidence / "work"
-        if self.work.exists():
-            shutil.rmtree(self.work)
-        self.work.mkdir()
-        self.attack_dir = self.work / "attack"
-        self.attack_dir.mkdir()
-        self.app = self.work / "app"
-        shutil.copytree(HERE / "app", self.app)
+        if not args.down:
+            if self.work.exists():
+                shutil.rmtree(self.work)
+            self.work.mkdir()
+            self.attack_dir = self.work / "attack"
+            self.attack_dir.mkdir()
+            self.app = self.work / "app"
+            shutil.copytree(HERE / "app", self.app)
         self.binaries = Path(args.binaries or REPO / "target/debug").resolve()
-        self.alien = Path(args.alien or self.binaries / "alien")
+        self.alien = Path(args.alien).resolve() if args.alien else None
         self.admin_token = "ax_admin_" + secrets.token_hex(16)
+        # Sync changes the proxy makes all the time (see `relay_config`).
+        self.standing = []
         self.results = []
         self.releases = []
         self.targets = "linux-x64"
+        self.swtpm = None
+        self.install_name = "customer"
+        self.ci_key = None
         # The Operator image the manager's charts run, through the manager.
         self.manager_operator_image = UPSTREAM_OPERATOR
 
     # ── Environment ──────────────────────────────────────────────────────
 
-    def cli_env(self):
+    def cli_env(self, who="alice"):
+        """The environment of `alien` run as `who`: `alice` is the developer's
+        machine (its device key lives in the TPM simulator), `ci` signs with
+        the CI key, `stranger` is a machine nobody trusts."""
+        home = self.work / "people" / who
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "gitconfig").write_text(f"[user]\n\temail = {who}@example.com\n")
         env = dict(os.environ)
         env.update(
             {
                 "ALIEN_MANAGER_URL": f"http://localhost:{MANAGER_PORT}",
                 "ALIEN_API_KEY": self.admin_token,
                 "XDG_CONFIG_HOME": str(self.work / "config"),
-                "ALIEN_SIGNING_HOME": str(self.work / "signing"),
+                "ALIEN_SIGNING_HOME": str(home / "signing"),
+                "ALIEN_DEVICE_KEY_PIN": DEVICE_PIN,
+                "TPM2TOOLS_TCTI": self.tcti,
+                "USER": who,
+                "GIT_CONFIG_GLOBAL": str(home / "gitconfig"),
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "PATH": f"{self.work / 'gh'}:{os.environ.get('PATH', '')}",
                 "NO_COLOR": "1",
             }
         )
+        env.pop("ALIEN_SIGNING_KEY", None)
+        if who == "ci":
+            env["ALIEN_SIGNING_KEY"] = self.ci_key
         return env
 
-    def alien_cli(self, *args, check=True):
-        return run([self.alien, *args], env=self.cli_env(), cwd=self.app, check=check)
+    def alien_cli(self, *args, who="alice", check=True):
+        """`alien` without a terminal, as CI runs it."""
+        return run([self.alien, *args], env=self.cli_env(who), cwd=self.app, check=check,
+                   input="")
+
+    def terminal(self, args, answers=(), who="alice", timeout=900):
+        """`alien` in a terminal (`script` gives it one). For each
+        `(prompt, answer)`, wait for the prompt, then type the answer.
+        Returns the exit status and everything the terminal showed."""
+        line = shlex.join([str(self.alien), *map(str, args)])
+        child = subprocess.Popen(
+            ["script", "-q", "-e", "-c", line, "/dev/null"], cwd=self.app, env=self.cli_env(who),
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        seen = bytearray()
+
+        def read(stream):
+            while chunk := stream.read1(4096):
+                seen.extend(chunk)
+
+        readers = [threading.Thread(target=read, args=(stream,), daemon=True)
+                   for stream in (child.stdout, child.stderr)]
+        for reader in readers:
+            reader.start()
+        position = 0
+        for prompt, answer in answers:
+            deadline = time.time() + timeout
+            while True:
+                at = seen.decode(errors="replace").find(prompt, position)
+                if at >= 0:
+                    position = at + len(prompt)
+                    break
+                if time.time() > deadline or child.poll() is not None:
+                    child.kill()
+                    raise RuntimeError(f"no prompt {prompt!r} in:\n{seen.decode(errors='replace')}")
+                time.sleep(0.05)
+            # The CLI prints a hidden prompt just before turning echo off, which
+            # drops what was typed ahead.
+            time.sleep(0.5)
+            child.stdin.write(answer.encode())
+            child.stdin.flush()
+        try:
+            status = child.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            raise
+        for reader in readers:
+            reader.join(timeout=5)
+        return status, seen.decode(errors="replace").replace("\r", "")
+
+    def start_tpm(self):
+        """A TPM simulator holds the developer's device key."""
+        self.tcti = os.environ.get("TPM2TOOLS_TCTI")
+        if self.tcti:
+            return
+        state = self.work / "tpm"
+        state.mkdir()
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        # The swtpm TCTI reaches the control channel on the next port.
+        self.swtpm = subprocess.Popen(
+            ["swtpm", "socket", "--tpm2", "--tpmstate", f"dir={state}",
+             "--server", f"type=tcp,port={port}", "--ctrl", f"type=tcp,port={port + 1}",
+             "--flags", "not-need-init,startup-clear", "--pid", f"file={self.work / 'swtpm.pid'}"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        atexit.register(self.swtpm.kill)
+        self.tcti = f"swtpm:port={port}"
+        wait_until("swtpm", lambda: run(
+            ["tpm2_getrandom", "4", "--hex"], check=False,
+            env={**os.environ, "TPM2TOOLS_TCTI": self.tcti}).returncode == 0, timeout=20, interval=0.2)
+
+    def fake_gh(self):
+        """A `gh` that stores the secret it is given in a file instead of calling GitHub, and
+        answers as a correctly set up `release` environment does."""
+        bin_dir = self.work / "gh"
+        bin_dir.mkdir()
+        secret = self.work / "secret.pem"
+        script = f"""#!/bin/sh
+case "$*" in
+  "secret set"*) cat > '{secret}' ;;
+  *"/rulesets/1") echo '{{"id":1,"name":"Release tags","target":"tag","enforcement":"active","conditions":{{"ref_name":{{"include":["refs/tags/v*"],"exclude":[]}}}},"rules":[{{"type":"creation"}},{{"type":"update"}},{{"type":"deletion"}}],"bypass_actors":[]}}' ;;
+  *"/rulesets") echo '[{{"id":1,"target":"tag"}}]' ;;
+  *"deployment-branch-policies"*"-X POST"*|*"-X POST"*"deployment-branch-policies"*) echo '{{}}' ;;
+  *"deployment-branch-policies"*) echo '{{"branch_policies":[{{"name":"main","type":"branch"}},{{"name":"v*","type":"tag"}}]}}' ;;
+  *"-X PUT"*) cat > /dev/null; echo '{{}}' ;;
+  *"environments/release"*) echo '{{"deployment_branch_policy":{{"protected_branches":false,"custom_branch_policies":true}}}}' ;;
+  *) echo "unexpected gh $*" >&2; exit 1 ;;
+esac
+"""
+        gh = bin_dir / "gh"
+        gh.write_text(script)
+        gh.chmod(0o755)
+        return secret
 
     def up(self):
         if CLUSTER not in run(["kind", "get", "clusters"]).stdout.split():
@@ -172,6 +322,10 @@ class Suite:
             run(["docker", "exec", "-i", node, "tee", f"/etc/containerd/certs.d/{REGISTRY_HOST}/hosts.toml"],
                 input=f'[host."http://{REGISTRY}:5000"]\n  capabilities = ["pull", "resolve"]\n')
         self.publish(OPERATOR_IMAGE, "upstream/alien-operator:dev")
+        self.operator_digest = self.registry_digest("upstream/alien-operator", "dev")
+        log(f"the vendor's Operator build is {self.operator_digest}")
+        if not self.alien:
+            self.build_cli()
 
         for name in (MANAGER, PROXY):
             run(["docker", "rm", "-f", name], check=False)
@@ -193,19 +347,51 @@ class Suite:
              PROXY_IMAGE, "python3", "-u", "/proxy.py"])
         wait_until("the manager", lambda: run(
             ["curl", "-sf", f"http://localhost:{MANAGER_PORT}/health"], check=False).returncode == 0)
+        self.turn_signing_on()
 
-        # The developer sets up signing: a signer list with this machine's key,
-        # a CI key in a file and a recovery key. Releases are signed with the CI key.
-        self.key_file = self.work / "ci.pem"
-        init = json.loads(self.alien_cli(
-            "signing", "init", "--backend", "software", "--ci-key-out", self.key_file,
-            "--recovery-key-out", self.work / "recovery.pem", "--json").stdout)
-        self.fingerprint = init["fingerprint"]
-        # The key that signs Operator builds; the suite never signs one.
-        self.components_key = "ecdsa-p256:" + base64.b64encode(
-            ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(
-                serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)).decode()
+    def registry_digest(self, repository, tag):
+        """The digest the plain registry gives a pushed image."""
+        headers = run(["curl", "-sI", "-H", "Accept: application/vnd.oci.image.manifest.v1+json,"
+                       "application/vnd.docker.distribution.manifest.v2+json",
+                       f"http://localhost:{REGISTRY_PORT}/v2/{repository}/manifests/{tag}"]).stdout
+        return re.search(r"(?im)^docker-content-digest: (sha256:[0-9a-f]{64})", headers).group(1)
+
+    def build_cli(self):
+        """A CLI that carries the Operator pin of the published image. Source
+        builds carry none, so they can't render a signed chart. The pin is in
+        two tracked files for the length of the build only."""
+        pins = [(REPO / "crates/alien-core/operator-digest.txt", f"{self.operator_digest}\n"),
+                (REPO / "crates/alien-cli/enforcer-digests.json",
+                 json.dumps({"operator": self.operator_digest}) + "\n")]
+        saved = [(path, path.read_bytes()) for path, _ in pins]
+        log("building the CLI with the Operator pin")
+        try:
+            for path, text in pins:
+                path.write_text(text)
+            run(["cargo", "build", "-p", "alien-cli", "--features", "test-device-env"],
+                cwd=REPO, capture=False)
+        finally:
+            for path, original in saved:
+                path.write_bytes(original)
+        self.alien = self.work / "alien"
+        shutil.copy2(self.binaries / "alien", self.alien)
+
+    def turn_signing_on(self):
+        """The developer's first release in a terminal turns signing on; then
+        CI is added, and signs everything after."""
+        self.start_tpm()
+        secret = self.fake_gh()
+        log("the developer's first release turns signing on")
+        self.release("release-0", who="alice")
+        pin = json.loads((self.app / ".alien/signing.json").read_text())
+        self.fingerprint = pin["fingerprint"]
         log(f"signing fingerprint {self.fingerprint}")
+        status, output = self.terminal(["devices", "add-ci", CI_REPOSITORY])
+        self.save("signing/add-ci.txt", output)
+        if status != 0:
+            raise RuntimeError(f"devices add-ci failed:\n{output}")
+        self.ci_key = secret.read_text()
+        self.save("signing/devices.txt", self.alien_cli("devices", "list").stdout)
 
     def build_images(self):
         build = self.work / "images"
@@ -237,18 +423,58 @@ class Suite:
         return reference
 
     def down(self):
+        pid_file = self.work / "swtpm.pid"
+        if pid_file.exists():
+            run(["kill", pid_file.read_text().strip()], check=False)
         for name in (MANAGER, PROXY, REGISTRY):
             run(["docker", "rm", "-f", name], check=False)
         run(["kind", "delete", "cluster", "--name", CLUSTER], check=False)
 
 
+    # ── Signed config ────────────────────────────────────────────────────
+
+    def ci_private_key(self):
+        return serialization.load_pem_private_key(self.ci_key.encode(), None)
+
+    def signer_list_version(self):
+        """The newest signer list version the manager holds."""
+        lists = self.manager_get(f"/v1/projects/{PROJECT}/signer-lists")["items"]
+        return max(json.loads(base64.b64decode(item["payload"]))["sequence"] for item in lists)
+
+    def install_id(self, cluster_uid=None):
+        """What a protected Operator calls itself: the cluster, namespace and Helm release."""
+        uid = cluster_uid or kubectl("get", "namespace", "kube-system", "-o",
+                                     "jsonpath={.metadata.uid}").stdout.strip()
+        return f"k8s:{uid}:{NAMESPACE}/{RELEASE_NAME}"
+
+    def ci_signer(self):
+        """The id `devices add-ci` gave the CI key, from the newest signer list."""
+        lists = self.manager_get(f"/v1/projects/{PROJECT}/signer-lists")["items"]
+        newest = max((json.loads(base64.b64decode(item["payload"])) for item in lists),
+                     key=lambda statement: statement["sequence"])
+        return next(s["id"] for s in newest["body"]["signers"] if s["kind"] == "ci")
+
+    def signed_config(self, body, key=None, signer=None, install=None):
+        """A `config/v1` statement for this installation, signed by CI unless told otherwise."""
+        signer = signer or self.ci_signer()
+        return sign_statement({
+            "type": "config/v1", "project": PROJECT, "install": install or self.install_id(),
+            "sequence": int(time.time() * 1000), "notAfter": None,
+            "signerListVersion": self.signer_list_version(), "body": body,
+        }, key or self.ci_private_key(), signer)
+
     # ── Vendor and installer actions ─────────────────────────────────────
 
-    def release(self, message, signed):
-        """`alien release` of the app printing `message`, signed or not."""
+    def release_ids(self):
+        return [r["id"] for r in self.manager_get("/v1/releases").get("items", [])]
+
+    def release(self, message, who="ci"):
+        """`alien release` of the app printing `message`, as `who`: `ci` signs
+        with the CI key, `alice` with her TPM-held device key (in a terminal),
+        and `stranger` is a machine nobody trusts, so the release is unsigned."""
         # The manager rolls a release out only to deployments in these statuses
         # (an Operator restarting after a self-update isn't one, for a moment).
-        if self.releases:
+        if self.releases and self.manager_get("/v1/deployments").get("items"):
             kubectl("-n", NAMESPACE, "rollout", "status", f"deployment/{RELEASE_NAME}", "--timeout=180s")
             wait_until("the deployment to take a new release", lambda: all(
                 d["status"] in ("running", "update-failed", "refresh-failed")
@@ -258,20 +484,36 @@ class Suite:
         config = json.loads(config_path.read_text())
         config["resources"]["app"]["config"]["code"]["toolchain"]["buildArgs"] = {"MESSAGE": message}
         config_path.write_text(json.dumps(config, indent=2) + "\n")
-        args = ["release", "--platforms", "kubernetes", "--targets", self.targets, "--no-git", "--json"]
-        if signed:
-            args += ["--sign", "--signing-key-file", self.key_file, "--signing-fingerprint", self.fingerprint]
-        output = json.loads(self.alien_cli(*args).stdout)
-        release = self.manager_get(f"/v1/releases/{output['releaseId']}")
+        before = self.release_ids()
+        args = ["release", "--platforms", "kubernetes", "--targets", self.targets, "--no-git"]
+        if who == "alice":
+            # The very first release shows the recovery code and waits for a
+            # confirmation that it was saved.
+            first = not (self.app / ".alien/signing.json").exists()
+            status, output = self.terminal(args, [("Press Enter once saved", "\n")] if first else [])
+            if status != 0:
+                raise RuntimeError(f"alien release failed:\n{output}")
+        else:
+            output = self.alien_cli(*args, who=who).stdout
+        new = [i for i in self.release_ids() if i not in before]
+        if len(new) != 1:
+            raise RuntimeError(f"expected one new release, found {new}:\n{output}")
+        release = self.manager_get(f"/v1/releases/{new[0]}")
         image = release["stack"]["kubernetes"]["resources"]["app"]["config"]["code"]["image"]
-        self.releases.append({"message": message, "signed": signed, "id": output["releaseId"], "image": image})
-        log(f"released {message} ({'signed' if signed else 'unsigned'}) as {output['releaseId']}: {image}")
+        signed = bool(release.get("signedStacks", {}).get("kubernetes"))
+        self.releases.append({"message": message, "signed": signed, "id": new[0], "image": image})
+        self.save(f"releases/{len(self.releases):02d}-{message}.txt", output)
+        log(f"released {message} ({'signed' if signed else 'unsigned'}, as {who}) as {new[0]}: {image}")
         return release
 
-    def deployment_id(self):
-        """The customer's deployment, once the installation registered it."""
+    def deployments(self, name=None):
+        """The manager's deployments, those named `name` if given."""
         items = self.manager_get("/v1/deployments").get("items", [])
-        return items[0]["id"] if items else "dep_customer"
+        return [d for d in items if name is None or d["name"] == name]
+
+    def deployment_id(self, name="customer"):
+        """The deployment `name`, once its installation registered it."""
+        return self.deployments(name)[0]["id"]
 
     def manager_post(self, path, body):
         result = run(["curl", "-sf", "-X", "POST", "-H", f"Authorization: Bearer {self.admin_token}",
@@ -279,55 +521,63 @@ class Suite:
                       f"http://localhost:{MANAGER_PORT}{path}"], input=json.dumps(body))
         return result.stdout
 
-    def signed_config(self, inputs):
-        """A config/v1 for the customer's deployment, signed with the CI key the
-        way `alien deployments set-inputs --sign` signs it."""
-        key = serialization.load_pem_private_key(self.key_file.read_bytes(), password=None)
-        release = json.loads(base64.b64decode(self.manager_get(
-            f"/v1/releases/{self.releases[-1]['id']}")["signedStacks"]["kubernetes"]["payload"]))
-        envelope = {"type": "config/v1", "project": release["project"], "deployment": self.deployment_id(),
-                    "sequence": int(time.time() * 1000), "signerListVersion": release["signerListVersion"],
-                    "body": {"inputs": inputs}}
-        payload = json.dumps(envelope).encode()
-        sig = key.sign(payload, ec.ECDSA(hashes.SHA256()))
-        return {"payload": base64.b64encode(payload).decode(),
-                "signatures": [{"signer": "ci", "sig": base64.b64encode(sig).decode()}]}
-
     def manager_get(self, path):
         result = run(["curl", "-sf", "-H", f"Authorization: Bearer {self.admin_token}",
                       f"http://localhost:{MANAGER_PORT}{path}"])
         return json.loads(result.stdout)
 
-    def install(self, protected=None):
+    # ── Installing ───────────────────────────────────────────────────────
+
+    def onboard(self, name):
+        """A deployment link for the customer `name`; returns its token."""
+        onboard = json.loads(self.alien_cli("onboard", name, "--platforms", "kubernetes", "--json").stdout)
+        self.save(f"onboard-{name}.json", {**onboard, "token": "<redacted>"})
+        return onboard
+
+    def install(self, protected=None, name="customer"):
+        """Install the Operator in a fresh namespace: the signed chart the
+        release carries when protected, the ordinary chart otherwise. The
+        deployment registers with the manager as `name`."""
+        protected = self.protected if protected is None else protected
         kubectl("delete", "namespace", NAMESPACE, "--ignore-not-found", "--wait=true", "--timeout=180s")
-        onboard = json.loads(self.alien_cli("onboard", "customer", "--platforms", "kubernetes", "--json").stdout)
-        self.chart = onboard["helm"]["chart"].replace(PUBLIC_URL.removeprefix("http://"), f"localhost:{MANAGER_PORT}")
+        onboard = self.onboard(name)
+        self.install_name = name
         self.management_token = onboard["token"]
+        self.chart = onboard["helm"]["chart"].replace(PUBLIC_URL.removeprefix("http://"), f"localhost:{MANAGER_PORT}")
         run(["helm", "registry", "login", f"localhost:{MANAGER_PORT}", "--insecure",
              "--username", "customer", "--password-stdin"], input=onboard["token"])
-        self.helm("install", self.protected if protected is None else protected)
+        self.helm("install", protected)
+
+    def signed_chart(self):
+        """The signed chart the newest signed release carries, written to a directory."""
+        release = self.manager_get(f"/v1/releases/{next(r for r in reversed(self.releases) if r['signed'])['id']}")
+        files = json.loads(base64.b64decode(release["setupTemplates"]["kubernetes"]["helm"]))
+        directory = self.work / "signed-chart"
+        shutil.rmtree(directory, ignore_errors=True)
+        for path, contents in files.items():
+            destination = directory / path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(contents)
+        return directory
 
     def helm(self, command, protected):
         """`helm install` or `helm upgrade` with the customer's values."""
         values = {
-            "management": {"token": self.management_token, "name": "customer"},
+            "management": {"token": self.management_token, "name": self.install_name,
+                           "defaultUrl": PUBLIC_URL},
             "inputValues": {"databaseUrl": CUSTOMER_DATABASE_URL},
             "tunnel": {"enabled": False},
         }
+        chart = self.chart
         if protected:
-            # The anchor the customer's setup pins, from the vendor's install
-            # guide. It names the deployment the installation registered as, so
-            # config signed for this deployment verifies and config signed for
-            # another doesn't.
-            values["releaseSigning"] = {
-                "protected": True, "project": "default", "deployment": self.deployment_id(),
-                "signing": self.fingerprint, "components": self.components_key,
-            }
+            chart = self.signed_chart()
+            # The vendor's Operator build, mirrored: the chart fixes its digest.
+            values["runtime"] = {"image": {"repository": f"{REGISTRY_HOST}/upstream/alien-operator"}}
         values_file = self.work / "values.yaml"
         values_file.write_text(json.dumps(values))
         (self.evidence / "customer-values.json").write_text(json.dumps(
-            {**values, "management": {"name": "customer", "token": "<redacted>"}}, indent=2))
-        run(["helm", command, RELEASE_NAME, self.chart, "--plain-http", "--kube-context", CONTEXT,
+            {**values, "management": {**values["management"], "token": "<redacted>"}}, indent=2))
+        run(["helm", command, RELEASE_NAME, chart, "--plain-http", "--kube-context", CONTEXT,
              "--namespace", NAMESPACE, "--create-namespace", "--values", values_file,
              "--wait", "--timeout", "5m"])
         # The customer opts in to dynamic containers; protected mode must still refuse them.
@@ -351,6 +601,12 @@ class Suite:
             items = [d for d in json.loads(result.stdout)["items"] if d["metadata"]["name"] != RELEASE_NAME]
         return items[0] if items else None
 
+    def app_env(self):
+        """The environment the app's workload is given."""
+        workload = self.app_workload()
+        return {e["name"]: e.get("value") for c in workload["spec"]["template"]["spec"]["containers"]
+                for e in c.get("env", [])}
+
     def app_message(self):
         """What the running app pod printed at start, or None."""
         workload = self.app_workload()
@@ -371,7 +627,7 @@ class Suite:
         release_id = next(r["id"] for r in reversed(self.releases) if r["message"] == message)
         wait_until(f"the manager to see {message} running", lambda: any(
             d["status"] == "running" and d.get("currentReleaseId") == release_id
-            for d in self.manager_get("/v1/deployments").get("items", [])), timeout=timeout)
+            for d in self.deployments(self.install_name)), timeout=timeout)
 
     def snapshot(self):
         """What runs in the namespace and what it is given, without status."""
@@ -416,6 +672,7 @@ class Suite:
         return json.loads((self.attack_dir / "capture/target.json").read_text())
 
     def load_attack(self, attack):
+        attack = {**attack, "sync": self.standing + attack.get("sync", [])}
         (self.attack_dir / "attack.json.tmp").write_text(json.dumps(attack))
         os.replace(self.attack_dir / "attack.json.tmp", self.attack_dir / "attack.json")
 
@@ -456,14 +713,13 @@ class Suite:
             change(modified["releaseInfo"]["stack"]["resources"]["app"]["config"])
             return [{"op": "set", "path": ["target"], "value": modified}]
 
-        def app_env():
-            workload = self.app_workload()
-            return {e["name"]: e.get("value") for c in workload["spec"]["template"]["spec"]["containers"]
-                    for e in c.get("env", [])}
+        app_env = self.app_env
 
         def tampered_payload():
             modified = copy.deepcopy(target)
             payload = json.loads(base64.b64decode(modified["releaseInfo"]["signed"]["payload"]))
+            # A newer sequence too, so the release is not simply the one already applied.
+            payload["sequence"] += 1000
             payload["body"]["stack"]["resources"]["app"]["config"]["command"] = evil_command
             payload["body"]["workloads"][0]["command"] = evil_command
             modified["releaseInfo"]["signed"]["payload"] = base64.b64encode(
@@ -482,33 +738,29 @@ class Suite:
             return [{"op": "set", "path": ["target"], "value": modified}]
 
         def attacker_signed():
-            """A signer list version 2 that adds the attacker's key, and a release
-            the attacker signs with it: what a control plane that forged the list
-            would send."""
+            """A signer list version n+1 that adds the attacker's key, claiming an
+            admin's id, and a release the attacker signs with it: what a control
+            plane that forged the list would send."""
             attacker = ec.generate_private_key(ec.SECP256R1())
-            attacker_key = "ecdsa-p256:" + base64.b64encode(attacker.public_key().public_bytes(
-                serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)).decode()
             modified = copy.deepcopy(target)
             lists = modified["releaseInfo"]["signerLists"]
-            first = json.loads(base64.b64decode(lists[0]["payload"]))
-            first_digest = "sha256:" + hashlib.sha256(base64.b64decode(lists[0]["payload"])).hexdigest()
-            body = first["body"]
-            body["previous"] = first_digest
-            body["signers"].append({"id": "attacker", "key": attacker_key, "kind": "ci", "roles": ["release", "admin"]})
-            forged = {**first, "sequence": 2, "signerListVersion": 1, "body": body}
-            def sign(document, signer):
-                payload = json.dumps(document).encode()
-                sig = attacker.sign(payload, ec.ECDSA(hashes.SHA256()))
-                return {"payload": base64.b64encode(payload).decode(),
-                        "signatures": [{"signer": signer, "sig": base64.b64encode(sig).decode()}]}
-            admin = next(s["id"] for s in first["body"]["signers"] if "admin" in s["roles"] and s["kind"] != "recovery")
-            modified["releaseInfo"]["signerLists"] = [lists[0], sign(forged, admin)]
+            newest = json.loads(base64.b64decode(lists[-1]["payload"]))
+            newest_digest = "sha256:" + hashlib.sha256(base64.b64decode(lists[-1]["payload"])).hexdigest()
+            body = copy.deepcopy(newest["body"])
+            body["previous"] = newest_digest
+            body["signers"].append({"id": "attacker", "key": public_key_text(attacker), "kind": "ci",
+                                    "roles": ["release", "admin"]})
+            forged = {**newest, "sequence": newest["sequence"] + 1,
+                      "signerListVersion": newest["sequence"], "body": body}
+            admin = next(s["id"] for s in newest["body"]["signers"]
+                         if "admin" in s["roles"] and s["kind"] != "recovery")
+            modified["releaseInfo"]["signerLists"] = [*lists, sign_statement(forged, attacker, admin)]
             release = json.loads(base64.b64decode(modified["releaseInfo"]["signed"]["payload"]))
             release["sequence"] += 1000
-            release["signerListVersion"] = 2
+            release["signerListVersion"] = forged["sequence"]
             release["body"]["stack"]["resources"]["app"]["config"]["command"] = evil_command
             release["body"]["workloads"][0]["command"] = evil_command
-            modified["releaseInfo"]["signed"] = sign(release, "attacker")
+            modified["releaseInfo"]["signed"] = sign_statement(release, attacker, "attacker")
             modified["releaseInfo"]["stack"]["resources"]["app"]["config"]["command"] = evil_command
             return [{"op": "set", "path": ["target"], "value": modified}]
 
@@ -522,16 +774,16 @@ class Suite:
         attacks = [
             {
                 "name": "forged-signer-list",
-                "summary": "the manager forges signer list version 2 with its own key and signs a release with it",
+                "summary": "the manager forges the next signer list with its own key and signs a release with it",
                 "sync": attacker_signed(),
-                "refusal": r"refused the target.*TRUST_SIGNATURE_REFUSED|refused the target.*TRUST_SIGNER_LIST_REFUSED",
+                "refusal": r"refused the target.*SIGNING_(SIGNATURE|SIGNER_LIST)_REFUSED",
                 "took_effect": lambda: self.app_message() == "evil",
             },
             {
                 "name": "unsigned-target",
                 "summary": "the manager drops the signature and sends its own command",
                 "sync": unsigned(),
-                "refusal": r"refused the target.*not signed",
+                "refusal": r"refused the target.*the release is not signed",
                 "took_effect": lambda: self.app_message() == "evil",
             },
             {
@@ -551,9 +803,9 @@ class Suite:
             },
             {
                 "name": "tampered-signed-bytes",
-                "summary": "the manager edits the signed statement itself (same release, new bytes)",
+                "summary": "the manager edits the signed statement itself (new bytes, the old signature)",
                 "sync": tampered_payload(),
-                "refusal": r"refused the target.*TRUST_SIGNATURE_REFUSED",
+                "refusal": r"refused the target.*SIGNING_SIGNATURE_REFUSED",
                 "took_effect": lambda: self.app_message() == "evil",
             },
             {
@@ -660,7 +912,7 @@ class Suite:
         """After an attack took effect, roll a fresh release out again."""
         self.restores = getattr(self, "restores", 0) + 1
         message = f"restore-{self.restores}"
-        self.release(message, signed=True)
+        self.release(message)
         kubectl("-n", NAMESPACE, "rollout", "undo", f"deployment/{RELEASE_NAME}", check=False) \
             if self.operator_image_changed() else None
         self.wait_for_message(message)
@@ -683,15 +935,8 @@ class Suite:
 
     def suite(self):
         # Releases are signed in both modes: only the installation differs.
-        signed = True
-        self.release("release-1", signed)
-        if self.protected:
-            # The customer turns protected mode on for an existing installation.
-            self.install(protected=False)
-            self.wait_for_message("release-1")
-            self.run_protection_turned_on()
-        else:
-            self.install()
+        self.release("release-1")
+        self.install()
         self.wait_for_message("release-1")
         self.first_target = wait_until("the first target", lambda: self.target_for("release-1"))
         self.save("normal-deploy/target.json", self.first_target)
@@ -699,7 +944,7 @@ class Suite:
         self.save("normal-deploy/app-workload.json", self.app_workload())
 
         log("normal release: release-2 rolls out with no installer action")
-        self.release("release-2", signed)
+        self.release("release-2")
         self.wait_for_message("release-2")
         self.baseline_target = wait_until("the release-2 target", lambda: self.target_for("release-2"))
         self.results.append({"attack": "normal-release", "summary": "a new signed release rolls out",
@@ -714,12 +959,21 @@ class Suite:
         self.run_unsigned_release()
 
         log("rollback: re-releasing release-1's code rolls out as a new release")
-        self.release("release-1", signed)
+        self.release("release-1")
         self.wait_for_message("release-1")
         self.results.append({"attack": "rollback-by-re-release",
                              "summary": "re-releasing release-1's code rolls it back",
                              "passed": True, "took_effect": True, "changed": []})
         self.save("operator-full.log", self.operator_logs("2000-01-01T00:00:00Z"))
+        if self.protected:
+            # A second customer turns protected mode on for an installation they
+            # already run. Its own deployment: the manager records whether a
+            # deployment is protected when it registers.
+            log("protection turned on for an existing installation")
+            self.standing = []
+            self.install(protected=False, name="early")
+            self.wait_for_message(self.current_message())
+            self.run_protection_turned_on()
         self.save("results.json", self.results)
         return all(r["passed"] for r in self.results)
 
@@ -800,23 +1054,39 @@ class Suite:
         if self.protected:
             self.run_signed_developer_input()
 
+    def log_level(self):
+        return self.app_env().get("LOG_LEVEL")
+
+    def rolled_out(self):
+        """One app pod, none on the way out."""
+        selector = ",".join(f"{k}={v}" for k, v in self.app_workload()["spec"]["selector"]["matchLabels"].items())
+        pods = json.loads(kubectl("-n", NAMESPACE, "get", "pods", "-l", selector, "-o", "json").stdout)["items"]
+        return len(pods) == 1 and not pods[0]["metadata"].get("deletionTimestamp")
+
+    def settled(self):
+        """Every deployment runs its release with nothing pending."""
+        return all(d["status"] == "running" and not d.get("desiredReleaseId")
+                   for d in self.deployments())
+
     def run_signed_developer_input(self):
-        """The developer signs a config/v1 setting logLevel; it reaches the workload."""
+        """The developer signs two config/v1 statements that set logLevel; each
+        reaches the workload. Then the control plane tries three configs it
+        shouldn't deliver."""
         name = "signed-developer-input"
         # Sign on a settled deployment: a config stored while an update is
         # in flight waits for the next change (a known gap in the manager).
-        wait_until("the deployment to settle", lambda: all(
-            d["status"] == "running" and not d.get("desiredReleaseId")
-            for d in self.manager_get("/v1/deployments").get("items", [])), timeout=300)
+        wait_until("the deployment to settle", self.settled, timeout=300)
+        deployment = self.deployment_id()
+        # `alien deployments set-inputs` is the way to sign it; it refuses
+        # a standalone manager, so here it only explains that.
+        attempt = self.alien_cli("deployments", "set-inputs", "customer", "--input", "logLevel=warn", check=False)
+        self.save(f"attacks/{name}/cli-attempt.txt",
+                  f"exit {attempt.returncode}\n{attempt.stdout}{attempt.stderr}")
         log(f"{name}: the developer signs logLevel=warn for this deployment")
-        self.manager_post(f"/v1/deployments/{self.deployment_id()}/config-statements",
-                          {"statement": self.signed_config({"logLevel": "warn"})})
-        def level():
-            workload = self.app_workload()
-            return any(e["name"] == "LOG_LEVEL" and e.get("value") == "warn"
-                       for c in workload["spec"]["template"]["spec"]["containers"] for e in c.get("env", []))
+        first = self.signed_config({"inputs": {"logLevel": "warn"}})
+        self.manager_post(f"/v1/deployments/{deployment}/config-statements", {"statement": first})
         try:
-            wait_until("LOG_LEVEL=warn", level, timeout=240)
+            wait_until("LOG_LEVEL=warn", lambda: self.log_level() == "warn", timeout=240)
             effect = True
         except TimeoutError:
             effect = False
@@ -826,6 +1096,111 @@ class Suite:
         log(f"{name}: {'PASS' if effect else 'FAIL'} (took effect: {effect})")
         self.results.append(result)
 
+        name = "signed-developer-input-update"
+        log(f"{name}: the developer signs logLevel=error")
+        second = self.signed_config({"inputs": {"logLevel": "error"}})
+        self.manager_post(f"/v1/deployments/{deployment}/config-statements", {"statement": second})
+        try:
+            wait_until("LOG_LEVEL=error", lambda: self.log_level() == "error", timeout=240)
+            updated = True
+        except TimeoutError:
+            updated = False
+        result = {"attack": name, "took_effect": updated, "changed": [], "passed": updated,
+                  "summary": "a newer signed config replaces the one before it"}
+        self.save(f"attacks/{name}/result.json", result)
+        log(f"{name}: {'PASS' if updated else 'FAIL'}")
+        self.results.append(result)
+        applied = effect and updated
+        if not applied:
+            # The manager didn't deliver them. Does the Operator apply them
+            # when they reach it? Hand them over the way the manager should.
+            applied = self.run_relayed_config(first, second)
+        self.run_config_attacks(first, replay=applied)
+
+    @staticmethod
+    def relay_config(statement):
+        """What a manager that delivers signed config adds to every sync, with
+        the newest `config/v1` the developer signed."""
+        return [{"op": "set", "path": ["signedConfig"], "value": statement},
+                {"op": "set", "path": ["target", "signedConfig"], "value": statement}]
+
+    def run_relayed_config(self, first, second):
+        """Signed configs the manager didn't deliver, handed to the Operator through
+        the proxy, as a manager that delivered them would. Once the Operator has
+        applied one, the proxy keeps adding the newest to every sync: a protected
+        Operator that accepted a config refuses any release delivered without
+        one, so later releases need it."""
+        name = "signed-config-relayed"
+        log(f"{name}: the proxy hands the Operator the two signed configs")
+        applied = []
+        try:
+            for statement, value in ((first, "warn"), (second, "error")):
+                self.load_attack({"name": name, "sync": self.relay_config(statement)[:1]})
+                try:
+                    wait_until(f"LOG_LEVEL={value}", lambda: self.log_level() == value, timeout=240)
+                    applied.append(True)
+                except TimeoutError:
+                    applied.append(False)
+                    break
+            if applied[-1:] == [True]:
+                self.standing = self.relay_config(statement)
+        finally:
+            self.clear_attack()
+        passed = applied == [True, True]
+        result = {"attack": name, "took_effect": passed, "changed": [], "passed": passed,
+                  "summary": "the Operator applies signed configs, newest last, when they reach it"}
+        self.save(f"attacks/{name}/result.json", result)
+        log(f"{name}: {'PASS' if passed else 'FAIL'}")
+        self.results.append(result)
+        return passed
+
+    def run_config_attacks(self, older, replay):
+        """The control plane hands the Operator a config it must not apply. The
+        newest applied one sets logLevel=error; none of these may change it.
+        The replay of the older config means something only if the newer one
+        was applied (`replay`)."""
+        wait_until("the app to finish rolling out", self.rolled_out, timeout=180)
+        attacker = ec.generate_private_key(ec.SECP256R1())
+        target = self.baseline_target
+        configs = [
+            {
+                "name": "forged-config",
+                "summary": "the manager signs logLevel=debug with its own key, under the CI key's id",
+                "sync": [{"op": "set", "path": ["signedConfig"], "value": self.signed_config(
+                    {"inputs": {"logLevel": "debug"}}, key=attacker)}],
+                "refusal": r"refused the target.*SIGNING_SIGNATURE_REFUSED",
+            },
+            {
+                "name": "config-for-another-install",
+                "summary": "the manager sends a config the developer signed for a different cluster",
+                "sync": [{"op": "set", "path": ["signedConfig"], "value": self.signed_config(
+                    {"inputs": {"logLevel": "debug"}},
+                    install=self.install_id(cluster_uid="00000000-0000-4000-8000-000000000000"))}],
+                "refusal": r"refused the target.*SIGNING_WRONG_INSTALL",
+            },
+            {
+                "name": "older-signed-config",
+                "summary": "the manager replays the developer's earlier config (logLevel=warn)",
+                "sync": [{"op": "delete", "path": ["signedConfig"]},
+                         {"op": "set", "path": ["target"], "value": {**target, "signedConfig": older}}],
+                "refusal": r"refused the target.*the config has sequence.*already applied",
+            },
+        ]
+        level = self.log_level()
+        for config in configs:
+            if config["name"] == "older-signed-config" and not replay:
+                log(f"attack {config['name']}: not run, the newer signed config was never applied")
+                self.results.append({"attack": config["name"], "summary": config["summary"],
+                                     "took_effect": None, "changed": [], "passed": False,
+                                     "note": "not run: no signed config was applied to replay against"})
+                continue
+            config["took_effect"] = lambda: self.log_level() != level
+            self.run_attack(config)
+        if self.protected:
+            # A refused target stays with its claim and the deployment shows
+            # update-failed until a newer target replaces it.
+            self.restore()
+
     def run_registry_swap(self):
         """The registry serves other bytes for the release's image; the node has to pull again."""
         name = "registry-swap"
@@ -833,7 +1208,7 @@ class Suite:
         self.push_evil_image()
         if not self.protected:
             # Unsigned releases reference images by tag, as they always have.
-            self.release("tagged", signed=False)
+            self.release("tagged", who="stranger")
             self.wait_for_message("tagged")
         image = self.app_workload()["spec"]["template"]["spec"]["containers"][0]["image"]
         since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -879,7 +1254,7 @@ class Suite:
         log(f"attack {name}: anyone with manager access publishes an unsigned release")
         before = self.snapshot()
         since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        self.release("unsigned", signed=False)
+        self.release("unsigned", who="stranger")
         if self.protected:
             refusal = wait_until("the Operator to refuse the unsigned release", lambda: next(
                 (line for line in self.operator_logs(since).splitlines()
@@ -913,10 +1288,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--mode", choices=["protected", "unprotected"], default="protected")
     parser.add_argument("--evidence", default=None, help="evidence directory (default: a new temporary one)")
-    parser.add_argument("--alien", help="alien CLI binary (default: <binaries>/alien)")
+    parser.add_argument("--alien", help="alien CLI built with the Operator pin and the test-device-env "
+                                        "feature (default: build it)")
     parser.add_argument("--binaries", help="directory with the debug binaries (default: target/debug)")
-    parser.add_argument("--only", choices=["protection-turned-on"],
-                        help="run one protected-mode step instead of the whole suite")
+    parser.add_argument("--only", choices=["protection-turned-on", "setup"],
+                        help="run one step instead of the whole suite")
     parser.add_argument("--down", action="store_true", help="remove everything the suite created")
     args = parser.parse_args()
     args.evidence = args.evidence or tempfile.mkdtemp(prefix="sign-e2e-")
@@ -925,9 +1301,13 @@ def main():
         suite.down()
         return
     suite.up()
+    if args.only == "setup":
+        suite.release("release-1")
+        log(f"signed chart in {suite.signed_chart()}")
+        return
     if args.only == "protection-turned-on":
         suite.protected = True
-        suite.release("release-1", True)
+        suite.release("release-1")
         suite.install(protected=False)
         suite.wait_for_message("release-1")
         passed = suite.run_protection_turned_on()["passed"]
