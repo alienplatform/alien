@@ -1215,7 +1215,10 @@ fn suspend_processes_form(request: &SuspendProcessesRequest) -> HashMap<String, 
         request.auto_scaling_group_name.clone(),
     );
     for (i, process) in request.scaling_processes.iter().enumerate() {
-        form_data.insert(format!("ScalingProcesses.member.{}", i + 1), process.clone());
+        form_data.insert(
+            format!("ScalingProcesses.member.{}", i + 1),
+            process.clone(),
+        );
     }
     form_data
 }
@@ -1446,7 +1449,10 @@ mod tests {
 
         let suspended = groups[0].suspended_processes.as_ref().unwrap();
         assert_eq!(suspended.members.len(), 2);
-        assert_eq!(suspended.members[0].process_name.as_deref(), Some("AZRebalance"));
+        assert_eq!(
+            suspended.members[0].process_name.as_deref(),
+            Some("AZRebalance")
+        );
         assert_eq!(
             suspended.members[0].suspension_reason.as_deref(),
             Some("User suspended at 2026-11-08T10:00:00Z")
@@ -1454,7 +1460,10 @@ mod tests {
         assert_eq!(suspended.members[1].process_name.as_deref(), Some("Launch"));
         assert_eq!(suspended.members[1].suspension_reason, None);
 
-        let empty = groups[1].suspended_processes.as_ref().map_or(0, |w| w.members.len());
+        let empty = groups[1]
+            .suspended_processes
+            .as_ref()
+            .map_or(0, |w| w.members.len());
         assert_eq!(empty, 0);
         assert!(groups[2].suspended_processes.is_none());
     }

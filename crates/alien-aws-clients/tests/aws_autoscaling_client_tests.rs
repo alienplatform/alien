@@ -462,7 +462,12 @@ async fn test_auto_scaling_group_e2e(ctx: &mut AutoScalingTestContext) {
         .auto_scaling_groups
         .and_then(|asgs| asgs.members.into_iter().next())
         .and_then(|asg| asg.suspended_processes)
-        .map(|w| w.members.into_iter().filter_map(|p| p.process_name).collect())
+        .map(|w| {
+            w.members
+                .into_iter()
+                .filter_map(|p| p.process_name)
+                .collect()
+        })
         .unwrap_or_default();
     assert_eq!(suspended, vec!["AZRebalance".to_string()]);
 
