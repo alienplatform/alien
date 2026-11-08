@@ -394,6 +394,9 @@ pub fn exclusion_reason(
         {
             Some("Bun-on-Windows runtime issue: detached async tasks in waitUntil don't execute")
         }
+        Binding::Redis if app != TestApp::ComprehensiveTs => {
+            Some("Redis check runs in the TypeScript comprehensive app, which carries the stock clients")
+        }
         Binding::Ai if app == TestApp::ComprehensiveRust => {
             Some("AI binding check not implemented in the Rust test app")
         }
