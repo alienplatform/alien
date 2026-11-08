@@ -331,7 +331,7 @@ mod tests {
             when.method(GET).path("/v1/deployments/dep_test");
             then.json_body(json!({"id":"dep_test", "name":"docproc", "platform":"test", "status":"running",
                 "deploymentGroupId":"dg_test", "deploymentProtocolVersion":1,"projectId":"prj_test",
-                "workspaceId":"ws_test","retryRequested":false,"updateBlocked":false,"createdAt":"2026-01-01T00:00:00Z"}));
+                "workspaceId":"ws_test","retryRequested":false,"updateBlocked":false,"protected":false,"signingChannel":null,"createdAt":"2026-01-01T00:00:00Z"}));
         }).await;
         let create = server
             .mock_async(|when, then| {
@@ -373,7 +373,7 @@ mod tests {
             when.method(GET).path("/v1/deployments/dep_test");
             then.json_body(json!({"id":"dep_test", "name":"docproc", "platform":"test", "status":"running",
                 "deploymentGroupId":"dg_test", "deploymentProtocolVersion":1,"projectId":"prj_test",
-                "workspaceId":"ws_test","retryRequested":false,"updateBlocked":false,"createdAt":"2026-01-01T00:00:00Z"}));
+                "workspaceId":"ws_test","retryRequested":false,"updateBlocked":false,"protected":false,"signingChannel":null,"createdAt":"2026-01-01T00:00:00Z"}));
         }).await;
         // The body a standalone manager returns for COMMAND_TARGET_AMBIGUOUS.
         let rejected =

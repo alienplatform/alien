@@ -1896,6 +1896,7 @@ async fn machines_inventory_task(
         "Network",
         "Peers",
         "Machine agent",
+        "Plan check",
     ]);
     for machine in &response.machines {
         let network = machine
@@ -1933,9 +1934,14 @@ async fn machines_inventory_task(
             network.into(),
             peers.into(),
             version.into(),
+            plan_check_cell(machine).into(),
         ]);
     }
     print_table(table);
+
+    for line in plan_refusal_lines(&response.machines) {
+        println!("{line}");
+    }
 
     for machine in response
         .machines
@@ -1958,6 +1964,30 @@ async fn machines_inventory_task(
     }
 
     Ok(())
+}
+
+/// What a protected machine last said about the plan it checked: `refused`, `accepted`, or `—`
+/// for a machine that doesn't verify releases or hasn't reported a check.
+fn plan_check_cell(machine: &alien_platform_api::types::DeploymentMachine) -> &'static str {
+    match machine.plan_check.as_ref() {
+        None => "—",
+        Some(check) if check.refusal.is_some() => "refused",
+        Some(_) => "accepted",
+    }
+}
+
+/// One line per machine that refused its last plan, with the reason it gave.
+fn plan_refusal_lines(machines: &[alien_platform_api::types::DeploymentMachine]) -> Vec<String> {
+    machines
+        .iter()
+        .filter_map(|machine| {
+            let refusal = machine.plan_check.as_ref()?.refusal.as_ref()?;
+            Some(format!(
+                "{} refused its plan: {}",
+                machine.machine_id, refusal
+            ))
+        })
+        .collect()
 }
 
 fn machine_network_rank(machine: &alien_platform_api::types::DeploymentMachine) -> u8 {
@@ -2016,6 +2046,50 @@ mod machines_inventory_tests {
         assert_eq!(
             network_health_rank(Some(DeploymentMachineNetworkHealth::Healthy)),
             0
+        );
+    }
+
+    fn machine(plan_check: serde_json::Value) -> alien_platform_api::types::DeploymentMachine {
+        let mut machine = serde_json::json!({
+            "machineId": "m-1",
+            "clusterResourceId": "machines",
+            "status": "healthy",
+            "capacityGroup": "general",
+            "zone": "us-east-1a",
+            "cpu": { "allocated": 1.0, "systemReserve": 0.5, "total": 4.0 },
+            "memory": { "allocated": 1.0, "systemReserve": 0.5, "total": 8.0 },
+            "drainBlockers": [],
+            "drainForce": false,
+            "lastHeartbeat": "2026-11-08T12:00:00.000Z",
+            "localOverrides": [],
+            "replicaCount": 0,
+        });
+        if !plan_check.is_null() {
+            machine["planCheck"] = plan_check;
+        }
+        serde_json::from_value(machine).expect("a machine as the platform API returns it")
+    }
+
+    #[test]
+    fn machine_inventory_shows_why_a_machine_refused_its_plan() {
+        let refused = machine(serde_json::json!({
+            "observedAt": "2026-11-08T12:00:00.000Z",
+            "refusal": "the plan names an image the release did not sign",
+        }));
+        let accepted = machine(serde_json::json!({ "observedAt": "2026-11-08T12:00:00.000Z" }));
+        let unreported = machine(serde_json::Value::Null);
+
+        assert_eq!(plan_check_cell(&refused), "refused");
+        assert_eq!(plan_check_cell(&accepted), "accepted");
+        assert_eq!(plan_check_cell(&unreported), "—");
+        assert_eq!(
+            plan_refusal_lines(&[refused.clone(), accepted, unreported]),
+            ["m-1 refused its plan: the plan names an image the release did not sign"]
+        );
+        let json = serde_json::to_value(&refused).expect("machine serializes");
+        assert_eq!(
+            json["planCheck"]["refusal"],
+            "the plan names an image the release did not sign"
         );
     }
 
