@@ -223,6 +223,8 @@ pub(crate) async fn encrypt_with_manager(
     // A redirect would carry the bearer token and the values to another host.
     let manager_client = http_client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(60))
         .build()
         .into_alien_error()
         .context(ErrorData::NetworkError {
@@ -297,7 +299,8 @@ pub(crate) async fn seal_environment_variables(
             .and_then(serde_json::Value::as_str)
             .map(|name| format!("env:{name}"))
     };
-    let mut values = Vec::new();
+    let mut values: Vec<SecretSlotValue> = Vec::new();
+    let mut repeated_slot = None;
     for variable in json.as_array().into_iter().flatten().filter(|variable| {
         variable.get("type").and_then(serde_json::Value::as_str) == Some("secret")
     }) {
@@ -316,6 +319,10 @@ pub(crate) async fn seal_environment_variables(
                     message: "A secret value must be a string".to_string(),
                 })
             })?;
+        if values.iter().any(|existing| existing.slot == slot) {
+            repeated_slot.get_or_insert(slot);
+            continue;
+        }
         values.push(SecretSlotValue {
             slot,
             value: value.to_string(),
@@ -325,7 +332,20 @@ pub(crate) async fn seal_environment_variables(
     else {
         return Ok(variables);
     };
-    for variable in json.as_array_mut().into_iter().flatten() {
+    if let Some(slot) = repeated_slot {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: slot,
+            message: "Two secret variables have the same name. A manager that encrypts secret values takes one value per name, so give each secret its own name".to_string(),
+        }));
+    }
+    for variable in json
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+        .filter(|variable| {
+            variable.get("type").and_then(serde_json::Value::as_str) == Some("secret")
+        })
+    {
         if let Some(ciphertext) = slot(variable).and_then(|slot| sealed.get(&slot)) {
             variable["value"] = serde_json::Value::String(ciphertext.clone());
         }
@@ -635,6 +655,65 @@ mod tests {
         access_mock(&platform_server, "ftp://manager.example.com");
         let error = seal(&platform_server).await.expect_err("scheme refused");
         assert!(error.message.contains("https"), "{}", error.message);
+    }
+
+    #[tokio::test]
+    async fn a_plain_variable_with_a_secret_name_keeps_its_own_value() {
+        let platform_server = MockServer::start_async().await;
+        let manager = MockServer::start_async().await;
+        access_mock(&platform_server, &manager.base_url());
+        manager.mock(|when, then| {
+            when.method(POST).path("/v1/secret-values/encrypt");
+            then.status(200).json_body(serde_json::json!({
+                "values": [{ "slot": "env:API_TOKEN", "ciphertext": "aiv1:key:sealed" }]
+            }));
+        });
+        let variables = serde_json::from_value(serde_json::json!([
+            { "name": "API_TOKEN", "value": "plain-value", "type": "plain" },
+            { "name": "API_TOKEN", "value": "canary-cli-secret", "type": "secret" }
+        ]))
+        .expect("variables");
+
+        let sealed = seal_environment_variables(
+            &platform(&platform_server),
+            Some("acme"),
+            SecretValuesTarget::Deployment("dep_123456789012345678901234567a"),
+            variables,
+        )
+        .await
+        .expect("sealed");
+
+        let sealed = serde_json::to_value(sealed).unwrap();
+        assert_eq!(sealed[0]["value"], "plain-value");
+        assert_eq!(sealed[1]["value"], "aiv1:key:sealed");
+    }
+
+    #[tokio::test]
+    async fn two_secrets_with_one_name_are_refused_instead_of_sharing_a_value() {
+        let platform_server = MockServer::start_async().await;
+        let manager = MockServer::start_async().await;
+        access_mock(&platform_server, &manager.base_url());
+        manager.mock(|when, then| {
+            when.method(POST).path("/v1/secret-values/encrypt");
+            then.status(200).json_body(serde_json::json!({
+                "values": [{ "slot": "env:API_TOKEN", "ciphertext": "aiv1:key:sealed" }]
+            }));
+        });
+        let variables = serde_json::from_value(serde_json::json!([
+            { "name": "API_TOKEN", "value": "first-secret", "type": "secret" },
+            { "name": "API_TOKEN", "value": "second-secret", "type": "secret" }
+        ]))
+        .expect("variables");
+
+        let error = seal_environment_variables(
+            &platform(&platform_server),
+            Some("acme"),
+            SecretValuesTarget::Deployment("dep_123456789012345678901234567a"),
+            variables,
+        )
+        .await
+        .expect_err("one ciphertext must not stand in for two different secrets");
+        assert!(error.message.contains("same name"), "{}", error.message);
     }
 
     #[tokio::test]

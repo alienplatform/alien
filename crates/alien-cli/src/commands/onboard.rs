@@ -722,7 +722,6 @@ fn platform_to_setup_policy_platform(
     }
 }
 
-#[cfg(feature = "platform")]
 pub(crate) async fn fetch_active_release_stack_inputs(
     client: &alien_platform_api::Client,
     workspace_query: Option<&str>,
