@@ -195,6 +195,7 @@ pub struct ArtifactRegistrySection {
 /// [commands]
 /// kv = { service = "dynamodb", tableName = "alien-commands", region = "us-east-1" }
 /// storage = { service = "s3", bucketName = "alien-command-storage" }
+/// values-key = { service = "kms", keyArn = "arn:aws:kms:us-east-1:123456789012:key/abc" }
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -203,6 +204,11 @@ pub struct CommandsSection {
     pub kv: Option<KvBinding>,
     /// Blob storage for large command payloads.
     pub storage: Option<StorageBinding>,
+    /// Key that protects deployment values kept in `kv`. With a cloud `kv`
+    /// and this key, values live in `kv`, encrypted under a per-deployment data
+    /// key that this key wraps. Without it, values stay in the manager's
+    /// encrypted database.
+    pub values_key: Option<alien_core::bindings::KeyBinding>,
 }
 
 /// Cross-account credential impersonation.
@@ -528,6 +534,32 @@ roleArn = "arn:aws:iam::123456789012:role/old-management"
             ]
         );
         assert!(names(Platform::Gcp).is_empty());
+    }
+
+    #[test]
+    fn a_values_key_binding_is_read_for_each_cloud() {
+        use alien_core::bindings::KeyBinding;
+        for (toml_key, check) in [
+            (
+                r#"{ service = "kms", keyArn = "arn:aws:kms:us-east-1:1:key/abc", region = "us-east-1" }"#,
+                (|b: &KeyBinding| matches!(b, KeyBinding::AwsKms(_))) as fn(&KeyBinding) -> bool,
+            ),
+            (
+                r#"{ service = "cloud-kms", cryptoKeyName = "projects/p/locations/l/keyRings/r/cryptoKeys/k" }"#,
+                |b| matches!(b, KeyBinding::GcpCloudKms(_)),
+            ),
+            (
+                r#"{ service = "key-vault-key", keyId = "https://v.vault.azure.net/keys/k" }"#,
+                |b| matches!(b, KeyBinding::AzureKeyVault(_)),
+            ),
+        ] {
+            let config: ManagerTomlConfig =
+                toml::from_str(&format!("[commands]\nvalues-key = {toml_key}\n")).unwrap();
+            let binding = config.commands.values_key.expect("values-key is read");
+            assert!(check(&binding), "{toml_key} gave {binding:?}");
+        }
+        let none: ManagerTomlConfig = toml::from_str("[commands]\n").unwrap();
+        assert!(none.commands.values_key.is_none());
     }
 
     #[test]

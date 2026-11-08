@@ -1897,7 +1897,7 @@
           {
             "name": "scope",
             "in": "path",
-            "description": "dep:<id>, link:<id> or reg:<id>",
+            "description": "dep:<deploymentId>",
             "required": true,
             "schema": {
               "type": "string"
@@ -1931,7 +1931,7 @@
           {
             "name": "scope",
             "in": "path",
-            "description": "dep:<id>, link:<id> or reg:<id>",
+            "description": "dep:<deploymentId>",
             "required": true,
             "schema": {
               "type": "string"
@@ -1977,7 +1977,7 @@
           {
             "name": "scope",
             "in": "path",
-            "description": "dep:<id>, link:<id> or reg:<id>",
+            "description": "dep:<deploymentId>",
             "required": true,
             "schema": {
               "type": "string"
@@ -2023,7 +2023,7 @@
           {
             "name": "scope",
             "in": "path",
-            "description": "dep:<id>, link:<id> or reg:<id>",
+            "description": "dep:<deploymentId>",
             "required": true,
             "schema": {
               "type": "string"

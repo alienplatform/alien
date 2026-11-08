@@ -344,7 +344,53 @@ async fn limits_and_bad_requests_are_refused_without_changing_anything() {
         .iter()
         .map(|s| s["slot"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(slots, ["env:BIG", "input:size"], "FINE must not have been written");
+    assert_eq!(
+        slots,
+        ["env:BIG", "input:size"],
+        "FINE must not have been written"
+    );
+}
+
+#[tokio::test]
+async fn a_request_over_the_item_or_byte_limit_is_refused_and_states_the_limits() {
+    let server = start().await;
+
+    let many: Vec<Value> = (0..101)
+        .map(|i| json!({ "slot": format!("env:V{i}"), "value": "x", "kind": "plain" }))
+        .collect();
+    let (status, error) = server.put(Value::Array(many)).await;
+    assert_eq!(status, 413, "{error}");
+    assert_eq!(error["code"], "VALUES_REQUEST_TOO_LARGE");
+    assert!(error["message"].as_str().unwrap().contains("100 values"));
+
+    let hundred: Vec<Value> = (0..100)
+        .map(|i| json!({ "slot": format!("env:V{i}"), "value": "x", "kind": "plain" }))
+        .collect();
+    let (status, _) = server.put(Value::Array(hundred)).await;
+    assert_eq!(status, 200);
+
+    // A body over 8 MiB is refused before it is read in full.
+    let body = json!({ "values": [{ "slot": "env:HUGE", "value": "x".repeat(9 * 1024 * 1024), "kind": "plain" }] });
+    let (status, error) = server
+        .call(
+            reqwest::Method::PUT,
+            &format!("/v1/values/{}", server.scope()),
+            Some(&server.admin),
+            Some(body),
+        )
+        .await;
+    assert_eq!(status, 413, "{error}");
+    assert_eq!(error["code"], "VALUES_REQUEST_TOO_LARGE");
+    assert!(error["message"].as_str().unwrap().contains("8 MiB"));
+
+    let (status, error) = server
+        .put(json!([{ "slot": "env:BIG", "value": "x".repeat(24_001), "kind": "plain" }]))
+        .await;
+    assert_eq!(status, 413);
+    assert!(
+        error["message"].as_str().unwrap().contains("24,000 bytes"),
+        "{error}"
+    );
 }
 
 #[tokio::test]
@@ -377,7 +423,7 @@ async fn callers_without_rights_and_unknown_scopes_are_refused() {
         .await;
     assert_eq!(status, 404);
 
-    // Links and registrations are not kept by this manager.
+    // Only deployments have values.
     let (status, _) = server
         .call(
             reqwest::Method::PUT,
@@ -386,7 +432,7 @@ async fn callers_without_rights_and_unknown_scopes_are_refused() {
             Some(body.clone()),
         )
         .await;
-    assert_eq!(status, 403);
+    assert_eq!(status, 400);
 
     // Verification is only for migration, which a standalone manager has none of.
     let (status, _) = server

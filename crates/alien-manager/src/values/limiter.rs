@@ -6,8 +6,11 @@ use std::time::{Duration, Instant};
 
 use super::ValueScope;
 
-/// Allows a few verifications per scope per minute. Verification tells a
-/// caller whether a guess is right, so it is slowed down.
+/// Allows a few verification requests per scope per minute. Verification
+/// tells a caller whether a guess is right, so it is slowed down.
+///
+/// Verification exists only to move values between control planes. It is
+/// removed in Deploy 2, together with this limiter.
 pub struct VerifyLimiter {
     max_per_window: u32,
     window: Duration,
@@ -16,7 +19,7 @@ pub struct VerifyLimiter {
 
 impl Default for VerifyLimiter {
     fn default() -> Self {
-        Self::new(60, Duration::from_secs(60))
+        Self::new(10, Duration::from_secs(60))
     }
 }
 
@@ -29,16 +32,16 @@ impl VerifyLimiter {
         }
     }
 
-    /// Counts `attempts` against the scope. Returns false when over the limit.
-    pub fn allow(&self, scope: &ValueScope, attempts: u32) -> bool {
+    /// Counts one request against the scope. Returns false when over the limit.
+    pub fn allow(&self, scope: &ValueScope) -> bool {
         let now = Instant::now();
         let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
         seen.retain(|_, (started, _)| now.duration_since(*started) < self.window);
         let entry = seen.entry(scope.clone()).or_insert((now, 0));
-        if entry.1.saturating_add(attempts) > self.max_per_window {
+        if entry.1 >= self.max_per_window {
             return false;
         }
-        entry.1 += attempts;
+        entry.1 += 1;
         true
     }
 }
@@ -48,15 +51,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ten_requests_a_minute_is_the_default() {
+        let limiter = VerifyLimiter::default();
+        let scope: ValueScope = "dep:a".parse().unwrap();
+        assert_eq!((0..20).filter(|_| limiter.allow(&scope)).count(), 10);
+    }
+
+    #[test]
     fn the_limit_applies_per_scope_and_resets_after_the_window() {
         let limiter = VerifyLimiter::new(3, Duration::from_millis(50));
         let a: ValueScope = "dep:a".parse().unwrap();
         let b: ValueScope = "dep:b".parse().unwrap();
-        assert!(limiter.allow(&a, 2));
-        assert!(limiter.allow(&a, 1));
-        assert!(!limiter.allow(&a, 1));
-        assert!(limiter.allow(&b, 3));
+        for _ in 0..3 {
+            assert!(limiter.allow(&a));
+        }
+        assert!(!limiter.allow(&a));
+        for _ in 0..3 {
+            assert!(limiter.allow(&b));
+        }
         std::thread::sleep(Duration::from_millis(60));
-        assert!(limiter.allow(&a, 3));
+        assert!(limiter.allow(&a));
     }
 }

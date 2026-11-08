@@ -1421,11 +1421,12 @@ fn keyed_secrets_sync_hash(
 
 /// Keyed digest of one value held by a manager, as lowercase hex.
 ///
-/// `HMAC(K, slot || 0x00 || value)` with `K` derived from the process's key
-/// (see [`set_secrets_digest_key`]). It is not tied to a deployment, so the
-/// digest of a value stays the same when its scope moves. The control plane
+/// `HMAC(HMAC(K, "alien-values\0" || scope), slot || 0x00 || value)` with `K`
+/// the process's key (see [`set_secrets_digest_key`]). The scope (`dep:<id>`)
+/// is part of the key, so the same value in two deployments has two digests
+/// and a digest cannot be matched across deployments. The control plane
 /// stores the digest to notice changes and cannot use it to test guesses.
-pub fn value_digest(slot: &str, value: &str) -> Result<String> {
+pub fn value_digest(scope: &str, slot: &str, value: &str) -> Result<String> {
     #[cfg(test)]
     let key = SECRETS_DIGEST_KEY.get().or(Some(&[7; 32]));
     #[cfg(not(test))]
@@ -1437,7 +1438,7 @@ pub fn value_digest(slot: &str, value: &str) -> Result<String> {
                 .to_string(),
         })
     })?;
-    Ok(keyed_value_digest(key, slot, value))
+    Ok(keyed_value_digest(key, scope, slot, value))
 }
 
 /// Fingerprint of a deployment's environment variables, as `env-<hex>`.
@@ -1493,21 +1494,25 @@ fn compute_environment_mut(
         .map(|r| &mut r.environment)
 }
 
-fn held_value_marker(name: &str, value: &str) -> Result<String> {
+fn held_value_marker(scope: &str, name: &str, value: &str) -> Result<String> {
     Ok(format!(
         "{HELD_VALUE_PREFIX}{}",
-        value_digest(&format!("env:{name}"), value)?
+        value_digest(scope, &format!("env:{name}"), value)?
     ))
 }
 
-/// Replaces values a manager holds (`held`: name and value) in the compute
+/// Replaces values a manager holds in `scope` (`held`: name and value) in the compute
 /// resources' environments with `alien-held:<digest>`, so the state it hands
 /// to a control plane carries no deployment value. Environment entries that
 /// differ from the held value are left as they are.
-pub fn redact_held_values(stack_state: &mut StackState, held: &[(String, String)]) -> Result<()> {
+pub fn redact_held_values(
+    stack_state: &mut StackState,
+    scope: &str,
+    held: &[(String, String)],
+) -> Result<()> {
     rewrite_held_values(stack_state, held, |name, value, current| {
         Ok((current == value)
-            .then(|| held_value_marker(name, value))
+            .then(|| held_value_marker(scope, name, value))
             .transpose()?)
     })
 }
@@ -1515,9 +1520,13 @@ pub fn redact_held_values(stack_state: &mut StackState, held: &[(String, String)
 /// Undoes [`redact_held_values`] for the values `held` now has. A marker for
 /// a value that has since changed stays, so it differs from the desired
 /// environment and the resource is updated.
-pub fn restore_held_values(stack_state: &mut StackState, held: &[(String, String)]) -> Result<()> {
+pub fn restore_held_values(
+    stack_state: &mut StackState,
+    scope: &str,
+    held: &[(String, String)],
+) -> Result<()> {
     rewrite_held_values(stack_state, held, |name, value, current| {
-        Ok((current == held_value_marker(name, value)?).then(|| value.to_string()))
+        Ok((current == held_value_marker(scope, name, value)?).then(|| value.to_string()))
     })
 }
 
@@ -1548,9 +1557,10 @@ fn rewrite_held_values(
     Ok(())
 }
 
-fn keyed_value_digest(key: &[u8; 32], slot: &str, value: &str) -> String {
+fn keyed_value_digest(key: &[u8; 32], scope: &str, slot: &str, value: &str) -> String {
     let mut derive = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     derive.update(b"alien-values\0");
+    derive.update(scope.as_bytes());
     let value_key = derive.finalize().into_bytes();
 
     let mut mac = HmacSha256::new_from_slice(&value_key).expect("HMAC accepts any key length");
@@ -3188,27 +3198,20 @@ mod tests {
     }
 
     #[test]
-    fn value_digests_depend_on_the_key_the_slot_and_the_value() {
-        let digest = keyed_value_digest(&[1; 32], "env:API_TOKEN", "value");
+    fn value_digests_depend_on_the_key_the_scope_the_slot_and_the_value() {
+        let d = |key: u8, scope: &str, slot: &str, value: &str| {
+            keyed_value_digest(&[key; 32], scope, slot, value)
+        };
+        let digest = d(1, "dep:a", "env:API_TOKEN", "value");
         assert_eq!(digest.len(), 64);
-        assert_eq!(
-            digest,
-            keyed_value_digest(&[1; 32], "env:API_TOKEN", "value")
-        );
-        assert_ne!(
-            digest,
-            keyed_value_digest(&[2; 32], "env:API_TOKEN", "value")
-        );
-        assert_ne!(digest, keyed_value_digest(&[1; 32], "env:OTHER", "value"));
-        assert_ne!(
-            digest,
-            keyed_value_digest(&[1; 32], "env:API_TOKEN", "other")
-        );
-        // The slot and value are separated, so moving a byte between them changes the digest.
-        assert_ne!(
-            keyed_value_digest(&[1; 32], "env:AB", "C"),
-            keyed_value_digest(&[1; 32], "env:A", "BC")
-        );
+        assert_eq!(digest, d(1, "dep:a", "env:API_TOKEN", "value"));
+        assert_ne!(digest, d(2, "dep:a", "env:API_TOKEN", "value"));
+        assert_ne!(digest, d(1, "dep:b", "env:API_TOKEN", "value"));
+        assert_ne!(digest, d(1, "dep:a", "env:OTHER", "value"));
+        assert_ne!(digest, d(1, "dep:a", "env:API_TOKEN", "other"));
+        // Scope, slot and value are separated, so moving a byte between them changes the digest.
+        assert_ne!(d(1, "dep:a", "env:AB", "C"), d(1, "dep:a", "env:A", "BC"));
+        assert_ne!(d(1, "dep:ab", "env:C", "v"), d(1, "dep:a", "env:bC", "v"));
     }
 
     /// A deployment upgraded from the unkeyed digest writes its secrets once,
@@ -3777,7 +3780,7 @@ mod tests {
         );
         let original = serde_json::to_value(&state).unwrap();
 
-        redact_held_values(&mut state, &held).unwrap();
+        redact_held_values(&mut state, "dep:dep_1", &held).unwrap();
 
         let json = serde_json::to_string(&state).unwrap();
         assert!(!json.contains(&canary), "{json}");
@@ -3787,7 +3790,7 @@ mod tests {
         assert_eq!(environment_of(&state, "other")["API_URL"], "someone-else");
         assert_ne!(serde_json::to_value(&state).unwrap(), original);
 
-        restore_held_values(&mut state, &held).unwrap();
+        restore_held_values(&mut state, "dep:dep_1", &held).unwrap();
         assert_eq!(serde_json::to_value(&state).unwrap(), original);
     }
 
@@ -3799,12 +3802,39 @@ mod tests {
             "api".to_string(),
             worker_state_with_environment("api", &[("TOKEN", "first")]),
         );
-        redact_held_values(&mut state, &[("TOKEN".to_string(), "first".to_string())]).unwrap();
+        redact_held_values(
+            &mut state,
+            "dep:dep_1",
+            &[("TOKEN".to_string(), "first".to_string())],
+        )
+        .unwrap();
         let marker = environment_of(&state, "api")["TOKEN"].clone();
 
-        restore_held_values(&mut state, &[("TOKEN".to_string(), "second".to_string())]).unwrap();
+        restore_held_values(
+            &mut state,
+            "dep:dep_1",
+            &[("TOKEN".to_string(), "second".to_string())],
+        )
+        .unwrap();
 
         // The desired environment has "second"; the stale marker differs from it.
+        assert_eq!(environment_of(&state, "api")["TOKEN"], marker);
+    }
+
+    #[test]
+    fn a_marker_from_another_deployment_is_not_restored() {
+        set_secrets_digest_key([7; 32]).unwrap();
+        let held = vec![("TOKEN".to_string(), "value".to_string())];
+        let mut state = StackState::new(Platform::Aws);
+        state.resources.insert(
+            "api".to_string(),
+            worker_state_with_environment("api", &[("TOKEN", "value")]),
+        );
+        redact_held_values(&mut state, "dep:dep_1", &held).unwrap();
+        let marker = environment_of(&state, "api")["TOKEN"].clone();
+
+        restore_held_values(&mut state, "dep:dep_2", &held).unwrap();
+
         assert_eq!(environment_of(&state, "api")["TOKEN"], marker);
     }
 

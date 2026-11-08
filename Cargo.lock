@@ -1062,6 +1062,7 @@ name = "alien-manager"
 version = "3.3.56"
 dependencies = [
  "aegis",
+ "aes-gcm 0.10.3",
  "alien-aws-clients",
  "alien-azure-clients",
  "alien-bindings",

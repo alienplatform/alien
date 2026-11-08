@@ -56,7 +56,7 @@ pub async fn hydrate_held_values<'a>(
         if stored.kind != expected_kind {
             return Err(changed());
         }
-        if !constant_time_eq(stored.digest()?.as_bytes(), held.digest.as_bytes()) {
+        if !constant_time_eq(stored.digest(&scope)?.as_bytes(), held.digest.as_bytes()) {
             return Err(changed());
         }
         if let Some(name) = slot.env_name() {
@@ -102,7 +102,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::values::KvValueBackend;
+    use crate::values::cipher::fixtures::sealed_backend;
 
     async fn store() -> (tempfile::TempDir, ValueStore) {
         alien_deployment::set_ephemeral_secrets_digest_key();
@@ -112,7 +112,7 @@ mod tests {
             .unwrap();
         (
             dir,
-            ValueStore::new(Arc::new(KvValueBackend::new(Arc::new(kv)))),
+            ValueStore::new(Arc::new(sealed_backend(Arc::new(kv)).1)),
         )
     }
 

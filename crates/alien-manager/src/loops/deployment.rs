@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::{stream, FutureExt, StreamExt};
-use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 

@@ -526,12 +526,24 @@ impl AlienManagerBuilder {
                         reason: "Failed to load KV binding".to_string(),
                     })?;
                 if self.value_store.is_none() {
-                    self.value_store = Some(Arc::new(crate::values::ValueStore::new(Arc::new(
-                        crate::values::KvValueBackend::new(kv.clone()),
-                    ))));
+                    if let Some(key_binding) = &toml_config.commands.values_key {
+                        let key = load_values_key(key_binding).await?;
+                        let cipher = Arc::new(crate::values::EnvelopeCipher::new(key, kv.clone()));
+                        self.value_store =
+                            Some(Arc::new(crate::values::ValueStore::new(Arc::new(
+                                crate::values::KvValueBackend::new(kv.clone(), cipher),
+                            ))));
+                    }
                 }
                 kv
             } else {
+                if toml_config.commands.values_key.is_some() {
+                    return Err(AlienError::new(ErrorData::ServerInitFailed {
+                        reason: "commands.values-key protects values kept in commands.kv; \
+                                 set commands.kv as well"
+                            .to_string(),
+                    }));
+                }
                 // Only the manager opens this store, so it doesn't need
                 // cross-process coordination, and it works when the state
                 // directory is a network volume (EFS, NFS).
@@ -925,6 +937,43 @@ fn azure_management_gap(
 }
 
 /// Determine which cloud platform a KV binding targets.
+/// Loads the key that protects values kept in a cloud key-value store.
+async fn load_values_key(
+    binding: &alien_core::bindings::KeyBinding,
+) -> crate::error::Result<Arc<dyn alien_bindings::traits::Key>> {
+    use alien_bindings::{BindingsProvider, BindingsProviderApi};
+    use alien_client_config::ClientConfigExt;
+    use alien_core::bindings::KeyBinding;
+    use alien_error::{Context, IntoAlienError};
+    let platform = match binding {
+        KeyBinding::AwsKms(_) => alien_core::Platform::Aws,
+        KeyBinding::GcpCloudKms(_) => alien_core::Platform::Gcp,
+        KeyBinding::AzureKeyVault(_) => alien_core::Platform::Azure,
+    };
+    let config = alien_core::ClientConfig::from_std_env(platform)
+        .await
+        .context(ErrorData::ServerInitFailed {
+            reason: format!("Failed to load {platform} credentials for the values key"),
+        })?;
+    let bindings = HashMap::from([(
+        "values-key".to_string(),
+        serde_json::to_value(binding)
+            .into_alien_error()
+            .context(ErrorData::ServerInitFailed {
+                reason: "Failed to serialize the values key binding".to_string(),
+            })?,
+    )]);
+    BindingsProvider::new(config, bindings)
+        .context(ErrorData::ServerInitFailed {
+            reason: "Failed to create the values key provider".to_string(),
+        })?
+        .load_key("values-key")
+        .await
+        .context(ErrorData::ServerInitFailed {
+            reason: "Failed to load the values key".to_string(),
+        })
+}
+
 fn kv_binding_platform(binding: &alien_core::bindings::KvBinding) -> alien_core::Platform {
     use alien_core::bindings::KvBinding;
     match binding {

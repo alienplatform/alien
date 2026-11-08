@@ -17,8 +17,7 @@ pub const MAX_VALUE_BYTES: usize = 24_000;
 
 const MAX_ID_LEN: usize = 128;
 
-/// Who a group of values belongs to: `dep:<deploymentId>`,
-/// `link:<apiKeyId>` or `reg:<operationId>`.
+/// Who a group of values belongs to: `dep:<deploymentId>`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ValueScope(String);
 
@@ -32,9 +31,9 @@ impl ValueScope {
         &self.0
     }
 
-    /// The deployment this scope belongs to, for `dep:` scopes.
-    pub fn deployment_id(&self) -> Option<&str> {
-        self.0.strip_prefix("dep:")
+    /// The deployment this scope belongs to.
+    pub fn deployment_id(&self) -> &str {
+        &self.0["dep:".len()..]
     }
 }
 
@@ -42,13 +41,9 @@ impl FromStr for ValueScope {
     type Err = AlienError<ErrorData>;
 
     fn from_str(s: &str) -> Result<Self> {
-        let valid = ["dep:", "link:", "reg:"]
-            .iter()
-            .find_map(|prefix| s.strip_prefix(prefix))
-            .is_some_and(valid_id);
-        if !valid {
+        if !s.strip_prefix("dep:").is_some_and(valid_id) {
             return Err(ErrorData::bad_request(format!(
-                "'{s}' is not a value scope; use dep:<id>, link:<id> or reg:<id>"
+                "'{s}' is not a value scope; use dep:<deploymentId>"
             )));
         }
         Ok(Self(s.to_string()))
@@ -185,18 +180,18 @@ impl fmt::Debug for StoredValue {
 
 impl StoredValue {
     /// What other services may hold about this value.
-    pub fn meta(&self) -> Result<ValueMeta> {
+    pub fn meta(&self, scope: &ValueScope) -> Result<ValueMeta> {
         Ok(ValueMeta {
             slot: self.slot.clone(),
             kind: self.kind,
-            digest: self.digest()?,
+            digest: self.digest(scope)?,
             updated_at: self.updated_at,
         })
     }
 
-    /// Keyed digest of the value; see [`alien_deployment::value_digest`].
-    pub fn digest(&self) -> Result<String> {
-        alien_deployment::value_digest(self.slot.as_str(), &self.value)
+    /// Keyed digest of the value in `scope`; see [`alien_deployment::value_digest`].
+    pub fn digest(&self, scope: &ValueScope) -> Result<String> {
+        alien_deployment::value_digest(scope.as_str(), self.slot.as_str(), &self.value)
             .map_err(|e| ErrorData::internal(format!("Could not digest value: {}", e.message)))
     }
 
@@ -263,11 +258,19 @@ mod tests {
 
     #[test]
     fn scopes_and_slots_accept_the_documented_forms_only() {
-        for ok in ["dep:dep_abc123", "link:ax_key-1", "reg:op.1"] {
+        for ok in ["dep:dep_abc123", "dep:a-b.c"] {
             assert!(ok.parse::<ValueScope>().is_ok(), "{ok}");
         }
         for bad in [
-            "", "dep:", "dep:a:b", "dep:a/b", "other:x", "dep_x", "dep:a b",
+            "",
+            "dep:",
+            "dep:a:b",
+            "dep:a/b",
+            "other:x",
+            "link:key1",
+            "reg:op.1",
+            "dep_x",
+            "dep:a b",
         ] {
             assert!(bad.parse::<ValueScope>().is_err(), "{bad}");
         }

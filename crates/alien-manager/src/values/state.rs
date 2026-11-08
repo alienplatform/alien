@@ -33,7 +33,8 @@ pub async fn redact_held_values(
         return Ok(());
     };
     let held = held_variables(store, deployment_id).await?;
-    alien_deployment::redact_held_values(stack_state, &held)
+    let scope = ValueScope::deployment(deployment_id)?;
+    alien_deployment::redact_held_values(stack_state, scope.as_str(), &held)
         .map_err(|e| ErrorData::internal(format!("Could not redact held values: {}", e.message)))
 }
 
@@ -47,7 +48,8 @@ pub async fn restore_held_values(
         return Ok(());
     };
     let held = held_variables(store, deployment_id).await?;
-    alien_deployment::restore_held_values(stack_state, &held)
+    let scope = ValueScope::deployment(deployment_id)?;
+    alien_deployment::restore_held_values(stack_state, scope.as_str(), &held)
         .map_err(|e| ErrorData::internal(format!("Could not restore held values: {}", e.message)))
 }
 
@@ -62,7 +64,8 @@ mod tests {
     };
 
     use super::*;
-    use crate::values::{KvValueBackend, ValueKind};
+    use crate::values::cipher::fixtures::sealed_backend;
+    use crate::values::ValueKind;
 
     const CANARY: &str = "canary-9d41c2";
 
@@ -72,7 +75,7 @@ mod tests {
         let kv = LocalKv::single_process(dir.path().join("kv"))
             .await
             .unwrap();
-        let store = ValueStore::new(Arc::new(KvValueBackend::new(Arc::new(kv))));
+        let store = ValueStore::new(Arc::new(sealed_backend(Arc::new(kv)).1));
         store
             .put(
                 &ValueScope::deployment(deployment_id).unwrap(),

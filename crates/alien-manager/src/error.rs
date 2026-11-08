@@ -298,10 +298,10 @@ pub enum ErrorData {
     )]
     Forbidden { reason: String },
 
-    /// A value is larger than the manager stores.
+    /// A value is larger than the store accepts.
     #[error(
         code = "VALUE_TOO_LARGE",
-        message = "Value for '{slot}' is {bytes} bytes; the limit is {max_bytes} bytes",
+        message = "Value for '{slot}' is {bytes} bytes; the limit is 24,000 bytes",
         retryable = "false",
         internal = "false",
         http_status_code = 413
@@ -311,6 +311,16 @@ pub enum ErrorData {
         bytes: usize,
         max_bytes: usize,
     },
+
+    /// A request to the value endpoints carries too many values or bytes.
+    #[error(
+        code = "VALUES_REQUEST_TOO_LARGE",
+        message = "{reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 413
+    )]
+    ValuesRequestTooLarge { reason: String },
 
     /// A value slot has no stored value.
     #[error(
@@ -322,15 +332,35 @@ pub enum ErrorData {
     )]
     ValueNotFound { scope: String, slot: String },
 
-    /// The manager has no place to keep values.
+    /// There is no place to keep values.
     #[error(
         code = "VALUES_UNAVAILABLE",
-        message = "This manager cannot store values: {reason}",
+        message = "Values cannot be stored here: {reason}",
         retryable = "false",
         internal = "false",
         http_status_code = 501
     )]
     ValuesUnavailable { reason: String },
+
+    /// The key that protects stored values cannot be used right now.
+    #[error(
+        code = "VALUE_STORE_KEY_UNAVAILABLE",
+        message = "The key that protects stored values is unavailable: {reason}",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 503
+    )]
+    ValueStoreKeyUnavailable { reason: String },
+
+    /// A stored value could not be decrypted: it was damaged or moved to another slot.
+    #[error(
+        code = "STORED_VALUE_UNREADABLE",
+        message = "The stored value for '{slot}' cannot be read: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 500
+    )]
+    StoredValueUnreadable { slot: String, reason: String },
 
     /// A deployment's held value differs from the digest its update was planned with.
     #[error(
@@ -345,7 +375,7 @@ pub enum ErrorData {
     /// A deployment names a held value that the store does not have.
     #[error(
         code = "DEPLOYMENT_VALUE_MISSING",
-        message = "No value is stored for '{slot}' on this manager; set it again",
+        message = "No value is stored for '{slot}'; set it again",
         retryable = "false",
         internal = "false",
         http_status_code = 409

@@ -11,6 +11,7 @@
 
 mod access;
 mod backend;
+mod cipher;
 mod hydrate;
 mod limiter;
 mod standalone;
@@ -19,6 +20,7 @@ mod types;
 
 pub use access::{ValueAccess, ValueAccessAuthorizer, ValueGrant};
 pub use backend::{KvValueBackend, ValueBackend};
+pub use cipher::{EnvelopeCipher, ValueCipher, DATA_KEY_CACHE_TTL};
 pub use hydrate::hydrate_held_values;
 pub use limiter::VerifyLimiter;
 pub use standalone::StandaloneValueAccess;
@@ -61,7 +63,7 @@ impl ValueStore {
             updated_at: Utc::now(),
         };
         self.backend.put(scope, &stored).await?;
-        stored.meta()
+        stored.meta(scope)
     }
 
     /// Removes the slot. Removing an empty slot is not an error.
@@ -126,6 +128,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::cipher::fixtures::sealed_backend;
     use super::*;
     use alien_bindings::providers::kv::local::LocalKv;
 
@@ -134,7 +137,7 @@ mod tests {
         let kv = LocalKv::single_process(dir.path().join("kv"))
             .await
             .unwrap();
-        let store = ValueStore::new(Arc::new(KvValueBackend::new(Arc::new(kv))));
+        let store = ValueStore::new(Arc::new(sealed_backend(Arc::new(kv)).1));
         (dir, store)
     }
 
@@ -269,6 +272,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_same_value_has_a_different_digest_in_another_scope() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        let (_dir, store) = kv_store().await;
+        let put = |dep: &'static str| {
+            let store = store.clone();
+            async move {
+                store
+                    .put(
+                        &scope(dep),
+                        &slot("env:TOKEN"),
+                        ValueKind::Secret,
+                        "same".into(),
+                    )
+                    .await
+                    .unwrap()
+                    .digest
+            }
+        };
+        let (first, second) = (put("dep:dep_1").await, put("dep:dep_2").await);
+        assert_ne!(first, second);
+        assert_eq!(first, put("dep:dep_1").await);
+    }
+
+    #[tokio::test]
     async fn matches_compares_the_stored_value() {
         let (_dir, store) = kv_store().await;
         let dep = scope("dep:dep_1");
@@ -345,7 +372,7 @@ mod tests {
 
         alien_deployment::set_ephemeral_secrets_digest_key();
         let recording = Arc::new(Recording::default());
-        let store = ValueStore::new(Arc::new(KvValueBackend::new(recording.clone())));
+        let store = ValueStore::new(Arc::new(sealed_backend(recording.clone()).1));
         store
             .put(
                 &scope("dep:dep_1"),
@@ -355,6 +382,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(*recording.inner.lock().unwrap(), vec![None]);
+        // One write for the wrapped data key, one for the value.
+        assert_eq!(*recording.inner.lock().unwrap(), vec![None, None]);
     }
 }

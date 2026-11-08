@@ -5,7 +5,7 @@
 //! a keyed digest. Secret values are never returned.
 
 use axum::{
-    extract::{Path, State},
+    extract::{rejection::JsonRejection, DefaultBodyLimit, Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
@@ -20,11 +20,56 @@ use crate::values::{
     ValueScope, ValueSlot, ValueStore,
 };
 
+/// Most values one PUT or verify request may carry.
+pub const MAX_VALUES_PER_REQUEST: usize = 100;
+
+/// Largest PUT or verify request body, in bytes (8 MiB). 100 values of 24,000
+/// bytes fit even when escaping doubles their size.
+pub const MAX_REQUEST_BODY_BYTES: usize = 8 * 1024 * 1024;
+
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/v1/values/{scope}", get(list_values).put(put_values))
-        .route("/v1/values/{scope}/verify", post(verify_values))
+        .route(
+            "/v1/values/{scope}",
+            get(list_values)
+                .put(put_values)
+                .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES)),
+        )
+        .route(
+            "/v1/values/{scope}/verify",
+            post(verify_values).layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES)),
+        )
         .route("/v1/values/{scope}/{slot}", delete(delete_value))
+}
+
+/// The request body, or the error to answer with. A body over the limit
+/// gets a 413 that states the limits.
+fn read_body<T>(
+    body: std::result::Result<Json<T>, JsonRejection>,
+) -> std::result::Result<T, Response> {
+    match body {
+        Ok(Json(body)) => Ok(body),
+        Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+            Err(request_too_large().into_response())
+        }
+        Err(rejection) => Err(rejection.into_response()),
+    }
+}
+
+fn request_too_large() -> alien_error::AlienError<ErrorData> {
+    alien_error::AlienError::new(ErrorData::ValuesRequestTooLarge {
+        reason: format!(
+            "A request may carry at most {MAX_VALUES_PER_REQUEST} values and 8 MiB; \
+             send fewer values per request"
+        ),
+    })
+}
+
+fn check_item_count(count: usize) -> Result<()> {
+    if count > MAX_VALUES_PER_REQUEST {
+        return Err(request_too_large());
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -156,12 +201,12 @@ async fn authorize(
     path = "/v1/values/{scope}",
     operation_id = "put_values",
     tag = "values",
-    params(("scope" = String, Path, description = "dep:<id>, link:<id> or reg:<id>")),
+    params(("scope" = String, Path, description = "dep:<deploymentId>")),
     request_body = PutValuesRequest,
     responses(
         (status = 200, description = "Metadata of the stored values", body = ValueSlotsResponse),
         (status = 403, description = "A slot is outside the caller's access"),
-        (status = 413, description = "A value is larger than 24,000 bytes")
+        (status = 413, description = "A value is larger than 24,000 bytes, or the request carries more than 100 values or 8 MiB")
     ),
     security(("bearer" = []))
 ))]
@@ -169,7 +214,7 @@ pub(crate) async fn put_values(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(scope): Path<String>,
-    Json(request): Json<PutValuesRequest>,
+    body: std::result::Result<Json<PutValuesRequest>, JsonRejection>,
 ) -> Response {
     async fn run(
         state: &AppState,
@@ -182,6 +227,7 @@ pub(crate) async fn put_values(
         let selection =
             SlotSelection::Slots(request.values.iter().map(|v| v.slot.clone()).collect());
         authorize(&values, headers, &scope, ValueAccess::Write, &selection).await?;
+        check_item_count(request.values.len())?;
 
         // Check every value before writing any, so a rejected batch changes nothing.
         for value in &request.values {
@@ -197,6 +243,10 @@ pub(crate) async fn put_values(
         }
         Ok(ValueSlotsResponse { slots })
     }
+    let request = match read_body(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
     match run(&state, &headers, &scope, request).await {
         Ok(response) => Json(response).into_response(),
         Err(e) => e.into_response(),
@@ -208,7 +258,7 @@ pub(crate) async fn put_values(
     path = "/v1/values/{scope}",
     operation_id = "list_values",
     tag = "values",
-    params(("scope" = String, Path, description = "dep:<id>, link:<id> or reg:<id>")),
+    params(("scope" = String, Path, description = "dep:<deploymentId>")),
     responses((status = 200, description = "Metadata of the stored values, with plain values", body = ValueSlotsResponse)),
     security(("bearer" = []))
 ))]
@@ -232,7 +282,7 @@ pub(crate) async fn list_values(
             if !grant.allows_slot(&stored.slot) {
                 continue;
             }
-            let mut entry = ValueSlotEntry::from(stored.meta()?);
+            let mut entry = ValueSlotEntry::from(stored.meta(&scope)?);
             if stored.kind == ValueKind::Plain {
                 entry.value = Some(stored.value);
             }
@@ -252,7 +302,7 @@ pub(crate) async fn list_values(
     operation_id = "delete_value",
     tag = "values",
     params(
-        ("scope" = String, Path, description = "dep:<id>, link:<id> or reg:<id>"),
+        ("scope" = String, Path, description = "dep:<deploymentId>"),
         ("slot" = String, Path, description = "env:<NAME> or input:<id>")
     ),
     responses((status = 204, description = "Deleted, or there was nothing to delete")),
@@ -288,7 +338,7 @@ pub(crate) async fn delete_value(
     path = "/v1/values/{scope}/verify",
     operation_id = "verify_values",
     tag = "values",
-    params(("scope" = String, Path, description = "dep:<id>, link:<id> or reg:<id>")),
+    params(("scope" = String, Path, description = "dep:<deploymentId>")),
     request_body = VerifyValuesRequest,
     responses(
         (status = 200, description = "Whether each value equals the stored one", body = VerifyValuesResponse),
@@ -296,11 +346,13 @@ pub(crate) async fn delete_value(
     ),
     security(("bearer" = []))
 ))]
+// Migration only: lets a control plane that moves values compare them
+// without reading them. Removed in Deploy 2.
 pub(crate) async fn verify_values(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(scope): Path<String>,
-    Json(request): Json<VerifyValuesRequest>,
+    body: std::result::Result<Json<VerifyValuesRequest>, JsonRejection>,
 ) -> Response {
     async fn run(
         state: &AppState,
@@ -313,10 +365,8 @@ pub(crate) async fn verify_values(
         let selection =
             SlotSelection::Slots(request.values.iter().map(|v| v.slot.clone()).collect());
         authorize(&values, headers, &scope, ValueAccess::Migrate, &selection).await?;
-        if !state.verify_limiter.allow(
-            &scope,
-            u32::try_from(request.values.len()).unwrap_or(u32::MAX),
-        ) {
+        check_item_count(request.values.len())?;
+        if !state.verify_limiter.allow(&scope) {
             return Err(alien_error::AlienError::new(
                 ErrorData::ValueVerifyRateLimited {
                     scope: scope.to_string(),
@@ -336,6 +386,10 @@ pub(crate) async fn verify_values(
         }
         Ok(VerifyValuesResponse { results })
     }
+    let request = match read_body(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
     match run(&state, &headers, &scope, request).await {
         Ok(response) => Json(response).into_response(),
         Err(e) => e.into_response(),

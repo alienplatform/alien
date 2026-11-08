@@ -7,7 +7,7 @@ use alien_bindings::traits::Kv;
 use alien_error::{AlienError, Context};
 use async_trait::async_trait;
 
-use super::{StoredValue, ValueScope, ValueSlot};
+use super::{StoredValue, ValueCipher, ValueScope, ValueSlot};
 use crate::error::{ErrorData, Result};
 
 /// Storage for [`super::ValueStore`]. A write is visible to the next read.
@@ -21,16 +21,19 @@ pub trait ValueBackend: Send + Sync {
 }
 
 /// Values in the manager's key-value binding, under `val:{scope}:{slot}`.
-/// Records are written without a TTL, so the store never expires them.
+/// Records are written without a TTL, so the store never expires them. Every
+/// record is sealed by the cipher before it is written: the key-value store
+/// never holds a value in the clear.
 pub struct KvValueBackend {
     kv: Arc<dyn Kv>,
+    cipher: Arc<dyn ValueCipher>,
 }
 
 const PAGE_SIZE: usize = 100;
 
 impl KvValueBackend {
-    pub fn new(kv: Arc<dyn Kv>) -> Self {
-        Self { kv }
+    pub fn new(kv: Arc<dyn Kv>, cipher: Arc<dyn ValueCipher>) -> Self {
+        Self { kv, cipher }
     }
 
     fn key(scope: &ValueScope, slot: &ValueSlot) -> String {
@@ -47,20 +50,28 @@ impl KvValueBackend {
 #[async_trait]
 impl ValueBackend for KvValueBackend {
     async fn put(&self, scope: &ValueScope, value: &StoredValue) -> Result<()> {
+        let sealed = self
+            .cipher
+            .seal(scope, &value.slot, &value.encode())
+            .await?;
         self.kv
-            .put(&Self::key(scope, &value.slot), value.encode(), None)
+            .put(&Self::key(scope, &value.slot), sealed, None)
             .await
             .context(Self::kv_error("write a value"))?;
         Ok(())
     }
 
     async fn get(&self, scope: &ValueScope, slot: &ValueSlot) -> Result<Option<StoredValue>> {
-        self.kv
+        let Some(entry) = self
+            .kv
             .get(&Self::key(scope, slot))
             .await
             .context(Self::kv_error("read a value"))?
-            .map(|entry| StoredValue::decode(slot.clone(), &entry.value))
-            .transpose()
+        else {
+            return Ok(None);
+        };
+        let record = self.cipher.open(scope, slot, &entry.value).await?;
+        StoredValue::decode(slot.clone(), &record).map(Some)
     }
 
     async fn delete(&self, scope: &ValueScope, slot: &ValueSlot) -> Result<()> {
@@ -92,7 +103,8 @@ impl ValueBackend for KvValueBackend {
                     }));
                 };
                 let slot: ValueSlot = slot.parse()?;
-                let stored = StoredValue::decode(slot.clone(), &entry.value)?;
+                let record = self.cipher.open(scope, &slot, &entry.value).await?;
+                let stored = StoredValue::decode(slot.clone(), &record)?;
                 found.insert(slot, stored);
             }
             match page.next_cursor {
