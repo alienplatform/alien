@@ -267,13 +267,15 @@ pub async fn stack_import(
         Err(e) => return e.into_response(),
     };
     let frozen_gating = alien_deployment::frozen_gating_inputs(source_stack, req.platform);
-    if let Err(e) = alien_deployment::enforce_frozen_gate_fixity(
-        &imported_gate_answers,
-        source_stack,
-        &frozen_gating,
-        &delivered_resource_ids,
-        &req.input_values,
-    ) {
+    if let Err(e) =
+        alien_deployment::enforce_frozen_gate_fixity(alien_deployment::FrozenGateFixityCheck {
+            persisted: &imported_gate_answers,
+            stack: source_stack,
+            still_frozen_gating: &frozen_gating,
+            existing_resource_ids: &delivered_resource_ids,
+            input_values: &req.input_values,
+        })
+    {
         return e.into_response();
     }
     let existing_deployment = match state

@@ -213,46 +213,15 @@ async fn declining_an_unanswered_gate_updates_without_setup_and_setup_turns_it_o
 }
 
 #[tokio::test]
-async fn setup_never_turns_a_recorded_yes_into_a_no() {
-    let state = deployment(
-        next_release(&["optional"]),
-        Some(true),
-        next_release(&["optional"]),
-    )
-    .await;
-    assert_eq!(recorded(&state), Some(true));
-    let kept = rerun_setup(
-        &{
-            let mut state = state.clone();
-            let metadata = state.runtime_metadata.as_mut().unwrap();
-            metadata.pending_prepared_stack = metadata.prepared_stack.clone();
-            state
-        },
-        next_release(&["optional"]),
-        Some(false),
-    )
-    .await;
-    assert_eq!(kept.persisted_gate_answers.get(GATE), Some(&true));
-    assert!(kept
-        .prepared_stack
-        .as_ref()
-        .unwrap()
-        .resources
-        .contains_key("optional"));
-}
-
-#[tokio::test]
 async fn an_unanswered_gate_with_nothing_set_still_requires_setup() {
     let state = unanswered_deployment(&["optional"]).await;
-    let result = alien_deployment::step(state, config(None), client(), None).await;
-    let failure = match result {
-        Err(error) => format!("{error:?}"),
-        Ok(result) => format!(
-            "{:?}",
-            result.state.error.expect("the update must be refused")
-        ),
-    };
-    assert!(failure.contains("setup"), "{failure}");
+    // The new frozen resource stays in the target stack, so the frozen-compatibility
+    // check stops the update and asks for setup.
+    let error = alien_deployment::step(state, config(None), client(), None)
+        .await
+        .expect_err("the update must be refused");
+    let cause = error.source.as_ref().expect("the preflight cause");
+    assert_eq!(cause.code, "DEPLOYMENT_SETUP_REQUIRED", "{error:?}");
 }
 
 #[tokio::test]
@@ -296,6 +265,28 @@ async fn set_inputs_cannot_turn_a_declined_gate_on_or_decline_an_installed_resou
         .await
         .expect_err("an update cannot create a frozen resource");
     assert_eq!(error.code, "FROZEN_GATE_ANSWER_UNDERIVABLE");
+}
+
+#[tokio::test]
+async fn direct_setup_refuses_to_turn_a_recorded_yes_into_a_no() {
+    let state = deployment(
+        next_release(&["optional"]),
+        Some(true),
+        next_release(&["optional"]),
+    )
+    .await;
+    let mut previous = state.runtime_metadata.clone().unwrap();
+    previous.pending_prepared_stack = previous.prepared_stack.clone();
+    let error = alien_deployment::prepare_direct_setup_update(
+        next_release(&["optional"]),
+        state.stack_state.as_ref().unwrap(),
+        &config(Some(false)),
+        &client(),
+        &previous,
+    )
+    .await
+    .expect_err("setup cannot delete a frozen resource by answering no");
+    assert_eq!(error.code, "FROZEN_GATE_ANSWER_CHANGED");
 }
 
 #[tokio::test]

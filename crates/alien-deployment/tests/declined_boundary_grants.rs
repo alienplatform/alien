@@ -167,12 +167,22 @@ async fn declined_setup_key_removes_runtime_and_management_grants_before_boundar
     let declined = prepare(false, &RuntimeMetadata::default()).await;
     assert_key_grants(&declined, false);
 
-    // Setup run again with an explicit yes turns the declined key on; a yes is
-    // then kept even if a later run asks for no.
+    // Setup run again with an explicit yes turns the declined key on.
     let turned_on = prepare(true, &declined).await;
     assert_key_grants(&turned_on, true);
-    let kept = prepare(false, &turned_on).await;
-    assert_key_grants(&kept, true);
+    // Asking for no after a yes is refused: it would delete the key.
+    let error = alien_deployment::prepare_direct_setup_update(
+        declared(),
+        &StackState::new(Platform::Aws),
+        &config(false),
+        &ClientConfig::Local {
+            state_directory: "/unused".into(),
+        },
+        &turned_on,
+    )
+    .await
+    .expect_err("a recorded yes cannot become a no");
+    assert_eq!(error.code, "FROZEN_GATE_ANSWER_CHANGED");
 }
 
 #[tokio::test]

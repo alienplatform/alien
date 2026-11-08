@@ -674,21 +674,38 @@ async fn reconcile(
     //    This must happen before persisting so the `registry_access_granted`
     //    flag is included in the persisted state (matches ManagerTransport).
     let mut final_state = deployment_state;
-    // Only a setup run, reported by a caller outside the deployment, may turn a
-    // recorded decline into a yes: its prepared stack already holds the resource.
-    let setup_may_turn_gate_on = !matches!(subject.scope, crate::auth::Scope::Deployment { .. })
-        && matches!(
-            final_state.status,
-            alien_core::DeploymentStatus::InitialSetup
-                | alien_core::DeploymentStatus::InitialSetupFailed
-        )
-        && final_state
+    // Only a setup run may turn a recorded decline into a yes. What counts is the
+    // stored record, never the report: the caller is outside the deployment, holds
+    // the deployment's lock for this session, and the deployment was set up with
+    // direct setup authority. Even then the report must carry every resource the
+    // target release puts behind the gate, the way an import must deliver them.
+    let setup_gate_resources = if !matches!(subject.scope, crate::auth::Scope::Deployment { .. })
+        && deployment.locked_by.as_deref() == Some(req.session.as_str())
+        && deployment
             .runtime_metadata
             .as_ref()
             .is_some_and(|metadata| {
                 metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
-            });
-    preserve_recorded_gate_answers(&mut final_state, &deployment, setup_may_turn_gate_on);
+            }) {
+        let release_id = deployment
+            .desired_release_id
+            .as_deref()
+            .or(deployment.current_release_id.as_deref());
+        match release_id {
+            Some(release_id) => {
+                match target_release_stack(state.release_store.as_ref(), &deployment, release_id)
+                    .await
+                {
+                    Ok(stack) => stack.map(|stack| gate_resources(&stack)),
+                    Err(error) => return error.into_response(),
+                }
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+    preserve_recorded_gate_answers(&mut final_state, &deployment, setup_gate_resources.as_ref());
     let legacy_cli = headers
         .get("user-agent")
         .and_then(|value| value.to_str().ok())
@@ -2654,7 +2671,7 @@ mod tests {
         let mut incoming = uninitialized_state();
         incoming.runtime_metadata = Some(incoming_metadata);
 
-        preserve_recorded_gate_answers(&mut incoming, &stored, false);
+        preserve_recorded_gate_answers(&mut incoming, &stored, None);
 
         let answers = &incoming
             .runtime_metadata
@@ -2894,7 +2911,7 @@ async fn agent_sync(
                 } else {
                     // Stays below the ignore check: restoring metadata here
                     // would make an uninitialized report look initialized.
-                    preserve_recorded_gate_answers(&mut agent_state, &deployment, false);
+                    preserve_recorded_gate_answers(&mut agent_state, &deployment, None);
                     // Reconcile registry access before persisting so the flag
                     // is saved in the same DB write.
                     // Pull sync is the agent's only channel to the manager, so a pending
@@ -3588,10 +3605,22 @@ pub(crate) fn validate_kubernetes_base_platform(
 /// Gate answers are lifetime-fixed: fold the stored map into a write arriving
 /// through these routes so an actor that predates the field, omits its
 /// metadata, or holds a stale copy cannot shrink or flip the record.
+/// The resources a stack puts behind each frozen gate, by input id.
+fn gate_resources(stack: &alien_core::Stack) -> std::collections::HashMap<String, Vec<String>> {
+    let mut gates: std::collections::HashMap<String, Vec<String>> = Default::default();
+    for (resource_id, input_id) in alien_core::frozen_gated(stack) {
+        gates
+            .entry(input_id.to_string())
+            .or_default()
+            .push(resource_id.clone());
+    }
+    gates
+}
+
 fn preserve_recorded_gate_answers(
     incoming: &mut DeploymentState,
     stored: &DeploymentRecord,
-    setup_may_turn_on: bool,
+    setup_gate_resources: Option<&std::collections::HashMap<String, Vec<String>>>,
 ) {
     // An installed ongoing-management grant permits setup choices to change.
     // Only the stored grant counts: a runtime report cannot confer authority.
@@ -3620,8 +3649,20 @@ fn preserve_recorded_gate_answers(
                     .insert(input_id.clone(), *recorded_answer);
                 restored += 1;
             }
-            // A setup run's yes replaces a recorded decline; nothing else does.
-            Some(true) if setup_may_turn_on && !*recorded_answer => {}
+            // A setup run's yes replaces a recorded decline, once the report holds
+            // every resource behind the gate; nothing else does.
+            Some(true)
+                if !*recorded_answer
+                    && setup_gate_resources
+                        .and_then(|gates| gates.get(input_id))
+                        .is_some_and(|resource_ids| {
+                            !resource_ids.is_empty()
+                                && metadata.prepared_stack.as_ref().is_some_and(|stack| {
+                                    resource_ids
+                                        .iter()
+                                        .all(|id| stack.resources.contains_key(id))
+                                })
+                        }) => {}
             Some(incoming_answer) if incoming_answer != recorded_answer => {
                 tracing::warn!(
                     %input_id,

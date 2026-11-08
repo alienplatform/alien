@@ -233,13 +233,14 @@ pub async fn handle_update_pending(
         .collect();
     // A gate this deployment never answered can be declined here when nothing
     // behind it is installed; the decline is recorded below with the rest.
-    let new_declines = crate::pending::enforce_frozen_gate_fixity(
-        &persisted_gate_answers,
-        &target_stack,
-        &frozen_gating,
-        &existing_resource_ids,
-        &config.input_values,
-    )?;
+    let new_declines =
+        crate::pending::enforce_frozen_gate_fixity(crate::pending::FrozenGateFixityCheck {
+            persisted: &persisted_gate_answers,
+            stack: &target_stack,
+            still_frozen_gating: &frozen_gating,
+            existing_resource_ids: &existing_resource_ids,
+            input_values: &config.input_values,
+        })?;
     persisted_gate_answers.extend(new_declines);
 
     // Drop gated setup resources the deployer declined, BEFORE the
