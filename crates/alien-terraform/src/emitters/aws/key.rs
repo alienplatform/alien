@@ -12,7 +12,7 @@ use alien_core::{
     RemoteBindings, RemoteStackManagement, Result,
 };
 use alien_permissions::{
-    aws_key_policy::{aws_key_policy, key_has_native_service_use},
+    aws_key_policy::{aws_key_policy, key_has_native_service_use, key_runtime_service_accounts},
     BindingTarget,
 };
 use hcl::{
@@ -248,7 +248,24 @@ fn key_policy(ctx: &EmitContext<'_>) -> Expression {
         ),
         management_role_arn,
         key_has_native_service_use(ctx.stack, ctx.resource_id),
+        runtime_role_arns(ctx),
     ))))
+}
+
+/// Roles that may use a key no AWS service uses: the service accounts granted the
+/// key, and the remote-bindings role when the key has remote access.
+fn runtime_role_arns(ctx: &EmitContext<'_>) -> Vec<serde_json::Value> {
+    let mut labels = key_runtime_service_accounts(ctx.stack, ctx.resource_id)
+        .into_iter()
+        .filter_map(|account_id| ctx.name_for(&account_id).map(str::to_string))
+        .collect::<Vec<_>>();
+    if alien_core::remote_bindings::remote_binding_for_entry(ctx.resource).is_some() {
+        labels.extend(remote_bindings_label(ctx).map(str::to_string));
+    }
+    labels
+        .into_iter()
+        .map(|label| serde_json::Value::String(format!("${{aws_iam_role.{label}.arn}}")))
+        .collect()
 }
 
 /// Orders object keys so the rendered policy doesn't depend on whether

@@ -4,18 +4,43 @@
 //! role gets explicit denies, so it can't read data protected by the key even if
 //! an IAM policy later grants it more. Explicit denies in the key policy also
 //! override grants.
+//!
+//! Denying only the management role is not enough on its own: management may
+//! create and retrust roles named after the stack, grant such a role
+//! `kms:Decrypt`, assume it and decrypt. A key that no AWS service uses
+//! therefore also gets an allowlist: use of the key is denied to every principal
+//! except the runtime roles that setup created for it.
 
-use alien_core::{Container, Postgres, Stack, Storage};
-use serde_json::{json, Value};
+use alien_core::{Container, PermissionSetReference, Postgres, ServiceAccount, Stack, Storage};
+use serde_json::{json, Map, Value};
 
-/// Actions that return plaintext, move ciphertext to another key, or hand key use
-/// to someone else.
-const MANAGEMENT_DENIED_ACTIONS: [&str; 5] = [
+/// Administration actions the management role never needs on a setup-owned key.
+/// The account root can still change the key policy, so recovery stays possible.
+const MANAGEMENT_DENIED_ADMIN_ACTIONS: [&str; 7] = [
+    "kms:PutKeyPolicy",
+    "kms:ScheduleKeyDeletion",
+    "kms:DisableKey",
+    "kms:DisableKeyRotation",
+    "kms:CreateAlias",
+    "kms:UpdateAlias",
+    "kms:CreateGrant",
+];
+
+/// Actions that return plaintext, move ciphertext to another key, or hand key
+/// use to someone else.
+const KEY_USE_DENIED_ACTIONS: [&str; 4] = [
     "kms:Decrypt",
     "kms:GenerateDataKey*",
     "kms:ReEncrypt*",
     "kms:CreateGrant",
-    "kms:PutKeyPolicy",
+];
+
+/// AWS services that call KMS for the management role while it provisions
+/// volumes, databases and buckets that encrypt with a data-layer key.
+const NATIVE_ENCRYPTION_SERVICES: [&str; 3] = [
+    "ec2.*.amazonaws.com",
+    "rds.*.amazonaws.com",
+    "s3.*.amazonaws.com",
 ];
 
 /// Encryption context the `key/availability` probe sends. Encrypt is allowed
@@ -26,16 +51,25 @@ const AVAILABILITY_PROBE_CONTEXT_VALUE: &str = "key-health";
 
 /// Builds the key policy document.
 ///
-/// `account_root_arn` and `management_role_arn` are template values (a string or
-/// an intrinsic function object). `native_service_use` is true when a stack
-/// resource encrypts with the key through an AWS service (EBS, RDS, S3). Those
-/// services call KMS on the management role's behalf while it provisions them,
-/// so calls made through an AWS service are exempt from the deny. They never
-/// return plaintext to the caller.
+/// `account_root_arn`, `management_role_arn` and `runtime_role_arns` are
+/// template values (a string or an intrinsic function object).
+///
+/// `native_service_use` is true when a stack resource encrypts with the key
+/// through an AWS service (EBS, RDS, S3). Those services call KMS for the
+/// management role while it provisions them, so the key-use denies don't apply
+/// to calls made through EC2, RDS or S3. The service keeps the data key; the
+/// caller never receives it. The management role can still make those services
+/// read or write data they encrypt with the key. Such a key has no allowlist,
+/// because the customer's own principals read the data it protects.
+///
+/// Otherwise only the runtime uses the key, and `runtime_role_arns` names the
+/// roles that may. An empty list gives no allowlist, so only the
+/// management-role denies apply.
 pub fn aws_key_policy(
     account_root_arn: Value,
     management_role_arn: Option<Value>,
     native_service_use: bool,
+    runtime_role_arns: Vec<Value>,
 ) -> Value {
     let mut statements = vec![json!({
         "Sid": "EnableAccountAdministration",
@@ -45,43 +79,108 @@ pub fn aws_key_policy(
         "Resource": "*",
     })];
 
+    let allowlist = !native_service_use && !runtime_role_arns.is_empty();
+
     if let Some(role_arn) = management_role_arn {
-        let direct_call_only = |mut condition: serde_json::Map<String, Value>| {
-            if native_service_use {
-                condition.insert("Null".to_string(), json!({ "kms:ViaService": "true" }));
-            }
-            condition
-        };
-        let principal = |mut condition: serde_json::Map<String, Value>| {
-            condition.insert(
+        let is_management = || {
+            Map::from_iter([(
                 "ArnEquals".to_string(),
                 json!({ "aws:PrincipalArn": role_arn.clone() }),
-            );
-            Value::Object(condition)
+            )])
         };
-
         statements.push(json!({
-            "Sid": "DenyManagementKeyUse",
+            "Sid": "DenyManagementKeyAdministration",
             "Effect": "Deny",
             "Principal": { "AWS": "*" },
-            "Action": MANAGEMENT_DENIED_ACTIONS,
+            "Action": MANAGEMENT_DENIED_ADMIN_ACTIONS,
             "Resource": "*",
-            "Condition": principal(direct_call_only(serde_json::Map::new())),
+            "Condition": is_management(),
+        }));
+        if !allowlist {
+            let mut use_condition = is_management();
+            if native_service_use {
+                use_condition.insert(
+                    "StringNotLike".to_string(),
+                    json!({ "kms:ViaService": NATIVE_ENCRYPTION_SERVICES }),
+                );
+            }
+            let mut encrypt_condition = use_condition.clone();
+            encrypt_condition.insert(
+                "StringNotEquals".to_string(),
+                json!({ AVAILABILITY_PROBE_CONTEXT_KEY: AVAILABILITY_PROBE_CONTEXT_VALUE }),
+            );
+            statements.push(json!({
+                "Sid": "DenyManagementKeyUse",
+                "Effect": "Deny",
+                "Principal": { "AWS": "*" },
+                "Action": KEY_USE_DENIED_ACTIONS,
+                "Resource": "*",
+                "Condition": use_condition,
+            }));
+            statements.push(json!({
+                "Sid": "DenyManagementEncryptOutsideAvailabilityProbe",
+                "Effect": "Deny",
+                "Principal": { "AWS": "*" },
+                "Action": "kms:Encrypt",
+                "Resource": "*",
+                "Condition": encrypt_condition,
+            }));
+        }
+    }
+
+    if allowlist {
+        let outside_runtime = json!({ "aws:PrincipalArn": runtime_role_arns });
+        statements.push(json!({
+            "Sid": "DenyKeyUseOutsideRuntime",
+            "Effect": "Deny",
+            "Principal": { "AWS": "*" },
+            "Action": KEY_USE_DENIED_ACTIONS,
+            "Resource": "*",
+            "Condition": { "ArnNotEquals": outside_runtime.clone() },
         }));
         statements.push(json!({
-            "Sid": "DenyManagementEncryptOutsideAvailabilityProbe",
+            "Sid": "DenyEncryptOutsideRuntimeAndAvailabilityProbe",
             "Effect": "Deny",
             "Principal": { "AWS": "*" },
             "Action": "kms:Encrypt",
             "Resource": "*",
-            "Condition": principal(direct_call_only(serde_json::Map::from_iter([(
-                "StringNotEquals".to_string(),
-                json!({ AVAILABILITY_PROBE_CONTEXT_KEY: AVAILABILITY_PROBE_CONTEXT_VALUE }),
-            )]))),
+            "Condition": {
+                "ArnNotEquals": outside_runtime,
+                "StringNotEquals": { AVAILABILITY_PROBE_CONTEXT_KEY: AVAILABILITY_PROBE_CONTEXT_VALUE },
+            },
         }));
     }
 
     json!({ "Version": "2012-10-17", "Statement": statements })
+}
+
+/// Ids of the service accounts whose runtime roles may use the key: those whose
+/// permission profile grants anything on the key, or any `key/` permission
+/// stack-wide.
+pub fn key_runtime_service_accounts(stack: &Stack, key_id: &str) -> Vec<String> {
+    let is_key_permission = |reference: &PermissionSetReference| reference.id().starts_with("key/");
+    stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<ServiceAccount>())
+        .filter(|account| {
+            let profile = stack
+                .permission_profiles()
+                .get(account.id.strip_suffix("-sa").unwrap_or(&account.id));
+            account.resource_permission_sets.contains_key(key_id)
+                || account
+                    .stack_permission_sets
+                    .iter()
+                    .any(|set| set.id.starts_with("key/"))
+                || profile.is_some_and(|profile| {
+                    profile.0.get(key_id).is_some_and(|refs| !refs.is_empty())
+                        || profile
+                            .0
+                            .get("*")
+                            .is_some_and(|refs| refs.iter().any(is_key_permission))
+                })
+        })
+        .map(|account| account.id.clone())
+        .collect()
 }
 
 /// Whether a stack resource uses the key for native AWS service encryption.
@@ -101,4 +200,154 @@ pub fn key_has_native_service_use(stack: &Stack, key_id: &str) -> bool {
         };
         key.is_some_and(|key| key.id() == key_id)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{Key, PermissionProfile, PermissionSetReference, ResourceLifecycle};
+
+    fn statement<'a>(policy: &'a Value, sid: &str) -> Option<&'a Value> {
+        policy["Statement"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|statement| statement["Sid"] == sid)
+    }
+
+    fn policy(native_service_use: bool, runtime: &[&str]) -> Value {
+        aws_key_policy(
+            json!("root"),
+            Some(json!("management")),
+            native_service_use,
+            runtime.iter().map(|arn| json!(arn)).collect(),
+        )
+    }
+
+    #[test]
+    fn a_runtime_only_key_denies_everyone_but_its_runtime_roles() {
+        let policy = policy(false, &["runtime-a", "runtime-b"]);
+
+        let outside = statement(&policy, "DenyKeyUseOutsideRuntime").unwrap();
+        assert_eq!(outside["Principal"], json!({ "AWS": "*" }));
+        assert_eq!(
+            outside["Condition"],
+            json!({ "ArnNotEquals": { "aws:PrincipalArn": ["runtime-a", "runtime-b"] } })
+        );
+        let actions = outside["Action"].as_array().unwrap();
+        for action in [
+            "kms:Decrypt",
+            "kms:GenerateDataKey*",
+            "kms:ReEncrypt*",
+            "kms:CreateGrant",
+        ] {
+            assert!(actions.contains(&json!(action)), "{action}");
+        }
+        // Encrypt stays open only for runtime roles and the availability probe.
+        let encrypt = statement(&policy, "DenyEncryptOutsideRuntimeAndAvailabilityProbe").unwrap();
+        assert_eq!(encrypt["Action"], json!("kms:Encrypt"));
+        assert_eq!(
+            encrypt["Condition"]["StringNotEquals"],
+            json!({ "kms:EncryptionContext:deployment-purpose": "key-health" })
+        );
+        // The root account may still administer the key, so recovery needs no edit.
+        let admin = statement(&policy, "DenyManagementKeyAdministration").unwrap();
+        assert!(!outside["Action"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("kms:PutKeyPolicy")));
+        assert_eq!(
+            admin["Condition"],
+            json!({ "ArnEquals": { "aws:PrincipalArn": "management" } })
+        );
+        for action in [
+            "kms:PutKeyPolicy",
+            "kms:ScheduleKeyDeletion",
+            "kms:DisableKey",
+            "kms:DisableKeyRotation",
+            "kms:CreateAlias",
+            "kms:UpdateAlias",
+        ] {
+            assert!(
+                admin["Action"].as_array().unwrap().contains(&json!(action)),
+                "{action}"
+            );
+        }
+        assert!(statement(&policy, "DenyManagementKeyUse").is_none());
+    }
+
+    #[test]
+    fn a_key_without_runtime_roles_denies_only_the_management_role() {
+        let policy = policy(false, &[]);
+        assert!(statement(&policy, "DenyKeyUseOutsideRuntime").is_none());
+        let direct = statement(&policy, "DenyManagementKeyUse").unwrap();
+        assert_eq!(
+            direct["Condition"],
+            json!({ "ArnEquals": { "aws:PrincipalArn": "management" } })
+        );
+        assert!(statement(&policy, "DenyManagementEncryptOutsideAvailabilityProbe").is_some());
+    }
+
+    #[test]
+    fn a_data_key_exempts_only_the_native_encryption_services() {
+        let policy = policy(true, &["runtime"]);
+        assert!(statement(&policy, "DenyKeyUseOutsideRuntime").is_none());
+        let direct = statement(&policy, "DenyManagementKeyUse").unwrap();
+        assert_eq!(
+            direct["Condition"]["StringNotLike"],
+            json!({ "kms:ViaService": ["ec2.*.amazonaws.com", "rds.*.amazonaws.com", "s3.*.amazonaws.com"] })
+        );
+        let admin = statement(&policy, "DenyManagementKeyAdministration").unwrap();
+        assert!(admin["Condition"].get("StringNotLike").is_none());
+    }
+
+    #[test]
+    fn runtime_roles_are_the_service_accounts_granted_the_key() {
+        let stack = Stack::new("stack".to_string())
+            .add(
+                Key::new("secrets".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ServiceAccount::new("manager-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ServiceAccount::new("other-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ServiceAccount::new("wild-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .permissions(
+                alien_core::PermissionsConfig::new()
+                    .with_profile(
+                        "manager",
+                        PermissionProfile::new().resource(
+                            "secrets",
+                            [PermissionSetReference::from_name("key/remote-cryptography")],
+                        ),
+                    )
+                    .with_profile(
+                        "other",
+                        PermissionProfile::new().resource(
+                            "elsewhere",
+                            [PermissionSetReference::from_name("key/remote-cryptography")],
+                        ),
+                    )
+                    .with_profile(
+                        "wild",
+                        PermissionProfile::new()
+                            .global([PermissionSetReference::from_name("key/remote-cryptography")]),
+                    ),
+            )
+            .build();
+
+        assert_eq!(
+            key_runtime_service_accounts(&stack, "secrets"),
+            vec!["manager-sa".to_string(), "wild-sa".to_string()]
+        );
+        assert!(!key_has_native_service_use(&stack, "secrets"));
+    }
 }

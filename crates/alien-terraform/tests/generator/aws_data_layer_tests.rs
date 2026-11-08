@@ -52,6 +52,46 @@ fn aws_key_package_is_valid_and_retained() {
 }
 
 #[test]
+fn aws_runtime_only_key_denies_every_principal_but_its_runtime_roles() {
+    let stack = Stack::new("instance-secrets".to_string())
+        .permissions(alien_core::PermissionsConfig::new().with_profile(
+            "manager",
+            PermissionProfile::new().resource("secrets", ["key/remote-cryptography"]),
+        ))
+        .add(
+            Key::new("secrets".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("manager-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("bystander-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let policy_start = rendered
+        .find("DenyKeyUseOutsideRuntime")
+        .expect("the key policy denies use outside the runtime roles");
+    let policy = &rendered[policy_start.saturating_sub(400)..policy_start + 400];
+    assert!(
+        policy.contains("${aws_iam_role.manager_sa.arn}"),
+        "{policy}"
+    );
+    assert!(!policy.contains("bystander"), "{policy}");
+    assert_terraform_valid(&module, "aws_runtime_only_key");
+}
+
+#[test]
 fn aws_storage_minimal_renders_idiomatic_module() {
     let stack = Stack::new("acme-prod".to_string())
         .add(
