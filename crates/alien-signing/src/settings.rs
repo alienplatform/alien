@@ -348,7 +348,7 @@ pub mod names {
         format!("signed-{prefix}-fingerprint")
     }
 
-    /// GCP Parameter Manager parameter holding the ledger.
+    /// GCP Secret Manager secret holding the ledger.
     pub fn gcp_ledger(prefix: &str) -> String {
         format!("signed-{prefix}-state")
     }

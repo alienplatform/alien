@@ -24,6 +24,8 @@ fn role_permissions(role: &str) -> &'static [&'static str] {
             "artifactregistry.repositories.get",
             "artifactregistry.repositories.list",
         ],
+        "roles/secretmanager.secretAccessor" => &["secretmanager.versions.access"],
+        "roles/secretmanager.secretVersionAdder" => &["secretmanager.versions.add"],
         "roles/parametermanager.parameterVersionAdder" => &[
             "parametermanager.parameterVersions.create",
             "parametermanager.parameters.get",
@@ -90,6 +92,60 @@ fn the_verifier_may_read_its_settings_ledger_and_the_images_it_deploys() {
     ] {
         assert!(permissions.contains(&needed), "{needed}: {permissions:?}");
     }
+    // No project-wide Secret Manager grant: the ledger is the only secret it writes.
+    assert!(
+        !permissions
+            .iter()
+            .any(|permission| permission.starts_with("secretmanager.")),
+        "{permissions:?}"
+    );
+    // The ledger is the secret the verifier reads (`signed-<prefix>-state`), and on it alone the
+    // verifier reads the newest version and adds one.
+    let ledger = text
+        .split("resource \"google_secret_manager_secret\" \"signing_state\"")
+        .nth(1)
+        .expect("the ledger secret");
+    let ledger = &ledger[..ledger.find("\n}").unwrap()];
+    assert!(
+        ledger.contains(&format!(
+            "secret_id = \"{}\"",
+            alien_signing::settings::names::gcp_ledger("${local.resource_prefix}")
+        )),
+        "{ledger}"
+    );
+    let mut on_ledger: Vec<&str> = Vec::new();
+    for block in text
+        .split("resource \"google_secret_manager_secret_iam_member\"")
+        .skip(1)
+    {
+        let body = &block[..block.find("\n}").unwrap_or(block.len())];
+        assert!(
+            body.contains("google_secret_manager_secret.signing_state.secret_id"),
+            "{body}"
+        );
+        if !body.contains("google_service_account.signing_verifier.email") {
+            continue;
+        }
+        let role = body
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("role"))
+            .map(|rest| {
+                rest.trim_start()
+                    .trim_start_matches('=')
+                    .trim()
+                    .trim_matches('"')
+            })
+            .unwrap_or_default();
+        on_ledger.extend(role_permissions(role));
+    }
+    on_ledger.sort();
+    assert_eq!(
+        on_ledger,
+        [
+            "secretmanager.versions.access",
+            "secretmanager.versions.add"
+        ]
+    );
 }
 
 /// Every permission a protected GCP module puts in a custom role is one GCP accepts there:

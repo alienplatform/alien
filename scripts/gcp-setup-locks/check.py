@@ -20,13 +20,14 @@ As that account it then tries what a compromised control plane would try:
   * resize the group (scaling goes through the verifier on protected installs);
   * write the project's IAM policy (the policy it already has, so nothing changes);
   * write a signed input secret's IAM policy and add a version to it;
-  * add a version to the signing settings parameter in Parameter Manager.
+  * add a version to the signing settings parameter in Parameter Manager;
+  * add a version to the ledger secret (an older or empty ledger would let older releases in).
 
 The protected account must be refused each attempt. The unprotected account must pass the
 permission check (succeed, or fail for a reason other than permission), so the check cannot
 pass on attempts GCP refuses for an unrelated reason. The signing settings parameter is refused
-to both (management never holds Parameter Manager writes), and so is a signed input secret
-(no grant reaches `signed-` names; protected bindings also exclude them by name). Both must still read the Cloud Run service.
+to both (management never holds Parameter Manager writes), and so are a signed input secret and
+the ledger secret (no grant reaches `signed-` names; protected bindings also exclude them by name). Both must still read the Cloud Run service.
 Compute Engine names every permission a refused request lacks, so for instance creation and
 group metadata the check compares those lists: the protected account must lack creating and
 reconfiguring machines, the unprotected one must hold both.
@@ -153,6 +154,7 @@ class Run:
         self.service = f"{self.name}-fn-api"
         self.input_secret = f"signed-{self.name}-input-api-key"
         self.settings_parameter = f"signed-{self.name}-fingerprint"
+        self.ledger_secret = f"signed-{self.name}-state"
         self.mig = f"{self.name}-mig"
         self.template = f"{self.name}-tpl"
 
@@ -357,6 +359,9 @@ class Run:
         self.call("POST", f"{secrets}?secretId={self.input_secret}", {"labels": self.labels, "replication": {"automatic": {}}})
         self.cleanups.append(("input secret", lambda: self.call("DELETE", f"{secrets}/{self.input_secret}")))
         self.call("POST", f"{secrets}/{self.input_secret}:addVersion", {"payload": {"data": base64.b64encode(b"vendor value").decode()}})
+        self.call("POST", f"{secrets}?secretId={self.ledger_secret}", {"labels": self.labels, "replication": {"automatic": {}}})
+        self.cleanups.append(("ledger secret", lambda: self.call("DELETE", f"{secrets}/{self.ledger_secret}")))
+        self.call("POST", f"{secrets}/{self.ledger_secret}:addVersion", {"payload": {"data": base64.b64encode(json.dumps({"prefix": self.name}).encode()).decode()}})
         parameters = f"https://parametermanager.googleapis.com/v1/projects/{self.project}/locations/global/parameters"
         self.call("POST", f"{parameters}?parameterId={self.settings_parameter}", {"labels": self.labels, "format": "JSON"})
         self.cleanups.append(("settings parameter", lambda: self.call("DELETE", f"{parameters}/{self.settings_parameter}")))
@@ -439,6 +444,9 @@ class Run:
         added, error = self.attempt("POST", f"{secret}:addVersion", {"payload": {"data": base64.b64encode(b"cp value").decode()}}, token)
         # No management grant reaches `signed-` names; protected bindings also exclude them.
         self.expect(variant, "write-input-secret", "denied", error)
+        ledger = f"https://secretmanager.googleapis.com/v1/projects/{self.project}/secrets/{self.ledger_secret}"
+        _, error = self.attempt("POST", f"{ledger}:addVersion", {"payload": {"data": base64.b64encode(b"{}").decode()}}, token)
+        self.expect(variant, "write-ledger", "denied", error)
         parameter = (f"https://parametermanager.googleapis.com/v1/projects/{self.project}/locations/global/"
                      f"parameters/{self.settings_parameter}")
         version = f"cp{variant[:4]}"

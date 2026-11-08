@@ -160,7 +160,8 @@ fn kms_used_without_activation(stack_state: &StackState) -> bool {
 
 impl GcpServiceActivationMutation {
     /// The services the stack's resources need, plus what setup needs on a protected install:
-    /// Parameter Manager for the signing settings and Cloud Run for the verifier.
+    /// Parameter Manager for the signing settings, Secret Manager for the ledger and Cloud Run
+    /// for the verifier.
     fn required_services(
         &self,
         stack: &Stack,
@@ -172,6 +173,10 @@ impl GcpServiceActivationMutation {
             services.insert(
                 "enable-parameter-manager".to_string(),
                 "parametermanager.googleapis.com".to_string(),
+            );
+            services.insert(
+                "enable-secret-manager".to_string(),
+                "secretmanager.googleapis.com".to_string(),
             );
             services.insert(
                 "enable-cloud-run".to_string(),

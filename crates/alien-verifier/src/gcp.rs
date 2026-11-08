@@ -1,5 +1,5 @@
-//! The verifier's GCP calls: Parameter Manager for the signing settings and
-//! ledger, Secret Manager for deployer inputs, Cloud Run services and
+//! The verifier's GCP calls: Parameter Manager for the signing settings,
+//! Secret Manager for the ledger and deployer inputs, Cloud Run services and
 //! managed instance groups, with the token of the service account the
 //! verifier runs as.
 
@@ -176,6 +176,45 @@ impl Gcp {
             .context(failed(format!("secret {secret} is not UTF-8")))
     }
 
+    /// The newest version of secret `secret`. The newest being disabled or
+    /// destroyed is a refusal, never a reason to read an older one:
+    /// disabling the latest ledger would otherwise bring back an older one.
+    /// Secret Manager's `latest` is the newest version in any state.
+    pub async fn latest_secret(&self, secret: &str) -> Result<Lookup> {
+        let url = format!(
+            "https://secretmanager.googleapis.com/v1/projects/{}/secrets/{secret}/versions/latest:access",
+            self.project
+        );
+        let operation = format!("secretmanager access {secret}");
+        let response = self
+            .http
+            .get(&url)
+            .bearer_auth(self.token().await?)
+            .send()
+            .await
+            .into_alien_error()
+            .context(failed(&operation))?;
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .into_alien_error()
+            .context(failed(&operation))?;
+        let response = match latest_secret_answer(secret, status, &text)? {
+            Some(response) => response,
+            None if status == reqwest::StatusCode::FORBIDDEN => return Ok(Lookup::Denied),
+            None => return Ok(Lookup::Absent),
+        };
+        let data = response["payload"]["data"].as_str().ok_or_else(|| {
+            AlienError::new(failed(format!("secret {secret} carries no payload")))
+        })?;
+        base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map(Lookup::Found)
+            .into_alien_error()
+            .context(failed(format!("secret {secret} is not base64")))
+    }
+
     /// Add a version to a secret.
     pub async fn add_secret_version(&self, secret: &str, value: &str) -> Result<()> {
         let url = format!(
@@ -288,27 +327,6 @@ impl Gcp {
         Ok(Lookup::Found(bytes))
     }
 
-    /// Add a version holding `value` to parameter `parameter`.
-    pub async fn add_parameter_version(&self, parameter: &str, value: &str) -> Result<()> {
-        let id = format!("v{}", chrono::Utc::now().timestamp_millis());
-        let url = format!(
-            "{}/versions?parameterVersionId={id}",
-            self.parameter_url(parameter)
-        );
-        let body = json!({"payload": {
-            "data": base64::engine::general_purpose::STANDARD.encode(value),
-        }});
-        self.call(
-            reqwest::Method::POST,
-            &url,
-            Some(&body),
-            &format!("parametermanager create version {parameter}"),
-        )
-        .await?
-        .ok_or_else(|| AlienError::new(failed(format!("parameter {parameter} does not exist"))))?;
-        Ok(())
-    }
-
     /// Resize managed instance group `name`, zonal when `zone` is given,
     /// and wait for the operation, so a resize Compute Engine fails is an
     /// error and the answer's size is the group's.
@@ -385,6 +403,47 @@ fn newest_version(parameter: &str, versions: &[Value]) -> Result<Option<String>>
         })),
         Some((_, name, false)) => Ok(Some(name.to_string())),
     }
+}
+
+/// What `versions/latest:access` on `secret` answered: the version, `None`
+/// when the secret or its versions are absent (404) or reading is denied
+/// (403), and a refusal when the newest version is disabled or destroyed.
+fn latest_secret_answer(
+    secret: &str,
+    status: reqwest::StatusCode,
+    text: &str,
+) -> Result<Option<Value>> {
+    if status == reqwest::StatusCode::NOT_FOUND || status == reqwest::StatusCode::FORBIDDEN {
+        return Ok(None);
+    }
+    let body: Option<Value> = serde_json::from_str(text).ok();
+    if status == reqwest::StatusCode::BAD_REQUEST
+        && body
+            .as_ref()
+            .and_then(|body| body["error"]["status"].as_str())
+            == Some("FAILED_PRECONDITION")
+    {
+        let message = body
+            .as_ref()
+            .and_then(|body| body["error"]["message"].as_str())
+            .unwrap_or_default();
+        return Err(AlienError::new(ErrorData::Refused {
+            reason: format!(
+                "the newest version of secret {secret} can't be read ({message}); an administrator must enable it or add a new one"
+            ),
+        }));
+    }
+    if !status.is_success() {
+        return Err(AlienError::new(failed(format!(
+            "secretmanager access {secret}: HTTP {status}: {}",
+            text.chars().take(2000).collect::<String>()
+        ))));
+    }
+    body.map(Some).ok_or_else(|| {
+        AlienError::new(failed(format!(
+            "secretmanager access {secret}: the response is not JSON"
+        )))
+    })
 }
 
 const COMPUTE: &str = "https://compute.googleapis.com/compute/v1/";
@@ -521,7 +580,10 @@ impl crate::gcp_machines::GcpMachineApi for Gcp {
     }
 }
 
-/// The install's Parameter Manager parameters and Secret Manager inputs.
+/// The install's settings parameter (Parameter Manager) and its ledger and
+/// inputs (Secret Manager). The ledger is a secret so that deleting it at
+/// teardown takes the versions the verifier added with it; Parameter
+/// Manager refuses to delete a parameter that still has versions.
 pub struct GcpInstall(pub Gcp);
 
 #[async_trait]
@@ -531,12 +593,12 @@ impl InstallStore for GcpInstall {
     }
 
     async fn ledger(&self, prefix: &str) -> Result<Lookup> {
-        self.0.parameter(&names::gcp_ledger(prefix)).await
+        self.0.latest_secret(&names::gcp_ledger(prefix)).await
     }
 
     async fn store_ledger(&self, prefix: &str, ledger: &Ledger) -> Result<()> {
         self.0
-            .add_parameter_version(&names::gcp_ledger(prefix), &ledger.to_json())
+            .add_secret_version(&names::gcp_ledger(prefix), &ledger.to_json())
             .await
     }
 
@@ -761,6 +823,55 @@ mod tests {
 
     fn version(name: &str, created: &str, disabled: bool) -> Value {
         json!({"name": name, "createTime": created, "disabled": disabled})
+    }
+
+    /// The answers are the ones Secret Manager gave on a real secret
+    /// (`versions/latest:access` after `:disable` and `:destroy` of the newest).
+    #[test]
+    fn a_disabled_or_destroyed_newest_ledger_refuses_instead_of_reading_an_older_one() {
+        let ok = reqwest::StatusCode::OK;
+        let found = latest_secret_answer(
+            "signed-p-state",
+            ok,
+            r#"{"name": "projects/1/secrets/signed-p-state/versions/2", "payload": {"data": "e30="}}"#,
+        )
+        .expect("an enabled newest version is read");
+        assert_eq!(
+            found.expect("found")["payload"]["data"].as_str(),
+            Some("e30=")
+        );
+        for state in ["DISABLED", "DESTROYED"] {
+            let body = format!(
+                r#"{{"error": {{"code": 400, "message": "Secret Version [projects/1/secrets/signed-p-state/versions/2] is in {state} state.", "status": "FAILED_PRECONDITION"}}}}"#
+            );
+            let error =
+                latest_secret_answer("signed-p-state", reqwest::StatusCode::BAD_REQUEST, &body)
+                    .expect_err("a newest version that can't be read refuses");
+            assert_eq!(
+                error.message,
+                format!("Refused: the newest version of secret signed-p-state can't be read (Secret Version [projects/1/secrets/signed-p-state/versions/2] is in {state} state.); an administrator must enable it or add a new one")
+            );
+        }
+        // No secret, or a secret without versions, is absent; a denied read is denied.
+        for status in [
+            reqwest::StatusCode::NOT_FOUND,
+            reqwest::StatusCode::FORBIDDEN,
+        ] {
+            assert!(latest_secret_answer("signed-p-state", status, "{}")
+                .expect("absent or denied")
+                .is_none());
+        }
+        // Another failure stays a cloud failure, not a refusal.
+        let error = latest_secret_answer(
+            "signed-p-state",
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            r#"{"error": {"status": "UNAVAILABLE"}}"#,
+        )
+        .expect_err("a 503 fails");
+        assert!(
+            !matches!(error.error, Some(ErrorData::Refused { .. })),
+            "{error}"
+        );
     }
 
     #[test]

@@ -776,7 +776,7 @@ fn gcp_verifier_blocks(
                 attr("member", member.clone()),
             ],
         ),
-        // The settings and ledger are public values; reading them needs no name condition.
+        // The settings are a public value; reading them needs no name condition.
         resource_block(
             "google_project_iam_member",
             "signing_verifier_reads_settings",
@@ -791,31 +791,32 @@ fn gcp_verifier_blocks(
                 attr("member", member.clone()),
             ],
         ),
-        resource_block(
-            "google_project_iam_member",
+    ];
+    // On the ledger secret alone: read its newest version and add one.
+    for (label, role) in [
+        (
+            "signing_verifier_reads_ledger",
+            "roles/secretmanager.secretAccessor",
+        ),
+        (
             "signing_verifier_records_ledger",
+            "roles/secretmanager.secretVersionAdder",
+        ),
+    ] {
+        blocks.push(resource_block(
+            "google_secret_manager_secret_iam_member",
+            label,
             [
                 attr("project", expr::raw("var.gcp_project")),
                 attr(
-                    "role",
-                    Expression::String("roles/parametermanager.parameterVersionAdder".to_string()),
+                    "secret_id",
+                    expr::traversal(["google_secret_manager_secret", "signing_state", "secret_id"]),
                 ),
+                attr("role", Expression::String(role.to_string())),
                 attr("member", member.clone()),
-                nested(block(
-                    "condition",
-                    [
-                        attr("title", Expression::String("This install's ledger".to_string())),
-                        attr(
-                            "expression",
-                            escaped_template(
-                                r#"resource.name.startsWith("projects/${var.gcp_project}/locations/global/parameters/signed-${local.resource_prefix}-state")"#,
-                            ),
-                        ),
-                    ],
-                )),
             ],
-        ),
-    ];
+        ));
+    }
     for label in runtime_service_accounts {
         blocks.push(resource_block(
             "google_service_account_iam_member",
@@ -896,7 +897,11 @@ fn gcp_verifier_blocks(
                         "signing_verifier_reads_settings",
                     ]),
                     expr::traversal([
-                        "google_project_iam_member",
+                        "google_secret_manager_secret_iam_member",
+                        "signing_verifier_reads_ledger",
+                    ]),
+                    expr::traversal([
+                        "google_secret_manager_secret_iam_member",
                         "signing_verifier_records_ledger",
                     ]),
                 ]),

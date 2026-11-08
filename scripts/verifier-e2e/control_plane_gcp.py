@@ -7,9 +7,9 @@ The GCP counterpart of `control_plane.py`. Sets up, as protected setup would, an
   - the workload's account, named as setup names it (`a-<p>-execution-<hash>`), the verifier's
     `<p>-verifier`, and a management stand-in `<p>-mgmt` that may read Cloud Run and call the
     verifier, nothing more;
-  - the signing settings and ledger in Parameter Manager (`signed-<p>-fingerprint`,
-    `signed-<p>-state`), the verifier allowed to list and read them (parameterViewer) and to add
-    ledger versions;
+  - the signing settings in Parameter Manager (`signed-<p>-fingerprint`) and the ledger in
+    Secret Manager (`signed-<p>-state`), the verifier allowed to list and read the settings
+    (parameterViewer) and, on the ledger secret alone, to read and add versions;
   - a VPC `<p>-net` with subnet `<p>-workload`, which this install's setup doesn't name (the
     driver's stack has no network, so the verifier gets no VERIFIER_FUNCTION_VPC), and the
     verifier's shared compute role;
@@ -204,9 +204,6 @@ class Run:
         self.bind_project(verifier, f"projects/{self.project}/roles/{role_id}")
         self.bind_project(verifier, "roles/parametermanager.parameterViewer")
         self.bind_project(verifier, "roles/artifactregistry.reader")
-        ledger = f"projects/{self.project}/locations/global/parameters/signed-{self.prefix}-state"
-        self.bind_project(verifier, "roles/parametermanager.parameterVersionAdder",
-                          f"expression=resource.name.startsWith(\"{ledger}\"),title=ledger")
         self.gcloud("iam", "service-accounts", "add-iam-policy-binding", self.sa["execution-sa"],
                     f"--member={verifier}", "--role=roles/iam.serviceAccountUser")
         # Management may only read Cloud Run; it calls the verifier with its own ID token.
@@ -222,15 +219,23 @@ class Run:
 
     def parameters(self):
         fixtures = json.loads(self.driver("fixtures").stdout)
-        for name, value in [(f"signed-{self.prefix}-fingerprint", fixtures["settings"]),
-                            (f"signed-{self.prefix}-state", fixtures["ledger"])]:
-            path = self.work / f"{name}.json"
-            path.write_text(json.dumps(value))
-            self.gcloud("parametermanager", "parameters", "create", name, "--location=global",
-                        f"--labels={self.label_key}={self.label_value}")
-            self.created.append(("parameter", name))
-            self.gcloud("parametermanager", "parameters", "versions", "create", "v1", f"--parameter={name}",
-                        "--location=global", f"--payload-data-from-file={path}")
+        name = f"signed-{self.prefix}-fingerprint"
+        path = self.work / f"{name}.json"
+        path.write_text(json.dumps(fixtures["settings"]))
+        self.gcloud("parametermanager", "parameters", "create", name, "--location=global",
+                    f"--labels={self.label_key}={self.label_value}")
+        self.created.append(("parameter", name))
+        self.gcloud("parametermanager", "parameters", "versions", "create", "v1", f"--parameter={name}",
+                    "--location=global", f"--payload-data-from-file={path}")
+        ledger = f"signed-{self.prefix}-state"
+        path = self.work / f"{ledger}.json"
+        path.write_text(json.dumps(fixtures["ledger"]))
+        self.gcloud("secrets", "create", ledger, "--replication-policy=automatic",
+                    f"--labels={self.label_key}={self.label_value}", f"--data-file={path}")
+        self.created.append(("secret", ledger))
+        verifier = f"serviceAccount:{self.sa['verifier']}"
+        for role in ["roles/secretmanager.secretAccessor", "roles/secretmanager.secretVersionAdder"]:
+            self.gcloud("secrets", "add-iam-policy-binding", ledger, f"--member={verifier}", f"--role={role}")
 
     def network(self):
         self.gcloud("compute", "networks", "create", f"{self.prefix}-net", "--subnet-mode=custom")
@@ -443,6 +448,8 @@ class Run:
                                 version["name"].rsplit("/", 1)[-1], f"--parameter={name}",
                                 "--location=global", check=False)
                 self.gcloud("parametermanager", "parameters", "delete", name, "--location=global", check=False)
+            elif kind == "secret":
+                self.gcloud("secrets", "delete", name, "--quiet", check=False)
             elif kind == "repository":
                 self.gcloud("artifacts", "repositories", "delete", name, f"--location={self.region}", check=False)
         for kind, name in reversed(self.created):
@@ -474,6 +481,8 @@ class Run:
                  if a["email"].startswith(self.prefix)]
         left += [p["name"] for p in self.gcloud_json("parametermanager", "parameters", "list",
                  "--location=global") if f"signed-{self.prefix}-" in p["name"]]
+        left += [s["name"] for s in self.gcloud_json("secrets", "list")
+                 if f"signed-{self.prefix}-" in s["name"]]
         left += [r["name"] for r in self.gcloud_json("artifacts", "repositories", "list",
                  f"--location={self.region}") if r["name"].endswith(f"/{self.prefix}")]
         left += [r["name"] for r in self.gcloud_json("iam", "roles", "list")

@@ -378,11 +378,13 @@ fn protected_management_holds_no_parameter_manager_permission() {
 }
 
 #[test]
-fn protected_management_cannot_touch_signing_inputs_stored_as_secrets() {
-    // Inputs of this install and of one whose prefix extends this one's.
+fn protected_management_cannot_touch_signing_inputs_or_the_ledger() {
+    // Inputs of this install and of one whose prefix extends this one's, and the ledger: a
+    // version added to it would let management raise or reset what the install accepted.
     let inputs = [
         format!("projects/{PROJECT_NUMBER}/secrets/signed-{PREFIX}-input-api-key"),
         format!("projects/{PROJECT_NUMBER}/secrets/signed-{PREFIX}-eu-input-api-key"),
+        format!("projects/{PROJECT_NUMBER}/secrets/signed-{PREFIX}-state"),
     ];
     let own_secret = format!("projects/{PROJECT_NUMBER}/secrets/{PREFIX}-otlp");
     for protected in [false, true] {

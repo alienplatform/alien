@@ -202,9 +202,7 @@ pub async fn read_install(install: &ModuleInstall) -> Result<Signed> {
             let settings_name = names::gcp_settings(&prefix);
             let ledger_name = names::gcp_ledger(&prefix);
             let settings = gcp_parameter(&http, &token, &project, &settings_name).await?;
-            let ledger = gcp_parameter(&http, &token, &project, &ledger_name)
-                .await?
-                .map(|(bytes, _)| bytes);
+            let ledger = gcp_secret(&http, &token, &project, &ledger_name).await?;
             Ok(signed(
                 id,
                 install,
@@ -393,6 +391,26 @@ async fn gcp_parameter(
     Ok(Some((parameter_payload(name, &full)?, Some(created))))
 }
 
+/// The newest version of Secret Manager secret `name`; `None` when the secret
+/// doesn't exist or has no version. A disabled or destroyed newest version
+/// fails, as it does in the verifier, rather than reading an older one.
+async fn gcp_secret(
+    http: &reqwest::Client,
+    token: &str,
+    project: &str,
+    name: &str,
+) -> Result<Option<Vec<u8>>> {
+    let url = format!(
+        "https://secretmanager.googleapis.com/v1/projects/{project}/secrets/{name}/versions/latest:access"
+    );
+    let Some(version) =
+        get_json(http, token, &url, &format!("secretmanager access {name}")).await?
+    else {
+        return Ok(None);
+    };
+    parameter_payload(name, &version).map(Some)
+}
+
 /// The newest of `versions` by create time, refusing a disabled newest one:
 /// the verifier refuses it too, rather than falling back to an older ledger.
 pub(crate) fn newest_version(
@@ -424,7 +442,7 @@ pub(crate) fn newest_version(
     }
 }
 
-/// The bytes a Parameter Manager version holds.
+/// The bytes a Parameter Manager version or an accessed Secret Manager version holds.
 pub(crate) fn parameter_payload(parameter: &str, version: &Value) -> Result<Vec<u8>> {
     let data = version["payload"]["data"]
         .as_str()

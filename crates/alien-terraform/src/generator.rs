@@ -931,12 +931,6 @@ pub(crate) fn render_terraform_module(
         }
     }
 
-    if stack_settings.signing.is_some() && target == TerraformTarget::Gcp {
-        if let Some(readme) = files.get_mut("README.md") {
-            readme.push_str(include_str!("templates/protected-uninstall-gcp.md"));
-        }
-    }
-
     if has_retention_workflow {
         if let Some(readme) = files.get_mut("README.md") {
             readme.push_str(
@@ -1993,42 +1987,71 @@ fn signing_blocks(
         ]
         .concat()),
         TerraformTarget::Gcp => {
-            let mut blocks = vec![fingerprint_variable];
-            for (label, name, value) in [
-                (
-                    "signing_fingerprint",
-                    alien_signing::settings::names::gcp_settings(prefix),
-                    settings_value,
-                ),
-                (
-                    "signing_state",
-                    alien_signing::settings::names::gcp_ledger(prefix),
-                    ledger_value,
-                ),
-            ] {
-                blocks.push(resource_block(
+            let settings_label = "signing_fingerprint";
+            Ok(vec![
+                fingerprint_variable,
+                resource_block(
                     "google_parameter_manager_parameter",
-                    label,
+                    settings_label,
                     [
                         attr("project", expr::raw("var.gcp_project")),
-                        attr("parameter_id", expr::template(name)),
+                        attr(
+                            "parameter_id",
+                            expr::template(alien_signing::settings::names::gcp_settings(prefix)),
+                        ),
                         attr("format", Expression::String("JSON".to_string())),
                     ],
-                ));
-                blocks.push(resource_block(
+                ),
+                resource_block(
                     "google_parameter_manager_parameter_version",
-                    label,
+                    settings_label,
                     [
                         attr(
                             "parameter",
-                            expr::traversal(["google_parameter_manager_parameter", label, "id"]),
+                            expr::traversal([
+                                "google_parameter_manager_parameter",
+                                settings_label,
+                                "id",
+                            ]),
                         ),
                         attr("parameter_version_id", Expression::String("v1".to_string())),
-                        attr("parameter_data", value),
+                        attr("parameter_data", settings_value),
                     ],
-                ));
-            }
-            Ok(blocks)
+                ),
+                // The ledger is a secret, not a parameter: the verifier adds a version per
+                // release, and deleting a secret takes its versions along, so teardown
+                // finishes; Parameter Manager refuses to delete a parameter with versions.
+                resource_block(
+                    "google_secret_manager_secret",
+                    "signing_state",
+                    [
+                        attr("project", expr::raw("var.gcp_project")),
+                        attr(
+                            "secret_id",
+                            expr::template(alien_signing::settings::names::gcp_ledger(prefix)),
+                        ),
+                        nested(block(
+                            "replication",
+                            [nested(block("auto", Vec::<Structure>::new()))],
+                        )),
+                    ],
+                ),
+                resource_block(
+                    "google_secret_manager_secret_version",
+                    "signing_state",
+                    [
+                        attr(
+                            "secret",
+                            expr::traversal([
+                                "google_secret_manager_secret",
+                                "signing_state",
+                                "id",
+                            ]),
+                        ),
+                        attr("secret_data", ledger_value),
+                    ],
+                ),
+            ])
         }
         TerraformTarget::Azure => Ok(vec![fingerprint_variable]),
         TerraformTarget::Eks | TerraformTarget::Gke | TerraformTarget::Aks => {

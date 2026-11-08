@@ -5,8 +5,9 @@ Runs the `verifier-local` example (the deployed verifier's stores, backend
 and checks, with the identity and pins given on its command line) against a
 test project. Creates, named `$TEST_RESOURCE_PREFIX-<random>` and labeled
 `<prefix>=true` where GCP allows labels:
-  - the signing settings and ledger as Parameter Manager parameters
-    `signed-<p>-fingerprint` and `signed-<p>-state`, as setup writes them;
+  - the signing settings as Parameter Manager parameter
+    `signed-<p>-fingerprint` and the ledger as Secret Manager secret
+    `signed-<p>-state`, as setup writes them;
   - the machines' service account `<p>-m`;
 and lets the verifier create the instance templates and the zonal MIG.
 
@@ -23,7 +24,7 @@ the publisher's". Then, each refusal checked to write nothing:
   4. a zone outside the verifier's region is refused;
   5. a publisher image older than the build's minimum is refused;
   6. a second roll adds template 2 and points the MIG at it;
-  7. each roll writes the ledger back as a new parameter version;
+  7. each roll writes the ledger back as a new secret version;
   8. `scale` resizes the MIG the verifier names, clamped to the signed
      bounds; a caller-named target or a foreign zone is refused (off: a
      resize past the maximum written straight to Compute Engine lands);
@@ -122,10 +123,15 @@ class Run:
 
     def parameters(self):
         base = f"https://parametermanager.googleapis.com/v1/projects/{self.project}/locations/global/parameters"
-        for name, value in [(f"signed-{self.prefix}-fingerprint", self.statements["settings"]), (f"signed-{self.prefix}-state", self.statements["ledger"])]:
-            self.call("POST", f"{base}?parameterId={name}", {"labels": {self.label: "true"}})
-            self.call("POST", f"{base}/{name}/versions?parameterVersionId=v1",
-                      {"payload": {"data": base64.b64encode(json.dumps(value).encode()).decode()}})
+        name = f"signed-{self.prefix}-fingerprint"
+        self.call("POST", f"{base}?parameterId={name}", {"labels": {self.label: "true"}})
+        self.call("POST", f"{base}/{name}/versions?parameterVersionId=v1",
+                  {"payload": {"data": base64.b64encode(json.dumps(self.statements["settings"]).encode()).decode()}})
+        secrets = f"https://secretmanager.googleapis.com/v1/projects/{self.project}/secrets"
+        self.call("POST", f"{secrets}?secretId=signed-{self.prefix}-state",
+                  {"replication": {"automatic": {}}, "labels": {self.label: "true"}})
+        self.call("POST", f"{secrets}/signed-{self.prefix}-state:addVersion",
+                  {"payload": {"data": base64.b64encode(json.dumps(self.statements["ledger"]).encode()).decode()}})
 
     def service_account(self):
         self.call("POST", f"https://iam.googleapis.com/v1/projects/{self.project}/serviceAccounts",
@@ -162,8 +168,8 @@ class Run:
         return False
 
     def ledger_versions(self):
-        base = f"https://parametermanager.googleapis.com/v1/projects/{self.project}/locations/global/parameters/signed-{self.prefix}-state"
-        versions = self.call("GET", f"{base}/versions").get("parameterVersions", [])
+        base = f"https://secretmanager.googleapis.com/v1/projects/{self.project}/secrets/signed-{self.prefix}-state"
+        versions = self.call("GET", f"{base}/versions").get("versions", [])
         return sorted(versions, key=lambda v: v["createTime"])
 
     def templates(self):
@@ -238,8 +244,8 @@ class Run:
 
         # 7 the ledger: the roll wrote a new version holding the release.
         versions = self.ledger_versions()
-        newest = json.loads(base64.b64decode(self.call("GET", f"https://parametermanager.googleapis.com/v1/{versions[-1]['name']}")["payload"]["data"]))
-        self.record("7 the roll wrote the ledger back as a new parameter version", len(versions) >= 2
+        newest = json.loads(base64.b64decode(self.call("GET", f"https://secretmanager.googleapis.com/v1/{versions[-1]['name']}:access")["payload"]["data"]))
+        self.record("7 the roll wrote the ledger back as a new secret version", len(versions) >= 2
                     and newest.get("release", {}).get("sequence") == 71, json.dumps({"versions": len(versions), "release": newest.get("release")}))
 
         # 8 scale: clamped to the signed bounds, in the group the verifier names.
@@ -281,12 +287,13 @@ class Run:
 
         # 10 a disabled newest ledger version is an error, never a skip.
         newest = self.ledger_versions()[-1]["name"]
-        self.call("PATCH", f"https://parametermanager.googleapis.com/v1/{newest}?updateMask=disabled", {"disabled": True})
+        self.call("POST", f"https://secretmanager.googleapis.com/v1/{newest}:disable", {})
         ok, body = self.invoke("scale", desired=1)
-        self.record("10 a disabled newest ledger version refuses (on)", not ok and "is disabled" in str(body) and self.mig()["targetSize"] == 0, str(body)[:300])
-        self.call("PATCH", f"https://parametermanager.googleapis.com/v1/{newest}?updateMask=disabled", {"disabled": False})
+        self.record("10 a disabled newest ledger version refuses (on)", not ok and "DISABLED state" in str(body) and self.mig()["targetSize"] == 0, str(body)[:300])
+        self.call("POST", f"https://secretmanager.googleapis.com/v1/{newest}:enable", {})
         ok, body = self.invoke("scale", desired=1)
         self.record("10 enabled again, scale lands", ok and body.get("size") == 1, str(body)[:300])
+
 
     # --- teardown -------------------------------------------------------------
 
@@ -305,10 +312,11 @@ class Run:
             except Exception as error:
                 log(f"template {name}: {error}")
         base = f"https://parametermanager.googleapis.com/v1/projects/{self.project}/locations/global/parameters"
-        for name in (f"signed-{self.prefix}-fingerprint", f"signed-{self.prefix}-state"):
-            for version in (self.call("GET", f"{base}/{name}/versions", ok_missing=True) or {}).get("parameterVersions", []):
-                self.call("DELETE", f"https://parametermanager.googleapis.com/v1/{version['name']}", ok_missing=True)
-            self.call("DELETE", f"{base}/{name}", ok_missing=True)
+        name = f"signed-{self.prefix}-fingerprint"
+        for version in (self.call("GET", f"{base}/{name}/versions", ok_missing=True) or {}).get("parameterVersions", []):
+            self.call("DELETE", f"https://parametermanager.googleapis.com/v1/{version['name']}", ok_missing=True)
+        self.call("DELETE", f"{base}/{name}", ok_missing=True)
+        self.call("DELETE", f"https://secretmanager.googleapis.com/v1/projects/{self.project}/secrets/signed-{self.prefix}-state", ok_missing=True)
         self.call("DELETE", f"https://iam.googleapis.com/v1/projects/{self.project}/serviceAccounts/{self.email}", ok_missing=True)
 
     def audit(self):
@@ -318,6 +326,8 @@ class Run:
         left += [f"template {t}" for t in self.templates()]
         if self.compute("GET", f"projects/{self.project}/global/instanceTemplates/{self.prefix}-direct", ok_missing=True):
             left.append("template direct")
+        if self.call("GET", f"https://secretmanager.googleapis.com/v1/projects/{self.project}/secrets/signed-{self.prefix}-state", ok_missing=True):
+            left.append(f"secret signed-{self.prefix}-state")
         # IAM reads lag a delete by a few seconds.
         for _ in range(12):
             if not self.call("GET", f"https://iam.googleapis.com/v1/projects/{self.project}/serviceAccounts/{self.email}", ok_missing=True):
