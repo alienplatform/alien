@@ -1766,6 +1766,7 @@ mod tests {
             "storage/heartbeat",
             "storage/telemetry",
             "postgres/setup",
+            "redis/setup",
             "guard/example",
             "sandbox/protect-setup-roles",
             "network/setup",

@@ -142,7 +142,11 @@ pub fn ownership_policy_for_resource_type(resource_type: &str) -> ResourceOwners
         // Durable search state, setup-owned only: there is no runtime
         // controller that could provision or replace the collection.
         "experimental/aws-opensearch" => frozen_only(),
-        "storage" | "queue" | "kv" | "vault" | "postgres" | "redis" | "ai" => user_choice(),
+        // A setup-created Memorystore instance has no readable auth token in its Terraform
+        // output, so Alien copies it into Secret Manager after setup and needs `redis/management`
+        // even while the resource is Frozen.
+        "redis" => user_choice_with_management(),
+        "storage" | "queue" | "kv" | "vault" | "postgres" | "ai" => user_choice(),
         _ => user_choice(),
     }
 }
@@ -214,6 +218,17 @@ const fn removed_resource_type() -> ResourceOwnershipPolicy {
         false,
         SetupEmission::Never,
         false,
+        false,
+    )
+}
+
+const fn user_choice_with_management() -> ResourceOwnershipPolicy {
+    ResourceOwnershipPolicy::new(
+        ResourceLifecycle::Frozen,
+        true,
+        true,
+        SetupEmission::WhenFrozen,
+        true,
         false,
     )
 }
@@ -349,6 +364,10 @@ mod tests {
     fn data_resources_can_be_frozen_or_live() {
         for resource_type in ["storage", "queue", "kv", "vault", "postgres", "redis", "ai"] {
             let policy = ownership_policy_for_resource_type(resource_type);
+            assert_eq!(
+                policy.requires_management_permissions(),
+                resource_type == "redis"
+            );
             assert_eq!(policy.default_lifecycle(), ResourceLifecycle::Frozen);
             assert!(policy.allows_lifecycle(ResourceLifecycle::Frozen));
             assert!(policy.allows_lifecycle(ResourceLifecycle::Live));

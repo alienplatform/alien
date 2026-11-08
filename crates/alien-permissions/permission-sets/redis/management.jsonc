@@ -1,0 +1,57 @@
+{
+  "id": "redis/management",
+  "description": "Lets Alien copy the generated auth token of a setup-created Memorystore instance into Secret Manager. AWS and Azure Redis need nothing beyond redis/heartbeat.",
+  "platforms": {
+    "gcp": [
+      {
+        "label": "write-auth-secret",
+        "description": "Add versions to the auth-token secret. Never reads a version.",
+        "grant": {
+          "permissions": [
+            "secretmanager.versions.add"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "StackRedisSecretWrite",
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "ResourceRedisSecretWrite",
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+            }
+          }
+        }
+      },
+      // Memorystore generates the auth token and the API is the only place to read it: the
+      // controller reads it once and adds it as a new Secret Manager version (the write grant
+      // above), never into controller state or logs. The grant is project-wide because Memorystore
+      // supports no IAM conditions. It belongs here and in redis/management because both the live
+      // create and the import of a setup-created instance run the copy; neither the workload nor the
+      // heartbeat identity gets it.
+      {
+        "label": "read-generated-auth-token",
+        "description": "Read the server-generated auth token of the Redis instance so it can be copied to Secret Manager.",
+        "grant": {
+          "permissions": [
+            "memorystore.tokenAuthUsers.list",
+            "memorystore.authTokens.list"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ]
+  }
+}
