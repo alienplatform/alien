@@ -207,7 +207,11 @@ pub async fn step(
     );
 
     if let Some(stack_state) = current.stack_state.as_mut() {
-        helpers::adopt_unkeyed_environment_hash(stack_state, &config.environment_variables)?;
+        helpers::adopt_unkeyed_hashes(
+            stack_state,
+            &config.environment_variables,
+            config.monitoring.as_ref(),
+        )?;
     }
 
     // Resolve GCP project number for IAM condition expressions

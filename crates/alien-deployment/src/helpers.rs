@@ -554,7 +554,7 @@ pub fn inject_monitoring_environment_variables(
                         .metrics_endpoint
                         .as_ref()
                         .map(|_| RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET.to_string()),
-                    hash: runtime_monitoring_secrets_hash(monitoring),
+                    hash: runtime_monitoring_secrets_hash(monitoring)?,
                 };
                 let runtime_secrets_json = serde_json::to_string(&runtime_secrets)
                     .into_alien_error()
@@ -1300,12 +1300,19 @@ fn vault_secret_names_to_remove(
     removed
 }
 
-fn runtime_monitoring_secrets_hash(monitoring: &OtlpConfig) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(monitoring.logs_auth_header.as_bytes());
+/// Fingerprint of the runtime-owned monitoring secrets, so a changed header rolls the worker.
+/// Keyed, so a copy of the worker settings cannot be used to test guesses at the headers.
+fn runtime_monitoring_secrets_hash(monitoring: &OtlpConfig) -> Result<String> {
+    let key = process_digest_key()?;
+    let mut derive = HmacSha256::new_from_slice(&key).expect("HMAC accepts any key length");
+    derive.update(b"alien-runtime-secrets\0");
+    let derived = derive.finalize().into_bytes();
+
+    let mut mac = HmacSha256::new_from_slice(&derived).expect("HMAC accepts any key length");
+    mac.update(monitoring.logs_auth_header.as_bytes());
     if monitoring.metrics_endpoint.is_some() {
-        hasher.update(b"\0metrics\0");
-        hasher.update(
+        mac.update(b"\0metrics\0");
+        mac.update(
             monitoring
                 .metrics_auth_header
                 .as_ref()
@@ -1313,7 +1320,21 @@ fn runtime_monitoring_secrets_hash(monitoring: &OtlpConfig) -> String {
                 .as_bytes(),
         );
     }
-    format!("{:x}", hasher.finalize())
+    Ok(format!("{:x}", mac.finalize().into_bytes()))
+}
+
+fn process_digest_key() -> Result<[u8; 32]> {
+    #[cfg(test)]
+    let key = SECRETS_DIGEST_KEY.get().or(Some(&[7; 32]));
+    #[cfg(not(test))]
+    let key = SECRETS_DIGEST_KEY.get();
+    key.copied().ok_or_else(|| {
+        AlienError::new(ErrorData::InternalError {
+            message: "No secrets digest key is set; the embedding process must call \
+                      set_secrets_digest_key"
+                .to_string(),
+        })
+    })
 }
 
 /// The key for digests of secret values, set once at startup.
@@ -1473,22 +1494,33 @@ pub fn environment_snapshot_hash(variables: &[EnvironmentVariable]) -> Result<St
     Ok(format!("env-{:x}", mac.finalize().into_bytes()))
 }
 
-/// Deploy 1 upgrade check: delete it, with the old hash function below, in Deploy 2.
+/// Deploy 1 upgrade check: delete it, with the old hash functions below, in Deploy 2.
 ///
-/// Before the hash was keyed it was a plain SHA-256 of the variables. A workload saved with that
-/// hash and an unchanged environment must not roll because the hash is now keyed. For each
-/// compute resource whose `ALIEN_SECRETS` carries the old hash of these variables, this
-/// rewrites it to the snapshot's keyed hash, so the resource compares equal to its desired
-/// config. A hash that matches neither is left alone: its values changed and it rolls.
-/// Returns the number of resources rewritten.
-pub(crate) fn adopt_unkeyed_environment_hash(
+/// The hashes a workload carries were plain SHA-256 values before they were keyed. A workload
+/// saved with an old hash and unchanged values must not roll because the hash is now keyed.
+/// For each compute resource whose `ALIEN_SECRETS` carries the old hash of the snapshot's
+/// variables, and each worker whose `ALIEN_RUNTIME_SECRETS` carries the old hash of the
+/// monitoring headers, this rewrites the hash to the keyed one, so the resource compares equal
+/// to its desired config. A hash that matches neither is left alone: its values changed and
+/// the resource rolls. Returns the number of hashes rewritten.
+pub(crate) fn adopt_unkeyed_hashes(
     stack_state: &mut StackState,
     snapshot: &EnvironmentVariablesSnapshot,
+    monitoring: Option<&OtlpConfig>,
 ) -> Result<usize> {
-    let unkeyed = unkeyed_environment_snapshot_hash(&snapshot.variables);
-    if unkeyed == snapshot.hash {
-        return Ok(0);
-    }
+    let environment_hashes = (
+        unkeyed_environment_snapshot_hash(&snapshot.variables),
+        snapshot.hash.clone(),
+    );
+    let runtime_hashes = monitoring
+        .map(|monitoring| {
+            Ok::<_, AlienError<ErrorData>>((
+                unkeyed_runtime_monitoring_secrets_hash(monitoring),
+                runtime_monitoring_secrets_hash(monitoring)?,
+            ))
+        })
+        .transpose()?;
+
     let mut adopted = 0;
     for resource_state in stack_state.resources.values_mut() {
         let configs = std::iter::once(&mut resource_state.config)
@@ -1497,34 +1529,58 @@ pub(crate) fn adopt_unkeyed_environment_hash(
             let Some(environment) = compute_environment_mut(config) else {
                 continue;
             };
-            let Some(stored) = environment.get_mut(ENV_ALIEN_SECRETS) else {
-                continue;
-            };
-            let Ok(mut parsed) = serde_json::from_str::<AlienSecretsConfig>(stored) else {
-                continue;
-            };
-            if parsed.hash != unkeyed {
-                continue;
+            if let Some(stored) = environment.get_mut(ENV_ALIEN_SECRETS) {
+                adopted += usize::from(adopt_hash::<AlienSecretsConfig>(
+                    stored,
+                    &environment_hashes,
+                    |config| &mut config.hash,
+                )?);
             }
-            parsed.hash = snapshot.hash.clone();
-            *stored = serde_json::to_string(&parsed).into_alien_error().context(
-                ErrorData::InternalError {
-                    message: "Failed to serialize ALIEN_SECRETS config".to_string(),
-                },
-            )?;
-            adopted += 1;
+            if let (Some(stored), Some(hashes)) = (
+                environment.get_mut(ENV_ALIEN_RUNTIME_SECRETS),
+                &runtime_hashes,
+            ) {
+                adopted += usize::from(adopt_hash::<AlienRuntimeSecretsConfig>(
+                    stored,
+                    hashes,
+                    |config| &mut config.hash,
+                )?);
+            }
         }
     }
     if adopted > 0 {
         info!(
             adopted,
-            "Rewrote the unkeyed environment hash of unchanged workloads to the keyed hash"
+            "Rewrote unkeyed workload hashes of unchanged values to keyed hashes"
         );
     }
     Ok(adopted)
 }
 
-/// The hash before it was keyed. Used only by [`adopt_unkeyed_environment_hash`].
+/// Rewrites the hash in a stored JSON setting from `old` to `keyed`, when it equals `old`.
+fn adopt_hash<T: Serialize + serde::de::DeserializeOwned>(
+    stored: &mut String,
+    (old, keyed): &(String, String),
+    hash_of: impl Fn(&mut T) -> &mut String,
+) -> Result<bool> {
+    let Ok(mut parsed) = serde_json::from_str::<T>(stored) else {
+        return Ok(false);
+    };
+    let hash = hash_of(&mut parsed);
+    if hash != old || hash == keyed {
+        return Ok(false);
+    }
+    *hash = keyed.clone();
+    *stored =
+        serde_json::to_string(&parsed)
+            .into_alien_error()
+            .context(ErrorData::InternalError {
+                message: "Failed to serialize a workload hash setting".to_string(),
+            })?;
+    Ok(true)
+}
+
+/// The environment hash before it was keyed. Used only by [`adopt_unkeyed_hashes`].
 fn unkeyed_environment_snapshot_hash(variables: &[EnvironmentVariable]) -> String {
     let mut hasher = Sha256::new();
     for variable in variables {
@@ -1534,6 +1590,23 @@ fn unkeyed_environment_snapshot_hash(variables: &[EnvironmentVariable]) -> Strin
         hasher.update(b"\n");
     }
     format!("env-{:x}", hasher.finalize())
+}
+
+/// The monitoring secrets hash before it was keyed. Used only by [`adopt_unkeyed_hashes`].
+fn unkeyed_runtime_monitoring_secrets_hash(monitoring: &OtlpConfig) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(monitoring.logs_auth_header.as_bytes());
+    if monitoring.metrics_endpoint.is_some() {
+        hasher.update(b"\0metrics\0");
+        hasher.update(
+            monitoring
+                .metrics_auth_header
+                .as_ref()
+                .unwrap_or(&monitoring.logs_auth_header)
+                .as_bytes(),
+        );
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 const HELD_VALUE_PREFIX: &str = "alien-held:";
