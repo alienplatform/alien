@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use alien_bindings::traits::Kv;
+use alien_bindings::traits::{Kv, PutCondition, PutOptions};
 use alien_error::{AlienError, Context};
 use async_trait::async_trait;
 
@@ -14,6 +14,9 @@ use crate::error::{ErrorData, Result};
 #[async_trait]
 pub trait ValueBackend: Send + Sync {
     async fn put(&self, scope: &ValueScope, value: &StoredValue) -> Result<()>;
+    /// Writes `value` only when its slot is empty, atomically. Returns whether
+    /// it was written.
+    async fn put_if_absent(&self, scope: &ValueScope, value: &StoredValue) -> Result<bool>;
     async fn get(&self, scope: &ValueScope, slot: &ValueSlot) -> Result<Option<StoredValue>>;
     /// Removing an empty slot succeeds.
     async fn delete(&self, scope: &ValueScope, slot: &ValueSlot) -> Result<()>;
@@ -66,6 +69,24 @@ impl ValueBackend for KvValueBackend {
             .await
             .context(Self::kv_error("write a value"))?;
         Ok(())
+    }
+
+    async fn put_if_absent(&self, scope: &ValueScope, value: &StoredValue) -> Result<bool> {
+        let sealed = self
+            .cipher
+            .seal(scope, &value.slot, &value.encode())
+            .await?;
+        self.kv
+            .put(
+                &Self::key(scope, &value.slot),
+                sealed,
+                Some(PutOptions {
+                    ttl: None,
+                    condition: PutCondition::Absent,
+                }),
+            )
+            .await
+            .context(Self::kv_error("write a value"))
     }
 
     async fn get(&self, scope: &ValueScope, slot: &ValueSlot) -> Result<Option<StoredValue>> {

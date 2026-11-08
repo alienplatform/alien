@@ -15,6 +15,7 @@ mod cipher;
 mod container_env;
 mod digest_key;
 mod durability;
+mod generated;
 mod hydrate;
 mod limiter;
 mod standalone;
@@ -27,6 +28,7 @@ pub use cipher::{EnvelopeCipher, ValueCipher, DATA_KEY_CACHE_TTL};
 pub use container_env::load_container_env;
 pub use digest_key::{load_or_create_digest_key, DIGEST_KEY_NAME};
 pub use durability::state_dir_is_ephemeral;
+pub use generated::{with_generated_inputs, GeneratedInputs};
 pub use hydrate::hydrate_held_values;
 pub use limiter::VerifyLimiter;
 pub use standalone::StandaloneValueAccess;
@@ -94,6 +96,32 @@ impl ValueStore {
         };
         self.backend.put(scope, &stored).await?;
         stored.meta(scope)
+    }
+
+    /// Stores `value` only when the slot is empty. Returns the stored
+    /// metadata when this call wrote it, `None` when the slot already held a
+    /// value, which is left untouched.
+    pub async fn put_if_absent(
+        &self,
+        scope: &ValueScope,
+        slot: &ValueSlot,
+        kind: ValueKind,
+        value: String,
+    ) -> Result<Option<ValueMeta>> {
+        if self.refuse_writes {
+            return Err(durability::ephemeral_state_error());
+        }
+        check_size(slot, &value)?;
+        let stored = StoredValue {
+            slot: slot.clone(),
+            kind,
+            value,
+            updated_at: now_in_stored_precision(),
+        };
+        if !self.backend.put_if_absent(scope, &stored).await? {
+            return Ok(None);
+        }
+        stored.meta(scope).map(Some)
     }
 
     /// Removes the slot. Removing an empty slot is not an error.

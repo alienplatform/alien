@@ -426,6 +426,7 @@ pub struct ReconcileInput {
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
     operations_config: Option<alien_core::OperationsConfig>,
     applied_configuration_revision: Option<String>,
+    generated_slots: Vec<crate::values::ValueMeta>,
 }
 
 impl ReconcileInput {
@@ -437,7 +438,18 @@ impl ReconcileInput {
             dynamic_containers: None,
             operations_config: None,
             applied_configuration_revision: None,
+            generated_slots: Vec::new(),
         }
+    }
+
+    /// Secret inputs the manager generated for the deployment, as metadata
+    /// only: the slot, its kind, a keyed digest and when it was written. The
+    /// values stay in the manager's value store. Every step lists all of the
+    /// deployment's generated slots, so a report that was lost is repeated.
+    /// An embedder records a slot it does not know yet and leaves one it
+    /// already tracks alone: a developer may have set the value themselves.
+    pub fn generated_slots(&self) -> &[crate::values::ValueMeta] {
+        &self.generated_slots
     }
 
     /// Approved configuration revision confirmed Running by an offline site.
@@ -475,9 +487,16 @@ pub struct ReconcileInputBuilder {
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
     operations_config: Option<alien_core::OperationsConfig>,
     applied_configuration_revision: Option<String>,
+    generated_slots: Vec<crate::values::ValueMeta>,
 }
 
 impl ReconcileInputBuilder {
+    /// Attach the metadata of the deployment's generated secret inputs.
+    pub fn generated_slots(mut self, slots: Vec<crate::values::ValueMeta>) -> Self {
+        self.generated_slots = slots;
+        self
+    }
+
     /// Attach the approved configuration revision confirmed by the site.
     pub fn applied_configuration_revision(mut self, revision: String) -> Self {
         self.applied_configuration_revision = Some(revision);
@@ -515,6 +534,7 @@ impl ReconcileInputBuilder {
             dynamic_containers: self.dynamic_containers,
             operations_config: self.operations_config,
             applied_configuration_revision: self.applied_configuration_revision,
+            generated_slots: self.generated_slots,
         }
     }
 }
