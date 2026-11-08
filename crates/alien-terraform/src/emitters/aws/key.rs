@@ -241,14 +241,35 @@ impl TfEmitter for AwsKeyEmitter {
 fn key_policy(ctx: &EmitContext<'_>) -> Expression {
     let management_role_arn = management_role_label(ctx)
         .map(|label| serde_json::Value::String(format!("${{aws_iam_role.{label}.arn}}")));
-    jsonencode(json_value_to_expression(aws_key_policy(
+    jsonencode(json_value_to_expression(sorted_keys(aws_key_policy(
         serde_json::Value::String(
             "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root"
                 .to_string(),
         ),
         management_role_arn,
         key_has_native_service_use(ctx.stack, ctx.resource_id),
-    )))
+    ))))
+}
+
+/// Orders object keys so the rendered policy doesn't depend on whether
+/// `serde_json` keeps insertion order in this build.
+fn sorted_keys(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut entries = map.into_iter().collect::<Vec<_>>();
+            entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+            serde_json::Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, sorted_keys(value)))
+                    .collect(),
+            )
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(sorted_keys).collect())
+        }
+        other => other,
+    }
 }
 
 fn management_role_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
