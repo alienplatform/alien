@@ -1417,7 +1417,6 @@ pub(crate) async fn create_deployment_with_answers(
             }
         }
     }
-    let mut restored = false;
     let response = loop {
         match client
             .create_deployment()
@@ -1441,24 +1440,18 @@ pub(crate) async fn create_deployment_with_answers(
                     withheld.insert(input, value.clone());
                 }
             }
-            Err(error)
-                if !restored
-                    && error.http_status_code == Some(400)
-                    && withheld
-                        .keys()
-                        .any(|id| error.message.contains(id.as_str())) =>
-            {
-                restored = true;
-                for (id, value) in std::mem::take(&mut withheld) {
-                    if let Ok(value) = serde_json::from_value(value) {
-                        request.input_values.insert(id, value);
-                    }
-                }
-            }
             Err(error) => {
-                return Err(error).context(failed(
-                    "Failed to create deployment with deployment group token",
-                ));
+                let Some(input) = value_access::missing_required_input(&error, &withheld) else {
+                    return Err(error).context(failed(
+                        "Failed to create deployment with deployment group token",
+                    ));
+                };
+                if let Some(value) = withheld
+                    .remove(&input)
+                    .and_then(|value| serde_json::from_value(value).ok())
+                {
+                    request.input_values.insert(input, value);
+                }
             }
         }
     };

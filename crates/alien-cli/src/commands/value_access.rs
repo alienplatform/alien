@@ -104,6 +104,7 @@ fn interpret_reply(status: u16, body: &str) -> Result<Reply> {
 /// The platform refuses values it must not hold with this code, before it
 /// writes anything. The context names the input when an input caused it.
 const HELD_VALUE_REFUSAL_CODE: &str = "ALIEN_CLI_UPGRADE_REQUIRED";
+const INVALID_STACK_INPUT_CODE: &str = "INVALID_STACK_INPUT_VALUE";
 
 /// True when a create call was refused because the deployment's manager stores
 /// the values it carried and the platform must not hold them.
@@ -120,6 +121,21 @@ pub(crate) fn refused_input(error: &AlienError<GenericError>) -> Option<String> 
         .and_then(|context| context.get("input"))
         .and_then(Value::as_str)
         .map(str::to_string)
+}
+
+/// The withheld input an older platform refuses a create for, because it
+/// stores secret answers itself and wants this one in the request. Only its
+/// own error for a missing required input counts: any other refusal that
+/// happens to mention a name must not make the CLI send a secret.
+pub(crate) fn missing_required_input(
+    error: &AlienError<GenericError>,
+    withheld: &serde_json::Map<String, Value>,
+) -> Option<String> {
+    if error.http_status_code != Some(400) || error.code != INVALID_STACK_INPUT_CODE {
+        return None;
+    }
+    let input = error.context.as_ref()?.get("inputId")?.as_str()?;
+    withheld.contains_key(input).then(|| input.to_string())
 }
 
 /// The command that stores `variables` on a deployment that was created

@@ -190,6 +190,7 @@ struct FakePlatformState {
     inputs: Value,
     created_id: String,
     create_requires_input: Option<String>,
+    create_refusal_code: &'static str,
     environment_names: Arc<Mutex<Vec<String>>>,
     requests: Arc<Mutex<Vec<(String, String, String)>>>,
 }
@@ -306,8 +307,9 @@ fn create_deployment(platform: &FakePlatformState, body: &str) -> Response {
             return (
                 StatusCode::BAD_REQUEST,
                 axum::Json(json!({
-                    "code": "INPUT_REQUIRED",
-                    "message": format!("Input '{input}' is required."),
+                    "code": platform.create_refusal_code,
+                    "message": format!("Invalid stack input '{input}': is required"),
+                    "context": { "inputId": input, "reason": "is required" },
                     "retryable": false,
                     "internal": false,
                 })),
@@ -357,6 +359,25 @@ async fn start_platform_creating(
     created_id: &str,
     create_requires_input: Option<&str>,
 ) -> FakePlatform {
+    start_platform_refusing_create(
+        access,
+        inputs,
+        created_id,
+        create_requires_input,
+        "INVALID_STACK_INPUT_VALUE",
+    )
+    .await
+}
+
+/// Like `start_platform_creating`, but the refusal for the missing input
+/// carries `refusal_code` instead of the platform's missing-input code.
+async fn start_platform_refusing_create(
+    access: Access,
+    inputs: Value,
+    created_id: &str,
+    create_requires_input: Option<&str>,
+    refusal_code: &'static str,
+) -> FakePlatform {
     let requests = Arc::default();
     let environment_names = Arc::<Mutex<Vec<String>>>::default();
     let app = Router::new()
@@ -366,6 +387,7 @@ async fn start_platform_creating(
             inputs,
             created_id: created_id.to_string(),
             create_requires_input: create_requires_input.map(str::to_string),
+            create_refusal_code: refusal_code,
             environment_names: Arc::clone(&environment_names),
             requests: Arc::clone(&requests),
         });
@@ -1071,6 +1093,49 @@ async fn a_platform_that_needs_the_secret_answer_in_the_create_gets_it_there() {
             .iter()
             .all(|(_, path, _)| !path.ends_with("value-access")),
         "nothing was withheld, so there is nothing to store"
+    );
+}
+
+#[tokio::test]
+async fn a_refusal_that_only_names_the_secret_input_does_not_send_the_answer() {
+    let inputs = json!({
+        "inputs": [{"id": "api_key", "kind": "secret", "required": true}],
+        "providedInputIds": [],
+        "values": {},
+    });
+    let platform = start_platform_refusing_create(
+        Access::NoRoute,
+        inputs,
+        "dep_0c0ffee0c0ffee0c0ffee0c0ffee",
+        Some("api_key"),
+        "VALIDATION_ERROR",
+    )
+    .await;
+    let (answers, secrets) = secret_answers();
+    let mut request = deploy_request(&answers);
+
+    create_deployment_with_answers(
+        &platform.client,
+        WORKSPACE,
+        &mut request,
+        &answers,
+        &secrets,
+    )
+    .await
+    .expect_err("a refusal that is not the missing-input error fails the create");
+
+    let requests = platform.requests();
+    assert!(
+        requests.iter().all(|(_, _, body)| !body.contains(CANARY)),
+        "the secret answer was sent to the platform: {requests:?}"
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|(method, path, _)| method == "POST" && path == "/v1/deployments")
+            .count(),
+        1,
+        "{requests:?}"
     );
 }
 
