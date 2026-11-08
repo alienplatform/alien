@@ -274,12 +274,9 @@ fn emit_remote_access(ctx: &EmitContext<'_>, label: &str, fragment: &mut TfFragm
         })?;
         principals.push((access_label, "access".to_string()));
     }
-    for (index, account_id) in cryptography_service_accounts(ctx.stack, ctx.resource_id)
-        .into_iter()
-        .enumerate()
-    {
+    for account_id in cryptography_service_accounts(ctx.stack, ctx.resource_id) {
         if let Some(account_label) = ctx.name_for(&account_id) {
-            principals.push((account_label, format!("runtime_{index}")));
+            principals.push((account_label, format!("runtime_{account_label}")));
         }
     }
     if principals.is_empty() {

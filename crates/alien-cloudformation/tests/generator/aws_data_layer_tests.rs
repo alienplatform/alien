@@ -125,6 +125,67 @@ fn instance_secrets_stack() -> Stack {
     stack
 }
 
+fn granted_runtime_stack(accounts: &[&str]) -> Stack {
+    let mut permissions = alien_core::PermissionsConfig::new();
+    let mut stack = Stack::new("instance-secrets".to_string()).add(
+        Key::new("secrets".to_string()).build(),
+        ResourceLifecycle::Frozen,
+    );
+    for account in accounts {
+        permissions = permissions.with_profile(
+            account.trim_end_matches("-sa"),
+            PermissionProfile::new().resource("secrets", ["key/remote-cryptography"]),
+        );
+        stack = stack.add(
+            ServiceAccount::new(account.to_string()).build(),
+            ResourceLifecycle::Frozen,
+        );
+    }
+    stack.permissions(permissions).build()
+}
+
+/// A grant is named after its service account, so adding another granted account before it
+/// must not rename or replace its policy.
+#[test]
+fn aws_runtime_key_grant_names_do_not_move_when_an_earlier_account_is_added() {
+    let policies = |accounts: &[&str]| {
+        let (template, _yaml) = render_built_ins_template(
+            &granted_runtime_stack(accounts),
+            StackSettings::default(),
+            RegistrationMode::OutputsFallback,
+            alien_cloudformation::CloudFormationTarget::Aws,
+            "aws",
+            "aws runtime key grant names",
+        );
+        template
+            .resources
+            .iter()
+            .filter(|(_, resource)| resource.resource_type == "AWS::IAM::Policy")
+            .filter(|(_, resource)| {
+                serde_json::to_string(&resource.properties["PolicyDocument"])
+                    .unwrap()
+                    .contains("kms:Decrypt")
+            })
+            .map(|(logical_id, resource)| {
+                (
+                    serde_json::to_string(&resource.properties["Roles"]).unwrap(),
+                    (
+                        logical_id.clone(),
+                        serde_json::to_string(&resource.properties["PolicyName"]).unwrap(),
+                    ),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let before = policies(&["manager-sa", "worker-sa"]);
+    let after = policies(&["alpha-sa", "manager-sa", "worker-sa"]);
+    assert_eq!(before.len(), 2, "{before:?}");
+    assert_eq!(after.len(), 3, "{after:?}");
+    for (role, policy) in &before {
+        assert_eq!(after.get(role), Some(policy), "{role} was renamed");
+    }
+}
+
 #[test]
 fn aws_runtime_only_key_denies_every_principal_but_its_runtime_roles() {
     let (template, yaml) = render_built_ins_template(

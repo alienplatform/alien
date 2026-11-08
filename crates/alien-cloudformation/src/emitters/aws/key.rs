@@ -235,18 +235,14 @@ fn remote_access_policy(ctx: &EmitContext<'_>, key_id: &str) -> Result<CfResourc
 fn runtime_access_policies(ctx: &EmitContext<'_>, key_id: &str) -> Result<Vec<CfResource>> {
     cryptography_service_accounts(ctx.stack, ctx.resource_id)
         .into_iter()
-        .filter_map(|account_id| ctx.name_for(&account_id).map(|name| format!("{name}Role")))
-        .enumerate()
-        .map(|(index, role_id)| {
+        .filter_map(|account_id| ctx.name_for(&account_id).map(|name| name.to_string()))
+        .map(|name| {
             key_access_policy(
                 ctx,
                 key_id,
-                format!("{key_id}{role_id}CryptographyPolicy"),
-                format!(
-                    "${{AWS::StackName}}-{}-key-runtime-{index}",
-                    ctx.resource_id
-                ),
-                role_id,
+                format!("{key_id}{name}RoleCryptographyPolicy"),
+                format!("${{AWS::StackName}}-{}-key-runtime-{name}", ctx.resource_id),
+                format!("{name}Role"),
             )
         })
         .collect()
