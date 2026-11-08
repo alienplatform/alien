@@ -1679,15 +1679,20 @@ mod tests {
         assert!(state.error.is_none());
     }
 
-    /// After an Operator moves from a deployment token to an enrollment code,
-    /// the token keeps working until the first rollout the enrolled Operator
-    /// finishes. Then every workload uses capability files and it is revoked.
+    /// An Operator on a deployment token (a self-updated old install) asks
+    /// for an enrollment code with that token and enrolls with it. The token
+    /// keeps working until the first rollout the enrolled Operator finishes.
+    /// Then every workload uses capability files and it is revoked, and it
+    /// can no longer get a code.
     #[tokio::test]
     async fn the_deployment_token_is_revoked_after_the_first_enrolled_rollout() {
+        use crate::auth::identity_exchange::{IdentityEnrollmentRequest, RuntimeIdentityVerifier};
         use crate::auth::runtime_capability::{
             RuntimeAuthValidator, RuntimeCredentials, RuntimeGrant, RuntimePurpose,
         };
+        use crate::auth::standalone_identity::StandaloneRuntimeIdentity;
         use crate::providers::token_db_validator::TokenDbValidator;
+        use crate::stores::sqlite::SqliteRuntimeIdentityStore;
         use crate::traits::token_store::{CreateTokenParams, TokenStore, TokenType};
 
         let temp = tempfile::tempdir().expect("test directory");
@@ -1731,11 +1736,21 @@ mod tests {
                 target_dynamic_containers: None,
             })
         });
+        let store: Arc<dyn crate::traits::DeploymentStore> = Arc::new(store);
+        let resolver = Arc::new(LocalCredentialResolver::new(temp.path().to_path_buf()));
+        let verifier: Arc<dyn RuntimeIdentityVerifier> = Arc::new(
+            StandaloneRuntimeIdentity::new(
+                Arc::new(SqliteRuntimeIdentityStore::new(db.clone())),
+                store.clone(),
+                resolver.clone(),
+            )
+            .unwrap(),
+        );
         let mut state = test_app_state(
             temp.path(),
-            Arc::new(store),
+            store,
             Arc::new(SqliteReleaseStore::new(db.clone())),
-            Arc::new(LocalCredentialResolver::new(temp.path().to_path_buf())),
+            resolver,
             db,
         )
         .await;
@@ -1746,6 +1761,46 @@ mod tests {
             credentials.clone(),
             Arc::new(TokenDbValidator::new(tokens.clone())),
         ));
+
+        let enrollment_code = |bearer: &'static str| {
+            let router =
+                crate::auth::identity_exchange::router(credentials.clone(), verifier.clone())
+                    .with_state(state.clone());
+            async move {
+                let response = router
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri("/v1/deployments/dep_test/enrollment-code")
+                            .header("authorization", format!("Bearer {bearer}"))
+                            .body(Body::empty())
+                            .expect("request"),
+                    )
+                    .await
+                    .expect("enrollment code response");
+                let status = response.status();
+                let body = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+                (
+                    status,
+                    serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null),
+                )
+            }
+        };
+
+        // The old token gets a one-use code for its own deployment, and the
+        // code enrolls the Operator's key for that deployment.
+        let (status, issued) = enrollment_code(old_token).await;
+        assert_eq!(status, StatusCode::OK, "{issued}");
+        assert_eq!(issued["deploymentId"], "dep_test");
+        assert_eq!(issued["managerAudience"], "https://manager.test");
+        let enrolled = verifier
+            .enroll(&IdentityEnrollmentRequest {
+                code: issued["code"].as_str().expect("code").to_owned(),
+                initial_key_hash: crate::ids::sha256_hash("ax_day_v1_operator"),
+            })
+            .await
+            .expect("the code enrolls");
+        assert_eq!(enrolled.deployment_id, "dep_test");
         let operator = credentials
             .issue(
                 RuntimeGrant {
@@ -1807,16 +1862,15 @@ mod tests {
         assert_eq!(sync(operator.clone()).await, StatusCode::OK);
         assert_eq!(sync(old_token.into()).await, StatusCode::UNAUTHORIZED);
         assert_eq!(sync(operator).await, StatusCode::OK);
+        assert_eq!(enrollment_code(old_token).await.0, StatusCode::UNAUTHORIZED);
     }
 
     /// An Operator that cleared its config in token mode and then enrolled
     /// asks for it. The manager sends the running release again, and only then.
     #[tokio::test]
     async fn an_operator_without_its_installed_config_gets_the_running_release() {
-        let record = pull_record_in_cluster(
-            "running",
-            alien_core::KubernetesClusterOwnership::Existing,
-        );
+        let record =
+            pull_record_in_cluster("running", alien_core::KubernetesClusterOwnership::Existing);
         let (response, _) = sync_operator_without_claim_reporting(record.clone(), false).await;
         assert!(response.get("target").is_none(), "{response}");
 

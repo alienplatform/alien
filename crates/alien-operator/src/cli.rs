@@ -534,6 +534,15 @@ async fn run_operator_cli(
         })
         .transpose()?;
 
+    if args.identity_enrollment_code_file.is_none() && args.manager_audience.is_none() {
+        enroll_with_deployment_token(
+            &db,
+            effective_sync_url.as_deref(),
+            effective_sync_token.as_deref(),
+            args.sync_token_revision,
+        )
+        .await?;
+    }
     let stored_identity = db.read_daily_identity().await?;
     let sync_config = if args.identity_enrollment_code_file.is_some()
         || stored_identity.is_some()
@@ -878,6 +887,55 @@ async fn run_operator_cli(
 
 // This only excludes setup/admin credentials before initialize can create an identity.
 // Both manager token formats still require authenticated exact-deployment verification.
+/// An Operator installed with a deployment token (an older chart, often
+/// moved to this image by self-update) enrolls with that token once and then
+/// runs on its daily key. Without a code from the manager it keeps the token.
+async fn enroll_with_deployment_token(
+    db: &std::sync::Arc<crate::db::OperatorDb>,
+    sync_url: Option<&str>,
+    configured_token: Option<&str>,
+    sync_token_revision: u64,
+) -> Result<()> {
+    if db
+        .read_daily_identity()
+        .await?
+        .is_some_and(|identity| !identity.deployment_id.is_empty())
+    {
+        return Ok(());
+    }
+    let (Some(sync_url), Some(deployment_id)) = (sync_url, db.get_deployment_id().await?) else {
+        return Ok(());
+    };
+    // A pending token rotation runs first, in token mode.
+    if sync_token_revision > db.get_sync_token_revision().await? {
+        return Ok(());
+    }
+    let token = match db.get_sync_token().await? {
+        Some(stored) => stored,
+        None => match configured_token.filter(|token| has_deployment_token_prefix(token)) {
+            Some(configured) => configured.to_string(),
+            None => return Ok(()),
+        },
+    };
+    let identity = crate::daily_identity::DailyIdentity::new(db.clone())?;
+    match identity
+        .enroll_with_deployment_token(sync_url, &deployment_id, &token)
+        .await
+    {
+        Ok(true) => {
+            info!("   Enrolled with the deployment token; using the daily key");
+            return Ok(());
+        }
+        Ok(false) => info!("   Manager issued no enrollment code; using the deployment token"),
+        Err(error) => {
+            warn!(error = %error, "Enrollment with the deployment token failed; using the token")
+        }
+    }
+    // Drop a key left by an earlier attempt that stopped halfway, so the
+    // Operator starts in token mode.
+    db.clear_unenrolled_daily_identity().await
+}
+
 fn has_deployment_token_prefix(token: &str) -> bool {
     token.starts_with("ax_dep_") || token.starts_with("ax_deploy_")
 }

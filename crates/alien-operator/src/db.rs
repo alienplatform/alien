@@ -181,6 +181,21 @@ impl OperatorDb {
         write_json(&conn, "daily_identity", state).await
     }
 
+    /// Drop a saved key that never finished enrolling. An enrolled identity
+    /// is kept.
+    pub(crate) async fn clear_unenrolled_daily_identity(&self) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "DELETE FROM state WHERE key = 'daily_identity'
+             AND COALESCE(json_extract(value, '$.deploymentId'), '') = ''",
+            (),
+        )
+        .await
+        .into_alien_error()
+        .context(database_error("Clearing an unfinished enrollment"))?;
+        Ok(())
+    }
+
     /// Repair only the canonical ID for an already enrolled identity. A saved
     /// key may have advanced since enrollment was read; never write it back.
     pub(crate) async fn repair_enrolled_deployment_id(

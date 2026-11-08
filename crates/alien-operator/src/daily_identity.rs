@@ -264,6 +264,76 @@ impl DailyIdentity {
         Ok((deployment_id, token))
     }
 
+    /// Enroll an Operator that runs with a deployment token, once. It asks
+    /// the manager for a one-use code with that token and enrolls with it.
+    /// From then on it uses its daily key, and the manager revokes the token
+    /// after the first rollout this Operator finishes.
+    ///
+    /// Returns `false` and keeps the token when the manager issues no code:
+    /// an older manager, or one that refuses the token. A failed enrollment
+    /// leaves no half-made identity behind, so the token keeps working.
+    pub(crate) async fn enroll_with_deployment_token(
+        &self,
+        manager_url: &str,
+        deployment_id: &str,
+        token: &str,
+    ) -> Result<bool> {
+        let mut endpoint =
+            reqwest::Url::parse(manager_url).map_err(|_| failed("Invalid manager URL"))?;
+        endpoint
+            .path_segments_mut()
+            .map_err(|_| failed("Invalid manager URL"))?
+            .pop_if_empty()
+            .extend(["v1", "deployments", deployment_id, "enrollment-code"]);
+        let response = self
+            .client
+            .post(endpoint)
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|_| failed("Enrollment code request transport failed"))?;
+        if matches!(
+            response.status(),
+            reqwest::StatusCode::NOT_FOUND
+                | reqwest::StatusCode::UNAUTHORIZED
+                | reqwest::StatusCode::FORBIDDEN
+        ) {
+            return Ok(false);
+        }
+        if !response.status().is_success() {
+            return Err(failed(&format!(
+                "Enrollment code request failed with {}",
+                response.status()
+            )));
+        }
+        let issued: Value = response
+            .json()
+            .await
+            .map_err(|_| failed("Invalid enrollment code response"))?;
+        let field = |name: &str| {
+            issued
+                .get(name)
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .ok_or_else(|| failed("Invalid enrollment code response"))
+        };
+        let (code, audience) = (field("code")?, field("managerAudience")?);
+        let enrolled = self
+            .enroll(EnrollmentRequest {
+                manager_url,
+                audience: &audience,
+                code: &code,
+                deployment_id: Some(deployment_id),
+            })
+            .await;
+        if let Err(error) = enrolled {
+            self.db.clear_unenrolled_daily_identity().await?;
+            return Err(error);
+        }
+        Ok(true)
+    }
+
     async fn sync_token(
         self: Arc<Self>,
         request: &EnrollmentRequest<'_>,
@@ -1049,6 +1119,146 @@ mod persistence_tests {
                 enrolls
             );
         }
+    }
+
+    /// Issues a code only for the deployment's own token, like the
+    /// manager's `/v1/deployments/{id}/enrollment-code`.
+    async fn code_for_token(
+        axum::extract::State(manager): axum::extract::State<RecoveryManager>,
+        axum::extract::Path(deployment): axum::extract::Path<String>,
+        headers: axum::http::HeaderMap,
+    ) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        if deployment != "deployment-one"
+            || headers.get("authorization").and_then(|v| v.to_str().ok())
+                != Some("Bearer ax_deploy_old")
+        {
+            return axum::http::StatusCode::UNAUTHORIZED.into_response();
+        }
+        manager
+            .codes
+            .lock()
+            .await
+            .insert("ax_enroll_from_token".to_owned(), None);
+        axum::Json(json!({
+            "deploymentId": "deployment-one",
+            "code": "ax_enroll_from_token",
+            "expiresAt": Utc::now() + chrono::Duration::hours(1),
+            "managerAudience": "manager-one",
+        }))
+        .into_response()
+    }
+
+    /// An Operator moved to this image by self-update still has only its
+    /// deployment token. It enrolls with it once and then runs on its key.
+    /// A refused token or an older manager leaves it on the token, with no
+    /// half-made identity that would stop it from starting.
+    #[tokio::test]
+    async fn a_token_operator_enrolls_with_its_deployment_token_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let manager = RecoveryManager {
+            current: Arc::new(Mutex::new(String::new())),
+            codes: Arc::new(Mutex::new(Default::default())),
+            enrolls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            rotate_unavailable: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+        let app = axum::Router::new()
+            .route(
+                "/v1/deployments/{id}/enrollment-code",
+                axum::routing::post(code_for_token),
+            )
+            .route("/v1/identity/enroll", axum::routing::post(recovery_enroll))
+            .route(
+                "/v1/identity/exchange",
+                axum::routing::post(recovery_exchange),
+            )
+            .with_state(manager.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let db = Arc::new(
+            OperatorDb::new(directory.path().to_str().unwrap(), &"a".repeat(64))
+                .await
+                .unwrap(),
+        );
+        db.set_deployment_id("deployment-one").await.unwrap();
+        let identity = Arc::new(DailyIdentity::new(db.clone()).unwrap());
+
+        // A token the manager refuses: no code, no saved identity.
+        assert!(!identity
+            .enroll_with_deployment_token(&url, "deployment-one", "ax_deploy_other")
+            .await
+            .unwrap());
+        assert!(db.read_daily_identity().await.unwrap().is_none());
+
+        // A manager without the route (an older one) issues no code either.
+        let missing = format!("{url}/older");
+        assert!(!identity
+            .enroll_with_deployment_token(&missing, "deployment-one", "ax_deploy_old")
+            .await
+            .unwrap());
+        assert!(db.read_daily_identity().await.unwrap().is_none());
+
+        // The deployment's own token gets a code and enrolls.
+        assert!(identity
+            .enroll_with_deployment_token(&url, "deployment-one", "ax_deploy_old")
+            .await
+            .unwrap());
+        let saved = db.read_daily_identity().await.unwrap().expect("enrolled");
+        assert_eq!(saved.deployment_id, "deployment-one");
+        assert_eq!(saved.audience, "manager-one");
+        assert_eq!(key_hash(&saved.current), *manager.current.lock().await);
+        assert_eq!(manager.enrolls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // The next start takes the enrolled path with no code and gets its
+        // sync credential from the daily key.
+        let (deployment, token) = identity
+            .clone()
+            .connect(EnrollmentRequest {
+                manager_url: &url,
+                audience: "manager-one",
+                code: "",
+                deployment_id: Some("deployment-one"),
+            })
+            .await
+            .unwrap();
+        assert_eq!(deployment, "deployment-one");
+        assert_eq!(token, "ax_cap_v1_recovered");
+        assert_eq!(manager.enrolls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// A code that the enroll step refuses leaves no saved key, so the
+    /// Operator still starts in token mode.
+    #[tokio::test]
+    async fn a_refused_token_enrollment_leaves_no_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let app = axum::Router::new()
+            .route(
+                "/v1/deployments/{id}/enrollment-code",
+                axum::routing::post(|| async {
+                    axum::Json(json!({"code": "ax_enroll_spent", "managerAudience": "manager-one"}))
+                }),
+            )
+            .route(
+                "/v1/identity/enroll",
+                axum::routing::post(|| async { axum::http::StatusCode::UNAUTHORIZED }),
+            );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let db = Arc::new(
+            OperatorDb::new(directory.path().to_str().unwrap(), &"a".repeat(64))
+                .await
+                .unwrap(),
+        );
+        db.set_deployment_id("deployment-one").await.unwrap();
+        let identity = DailyIdentity::new(db.clone()).unwrap();
+
+        identity
+            .enroll_with_deployment_token(&url, "deployment-one", "ax_deploy_old")
+            .await
+            .expect_err("the enroll step is refused");
+        assert!(db.read_daily_identity().await.unwrap().is_none());
     }
 
     /// The manager was down for two days, so the key expired. Its key is still
