@@ -2536,6 +2536,119 @@ async fn a_state_write_back_without_the_answer_map_does_not_erase_the_record_and
     );
 }
 
+/// The CLI saves a manual setup run's prepared state through the reconcile route. That report
+/// may turn a recorded decline into a yes; a report from the deployment itself, or one that is
+/// not a setup run, may not.
+#[tokio::test]
+async fn only_a_setup_run_report_can_turn_a_recorded_decline_into_a_yes() {
+    let fixture = make_fixture(Some(stack_with_gated_storage("assets", "extras"))).await;
+    let declined = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &declined).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+    let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
+    let deployment_token = parsed
+        .deployment_token
+        .expect("imported deployments must return a deployment token");
+    let read_answer = || async {
+        fixture
+            .deployment_store
+            .get_deployment(
+                &alien_manager::auth::Subject::system(),
+                &parsed.deployment_id,
+            )
+            .await
+            .unwrap()
+            .expect("deployment must persist")
+            .runtime_metadata
+            .expect("runtime_metadata must be persisted")
+            .persisted_gate_answers
+            .get("extrasEnabled")
+            .copied()
+    };
+    assert_eq!(read_answer().await, Some(false));
+    let persisted = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &parsed.deployment_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+    let report = |status: DeploymentStatus, authority: alien_core::InitialSetupAuthority| {
+        let mut metadata = persisted.runtime_metadata.clone().unwrap();
+        metadata
+            .persisted_gate_answers
+            .insert("extrasEnabled".to_string(), true);
+        metadata.initial_setup_authority = authority;
+        serde_json::json!({
+            "deploymentId": persisted.id,
+            "session": "setup-run",
+            "state": serde_json::to_value(DeploymentState {
+                status,
+                platform: persisted.platform,
+                current_release: Some(ReleaseInfo {
+                    release_id: fixture.release_id.clone(),
+                    version: None,
+                    description: None,
+                    stack: stack_with_gated_storage("assets", "extras"),
+                }),
+                target_release: None,
+                stack_state: persisted.stack_state.clone(),
+                error: None,
+                environment_info: persisted.environment_info.clone(),
+                runtime_metadata: Some(metadata),
+                retry_requested: false,
+                protocol_version: persisted.deployment_protocol_version,
+            })
+            .unwrap(),
+        })
+    };
+
+    // The deployment's own token cannot, even with setup-looking metadata.
+    let (status, json) = post_sync(
+        &fixture,
+        &deployment_token,
+        "/v1/sync/reconcile",
+        report(
+            DeploymentStatus::InitialSetup,
+            alien_core::InitialSetupAuthority::DirectSetup,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {json:#}");
+    assert_eq!(read_answer().await, Some(false));
+
+    // A group token reporting an ordinary running state cannot either.
+    let (status, json) = post_sync(
+        &fixture,
+        &fixture.dg_token,
+        "/v1/sync/reconcile",
+        report(
+            DeploymentStatus::Running,
+            alien_core::InitialSetupAuthority::DirectSetup,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {json:#}");
+    assert_eq!(read_answer().await, Some(false));
+
+    // A setup run handing its prepared state to the manager can.
+    let (status, json) = post_sync(
+        &fixture,
+        &fixture.dg_token,
+        "/v1/sync/reconcile",
+        report(
+            DeploymentStatus::InitialSetup,
+            alien_core::InitialSetupAuthority::DirectSetup,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {json:#}");
+    assert_eq!(read_answer().await, Some(true));
+}
+
 fn stack_with_storage_and_generated_secret(resource_id: &str) -> Stack {
     Stack::new("imported".to_string())
         .add(
