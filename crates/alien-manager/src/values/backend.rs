@@ -18,6 +18,13 @@ pub trait ValueBackend: Send + Sync {
     /// Removing an empty slot succeeds.
     async fn delete(&self, scope: &ValueScope, slot: &ValueSlot) -> Result<()>;
     async fn list(&self, scope: &ValueScope) -> Result<Vec<StoredValue>>;
+    /// The scope's values whose slot starts with `slot_prefix`. A backend
+    /// that can narrow its read overrides this.
+    async fn list_prefix(&self, scope: &ValueScope, slot_prefix: &str) -> Result<Vec<StoredValue>> {
+        let mut values = self.list(scope).await?;
+        values.retain(|v| v.slot.as_str().starts_with(slot_prefix));
+        Ok(values)
+    }
 }
 
 /// Values in the manager's key-value binding, under `val:{scope}:{slot}`.
@@ -83,7 +90,12 @@ impl ValueBackend for KvValueBackend {
     }
 
     async fn list(&self, scope: &ValueScope) -> Result<Vec<StoredValue>> {
-        let prefix = format!("val:{scope}:");
+        self.list_prefix(scope, "").await
+    }
+
+    async fn list_prefix(&self, scope: &ValueScope, slot_prefix: &str) -> Result<Vec<StoredValue>> {
+        let scope_prefix = format!("val:{scope}:");
+        let prefix = format!("{scope_prefix}{slot_prefix}");
         let mut found = BTreeMap::new();
         let mut cursor = None;
         loop {
@@ -94,7 +106,11 @@ impl ValueBackend for KvValueBackend {
                 .context(Self::kv_error("list values"))?;
             for entry in page.items {
                 // Scans may repeat keys across pages.
-                let Some(slot) = entry.key.strip_prefix(&prefix) else {
+                let Some(slot) = entry
+                    .key
+                    .strip_prefix(&prefix)
+                    .map(|_| &entry.key[scope_prefix.len()..])
+                else {
                     return Err(AlienError::new(ErrorData::InternalError {
                         message: format!(
                             "Key-value scan returned '{}' outside '{prefix}'",

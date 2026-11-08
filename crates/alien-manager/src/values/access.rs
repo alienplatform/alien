@@ -138,6 +138,31 @@ mod tests {
     }
 
     #[test]
+    fn a_container_env_grant_covers_only_its_own_container_and_name() {
+        let grant = ValueGrant {
+            access: ValueAccess::Read,
+            slots: Some(vec![slot("cenv.a.b.X")]),
+        };
+        let select = |s: &str| SlotSelection::Slots(vec![slot(s)]);
+        assert!(grant
+            .check(ValueAccess::Read, &select("cenv.a.b.X"))
+            .is_ok());
+        for other in [
+            "cenv.a.X",
+            "cenv.a.b.c.X",
+            "cenv.a.b.Y",
+            "cenv.b.X",
+            "env:X",
+            "input:X",
+        ] {
+            let error = grant
+                .check(ValueAccess::Read, &select(other))
+                .expect_err(other);
+            assert_eq!(error.http_status_code, Some(403), "{other}");
+        }
+    }
+
+    #[test]
     fn a_migrate_grant_covers_every_access() {
         let grant = ValueGrant::all_slots(ValueAccess::Migrate);
         for needed in [ValueAccess::Read, ValueAccess::Write, ValueAccess::Migrate] {

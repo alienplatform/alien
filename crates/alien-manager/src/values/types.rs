@@ -16,6 +16,7 @@ use crate::error::{ErrorData, Result};
 pub const MAX_VALUE_BYTES: usize = 24_000;
 
 const MAX_ID_LEN: usize = 128;
+const MAX_CONTAINER_NAME_LEN: usize = 63;
 
 /// Who a group of values belongs to: `dep:<deploymentId>`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -56,7 +57,8 @@ impl fmt::Display for ValueScope {
     }
 }
 
-/// One value's name inside a scope: `env:<NAME>` or `input:<id>`.
+/// One value's name inside a scope: `env:<NAME>`, `input:<id>` or
+/// `cenv.<containerName>.<NAME>`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ValueSlot(String);
 
@@ -74,6 +76,47 @@ impl ValueSlot {
     pub fn input_id(&self) -> Option<&str> {
         self.0.strip_prefix("input:")
     }
+
+    /// The slot of one environment variable of a dynamic container.
+    pub fn container_env(container: &str, name: &str) -> Result<Self> {
+        format!("cenv.{container}.{name}").parse()
+    }
+
+    /// The container name and variable name, for `cenv.` slots.
+    ///
+    /// Variable names have no '.', and container names may, so the split is
+    /// at the last '.'.
+    pub fn container_env_parts(&self) -> Option<(&str, &str)> {
+        split_container_env(&self.0)
+    }
+}
+
+fn split_container_env(slot: &str) -> Option<(&str, &str)> {
+    let rest = slot.strip_prefix("cenv.")?;
+    let (container, name) = rest.rsplit_once('.')?;
+    (valid_container_name(container) && valid_env_name(name)).then_some((container, name))
+}
+
+fn valid_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    name.len() <= MAX_ID_LEN
+        && chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// A dynamic container's name is kept as a Kubernetes label value: at most
+/// 63 characters of letters, digits, '-', '_' and '.', starting and ending
+/// with a letter or digit.
+fn valid_container_name(name: &str) -> bool {
+    let edge = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric());
+    name.len() <= MAX_CONTAINER_NAME_LEN
+        && edge(name.chars().next())
+        && edge(name.chars().last())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
 }
 
 impl FromStr for ValueSlot {
@@ -81,20 +124,15 @@ impl FromStr for ValueSlot {
 
     fn from_str(s: &str) -> Result<Self> {
         let valid = if let Some(name) = s.strip_prefix("env:") {
-            let mut chars = name.chars();
-            name.len() <= MAX_ID_LEN
-                && chars
-                    .next()
-                    .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-                && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+            valid_env_name(name)
         } else if let Some(id) = s.strip_prefix("input:") {
             valid_id(id)
         } else {
-            false
+            split_container_env(s).is_some()
         };
         if !valid {
             return Err(ErrorData::bad_request(format!(
-                "'{s}' is not a value slot; use env:<NAME> or input:<id>"
+                "'{s}' is not a value slot; use env:<NAME>, input:<id> or cenv.<containerName>.<NAME>"
             )));
         }
         Ok(Self(s.to_string()))
@@ -274,7 +312,17 @@ mod tests {
         ] {
             assert!(bad.parse::<ValueScope>().is_err(), "{bad}");
         }
-        for ok in ["env:API_TOKEN", "env:_x1", "input:db-url", "input:a.b_c"] {
+        for ok in [
+            "env:API_TOKEN",
+            "env:_x1",
+            "input:db-url",
+            "input:a.b_c",
+            "cenv.api.TOKEN",
+            "cenv.a.b.X",
+            "cenv.my-app_1.v2._X",
+            "cenv.a.A1",
+            "cenv.a.X.Y",
+        ] {
             assert!(ok.parse::<ValueSlot>().is_ok(), "{ok}");
         }
         for bad in [
@@ -286,12 +334,53 @@ mod tests {
             "input:a:b",
             "x:y",
             "API",
+            "cenv.",
+            "cenv.X",
+            "cenv..X",
+            "cenv.a.",
+            "cenv.a.1X",
+            "cenv.a.X-Y",
+            "cenv.a:b.X",
+            "cenv.-a.X",
+            "cenv.a-.X",
+            "cenv.a b.X",
+            "cenv:a:X",
+            "cenv.a/b.X",
         ] {
             assert!(bad.parse::<ValueSlot>().is_err(), "{bad}");
         }
         assert!(format!("env:{}", "A".repeat(129))
             .parse::<ValueSlot>()
             .is_err());
+        assert!(format!("cenv.{}.X", "a".repeat(63))
+            .parse::<ValueSlot>()
+            .is_ok());
+        assert!(format!("cenv.{}.X", "a".repeat(64))
+            .parse::<ValueSlot>()
+            .is_err());
+        assert!(format!("cenv.a.{}", "A".repeat(129))
+            .parse::<ValueSlot>()
+            .is_err());
+    }
+
+    #[test]
+    fn a_container_env_slot_splits_at_the_last_dot() {
+        let parts = |slot: &str| {
+            let slot: ValueSlot = slot.parse().unwrap();
+            slot.container_env_parts()
+                .map(|(container, name)| (container.to_string(), name.to_string()))
+        };
+        assert_eq!(parts("cenv.a.X"), Some(("a".into(), "X".into())));
+        assert_eq!(parts("cenv.a.b.X"), Some(("a.b".into(), "X".into())));
+        assert_eq!(parts("cenv.a.b.c.X"), Some(("a.b.c".into(), "X".into())));
+        assert_eq!(parts("env:X"), None);
+        assert_eq!(parts("input:a.b"), None);
+        assert_eq!(
+            ValueSlot::container_env("a.b", "X").unwrap().as_str(),
+            "cenv.a.b.X"
+        );
+        assert!(ValueSlot::container_env("a b", "X").is_err());
+        assert!(ValueSlot::container_env("a", "X-Y").is_err());
     }
 
     #[test]

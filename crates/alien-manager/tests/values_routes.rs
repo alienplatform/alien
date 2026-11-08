@@ -482,3 +482,79 @@ async fn callers_without_rights_and_unknown_scopes_are_refused() {
     let (_, listed) = server.get().await;
     assert!(listed["slots"].as_array().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn dynamic_container_variables_are_stored_by_container_and_name() {
+    let server = start().await;
+
+    let (status, put) = server
+        .put(json!([
+            { "slot": "cenv.api.TOKEN", "value": CANARY, "kind": "secret" },
+            { "slot": "cenv.api.LEVEL", "value": "debug", "kind": "plain" },
+            { "slot": "cenv.api.worker.TOKEN", "value": "other", "kind": "secret" },
+        ]))
+        .await;
+    assert_eq!(status, 200, "{put}");
+    assert!(!put.to_string().contains(CANARY));
+
+    let (status, listed) = server.get().await;
+    assert_eq!(status, 200);
+    let slots = listed["slots"].as_array().unwrap();
+    let names: Vec<_> = slots.iter().map(|s| s["slot"].as_str().unwrap()).collect();
+    assert_eq!(
+        names,
+        ["cenv.api.LEVEL", "cenv.api.TOKEN", "cenv.api.worker.TOKEN"]
+    );
+    assert_eq!(slots[0]["value"], "debug");
+    assert!(slots[1].get("value").is_none());
+    assert!(!listed.to_string().contains(CANARY));
+
+    let (status, _) = server
+        .call(
+            reqwest::Method::DELETE,
+            &format!("/v1/values/{}/cenv.api.TOKEN", server.scope()),
+            Some(&server.admin),
+            None,
+        )
+        .await;
+    assert_eq!(status, 204);
+    let (_, listed) = server.get().await;
+    assert_eq!(listed["slots"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_malformed_dynamic_container_slot_is_a_400_and_writes_nothing() {
+    let server = start().await;
+
+    for bad in [
+        "cenv.api",
+        "cenv..TOKEN",
+        "cenv.api.",
+        "cenv.api.1TOKEN",
+        "cenv.api.TO-KEN",
+        "cenv.-api.TOKEN",
+        "cenv.api:x.TOKEN",
+        "cenv:api:TOKEN",
+        "cenv.a b.TOKEN",
+    ] {
+        let (status, error) = server
+            .put(json!([
+                { "slot": "env:FINE", "value": "ok", "kind": "plain" },
+                { "slot": bad, "value": "v", "kind": "plain" },
+            ]))
+            .await;
+        assert_eq!(status, 400, "{bad}: {error}");
+
+        let (status, error) = server
+            .call(
+                reqwest::Method::DELETE,
+                &format!("/v1/values/{}/{bad}", server.scope()),
+                Some(&server.admin),
+                None,
+            )
+            .await;
+        assert_eq!(status, 400, "{bad}: {error}");
+    }
+    let (_, listed) = server.get().await;
+    assert!(listed["slots"].as_array().unwrap().is_empty());
+}
