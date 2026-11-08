@@ -15,11 +15,16 @@ use tracing::info;
 /// 5. Updates stack state with the new state after health checks
 pub async fn handle_running(
     current: DeploymentState,
-    config: DeploymentConfig,
+    mut config: DeploymentConfig,
     client_config: alien_core::ClientConfig,
     service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
     info!("Handling Running status (health check)");
+    // A protected install's controllers check what runs against the signed release on every
+    // tick (a machine that replaces another is admitted only through the verifier), so they get
+    // the running release's statements, as provisioning and updates get the target's.
+    config.release_statements =
+        crate::helpers::release_statements(current.current_release.as_ref());
 
     // Clone current first before moving any fields
     let mut next = current.clone();
