@@ -30,7 +30,12 @@ the publisher's". Then, each refusal checked to write nothing:
      resize past the maximum written straight to Compute Engine lands);
   9. `removeMachines` deletes only members and never below the signed
      minimum (off: deleting the last machine directly lands);
-  10. a disabled newest ledger version refuses; enabled again, it works.
+  10. a disabled newest ledger version refuses; enabled again, it works;
+  11. `deleteMachines` (no statement) names only the signed cluster and group:
+      a zone outside the verifier's region and a group id that leaves its
+      name are refused; asked again until it answers gone, it deletes the MIG
+      and then every instance template of the group, and asked once more it
+      still answers gone.
 
 Usage (an access token for the project in --token-file):
     scripts/verifier-e2e/gcp_machines.py --verifier-local <example> --fixtures <verifier-fixtures> \\
@@ -145,7 +150,9 @@ class Run:
                 "signerLists": [self.statements["signer-list"]], "zone": self.zone}
         if kind == "rollMachines":
             base["machineImage"] = self.image
-        request = {kind: {**base, **overrides}}
+        return self.send({kind: {**base, **overrides}})
+
+    def send(self, request):
         network = json.dumps({"subnetIds": [self.subnetwork], "securityGroupIds": [self.tag], "identity": self.email})
         result = subprocess.run([self.args.verifier_local, "gcp", self.project, self.region, f"{self.prefix}-verifier",
                                  PUBLISHER, MINIMUM_CREATED, network], input=json.dumps(request), capture_output=True, text=True,
@@ -294,6 +301,29 @@ class Run:
         ok, body = self.invoke("scale", desired=1)
         self.record("10 enabled again, scale lands", ok and body.get("size") == 1, str(body)[:300])
 
+        # 11 deleteMachines: only the install's group, repeated until gone.
+        templates = self.templates()
+        ok, body = self.send({"deleteMachines": {"cluster": "compute", "group": "general", "zone": "europe-west1-b"}})
+        self.record("11 a delete in a zone outside the verifier's region is refused", not ok and "is not a zone of the verifier's region" in str(body)
+                    and self.mig() is not None, str(body)[:300])
+        ok, body = self.send({"deleteMachines": {"cluster": "compute", "group": "general/../other", "zone": self.zone}})
+        self.record("11 a group id that leaves its name is refused", not ok and "may not be part of a machine group name" in str(body)
+                    and self.mig() is not None, str(body)[:300])
+        answers = []
+        for _ in range(40):
+            ok, body = self.send({"deleteMachines": {"cluster": "compute", "group": "general", "zone": self.zone}})
+            answers.append(body if ok else {"refused": str(body)[:300]})
+            if not ok or body.get("gone"):
+                break
+            time.sleep(10)
+        gone = ok and body == {"group": self.group, "gone": True}
+        self.record("11 deleteMachines repeated until gone removes the MIG, then its templates",
+                    gone and len(answers) >= 2 and answers[0] == {"group": self.group, "gone": False}
+                    and self.mig() is None and self.templates() == [],
+                    json.dumps({"answers": answers[:3] + answers[-1:], "calls": len(answers), "templatesBefore": templates,
+                                "templatesAfter": self.templates()}))
+        ok, body = self.send({"deleteMachines": {"cluster": "compute", "group": "general", "zone": self.zone}})
+        self.record("11 asked again once gone, it still answers gone", ok and body == {"group": self.group, "gone": True}, str(body)[:300])
 
     # --- teardown -------------------------------------------------------------
 

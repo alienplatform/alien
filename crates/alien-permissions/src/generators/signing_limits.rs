@@ -356,7 +356,9 @@ pub fn aws_verifier_policy(prefix: &str, account: &str, region: &str, publisher:
                 "Action": [
                     "autoscaling:CreateAutoScalingGroup",
                     "autoscaling:UpdateAutoScalingGroup",
-                    "autoscaling:CreateOrUpdateTags"
+                    "autoscaling:CreateOrUpdateTags",
+                    // Uninstall deletes a group with its machines through the verifier.
+                    "autoscaling:DeleteAutoScalingGroup"
                 ],
                 "Resource": format!(
                     "arn:aws:autoscaling:{region}:{account}:autoScalingGroup:*:autoScalingGroupName/{prefix}-*"
@@ -477,6 +479,26 @@ mod tests {
             &policy,
             "lambda:DeleteFunction",
             &function("billing-api")
+        ));
+    }
+
+    /// Uninstall deletes the install's machine groups through the verifier, and no other
+    /// install's. (Their launch templates it already deletes by the install's tag.)
+    #[test]
+    fn the_verifier_deletes_the_installs_machine_groups_only() {
+        let policy = aws_verifier_policy("orders", "111122223333", "us-east-1", "444455556666");
+        let group = |name: &str| {
+            format!("arn:aws:autoscaling:us-east-1:111122223333:autoScalingGroup:0f1e2d3c-aaaa-bbbb-cccc-111122223333:autoScalingGroupName/{name}")
+        };
+        assert!(allows(
+            &policy,
+            "autoscaling:DeleteAutoScalingGroup",
+            &group("orders-compute-general")
+        ));
+        assert!(!allows(
+            &policy,
+            "autoscaling:DeleteAutoScalingGroup",
+            &group("billing-compute-general")
         ));
     }
 

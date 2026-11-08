@@ -284,6 +284,16 @@ impl<L: LambdaApi, M: MachineApi> Backend for AwsBackend<L, M> {
         }
     }
 
+    /// A zone means nothing to an Auto Scaling group, which spans the subnets setup gave it.
+    async fn delete_machines(&self, target: &str, zone: Option<&str>) -> Result<bool> {
+        if let Some(zone) = zone {
+            return Err(AlienError::new(ErrorData::Refused {
+                reason: format!("an Auto Scaling group has no zone ({zone})"),
+            }));
+        }
+        crate::machines::delete_group(&self.machines, target).await
+    }
+
     async fn roll(
         &self,
         place: &Place,

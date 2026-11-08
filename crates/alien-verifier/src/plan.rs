@@ -35,6 +35,8 @@ pub enum Request {
     RemoveMachines(crate::machines::RemoveMachines),
     /// Delete a Live workload's function, service or app (uninstall).
     DeleteWorkload(DeleteWorkload),
+    /// Delete a machine group with what it boots from (uninstall), one step per call.
+    DeleteMachines(crate::machines::DeleteMachines),
 }
 
 /// Delete the function, Cloud Run service or Container App of a Live workload, with everything

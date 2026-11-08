@@ -448,6 +448,27 @@ fn latest_secret_answer(
 
 const COMPUTE: &str = "https://compute.googleapis.com/compute/v1/";
 
+/// What a Compute Engine DELETE that isn't waited for answered: started (an operation), absent
+/// (404), or already running, which Compute Engine answers with 400 `resourceNotReady` while a
+/// delete of the same resource is in progress.
+fn delete_started(what: &str, status: reqwest::StatusCode, text: &str) -> Result<()> {
+    if status.is_success() || status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(());
+    }
+    let reason = serde_json::from_str::<Value>(text).ok().and_then(|body| {
+        body["error"]["errors"][0]["reason"]
+            .as_str()
+            .map(str::to_string)
+    });
+    if status == reqwest::StatusCode::BAD_REQUEST && reason.as_deref() == Some("resourceNotReady") {
+        return Ok(());
+    }
+    Err(AlienError::new(failed(format!(
+        "{what}: HTTP {status}: {}",
+        text.chars().take(2000).collect::<String>()
+    ))))
+}
+
 impl Gcp {
     /// Wait for Compute Engine operation `operation` to finish; its error,
     /// if it has one, is an error here.
@@ -548,6 +569,41 @@ impl crate::gcp_machines::GcpMachineApi for Gcp {
 
     async fn patch(&self, path: &str, body: &Value) -> Result<()> {
         self.compute_write(reqwest::Method::PATCH, path, body).await
+    }
+
+    async fn start_delete(&self, path: &str) -> Result<()> {
+        let what = format!("compute delete {path}");
+        let response = self
+            .http
+            .delete(format!("{COMPUTE}{path}"))
+            .bearer_auth(self.token().await?)
+            .send()
+            .await
+            .into_alien_error()
+            .context(failed(&what))?;
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .into_alien_error()
+            .context(failed(&what))?;
+        delete_started(&what, status, &text)
+    }
+
+    async fn delete(&self, path: &str) -> Result<()> {
+        let what = format!("compute delete {path}");
+        match self
+            .call(
+                reqwest::Method::DELETE,
+                &format!("{COMPUTE}{path}"),
+                None,
+                &what,
+            )
+            .await?
+        {
+            Some(operation) => self.wait_compute(operation, &what).await,
+            None => Ok(()),
+        }
     }
 
     async fn members(&self, path: &str) -> Result<Vec<String>> {
@@ -659,6 +715,11 @@ impl Backend for GcpBackend {
             )
             .await?;
         Ok(deleted.is_some())
+    }
+
+    async fn delete_machines(&self, target: &str, zone: Option<&str>) -> Result<bool> {
+        crate::gcp_machines::delete_group(&self.0, &self.0.project, &self.0.region, target, zone)
+            .await
     }
 
     async fn remove(
@@ -823,6 +884,33 @@ mod tests {
 
     fn version(name: &str, created: &str, disabled: bool) -> Value {
         json!({"name": name, "createTime": created, "disabled": disabled})
+    }
+
+    /// The answers are the ones Compute Engine gave on a real MIG: deleted once, then asked again
+    /// while the delete ran, then once gone.
+    #[test]
+    fn a_delete_already_running_or_done_is_no_error() {
+        let what = "compute delete projects/p/zones/us-central1-a/instanceGroupManagers/acme-g";
+        delete_started(what, reqwest::StatusCode::OK, r#"{"status": "RUNNING"}"#).expect("started");
+        delete_started(
+            what,
+            reqwest::StatusCode::BAD_REQUEST,
+            r#"{"error": {"code": 400, "message": "The resource '...' is not ready", "errors": [{"domain": "global", "reason": "resourceNotReady"}]}}"#,
+        )
+        .expect("already deleting");
+        delete_started(
+            what,
+            reqwest::StatusCode::NOT_FOUND,
+            r#"{"error": {"code": 404, "errors": [{"reason": "notFound"}]}}"#,
+        )
+        .expect("gone");
+        let error = delete_started(
+            what,
+            reqwest::StatusCode::FORBIDDEN,
+            r#"{"error": {"code": 403, "errors": [{"reason": "forbidden"}]}}"#,
+        )
+        .expect_err("a denied delete fails");
+        assert!(error.message.contains("HTTP 403"), "{error}");
     }
 
     /// The answers are the ones Secret Manager gave on a real secret

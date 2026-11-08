@@ -44,6 +44,10 @@ pub trait GcpMachineApi: Send + Sync {
     async fn patch(&self, path: &str, body: &Value) -> Result<()>;
     /// The instance URLs of MIG `path`'s members.
     async fn members(&self, path: &str) -> Result<Vec<String>>;
+    /// Start deleting `path` without waiting for it; nothing when a delete already runs.
+    async fn start_delete(&self, path: &str) -> Result<()>;
+    /// Delete `path` and wait for the operation to finish; nothing when it doesn't exist.
+    async fn delete(&self, path: &str) -> Result<()>;
 }
 
 /// `name` is lower case letters, digits and dashes.
@@ -300,6 +304,38 @@ pub async fn roll(
     Ok(json!({"template": template, "version": version, "group": basics.name}))
 }
 
+/// Take the next step in deleting MIG `name`, zonal in `zone`: start deleting the group with its
+/// machines, and once Compute Engine has removed it, delete the group's instance templates
+/// (`<name>-<n>`, which a group in use keeps). Answers whether both are gone; the caller asks
+/// again until they are.
+pub async fn delete_group(
+    api: &dyn GcpMachineApi,
+    project: &str,
+    region: &str,
+    name: &str,
+    zone: Option<&str>,
+) -> Result<bool> {
+    let scope = match zone {
+        Some(zone) => {
+            check_zone(zone, region)?;
+            format!("projects/{project}/zones/{zone}")
+        }
+        None => format!("projects/{project}/regions/{region}"),
+    };
+    let path = format!("{scope}/instanceGroupManagers/{name}");
+    if api.get(&path).await?.is_some() {
+        api.start_delete(&path).await?;
+        return Ok(false);
+    }
+    for template in api.template_names(&format!("{name}-[0-9]+")).await? {
+        api.delete(&format!(
+            "projects/{project}/global/instanceTemplates/{template}"
+        ))
+        .await?;
+    }
+    Ok(true)
+}
+
 /// Delete `machines` (instance names) from MIG `name`, zonal in `zone`,
 /// keeping at least `minimum`. Answers the removed names and the new size.
 #[allow(clippy::too_many_arguments)]
@@ -481,6 +517,20 @@ mod tests {
                 .push(("PATCH".into(), path.into(), body.clone()));
             Ok(())
         }
+        async fn start_delete(&self, path: &str) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(("DELETE".into(), path.into(), Value::Null));
+            Ok(())
+        }
+        async fn delete(&self, path: &str) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(("DELETE and wait".into(), path.into(), Value::Null));
+            Ok(())
+        }
         async fn members(&self, path: &str) -> Result<Vec<String>> {
             assert!(path.ends_with("/instanceGroupManagers/acme-prod-compute-general"));
             Ok(vec![
@@ -508,6 +558,96 @@ mod tests {
             &pins(),
         )
         .await
+    }
+
+    /// The group goes first, its templates only once Compute Engine has removed it (a template
+    /// a group still uses can't be deleted), and a zone outside the verifier's region is refused.
+    #[tokio::test]
+    async fn a_group_delete_takes_the_group_then_its_templates() {
+        let calls = |api: &Recorded| -> Vec<(String, String)> {
+            api.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(method, path, _)| (method.clone(), path.clone()))
+                .collect()
+        };
+        let existing = Recorded {
+            group: Some(json!({"name": "acme-prod-compute-general"})),
+            templates: vec!["acme-prod-compute-general-1".into()],
+            ..Default::default()
+        };
+        assert!(!delete_group(
+            &existing,
+            "shop-prod",
+            "us-central1",
+            "acme-prod-compute-general",
+            Some("us-central1-a")
+        )
+        .await
+        .unwrap());
+        assert_eq!(
+            calls(&existing),
+            [(
+                "DELETE".to_string(),
+                "projects/shop-prod/zones/us-central1-a/instanceGroupManagers/acme-prod-compute-general".to_string()
+            )]
+        );
+
+        let removed = Recorded {
+            templates: vec![
+                "acme-prod-compute-general-1".into(),
+                "acme-prod-compute-general-2".into(),
+            ],
+            ..Default::default()
+        };
+        assert!(delete_group(
+            &removed,
+            "shop-prod",
+            "us-central1",
+            "acme-prod-compute-general",
+            None
+        )
+        .await
+        .unwrap());
+        assert_eq!(
+            calls(&removed),
+            ["1", "2"].map(|n| (
+                "DELETE and wait".to_string(),
+                format!(
+                    "projects/shop-prod/global/instanceTemplates/acme-prod-compute-general-{n}"
+                )
+            ))
+        );
+
+        let gone = Recorded::default();
+        assert!(delete_group(
+            &gone,
+            "shop-prod",
+            "us-central1",
+            "acme-prod-compute-general",
+            None
+        )
+        .await
+        .unwrap());
+        assert!(calls(&gone).is_empty());
+
+        let error = delete_group(
+            &existing,
+            "shop-prod",
+            "us-central1",
+            "acme-prod-compute-general",
+            Some("europe-west1-b"),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error
+                .message
+                .contains("is not a zone of the verifier's region"),
+            "{error}"
+        );
+        assert_eq!(calls(&existing).len(), 1);
     }
 
     #[tokio::test]

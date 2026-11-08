@@ -456,6 +456,42 @@ impl Backend for AzureBackend {
         Ok(deleted.is_some())
     }
 
+    /// Deleting a scale set takes its machines with it; Azure finishes it in the background, so
+    /// the caller asks again until the scale set is gone.
+    async fn delete_machines(&self, target: &str, zone: Option<&str>) -> Result<bool> {
+        if let Some(zone) = zone {
+            return Err(AlienError::new(ErrorData::Refused {
+                reason: format!("a scale set takes no zone here ({zone})"),
+            }));
+        }
+        let url = scale_set_url(&self.0.resource_group, target)?;
+        let Some(scale_set) = self
+            .0
+            .call(
+                reqwest::Method::GET,
+                url.as_str(),
+                ARM,
+                None,
+                &format!("virtualMachineScaleSets get {target}"),
+            )
+            .await?
+        else {
+            return Ok(true);
+        };
+        if scale_set["properties"]["provisioningState"].as_str() != Some("Deleting") {
+            self.0
+                .call(
+                    reqwest::Method::DELETE,
+                    url.as_str(),
+                    ARM,
+                    None,
+                    &format!("virtualMachineScaleSets delete {target}"),
+                )
+                .await?;
+        }
+        Ok(false)
+    }
+
     async fn roll(
         &self,
         place: &Place,

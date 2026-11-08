@@ -13,7 +13,7 @@ use tracing::info;
 use crate::cloud_write::{own_workload, ApplyWrite, CloudWrite, Facts};
 use crate::error::{ErrorData, Result};
 use crate::function::StillNewest;
-use crate::machines::{self, RemoveMachines, RollMachines, Scale};
+use crate::machines::{self, DeleteMachines, RemoveMachines, RollMachines, Scale};
 use crate::plan::{DeleteWorkload, Place, Reads, Request, SetupNetwork};
 use crate::trust::{accept, find_install, store_ledger, Floor, Install, InstallStore};
 
@@ -83,6 +83,13 @@ pub trait Backend: Send + Sync {
     async fn delete_workload(&self, name: &str) -> Result<bool> {
         Err(refused(format!("this cloud deletes no workload ({name})")))
     }
+    /// Take the next step in deleting machine group `target` (in `zone`, for a zonal GCP MIG)
+    /// with what it boots from. Answers whether all of it is gone.
+    async fn delete_machines(&self, target: &str, _zone: Option<&str>) -> Result<bool> {
+        Err(refused(format!(
+            "this cloud deletes no machine group ({target})"
+        )))
+    }
 }
 
 fn refused(reason: impl Into<String>) -> AlienError<ErrorData> {
@@ -137,7 +144,27 @@ impl Verifier {
             Request::Scale(request) => self.scale(&request).await,
             Request::RemoveMachines(request) => self.remove(&request).await,
             Request::DeleteWorkload(request) => self.delete_workload(&request).await,
+            Request::DeleteMachines(request) => self.delete_machines(&request).await,
         }
+    }
+
+    /// Take the next step in deleting a machine group of the install, `<prefix>-<cluster>-
+    /// <group>`; the caller repeats the request until the answer says it is gone.
+    async fn delete_machines(&self, request: &DeleteMachines) -> Result<Value> {
+        let (_, place) = self.install().await?;
+        let target = machines::scale_target(&place.prefix, &request.cluster, &request.group)?;
+        if target == self.own_name || target == format!("{}-verifier", place.prefix) {
+            return Err(refused(format!(
+                "group '{}' of '{}' would be the install's verifier",
+                request.group, request.cluster
+            )));
+        }
+        let gone = self
+            .backend
+            .delete_machines(&target, request.zone.as_deref())
+            .await?;
+        info!(target = %target, gone, "deleting a machine group");
+        Ok(json!({"group": target, "gone": gone}))
     }
 
     /// Delete a Live workload's resource. The name is the install's `<prefix>-<workload>` and
@@ -883,6 +910,13 @@ mod tests {
             self.0.lock().unwrap().push(name.to_string());
             Ok(true)
         }
+        async fn delete_machines(&self, target: &str, zone: Option<&str>) -> Result<bool> {
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("{target} zone={zone:?}"));
+            Ok(false)
+        }
     }
 
     /// Uninstall deletes a Live workload by the name the install gives it, with no statement,
@@ -933,5 +967,61 @@ mod tests {
         );
         assert!(reason.contains("unknown field"), "{reason}");
         assert_eq!(*backend.0.lock().unwrap(), ["acme-prod-api"]);
+    }
+
+    /// Uninstall deletes a machine group by the name the install gives it, with no statement:
+    /// the caller names only the signed cluster and group ids, never the cloud resource.
+    #[tokio::test]
+    async fn a_machines_delete_names_only_the_installs_own_group() {
+        let list = signer_list_of(PROJECT, &ci(), Utc::now());
+        let backend = Arc::new(Deletes::default());
+        let verifier = Verifier {
+            own_name: format!("{PREFIX}-verifier"),
+            install_id: Arc::new(|prefix| InstallId::Gcp {
+                project: "shop-prod".to_string(),
+                prefix: prefix.to_string(),
+            }),
+            store: Arc::new(MemoryStore::protected(&settings_for(
+                &list, PREFIX, CHANNEL,
+            ))),
+            backend: backend.clone(),
+            vpc: None,
+            machine_network: None,
+        };
+
+        let answer = verifier
+            .handle(json!({"deleteMachines": {"cluster": "compute", "group": "general", "zone": "us-central1-a"}}))
+            .await
+            .unwrap();
+        assert_eq!(
+            answer,
+            json!({"group": "acme-prod-compute-general", "gone": false})
+        );
+
+        for (cluster, group) in [
+            ("compute", "general/../x"),
+            ("compute", ""),
+            ("a b", "general"),
+        ] {
+            let reason = refusal(
+                verifier
+                    .handle(json!({"deleteMachines": {"cluster": cluster, "group": group}}))
+                    .await,
+            );
+            assert!(
+                reason.contains("may not be part of a machine group name"),
+                "{cluster}/{group}: {reason}"
+            );
+        }
+        let reason = refusal(
+            verifier
+                .handle(json!({"deleteMachines": {"cluster": "compute", "group": "general", "name": "acme-prod-verifier"}}))
+                .await,
+        );
+        assert!(reason.contains("unknown field"), "{reason}");
+        assert_eq!(
+            *backend.0.lock().unwrap(),
+            ["acme-prod-compute-general zone=Some(\"us-central1-a\")"]
+        );
     }
 }

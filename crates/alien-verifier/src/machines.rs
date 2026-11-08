@@ -15,13 +15,13 @@
 //! typed fields.
 
 use alien_aws_clients::autoscaling::{
-    AsgTag, AutoScalingApi, CreateAutoScalingGroupRequest, DescribeAutoScalingGroupsRequest,
-    LaunchTemplateSpecification, UpdateAutoScalingGroupRequest,
+    AsgTag, AutoScalingApi, CreateAutoScalingGroupRequest, DeleteAutoScalingGroupRequest,
+    DescribeAutoScalingGroupsRequest, LaunchTemplateSpecification, UpdateAutoScalingGroupRequest,
 };
 use alien_aws_clients::ec2::{
-    CreateLaunchTemplateRequest, CreateLaunchTemplateVersionRequest, DescribeImagesRequest,
-    DescribeLaunchTemplatesRequest, Ec2Api, LaunchTemplateBlockDeviceMapping,
-    LaunchTemplateCpuOptions, LaunchTemplateEbsBlockDevice,
+    CreateLaunchTemplateRequest, CreateLaunchTemplateVersionRequest, DeleteLaunchTemplateRequest,
+    DescribeImagesRequest, DescribeLaunchTemplatesRequest, Ec2Api,
+    LaunchTemplateBlockDeviceMapping, LaunchTemplateCpuOptions, LaunchTemplateEbsBlockDevice,
     LaunchTemplateIamInstanceProfileSpecification, LaunchTemplateInstanceMetadataOptions,
     RequestLaunchTemplateData, Tag, TagSpecification,
 };
@@ -121,6 +121,23 @@ pub struct RemoveMachines {
     pub release: SignedStatement,
     /// The signer list chain, from version 1.
     pub signer_lists: Vec<SignedStatement>,
+}
+
+/// Delete one machine group with what it boots from (AWS Auto Scaling group and launch
+/// template, GCP MIG and instance templates, Azure VMSS). The verifier deletes only
+/// `<prefix>-<cluster>-<group>`. Each call takes the next step the cloud allows, so the caller
+/// repeats it until the answer says the group is gone. No statement: a delete can only cause
+/// an outage, which a control plane can already cause by not deploying.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeleteMachines {
+    /// Compute cluster resource id in the signed stack.
+    pub cluster: String,
+    /// Capacity group id in that cluster.
+    pub group: String,
+    /// GCP zone of a zonal MIG; absent for a regional one, and on AWS and Azure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
 }
 
 /// Refuse a removal that names no machine, one twice, or a name that could
@@ -626,6 +643,12 @@ pub trait MachineApi: Send + Sync {
     async fn create_version(&self, id: &str, data: &RequestLaunchTemplateData) -> Result<i64>;
     /// Whether Auto Scaling group `name` exists.
     async fn group_exists(&self, name: &str) -> Result<bool>;
+    /// Whether Auto Scaling group `name` is being deleted; `None` when it doesn't exist.
+    async fn group_deleting(&self, name: &str) -> Result<Option<bool>>;
+    /// Delete Auto Scaling group `name` and terminate its machines.
+    async fn delete_group(&self, name: &str) -> Result<()>;
+    /// Delete launch template `id`.
+    async fn delete_template(&self, id: &str) -> Result<()>;
     /// Create an Auto Scaling group.
     async fn create_group(&self, request: CreateAutoScalingGroupRequest) -> Result<()>;
     /// Update an Auto Scaling group.
@@ -724,6 +747,26 @@ pub async fn roll(api: &dyn MachineApi, plan: &RollPlan) -> Result<Rolled> {
     })
 }
 
+/// Take the next step in deleting group `base` (`<prefix>-<cluster>-<group>`): delete the Auto
+/// Scaling group with its machines, and once Auto Scaling has removed it, its launch template.
+/// Answers whether both are gone. Auto Scaling deletes a group in the background, so the caller
+/// asks again until they are.
+pub async fn delete_group(api: &dyn MachineApi, base: &str) -> Result<bool> {
+    match api.group_deleting(base).await? {
+        Some(true) => Ok(false),
+        Some(false) => {
+            api.delete_group(base).await?;
+            Ok(false)
+        }
+        None => {
+            if let Some(id) = api.template(&format!("{base}-lt")).await? {
+                api.delete_template(&id).await?;
+            }
+            Ok(true)
+        }
+    }
+}
+
 /// The real EC2 and Auto Scaling clients.
 pub struct AwsMachines<E, A> {
     /// EC2.
@@ -731,6 +774,9 @@ pub struct AwsMachines<E, A> {
     /// Auto Scaling.
     pub autoscaling: A,
 }
+
+/// The status Auto Scaling reports for a group it is deleting.
+const ASG_DELETING: &str = "Delete in progress";
 
 fn failed(operation: impl Into<String>) -> ErrorData {
     ErrorData::CloudCallFailed {
@@ -901,6 +947,54 @@ impl<E: Ec2Api, A: AutoScalingApi> MachineApi for AwsMachines<E, A> {
                     .iter()
                     .any(|group| group.auto_scaling_group_name.as_deref() == Some(name))
             }))
+    }
+
+    async fn group_deleting(&self, name: &str) -> Result<Option<bool>> {
+        let response = self
+            .autoscaling
+            .describe_auto_scaling_groups(
+                DescribeAutoScalingGroupsRequest::builder()
+                    .auto_scaling_group_names(vec![name.to_string()])
+                    .build(),
+            )
+            .await
+            .context(failed(format!(
+                "autoscaling:DescribeAutoScalingGroups {name}"
+            )))?;
+        Ok(response
+            .describe_auto_scaling_groups_result
+            .auto_scaling_groups
+            .and_then(|groups| {
+                groups
+                    .members
+                    .into_iter()
+                    .find(|group| group.auto_scaling_group_name.as_deref() == Some(name))
+            })
+            .map(|group| group.status.as_deref() == Some(ASG_DELETING)))
+    }
+
+    async fn delete_group(&self, name: &str) -> Result<()> {
+        self.autoscaling
+            .delete_auto_scaling_group(
+                DeleteAutoScalingGroupRequest::builder()
+                    .auto_scaling_group_name(name.to_string())
+                    .force_delete(true)
+                    .build(),
+            )
+            .await
+            .context(failed(format!("autoscaling:DeleteAutoScalingGroup {name}")))
+    }
+
+    async fn delete_template(&self, id: &str) -> Result<()> {
+        self.ec2
+            .delete_launch_template(
+                DeleteLaunchTemplateRequest::builder()
+                    .launch_template_id(id.to_string())
+                    .build(),
+            )
+            .await
+            .context(failed(format!("ec2:DeleteLaunchTemplate {id}")))?;
+        Ok(())
     }
 
     async fn create_group(&self, request: CreateAutoScalingGroupRequest) -> Result<()> {
@@ -1424,6 +1518,46 @@ mod tests {
         }
     }
 
+    /// Each call takes one step: the group with its machines first, its launch template only
+    /// once Auto Scaling has removed the group, and nothing twice.
+    #[tokio::test]
+    async fn a_group_delete_takes_the_group_then_its_template() {
+        let base = format!("{PREFIX}-compute-general");
+        let existing = Recorded {
+            template: Some("lt-0aaaaaaaaaaaaaaaa".to_string()),
+            group_exists: true,
+            ..Recorded::default()
+        };
+        assert!(!delete_group(&existing, &base).await.unwrap());
+        assert_eq!(
+            *existing.calls.lock().unwrap(),
+            [format!("DeleteAutoScalingGroup {base} force")]
+        );
+
+        let deleting = Recorded {
+            template: Some("lt-0aaaaaaaaaaaaaaaa".to_string()),
+            group_exists: true,
+            group_deleting: true,
+            ..Recorded::default()
+        };
+        assert!(!delete_group(&deleting, &base).await.unwrap());
+        assert!(deleting.calls.lock().unwrap().is_empty());
+
+        let removed = Recorded {
+            template: Some("lt-0aaaaaaaaaaaaaaaa".to_string()),
+            ..Recorded::default()
+        };
+        assert!(delete_group(&removed, &base).await.unwrap());
+        assert_eq!(
+            *removed.calls.lock().unwrap(),
+            ["DeleteLaunchTemplate lt-0aaaaaaaaaaaaaaaa"]
+        );
+
+        let gone = Recorded::default();
+        assert!(delete_group(&gone, &base).await.unwrap());
+        assert!(gone.calls.lock().unwrap().is_empty());
+    }
+
     #[test]
     fn scaling_stays_within_the_signed_bounds() {
         let group = group(None);
@@ -1437,6 +1571,7 @@ mod tests {
     struct Recorded {
         template: Option<String>,
         group_exists: bool,
+        group_deleting: bool,
         calls: Mutex<Vec<String>>,
         /// The groups it was asked to create.
         groups: Mutex<Vec<CreateAutoScalingGroupRequest>>,
@@ -1477,6 +1612,17 @@ mod tests {
         }
         async fn group_exists(&self, _name: &str) -> Result<bool> {
             Ok(self.group_exists)
+        }
+        async fn group_deleting(&self, _name: &str) -> Result<Option<bool>> {
+            Ok(self.group_exists.then_some(self.group_deleting))
+        }
+        async fn delete_group(&self, name: &str) -> Result<()> {
+            self.call(format!("DeleteAutoScalingGroup {name} force"));
+            Ok(())
+        }
+        async fn delete_template(&self, id: &str) -> Result<()> {
+            self.call(format!("DeleteLaunchTemplate {id}"));
+            Ok(())
         }
         async fn create_group(&self, request: CreateAutoScalingGroupRequest) -> Result<()> {
             self.groups.lock().unwrap().push(request.clone());
