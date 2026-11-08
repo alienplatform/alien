@@ -21,6 +21,7 @@ use alien_aws_clients::{
     kms::{KmsApi, KmsClient},
     lambda::{LambdaApi, LambdaClient},
     lambda_microvms::{LambdaMicrovmsApi, LambdaMicrovmsClient},
+    elasticache::{ElastiCacheApi, ElastiCacheClient},
     rds::{RdsApi, RdsClient},
     s3::{S3Api, S3Client},
     secrets_manager::{SecretsManagerApi, SecretsManagerClient},
@@ -72,6 +73,9 @@ use alien_gcp_clients::{
     artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient},
     cloud_kms::{CloudKmsApi, CloudKmsClient},
     cloud_sql::{CloudSqlApi, CloudSqlClient},
+    memorystore::{
+        MemorystoreApi, MemorystoreClient, ServiceConnectionPolicyApi, ServiceConnectionPolicyClient,
+    },
     cloudbuild::{CloudBuildApi, CloudBuildClient},
     cloudrun::{CloudRunApi, CloudRunClient},
     cloudscheduler::{CloudSchedulerApi, CloudSchedulerClient},
@@ -143,6 +147,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         config: &AwsClientConfig,
     ) -> Result<Arc<dyn SecretsManagerApi>>;
     async fn get_aws_rds_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn RdsApi>>;
+    async fn get_aws_elasticache_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn ElastiCacheApi>>;
     async fn get_aws_ssm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn SsmApi>>;
     async fn get_aws_logs_client(
         &self,
@@ -211,6 +219,11 @@ pub trait PlatformServiceProvider: Send + Sync {
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn SecretManagerApi>>;
     fn get_gcp_cloud_sql_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudSqlApi>>;
+    fn get_gcp_memorystore_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn MemorystoreApi>>;
+    fn get_gcp_service_connection_policy_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn ServiceConnectionPolicyApi>>;
     fn get_gcp_firestore_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn FirestoreApi>>;
     fn get_gcp_pubsub_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn PubSubApi>>;
     fn get_gcp_compute_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpComputeApi>>;
@@ -834,6 +847,22 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         )))
     }
 
+    async fn get_aws_elasticache_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn ElastiCacheApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(ElastiCacheClient::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
+    }
+
     async fn get_aws_autoscaling_client(
         &self,
         config: &AwsClientConfig,
@@ -1075,6 +1104,23 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
 
     fn get_gcp_cloud_sql_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudSqlApi>> {
         Ok(Arc::new(CloudSqlClient::new(
+            reqwest::Client::new(),
+            config.clone(),
+        )))
+    }
+
+    fn get_gcp_memorystore_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn MemorystoreApi>> {
+        Ok(Arc::new(MemorystoreClient::new(
+            reqwest::Client::new(),
+            config.clone(),
+        )))
+    }
+
+    fn get_gcp_service_connection_policy_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn ServiceConnectionPolicyApi>> {
+        Ok(Arc::new(ServiceConnectionPolicyClient::new(
             reqwest::Client::new(),
             config.clone(),
         )))
