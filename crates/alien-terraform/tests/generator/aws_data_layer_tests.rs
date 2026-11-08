@@ -10,8 +10,9 @@ use super::helpers::{
 };
 use alien_core::{
     Ai, ArtifactRegistry, Key, Kv, LifecycleRule, Network, NetworkSettings, PermissionProfile,
-    Queue, RemoteBindings, ResourceLifecycle, ResourceRef, Sandbox, SandboxCode, SandboxEgress,
-    SandboxLifecyclePolicy, ServiceAccount, Stack, StackSettings, Storage, Vault,
+    Queue, RemoteBindings, RemoteStackManagement, ResourceLifecycle, ResourceRef, Sandbox,
+    SandboxCode, SandboxEgress, SandboxLifecyclePolicy, ServiceAccount, Stack, StackSettings,
+    Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
 
@@ -49,6 +50,58 @@ fn aws_key_package_is_valid_and_retained() {
         serde_json::from_str(module.get("retained-data.json").unwrap()).unwrap();
     assert_eq!(inventory, vec!["aws_kms_key.customer_key"]);
     assert_terraform_valid(&module, "aws_key_package");
+}
+
+#[test]
+fn aws_runtime_only_key_denies_every_principal_but_its_runtime_roles() {
+    let stack = Stack::new("instance-secrets".to_string())
+        .permissions(alien_core::PermissionsConfig::new().with_profile(
+            "manager",
+            PermissionProfile::new().resource("secrets", ["key/remote-cryptography"]),
+        ))
+        .add(
+            Key::new("secrets".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("manager-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("bystander-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let policy_start = rendered
+        .find("DenyKeyUseOutsideRuntime")
+        .expect("the key policy denies use outside the runtime roles");
+    let policy = &rendered[policy_start.saturating_sub(400)..policy_start + 400];
+    assert!(
+        policy.contains("${aws_iam_role.manager_sa.arn}"),
+        "{policy}"
+    );
+    assert!(!policy.contains("bystander"), "{policy}");
+    // Management can create `<prefix>-x`, grant it kms:PutKeyPolicy and assume it,
+    // so administration is denied to every role under the prefix.
+    let admin_start = rendered
+        .find("DenyStackRoleKeyAdministration")
+        .expect("administration is denied to roles under the stack prefix");
+    let admin = &rendered[admin_start.saturating_sub(400)..admin_start + 600];
+    assert!(admin.contains("kms:PutKeyPolicy"), "{admin}");
+    assert!(admin.contains("role/${local.resource_prefix}-*"), "{admin}");
+    assert_terraform_valid(&module, "aws_runtime_only_key");
 }
 
 #[test]

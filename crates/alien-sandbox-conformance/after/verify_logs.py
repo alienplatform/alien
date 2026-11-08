@@ -41,12 +41,12 @@ def unique_events(events):
     Overlapping exports can deliver the same record twice, and each copy must not
     prove a separate connection. The gateway emits no event ID, but each record
     carries a nanosecond timestamp, byte counts and a duration, so two distinct
-    connections do not produce identical fields.
+    connections do not produce identical records.
     """
     seen = set()
     unique = []
     for event in events:
-        key = json.dumps(event.get("fields", event), sort_keys=True)
+        key = json.dumps(event, sort_keys=True)
         if key not in seen:
             seen.add(key)
             unique.append(event)
@@ -112,7 +112,8 @@ def verify(report, events, audience, identity_map=None):
                 decision,
             ):
                 continue
-            stamp = datetime.fromisoformat(fields["ts"]).timestamp()
+            # tracing writes the record time at the top level in both JSON layouts.
+            stamp = datetime.fromisoformat(event["timestamp"]).timestamp()
             # Allow one second of host clock skew and the completion log flush.
             if not item["startedAt"] - 1 <= stamp <= item["finishedAt"] + 1:
                 continue

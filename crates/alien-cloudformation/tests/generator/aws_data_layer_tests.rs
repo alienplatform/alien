@@ -89,6 +89,153 @@ fn aws_key_template_is_valid_and_retained() {
     );
 }
 
+/// A key that only the runtime uses (like the Private Alien Instance's secrets key)
+/// is usable by the runtime roles that hold a grant on it and by nobody else.
+fn instance_secrets_stack() -> Stack {
+    let mut stack = Stack::new("instance-secrets".to_string())
+        .permissions(alien_core::PermissionsConfig::new().with_profile(
+            "manager",
+            PermissionProfile::new().resource("secrets", ["key/remote-cryptography"]),
+        ))
+        .add(
+            Key::new("secrets".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("manager-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("bystander-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    stack.permissions.management =
+        alien_core::ManagementPermissions::Extend(PermissionProfile::new().resource(
+            "secrets",
+            [
+                PermissionSetReference::from_name("key/management"),
+                PermissionSetReference::from_name("key/availability"),
+            ],
+        ));
+    stack
+}
+
+#[test]
+fn aws_runtime_only_key_denies_every_principal_but_its_runtime_roles() {
+    let (template, yaml) = render_built_ins_template(
+        &instance_secrets_stack(),
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        alien_cloudformation::CloudFormationTarget::Aws,
+        "aws",
+        "aws runtime only key",
+    );
+    if let Ok(path) = std::env::var("ALIEN_DUMP_KEY_TEMPLATE") {
+        std::fs::write(path, &yaml).expect("write template");
+    }
+    let key = template
+        .resources
+        .values()
+        .find(|resource| resource.resource_type == "AWS::KMS::Key")
+        .expect("KMS key should render");
+    let policy = serde_json::to_value(&key.properties["KeyPolicy"]).expect("serialize key policy");
+    let statements = policy["Statement"].as_array().expect("statements");
+    let deny = statements
+        .iter()
+        .find(|statement| statement["Sid"] == "DenyKeyUseOutsideRuntime")
+        .expect("allowlist deny");
+    assert_eq!(
+        deny["Condition"]["ArnNotEquals"]["aws:PrincipalArn"],
+        serde_json::json!([{
+            "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-manager-sa"
+        }]),
+        "only the service account granted the key is on the allowlist"
+    );
+    assert!(statements
+        .iter()
+        .any(|statement| statement["Sid"] == "DenyManagementKeyAdministration"));
+    // Management can create `<stack>-x`, grant it kms:PutKeyPolicy and assume it,
+    // so administration is denied to every role under the stack's name prefix.
+    let admin = statements
+        .iter()
+        .find(|statement| statement["Sid"] == "DenyStackRoleKeyAdministration")
+        .expect("stack-prefix administration deny");
+    assert_eq!(
+        admin["Condition"],
+        serde_json::json!({ "ArnLike": { "aws:PrincipalArn": {
+            "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*"
+        } } })
+    );
+    assert!(admin["Action"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("kms:PutKeyPolicy")));
+}
+
+#[test]
+fn aws_data_key_exempts_only_native_encryption_services_for_management() {
+    let mut stack = Stack::new("data-key".to_string())
+        .add(
+            Key::new("data-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("data".to_string())
+                .encryption_key(ResourceRef::new(Key::RESOURCE_TYPE, "data-key"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    stack.permissions.management =
+        alien_core::ManagementPermissions::Extend(PermissionProfile::new().resource(
+            "data-key",
+            [PermissionSetReference::from_name("key/management")],
+        ));
+    let (template, yaml) = render_built_ins_template(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        alien_cloudformation::CloudFormationTarget::Aws,
+        "aws",
+        "aws data key",
+    );
+    if let Ok(path) = std::env::var("ALIEN_DUMP_DATA_KEY_TEMPLATE") {
+        std::fs::write(path, &yaml).expect("write template");
+    }
+    let key = template
+        .resources
+        .values()
+        .find(|resource| resource.resource_type == "AWS::KMS::Key")
+        .expect("KMS key should render");
+    let policy = serde_json::to_value(&key.properties["KeyPolicy"]).expect("serialize key policy");
+    let statements = policy["Statement"].as_array().expect("statements");
+    assert!(
+        !statements
+            .iter()
+            .any(|statement| statement["Sid"] == "DenyKeyUseOutsideRuntime"),
+        "the customer's own principals read the data this key protects"
+    );
+    let direct = statements
+        .iter()
+        .find(|statement| statement["Sid"] == "DenyManagementKeyUse")
+        .expect("management key-use deny");
+    assert_eq!(
+        direct["Condition"]["StringNotLike"],
+        serde_json::json!({
+            "kms:ViaService": ["ec2.*.amazonaws.com", "rds.*.amazonaws.com", "s3.*.amazonaws.com"]
+        })
+    );
+}
+
 #[test]
 fn aws_storage_uses_customer_managed_key() {
     let stack = Stack::new("encrypted-storage".to_string())

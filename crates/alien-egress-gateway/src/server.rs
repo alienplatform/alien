@@ -172,7 +172,7 @@ pub async fn serve(
                     Ok(permits) => permits,
                     Err(_) => {
                         gateway.denied.fetch_add(1, Ordering::Relaxed);
-                        if registry.record_denial(0) { tracing::info!(event = "close", decision = "deny", reason = if limit.available_permits() == 0 { "global connection capacity" } else { "source connection capacity" }, max_connections, "egress connection"); }
+                        if registry.record_denial(0) { log_capacity_denial(if limit.available_permits() == 0 { "global connection capacity" } else { "source connection capacity" }, max_connections); }
                         continue;
                     }
                 };
@@ -242,11 +242,7 @@ async fn connection(stream: TcpStream, gateway: Arc<Gateway>, source: SourcePerm
         gateway.connections.record_denial(category)
     };
     if log {
-        tracing::info!(event = "close", ts = %chrono::Utc::now().to_rfc3339(), aud = %audit.aud, sub = %audit.sub,
-            host = %audit.host, port = audit.port, decision = if allowed { "allow" } else { "deny" },
-            closeReason = %reason, reason = %reason, bytesUp = counters.up.load(Ordering::Relaxed),
-            bytesDown = counters.down.load(Ordering::Relaxed), durationMs = started.elapsed().as_millis() as u64,
-            "egress connection");
+        log_close(&audit, allowed, &reason, &counters, started.elapsed());
     }
 }
 
@@ -437,9 +433,31 @@ async fn authorized_proxy(
     Ok(())
 }
 
+// Audit records. The JSON layer writes each record's `message` and `timestamp`, so these
+// fields must not repeat either one: a log collector drops a timestamp that two fields
+// disagree on. `connectionEvent` avoids `event`, which structlog uses as its message.
+
 fn log_open(audit: &Audit) {
-    tracing::info!(event = "open", ts = %chrono::Utc::now().to_rfc3339(), aud = %audit.aud, sub = %audit.sub,
+    tracing::info!(connectionEvent = "open", aud = %audit.aud, sub = %audit.sub,
         host = %audit.host, port = audit.port, decision = "allow", "egress connection");
+}
+
+fn log_close(audit: &Audit, allowed: bool, reason: &str, counters: &Counters, elapsed: Duration) {
+    tracing::info!(connectionEvent = "close", aud = %audit.aud, sub = %audit.sub,
+        host = %audit.host, port = audit.port, decision = if allowed { "allow" } else { "deny" },
+        closeReason = %reason, reason = %reason, bytesUp = counters.up.load(Ordering::Relaxed),
+        bytesDown = counters.down.load(Ordering::Relaxed), durationMs = elapsed.as_millis() as u64,
+        "egress connection");
+}
+
+fn log_capacity_denial(reason: &str, max_connections: usize) {
+    tracing::info!(
+        connectionEvent = "close",
+        decision = "deny",
+        reason,
+        max_connections,
+        "egress connection"
+    );
 }
 
 async fn refuse(stream: &mut (impl tokio::io::AsyncWrite + Unpin), policy: bool) -> Result<()> {
@@ -540,4 +558,112 @@ fn inspect_head(input: &[u8]) -> Result<(Option<Target>, String, bool, usize)> {
         connect,
         head_len,
     ))
+}
+
+#[cfg(test)]
+mod audit_log_tests {
+    use std::{
+        io::Write,
+        sync::{atomic::Ordering, Arc, Mutex},
+        time::Duration,
+    };
+
+    use tracing_subscriber::{fmt::MakeWriter, layer::SubscriberExt};
+
+    use super::{log_capacity_denial, log_close, log_open, Audit};
+    use crate::{io::Counters, logging::json_layer};
+
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Captured {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for Captured {
+        type Writer = Captured;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Log collectors read these records with lognorm. Each one must give back its
+    /// message and the exact time the gateway wrote it, not the raw line and no time.
+    #[test]
+    fn audit_records_keep_their_message_and_timestamp_in_log_collectors() {
+        let output = Captured::default();
+        let subscriber = tracing_subscriber::registry().with(json_layer(output.clone()));
+        let audit = Audit {
+            aud: "deployment/resource".into(),
+            sub: "sandbox".into(),
+            host: "allowed.test".into(),
+            port: 443,
+            allowed: true,
+        };
+        let counters = Counters::default();
+        counters.up.store(10, Ordering::Relaxed);
+        counters.down.store(20, Ordering::Relaxed);
+
+        tracing::subscriber::with_default(subscriber, || {
+            log_open(&audit);
+            log_close(
+                &audit,
+                false,
+                "Invalid egress input: incomplete request",
+                &counters,
+                Duration::from_millis(7),
+            );
+            log_capacity_denial("global connection capacity", 64);
+        });
+
+        let text = String::from_utf8(output.0.lock().unwrap().clone()).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 3, "{text}");
+        for (line, connection_event) in lines.iter().zip(["open", "close", "close"]) {
+            let log = lognorm::parse(line);
+            assert_eq!(log.outcome(), lognorm::ParseOutcome::Structured, "{line}");
+            assert_eq!(log.message(), "egress connection", "{line}");
+            assert_eq!(log.severity(), Some(lognorm::Severity::Info), "{line}");
+            let written =
+                chrono::DateTime::parse_from_rfc3339(log.fields()["timestamp"].as_str().unwrap())
+                    .unwrap();
+            let timestamp = log
+                .timestamp()
+                .unwrap_or_else(|| panic!("no timestamp: {line}"));
+            assert_eq!(
+                (timestamp.unix_seconds(), timestamp.nanoseconds()),
+                (written.timestamp(), written.timestamp_subsec_nanos()),
+                "{line}"
+            );
+            assert_eq!(log.fields()["connectionEvent"], connection_event, "{line}");
+        }
+
+        let open = lognorm::parse(lines[0]);
+        assert_eq!(open.fields()["decision"], "allow");
+        assert_eq!(open.fields()["sub"], "sandbox");
+        assert_eq!(open.fields()["host"], "allowed.test");
+        assert_eq!(open.fields()["port"], 443);
+
+        let close = lognorm::parse(lines[1]);
+        assert_eq!(close.fields()["decision"], "deny");
+        assert_eq!(
+            close.fields()["closeReason"],
+            "Invalid egress input: incomplete request"
+        );
+        assert_eq!(close.fields()["bytesUp"], 10);
+        assert_eq!(close.fields()["bytesDown"], 20);
+        assert_eq!(close.fields()["durationMs"], 7);
+
+        let capacity = lognorm::parse(lines[2]);
+        assert_eq!(capacity.fields()["reason"], "global connection capacity");
+        assert_eq!(capacity.fields()["max_connections"], 64);
+    }
 }
