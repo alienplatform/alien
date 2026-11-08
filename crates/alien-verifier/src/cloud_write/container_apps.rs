@@ -83,6 +83,8 @@ fn app_rows<'a>(facts: &'a Facts<'a>, environment: Option<&'a str>) -> Vec<Row<'
                 .as_deref()
                 .ok_or_else(|| "the workload names no permission profile".to_string())?;
             let own = facts.place.run_as(profile);
+            // A linked service account would add an identity here; the signed release gives a
+            // protected worker its profile's identity only, so any other is refused.
             let ids: Vec<&String> = value["userAssignedIdentities"]
                 .as_object()
                 .map(|ids| ids.keys().collect())
@@ -90,18 +92,9 @@ fn app_rows<'a>(facts: &'a Facts<'a>, environment: Option<&'a str>) -> Vec<Row<'
             if !ids.iter().any(|id| id.eq_ignore_ascii_case(&own)) {
                 return Err(format!("it doesn't run as {own}"));
             }
-            let install = format!(
-                "{}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}-",
-                resource_group(facts),
-                facts.place.prefix
-            )
-            .to_lowercase();
-            match ids
-                .iter()
-                .find(|id| !id.to_lowercase().starts_with(&install))
-            {
+            match ids.iter().find(|id| !id.eq_ignore_ascii_case(&own)) {
                 Some(other) => Err(format!(
-                    "it also runs as {other}, not one of the install's identities"
+                    "it also runs as {other}, which isn't an identity the workload's permission profile names"
                 )),
                 None => Ok(()),
             }
@@ -531,7 +524,32 @@ mod tests {
                         "{GROUP}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/admin"
                     )] = json!({});
                 }),
-                "not one of the install's identities",
+                "which isn't an identity the workload's permission profile names",
+            ),
+            (
+                // The verifier's own identity: it reads the signing vault and writes the apps.
+                Box::new(|a| {
+                    a["identity"]["userAssignedIdentities"][format!(
+                        "{GROUP}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{PREFIX}-verifier"
+                    )] = json!({});
+                }),
+                "isn't an identity the workload's permission profile names",
+            ),
+            (
+                // Another permission profile's identity.
+                Box::new(|a| {
+                    a["identity"]["userAssignedIdentities"][place().run_as("reader")] = json!({});
+                }),
+                "isn't an identity the workload's permission profile names",
+            ),
+            (
+                // Setup's management identity.
+                Box::new(|a| {
+                    a["identity"]["userAssignedIdentities"][format!(
+                        "{GROUP}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{PREFIX}-management-sa"
+                    )] = json!({});
+                }),
+                "isn't an identity the workload's permission profile names",
             ),
             (
                 Box::new(|a| {
