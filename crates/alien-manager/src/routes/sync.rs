@@ -677,7 +677,11 @@ async fn reconcile(
     // Only a setup run, reported by a caller outside the deployment, may turn a
     // recorded decline into a yes: its prepared stack already holds the resource.
     let setup_may_turn_gate_on = !matches!(subject.scope, crate::auth::Scope::Deployment { .. })
-        && final_state.status == alien_core::DeploymentStatus::InitialSetup
+        && matches!(
+            final_state.status,
+            alien_core::DeploymentStatus::InitialSetup
+                | alien_core::DeploymentStatus::InitialSetupFailed
+        )
         && final_state
             .runtime_metadata
             .as_ref()

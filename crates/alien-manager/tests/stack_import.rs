@@ -2344,7 +2344,7 @@ async fn an_import_carrying_a_deployer_secret_value_is_refused() {
 /// The recorded answers must survive such a write — a decline especially,
 /// since nothing in the settled state can prove one after the fact.
 #[tokio::test]
-async fn a_state_write_back_without_the_answer_map_does_not_erase_the_record_and_setup_can_turn_it_on() {
+async fn a_write_back_without_the_answer_map_keeps_the_record_and_import_can_turn_it_on() {
     let fixture = make_fixture(Some(stack_with_gated_storage("assets", "extras"))).await;
 
     // The template omitted the gated store: a decline, recorded at import.
@@ -2541,6 +2541,16 @@ async fn a_state_write_back_without_the_answer_map_does_not_erase_the_record_and
 /// not a setup run, may not.
 #[tokio::test]
 async fn only_a_setup_run_report_can_turn_a_recorded_decline_into_a_yes() {
+    // A setup run whose first step fails reports the failure with the same prepared state.
+    for setup_status in [
+        DeploymentStatus::InitialSetup,
+        DeploymentStatus::InitialSetupFailed,
+    ] {
+        setup_run_report_turns_a_decline_into_a_yes(setup_status).await;
+    }
+}
+
+async fn setup_run_report_turns_a_decline_into_a_yes(setup_status: DeploymentStatus) {
     let fixture = make_fixture(Some(stack_with_gated_storage("assets", "extras"))).await;
     let declined = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
     let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &declined).await;
@@ -2612,7 +2622,7 @@ async fn only_a_setup_run_report_can_turn_a_recorded_decline_into_a_yes() {
         &deployment_token,
         "/v1/sync/reconcile",
         report(
-            DeploymentStatus::InitialSetup,
+            setup_status.clone(),
             alien_core::InitialSetupAuthority::DirectSetup,
         ),
     )
@@ -2640,7 +2650,7 @@ async fn only_a_setup_run_report_can_turn_a_recorded_decline_into_a_yes() {
         &fixture.dg_token,
         "/v1/sync/reconcile",
         report(
-            DeploymentStatus::InitialSetup,
+            setup_status.clone(),
             alien_core::InitialSetupAuthority::DirectSetup,
         ),
     )
