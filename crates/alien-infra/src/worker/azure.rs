@@ -2710,6 +2710,21 @@ impl AzureWorkerController {
             self.update_rbac_wait_required = func_cfg != previous_cfg;
         }
 
+        // The worker's own binding names the address Azure reports for the app, which a
+        // worker recorded without it (imported, or deployed before it was kept) would otherwise
+        // replace with its public URL, possibly a custom domain, and an update can come before
+        // any heartbeat records it. Take it from the app read for this update.
+        let live = client
+            .get_container_app(&resource_group_name, &container_app_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to read the Container App for an update".to_string(),
+                resource_id: Some(func_cfg.id.clone()),
+            })?;
+        if let Some(address) = self.extract_url_from_container_app(&live) {
+            self.container_app_url = Some(address);
+        }
+
         let desired_app = self
             .desired_container_app(func_cfg, &container_app_name, azure_cfg, ctx)
             .await?;
@@ -2860,11 +2875,15 @@ impl AzureWorkerController {
                     self.container_app_url = container_app_url.clone();
 
                     // Check for URL override in deployment config, otherwise use Container App URL
-                    self.url = func_cfg
-                        .configured_primary_public_url(
-                            ctx.deployment_config.public_endpoints.as_ref(),
-                        )
-                        .or(container_app_url);
+                    self.url = if verifier::is_protected(ctx) {
+                        container_app_url
+                    } else {
+                        func_cfg
+                            .configured_primary_public_url(
+                                ctx.deployment_config.public_endpoints.as_ref(),
+                            )
+                            .or(container_app_url)
+                    };
 
                     Ok(HandlerAction::Continue {
                         state: UpdateDaprComponents,
@@ -3874,7 +3893,6 @@ impl AzureWorkerController {
             let private_url = self
                 .container_app_url
                 .clone()
-                .or_else(|| self.url.clone())
                 .unwrap_or_else(|| format!("https://{}", container_app_name));
 
             let binding = WorkerBinding::ContainerApp(ContainerAppWorkerBinding {
@@ -4269,7 +4287,7 @@ impl AzureWorkerController {
                 self.keyvault_cert_id = domain_info.keyvault_cert_id;
                 self.container_apps_certificate_id = domain_info.container_apps_certificate_id;
                 self.uses_custom_domain = domain_info.uses_custom_domain;
-                if self.url.is_none() {
+                if self.url.is_none() && !verifier::is_protected(ctx) {
                     self.url = config
                         .configured_primary_public_url(
                             ctx.deployment_config.public_endpoints.as_ref(),
@@ -4307,13 +4325,12 @@ impl AzureWorkerController {
         self.container_app_url = container_app_url.clone();
 
         // Check for URL override in deployment config, otherwise use Container App URL
-        if let Ok(config) = ctx.desired_resource_config::<Worker>() {
-            self.url = config
+        self.url = match ctx.desired_resource_config::<Worker>() {
+            Ok(config) if !verifier::is_protected(ctx) => config
                 .configured_primary_public_url(ctx.deployment_config.public_endpoints.as_ref())
-                .or(container_app_url);
-        } else {
-            self.url = container_app_url;
-        }
+                .or(container_app_url),
+            _ => container_app_url,
+        };
 
         self.pending_operation_url = None;
         self.pending_operation_retry_after = None;
@@ -7391,6 +7408,8 @@ mod tests {
                 image: "registry.example.com/worker:new".into(),
             };
             let mut apps = MockContainerAppsApi::new();
+            apps.expect_get_container_app()
+                .returning(|_, name| Ok(create_successful_container_app_response(name, true)));
             apps.expect_update_container_app()
                 .times(1)
                 .returning(move |_, name, app| {
@@ -8064,6 +8083,8 @@ mod tests {
             let captured = Arc::new(Mutex::new(None));
             let sink = captured.clone();
             let mut apps = MockContainerAppsApi::new();
+            apps.expect_get_container_app()
+                .returning(|_, name| Ok(create_successful_container_app_response(name, false)));
             apps.expect_update_container_app()
                 .returning(move |_, name, app| {
                     *sink.lock().unwrap() = Some(app.clone());
@@ -8157,6 +8178,66 @@ mod tests {
                 controller.get_binding_params().unwrap(),
                 own_binding,
                 "a refresh must not change the worker's own binding, or its dependents would follow"
+            );
+        }
+
+        /// A worker recorded without its Container Apps address, behind a custom domain, is
+        /// updated before any heartbeat records the address. The update must still name the
+        /// address Azure reports as the own binding's private URL, not the custom domain, since
+        /// a protected install's verifier accepts only the former.
+        #[tokio::test]
+        async fn an_update_names_the_address_container_apps_reports_without_a_heartbeat() {
+            const ADDRESS: &str = "https://basic-func.azurecontainerapps.io";
+            let own = format!(
+                "ALIEN_{}_BINDING",
+                basic_function().id.replace('-', "_").to_uppercase()
+            );
+            let mut live = rendered_app(OLD_IMAGE).await;
+            let reported = create_successful_container_app_response("basic-func", true)
+                .properties
+                .and_then(|properties| properties.configuration)
+                .and_then(|configuration| configuration.ingress);
+            live.properties
+                .as_mut()
+                .and_then(|properties| properties.configuration.as_mut())
+                .expect("the rendered app has configuration")
+                .ingress = reported;
+            let mut apps = MockContainerAppsApi::new();
+            serving(live, &mut apps);
+            apps.expect_update_container_app()
+                .times(1)
+                .withf(move |_, _, app| {
+                    let binding: serde_json::Value =
+                        serde_json::from_str(&main_env(app)[&own]).expect("the own binding is JSON");
+                    binding["privateUrl"] == ADDRESS
+                        && binding["publicUrl"] == "https://api.acme.example"
+                })
+                .returning(|_, name, _| {
+                    Ok(OperationResult::Completed(
+                        create_successful_container_app_response(name, true),
+                    ))
+                });
+            let mut worker = AzureWorkerController {
+                state: AzureWorkerState::UpdateStart,
+                ..AzureWorkerController::mock_ready("basic-func")
+            };
+            worker.url = Some("https://api.acme.example".to_string());
+            worker.container_app_url = None;
+            let mut executor = executor(
+                apps,
+                worker,
+                sandbox_on(NEW_IMAGE, AzureSandboxState::Ready),
+                Some(prepared_worker().await),
+            )
+            .await;
+            executor.step().await.expect("the update runs");
+            assert_eq!(
+                executor
+                    .internal_state::<AzureWorkerController>()
+                    .unwrap()
+                    .container_app_url
+                    .as_deref(),
+                Some(ADDRESS)
             );
         }
 
@@ -8418,13 +8499,65 @@ mod tests {
         }
     }
 
+    /// A worker whose update just settled, with a custom domain the manager chose for it: the
+    /// unprotected install shows the domain, a protected install shows the address Container
+    /// Apps reports, which its verifier reads back.
+    #[tokio::test]
+    async fn a_protected_worker_shows_the_container_apps_address_not_the_managers_domain() {
+        let custom = "https://api.example.test";
+        let worker = function_public_ingress();
+        let app_name = "test-public-func";
+        let mut shown = Vec::new();
+        for protected in [false, true] {
+            let mut apps = MockContainerAppsApi::new();
+            apps.expect_get_container_app()
+                .returning(move |_, _| Ok(create_successful_container_app_response(app_name, true)));
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(worker.clone())
+                .controller(AzureWorkerController {
+                    state: AzureWorkerState::UpdatingContainerApp,
+                    ..AzureWorkerController::mock_ready(app_name)
+                })
+                .platform(Platform::Azure)
+                .service_provider(setup_mock_service_provider(Arc::new(apps), None))
+                .public_endpoints(HashMap::from([(
+                    worker.id.clone(),
+                    HashMap::from([("api".to_string(), custom.to_string())]),
+                )]))
+                .stack_settings(if protected {
+                    protected_settings()
+                } else {
+                    StackSettings::default()
+                })
+                .with_test_dependencies()
+                .build()
+                .await
+                .unwrap();
+            executor.step().await.expect("the update settled");
+            shown.push(
+                executor
+                    .internal_state::<AzureWorkerController>()
+                    .unwrap()
+                    .url
+                    .clone(),
+            );
+        }
+        assert_eq!(
+            shown,
+            [
+                Some(custom.to_string()),
+                Some(format!("https://{app_name}.azurecontainerapps.io"))
+            ]
+        );
+    }
+
     /// Container Apps on a protected install: reads succeed and nothing may update the app.
     fn protected_provider() -> Arc<MockPlatformServiceProvider> {
         let mut apps = MockContainerAppsApi::new();
         apps.expect_get_container_app().returning(|_, _| {
             Ok(create_successful_container_app_response(
                 PROTECTED_APP,
-                false,
+                true,
             ))
         });
         apps.expect_update_container_app().never();

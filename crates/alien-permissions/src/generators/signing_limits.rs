@@ -266,6 +266,7 @@ pub fn aws_verifier_policy(prefix: &str, account: &str, region: &str, publisher:
                 "Action": [
                     "lambda:GetFunction",
                     "lambda:GetFunctionConfiguration",
+                    "lambda:GetFunctionUrlConfig",
                     "lambda:ListVersionsByFunction",
                     "lambda:ListAliases",
                     // It keeps a function's resource policy to what the signed stack grants.

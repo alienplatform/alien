@@ -970,9 +970,13 @@ impl GcpWorkerController {
 
         // Check for URL override in deployment config, otherwise use Cloud Run URL
         let config = ctx.desired_resource_config::<Worker>()?;
-        self.url = config
-            .configured_primary_public_url(ctx.deployment_config.public_endpoints.as_ref())
-            .or(cloud_run_url);
+        self.url = if verifier::is_protected(ctx) {
+            cloud_run_url
+        } else {
+            config
+                .configured_primary_public_url(ctx.deployment_config.public_endpoints.as_ref())
+                .or(cloud_run_url)
+        };
 
         info!(name=%service_name, url=?self.url, "Cloud Run service created successfully");
 
@@ -4870,7 +4874,7 @@ impl GcpWorkerController {
                 self.certificate_id = domain_info.certificate_id;
                 self.ssl_certificate_name = domain_info.ssl_certificate_name;
                 self.uses_custom_domain = domain_info.uses_custom_domain;
-                if self.url.is_none() {
+                if self.url.is_none() && !verifier::is_protected(ctx) {
                     self.url = config
                         .configured_primary_public_url(
                             ctx.deployment_config.public_endpoints.as_ref(),
@@ -9396,6 +9400,53 @@ mod tests {
                 GcpWorkerState::UpdateEnsuringPublicExposure
             );
         }
+    }
+
+    /// A worker that has just been created, with a custom domain the manager chose for it: the
+    /// unprotected install shows the domain, a protected install shows the address Cloud Run
+    /// reports, which its verifier reads back.
+    #[tokio::test]
+    async fn a_protected_worker_shows_the_cloud_run_address_not_the_managers_domain() {
+        let custom = "https://api.example.test";
+        let worker = function_public_ingress();
+        let cloud_run = format!("https://{}-abcd1234-uc.a.run.app", worker.id);
+        let mut shown = Vec::new();
+        for protected in [false, true] {
+            let mut cloudrun = MockCloudRunApi::new();
+            cloudrun
+                .expect_get_service()
+                .returning(|_, name| Ok(create_successful_service_response(&name)));
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(worker.clone())
+                .controller(GcpWorkerController {
+                    state: GcpWorkerState::WaitingForServiceCreation,
+                    service_name: Some(worker.id.clone()),
+                    ..Default::default()
+                })
+                .platform(Platform::Gcp)
+                .service_provider(setup_mock_service_provider(Arc::new(cloudrun), None))
+                .public_endpoints(HashMap::from([(
+                    worker.id.clone(),
+                    HashMap::from([("api".to_string(), custom.to_string())]),
+                )]))
+                .stack_settings(if protected {
+                    protected_settings()
+                } else {
+                    StackSettings::default()
+                })
+                .build()
+                .await
+                .unwrap();
+            executor.step().await.expect("the service is ready");
+            shown.push(
+                executor
+                    .internal_state::<GcpWorkerController>()
+                    .unwrap()
+                    .url
+                    .clone(),
+            );
+        }
+        assert_eq!(shown, [Some(custom.to_string()), Some(cloud_run)]);
     }
 
     // ─────────────── PROTECTED INSTALL TESTS ───────────────────────

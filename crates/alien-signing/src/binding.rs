@@ -55,19 +55,15 @@ pub struct OwnBindingFacts {
     pub resource_group: Option<String>,
     /// The Cloud Run location the service is in: the one the enforcer is configured with.
     pub location: Option<String>,
-    /// The addresses the cloud reports for the resource: the only ones a field that picks where
-    /// requests go (`privateUrl`, `internalUrl`) may carry.
+    /// The addresses the enforcer reads from the cloud for the resource: the only ones any URL
+    /// field (`privateUrl`, `publicUrl`, a Lambda function's `url`) may carry. A name the
+    /// control plane picked, such as a custom or generated domain, is in none of them.
     pub urls: Vec<String>,
-    /// The public endpoint URLs the deployment provides to the workload. The control plane
-    /// chooses them and the enforcer can't verify them, so they can fill only fields that
-    /// destine no request (`publicUrl`, a Lambda function's `url`).
-    pub public_urls: Vec<String>,
 }
 
 /// Check `value`, a workload's own binding, against `facts`: the binding of the platform the
 /// workload runs on, naming the workload's own resource and nothing else, with no field the
-/// install doesn't decide, every destination one of `facts.urls` and every display URL one of
-/// those or `facts.public_urls`.
+/// install doesn't decide and every URL one of `facts.urls`.
 pub fn check_own_binding(value: &str, facts: &OwnBindingFacts) -> std::result::Result<(), String> {
     let context = facts
         .context
@@ -88,7 +84,7 @@ pub fn check_own_binding(value: &str, facts: &OwnBindingFacts) -> std::result::R
                 .map_or("missing".to_string(), |v| v.to_string())
         )),
     };
-    let url = |key: &str, required: bool, display: bool| match object.get(key) {
+    let url = |key: &str, required: bool| match object.get(key) {
         None if !required => Ok(()),
         None => Err(format!("it has no {key}")),
         Some(found) => {
@@ -96,15 +92,8 @@ pub fn check_own_binding(value: &str, facts: &OwnBindingFacts) -> std::result::R
                 .as_str()
                 .ok_or_else(|| format!("its {key} isn't a URL"))?;
             let same = |url: &String| url.trim_end_matches('/') == found.trim_end_matches('/');
-            let allowed =
-                facts.urls.iter().any(same) || (display && facts.public_urls.iter().any(same));
-            if allowed {
+            if facts.urls.iter().any(same) {
                 Ok(())
-            } else if display {
-                Err(format!(
-                    "its {key} is {found}, which is no URL the cloud reports for {} or the deployment provides as a public endpoint",
-                    facts.resource_name
-                ))
             } else {
                 Err(format!(
                     "its {key} is {found}, which is no URL the cloud reports for {}",
@@ -137,23 +126,8 @@ pub fn check_own_binding(value: &str, facts: &OwnBindingFacts) -> std::result::R
                     .ok_or("the enforcer knows no region")?,
             )?;
             // Lambda is invoked by name through the cloud API; the URL is only what the code
-            // reports as its own. API Gateway's address for a function can't be read back by
-            // the enforcer, so besides the public endpoints, an address AWS itself gives
-            // functions in this region passes.
-            if url("url", false, true).is_err() {
-                let region = context.region.as_deref().unwrap_or_default();
-                let found = text("url").unwrap_or_default();
-                let aws = [
-                    format!(".lambda-url.{region}.on.aws"),
-                    format!(".execute-api.{region}.amazonaws.com"),
-                ];
-                let plain = plain_https(found).filter(|(_, port)| port.is_none());
-                if !plain.is_some_and(|(host, _)| aws.iter().any(|suffix| host.ends_with(suffix))) {
-                    return Err(format!(
-                        "its url is {found}, no address AWS gives a function in {region} and no public endpoint of the deployment"
-                    ));
-                }
-            }
+            // reports as its own, and the enforcer has to find it in its own account.
+            url("url", false)?;
         }
         "gcp" => {
             only(&[
@@ -174,8 +148,8 @@ pub fn check_own_binding(value: &str, facts: &OwnBindingFacts) -> std::result::R
                     .as_deref()
                     .ok_or("the enforcer found no such service to read its location from")?,
             )?;
-            url("privateUrl", true, false)?;
-            url("publicUrl", false, true)?;
+            url("privateUrl", true)?;
+            url("publicUrl", false)?;
         }
         "azure" => {
             only(&[
@@ -196,8 +170,8 @@ pub fn check_own_binding(value: &str, facts: &OwnBindingFacts) -> std::result::R
                     .ok_or("the enforcer knows no resource group")?,
             )?;
             expect("containerAppName", name)?;
-            url("privateUrl", true, false)?;
-            url("publicUrl", false, true)?;
+            url("privateUrl", true)?;
+            url("publicUrl", false)?;
         }
         "machines" => {
             only(&[
@@ -256,7 +230,7 @@ pub fn check_own_binding(value: &str, facts: &OwnBindingFacts) -> std::result::R
             {
                 return Err("its internalUrls isn't a map".to_string());
             }
-            url("publicUrl", false, true)?;
+            url("publicUrl", false)?;
         }
         other => return Err(format!("{other} has no own binding the enforcer can check")),
     }
@@ -377,20 +351,4 @@ fn refused(
             context.platform
         ),
     })
-}
-
-/// The host and port of `found`, a plain `https` URL: no user, no query, no fragment.
-fn plain_https(found: &str) -> Option<(String, Option<u16>)> {
-    let parsed = url::Url::parse(found).ok()?;
-    (parsed.scheme() == "https"
-        && parsed.username().is_empty()
-        && parsed.password().is_none()
-        && parsed.query().is_none()
-        && parsed.fragment().is_none())
-    .then(|| {
-        parsed
-            .host_str()
-            .map(|host| (host.to_string(), parsed.port()))
-    })
-    .flatten()
 }

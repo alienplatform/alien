@@ -39,7 +39,7 @@ fn local() -> LocalValues {
                 region: None,
             }),
             resource_name: "web".to_string(),
-            public_urls: vec!["https://web.acme.example".to_string()],
+            urls: vec!["https://web.acme.example".to_string()],
             ..OwnBindingFacts::default()
         },
     }

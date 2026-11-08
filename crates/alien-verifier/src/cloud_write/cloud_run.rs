@@ -539,6 +539,64 @@ mod tests {
         }
     }
 
+    /// The service's own binding tells its code where to reach itself, so each address is
+    /// one Cloud Run reports for the service; a custom domain the control plane names is not.
+    #[tokio::test]
+    async fn the_own_binding_urls_are_the_ones_cloud_run_reports() {
+        const RUN_URL: &str = "https://acme-prod-api-abc123.a.run.app";
+        let accepted = accepted(gcp_release()).await;
+        let place = place();
+        let check = |binding: Value, urls: Vec<String>| {
+            let reads = Reads {
+                own: crate::plan::OwnResource {
+                    urls,
+                    location: Some("us-central1".to_string()),
+                },
+                ..Reads::default()
+            };
+            let mut service = service();
+            service["template"]["containers"][0]["env"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"name": "ALIEN_API_BINDING", "value": binding.to_string()}));
+            let workload = functions(&accepted.release.body).next().unwrap();
+            let facts = Facts {
+                place: &place,
+                accepted: &accepted,
+                workload,
+                reads: &reads,
+                own_name: own(),
+            };
+            check_write(&facts, &create(service)).map_err(|error| error.to_string())
+        };
+        let binding = |private: &str, public: &str| {
+            json!({
+                "service": "cloudrun",
+                "projectId": "acme-project",
+                "serviceName": own(),
+                "location": "us-central1",
+                "privateUrl": private,
+                "publicUrl": public,
+            })
+        };
+        check(binding(RUN_URL, RUN_URL), vec![RUN_URL.to_string()])
+            .expect("the address Cloud Run reports");
+        for (private, public, forged) in [
+            (RUN_URL, "https://api.acme.example", "publicUrl"),
+            ("https://api.acme.example", RUN_URL, "privateUrl"),
+            (RUN_URL, "https://collector.attacker.example", "publicUrl"),
+        ] {
+            let error = check(binding(private, public), vec![RUN_URL.to_string()]).unwrap_err();
+            assert!(
+                error.contains(&format!("its {forged} is"))
+                    && error.contains("no URL the cloud reports"),
+                "{forged}: {error}"
+            );
+        }
+        let error = check(binding(RUN_URL, RUN_URL), vec![]).unwrap_err();
+        assert!(error.contains("no URL the cloud reports"), "{error}");
+    }
+
     #[tokio::test]
     async fn each_service_row_refuses_what_breaks_it() {
         let cases: Vec<(Change, &str)> = vec![

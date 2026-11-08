@@ -366,10 +366,7 @@ mod tests {
     }
 
     fn azure_release() -> SignedStatement {
-        let mut workload = function_workload_with(&format!("{IMAGE_HOST}/api@{DIGEST}"));
-        workload
-            .provided_env
-            .push("ALIEN_PUBLIC_ENDPOINTS_JSON".to_string());
+        let workload = function_workload_with(&format!("{IMAGE_HOST}/api@{DIGEST}"));
         let mut body = release_body(vec![workload]);
         body.platform = "azure".to_string();
         signed_release(1, &body)
@@ -538,11 +535,6 @@ mod tests {
                 .as_array_mut()
                 .unwrap();
             env.push(json!({"name": "ALIEN_API_BINDING", "value": binding.to_string()}));
-            // The control plane's own word for the app's public endpoints.
-            env.push(json!({
-                "name": "ALIEN_PUBLIC_ENDPOINTS_JSON",
-                "value": json!({"api": {"url": "https://api.acme.example"}}).to_string(),
-            }));
             CloudWrite::UpdateContainerApp { name: own(), app }
         };
         let reads = || Reads {
@@ -555,11 +547,27 @@ mod tests {
         checked_reading(with(&own_binding()), reads())
             .await
             .expect("the binding the controller writes once the app has its address");
-        let mut custom_domain = own_binding();
-        custom_domain["publicUrl"] = json!("https://api.acme.example");
-        checked_reading(with(&custom_domain), reads())
-            .await
-            .expect("a public endpoint the deployment provides is what the app displays");
+        let mut forged_list = app();
+        forged_list["properties"]["template"]["containers"][0]["env"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "name": "ALIEN_PUBLIC_ENDPOINTS_JSON",
+                "value": json!({"api": {"url": "https://api.acme.example"}}).to_string(),
+            }));
+        let error = checked_reading(
+            CloudWrite::UpdateContainerApp {
+                name: own(),
+                app: forged_list,
+            },
+            reads(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("lists public URLs the control plane chose"),
+            "{error}"
+        );
         let cases: Vec<(Box<dyn Fn(&mut Value)>, &str)> = vec![
             (
                 // The same word cannot also say where requests go.
@@ -573,6 +581,11 @@ mod tests {
             (
                 Box::new(|b| b["publicUrl"] = json!("https://collector.attacker.example")),
                 "its publicUrl is https://collector.attacker.example",
+            ),
+            (
+                // A custom domain the manager chose is not shown to a protected app.
+                Box::new(|b| b["publicUrl"] = json!("https://api.acme.example")),
+                "its publicUrl is https://api.acme.example, which is no URL the cloud reports",
             ),
             (
                 Box::new(|b| {

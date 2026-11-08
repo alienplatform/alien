@@ -1249,12 +1249,33 @@ esac
     def current_message(self):
         return self.releases[-1]["message"]
 
+    def publish_unsigned_directly(self):
+        """What a stranger with manager access does: `alien release` itself
+        refuses to publish an unsigned release to a channel protected
+        deployments follow, so the request goes straight to the manager,
+        pointing the stack at the image the vendor never released."""
+        if not hasattr(self, "evil_manifest"):
+            self.push_evil_image()
+        previous = self.manager_get(f"/v1/releases/{self.releases[-1]['id']}")
+        stack = copy.deepcopy(previous["stack"])
+        code = stack["kubernetes"]["resources"]["app"]["config"]["code"]
+        code["image"] = re.sub(r"[:@][^/]*$", ":evil", code["image"])
+        before = self.release_ids()
+        self.manager_post("/v1/releases", {"projectId": "default", "stack": stack})
+        new = [i for i in self.release_ids() if i not in before]
+        if len(new) != 1:
+            raise RuntimeError(f"expected one new release, found {new}")
+        log(f"released an unsigned stack as stranger as {new[0]}: {code['image']}")
+
     def run_unsigned_release(self):
         name = "unsigned-release"
         log(f"attack {name}: anyone with manager access publishes an unsigned release")
         before = self.snapshot()
         since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        self.release("unsigned", who="stranger")
+        if self.protected:
+            self.publish_unsigned_directly()
+        else:
+            self.release("unsigned", who="stranger")
         if self.protected:
             refusal = wait_until("the Operator to refuse the unsigned release", lambda: next(
                 (line for line in self.operator_logs(since).splitlines()
@@ -1263,7 +1284,7 @@ esac
             wait_until("the manager to show the refusal", lambda: any(
                 d["status"] == "update-failed" and "RELEASE_REFUSED" in json.dumps(d.get("error"))
                 for d in self.manager_get("/v1/deployments").get("items", [])), timeout=120)
-            effect = self.app_message() == "unsigned"
+            effect = self.app_message() == "evil"
             after = self.snapshot()
             changed = sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
             passed = not effect and not changed

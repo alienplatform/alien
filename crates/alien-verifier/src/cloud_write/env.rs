@@ -27,7 +27,8 @@ const TELEMETRY_FOLLOWERS: &[&str] = &["OTEL_SERVICE_NAME", "OTEL_RESOURCE_ATTRI
 const RUNTIME_SECRETS: &str = "ALIEN_RUNTIME_SECRETS";
 /// The install's `secrets` vault, which the runtime reads its credentials from.
 const SECRETS_VAULT: &str = "secrets";
-/// The public endpoints of the workload, which the deployment provides.
+/// The public endpoints the control plane lists for a workload. A protected workload learns its
+/// public address from its own binding, which is checked against the cloud's read.
 const PUBLIC_ENDPOINTS: &str = ENV_ALIEN_PUBLIC_ENDPOINTS_JSON;
 
 fn refused(reason: String) -> AlienError<ErrorData> {
@@ -85,6 +86,12 @@ pub fn check_env(
     let name = &workload.name;
     let config = accepted.config_body();
     let mut rest = env.clone();
+
+    if rest.contains_key(PUBLIC_ENDPOINTS) {
+        return Err(refused(format!(
+            "env {PUBLIC_ENDPOINTS} of workload '{name}' lists public URLs the control plane chose; the workload's own binding carries the address the cloud reports"
+        )));
+    }
 
     // Telemetry goes only where the signed config says.
     let endpoint = rest.remove(OTLP_LOGS_ENDPOINT);
@@ -150,7 +157,7 @@ pub fn check_env(
 
     // The function's own binding describes this function and nothing else.
     let own_key = binding_env_name(name);
-    let own_facts = own_binding_facts(place, reads, own_name, rest.get(PUBLIC_ENDPOINTS));
+    let own_facts = own_binding_facts(place, reads, own_name);
     if let Some(value) = rest.remove(&own_key) {
         check_own_binding(&value, &own_facts).map_err(|reason| {
             refused(format!(
@@ -254,23 +261,9 @@ fn check_runtime_secrets(name: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-/// What the function's own binding is checked against: the install, what the cloud reports for
-/// the function, and the public endpoint URLs the deployment provides to the workload. Those
-/// come from the control plane, so they can name only fields that destine nothing.
-fn own_binding_facts(
-    place: &Place,
-    reads: &Reads,
-    own_name: &str,
-    public_endpoints: Option<&String>,
-) -> OwnBindingFacts {
-    let endpoints: BTreeMap<String, Value> = public_endpoints
-        .and_then(|json| serde_json::from_str(json).ok())
-        .unwrap_or_default();
-    let public_urls = endpoints
-        .values()
-        .filter_map(|endpoint| endpoint["url"].as_str())
-        .map(str::to_string)
-        .collect();
+/// What the function's own binding is checked against: the install and what the cloud reports
+/// for the function.
+fn own_binding_facts(place: &Place, reads: &Reads, own_name: &str) -> OwnBindingFacts {
     OwnBindingFacts {
         context: Some(place.binding_context()),
         resource_name: own_name.to_string(),
@@ -280,6 +273,5 @@ fn own_binding_facts(
         },
         location: reads.own.location.clone(),
         urls: reads.own.urls.clone(),
-        public_urls,
     }
 }

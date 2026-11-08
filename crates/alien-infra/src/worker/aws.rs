@@ -505,7 +505,7 @@ impl AwsWorkerController {
                 self.certificate_id = domain_info.certificate_id;
                 self.certificate_arn = domain_info.certificate_arn;
                 self.uses_custom_domain = domain_info.uses_custom_domain;
-                if self.url.is_none() {
+                if self.url.is_none() && !verifier::is_protected(ctx) {
                     self.url = config
                         .configured_primary_public_url(
                             ctx.deployment_config.public_endpoints.as_ref(),
@@ -964,11 +964,13 @@ impl AwsWorkerController {
                     self.domain_name = Some(domain_info.fqdn.clone());
 
                     // Check for URL override in deployment config, otherwise use domain FQDN
-                    self.url = cfg
-                        .configured_primary_public_url(
-                            ctx.deployment_config.public_endpoints.as_ref(),
-                        )
-                        .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
+                    if !verifier::is_protected(ctx) {
+                        self.url = cfg
+                            .configured_primary_public_url(
+                                ctx.deployment_config.public_endpoints.as_ref(),
+                            )
+                            .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
+                    }
                 }
                 None => {
                     // Standalone mode: no domain metadata available.
@@ -1525,13 +1527,6 @@ impl AwsWorkerController {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
         if self.stage_name.is_some() {
-            if self.fqdn.is_some() {
-                return Ok(HandlerAction::Continue {
-                    state: CreatingApiDomain,
-                    suggested_delay: Some(Duration::from_secs(1)),
-                });
-            }
-
             let aws_cfg = ctx.get_aws_config()?;
             let api_id = self.api_id.clone().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -1539,6 +1534,19 @@ impl AwsWorkerController {
                     resource_id: Some(worker_config.id.clone()),
                 })
             })?;
+            if self.fqdn.is_some() {
+                if verifier::is_protected(ctx) {
+                    self.url = Some(format!(
+                        "https://{}.execute-api.{}.amazonaws.com",
+                        api_id, aws_cfg.region
+                    ));
+                }
+                return Ok(HandlerAction::Continue {
+                    state: CreatingApiDomain,
+                    suggested_delay: Some(Duration::from_secs(1)),
+                });
+            }
+
             self.url = Some(format!(
                 "https://{}.execute-api.{}.amazonaws.com",
                 api_id, aws_cfg.region
@@ -1584,6 +1592,12 @@ impl AwsWorkerController {
 
         if self.fqdn.is_some() {
             // Platform mode: proceed to custom domain setup
+            if verifier::is_protected(ctx) {
+                self.url = Some(format!(
+                    "https://{}.execute-api.{}.amazonaws.com",
+                    api_id, aws_cfg.region
+                ));
+            }
             Ok(HandlerAction::Continue {
                 state: CreatingApiDomain,
                 suggested_delay: Some(Duration::from_secs(1)),
@@ -2072,6 +2086,12 @@ impl AwsWorkerController {
             })?;
 
         if self.fqdn.is_some() {
+            if verifier::is_protected(ctx) {
+                self.url = Some(format!(
+                    "https://{}.execute-api.{}.amazonaws.com/prod",
+                    rest_api_id, aws_cfg.region
+                ));
+            }
             Ok(HandlerAction::Continue {
                 state: CreatingRestDomain,
                 suggested_delay: Some(Duration::from_secs(1)),
@@ -12241,6 +12261,88 @@ mod tests {
         }
     }
 
+    /// Steps `controller` once, as a worker with a public endpoint, on a protected install or
+    /// not, and returns what it recorded.
+    async fn step_public_worker(
+        controller: AwsWorkerController,
+        protected: bool,
+        provider: Arc<MockPlatformServiceProvider>,
+    ) -> AwsWorkerController {
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(function_public_ingress())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(provider)
+            .stack_settings(if protected {
+                protected_settings()
+            } else {
+                StackSettings::default()
+            })
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.expect("the step succeeds");
+        executor
+            .internal_state::<AwsWorkerController>()
+            .unwrap()
+            .clone()
+    }
+
+    /// The URL the worker shows, with a custom domain in play: the manager's domain on an
+    /// unprotected install, the gateway's own address, which the verifier can read back from the
+    /// function's policy, on a protected one.
+    #[rstest]
+    #[case::http_api(false, "https://abc123.execute-api.us-east-1.amazonaws.com")]
+    #[case::rest_api(true, "https://abc123.execute-api.us-east-1.amazonaws.com/prod")]
+    #[tokio::test]
+    async fn a_protected_worker_shows_the_gateway_address_not_the_managers_domain(
+        #[case] rest: bool,
+        #[case] gateway: &str,
+    ) {
+        let custom = "https://api.example.test";
+        let controller = if rest {
+            AwsWorkerController {
+                state: AwsWorkerState::CreatingRestDeployment,
+                rest_api_id: Some("abc123".to_string()),
+                rest_deployment_id: Some("dep-1".to_string()),
+                ..Default::default()
+            }
+        } else {
+            AwsWorkerController {
+                state: AwsWorkerState::CreatingApiStage,
+                api_id: Some("abc123".to_string()),
+                ..Default::default()
+            }
+        };
+        let controller = AwsWorkerController {
+            stage_name: Some(if rest { "prod" } else { "$default" }.to_string()),
+            fqdn: Some("api.example.test".to_string()),
+            url: Some(custom.to_string()),
+            ..controller
+        };
+        let provider = || {
+            let mut provider = MockPlatformServiceProvider::new();
+            let mut rest_api = MockApiGatewayApi::new();
+            rest_api.expect_tag_resource().returning(|_, _| Ok(()));
+            let rest_api = Arc::new(rest_api);
+            provider
+                .expect_get_aws_apigateway_client()
+                .returning(move |_| Ok(rest_api.clone()));
+            Arc::new(provider)
+        };
+        let provider = || {
+            if rest {
+                provider()
+            } else {
+                setup_mock_service_provider(Arc::new(MockLambdaApi::new()), None, None)
+            }
+        };
+        let unprotected = step_public_worker(controller.clone(), false, provider()).await;
+        assert_eq!(unprotected.url.as_deref(), Some(custom));
+        let protected = step_public_worker(controller, true, provider()).await;
+        assert_eq!(protected.url.as_deref(), Some(gateway));
+    }
+
     /// Lambda on a protected install: reads succeed, and invoking the verifier records the
     /// request and answers with `answer` (see [`answer_to`]). No write has an expectation, so a
     /// write fails the test.
@@ -12325,7 +12427,11 @@ mod tests {
         let invocations = Arc::new(Mutex::new(Vec::new()));
         let mut executor = SingleControllerExecutor::builder()
             .resource(from)
-            .controller(AwsWorkerController::mock_ready(PROTECTED_WORKER_NAME))
+            .controller(AwsWorkerController {
+                // A private worker has no address; the fixture's function URL is not one Lambda gives it.
+                url: None,
+                ..AwsWorkerController::mock_ready(PROTECTED_WORKER_NAME)
+            })
             .platform(Platform::Aws)
             .service_provider(setup_mock_service_provider(
                 protected_lambda(invocations.clone(), answer),

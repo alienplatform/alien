@@ -1497,6 +1497,65 @@ mod tests {
         );
     }
 
+    /// The url in a function's own binding is the API Gateway address the verifier found in
+    /// the function's policy; a hostname the control plane names is refused.
+    #[tokio::test]
+    async fn the_own_binding_url_is_one_the_cloud_reports() {
+        const GATEWAY: &str = "https://abc123.execute-api.us-east-1.amazonaws.com";
+        let binding = |url: &str| {
+            let mut request = create();
+            request["Environment"]["Variables"]["ALIEN_API_BINDING"] = json!(json!({
+                "service": "lambda",
+                "workerName": own(),
+                "region": "us-east-1",
+                "url": url,
+            })
+            .to_string());
+            CloudWrite::CreateFunction(request)
+        };
+        let reads = || Reads {
+            own: crate::plan::OwnResource {
+                urls: vec![GATEWAY.to_string()],
+                location: None,
+            },
+            ..Reads::default()
+        };
+        checked_reading(
+            release(1, function_workload()),
+            None,
+            reads(),
+            binding(GATEWAY),
+        )
+        .await
+        .expect("the address the cloud reports");
+        for forged in [
+            "https://api.acme.example",
+            "https://collector.attacker.example",
+        ] {
+            let error = checked_reading(
+                release(1, function_workload()),
+                None,
+                reads(),
+                binding(forged),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                error.contains(&format!(
+                    "its url is {forged}, which is no URL the cloud reports"
+                )),
+                "{error}"
+            );
+        }
+        let error = checked(release(1, function_workload()), None, binding(GATEWAY))
+            .await
+            .unwrap_err();
+        assert!(
+            error.contains("which is no URL the cloud reports"),
+            "{error}"
+        );
+    }
+
     /// CreateFunction for the signed `api` workload with `env` on top of the controller's.
     fn create_with_env(env: &[(&str, &str)]) -> CloudWrite {
         let mut request = create();

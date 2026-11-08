@@ -17,7 +17,7 @@ use crate::cloud_write::{CloudWrite, Facts};
 use crate::error::{ErrorData, Result};
 use crate::function::StillNewest;
 use crate::machines::{plan_roll, roll, MachineApi, RollMachines};
-use crate::plan::Place;
+use crate::plan::{OwnResource, Place};
 use crate::trust::InstallStore;
 use crate::verifier::Backend;
 
@@ -231,6 +231,64 @@ pub async fn read_bindings(
     Ok(values)
 }
 
+/// The addresses the API Gateway API in front of `function` answers at, read from the
+/// function's own resource policy: the API id in the `ApiGatewayInvoke` grant, which the
+/// verifier admitted only for an API in this account and region. The default endpoint of an
+/// HTTP API is the host alone, and of a REST API the host under `/prod`.
+pub async fn read_gateway_urls(
+    lambda: &dyn LambdaApi,
+    function: &str,
+    account: &str,
+    region: &str,
+) -> Result<Vec<String>> {
+    let policy = match lambda.get_policy(function, None).await {
+        Ok(response) => response.policy,
+        Err(error)
+            if matches!(
+                error.error,
+                Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+            ) =>
+        {
+            return Ok(Vec::new())
+        }
+        Err(error) => {
+            return Err(error).context(ErrorData::CloudCallFailed {
+                operation: format!("lambda:GetPolicy {function}"),
+            })
+        }
+    };
+    let Some(policy) = policy else {
+        return Ok(Vec::new());
+    };
+    let policy: Value = serde_json::from_str(&policy).map_err(|error| {
+        AlienError::new(ErrorData::ConfigurationInvalid {
+            message: format!("the resource policy of {function} is not JSON: {error}"),
+        })
+    })?;
+    let prefix = format!("arn:aws:execute-api:{region}:{account}:");
+    let mut urls = Vec::new();
+    for statement in policy["Statement"].as_array().into_iter().flatten() {
+        if statement["Sid"] != "ApiGatewayInvoke"
+            || statement["Principal"]["Service"] != "apigateway.amazonaws.com"
+        {
+            continue;
+        }
+        let source = statement["Condition"]["ArnLike"]["AWS:SourceArn"]
+            .as_str()
+            .or_else(|| statement["Condition"]["StringEquals"]["AWS:SourceArn"].as_str());
+        let Some(api) = source
+            .and_then(|arn| arn.strip_prefix(&prefix))
+            .and_then(|rest| rest.strip_suffix("/*"))
+        else {
+            continue;
+        };
+        let host = format!("https://{api}.execute-api.{region}.amazonaws.com");
+        urls.push(format!("{host}/prod"));
+        urls.push(host);
+    }
+    Ok(urls)
+}
+
 /// Lambda functions and machines on AWS.
 pub struct AwsBackend<L, M> {
     /// Lambda.
@@ -251,6 +309,19 @@ impl<L: LambdaApi, M: MachineApi> Backend for AwsBackend<L, M> {
         workload: &Workload,
     ) -> Result<BTreeMap<String, String>> {
         read_bindings(&self.lambda, &place.prefix, &self.region, workload).await
+    }
+
+    async fn own_resource(&self, place: &Place, own_name: &str) -> Result<OwnResource> {
+        let InstallId::Aws {
+            account, region, ..
+        } = &place.install
+        else {
+            return Ok(OwnResource::default());
+        };
+        Ok(OwnResource {
+            urls: read_gateway_urls(&self.lambda, own_name, account, region).await?,
+            location: None,
+        })
     }
 
     fn check_write(&self, facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
@@ -330,6 +401,92 @@ impl<L: LambdaApi, M: MachineApi> Backend for AwsBackend<L, M> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_aws_clients::lambda::{GetPolicyResponse, MockLambdaApi};
+
+    fn policy(statements: Value) -> GetPolicyResponse {
+        GetPolicyResponse {
+            policy: Some(json!({"Version": "2012-10-17", "Statement": statements}).to_string()),
+        }
+    }
+
+    fn api_grant(sid: &str, principal: &str, source: &str) -> Value {
+        json!({
+            "Sid": sid,
+            "Effect": "Allow",
+            "Principal": {"Service": principal},
+            "Action": "lambda:InvokeFunction",
+            "Resource": "arn:aws:lambda:us-east-1:111122223333:function:acme-prod-api",
+            "Condition": {"ArnLike": {"AWS:SourceArn": source}},
+        })
+    }
+
+    async fn gateway_urls(response: GetPolicyResponse) -> Vec<String> {
+        let mut lambda = MockLambdaApi::new();
+        let policy = response.policy;
+        lambda
+            .expect_get_policy()
+            .returning(move |_, _| Ok(GetPolicyResponse { policy: policy.clone() }));
+        read_gateway_urls(&lambda, "acme-prod-api", "111122223333", "us-east-1")
+            .await
+            .unwrap()
+    }
+
+    /// A function's public address is the API its policy lets invoke it, in this account and
+    /// region, and nothing else the policy or the control plane says.
+    #[tokio::test]
+    async fn the_gateway_address_is_the_api_the_policy_admits() {
+        let urls = gateway_urls(policy(json!([
+            api_grant(
+                "ApiGatewayInvoke",
+                "apigateway.amazonaws.com",
+                "arn:aws:execute-api:us-east-1:111122223333:abc123/*"
+            ),
+            // Other grants, accounts and regions name no address of this function.
+            api_grant(
+                "OtherGrant",
+                "apigateway.amazonaws.com",
+                "arn:aws:execute-api:us-east-1:111122223333:def456/*"
+            ),
+            api_grant(
+                "ApiGatewayInvoke",
+                "events.amazonaws.com",
+                "arn:aws:execute-api:us-east-1:111122223333:ghi789/*"
+            ),
+            api_grant(
+                "ApiGatewayInvoke",
+                "apigateway.amazonaws.com",
+                "arn:aws:execute-api:us-east-1:999999999999:jkl012/*"
+            ),
+        ])))
+        .await;
+        assert_eq!(
+            urls,
+            [
+                "https://abc123.execute-api.us-east-1.amazonaws.com/prod",
+                "https://abc123.execute-api.us-east-1.amazonaws.com",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_function_without_a_policy_has_no_gateway_address() {
+        assert!(gateway_urls(GetPolicyResponse { policy: None })
+            .await
+            .is_empty());
+        let mut lambda = MockLambdaApi::new();
+        lambda.expect_get_policy().returning(|_, _| {
+            Err(AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+                resource_type: "Function".to_string(),
+                resource_name: "acme-prod-api".to_string(),
+            }))
+        });
+        assert!(
+            read_gateway_urls(&lambda, "acme-prod-api", "111122223333", "us-east-1")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     #[test]
     fn the_identity_comes_from_the_function_arn() {

@@ -5,6 +5,8 @@ use alien_signing::{check_own_binding, BindingContext, OwnBindingFacts};
 use serde_json::{json, Value};
 
 const PUBLIC: &str = "https://api.acme.example";
+const RUN_APP: &str = "https://acme-prod-api-abc.a.run.app";
+const LAMBDA_URL: &str = "https://abc.lambda-url.us-east-1.on.aws/";
 
 fn facts(platform: &str) -> OwnBindingFacts {
     OwnBindingFacts {
@@ -29,8 +31,14 @@ fn facts(platform: &str) -> OwnBindingFacts {
         resource_name: "acme-prod-api".to_string(),
         resource_group: Some("acme-rg".to_string()),
         location: Some("us-central1".to_string()),
-        urls: vec!["https://acme-prod-api-abc.a.run.app".to_string()],
-        public_urls: vec![PUBLIC.to_string()],
+        urls: match platform {
+            "aws" => vec![
+                LAMBDA_URL.to_string(),
+                "https://abc123.execute-api.us-east-1.amazonaws.com".to_string(),
+            ],
+            "machines" => vec![PUBLIC.to_string()],
+            _ => vec![RUN_APP.to_string()],
+        },
     }
 }
 
@@ -39,7 +47,7 @@ fn aws() -> Value {
         "service": "lambda",
         "workerName": "acme-prod-api",
         "region": "us-east-1",
-        "url": "https://abc.lambda-url.us-east-1.on.aws/",
+        "url": LAMBDA_URL,
     })
 }
 
@@ -49,8 +57,8 @@ fn gcp() -> Value {
         "projectId": "acme-project",
         "serviceName": "acme-prod-api",
         "location": "us-central1",
-        "privateUrl": "https://acme-prod-api-abc.a.run.app",
-        "publicUrl": PUBLIC,
+        "privateUrl": RUN_APP,
+        "publicUrl": RUN_APP,
     })
 }
 
@@ -60,8 +68,8 @@ fn azure() -> Value {
         "subscriptionId": "00000000-0000-0000-0000-000000000000",
         "resourceGroupName": "acme-rg",
         "containerAppName": "acme-prod-api",
-        "privateUrl": "https://acme-prod-api-abc.a.run.app",
-        "publicUrl": PUBLIC,
+        "privateUrl": RUN_APP,
+        "publicUrl": RUN_APP,
     })
 }
 
@@ -91,11 +99,9 @@ fn the_binding_a_controller_writes_for_its_own_resource_passes() {
     let mut without_urls = aws();
     without_urls.as_object_mut().unwrap().remove("url");
     check("aws", &without_urls).expect("a Lambda binding without a URL");
-    for url in [PUBLIC, "https://abc123.execute-api.us-east-1.amazonaws.com"] {
-        let mut binding = aws();
-        binding["url"] = json!(url);
-        check("aws", &binding).unwrap_or_else(|e| panic!("{url}: {e}"));
-    }
+    let mut binding = aws();
+    binding["url"] = json!("https://abc123.execute-api.us-east-1.amazonaws.com");
+    check("aws", &binding).expect("the address of an API in the install's account");
 }
 
 #[test]
@@ -224,18 +230,29 @@ fn a_binding_that_points_anywhere_else_is_refused() {
     }
 }
 
-/// A public endpoint is only what the worker displays: it may fill a display field, never a
-/// destination one, or a binding could send the worker's own calls to whatever the control
-/// plane named as its endpoint.
+/// A URL the control plane names, such as a custom or generated domain, is no address the
+/// enforcer read from the cloud, so it can't fill a display field or a destination, and a host
+/// that only looks like one of AWS's gateway hosts, in another account, passes no more.
 #[test]
-fn a_public_endpoint_is_no_destination() {
-    for (platform, mut binding, field) in [
-        ("gcp", gcp(), "privateUrl"),
-        ("azure", azure(), "privateUrl"),
-        ("machines", machines(), "internalUrl"),
+fn a_url_the_control_plane_names_is_no_url_the_cloud_reports() {
+    let forged_gateway = "https://evil1.execute-api.us-east-1.amazonaws.com";
+    for (platform, mut binding, field, value) in [
+        ("aws", aws(), "url", PUBLIC),
+        ("aws", aws(), "url", forged_gateway),
+        (
+            "aws",
+            aws(),
+            "url",
+            "https://evil1.lambda-url.us-east-1.on.aws",
+        ),
+        ("gcp", gcp(), "privateUrl", PUBLIC),
+        ("gcp", gcp(), "publicUrl", PUBLIC),
+        ("azure", azure(), "privateUrl", PUBLIC),
+        ("azure", azure(), "publicUrl", PUBLIC),
+        ("machines", machines(), "publicUrl", "https://evil.example"),
     ] {
-        binding[field] = json!(PUBLIC);
-        let error = check(platform, &binding).expect_err(&format!("{platform} {field}"));
+        binding[field] = json!(value);
+        let error = check(platform, &binding).expect_err(&format!("{platform} {field} {value}"));
         assert!(error.contains(field), "{platform} {field}: {error}");
     }
 }
