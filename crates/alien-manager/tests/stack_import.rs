@@ -2536,22 +2536,23 @@ async fn a_write_back_without_the_answer_map_keeps_the_record_and_import_can_tur
     );
 }
 
-/// The CLI saves a manual setup run's prepared state through the reconcile route. A recorded
-/// decline becomes a yes only for a setup run the STORED record shows (a caller outside the
-/// deployment holding the setup lock, on a deployment set up with direct setup) whose report
-/// carries the resource. Nothing in the report itself can claim that.
-#[tokio::test]
-async fn a_report_turns_a_recorded_decline_into_a_yes_only_for_a_stored_setup_run() {
-    let fixture = make_fixture(Some(stack_with_gated_storage("assets", "extras"))).await;
-    let declined = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
-    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &declined).await;
-    assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
-    let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
-    let deployment_token = parsed
-        .deployment_token
-        .expect("imported deployments must return a deployment token");
-    let read = || async {
-        fixture
+/// A declined-gate deployment, imported by setup and then stored as a direct setup deployment,
+/// as the reconcile route sees it.
+struct DeclinedGateDeployment {
+    fixture: Fixture,
+    deployment_id: String,
+    deployment_token: String,
+    persisted: alien_manager::traits::DeploymentRecord,
+}
+
+impl DeclinedGateDeployment {
+    async fn import() -> Self {
+        let fixture = make_fixture(Some(stack_with_gated_storage("assets", "extras"))).await;
+        let declined = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &declined).await;
+        assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+        let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
+        let persisted = fixture
             .deployment_store
             .get_deployment(
                 &alien_manager::auth::Subject::system(),
@@ -2559,146 +2560,196 @@ async fn a_report_turns_a_recorded_decline_into_a_yes_only_for_a_stored_setup_ru
             )
             .await
             .unwrap()
-            .expect("deployment must persist")
-    };
-    let read_answer = || async {
-        read()
+            .expect("deployment must persist");
+        let this = Self {
+            deployment_token: parsed.deployment_token.expect("deployment token"),
+            deployment_id: parsed.deployment_id,
+            persisted,
+            fixture,
+        };
+        assert_eq!(this.answer().await, Some(false));
+        this
+    }
+
+    async fn answer(&self) -> Option<bool> {
+        self.fixture
+            .deployment_store
+            .get_deployment(&alien_manager::auth::Subject::system(), &self.deployment_id)
             .await
+            .unwrap()
+            .expect("deployment must persist")
             .runtime_metadata
             .expect("runtime_metadata must be persisted")
             .persisted_gate_answers
             .get("extrasEnabled")
             .copied()
-    };
-    let persisted = read().await;
-    assert_eq!(read_answer().await, Some(false));
+    }
+
+    /// Store the deployment as a direct setup one and lock it for session `setup-run`.
+    async fn lock(&self, mode: alien_manager::traits::DeploymentAcquireMode) {
+        let mut stored_metadata = self.persisted.runtime_metadata.clone().unwrap();
+        stored_metadata.initial_setup_authority = alien_core::InitialSetupAuthority::DirectSetup;
+        self.fixture
+            .deployment_store
+            .reconcile(
+                &alien_manager::auth::Subject::system(),
+                ReconcileData {
+                    deployment_id: self.deployment_id.clone(),
+                    session: "setup-run".to_string(),
+                    execution_claim: None,
+                    state: self.state(
+                        DeploymentStatus::Running,
+                        stored_metadata,
+                        self.persisted.stack_state.clone(),
+                    ),
+                    update_heartbeat: false,
+                    suggested_delay_ms: None,
+                    heartbeats: vec![],
+                    observed_inventory_batches: vec![],
+                    capabilities: vec![],
+                    operator_version: None,
+                    operations_report: None,
+                },
+            )
+            .await
+            .expect("stored record becomes a direct setup deployment");
+        let acquired = self
+            .fixture
+            .deployment_store
+            .acquire(
+                &alien_manager::auth::Subject::system(),
+                "setup-run",
+                &alien_manager::traits::DeploymentFilter {
+                    deployment_ids: Some(vec![self.deployment_id.clone()]),
+                    statuses: Some(vec!["running".to_string()]),
+                    acquire_mode: Some(mode),
+                    ..Default::default()
+                },
+                1,
+            )
+            .await
+            .expect("the deployment is acquired");
+        assert_eq!(acquired.len(), 1, "the session holds the lock");
+    }
+
+    fn state(
+        &self,
+        status: DeploymentStatus,
+        metadata: RuntimeMetadata,
+        stack_state: Option<StackState>,
+    ) -> DeploymentState {
+        DeploymentState {
+            status,
+            platform: self.persisted.platform,
+            current_release: Some(ReleaseInfo {
+                release_id: self.fixture.release_id.clone(),
+                version: None,
+                description: None,
+                stack: stack_with_gated_storage("assets", "extras"),
+            }),
+            target_release: None,
+            stack_state,
+            error: None,
+            environment_info: self.persisted.environment_info.clone(),
+            runtime_metadata: Some(metadata),
+            retry_requested: false,
+            protocol_version: self.persisted.deployment_protocol_version,
+        }
+    }
+
+    /// Report the gate answered yes with direct setup authority. `listed` puts the gated store
+    /// in the prepared stack; `delivered` also records it as installed in the stack state.
+    async fn report(&self, token: &str, status: DeploymentStatus, listed: bool, delivered: bool) {
+        let mut metadata = self.persisted.runtime_metadata.clone().unwrap();
+        metadata
+            .persisted_gate_answers
+            .insert("extrasEnabled".to_string(), true);
+        metadata.initial_setup_authority = alien_core::InitialSetupAuthority::DirectSetup;
+        if listed {
+            metadata.prepared_stack = Some(stack_with_gated_storage("assets", "extras"));
+        }
+        let mut stack_state = self.persisted.stack_state.clone();
+        if delivered {
+            let state = stack_state.as_mut().unwrap();
+            let installed = state.resources["assets"].clone();
+            state.resources.insert("extras".to_string(), installed);
+        }
+        let body = serde_json::json!({
+            "deploymentId": self.deployment_id,
+            "session": "setup-run",
+            "state": serde_json::to_value(self.state(status, metadata, stack_state)).unwrap(),
+        });
+        let (status, json) = post_sync(&self.fixture, token, "/v1/sync/reconcile", body).await;
+        assert_eq!(status, StatusCode::OK, "body = {json:#}");
+    }
+}
+
+/// A report claiming a setup run through its own fields, for a stored record that is not in
+/// setup, saves nothing.
+#[tokio::test]
+async fn a_forged_setup_report_cannot_turn_a_recorded_decline_into_a_yes() {
+    let env = DeclinedGateDeployment::import().await;
     assert_eq!(
-        persisted
+        env.persisted
             .runtime_metadata
             .as_ref()
             .unwrap()
             .initial_setup_authority,
         alien_core::InitialSetupAuthority::ImportedHandoff
     );
+    let token = env.fixture.dg_token.clone();
+    for (listed, delivered) in [(false, false), (true, false), (true, true)] {
+        env.report(&token, DeploymentStatus::InitialSetup, listed, delivered)
+            .await;
+        assert_eq!(env.answer().await, Some(false), "{listed} {delivered}");
+    }
+}
 
-    // A report claiming a setup run: the setup status and authority, the gate answered yes,
-    // and optionally the gated store in the prepared stack.
-    let report = |with_resource: bool| {
-        let mut metadata = persisted.runtime_metadata.clone().unwrap();
-        metadata
-            .persisted_gate_answers
-            .insert("extrasEnabled".to_string(), true);
-        metadata.initial_setup_authority = alien_core::InitialSetupAuthority::DirectSetup;
-        if with_resource {
-            metadata.prepared_stack = Some(stack_with_gated_storage("assets", "extras"));
-        }
-        serde_json::json!({
-            "deploymentId": persisted.id,
-            "session": "setup-run",
-            "state": serde_json::to_value(DeploymentState {
-                status: DeploymentStatus::InitialSetup,
-                platform: persisted.platform,
-                current_release: Some(ReleaseInfo {
-                    release_id: fixture.release_id.clone(),
-                    version: None,
-                    description: None,
-                    stack: stack_with_gated_storage("assets", "extras"),
-                }),
-                target_release: None,
-                stack_state: persisted.stack_state.clone(),
-                error: None,
-                environment_info: persisted.environment_info.clone(),
-                runtime_metadata: Some(metadata),
-                retry_requested: false,
-                protocol_version: persisted.deployment_protocol_version,
-            })
-            .unwrap(),
-        })
-    };
-    let send = |token: String, body: serde_json::Value| {
-        let fixture = &fixture;
-        async move {
-            let (status, json) = post_sync(fixture, &token, "/v1/sync/reconcile", body).await;
-            assert_eq!(status, StatusCode::OK, "body = {json:#}");
-        }
-    };
+/// Holding the lock in runtime mode and listing the gated store in the prepared stack is not
+/// a setup run: only a store the report shows as installed is.
+#[tokio::test]
+async fn a_runtime_lock_holder_cannot_turn_a_recorded_decline_into_a_yes() {
+    let env = DeclinedGateDeployment::import().await;
+    env.lock(alien_manager::traits::DeploymentAcquireMode::Runtime)
+        .await;
+    let token = env.fixture.dg_token.clone();
+    env.report(&token, DeploymentStatus::InitialSetup, true, false)
+        .await;
+    assert_eq!(env.answer().await, Some(false));
+}
 
-    // Forged: a group token, setup status, direct setup authority, gate yes and no gated store
-    // delivered. The stored record is an imported deployment with no setup lock.
-    send(fixture.dg_token.clone(), report(false)).await;
-    assert_eq!(read_answer().await, Some(false), "a forged report is refused");
+/// The stored setup run's report saves the yes once the store is delivered, and not before.
+#[tokio::test]
+async fn a_setup_run_report_with_the_store_delivered_turns_a_recorded_decline_into_a_yes() {
+    let env = DeclinedGateDeployment::import().await;
+    env.lock(alien_manager::traits::DeploymentAcquireMode::SetupRun)
+        .await;
+    let token = env.fixture.dg_token.clone();
 
-    // The stored record is not in setup: even with the store in the report, nothing is saved.
-    send(fixture.dg_token.clone(), report(true)).await;
-    assert_eq!(read_answer().await, Some(false));
+    // The prepared stack lists the store but nothing is installed yet.
+    env.report(&token, DeploymentStatus::InitialSetup, true, false)
+        .await;
+    assert_eq!(env.answer().await, Some(false));
 
-    // Give the stored record what a direct setup run has: direct setup authority and the lock.
-    let mut stored_metadata = persisted.runtime_metadata.clone().unwrap();
-    stored_metadata.initial_setup_authority = alien_core::InitialSetupAuthority::DirectSetup;
-    fixture
-        .deployment_store
-        .reconcile(
-            &alien_manager::auth::Subject::system(),
-            ReconcileData {
-                deployment_id: persisted.id.clone(),
-                session: "setup-run".to_string(),
-                execution_claim: None,
-                state: DeploymentState {
-                    status: DeploymentStatus::Running,
-                    platform: persisted.platform,
-                    current_release: Some(ReleaseInfo {
-                        release_id: fixture.release_id.clone(),
-                        version: None,
-                        description: None,
-                        stack: stack_with_gated_storage("assets", "extras"),
-                    }),
-                    target_release: None,
-                    stack_state: persisted.stack_state.clone(),
-                    error: None,
-                    environment_info: persisted.environment_info.clone(),
-                    runtime_metadata: Some(stored_metadata),
-                    retry_requested: false,
-                    protocol_version: persisted.deployment_protocol_version,
-                },
-                update_heartbeat: false,
-                suggested_delay_ms: None,
-                heartbeats: vec![],
-                observed_inventory_batches: vec![],
-                capabilities: vec![],
-                operator_version: None,
-                operations_report: None,
-            },
-        )
-        .await
-        .expect("stored record becomes a direct setup deployment");
-    let acquired = fixture
-        .deployment_store
-        .acquire(
-            &alien_manager::auth::Subject::system(),
-            "setup-run",
-            &alien_manager::traits::DeploymentFilter {
-                deployment_ids: Some(vec![persisted.id.clone()]),
-                statuses: Some(vec!["running".to_string()]),
-                acquire_mode: Some(alien_manager::traits::DeploymentAcquireMode::SetupRun),
-                ..Default::default()
-            },
-            1,
-        )
-        .await
-        .expect("setup run acquires the deployment");
-    assert_eq!(acquired.len(), 1, "the setup run holds the lock");
+    // Delivered, but reported as a running deployment rather than a setup handoff.
+    env.report(&token, DeploymentStatus::Running, true, true)
+        .await;
+    assert_eq!(env.answer().await, Some(false));
 
-    // In setup, but the report does not carry the gated store.
-    send(fixture.dg_token.clone(), report(false)).await;
-    assert_eq!(read_answer().await, Some(false));
+    // The deployment's own token cannot.
+    env.report(
+        &env.deployment_token.clone(),
+        DeploymentStatus::InitialSetup,
+        true,
+        true,
+    )
+    .await;
+    assert_eq!(env.answer().await, Some(false));
 
-    // The deployment's own token cannot, whatever it reports.
-    send(deployment_token.clone(), report(true)).await;
-    assert_eq!(read_answer().await, Some(false));
-
-    // The setup run's report with the store in its prepared stack is saved.
-    send(fixture.dg_token.clone(), report(true)).await;
-    assert_eq!(read_answer().await, Some(true));
+    // The setup handoff with the store delivered is saved.
+    env.report(&token, DeploymentStatus::InitialSetup, true, true)
+        .await;
+    assert_eq!(env.answer().await, Some(true));
 }
 
 fn stack_with_storage_and_generated_secret(resource_id: &str) -> Stack {

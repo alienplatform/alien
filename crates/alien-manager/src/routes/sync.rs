@@ -677,9 +677,17 @@ async fn reconcile(
     // Only a setup run may turn a recorded decline into a yes. What counts is the
     // stored record, never the report: the caller is outside the deployment, holds
     // the deployment's lock for this session, and the deployment was set up with
-    // direct setup authority. Even then the report must carry every resource the
-    // target release puts behind the gate, the way an import must deliver them.
+    // direct setup authority. The report must be a setup handoff, and its stack
+    // state must hold every resource the target release puts behind the gate as
+    // delivered, the way an import must deliver them. The lock row does not record
+    // how it was acquired, so delivery is what separates a setup run from a runtime
+    // lock holder.
     let setup_gate_resources = if !matches!(subject.scope, crate::auth::Scope::Deployment { .. })
+        && matches!(
+            final_state.status,
+            alien_core::DeploymentStatus::InitialSetup
+                | alien_core::DeploymentStatus::InitialSetupFailed
+        )
         && deployment.locked_by.as_deref() == Some(req.session.as_str())
         && deployment
             .runtime_metadata
@@ -3639,6 +3647,19 @@ fn preserve_recorded_gate_answers(
     else {
         return;
     };
+    // Resources the report shows as installed: created, with state recorded.
+    let delivered: std::collections::HashSet<String> = incoming
+        .stack_state
+        .iter()
+        .flat_map(|state| state.resources.iter())
+        .filter(|(_, resource)| {
+            !matches!(
+                resource.status,
+                alien_core::ResourceStatus::Pending | alien_core::ResourceStatus::Deleted
+            ) && resource.internal_state.is_some()
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
     let metadata = incoming.runtime_metadata.get_or_insert_default();
     let mut restored = 0usize;
     for (input_id, recorded_answer) in recorded {
@@ -3649,19 +3670,15 @@ fn preserve_recorded_gate_answers(
                     .insert(input_id.clone(), *recorded_answer);
                 restored += 1;
             }
-            // A setup run's yes replaces a recorded decline, once the report holds
-            // every resource behind the gate; nothing else does.
+            // A setup run's yes replaces a recorded decline, once the report's stack
+            // state holds every resource behind the gate as delivered; nothing else does.
             Some(true)
                 if !*recorded_answer
                     && setup_gate_resources
                         .and_then(|gates| gates.get(input_id))
                         .is_some_and(|resource_ids| {
                             !resource_ids.is_empty()
-                                && metadata.prepared_stack.as_ref().is_some_and(|stack| {
-                                    resource_ids
-                                        .iter()
-                                        .all(|id| stack.resources.contains_key(id))
-                                })
+                                && resource_ids.iter().all(|id| delivered.contains(id))
                         }) => {}
             Some(incoming_answer) if incoming_answer != recorded_answer => {
                 tracing::warn!(
