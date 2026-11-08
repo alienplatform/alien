@@ -9,6 +9,8 @@
 //!                                      verifier's policy setup renders, for `$ACCOUNT`/`$REGION`
 //!   protected_worker_update update     updates worker `api` from `$FROM_IMAGE` to `$TO_IMAGE`,
 //!                                      or creates it when `$FROM_IMAGE` is empty
+//!   protected_worker_update delete     deletes worker `api`, installed from `$FROM_IMAGE`, as a
+//!                                      deployment's deletion step does
 //!   protected_worker_update request    prints the `applyWrite` request the controller sends for
 //!                                      release `$SEQUENCE` of the stack running `$TO_IMAGE`: an
 //!                                      UpdateFunctionCode of `<prefix>-api` to that image
@@ -418,22 +420,10 @@ fn signed_release(image: &str, sequence: u64) -> Result<ReleaseStatements, Error
     })
 }
 
-async fn update() -> Result<(), Error> {
-    let prefix = env("PREFIX")?;
-    let protected = env("PROTECTED")? == "1";
-    let target = stack(&env("TO_IMAGE")?, true, access());
-    let mut stack_settings = StackSettings::default();
-    let mut statements = None;
-    if protected {
-        stack_settings.signing = Some(StackSigning {
-            fingerprint: settings(&prefix)?.fingerprint,
-            channel: CHANNEL.to_string(),
-        });
-        let sequence = std::env::var("SEQUENCE").unwrap_or_else(|_| "1".to_string());
-        statements = Some(signed_release(&env("TO_IMAGE")?, sequence.parse()?)?);
-    }
-
-    let (client_config, account, region) = match platform()? {
+/// The credentials the controllers run with, and the account (AWS account, GCP project or Azure
+/// subscription) and region they are for.
+async fn management() -> Result<(ClientConfig, String, String), Error> {
+    Ok(match platform()? {
         Platform::Aws => {
             let aws = alien_aws_clients::AwsClientConfig::from_std_env().await?;
             let (account, region) = (aws.account_id.clone(), aws.region.clone());
@@ -449,16 +439,15 @@ async fn update() -> Result<(), Error> {
             let (project, region) = (gcp.project_id.clone(), gcp.region.clone());
             (ClientConfig::Gcp(Box::new(gcp)), project, region)
         }
-    };
-    let state = imported_state(
-        &prefix,
-        &account,
-        &region,
-        &stack(&env("FROM_IMAGE")?, true, false),
-        !env("FROM_IMAGE")?.is_empty(),
-        &stack_settings,
-    )?;
-    let config = DeploymentConfig::builder()
+    })
+}
+
+/// The deployment's configuration, as the runner hands it to the executor.
+fn deployment_config(
+    stack_settings: StackSettings,
+    statements: Option<ReleaseStatements>,
+) -> DeploymentConfig {
+    DeploymentConfig::builder()
         .stack_settings(stack_settings)
         .maybe_release_statements(statements)
         .environment_variables(EnvironmentVariablesSnapshot {
@@ -469,7 +458,34 @@ async fn update() -> Result<(), Error> {
         .maybe_deployment_token(std::env::var("DEPLOYMENT_TOKEN").ok())
         .external_bindings(Default::default())
         .allow_frozen_changes(false)
-        .build();
+        .build()
+}
+
+async fn update() -> Result<(), Error> {
+    let prefix = env("PREFIX")?;
+    let protected = env("PROTECTED")? == "1";
+    let target = stack(&env("TO_IMAGE")?, true, access());
+    let mut stack_settings = StackSettings::default();
+    let mut statements = None;
+    if protected {
+        stack_settings.signing = Some(StackSigning {
+            fingerprint: settings(&prefix)?.fingerprint,
+            channel: CHANNEL.to_string(),
+        });
+        let sequence = std::env::var("SEQUENCE").unwrap_or_else(|_| "1".to_string());
+        statements = Some(signed_release(&env("TO_IMAGE")?, sequence.parse()?)?);
+    }
+
+    let (client_config, account, region) = management().await?;
+    let state = imported_state(
+        &prefix,
+        &account,
+        &region,
+        &stack(&env("FROM_IMAGE")?, true, false),
+        !env("FROM_IMAGE")?.is_empty(),
+        &stack_settings,
+    )?;
+    let config = deployment_config(stack_settings, statements);
     // The executor of a deployment's update step, as the runner builds it.
     let executor = StackExecutor::builder(&target, client_config)
         .deployment_config(&config)
@@ -518,6 +534,70 @@ async fn update() -> Result<(), Error> {
     Err("the update did not settle in 200 steps".into())
 }
 
+/// Delete the install's Live worker, as a deployment's deletion step does before setup is torn
+/// down: the runtime-cleanup executor, which removes Live resources and leaves what setup owns.
+async fn delete() -> Result<(), Error> {
+    let prefix = env("PREFIX")?;
+    let installed_image = env("FROM_IMAGE")?;
+    let mut stack_settings = StackSettings::default();
+    let mut statements = None;
+    if env("PROTECTED")? == "1" {
+        stack_settings.signing = Some(StackSigning {
+            fingerprint: settings(&prefix)?.fingerprint,
+            channel: CHANNEL.to_string(),
+        });
+        let sequence = std::env::var("SEQUENCE").unwrap_or_else(|_| "1".to_string());
+        statements = Some(signed_release(&installed_image, sequence.parse()?)?);
+    }
+    let (client_config, account, region) = management().await?;
+    let mut state = imported_state(
+        &prefix,
+        &account,
+        &region,
+        &stack(&installed_image, true, false),
+        true,
+        &stack_settings,
+    )?;
+    let config = deployment_config(stack_settings, statements);
+    let executor = StackExecutor::for_runtime_cleanup_deletion_with_service_provider(
+        client_config,
+        &config,
+        Arc::new(DefaultPlatformServiceProvider::default()),
+    )?;
+    for _ in 0..200 {
+        let step = executor.step(state).await?;
+        state = step.next_state;
+        let worker = &state.resources[WORKER];
+        match worker.status {
+            ResourceStatus::Deleted => {
+                println!(
+                    "{}",
+                    serde_json::json!({"outcome": "deleted", "status": worker.status})
+                );
+                return Ok(());
+            }
+            ResourceStatus::DeleteFailed => {
+                let error = worker.error.as_ref();
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "outcome": "failed",
+                        "status": worker.status,
+                        "code": error.map(|error| error.code.clone()),
+                        "message": error.map(|error| error.to_string()),
+                    })
+                );
+                return Err("the delete failed".into());
+            }
+            _ => {}
+        }
+        if let Some(delay) = step.suggested_delay_ms {
+            tokio::time::sleep(std::time::Duration::from_millis(delay.min(5_000))).await;
+        }
+    }
+    Err("the delete did not settle in 200 steps".into())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     tracing_subscriber::fmt()
@@ -551,6 +631,7 @@ async fn main() -> Result<(), Error> {
             Ok(())
         }
         Some("update") => update().await,
+        Some("delete") => delete().await,
         Some("request") => {
             // The UpdateFunctionCode the worker controller hands the verifier for this release.
             let image = env("TO_IMAGE")?;
@@ -569,6 +650,6 @@ async fn main() -> Result<(), Error> {
             );
             Ok(())
         }
-        _ => Err("usage: protected_worker_update fixtures|policies|update|request".into()),
+        _ => Err("usage: protected_worker_update fixtures|policies|update|delete|request".into()),
     }
 }

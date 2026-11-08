@@ -28,7 +28,14 @@ as management, and the script checks:
   4. before the cases: a request with no token gets 401, management's token reaches the verifier
      (its own answer), and with another principal allowed instead, management's token gets 403
      from Container Apps.
-Everything is deleted at the end (the vault purged) and the run fails if anything is left.
+Then the uninstall, beside a neighbour's app `<p>x-api` in the same environment:
+  5. deleteWorkload of the verifier, of the neighbour's name (two spellings) and with an extra field
+     is refused with the reason, and the group holds the same resources;
+  6. the real stack executor and worker controller, in a deployment's deletion step, remove
+     `<p>-api` through the verifier, and the only resource gone from the group is that app;
+  7. Azure's activity log names the verifier's identity as the only deleter of the app;
+  8. a repeated deleteWorkload answers that nothing existed.
+Everything is deleted at the end with the group (the vault purged) and the run fails if anything is left.
 
     scripts/verifier-e2e/control_plane_azure.py \\
         --verifier target/x86_64-unknown-linux-musl/debug/alien-verifier \\
@@ -329,8 +336,8 @@ class Run:
                                "defaultAuthorizationPolicy": {"allowedPrincipals": {"identities": [principal]}}}}}}})
         time.sleep(45)  # authentication settings reach the ingress
 
-    def call_verifier(self, token):
-        request = urllib.request.Request(self.verifier_url, method="POST", data=b"{}",
+    def call_verifier(self, token, body=b"{}"):
+        request = urllib.request.Request(self.verifier_url, method="POST", data=body,
                                          headers={"content-type": "application/json",
                                                   **({"Authorization": f"Bearer {token}"} if token else {})})
         try:
@@ -440,6 +447,114 @@ class Run:
                     len(succeeded) >= 2 and all(oid == self.verifier_principal for _, oid in callers),
                     f"writes={len(succeeded)} callers={callers} verifier={self.verifier_principal}")
 
+    # --- uninstall --------------------------------------------------------------
+
+    def group_resources(self):
+        resources, url, version = [], f"{self.group}/resources", GROUP_API
+        while url:
+            page = self.arm("GET", url, version=version)
+            resources += [r["id"].lower() for r in page.get("value", [])]
+            url, version = page.get("nextLink"), None
+        return sorted(resources)
+
+    def neighbour(self):
+        """An app of the same environment that no name of this install's reaches."""
+        self.neighbour_app = f"{self.group}/providers/Microsoft.App/containerApps/{self.prefix}x-api"
+        self.put(self.neighbour_app, APPS_API, {
+            "location": self.location, "tags": self.tags,
+            "properties": {
+                "environmentId": self.environment,
+                "configuration": {
+                    "secrets": [{"name": "registry", "value": self.deployment_token}],
+                    "registries": [{"server": self.registry, "username": "deployment",
+                                    "passwordSecretRef": "registry"}],
+                },
+                "template": {
+                    "containers": [{"name": "api", "image": self.image["a"],
+                                    "resources": {"cpu": 0.25, "memory": "0.5Gi"}}],
+                    "scale": {"minReplicas": 0, "maxReplicas": 1},
+                },
+            }})
+
+    def delete_request(self, workload, **extra):
+        body = json.dumps({"deleteWorkload": {"workload": workload, **extra}}).encode()
+        status, text = self.call_verifier(self.token(), body)
+        try:
+            return status, json.loads(text)
+        except ValueError:
+            return status, {"raw": text[:300]}
+
+    def uninstall(self):
+        if not self.app():
+            self.record("5-8 uninstall", False, "not checked: the worker was not created")
+            return
+        self.neighbour()
+        before = self.group_resources()
+        worker, neighbour = self.worker_app.lower(), self.neighbour_app.lower()
+        assert worker in before and neighbour in before and self.verifier_app.lower() in before, before
+
+        refusals = [
+            ("the verifier", self.delete_request("verifier"), "would be the install's verifier"),
+            ("the neighbour's name", self.delete_request(f"{self.prefix}x-api"), "is not one setup creates as is"),
+            ("a path to the neighbour", self.delete_request(f"api/../{self.prefix}x-api"),
+             "is not one setup creates as is"),
+            ("an extra field", self.delete_request("api", name=f"{self.prefix}x-api"), "unknown field"),
+        ]
+        (self.evidence / "refusals.json").write_text(json.dumps(
+            [{"case": name, "status": status, "answer": answer} for name, (status, answer), _ in refusals],
+            indent=2))
+        refused = [(name, status, answer) for name, (status, answer), reason in refusals
+                   if not (400 <= status < 500 and answer.get("errorType") == "VERIFIER_REFUSED"
+                           and reason in answer.get("errorMessage", ""))]
+        self.record("5 deleteWorkload of the verifier, of the neighbour's name and with an extra field is "
+                    "refused with the reason, and nothing in the group changes",
+                    not refused and self.group_resources() == before,
+                    f"unexpected={refused} answers={[(n, st, a.get('errorMessage', a)) for n, (st, a), _ in refusals]}")
+
+        started = datetime.datetime.now(datetime.timezone.utc)
+        result = self.driver("delete", {"FROM_IMAGE": self.image["b"], "PROTECTED": "1", "SEQUENCE": "2"},
+                             check=False)
+        outcome = self.outcome(result)
+        after = self.group_resources()
+        self.record("6 the executor's deletion step removes the app through the verifier, and it is the "
+                    "only resource gone",
+                    result.returncode == 0 and outcome.get("outcome") == "deleted" and not self.app()
+                    and sorted(set(before) - set(after)) == [worker] and not set(after) - set(before),
+                    f"driver={json.dumps(outcome)[:600]} gone={sorted(set(before) - set(after))} "
+                    f"added={sorted(set(after) - set(before))}")
+        self.deleters(started)
+
+        status, answer = self.delete_request("api")
+        (self.evidence / "repeated-delete.json").write_text(json.dumps({"status": status, "answer": answer}))
+        self.record("8 a repeated deleteWorkload says nothing existed",
+                    status == 200 and answer == {"deleted": f"{self.prefix}-api", "existed": False}
+                    and self.group_resources() == after,
+                    f"status={status} answer={json.dumps(answer)[:300]}")
+
+    def deleters(self, since):
+        """Who deleted the worker's app, from Azure's activity log (it lags by minutes)."""
+        since = (since - datetime.timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        query = urllib.parse.quote(f"eventTimestamp ge '{since}' and resourceGroupName eq '{self.prefix}'")
+        url = (f"/subscriptions/{self.subscription}/providers/Microsoft.Insights/eventtypes/management/values"
+               f"?$filter={query}")
+        deletes = []
+        for _ in range(40):
+            events = self.arm("GET", url, version="2015-04-01").get("value", [])
+            deletes = [e for e in events
+                       if e.get("resourceId", "").lower() == self.worker_app.lower()
+                       and e.get("operationName", {}).get("value", "").lower()
+                       == "microsoft.app/containerapps/delete"]
+            if any(e.get("status", {}).get("value") == "Succeeded" for e in deletes):
+                break
+            time.sleep(30)
+        (self.evidence / "worker-deletes.json").write_text(json.dumps(deletes, indent=2))
+        callers = sorted({(e.get("caller"), e.get("claims", {}).get("http://schemas.microsoft.com/identity/claims/objectidentifier"))
+                          for e in deletes})
+        succeeded = [e for e in deletes if e.get("status", {}).get("value") == "Succeeded"]
+        self.record("7 the activity log names only the verifier's identity as a deleter of the worker's app",
+                    len(succeeded) >= 1 and all(oid == self.verifier_principal for _, oid in callers),
+                    f"deletes={len(succeeded)} callers={callers} verifier={self.verifier_principal}")
+
     # --- cleanup ----------------------------------------------------------------
 
     def verifier_log(self):
@@ -493,6 +608,7 @@ class Run:
             self.authentication()
             self.cases()
             self.writers()
+            self.uninstall()
         except Exception as error:
             self.record("the run itself", False, f"{type(error).__name__}: {error}")
         finally:
