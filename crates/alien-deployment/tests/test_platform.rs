@@ -13,7 +13,6 @@ use alien_core::{
 use alien_infra::{register_registry_extension, LocalComputeClusterController};
 use chrono::Utc;
 use indexmap::IndexMap;
-use sha2::{Digest, Sha256};
 use std::{collections::HashMap, sync::OnceLock};
 use tempfile::TempDir;
 use tokio::sync::MutexGuard;
@@ -252,13 +251,13 @@ fn create_env_vars_snapshot(hash: &str, include_secret: bool) -> EnvironmentVari
     }
 }
 
-fn expected_secrets_sync_hash(secret_value: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(b"\0vault-sync:vault-backed-consumers:v3\0");
-    hasher.update(b"SECRET_VAR\0");
-    hasher.update(secret_value.as_bytes());
-    hasher.update(b"\0");
-    format!("{:x}", hasher.finalize())
+/// The digest of the secrets last synced to the vault. It is keyed, so tests
+/// compare digests with each other rather than with a computed value.
+fn synced_digest(state: &DeploymentState) -> Option<String> {
+    state
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.last_synced_env_vars_hash.clone())
 }
 
 /// Create a deployment config fixture
@@ -637,14 +636,8 @@ async fn test_provisioning_syncs_secrets_before_live_compute() {
         .expect("Step should succeed");
     state = result.state;
 
-    assert_eq!(
-        state
-            .runtime_metadata
-            .as_ref()
-            .unwrap()
-            .last_synced_env_vars_hash
-            .as_deref(),
-        Some(expected_secrets_sync_hash("secret_value").as_str()),
+    assert!(
+        synced_digest(&state).is_some(),
         "Secrets should be synced before live compute is stepped"
     );
 }
@@ -669,15 +662,7 @@ async fn test_deploy_with_secrets_reaches_running() {
     );
 
     // Secrets should have been synced (hash recorded)
-    assert_eq!(
-        final_state
-            .runtime_metadata
-            .as_ref()
-            .unwrap()
-            .last_synced_env_vars_hash
-            .as_deref(),
-        Some(expected_secrets_sync_hash("secret_value").as_str()),
-    );
+    assert!(synced_digest(&final_state).is_some());
 }
 
 #[tokio::test]
@@ -703,16 +688,7 @@ async fn test_provisioning_syncs_secrets_once_per_hash() {
     state = result.state;
 
     // Assert hash was recorded after first sync
-    assert_eq!(
-        state
-            .runtime_metadata
-            .as_ref()
-            .unwrap()
-            .last_synced_env_vars_hash
-            .as_ref()
-            .unwrap(),
-        &expected_secrets_sync_hash("secret_value")
-    );
+    let first = synced_digest(&state).expect("digest recorded after the first sync");
 
     // Run another step with same config (should skip sync)
     let result2 = alien_deployment::step(state.clone(), config.clone(), ClientConfig::Test, None)
@@ -720,17 +696,8 @@ async fn test_provisioning_syncs_secrets_once_per_hash() {
         .expect("Step should succeed");
     state = result2.state;
 
-    // Hash should still be hash_v1 (not changed)
-    assert_eq!(
-        state
-            .runtime_metadata
-            .as_ref()
-            .unwrap()
-            .last_synced_env_vars_hash
-            .as_ref()
-            .unwrap(),
-        &expected_secrets_sync_hash("secret_value")
-    );
+    // The digest is unchanged: the same secrets were not synced again
+    assert_eq!(synced_digest(&state), Some(first));
 
     // Should continue progressing (no error from skipped sync)
     assert!(
@@ -758,16 +725,7 @@ async fn test_provisioning_resyncs_when_hash_changes() {
         .expect("Step should succeed");
     state = result.state;
 
-    assert_eq!(
-        state
-            .runtime_metadata
-            .as_ref()
-            .unwrap()
-            .last_synced_env_vars_hash
-            .as_ref()
-            .unwrap(),
-        &expected_secrets_sync_hash("secret_value")
-    );
+    let first = synced_digest(&state).expect("digest recorded after the first sync");
 
     // Now change the desired secret value. Snapshot-only changes intentionally
     // do not trigger vault writes when the desired vault contents are unchanged.
@@ -786,17 +744,9 @@ async fn test_provisioning_resyncs_when_hash_changes() {
         .expect("Step should succeed");
     state = result2.state;
 
-    // Hash should now be hash_v2 (resynced)
-    assert_eq!(
-        state
-            .runtime_metadata
-            .as_ref()
-            .unwrap()
-            .last_synced_env_vars_hash
-            .as_ref()
-            .unwrap(),
-        &expected_secrets_sync_hash("secret_value_v2")
-    );
+    // A new digest shows the changed secret was synced
+    let second = synced_digest(&state).expect("digest recorded after the resync");
+    assert_ne!(second, first);
 }
 
 /// C) Running health checks + heartbeat tests
