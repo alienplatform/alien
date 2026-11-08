@@ -430,6 +430,18 @@ struct PublishedWorkerDispatcher {
     service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
 }
 
+impl PublishedWorkerDispatcher {
+    async fn push(
+        &self,
+        token: String,
+        envelope: &alien_commands::Envelope,
+    ) -> alien_commands::Result<()> {
+        HttpCommandDispatcher::new(self.client.clone(), self.target_url.clone(), token)
+            .dispatch(envelope)
+            .await
+    }
+}
+
 impl std::fmt::Debug for PublishedWorkerDispatcher {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -442,28 +454,33 @@ impl std::fmt::Debug for PublishedWorkerDispatcher {
 #[async_trait]
 impl CommandDispatcher for PublishedWorkerDispatcher {
     async fn dispatch(&self, envelope: &alien_commands::Envelope) -> alien_commands::Result<()> {
-        let published = crate::daily_identity::published_capability(&self.db,
-            &json!({"type":"receiveCommands", "target":{"resourceId":self.resource_id,"resourceType":"worker"}}),
-        ).await.context(alien_commands::ErrorData::TransportDispatchRejected {
-            message: "Worker runtime authority has not been published".into(),
-            transport_type: Some("http".into()),
-            target: Some(envelope.command_id.clone()),
-        });
+        let purpose = json!({"type":"receiveCommands", "target":{"resourceId":self.resource_id,"resourceType":"worker"}});
+        let published = crate::daily_identity::published_capability(&self.db, &purpose)
+            .await
+            .context(alien_commands::ErrorData::TransportDispatchRejected {
+                message: "Worker runtime authority has not been published".into(),
+                transport_type: Some("http".into()),
+                target: Some(envelope.command_id.clone()),
+            });
         let rejected = match published {
             Ok(credential) => {
-                match HttpCommandDispatcher::new(
-                    self.client.clone(),
-                    self.target_url.clone(),
-                    credential.token,
-                )
-                .dispatch(envelope)
-                .await
-                {
-                    // Only a definite refusal may be retried: the runtime did
-                    // not accept the envelope.
+                // Only a definite refusal may be retried: the runtime did not
+                // accept the envelope.
+                let rejected = match self.push(credential.token, envelope).await {
                     Err(error) if error.code == "TRANSPORT_DISPATCH_REJECTED" => error,
                     result => return result,
+                };
+                // Right after a rotation the pod may still hold the leaf the
+                // newest one replaced, until its Secret volume catches up.
+                if let Some(previous) =
+                    crate::daily_identity::previous_published_capability(&self.db, &purpose).await
+                {
+                    match self.push(previous.token, envelope).await {
+                        Err(error) if error.code == "TRANSPORT_DISPATCH_REJECTED" => {}
+                        result => return result,
+                    }
                 }
+                rejected
             }
             Err(error) => error,
         };
@@ -479,11 +496,7 @@ impl CommandDispatcher for PublishedWorkerDispatcher {
         )
         .await
         {
-            Some(token) => {
-                HttpCommandDispatcher::new(self.client.clone(), self.target_url.clone(), token)
-                    .dispatch(envelope)
-                    .await
-            }
+            Some(token) => self.push(token, envelope).await,
             None => Err(rejected),
         }
     }
@@ -1096,9 +1109,12 @@ mod tests {
         .unwrap();
         db.published_runtime_credentials.lock().await.insert(
             serde_json::to_string(&serde_json::json!({"type":"receiveCommands", "target":{"resourceId":"agent","resourceType":"worker"}})).unwrap(),
-            alien_client_core::runtime_credentials::RuntimeCapability {
-                token: CAPABILITY.into(),
-                expires_at: Utc::now() + chrono::Duration::minutes(30),
+            crate::daily_identity::PublishedCapability {
+                current: alien_client_core::runtime_credentials::RuntimeCapability {
+                    token: CAPABILITY.into(),
+                    expires_at: Utc::now() + chrono::Duration::minutes(30),
+                },
+                previous: None,
             },
         );
         let operator_config = crate::config::OperatorConfig::builder()
@@ -1211,6 +1227,129 @@ mod tests {
                 "ax_deploy_before".to_string(),
                 push_secret,
                 CAPABILITY.to_string()
+            ]
+        );
+    }
+
+    /// The Operator writes a new command leaf to the Worker's Secret before the
+    /// pod sees it: the kubelet updates a mounted Secret up to a minute or two
+    /// later. A push in that window is still accepted with the replaced leaf
+    /// while it has not expired, and only for the same Worker.
+    #[tokio::test]
+    async fn a_push_right_after_a_rotation_is_accepted() {
+        use alien_infra::RuntimeRegistryCredentialProvider as _;
+        use std::sync::Mutex;
+
+        const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        #[derive(Clone, Default)]
+        struct Pod {
+            /// The leaf in the pod's capability file.
+            file: Arc<Mutex<String>>,
+            accepted: Arc<Mutex<Vec<String>>>,
+        }
+        let pod = Pod::default();
+        let runtime = axum::Router::new()
+            .route(
+                "/",
+                axum::routing::post(
+                    |axum::extract::State(pod): axum::extract::State<Pod>,
+                     headers: axum::http::HeaderMap| async move {
+                        let file = pod.file.lock().unwrap().clone();
+                        if headers
+                            .get("authorization")
+                            .and_then(|value| value.to_str().ok())
+                            != Some(format!("Bearer {file}").as_str())
+                        {
+                            return axum::http::StatusCode::UNAUTHORIZED;
+                        }
+                        pod.accepted.lock().unwrap().push(file);
+                        axum::http::StatusCode::ACCEPTED
+                    },
+                ),
+            )
+            .with_state(pod.clone());
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, runtime).await });
+
+        let data_dir = tempfile::tempdir().unwrap();
+        let directory = data_dir.path().to_str().unwrap();
+        let db = Arc::new(OperatorDb::new(directory, KEY).await.unwrap());
+        db.set_deployment_id("dep_rotation").await.unwrap();
+        let credentials = crate::daily_identity::OperatorRegistryCredentials(db.clone());
+        let purpose = |resource_id: &str| serde_json::json!({"type":"receiveCommands", "target":{"resourceId":resource_id,"resourceType":"worker"}});
+        let publish = |resource_id: &'static str, token: &'static str, minutes: i64| {
+            credentials.runtime_credential_published(
+                "dep_rotation",
+                purpose(resource_id),
+                alien_client_core::runtime_credentials::RuntimeCapability {
+                    token: token.into(),
+                    expires_at: Utc::now() + chrono::Duration::minutes(minutes),
+                },
+            )
+        };
+        let dispatcher = PublishedWorkerDispatcher {
+            client: Client::new(),
+            target_url: format!("http://{address}/"),
+            resource_id: "agent".into(),
+            db: db.clone(),
+            config: crate::config::OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(directory)
+                .encryption_key(KEY)
+                .build(),
+            service_provider: None,
+        };
+        let envelope = lease_response(BodySpec::inline(b"{}"))
+            .leases
+            .remove(0)
+            .envelope;
+        let set_file = |token: &str| *pod.file.lock().unwrap() = token.into();
+
+        publish("agent", "ax_cap_v1_first", 5).await.unwrap();
+        set_file("ax_cap_v1_first");
+        dispatcher.dispatch(&envelope).await.unwrap();
+
+        // Rotated; the pod file still holds the first leaf. A leaf for another
+        // Worker does not replace this Worker's previous leaf.
+        publish("agent", "ax_cap_v1_second", 8).await.unwrap();
+        publish("other", "ax_cap_v1_other", 5).await.unwrap();
+        dispatcher
+            .dispatch(&envelope)
+            .await
+            .expect("the push right after the rotation is accepted");
+
+        // The pod caught up.
+        set_file("ax_cap_v1_second");
+        dispatcher.dispatch(&envelope).await.unwrap();
+
+        // Another Worker's leaf is never sent to this Worker.
+        set_file("ax_cap_v1_other");
+        let error = dispatcher.dispatch(&envelope).await.unwrap_err();
+        assert_eq!(error.code, "TRANSPORT_DISPATCH_REJECTED");
+
+        // An expired previous leaf is not sent.
+        set_file("ax_cap_v1_first");
+        db.published_runtime_credentials
+            .lock()
+            .await
+            .get_mut(&serde_json::to_string(&purpose("agent")).unwrap())
+            .unwrap()
+            .previous
+            .as_mut()
+            .unwrap()
+            .expires_at = Utc::now() - chrono::Duration::seconds(1);
+        let error = dispatcher.dispatch(&envelope).await.unwrap_err();
+        assert_eq!(error.code, "TRANSPORT_DISPATCH_REJECTED");
+
+        assert_eq!(
+            *pod.accepted.lock().unwrap(),
+            vec![
+                "ax_cap_v1_first".to_string(),
+                "ax_cap_v1_first".to_string(),
+                "ax_cap_v1_second".to_string(),
             ]
         );
     }

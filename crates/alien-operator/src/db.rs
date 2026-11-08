@@ -150,12 +150,8 @@ pub struct OperatorDb {
     conn: Arc<Mutex<Connection>>,
     sync_requested: tokio::sync::Notify,
     pub(crate) daily_identity_operation: Arc<Mutex<()>>,
-    pub(crate) published_runtime_credentials: Mutex<
-        std::collections::HashMap<
-            String,
-            alien_client_core::runtime_credentials::RuntimeCapability,
-        >,
-    >,
+    pub(crate) published_runtime_credentials:
+        Mutex<std::collections::HashMap<String, crate::daily_identity::PublishedCapability>>,
     pub(crate) runtime_credentials: Mutex<
         std::collections::HashMap<
             String,

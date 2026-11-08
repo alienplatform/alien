@@ -547,11 +547,22 @@ impl alien_infra::RuntimeRegistryCredentialProvider for OperatorRegistryCredenti
         }
         if published
             .get(&key)
-            .is_some_and(|existing| existing.expires_at > credential.expires_at)
+            .is_some_and(|existing| existing.current.expires_at > credential.expires_at)
         {
             return Err(AlienError::new(invalid()));
         }
-        published.insert(key, credential);
+        let previous = match published.remove(&key) {
+            Some(existing) if existing.current.token != credential.token => Some(existing.current),
+            Some(existing) => existing.previous,
+            None => None,
+        };
+        published.insert(
+            key,
+            PublishedCapability {
+                current: credential,
+                previous,
+            },
+        );
         Ok(())
     }
 
@@ -600,6 +611,14 @@ impl alien_infra::RuntimeRegistryCredentialProvider for OperatorRegistryCredenti
     }
 }
 
+/// The newest written leaf for one purpose and the leaf it replaced. A pod
+/// sees a Secret change up to a minute or two after the write, so its runtime
+/// may still hold the replaced leaf.
+pub(crate) struct PublishedCapability {
+    pub(crate) current: alien_client_core::runtime_credentials::RuntimeCapability,
+    pub(crate) previous: Option<alien_client_core::runtime_credentials::RuntimeCapability>,
+}
+
 /// Read the successfully written generation without acquiring new authority.
 /// A failed writer leaves a still-valid generation usable until its hard deadline.
 pub(crate) async fn published_capability(
@@ -611,11 +630,26 @@ pub(crate) async fn published_capability(
     let published = db.published_runtime_credentials.lock().await;
     let credential = published
         .get(&key)
+        .map(|published| &published.current)
         .filter(|credential| credential.expires_at > Utc::now())
         .ok_or_else(|| {
             failed("Workload runtime authority has not been published or has expired")
         })?;
     Ok(credential.clone())
+}
+
+/// The generation the newest published leaf replaced, while it has not expired.
+pub(crate) async fn previous_published_capability(
+    db: &OperatorDb,
+    purpose: &Value,
+) -> Option<alien_client_core::runtime_credentials::RuntimeCapability> {
+    let key = serde_json::to_string(purpose).ok()?;
+    let published = db.published_runtime_credentials.lock().await;
+    published
+        .get(&key)?
+        .previous
+        .clone()
+        .filter(|credential| credential.expires_at > Utc::now())
 }
 
 pub(crate) async fn request_capability(
