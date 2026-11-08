@@ -38,9 +38,11 @@ remote-debugging session for kubectl, aws, gcloud, or az. Combine --operation an
 --debug-tool to request both on the same row; approving, denying, expiring, or revoking
 the request applies to both at once.
 
-Someone other than the requester approves: on Kubernetes the customer, in-cluster with
-kubectl; otherwise a workspace member other than the requester, with `approve` or `deny`.
-Deciding needs a signed-in workspace member; API keys can't approve or deny.
+Each deployment group says who approves. When the customer approves, they do it from the
+Slack approval card, or in-cluster with kubectl on Kubernetes; `approve` and `deny` are
+refused. When your team approves, a workspace member other than the requester runs
+`approve` or `deny`, or clicks the Slack card. Deciding here needs a signed-in workspace
+member; API keys can't approve or deny.
 
 Revoking a request withdraws the grant immediately: operations still waiting to be
 dispatched fail, open debug sessions stop, and the request can no longer be approved.
@@ -768,8 +770,10 @@ pub(crate) enum ApprovalInstructions {
     /// In-cluster with kubectl. The command is `None` until the operator has
     /// materialized the grant and reported its coordinates.
     Kubectl(Option<String>),
-    /// No in-cluster approval: a workspace member approves in the dashboard or Slack.
-    Elsewhere,
+    /// No in-cluster approval: the customer approves from the Slack card.
+    CustomerInSlack,
+    /// The vendor's team approves: a member other than the requester, in the dashboard or Slack.
+    Team,
 }
 
 impl ApprovalInstructions {
@@ -781,7 +785,7 @@ impl ApprovalInstructions {
     pub(crate) fn kubectl_command(&self) -> Option<&str> {
         match self {
             ApprovalInstructions::Kubectl(command) => command.as_deref(),
-            ApprovalInstructions::Elsewhere => None,
+            ApprovalInstructions::CustomerInSlack | ApprovalInstructions::Team => None,
         }
     }
 
@@ -792,12 +796,15 @@ impl ApprovalInstructions {
                 Some(format!("Run this in-cluster to approve:\n  {command}"))
             }
             ApprovalInstructions::Kubectl(None) => None,
-            ApprovalInstructions::Elsewhere => Some(ELSEWHERE_APPROVAL.to_string()),
+            ApprovalInstructions::CustomerInSlack => Some(CUSTOMER_APPROVAL.to_string()),
+            ApprovalInstructions::Team => Some(TEAM_APPROVAL.to_string()),
         }
     }
 }
 
-const ELSEWHERE_APPROVAL: &str = "A workspace member other than the requester approves this \
+const CUSTOMER_APPROVAL: &str = "The customer approves this request from the Slack approval card.";
+
+const TEAM_APPROVAL: &str = "A workspace member other than the requester approves this \
      request in the Alien dashboard (Access requests) or in Slack.";
 
 /// Fetch how the customer approves this request via `GET
@@ -822,20 +829,37 @@ pub(crate) async fn fetch_approval_instructions(
             url: None,
         })?
         .into_inner();
-    let in_cluster = coordinates
-        .approval_channels
-        .contains(&alien_platform_api::types::AccessRequestApprovalChannel::Kubectl);
-    Ok(if in_cluster {
-        ApprovalInstructions::Kubectl(coordinates.kubectl_approve)
+    Ok(approval_instructions(
+        &coordinates.approval_channels,
+        coordinates.kubectl_approve,
+    ))
+}
+
+/// Kubernetes deployments are approved in-cluster; otherwise the dashboard is
+/// offered only when the vendor's team approves, so its absence means the
+/// customer does, from the Slack card.
+fn approval_instructions(
+    channels: &[alien_platform_api::types::AccessRequestApprovalChannel],
+    kubectl_approve: Option<String>,
+) -> ApprovalInstructions {
+    use alien_platform_api::types::AccessRequestApprovalChannel as Channel;
+    if channels.contains(&Channel::Kubectl) {
+        ApprovalInstructions::Kubectl(kubectl_approve)
+    } else if channels.contains(&Channel::Dashboard) {
+        ApprovalInstructions::Team
     } else {
-        ApprovalInstructions::Elsewhere
-    })
+        ApprovalInstructions::CustomerInSlack
+    }
 }
 
 fn print_kubectl_approve(instructions: &ApprovalInstructions, status: AccessRequestStatus) {
-    if *instructions == ApprovalInstructions::Elsewhere && status == AccessRequestStatus::Queued {
+    if let (Some(message), None, AccessRequestStatus::Queued) = (
+        instructions.waiting_message(),
+        instructions.kubectl_command(),
+        status,
+    ) {
         println!();
-        println!("{}", dim_label(ELSEWHERE_APPROVAL));
+        println!("{}", dim_label(&message));
         return;
     }
     match (instructions.kubectl_command(), status) {
@@ -1341,14 +1365,23 @@ mod tests {
 
 #[cfg(test)]
 mod approval_instructions_tests {
-    use super::ApprovalInstructions;
+    use super::{approval_instructions, ApprovalInstructions};
+    use alien_platform_api::types::AccessRequestApprovalChannel as Channel;
 
     #[test]
-    fn push_deployments_stop_waiting_for_a_kubectl_command() {
-        let elsewhere = ApprovalInstructions::Elsewhere;
-        assert!(elsewhere.is_final());
-        assert_eq!(elsewhere.kubectl_command(), None);
-        assert!(elsewhere
+    fn push_deployments_say_who_approves_without_waiting_for_a_kubectl_command() {
+        let customer = approval_instructions(&[Channel::Slack], None);
+        assert_eq!(customer, ApprovalInstructions::CustomerInSlack);
+        assert!(customer.is_final());
+        assert_eq!(customer.kubectl_command(), None);
+        assert!(customer
+            .waiting_message()
+            .is_some_and(|message| message.contains("customer") && !message.contains("dashboard")));
+
+        let team = approval_instructions(&[Channel::Slack, Channel::Dashboard], None);
+        assert_eq!(team, ApprovalInstructions::Team);
+        assert!(team.is_final());
+        assert!(team
             .waiting_message()
             .is_some_and(|message| message.contains("dashboard")));
     }
