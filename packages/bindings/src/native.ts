@@ -53,6 +53,9 @@ export const container = factories.container
 /** Resolve the Postgres binding named `name`. */
 export const postgres = factories.postgres
 
+/** Resolve the Redis binding named `name`. */
+export const redis = factories.redis
+
 export {
   AlienError,
   BindingNotConfiguredError,

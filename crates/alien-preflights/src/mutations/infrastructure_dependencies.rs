@@ -130,7 +130,7 @@ impl InfrastructureDependenciesMutation {
 
         // AWS and GCP consumers need network outputs before they provision.
         // On Azure, the Container Apps environment needs the network, while
-        // Postgres also requires the network's dedicated Private Endpoint subnet.
+        // Postgres and Redis also require the network's dedicated Private Endpoint subnet.
         let waits_for_network = match platform {
             Platform::Aws | Platform::Gcp => {
                 stack.resources.get(resource_id).is_some_and(|entry| {
@@ -140,6 +140,7 @@ impl InfrastructureDependenciesMutation {
             Platform::Azure => {
                 resource_type == &alien_core::AzureContainerAppsEnvironment::RESOURCE_TYPE
                     || resource_type == &alien_core::Postgres::RESOURCE_TYPE
+                    || resource_type == &alien_core::Redis::RESOURCE_TYPE
             }
             _ => false,
         };
@@ -563,6 +564,40 @@ mod tests {
             vec![ResourceRef::new(Network::RESOURCE_TYPE, "default-network")]
         );
         assert!(stack.resources["default-network"].dependencies.is_empty());
+    }
+
+    #[tokio::test]
+    async fn redis_waits_for_the_network_on_aws_and_azure() {
+        for platform in [Platform::Aws, Platform::Azure] {
+            let stack = Stack::new("test".to_string())
+                .add(
+                    Network::new("default-network".to_string())
+                        .settings(NetworkSettings::UseDefault)
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    alien_core::Redis::new("cache".to_string()).build(),
+                    ResourceLifecycle::Live,
+                )
+                .build();
+            let stack_state = StackState::new(platform);
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(empty_env_snapshot())
+                .allow_frozen_changes(false)
+                .external_bindings(ExternalBindings::default())
+                .build();
+
+            let mutation = InfrastructureDependenciesMutation;
+            let stack = mutation.mutate(stack, &stack_state, &config).await.unwrap();
+            assert!(
+                stack.resources["cache"]
+                    .dependencies
+                    .contains(&ResourceRef::new(Network::RESOURCE_TYPE, "default-network")),
+                "Redis must wait for the network on {platform:?}"
+            );
+        }
     }
 
     #[tokio::test]

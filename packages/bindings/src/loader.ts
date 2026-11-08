@@ -172,6 +172,23 @@ export interface RawPostgresHandle {
   connection(): RawPostgresConnection
 }
 
+/** Raw napi Redis connection. */
+export interface RawRedisConnection {
+  url: string
+  host: string
+  port: number
+  username: string
+  password: string
+  tls: boolean
+  caCertificates: string[]
+  serverName?: string | null
+}
+
+/** Raw napi Redis handle. `connection()` is synchronous: everything is resolved already. */
+export interface RawRedisHandle {
+  connection(): RawRedisConnection
+}
+
 /** Raw napi vault handle. */
 export interface RawVaultHandle {
   getSecret(name: string): Promise<string>
@@ -278,6 +295,7 @@ export interface RawBindingsHandle {
   vault(name: string): Promise<RawVaultHandle>
   container(name: string): Promise<RawContainerHandle>
   postgres(name: string): Promise<RawPostgresHandle>
+  redis(name: string): Promise<RawRedisHandle>
   sandbox(name: string): Promise<RawSandboxHandle>
 }
 

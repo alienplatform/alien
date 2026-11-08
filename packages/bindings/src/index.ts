@@ -37,6 +37,9 @@ export const container = factories.container
 /** Resolve the Postgres binding named `name`. */
 export const postgres = factories.postgres
 
+/** Resolve the Redis binding named `name`. */
+export const redis = factories.redis
+
 /** Create an isolated environment for running untrusted code. */
 export const sandbox = factories.sandbox
 
@@ -71,6 +74,9 @@ export type {
   PostgresConnection,
   PostgresSslMode,
   PostgresTlsOptions,
+  Redis,
+  RedisConnection,
+  RedisTlsOptions,
   PresignedRequest,
   Queue,
   QueueAckResult,

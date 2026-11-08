@@ -387,6 +387,47 @@ export interface Postgres {
   connection(): Promise<PostgresConnection>
 }
 
+/**
+ * TLS options for a Redis connection, usable as ioredis `tls` and node-redis
+ * `socket` TLS settings. Absent fields mean the system trust store and the dialed host.
+ */
+export interface RedisTlsOptions {
+  /** PEM-encoded CA certificates when the provider signs with its own CA. */
+  ca?: string[]
+  /** Name to verify the certificate against, when it differs from the host. */
+  servername?: string
+}
+
+/** Everything a Redis client needs to connect. The database is always 0. */
+export interface RedisConnection {
+  /**
+   * `redis://` (local) or `rediss://` URL with the username and password
+   * percent-encoded, so a generated password with URL-special characters stays intact.
+   */
+  url: string
+  host: string
+  port: number
+  username: string
+  /** Connection password, read from the cloud secret store when the binding resolved. */
+  password: string
+  /** Always 0. */
+  database: 0
+  /** `false` for the local developer server; otherwise TLS options for your client. */
+  tls: false | RedisTlsOptions
+}
+
+/**
+ * A resolved Redis binding. It exposes no operations: the application connects with its
+ * own Redis client (ioredis, node-redis, BullMQ) using these details.
+ */
+export interface Redis {
+  /**
+   * Resolve the connection details. A cloud backend's password is read from its secret
+   * store with the workload's own identity; call the factory again to pick up a rotation.
+   */
+  connection(): Promise<RedisConnection>
+}
+
 /** A resolved vault (secrets) binding. */
 export interface Vault {
   /** Get the secret named `name` as a string. */

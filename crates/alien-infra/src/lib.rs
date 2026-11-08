@@ -98,6 +98,10 @@ mod postgres;
 #[cfg(feature = "local")]
 pub use postgres::LocalPostgresController;
 
+mod redis;
+#[cfg(feature = "local")]
+pub use redis::LocalRedisController;
+
 mod service_activation;
 pub use service_activation::{
     AzureServiceActivationController, AzureServiceActivationImporter,

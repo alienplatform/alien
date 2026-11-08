@@ -438,6 +438,13 @@ pub trait PlatformServiceProvider: Send + Sync {
     }
 
     #[cfg(feature = "local")]
+    fn get_local_redis_manager(&self) -> Option<Arc<alien_local::LocalRedisManager>>;
+    #[cfg(not(feature = "local"))]
+    fn get_local_redis_manager(&self) -> Option<Arc<()>> {
+        None
+    }
+
+    #[cfg(feature = "local")]
     fn get_local_postgres_manager(&self) -> Option<Arc<alien_local::LocalPostgresManager>>;
     #[cfg(not(feature = "local"))]
     fn get_local_postgres_manager(&self) -> Option<Arc<()>> {
@@ -1596,6 +1603,13 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     #[cfg(feature = "local")]
     fn get_local_kv_manager(&self) -> Option<Arc<alien_local::LocalKvManager>> {
         self.local_bindings.as_ref().map(|p| p.kv_manager().clone())
+    }
+
+    #[cfg(feature = "local")]
+    fn get_local_redis_manager(&self) -> Option<Arc<alien_local::LocalRedisManager>> {
+        self.local_bindings
+            .as_ref()
+            .map(|p| p.redis_manager().clone())
     }
 
     #[cfg(feature = "local")]

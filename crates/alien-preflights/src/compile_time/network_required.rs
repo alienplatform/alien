@@ -22,6 +22,7 @@ const RESOURCE_TYPES_REQUIRING_NETWORK: &[&str] = &[
     "compute-cluster", // ASGs/MIGs/VMSSs need VPC subnets
     "daemon",          // Transforms into compute-cluster in Phase 2 -> needs VPC
     "postgres",        // Needs a VPC on cloud (private-only DB); no-op on Local
+    "redis",           // Private-only server on cloud; no-op on Local
 ];
 
 /// Check if any resource in the stack requires VPC networking.
@@ -396,6 +397,27 @@ mod tests {
             ResourceEntry {
                 config: alien_core::Resource::new(
                     alien_core::Postgres::new("db".to_string()).build(),
+                ),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                display_name: None,
+                description: None,
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        let stack = create_stack(resources);
+        assert!(stack_requires_network(&stack));
+    }
+
+    #[test]
+    fn test_stack_requires_network_with_redis() {
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "cache".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(
+                    alien_core::Redis::new("cache".to_string()).build(),
                 ),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
