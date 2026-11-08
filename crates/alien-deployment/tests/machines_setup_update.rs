@@ -1,5 +1,7 @@
 //! Exercise Machines setup ownership without cloud credentials or a Machines host.
 
+mod support;
+
 use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus,
     EnvironmentVariablesSnapshot, ExternalBinding, ExternalBindings, Platform, ReleaseInfo,

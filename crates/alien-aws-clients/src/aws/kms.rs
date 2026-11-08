@@ -85,7 +85,7 @@ impl KmsApi for KmsClient {
                 message: "Failed to serialize AWS KMS Encrypt request".to_string(),
             },
         )?;
-        self.send("Encrypt", body, &key_id).await
+        alien_client_core::redact_request_body(self.send("Encrypt", body, &key_id).await)
     }
 
     async fn decrypt(&self, request: DecryptRequest) -> Result<DecryptResponse> {
@@ -95,7 +95,7 @@ impl KmsApi for KmsClient {
                 message: "Failed to serialize AWS KMS Decrypt request".to_string(),
             },
         )?;
-        self.send("Decrypt", body, &key_id).await
+        alien_client_core::redact_secret_bodies(self.send("Decrypt", body, &key_id).await)
     }
 
     async fn describe_key(&self, key_id: &str) -> Result<DescribeKeyResponse> {

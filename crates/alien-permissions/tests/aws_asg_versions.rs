@@ -109,6 +109,7 @@ fn bounded_asg_updates_require_numeric_versions_but_allow_capacity_changes(
                 "autoscaling:DeleteAutoScalingGroup",
                 "autoscaling:SetDesiredCapacity",
                 "autoscaling:TerminateInstanceInAutoScalingGroup",
+                "autoscaling:SuspendProcesses",
                 "autoscaling:StartInstanceRefresh",
             ] {
                 let request = Request::new(action, arn).resource_tags(&tags);

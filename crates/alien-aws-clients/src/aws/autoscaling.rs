@@ -80,6 +80,10 @@ pub trait AutoScalingApi: Send + Sync + std::fmt::Debug {
         request: DescribeScalingActivitiesRequest,
     ) -> Result<DescribeScalingActivitiesResponse>;
     async fn set_desired_capacity(&self, request: SetDesiredCapacityRequest) -> Result<()>;
+    /// Suspends the given scaling processes (for example `AZRebalance`) on a group.
+    /// Suspending a process that is already suspended succeeds.
+    /// See: https://docs.aws.amazon.com/autoscaling/ec2/APIReference/API_SuspendProcesses.html
+    async fn suspend_processes(&self, request: SuspendProcessesRequest) -> Result<()>;
 
     // Instance Operations
     async fn describe_auto_scaling_instances(
@@ -677,6 +681,16 @@ impl AutoScalingApi for AutoScalingClient {
         .await
     }
 
+    async fn suspend_processes(&self, request: SuspendProcessesRequest) -> Result<()> {
+        let form_data = suspend_processes_form(&request);
+        self.send_form_no_body(
+            form_data,
+            "SuspendProcesses",
+            &request.auto_scaling_group_name,
+        )
+        .await
+    }
+
     async fn describe_scaling_activities(
         &self,
         request: DescribeScalingActivitiesRequest,
@@ -934,6 +948,21 @@ pub struct CreateAutoScalingGroupRequest {
     pub new_instances_protected_from_scale_in: Option<bool>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct SuspendedProcessesWrapper {
+    #[serde(rename = "member", default)]
+    pub members: Vec<SuspendedProcess>,
+}
+
+/// A scaling process that is suspended on an Auto Scaling group.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct SuspendedProcess {
+    pub process_name: Option<String>,
+    pub suspension_reason: Option<String>,
+}
+
 /// Request to update an Auto Scaling group.
 #[derive(Debug, Clone, Serialize, Builder)]
 pub struct UpdateAutoScalingGroupRequest {
@@ -1091,6 +1120,7 @@ pub struct AutoScalingGroup {
     pub capacity_rebalance: Option<bool>,
     pub default_instance_warmup: Option<i32>,
     pub new_instances_protected_from_scale_in: Option<bool>,
+    pub suspended_processes: Option<SuspendedProcessesWrapper>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1165,6 +1195,32 @@ pub struct SetDesiredCapacityRequest {
     /// Whether to honor the default cooldown period.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub honor_cooldown: Option<bool>,
+}
+
+/// Request to suspend scaling processes on an Auto Scaling group.
+#[derive(Debug, Clone, Serialize, Builder)]
+pub struct SuspendProcessesRequest {
+    /// The name of the Auto Scaling group.
+    pub auto_scaling_group_name: String,
+    /// The processes to suspend, such as `AZRebalance` or `Launch`.
+    pub scaling_processes: Vec<String>,
+}
+
+fn suspend_processes_form(request: &SuspendProcessesRequest) -> HashMap<String, String> {
+    let mut form_data = HashMap::new();
+    form_data.insert("Action".to_string(), "SuspendProcesses".to_string());
+    form_data.insert("Version".to_string(), "2011-01-01".to_string());
+    form_data.insert(
+        "AutoScalingGroupName".to_string(),
+        request.auto_scaling_group_name.clone(),
+    );
+    for (i, process) in request.scaling_processes.iter().enumerate() {
+        form_data.insert(
+            format!("ScalingProcesses.member.{}", i + 1),
+            process.clone(),
+        );
+    }
+    form_data
 }
 
 /// Request to describe Auto Scaling instances.
@@ -1330,4 +1386,85 @@ pub struct InstanceRefresh {
     pub end_time: Option<String>,
     pub percentage_complete: Option<i32>,
     pub instances_to_update: Option<i32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn suspend_processes_form_numbers_each_process() {
+        let request = SuspendProcessesRequest::builder()
+            .auto_scaling_group_name("my-asg".to_string())
+            .scaling_processes(vec!["AZRebalance".to_string(), "Launch".to_string()])
+            .build();
+
+        let form = suspend_processes_form(&request);
+
+        assert_eq!(form.len(), 5);
+        assert_eq!(form["Action"], "SuspendProcesses");
+        assert_eq!(form["Version"], "2011-01-01");
+        assert_eq!(form["AutoScalingGroupName"], "my-asg");
+        assert_eq!(form["ScalingProcesses.member.1"], "AZRebalance");
+        assert_eq!(form["ScalingProcesses.member.2"], "Launch");
+    }
+
+    /// DescribeAutoScalingGroups response shape from the AWS API reference, trimmed to the
+    /// fields under test.
+    #[test]
+    fn describe_response_parses_suspended_processes() {
+        let body = r#"<DescribeAutoScalingGroupsResponse xmlns="http://autoscaling.amazonaws.com/doc/2011-01-01/">
+  <DescribeAutoScalingGroupsResult>
+    <AutoScalingGroups>
+      <member>
+        <AutoScalingGroupName>my-asg</AutoScalingGroupName>
+        <MinSize>1</MinSize>
+        <SuspendedProcesses>
+          <member>
+            <ProcessName>AZRebalance</ProcessName>
+            <SuspensionReason>User suspended at 2026-11-08T10:00:00Z</SuspensionReason>
+          </member>
+          <member>
+            <ProcessName>Launch</ProcessName>
+          </member>
+        </SuspendedProcesses>
+      </member>
+      <member>
+        <AutoScalingGroupName>other-asg</AutoScalingGroupName>
+        <SuspendedProcesses/>
+      </member>
+      <member>
+        <AutoScalingGroupName>third-asg</AutoScalingGroupName>
+      </member>
+    </AutoScalingGroups>
+  </DescribeAutoScalingGroupsResult>
+</DescribeAutoScalingGroupsResponse>"#;
+
+        let response: DescribeAutoScalingGroupsResponse = quick_xml::de::from_str(body).unwrap();
+        let groups = response
+            .describe_auto_scaling_groups_result
+            .auto_scaling_groups
+            .unwrap()
+            .members;
+
+        let suspended = groups[0].suspended_processes.as_ref().unwrap();
+        assert_eq!(suspended.members.len(), 2);
+        assert_eq!(
+            suspended.members[0].process_name.as_deref(),
+            Some("AZRebalance")
+        );
+        assert_eq!(
+            suspended.members[0].suspension_reason.as_deref(),
+            Some("User suspended at 2026-11-08T10:00:00Z")
+        );
+        assert_eq!(suspended.members[1].process_name.as_deref(), Some("Launch"));
+        assert_eq!(suspended.members[1].suspension_reason, None);
+
+        let empty = groups[1]
+            .suspended_processes
+            .as_ref()
+            .map_or(0, |w| w.members.len());
+        assert_eq!(empty, 0);
+        assert!(groups[2].suspended_processes.is_none());
+    }
 }

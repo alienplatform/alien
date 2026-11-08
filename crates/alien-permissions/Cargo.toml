@@ -10,6 +10,9 @@ license-file.workspace = true
 default = ["infrastructure"]
 infrastructure = ["dep:alien-core", "dep:regex", "dep:json5", "dep:tracing", "dep:sha2", "dep:uuid"]
 wasm = ["dep:wasm-bindgen"]
+# Exposes the IAM policy evaluator that this crate's own tests use, so other crates can check
+# rendered policies against requests.
+test-utils = ["infrastructure"]
 
 [dependencies]
 alien-core = { workspace = true, optional = true }
@@ -33,6 +36,8 @@ alien-permission-types = { workspace = true }
 indexmap = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
+# Turns on `test-utils` for this crate's own tests, so the exported evaluator is compiled by CI.
+alien-permissions = { path = ".", features = ["test-utils"] }
 insta = { workspace = true, features = ["yaml", "json"] }
 rstest = { workspace = true }
 tokio = { workspace = true, features = ["sync", "macros", "rt"] }

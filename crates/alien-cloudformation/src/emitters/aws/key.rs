@@ -7,7 +7,11 @@ use alien_core::{
     import::EmitContext, ErrorData, Key, RemoteBindings, RemoteStackManagement, Result,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
+use alien_permissions::{
+    aws_key_policy::{aws_key_policy, key_has_native_service_use, key_runtime_service_accounts},
+    generators::AwsCloudFormationPermissionsGenerator,
+    BindingTarget,
+};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsKeyEmitter;
@@ -26,7 +30,7 @@ impl CfEmitter for AwsKeyEmitter {
         key.properties
             .insert("PendingWindowInDays".to_string(), CfExpression::from(30u32));
         key.properties
-            .insert("KeyPolicy".to_string(), root_key_policy());
+            .insert("KeyPolicy".to_string(), key_policy(ctx)?);
         key.properties.insert("Tags".to_string(), tags(ctx));
         key.retain_data();
 
@@ -162,31 +166,43 @@ fn management_metadata_policy(ctx: &EmitContext<'_>, key_id: &str) -> Result<CfR
     Ok(policy)
 }
 
-fn root_key_policy() -> CfExpression {
-    CfExpression::object([
-        ("Version", CfExpression::from("2012-10-17")),
-        (
-            "Statement",
-            CfExpression::list([CfExpression::object([
-                ("Sid", CfExpression::from("EnableAccountAdministration")),
-                ("Effect", CfExpression::from("Allow")),
-                (
-                    "Principal",
-                    CfExpression::object([(
-                        "AWS",
-                        CfExpression::sub("arn:${AWS::Partition}:iam::${AWS::AccountId}:root"),
-                    )]),
-                ),
-                ("Action", CfExpression::from("kms:*")),
-                ("Resource", CfExpression::from("*")),
-            ])]),
-        ),
-    ])
+fn key_policy(ctx: &EmitContext<'_>) -> Result<CfExpression> {
+    let management_role_arn = management_role_id(ctx)
+        .map(|role_id| serde_json::json!({ "Fn::GetAtt": [role_id, "Arn"] }));
+    // Runtime roles are named from the stack name, as the service account emitter
+    // does. Building the ARN from the name keeps the key from depending on roles
+    // whose policies may depend on the key.
+    let mut runtime_role_arns = key_runtime_service_accounts(ctx.stack, ctx.resource_id)
+        .context(ErrorData::GenericError {
+            message: "Failed to work out which roles may use the Key".to_string(),
+        })?
+        .into_iter()
+        .map(|account_id| {
+            serde_json::json!({
+                "Fn::Sub": format!(
+                    "arn:${{AWS::Partition}}:iam::${{AWS::AccountId}}:role/${{AWS::StackName}}-{account_id}"
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    if alien_core::remote_bindings::remote_binding_for_entry(ctx.resource).is_some() {
+        if let Some(access_role_id) = remote_bindings_role_id(ctx) {
+            runtime_role_arns.push(serde_json::json!({ "Fn::GetAtt": [access_role_id, "Arn"] }));
+        }
+    }
+    cf_from_json(aws_key_policy(
+        serde_json::json!({ "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:root" }),
+        management_role_arn,
+        serde_json::json!({
+            "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*"
+        }),
+        key_has_native_service_use(ctx.stack, ctx.resource_id),
+        runtime_role_arns,
+    ))
 }
 
-fn remote_access_policy(ctx: &EmitContext<'_>, key_id: &str) -> Result<CfResource> {
-    let access_role_id = ctx
-        .stack
+fn remote_bindings_role_id(ctx: &EmitContext<'_>) -> Option<String> {
+    ctx.stack
         .resources()
         .find_map(|(id, entry)| {
             (entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
@@ -194,11 +210,14 @@ fn remote_access_policy(ctx: &EmitContext<'_>, key_id: &str) -> Result<CfResourc
                 .flatten()
         })
         .map(|id| format!("{id}Role"))
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::GenericError {
-                message: "remote Key has no Remote Bindings identity".to_string(),
-            })
-        })?;
+}
+
+fn remote_access_policy(ctx: &EmitContext<'_>, key_id: &str) -> Result<CfResource> {
+    let access_role_id = remote_bindings_role_id(ctx).ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: "remote Key has no Remote Bindings identity".to_string(),
+        })
+    })?;
     let actions = alien_permissions::get_permission_set("key/remote-cryptography")
         .and_then(|set| set.platforms.aws.as_ref())
         .into_iter()

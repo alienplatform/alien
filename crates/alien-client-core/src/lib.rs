@@ -5,5 +5,5 @@ pub mod request_utils;
 pub use error::{Error, ErrorData, Result};
 pub use request_utils::{
     handle_json_response, handle_no_response, handle_xml_response, redact_request_body,
-    RequestBuilderExt, RetriableRequestBuilder,
+    redact_response_body, redact_secret_bodies, RequestBuilderExt, RetriableRequestBuilder,
 };

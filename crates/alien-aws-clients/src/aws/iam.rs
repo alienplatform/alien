@@ -109,6 +109,17 @@ pub struct IamClient {
     credentials: AwsCredentialProvider,
 }
 
+/// Which failed requests an IAM call sends again.
+#[derive(Debug, Clone, Copy)]
+enum XmlRetry {
+    /// Every error marked retryable, including 4xx answers.
+    Retryable,
+    /// Only throttling.
+    Throttling,
+    /// Throttling, 5xx and transport errors; a 4xx answer is final.
+    Transient,
+}
+
 impl IamClient {
     pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
         Self {
@@ -161,7 +172,7 @@ impl IamClient {
         operation_name: &str,
         resource_name: &str,
     ) -> Result<T> {
-        self.send_xml(body, operation_name, resource_name, false)
+        self.send_xml(body, operation_name, resource_name, XmlRetry::Retryable)
             .await
     }
 
@@ -173,7 +184,19 @@ impl IamClient {
         operation_name: &str,
         resource_name: &str,
     ) -> Result<T> {
-        self.send_xml(body, operation_name, resource_name, true)
+        self.send_xml(body, operation_name, resource_name, XmlRetry::Throttling)
+            .await
+    }
+
+    /// For a read whose "not found" is an answer: callers probe for objects that may not
+    /// exist, and resending a 404 only delays that answer by the whole back-off.
+    async fn post_xml_retrying_transient<T: DeserializeOwned + Send + 'static>(
+        &self,
+        body: String,
+        operation_name: &str,
+        resource_name: &str,
+    ) -> Result<T> {
+        self.send_xml(body, operation_name, resource_name, XmlRetry::Transient)
             .await
     }
 
@@ -182,7 +205,7 @@ impl IamClient {
         body: String,
         operation_name: &str,
         resource_name: &str,
-        throttling_only: bool,
+        retry: XmlRetry,
     ) -> Result<T> {
         self.credentials.ensure_fresh().await?;
         let base_url = self.get_base_url();
@@ -194,14 +217,26 @@ impl IamClient {
             .content_type_form()
             .body(body.clone());
 
-        let result = if throttling_only {
-            crate::aws::aws_request_utils::sign_send_xml_retrying_throttling(
-                builder,
-                &self.sign_config(),
-            )
-            .await
-        } else {
-            crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await
+        let sign_config = self.sign_config();
+        let result = match retry {
+            XmlRetry::Retryable => {
+                crate::aws::aws_request_utils::sign_send_xml(builder, &sign_config).await
+            }
+            XmlRetry::Throttling => {
+                crate::aws::aws_request_utils::sign_send_xml_retrying_throttling(
+                    builder,
+                    &sign_config,
+                )
+                .await
+            }
+            XmlRetry::Transient => {
+                crate::aws::aws_request_utils::sign_send_xml_retrying_when(
+                    builder,
+                    &sign_config,
+                    crate::aws::aws_request_utils::is_transient_xml_error,
+                )
+                .await
+            }
         };
 
         match result {
@@ -649,7 +684,8 @@ impl IamApi for IamClient {
     async fn get_policy(&self, policy_arn: &str) -> Result<GetPolicyResponse> {
         let params = vec![("PolicyArn".to_string(), policy_arn.to_string())];
         let body = Self::build_form_body("GetPolicy", "2010-05-08", params);
-        self.post_xml(body, "GetPolicy", policy_arn).await
+        self.post_xml_retrying_transient(body, "GetPolicy", policy_arn)
+            .await
     }
 
     async fn delete_policy(&self, policy_arn: &str) -> Result<()> {

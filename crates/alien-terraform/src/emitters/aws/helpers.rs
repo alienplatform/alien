@@ -625,11 +625,12 @@ pub fn emit_iam_managed_policy_chunks(
     base_name: &str,
     statements: Vec<AwsIamStatement>,
 ) -> Result<()> {
-    const MAX_MANAGED_POLICY_BYTES: usize = 5_500;
-
     let mut statements = statements;
     ensure_unique_statement_sids(&mut statements);
-    let chunks = chunk_iam_statements(statements, MAX_MANAGED_POLICY_BYTES)?;
+    let chunks = chunk_iam_statements(
+        statements,
+        alien_permissions::generators::MAX_MANAGED_POLICY_BYTES,
+    )?;
     for (idx, chunk) in chunks.into_iter().enumerate() {
         let policy_label = format!("{base_label}_{idx}");
         let attachment_label = format!("{policy_label}_attachment");
@@ -663,99 +664,42 @@ pub fn emit_iam_managed_policy_chunks(
     Ok(())
 }
 
-/// Merges statements that differ only in their actions: same effect, same resources and same
-/// conditions. A statement allows or denies each of its actions on each resource under its
-/// conditions independently, so one statement with the union of the actions means exactly what
-/// the separate statements meant, and the shared resources and conditions are written once.
-/// The merged statement keeps the first statement's Sid and position, and is never larger than
-/// a policy holds. Statements with `NotResource` stay as they are.
+#[cfg(test)]
 fn merge_iam_statements(
     statements: Vec<AwsIamStatement>,
     max_policy_bytes: usize,
 ) -> Result<Vec<AwsIamStatement>> {
-    let mut merged: Vec<AwsIamStatement> = Vec::with_capacity(statements.len());
-    for statement in statements {
-        let mut placed = false;
-        if statement.not_resource.is_empty() {
-            for existing in merged.iter_mut().filter(|existing| {
-                existing.not_resource.is_empty()
-                    && existing.effect == statement.effect
-                    && existing.resource == statement.resource
-                    && existing.condition == statement.condition
-            }) {
-                let mut candidate = existing.clone();
-                for action in &statement.action {
-                    if !candidate.action.contains(action) {
-                        candidate.action.push(action.clone());
-                    }
-                }
-                // A merge never makes a statement too large for a policy of its own.
-                if policy_document_size(std::slice::from_ref(&candidate))? <= max_policy_bytes {
-                    *existing = candidate;
-                    placed = true;
-                    break;
-                }
-            }
-        }
-        if !placed {
-            merged.push(statement);
-        }
-    }
-    Ok(merged)
+    alien_permissions::generators::merge_statement_actions(
+        statements,
+        max_policy_bytes,
+        policy_document_size,
+    )
 }
 
-/// Merges statements that differ only in their actions (see [`merge_iam_statements`]), then
-/// packs them into as few managed policies as fit, first-fit decreasing: largest
-/// statement first (ties keep their order), each into the first policy it fits. A greedy split
-/// in the original order leaves room unused in most policies, which can push a role over the
-/// per-role quota of attached policies. Each policy lists its statements in their original
-/// order, and the same statements always give the same policies.
+/// Packs statements into managed policies with the shared packer (see
+/// [`alien_permissions::generators::pack_managed_policy_statements`]), sizing each policy as
+/// Terraform will render it, and rejects a statement too large for a policy of its own.
 fn chunk_iam_statements(
     statements: Vec<AwsIamStatement>,
     max_policy_bytes: usize,
 ) -> Result<Vec<Vec<AwsIamStatement>>> {
-    let statements = merge_iam_statements(statements, max_policy_bytes)?;
-    let mut sized = Vec::with_capacity(statements.len());
-    for (index, statement) in statements.into_iter().enumerate() {
-        let size = policy_document_size(std::slice::from_ref(&statement))?;
-        if size > max_policy_bytes {
+    let chunks = alien_permissions::generators::pack_managed_policy_statements(
+        statements,
+        max_policy_bytes,
+        policy_document_size,
+    )?;
+    for chunk in &chunks {
+        if policy_document_size(chunk)? > max_policy_bytes {
+            let sid = chunk
+                .first()
+                .map(|statement| statement.sid.as_str())
+                .unwrap_or("");
             return Err(AlienError::new(ErrorData::GenericError {
-                message: format!(
-                    "AWS IAM statement '{}' is too large for a managed policy",
-                    statement.sid
-                ),
+                message: format!("AWS IAM statement '{sid}' is too large for a managed policy"),
             }));
         }
-        sized.push((size, index, statement));
     }
-    sized.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-
-    let mut chunks: Vec<Vec<(usize, AwsIamStatement)>> = Vec::new();
-    for (_, index, statement) in sized {
-        let mut placed = false;
-        for chunk in chunks.iter_mut() {
-            let mut candidate: Vec<AwsIamStatement> = chunk
-                .iter()
-                .map(|(_, statement)| statement.clone())
-                .collect();
-            candidate.push(statement.clone());
-            if policy_document_size(&candidate)? <= max_policy_bytes {
-                chunk.push((index, statement.clone()));
-                placed = true;
-                break;
-            }
-        }
-        if !placed {
-            chunks.push(vec![(index, statement)]);
-        }
-    }
-    Ok(chunks
-        .into_iter()
-        .map(|mut chunk| {
-            chunk.sort_by_key(|(index, _)| *index);
-            chunk.into_iter().map(|(_, statement)| statement).collect()
-        })
-        .collect())
+    Ok(chunks)
 }
 
 fn policy_document_size(statements: &[AwsIamStatement]) -> Result<usize> {

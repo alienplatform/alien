@@ -678,7 +678,53 @@ async fn reconcile(
     //    This must happen before persisting so the `registry_access_granted`
     //    flag is included in the persisted state (matches ManagerTransport).
     let mut final_state = deployment_state;
-    preserve_recorded_gate_answers(&mut final_state, &deployment);
+    // Only a setup run may turn a recorded decline into a yes. What counts is the
+    // stored record, never the report: the caller is outside the deployment, holds
+    // the deployment's lock for this session, and the deployment was set up with
+    // direct setup authority. The report must be a setup handoff, and its stack
+    // state must hold every resource the target release puts behind the gate as
+    // delivered, the way an import must deliver them. The lock row does not record
+    // how it was acquired, so delivery is what separates a setup run from a runtime
+    // lock holder.
+    let setup_gate_resources = if !matches!(subject.scope, crate::auth::Scope::Deployment { .. })
+        && matches!(
+            final_state.status,
+            alien_core::DeploymentStatus::InitialSetup
+                | alien_core::DeploymentStatus::InitialSetupFailed
+        )
+        && deployment.locked_by.as_deref() == Some(req.session.as_str())
+        && deployment
+            .runtime_metadata
+            .as_ref()
+            .is_some_and(|metadata| {
+                metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+            }) {
+        let release_id = deployment
+            .desired_release_id
+            .as_deref()
+            .or(deployment.current_release_id.as_deref());
+        match release_id {
+            Some(release_id) => {
+                match target_release_stack(state.release_store.as_ref(), &deployment, release_id)
+                    .await
+                {
+                    Ok(stack) => stack.map(|stack| gate_resources(&stack)),
+                    Err(error) => return error.into_response(),
+                }
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+    // The stored answer flips only once every gated resource is delivered. Until then
+    // the setup run's choice goes back to it in the response alone, so it keeps creating
+    // the resources; it is never stored, and every report is checked again from scratch.
+    let pending_setup_yes = preserve_recorded_gate_answers(
+        &mut final_state,
+        &deployment,
+        setup_gate_resources.as_ref(),
+    );
     let legacy_cli = headers
         .get("user-agent")
         .and_then(|value| value.to_str().ok())
@@ -798,7 +844,13 @@ async fn reconcile(
     )
     .await;
 
-    let mut current = match serde_json::to_value(&final_state) {
+    let mut returned_state = final_state.clone();
+    if let Some(metadata) = returned_state.runtime_metadata.as_mut() {
+        for input_id in pending_setup_yes {
+            metadata.persisted_gate_answers.insert(input_id, true);
+        }
+    }
+    let mut current = match serde_json::to_value(&returned_state) {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!("Failed to serialize reconciled state: {e}");
@@ -962,10 +1014,9 @@ mod tests {
         agent_report_completes_claim, build_target_deployment_config, deployment_needs_target,
         deployment_state_from_record, deployment_target_release_id, management_platform,
         may_deliver_agent_target, preserve_recorded_gate_answers, release_stack_platform,
-        resolve_pull_input_environment, should_ignore_agent_state_report,
-        should_return_current_state_for_agent_sync, validate_kubernetes_base_platform,
-        AgentSyncRequest, AgentSyncWireRequest, HelmRelease, InitialDesiredRelease,
-        InitializeRequest, ReconcileRequest, RunnerConfigSources,
+        should_ignore_agent_state_report, should_return_current_state_for_agent_sync,
+        validate_kubernetes_base_platform, AgentSyncRequest, AgentSyncWireRequest, HelmRelease,
+        InitialDesiredRelease, InitializeRequest, ReconcileRequest, RunnerConfigSources,
     };
 
     #[tokio::test]
@@ -2514,7 +2565,8 @@ mod tests {
             target_resources: None,
         };
         deployment.user_environment_variables = Some(vec![variable.clone()]);
-        let resolved = resolve_pull_input_environment(&stack, &deployment).unwrap();
+        let resolved =
+            crate::loops::deployment::resolve_input_environment(&stack, &deployment).unwrap();
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].name, variable.name);
         assert_eq!(resolved[0].value, variable.value);
@@ -2654,7 +2706,7 @@ mod tests {
         let mut incoming = uninitialized_state();
         incoming.runtime_metadata = Some(incoming_metadata);
 
-        preserve_recorded_gate_answers(&mut incoming, &stored);
+        let _ = preserve_recorded_gate_answers(&mut incoming, &stored, None);
 
         let answers = &incoming
             .runtime_metadata
@@ -2902,7 +2954,7 @@ async fn agent_sync(
                 } else {
                     // Stays below the ignore check: restoring metadata here
                     // would make an uninitialized report look initialized.
-                    preserve_recorded_gate_answers(&mut agent_state, &deployment);
+                    let _ = preserve_recorded_gate_answers(&mut agent_state, &deployment, None);
                     // Reconcile registry access before persisting so the flag
                     // is saved in the same DB write.
                     // Pull sync is the agent's only channel to the manager, so a pending
@@ -3394,42 +3446,6 @@ fn remove_container_tunnels(stack: &mut alien_core::Stack) -> bool {
     removed
 }
 
-fn resolve_pull_input_environment(
-    stack: &alien_core::Stack,
-    deployment: &DeploymentRecord,
-) -> alien_core::Result<Vec<EnvironmentVariable>> {
-    let mut env_vars: Vec<EnvironmentVariable> = deployment
-        .user_environment_variables
-        .clone()
-        .unwrap_or_default();
-    // Inputs mapped to environment variables resolve against the
-    // target release, so a release that adds a mapped input takes
-    // effect without re-onboarding. Variables the deployment already
-    // carries win: embedders that resolve inputs themselves (into the
-    // deployment's variables) keep their values, and those mappings aren't
-    // resolved a second time. An input's other mappings still apply.
-    let unresolved_inputs: Vec<_> = stack
-        .inputs
-        .iter()
-        .map(|input| {
-            let mut input = input.clone();
-            input.env.retain(|mapping| {
-                !env_vars
-                    .iter()
-                    .any(|existing| existing.name == mapping.name)
-            });
-            input
-        })
-        .collect();
-    let input_env = alien_core::resolve_stack_input_environment_variables(
-        &unresolved_inputs,
-        &deployment.input_values,
-        deployment.platform,
-    )?;
-    env_vars.extend(input_env);
-    Ok(env_vars)
-}
-
 /// The management identity a pull deployment's target renders with; see
 /// [`crate::loops::deployment::resolve_deployment_management_config`] and
 /// [`ManagementRenderer::PullTarget`].
@@ -3493,7 +3509,7 @@ pub(crate) async fn build_pull_target(
         );
     }
 
-    let env_vars = match resolve_pull_input_environment(&stack, deployment) {
+    let env_vars = match crate::loops::deployment::resolve_input_environment(&stack, deployment) {
         Ok(variables) => variables,
         Err(error) => {
             return Err(ErrorData::bad_request(format!(
@@ -3671,7 +3687,23 @@ pub(crate) fn validate_kubernetes_base_platform(
 /// Gate answers are lifetime-fixed: fold the stored map into a write arriving
 /// through these routes so an actor that predates the field, omits its
 /// metadata, or holds a stale copy cannot shrink or flip the record.
-fn preserve_recorded_gate_answers(incoming: &mut DeploymentState, stored: &DeploymentRecord) {
+/// The resources a stack puts behind each frozen gate, by input id.
+fn gate_resources(stack: &alien_core::Stack) -> std::collections::HashMap<String, Vec<String>> {
+    let mut gates: std::collections::HashMap<String, Vec<String>> = Default::default();
+    for (resource_id, input_id) in alien_core::frozen_gated(stack) {
+        gates
+            .entry(input_id.to_string())
+            .or_default()
+            .push(resource_id.clone());
+    }
+    gates
+}
+
+fn preserve_recorded_gate_answers(
+    incoming: &mut DeploymentState,
+    stored: &DeploymentRecord,
+    setup_gate_resources: Option<&std::collections::HashMap<String, Vec<String>>>,
+) -> Vec<String> {
     // An installed ongoing-management grant permits setup choices to change.
     // Only the stored grant counts: a runtime report cannot confer authority.
     if stored
@@ -3679,7 +3711,7 @@ fn preserve_recorded_gate_answers(incoming: &mut DeploymentState, stored: &Deplo
         .as_ref()
         .is_some_and(|metadata| metadata.automatic_setup)
     {
-        return;
+        return Vec::new();
     }
     let Some(recorded) = stored
         .runtime_metadata
@@ -3687,10 +3719,24 @@ fn preserve_recorded_gate_answers(incoming: &mut DeploymentState, stored: &Deplo
         .map(|metadata| &metadata.persisted_gate_answers)
         .filter(|answers| !answers.is_empty())
     else {
-        return;
+        return Vec::new();
     };
+    // Resources the report shows as installed: created, with state recorded.
+    let delivered: std::collections::HashSet<String> = incoming
+        .stack_state
+        .iter()
+        .flat_map(|state| state.resources.iter())
+        .filter(|(_, resource)| {
+            !matches!(
+                resource.status,
+                alien_core::ResourceStatus::Pending | alien_core::ResourceStatus::Deleted
+            ) && resource.internal_state.is_some()
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
     let metadata = incoming.runtime_metadata.get_or_insert_default();
     let mut restored = 0usize;
+    let mut pending_setup_yes = Vec::new();
     for (input_id, recorded_answer) in recorded {
         match metadata.persisted_gate_answers.get(input_id) {
             None => {
@@ -3699,7 +3745,26 @@ fn preserve_recorded_gate_answers(incoming: &mut DeploymentState, stored: &Deplo
                     .insert(input_id.clone(), *recorded_answer);
                 restored += 1;
             }
+            // A setup run's yes replaces a recorded decline, once the report's stack
+            // state holds every resource behind the gate as delivered; nothing else does.
+            Some(true)
+                if !*recorded_answer
+                    && setup_gate_resources
+                        .and_then(|gates| gates.get(input_id))
+                        .is_some_and(|resource_ids| {
+                            !resource_ids.is_empty()
+                                && resource_ids.iter().all(|id| delivered.contains(id))
+                        }) => {}
             Some(incoming_answer) if incoming_answer != recorded_answer => {
+                // A setup run asking for yes with delivery incomplete: keep the record, and
+                // tell the caller the choice to hand back in the response.
+                if *incoming_answer
+                    && setup_gate_resources
+                        .and_then(|gates| gates.get(input_id))
+                        .is_some_and(|resource_ids| !resource_ids.is_empty())
+                {
+                    pending_setup_yes.push(input_id.clone());
+                }
                 tracing::warn!(
                     %input_id,
                     deployment_id = %stored.id,
@@ -3721,6 +3786,7 @@ fn preserve_recorded_gate_answers(incoming: &mut DeploymentState, stored: &Deplo
             "restored recorded gate answers a state write-back dropped"
         );
     }
+    pending_setup_yes
 }
 
 /// Once runtime cleanup hands off, setup owns the remaining identities and

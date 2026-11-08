@@ -1,4 +1,6 @@
 //! Recover the durable checkpoint written when a heartbeat entered the update flow.
+mod support;
+
 use alien_aws_clients::{
     acm::{ImportCertificateResponse, MockAcmApi},
     cloudwatch_logs::MockCloudWatchLogsApi,
@@ -131,7 +133,7 @@ async fn unchanged_deployment_retry_recovers_legacy_certificate_update_failure()
         // No provider mutations are allowed: the certificate was already installed.
         let services = Arc::new(MockPlatformServiceProvider::new());
         let state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-        let retried = alien_deployment::step(
+        let retried = crate::support::step(
             state,
             config.clone(),
             client.clone(),
@@ -153,7 +155,7 @@ async fn unchanged_deployment_retry_recovers_legacy_certificate_update_failure()
             plan.updates.is_empty(),
             "unchanged retry must not manufacture an update"
         );
-        let recovered = alien_deployment::step(retried, config, client, Some(services))
+        let recovered = crate::support::step(retried, config, client, Some(services))
             .await
             .unwrap();
         assert_eq!(
@@ -295,7 +297,7 @@ async fn failed_certificate_renewal_preserves_delay_through_deployment_step() {
     let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
     for attempt in 0..3 {
         state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-        let result = alien_deployment::step(
+        let result = crate::support::step(
             state,
             config.clone(),
             client.clone(),

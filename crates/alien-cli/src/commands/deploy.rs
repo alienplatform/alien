@@ -956,7 +956,7 @@ async fn resolve_self_deployment_group(
         [] => Err(AlienError::new(ErrorData::ValidationError {
             field: "deployment-group".to_string(),
             message: format!(
-                "Deployment group '{reference}' was not found in this project. Run `alien onboard <customer-name>` or pass an existing group ID, name, or external ID."
+                "Deployment group '{reference}' was not found in this project. Run `alien onboard <customer-name> --allow <email|@domain>` or pass an existing group ID, name, or external ID."
             ),
         })),
         _ => Err(AlienError::new(ErrorData::ValidationError {
@@ -2467,6 +2467,9 @@ async fn deploy_task_with_environment(
         session.clone(),
         acquired_deployment.execution_claim.clone(),
     );
+    // This process alone steps the deployment, so a key of its own is enough.
+    alien_deployment::set_ephemeral_secrets_digest_key();
+
     let policy = RunnerPolicy {
         max_steps: 400,
         operation: if setup_owned_status {

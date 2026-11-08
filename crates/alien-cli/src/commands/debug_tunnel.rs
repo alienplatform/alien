@@ -18,6 +18,9 @@
 //!    those env vars set. The child process talks to `localhost:<port>`,
 //!    thinking it's AWS; bytes flow through the WS to the manager and back.
 //! 5. On child exit, the WebSocket closes and the local server shuts down.
+//!    If the manager closes the WebSocket first (the access request was
+//!    revoked or expired), in-flight requests fail and the guard reports the
+//!    tunnel closed, so the caller can end the child.
 //!
 //! Multiplexing across concurrent requests uses `request_id` correlation,
 //! same as the pull tunnel — the WS is a fan-in / fan-out channel.
@@ -140,7 +143,9 @@ pub async fn spawn_push_tunnel(
         let _ = ws_sink.close().await;
     });
 
-    // 4. WS reader: dispatch responses to awaiters
+    // 4. WS reader: dispatch responses to awaiters. When the manager closes
+    //    the tunnel, fail what is in flight and tell the caller.
+    let (closed_tx, closed_rx) = tokio::sync::watch::channel(false);
     let pending_for_reader = Arc::clone(&pending);
     let reader_handle = tokio::spawn(async move {
         while let Some(msg) = ws_stream.next().await {
@@ -162,6 +167,8 @@ pub async fn spawn_push_tunnel(
                 let _ = tx.send(frame);
             }
         }
+        pending_for_reader.lock().await.clear();
+        let _ = closed_tx.send(true);
     });
 
     // 5. bind the loopback HTTP server on an ephemeral port
@@ -206,6 +213,7 @@ pub async fn spawn_push_tunnel(
             writer: writer_handle,
             reader: reader_handle,
             server: server_handle,
+            closed: Some(closed_rx),
         },
     ))
 }
@@ -215,6 +223,9 @@ pub struct PushTunnelGuard {
     writer: tokio::task::JoinHandle<()>,
     reader: tokio::task::JoinHandle<()>,
     server: tokio::task::JoinHandle<()>,
+    /// Becomes true when the manager closes a push tunnel. `None` for merged
+    /// pull-mode loopbacks, whose session ends with the kubectl tunnel.
+    closed: Option<tokio::sync::watch::Receiver<bool>>,
 }
 
 impl Drop for PushTunnelGuard {
@@ -226,6 +237,11 @@ impl Drop for PushTunnelGuard {
 }
 
 impl PushTunnelGuard {
+    /// Resolves once the manager has closed the tunnel, for a push tunnel.
+    pub fn closed(&self) -> Option<tokio::sync::watch::Receiver<bool>> {
+        self.closed.clone()
+    }
+
     /// Combine several guards into one so the caller can keep a single
     /// handle alive for the child process's run. Useful when a single
     /// `alien debug` session spawns multiple loopbacks (e.g. AWS + GCP +
@@ -267,6 +283,7 @@ impl PushTunnelGuard {
             writer,
             reader,
             server,
+            closed: None,
         }
     }
 }
@@ -422,6 +439,7 @@ pub async fn spawn_pull_aws_loopback(
             writer: tokio::spawn(async {}),
             reader: tokio::spawn(async {}),
             server: server_handle,
+            closed: None,
         },
     ))
 }
@@ -737,6 +755,7 @@ async fn spawn_generic_cloud_loopback(
             writer: tokio::spawn(async {}),
             reader: tokio::spawn(async {}),
             server: server_handle,
+            closed: None,
         },
     ))
 }
@@ -1001,3 +1020,54 @@ fn urlencoding(input: &str) -> String {
 // through their methods.
 #[allow(dead_code)]
 fn _trait_markers(_h: HeaderMap, _b: Bytes, _m: Method) {}
+
+#[cfg(test)]
+mod push_tunnel_close_tests {
+    use super::spawn_push_tunnel;
+    use alien_core::debug_session::PushTunnelDebugSession;
+    use futures::StreamExt;
+    use std::time::Duration;
+
+    /// A manager that accepts the tunnel, reads one proxied request and closes
+    /// the WebSocket without answering, as it does when access is revoked.
+    #[tokio::test]
+    async fn a_tunnel_the_manager_closes_fails_in_flight_requests_and_reports_closed() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+            let _request = ws.next().await;
+            let _ = ws.close(None).await;
+        });
+        let session = PushTunnelDebugSession {
+            session_id: "dbg_test".to_string(),
+            provider: "aws".to_string(),
+            tunnel_url: format!("http://127.0.0.1:{port}/v1/debug/sessions/dbg_test/push-tunnel"),
+            client_token: "token".to_string(),
+            expires_at: None,
+        };
+        let (env, guard) = spawn_push_tunnel(&session).await.unwrap();
+        let mut closed = guard
+            .closed()
+            .expect("a push tunnel reports when it closes");
+
+        let endpoint = env.get("AWS_ENDPOINT_URL").unwrap().clone();
+        let response = tokio::time::timeout(
+            Duration::from_secs(5),
+            reqwest::Client::new()
+                .post(&endpoint)
+                .body("Action=GetCallerIdentity")
+                .send(),
+        )
+        .await
+        .expect("an in-flight request must not wait out the 60s response timeout")
+        .unwrap();
+        assert!(response.status().is_server_error(), "{}", response.status());
+
+        tokio::time::timeout(Duration::from_secs(5), closed.wait_for(|closed| *closed))
+            .await
+            .expect("the guard reports the tunnel closed")
+            .unwrap();
+    }
+}

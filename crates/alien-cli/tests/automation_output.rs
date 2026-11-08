@@ -36,7 +36,7 @@ fn machine_inventory_and_token_are_json_without_a_linked_project() {
         when.method(POST)
             .path(format!("/v1/deployments/{ID}/token"));
         then.status(201)
-            .json_body(json!({"deploymentId":ID,"token":"test-deployment-token"}));
+            .json_body(json!({"deploymentId":ID,"token":"test-deployment-token","expiresAt":null}));
     });
     let events: Vec<_> = (0..100)
         .map(|i| {
@@ -63,7 +63,7 @@ fn machine_inventory_and_token_are_json_without_a_linked_project() {
         ("events", event_response),
         (
             "token",
-            json!({"deploymentId":ID,"token":"test-deployment-token"}),
+            json!({"deploymentId":ID,"token":"test-deployment-token","expiresAt":null}),
         ),
     ] {
         let config = tempfile::tempdir().unwrap();

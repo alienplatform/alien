@@ -15,7 +15,7 @@ connects to your own.
   - `alien dev release` / `alien dev vault` / `alien dev commands` — Local variants
 - **`alien build`** — Build the application into OCI images
 - **`alien release`** — Push images and create a release on the manager
-- **`alien onboard`** — Create a deployment group and print what the customer runs (a `helm install` command for Kubernetes, `--airgapped` for sites without a connection)
+- **`alien onboard`** — Create a deployment group and print what the customer runs (a setup link that opens for the emails or domains passed with `--allow`, a `helm install` command for Kubernetes, `--airgapped` for sites without a connection)
 - **`alien deployments`** — List and inspect deployments
 - **`alien logs`** — Search recent deployment logs
 - **`alien tokens`** — Create and revoke scoped tokens, such as tunnel tokens (`alien tokens create --tunnel`)

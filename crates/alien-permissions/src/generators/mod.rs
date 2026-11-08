@@ -2,6 +2,7 @@ pub mod aws_boundary;
 mod aws_boundary_coverage;
 mod aws_boundary_scope;
 pub mod aws_cloudformation;
+mod aws_managed_policies;
 pub mod aws_runtime;
 pub mod azure_runtime;
 pub mod azure_setup_owned;
@@ -18,6 +19,10 @@ pub use aws_boundary_scope::{
 pub use aws_cloudformation::{
     AwsCloudFormationIamPolicy, AwsCloudFormationIamStatement,
     AwsCloudFormationPermissionsGenerator,
+};
+pub use aws_managed_policies::{
+    merge_statement_actions, pack_managed_policy_statements, MAX_ATTACHED_MANAGEMENT_POLICIES,
+    MAX_MANAGED_POLICY_BYTES,
 };
 pub use aws_runtime::{
     ensure_unique_statement_sids, AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator,

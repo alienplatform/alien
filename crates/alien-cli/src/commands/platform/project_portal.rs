@@ -573,7 +573,7 @@ pub async fn portal_task(
                 "Portal settings saved. Every setup link for {project} uses them."
             ))
         );
-        println!("Check a setup link: alien onboard <name> --json | jq -r .deploymentLink");
+        println!("Check a setup link: alien onboard <name> --allow <email|@domain> --json | jq -r .deploymentLink");
     }
     match command {
         PortalCommand::Domain { .. } => print_domains(&result),

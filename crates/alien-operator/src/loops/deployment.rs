@@ -948,6 +948,7 @@ mod tests {
 
     #[tokio::test]
     async fn secret_wait_yields_for_the_requested_delay_and_wakes_sync_only_on_change() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         use alien_bindings::{BindingsProvider, BindingsProviderApi};
         use alien_core::{
             DeploymentStatus, Resource, ResourceLifecycle, ResourceStatus, RuntimeMetadata, Stack,
@@ -1571,6 +1572,7 @@ mod tests {
 
     #[tokio::test]
     async fn disconnected_health_refresh_observes_failure_and_recovery() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         let directory = tempfile::tempdir().unwrap();
         let key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let db = OperatorDb::new(directory.path().to_str().unwrap(), key)
@@ -1692,6 +1694,7 @@ mod tests {
     /// pass by pass and its waits are added up instead of slept.
     #[tokio::test]
     async fn resource_poll_budget_lasts_its_requested_delays() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         const MAX_POLLS: u32 = 60;
         const POLL_DELAY: Duration = Duration::from_secs(10);
 

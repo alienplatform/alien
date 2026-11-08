@@ -1,5 +1,7 @@
 //! Real-cloud updates with a single initial setup and the installed management identity.
 
+use alien_aws_clients::iam::{IamApi, IamClient};
+use alien_core::permissions::{ManagementPermissions, PermissionProfile};
 use alien_core::{Platform, ResourceLifecycle, Stack, Storage};
 use alien_test::{TestConfig, TestDeployment, TestManager};
 use anyhow::{bail, Context};
@@ -84,15 +86,53 @@ impl AutomaticSetup {
     }
 
     pub async fn run(&mut self) -> anyhow::Result<()> {
-        alien_test::setup_target(
-            &self.config,
-            self.platform,
-            &self.deployment,
-            &Stack::new("automatic-setup".into()).build(),
-            &self.manager,
-            self.manager.management_config(),
-        )
-        .await?;
+        self.install().await?;
+        verify_updates(&self.manager, &self.deployment, self.platform).await
+    }
+
+    /// A release that widens the management grant stops for setup, and the setup run
+    /// applies it. A release that narrows it runs on the wider installed grant.
+    pub async fn run_management_change(&mut self) -> anyhow::Result<()> {
+        self.install().await?;
+        let installed_revision = self.management_revision().await?;
+        let stuck = if self.platform == Platform::Aws {
+            Some(self.leave_role_at_the_quota().await?)
+        } else {
+            None
+        };
+
+        let wider = publish(&self.manager, self.platform, &management_stack(true)).await?;
+        let error = self.wait_for_setup_required(&wider).await?;
+        tracing::info!(%error, "Wider management grant stopped for setup");
+        anyhow::ensure!(
+            self.management_revision().await? == installed_revision,
+            "The runtime must not change its own management grant"
+        );
+
+        self.setup().await?;
+        self.wait_until_running_release(&wider).await?;
+        let applied_revision = self.management_revision().await?;
+        anyhow::ensure!(
+            applied_revision != installed_revision,
+            "The setup run must apply the wider management grant"
+        );
+        tracing::info!("Setup run applied the wider management grant");
+        if let Some(stuck) = &stuck {
+            stuck.verify_repaired().await?;
+        }
+
+        let narrower = publish(&self.manager, self.platform, &management_stack(false)).await?;
+        self.wait_until_running_release(&narrower).await?;
+        anyhow::ensure!(
+            self.management_revision().await? == applied_revision,
+            "Narrowing keeps the wider grant until the next setup run"
+        );
+        tracing::info!("Narrower management grant ran without setup");
+        Ok(())
+    }
+
+    async fn install(&mut self) -> anyhow::Result<()> {
+        self.setup().await?;
         self.deployment
             .wait_until_running(Duration::from_secs(900))
             .await
@@ -109,8 +149,159 @@ impl AutomaticSetup {
             metadata["automaticSetup"] == true,
             "Setup must persist its grant"
         );
+        Ok(())
+    }
 
-        verify_updates(&self.manager, &self.deployment, self.platform).await
+    /// Runs setup the way a deployer reruns it: it applies a pending or stopped update, and
+    /// leaves a settled deployment alone.
+    async fn setup(&self) -> anyhow::Result<()> {
+        alien_test::setup_target(
+            &self.config,
+            self.platform,
+            &self.deployment,
+            &Stack::new("automatic-setup".into()).build(),
+            &self.manager,
+            self.manager.management_config(),
+        )
+        .await
+    }
+
+    async fn deployment_state(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(
+            self.manager
+                .client()
+                .get_deployment()
+                .id(&self.deployment.id)
+                .send()
+                .await?
+                .into_inner(),
+        )?)
+    }
+
+    /// The management permissions revision the management controller last applied.
+    async fn management_revision(&self) -> anyhow::Result<String> {
+        let state = self.deployment_state().await?;
+        let management = &state["stackState"]["resources"]["management"];
+        anyhow::ensure!(
+            management["status"] == "running",
+            "The management identity must be running: {management}"
+        );
+        management["_internal"]["managementPermissionsRevision"]
+            .as_str()
+            .map(str::to_owned)
+            .with_context(|| format!("No applied management revision: {management}"))
+    }
+
+    /// Leaves the management role as a setup that hit the AWS quota of 20 attached
+    /// managed policies did: 22 numbered policies exist and the first 20 are attached,
+    /// so the policies that hold the role's Deny statements past index 19 are not.
+    async fn leave_role_at_the_quota(&self) -> anyhow::Result<StuckRole> {
+        let state = self.deployment_state().await?;
+        let management = &state["stackState"]["resources"]["management"]["_internal"];
+        let role = management["roleName"]
+            .as_str()
+            .context("The management role name is required")?
+            .to_owned();
+        let prefix = state["stackState"]["resourcePrefix"]
+            .as_str()
+            .context("The resource prefix is required")?
+            .to_owned();
+        let account = management["roleArn"]
+            .as_str()
+            .and_then(|arn| arn.split(':').nth(4))
+            .context("The management role ARN names the account")?
+            .to_owned();
+        let stuck = StuckRole {
+            iam: super::sandbox::target_iam().await?,
+            role,
+            prefix,
+            account,
+        };
+        let packed = stuck.attached().await?.len();
+        let filler = r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"iam:GetRole","Resource":"*"}]}"#;
+        for index in packed..22 {
+            let name = stuck.numbered(index);
+            stuck
+                .iam
+                .create_policy(&name, filler, None, None)
+                .await
+                .with_context(|| format!("create {name}"))?;
+            if index < 20 {
+                stuck
+                    .iam
+                    .attach_role_policy(&stuck.role, &stuck.arn(&name))
+                    .await
+                    .with_context(|| format!("attach {name}"))?;
+            }
+        }
+        anyhow::ensure!(
+            stuck.attached().await?
+                == (0..20)
+                    .map(|index| stuck.numbered(index))
+                    .collect::<Vec<_>>(),
+            "The role must be left at the quota"
+        );
+        tracing::info!(
+            role = %stuck.role,
+            packed,
+            "Seeded 22 numbered management policies with 20 attached"
+        );
+        Ok(stuck)
+    }
+
+    async fn wait_for_setup_required(&self, release: &str) -> anyhow::Result<String> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(600);
+        loop {
+            let state = self.deployment_state().await?;
+            if state["status"] == "running" && state["currentReleaseId"] == release {
+                bail!("The release went running without setup");
+            }
+            if state["status"] == "update-failed" {
+                // Preflight failures wrap the setup request, so look through the sources.
+                let setup_required =
+                    std::iter::successors(Some(&state["error"]), |error| error.get("source"))
+                        .find(|error| error["code"] == "DEPLOYMENT_SETUP_REQUIRED");
+                let Some(setup_required) = setup_required else {
+                    bail!("Expected the release to stop for setup: {}", state["error"]);
+                };
+                return Ok(setup_required["message"].to_string());
+            }
+            if state["status"]
+                .as_str()
+                .is_some_and(|status| status.ends_with("-failed"))
+            {
+                bail!(
+                    "The release failed without asking for setup: {} {}",
+                    state["status"],
+                    state["error"]
+                );
+            }
+            anyhow::ensure!(
+                tokio::time::Instant::now() < deadline,
+                "The release neither stopped for setup nor ran: {}",
+                state["status"]
+            );
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+
+    async fn wait_until_running_release(&self, release: &str) -> anyhow::Result<()> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(900);
+        loop {
+            let state = self.deployment_state().await?;
+            let status = state["status"].as_str().unwrap_or_default();
+            if status.ends_with("-failed") || status == "error" {
+                bail!("Release {release} failed: {}", state["error"]);
+            }
+            if status == "running" && state["currentReleaseId"] == release {
+                return Ok(());
+            }
+            anyhow::ensure!(
+                tokio::time::Instant::now() < deadline,
+                "Release {release} did not converge: {status}"
+            );
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
     }
 
     pub async fn cleanup(self) -> anyhow::Result<()> {
@@ -207,6 +398,84 @@ pub async fn verify_updates(
         }
     }
     Ok(())
+}
+
+/// A management role left at the AWS attached-policy quota.
+struct StuckRole {
+    iam: IamClient,
+    role: String,
+    prefix: String,
+    account: String,
+}
+
+impl StuckRole {
+    fn numbered(&self, index: usize) -> String {
+        format!("{}-deployment-management-{index}", self.prefix)
+    }
+
+    fn arn(&self, name: &str) -> String {
+        format!("arn:aws:iam::{}:policy/{name}", self.account)
+    }
+
+    /// Names of the managed policies attached to the role, in index order.
+    async fn attached(&self) -> anyhow::Result<Vec<String>> {
+        let mut names: Vec<String> = self
+            .iam
+            .list_attached_role_policies(&self.role)
+            .await?
+            .list_attached_role_policies_result
+            .attached_policies
+            .map(|attached| attached.member)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|policy| policy.policy_name)
+            .collect();
+        names.sort_by_key(|name| {
+            name.rsplit('-')
+                .next()
+                .and_then(|index| index.parse::<usize>().ok())
+        });
+        Ok(names)
+    }
+
+    /// The setup run packed the grant again: a contiguous run of numbered policies from 0,
+    /// all attached, with nothing numbered left above it.
+    async fn verify_repaired(&self) -> anyhow::Result<()> {
+        let attached = self.attached().await?;
+        let packed = attached.len();
+        anyhow::ensure!(
+            (1..20).contains(&packed),
+            "The repaired role holds {packed} managed policies"
+        );
+        anyhow::ensure!(
+            attached
+                == (0..packed)
+                    .map(|index| self.numbered(index))
+                    .collect::<Vec<_>>(),
+            "The repaired role must attach policies 0..{packed}: {attached:?}"
+        );
+        for index in packed..22 {
+            match self.iam.get_policy(&self.arn(&self.numbered(index))).await {
+                Err(error) if error.code == "REMOTE_RESOURCE_NOT_FOUND" => {}
+                Ok(_) => bail!("Stale management policy {index} was left behind"),
+                Err(error) => bail!("GetPolicy {index} failed: {error}"),
+            }
+        }
+        tracing::info!(role = %self.role, packed, "Setup run repaired the role left at the quota");
+        Ok(())
+    }
+}
+
+/// An empty stack whose management grant either adds reading application buckets or not.
+fn management_stack(read_buckets: bool) -> Stack {
+    let management = if read_buckets {
+        ManagementPermissions::Extend(PermissionProfile::new().global(["storage/data-read"]))
+    } else {
+        ManagementPermissions::Auto
+    };
+    Stack::new("automatic-setup".into())
+        .management(management)
+        .build()
 }
 
 fn storage_stack(platform: Platform, changed: bool) -> Stack {

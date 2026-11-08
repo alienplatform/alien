@@ -15,8 +15,11 @@ use alien_core::{
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
 use alien_infra::StackResourceStateExt;
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+type HmacSha256 = Hmac<Sha256>;
 use std::collections::{BTreeMap, HashMap};
 use tracing::{debug, info, warn};
 
@@ -31,7 +34,7 @@ const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
 // no-migration option and keep the wire keys stable.
 const RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_logs_auth_header";
 const RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_metrics_auth_header";
-const SECRETS_SYNC_SCHEMA_VERSION: &[u8] = b"\0vault-sync:vault-backed-consumers:v3\0";
+const SECRETS_SYNC_SCHEMA_VERSION: &[u8] = b"\0vault-sync:vault-backed-consumers:v4-keyed\0";
 
 /// The stack the executor reconciles once the deployment is prepared: the prepared stack from
 /// runtime metadata, with the deployment's environment variables and monitoring injected.
@@ -808,7 +811,7 @@ pub async fn sync_secrets_to_vault(
     runtime_metadata.vault_credentials_revoked = false;
 
     let desired_secrets = desired_vault_secrets(stack, client_config.platform(), config);
-    let sync_hash = secrets_sync_hash(&desired_secrets);
+    let sync_hash = secrets_sync_hash(&stack_state.resource_prefix, &desired_secrets)?;
     let desired_secret_names = desired_secrets.keys().cloned().collect::<Vec<_>>();
 
     if client_config.platform() == Platform::Machines {
@@ -1340,16 +1343,107 @@ fn runtime_monitoring_secrets_hash(monitoring: &OtlpConfig) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn secrets_sync_hash(desired_secrets: &BTreeMap<String, String>) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(SECRETS_SYNC_SCHEMA_VERSION);
-    for (name, value) in desired_secrets {
-        hasher.update(name.as_bytes());
-        hasher.update(b"\0");
-        hasher.update(value.as_bytes());
-        hasher.update(b"\0");
+/// The key for digests of secret values, set once at startup.
+static SECRETS_DIGEST_KEY: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
+
+/// Sets the key that digests of secret values are computed with.
+///
+/// Runtime metadata may be stored by a separate control plane, so the digest of
+/// the secrets last written to the vault is keyed: a plain digest would let
+/// whoever stores it test guesses for a weak secret. Every process that steps
+/// the same deployments must use the same key, from storage the control plane
+/// can't read. Without a key, syncing secrets fails. Setting the key that is
+/// already set is allowed; a different key is an error.
+pub fn set_secrets_digest_key(key: [u8; 32]) -> Result<()> {
+    match SECRETS_DIGEST_KEY.set(key) {
+        Ok(()) => Ok(()),
+        Err(_) if SECRETS_DIGEST_KEY.get() == Some(&key) => Ok(()),
+        Err(_) => Err(AlienError::new(ErrorData::InternalError {
+            message: "A different secrets digest key is already set for this process".to_string(),
+        })),
     }
-    format!("{:x}", hasher.finalize())
+}
+
+/// Sets the key unless one is already set, and returns whether this call set it.
+///
+/// For managers built several times in one process, each reading its own key
+/// file: the first key wins.
+pub fn set_secrets_digest_key_if_unset(key: [u8; 32]) -> bool {
+    SECRETS_DIGEST_KEY.set(key).is_ok()
+}
+
+/// Uses a random key that lives as long as this process.
+///
+/// For a process that is the only one to step its deployments and keeps no
+/// digest across restarts, such as a one-shot CLI run. After a restart the
+/// stored digest never matches, so the first sync writes the secrets again.
+pub fn set_ephemeral_secrets_digest_key() {
+    let mut key = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::rng(), &mut key);
+    let _ = SECRETS_DIGEST_KEY.set(key);
+}
+
+/// Whether a key has been set, by [`set_secrets_digest_key`] or
+/// [`set_ephemeral_secrets_digest_key`].
+pub fn secrets_digest_key_is_set() -> bool {
+    SECRETS_DIGEST_KEY.get().is_some()
+}
+
+/// Digest of the secrets last written to the vault, recorded in runtime
+/// metadata to skip unchanged syncs. Keyed per deployment (by its resource
+/// prefix) from the process's key; see [`set_secrets_digest_key`]. A digest from
+/// before the key, or from another key, never matches, so it reads as changed
+/// and the secrets are written again once.
+fn secrets_sync_hash(
+    deployment_scope: &str,
+    desired_secrets: &BTreeMap<String, String>,
+) -> Result<String> {
+    // Unit tests step deployments without an embedding process to set the key.
+    #[cfg(test)]
+    let key = SECRETS_DIGEST_KEY.get().or(Some(&[7; 32]));
+    #[cfg(not(test))]
+    let key = SECRETS_DIGEST_KEY.get();
+    configured_secrets_sync_hash(key, deployment_scope, desired_secrets)
+}
+
+fn configured_secrets_sync_hash(
+    key: Option<&[u8; 32]>,
+    deployment_scope: &str,
+    desired_secrets: &BTreeMap<String, String>,
+) -> Result<String> {
+    let key = key.ok_or_else(|| {
+        AlienError::new(ErrorData::InternalError {
+            message: "No secrets digest key is set; the embedding process must call \
+                      set_secrets_digest_key"
+                .to_string(),
+        })
+    })?;
+    Ok(keyed_secrets_sync_hash(
+        key,
+        deployment_scope,
+        desired_secrets,
+    ))
+}
+
+fn keyed_secrets_sync_hash(
+    key: &[u8; 32],
+    deployment_scope: &str,
+    desired_secrets: &BTreeMap<String, String>,
+) -> String {
+    let mut derive = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+    derive.update(b"alien-secrets-sync\0");
+    derive.update(deployment_scope.as_bytes());
+    let deployment_key = derive.finalize().into_bytes();
+
+    let mut mac = HmacSha256::new_from_slice(&deployment_key).expect("HMAC accepts any key length");
+    mac.update(SECRETS_SYNC_SCHEMA_VERSION);
+    for (name, value) in desired_secrets {
+        mac.update(name.as_bytes());
+        mac.update(b"\0");
+        mac.update(value.as_bytes());
+        mac.update(b"\0");
+    }
+    format!("{:x}", mac.finalize().into_bytes())
 }
 
 /// Interrupts all non-terminal, non-failed resources when a deployment failure is detected.
@@ -2492,12 +2586,14 @@ mod tests {
     async fn machines_skips_stack_vault_secret_sync() {
         let mut config = make_config(make_snapshot(&[], &[("API_TOKEN", "secret")]));
         config.monitoring = Some(make_monitoring_with_metrics());
-        let expected_hash = secrets_sync_hash(&BTreeMap::new());
+        let stack_state = StackState::new(Platform::Machines);
+        let expected_hash =
+            secrets_sync_hash(&stack_state.resource_prefix, &BTreeMap::new()).unwrap();
         let mut runtime_metadata = RuntimeMetadata::default();
 
         let synced = sync_secrets_to_vault(
             &make_single_function_stack("worker"),
-            &StackState::new(Platform::Machines),
+            &stack_state,
             &ClientConfig::Machines,
             &config,
             &mut runtime_metadata,
@@ -2517,7 +2613,8 @@ mod tests {
     async fn deployment_without_secrets_vault_skips_empty_reconcile_and_deletion() {
         let stack_state = StackState::new(Platform::Test);
         let config = make_config(make_snapshot(&[], &[]));
-        let expected_hash = secrets_sync_hash(&BTreeMap::new());
+        let expected_hash =
+            secrets_sync_hash(&stack_state.resource_prefix, &BTreeMap::new()).unwrap();
         let mut runtime_metadata = RuntimeMetadata::default();
 
         let synced = sync_secrets_to_vault(
@@ -2861,6 +2958,157 @@ mod tests {
         assert_eq!(delivery.deployer_secrets[0].vault_key, "api-key");
     }
 
+    /// The digest an attacker holding runtime metadata could compute for a guess,
+    /// as the unkeyed v3 scheme recorded it.
+    fn unkeyed_v3_digest(secrets: &BTreeMap<String, String>) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(b"\0vault-sync:vault-backed-consumers:v3\0");
+        for (name, value) in secrets {
+            hasher.update(name.as_bytes());
+            hasher.update(b"\0");
+            hasher.update(value.as_bytes());
+            hasher.update(b"\0");
+        }
+        format!("{:x}", hasher.finalize())
+    }
+
+    /// A local secrets vault for sync tests.
+    fn local_secrets_vault() -> (tempfile::TempDir, ClientConfig, StackState) {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let state_dir = temp.path().to_string_lossy().to_string();
+        let client_config = ClientConfig::Local {
+            state_directory: state_dir.clone(),
+        };
+        let mut vault_state = StackResourceState::new_pending(
+            Vault::RESOURCE_TYPE.to_string(),
+            Resource::new(Vault::new("secrets".to_string()).build()),
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        vault_state.status = ResourceStatus::Running;
+        vault_state.remote_binding_params = Some(
+            serde_json::to_value(VaultBinding::local("secrets", &state_dir))
+                .expect("local vault binding"),
+        );
+        let mut stack_state = StackState::new(Platform::Local);
+        stack_state
+            .resources
+            .insert("secrets".to_string(), vault_state);
+        (temp, client_config, stack_state)
+    }
+
+    /// Runtime metadata reaches the control plane. Its sync digest must not
+    /// confirm a guessed secret value.
+    #[tokio::test]
+    async fn the_recorded_sync_digest_does_not_confirm_a_guessed_secret() {
+        let (_temp, client_config, stack_state) = local_secrets_vault();
+        let stack = with_secrets_vault(make_single_function_stack("worker"));
+        let config = make_config(make_snapshot(&[], &[("DB_PASSWORD", "hunter2")]));
+        let mut metadata = RuntimeMetadata::default();
+        assert!(sync_secrets_to_vault(
+            &stack,
+            &stack_state,
+            &client_config,
+            &config,
+            &mut metadata
+        )
+        .await
+        .expect("sync"));
+        let recorded = metadata.last_synced_env_vars_hash.expect("recorded digest");
+
+        // Whoever stores the metadata knows the names and can guess the value.
+        let guess = desired_vault_secrets(&stack, Platform::Local, &config);
+        assert_eq!(
+            guess.get("DB_PASSWORD").map(String::as_str),
+            Some("hunter2")
+        );
+        assert_ne!(
+            recorded,
+            unkeyed_v3_digest(&guess),
+            "the right guess must not match"
+        );
+        let mut unkeyed_v4 = Sha256::new();
+        unkeyed_v4.update(SECRETS_SYNC_SCHEMA_VERSION);
+        for (name, value) in &guess {
+            unkeyed_v4.update(name.as_bytes());
+            unkeyed_v4.update(b"\0");
+            unkeyed_v4.update(value.as_bytes());
+            unkeyed_v4.update(b"\0");
+        }
+        assert_ne!(recorded, format!("{:x}", unkeyed_v4.finalize()));
+    }
+
+    #[test]
+    fn a_missing_key_is_an_error_not_a_random_key() {
+        let secrets = BTreeMap::from([("API_TOKEN".to_string(), "value".to_string())]);
+        let error = configured_secrets_sync_hash(None, "deployment-a", &secrets).unwrap_err();
+        assert!(error.to_string().contains("secrets digest key"), "{error}");
+        assert!(configured_secrets_sync_hash(Some(&[1; 32]), "deployment-a", &secrets).is_ok());
+    }
+
+    #[test]
+    fn a_second_key_is_refused_but_the_same_key_is_not() {
+        set_secrets_digest_key([7; 32]).unwrap();
+        set_secrets_digest_key([7; 32]).unwrap();
+        assert!(set_secrets_digest_key([8; 32]).is_err());
+        set_ephemeral_secrets_digest_key();
+        assert!(secrets_digest_key_is_set());
+    }
+
+    #[test]
+    fn sync_digests_depend_on_the_key_and_the_deployment() {
+        let secrets = BTreeMap::from([("API_TOKEN".to_string(), "value".to_string())]);
+        let digest = keyed_secrets_sync_hash(&[1; 32], "deployment-a", &secrets);
+        assert_eq!(
+            digest,
+            keyed_secrets_sync_hash(&[1; 32], "deployment-a", &secrets)
+        );
+        assert_ne!(
+            digest,
+            keyed_secrets_sync_hash(&[2; 32], "deployment-a", &secrets)
+        );
+        assert_ne!(
+            digest,
+            keyed_secrets_sync_hash(&[1; 32], "deployment-b", &secrets)
+        );
+    }
+
+    /// A deployment upgraded from the unkeyed digest writes its secrets once,
+    /// then skips unchanged syncs again.
+    #[tokio::test]
+    async fn a_digest_from_before_the_key_resyncs_once() {
+        let (_temp, client_config, stack_state) = local_secrets_vault();
+        let stack = with_secrets_vault(make_single_function_stack("worker"));
+        let config = make_config(make_snapshot(&[], &[("API_TOKEN", "v1")]));
+
+        let mut metadata = RuntimeMetadata::default();
+        metadata.last_synced_env_vars_hash = Some(unkeyed_v3_digest(&desired_vault_secrets(
+            &stack,
+            Platform::Local,
+            &config,
+        )));
+        metadata.last_synced_secret_names = vec!["API_TOKEN".to_string()];
+
+        assert!(
+            sync_secrets_to_vault(&stack, &stack_state, &client_config, &config, &mut metadata)
+                .await
+                .expect("first sync after the upgrade"),
+            "an unkeyed digest reads as changed, not as an error"
+        );
+        let vault = BindingsProvider::from_stack_state(&stack_state, client_config.clone())
+            .expect("bindings provider")
+            .load_vault("secrets")
+            .await
+            .expect("local vault");
+        assert_eq!(vault.get_secret("API_TOKEN").await.expect("synced"), "v1");
+        assert!(
+            !sync_secrets_to_vault(&stack, &stack_state, &client_config, &config, &mut metadata)
+                .await
+                .expect("second sync"),
+            "the keyed digest now matches"
+        );
+    }
+
     #[tokio::test]
     async fn vault_sync_removes_stale_owned_values_and_preserves_unrelated_values() {
         let temp = tempfile::TempDir::new().expect("temp dir");
@@ -3006,7 +3254,8 @@ mod tests {
         ));
         token_only.environment_variables.hash = "token-only".to_string();
         let old_hash = pre_v2_snapshot_only_sync_hash(&token_only);
-        let policy_hash = secrets_sync_hash(&BTreeMap::new());
+        let policy_hash =
+            secrets_sync_hash(&stack_state.resource_prefix, &BTreeMap::new()).unwrap();
         assert_ne!(old_hash, policy_hash);
         let mut legacy_metadata = RuntimeMetadata::default();
         legacy_metadata.last_synced_env_vars_hash = Some(old_hash);

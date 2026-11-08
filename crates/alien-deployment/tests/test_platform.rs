@@ -1,6 +1,8 @@
 //! Fast, deterministic deployment tests using Platform::Test
 //!
-//! These tests exercise the full alien_deployment::step() lifecycle with no cloud I/O.
+//! These tests exercise the full crate::support::step() lifecycle with no cloud I/O.
+
+mod support;
 
 use alien_azure_clients::AzureClientConfigExt;
 use alien_bindings::Vault as _;
@@ -13,7 +15,6 @@ use alien_core::{
 use alien_infra::{register_registry_extension, LocalComputeClusterController};
 use chrono::Utc;
 use indexmap::IndexMap;
-use sha2::{Digest, Sha256};
 use std::{collections::HashMap, sync::OnceLock};
 use tempfile::TempDir;
 use tokio::sync::MutexGuard;
@@ -74,10 +75,9 @@ async fn run_until_status(
         }
 
         // Execute one step
-        let result =
-            alien_deployment::step(state.clone(), config.clone(), ClientConfig::Test, None)
-                .await
-                .expect("Step should not fail");
+        let result = crate::support::step(state.clone(), config.clone(), ClientConfig::Test, None)
+            .await
+            .expect("Step should not fail");
 
         state = result.state;
 
@@ -252,13 +252,13 @@ fn create_env_vars_snapshot(hash: &str, include_secret: bool) -> EnvironmentVari
     }
 }
 
-fn expected_secrets_sync_hash(secret_value: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(b"\0vault-sync:vault-backed-consumers:v3\0");
-    hasher.update(b"SECRET_VAR\0");
-    hasher.update(secret_value.as_bytes());
-    hasher.update(b"\0");
-    format!("{:x}", hasher.finalize())
+/// The digest of the secrets last synced to the vault. It is keyed, so tests
+/// compare digests with each other rather than with a computed value.
+fn synced_digest(state: &DeploymentState) -> Option<String> {
+    state
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.last_synced_env_vars_hash.clone())
 }
 
 /// Create a deployment config fixture
@@ -423,7 +423,7 @@ async fn stale_waiting_for_machines_returns_to_provisioning() {
         ..state
     };
 
-    let result = alien_deployment::step(stale_state, config.clone(), ClientConfig::Test, None)
+    let result = crate::support::step(stale_state, config.clone(), ClientConfig::Test, None)
         .await
         .expect("provisioning step should succeed");
 
@@ -548,7 +548,7 @@ async fn initial_update_resumes_prepared_target_after_waiting_for_machines() {
         .unwrap()
         .resources
         .insert("machines".into(), inventory);
-    let result = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+    let result = crate::support::step(state, config.clone(), ClientConfig::Test, None)
         .await
         .expect("updating should wait for inventory");
     state = result.state;
@@ -638,19 +638,13 @@ async fn test_provisioning_syncs_secrets_before_live_compute() {
 
     // Execute one provisioning step. It must sync secrets before stepping
     // the live function.
-    let result = alien_deployment::step(state.clone(), config.clone(), ClientConfig::Test, None)
+    let result = crate::support::step(state.clone(), config.clone(), ClientConfig::Test, None)
         .await
         .expect("Step should succeed");
     state = result.state;
 
-    assert_eq!(
-        state
-            .runtime_metadata
-            .as_ref()
-            .unwrap()
-            .last_synced_env_vars_hash
-            .as_deref(),
-        Some(expected_secrets_sync_hash("secret_value").as_str()),
+    assert!(
+        synced_digest(&state).is_some(),
         "Secrets should be synced before live compute is stepped"
     );
 }
@@ -675,15 +669,7 @@ async fn test_deploy_with_secrets_reaches_running() {
     );
 
     // Secrets should have been synced (hash recorded)
-    assert_eq!(
-        final_state
-            .runtime_metadata
-            .as_ref()
-            .unwrap()
-            .last_synced_env_vars_hash
-            .as_deref(),
-        Some(expected_secrets_sync_hash("secret_value").as_str()),
-    );
+    assert!(synced_digest(&final_state).is_some());
 }
 
 #[tokio::test]
@@ -703,40 +689,22 @@ async fn test_provisioning_syncs_secrets_once_per_hash() {
     .await;
 
     // Execute one provisioning step to trigger secret sync
-    let result = alien_deployment::step(state.clone(), config.clone(), ClientConfig::Test, None)
+    let result = crate::support::step(state.clone(), config.clone(), ClientConfig::Test, None)
         .await
         .expect("Step should succeed");
     state = result.state;
 
     // Assert hash was recorded after first sync
-    assert_eq!(
-        state
-            .runtime_metadata
-            .as_ref()
-            .unwrap()
-            .last_synced_env_vars_hash
-            .as_ref()
-            .unwrap(),
-        &expected_secrets_sync_hash("secret_value")
-    );
+    let first = synced_digest(&state).expect("digest recorded after the first sync");
 
     // Run another step with same config (should skip sync)
-    let result2 = alien_deployment::step(state.clone(), config.clone(), ClientConfig::Test, None)
+    let result2 = crate::support::step(state.clone(), config.clone(), ClientConfig::Test, None)
         .await
         .expect("Step should succeed");
     state = result2.state;
 
-    // Hash should still be hash_v1 (not changed)
-    assert_eq!(
-        state
-            .runtime_metadata
-            .as_ref()
-            .unwrap()
-            .last_synced_env_vars_hash
-            .as_ref()
-            .unwrap(),
-        &expected_secrets_sync_hash("secret_value")
-    );
+    // The digest is unchanged: the same secrets were not synced again
+    assert_eq!(synced_digest(&state), Some(first));
 
     // Should continue progressing (no error from skipped sync)
     assert!(
@@ -759,21 +727,12 @@ async fn test_provisioning_resyncs_when_hash_changes() {
         &[DeploymentStatus::Provisioning],
     )
     .await;
-    let result = alien_deployment::step(state.clone(), config1.clone(), ClientConfig::Test, None)
+    let result = crate::support::step(state.clone(), config1.clone(), ClientConfig::Test, None)
         .await
         .expect("Step should succeed");
     state = result.state;
 
-    assert_eq!(
-        state
-            .runtime_metadata
-            .as_ref()
-            .unwrap()
-            .last_synced_env_vars_hash
-            .as_ref()
-            .unwrap(),
-        &expected_secrets_sync_hash("secret_value")
-    );
+    let first = synced_digest(&state).expect("digest recorded after the first sync");
 
     // Now change the desired secret value. Snapshot-only changes intentionally
     // do not trigger vault writes when the desired vault contents are unchanged.
@@ -787,22 +746,14 @@ async fn test_provisioning_resyncs_when_hash_changes() {
     }
 
     // Run another step with new config
-    let result2 = alien_deployment::step(state.clone(), config2.clone(), ClientConfig::Test, None)
+    let result2 = crate::support::step(state.clone(), config2.clone(), ClientConfig::Test, None)
         .await
         .expect("Step should succeed");
     state = result2.state;
 
-    // Hash should now be hash_v2 (resynced)
-    assert_eq!(
-        state
-            .runtime_metadata
-            .as_ref()
-            .unwrap()
-            .last_synced_env_vars_hash
-            .as_ref()
-            .unwrap(),
-        &expected_secrets_sync_hash("secret_value_v2")
-    );
+    // A new digest shows the changed secret was synced
+    let second = synced_digest(&state).expect("digest recorded after the resync");
+    assert_ne!(second, first);
 }
 
 /// C) Running health checks + heartbeat tests
@@ -825,7 +776,7 @@ async fn test_running_updates_heartbeat_when_healthy() {
     }
 
     // Call step() on Running status
-    let result = alien_deployment::step(state.clone(), config, ClientConfig::Test, None)
+    let result = crate::support::step(state.clone(), config, ClientConfig::Test, None)
         .await
         .expect("Step should succeed");
 
@@ -863,12 +814,12 @@ async fn health_failure_recovers_through_observation_without_retry_or_reprovisio
     let state = run_to_completion(create_initial_state(stack), config.clone()).await;
     assert_eq!(state.status, DeploymentStatus::Running);
     let release = state.current_release.clone();
-    let failed = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+    let failed = crate::support::step(state, config.clone(), ClientConfig::Test, None)
         .await
         .unwrap();
     assert_eq!(failed.state.status, DeploymentStatus::RefreshFailed);
     assert!(!failed.state.retry_requested);
-    let recovered = alien_deployment::step(failed.state, config, ClientConfig::Test, None)
+    let recovered = crate::support::step(failed.state, config, ClientConfig::Test, None)
         .await
         .unwrap();
     assert_eq!(recovered.state.status, DeploymentStatus::Running);
@@ -912,14 +863,14 @@ async fn explicit_retry_after_health_failure_preserves_the_running_resource() {
     stack.resources.get_mut("health-worker").unwrap().config = alien_core::Resource::new(worker);
     let config = create_test_config("retry-health", false);
     let state = run_to_completion(create_initial_state(stack), config.clone()).await;
-    let failed = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+    let failed = crate::support::step(state, config.clone(), ClientConfig::Test, None)
         .await
         .unwrap();
     assert_eq!(failed.state.status, DeploymentStatus::RefreshFailed);
 
     let mut retry_state = failed.state;
     request_retry(&mut retry_state);
-    let retried = alien_deployment::step(retry_state, config.clone(), ClientConfig::Test, None)
+    let retried = crate::support::step(retry_state, config.clone(), ClientConfig::Test, None)
         .await
         .unwrap();
     assert_eq!(retried.state.status, DeploymentStatus::Running);
@@ -940,7 +891,7 @@ async fn explicit_retry_after_health_failure_preserves_the_running_resource() {
         Some("test:worker:health-worker")
     );
 
-    let observed = alien_deployment::step(retried.state, config, ClientConfig::Test, None)
+    let observed = crate::support::step(retried.state, config, ClientConfig::Test, None)
         .await
         .unwrap();
     assert_eq!(observed.state.status, DeploymentStatus::Running);
@@ -1512,7 +1463,7 @@ async fn setup_authorized_update_clears_authority_only_on_success() {
         setup_fingerprint_version: 1,
     });
 
-    let first_update_step = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+    let first_update_step = crate::support::step(state, config.clone(), ClientConfig::Test, None)
         .await
         .expect("setup-authorized update should accept the desired release");
     assert_eq!(first_update_step.state.status, DeploymentStatus::Updating);
@@ -1702,7 +1653,7 @@ async fn an_update_omitting_a_frozen_resource_waits_for_setup() {
     );
     // The update step refuses before changing anything; the runner records this as
     // UpdateFailed and the control plane shows the update as blocked for setup.
-    let error = alien_deployment::step(state.clone(), config, ClientConfig::Test, None)
+    let error = crate::support::step(state.clone(), config, ClientConfig::Test, None)
         .await
         .expect_err("the update needs setup");
     let mut codes = vec![error.code.clone()];
@@ -1875,7 +1826,7 @@ async fn stale_waiting_for_machines_returns_to_updating() {
     state = run_until_status(state, config.clone(), &[DeploymentStatus::Updating]).await;
     state.status = DeploymentStatus::WaitingForMachines;
 
-    let result = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+    let result = crate::support::step(state, config.clone(), ClientConfig::Test, None)
         .await
         .expect("updating step should succeed");
 
@@ -2034,7 +1985,7 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
     );
 
     // Without retry_requested, should stay in failed state
-    let result = alien_deployment::step(state.clone(), config.clone(), ClientConfig::Test, None)
+    let result = crate::support::step(state.clone(), config.clone(), ClientConfig::Test, None)
         .await
         .expect("Step should succeed");
     assert_eq!(result.state.status, DeploymentStatus::UpdateFailed);
@@ -2045,7 +1996,7 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
 
     // With retry_requested, should transition to UpdatePending (not Updating)
     request_retry(&mut state);
-    let result = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+    let result = crate::support::step(state, config.clone(), ClientConfig::Test, None)
         .await
         .expect("Step should succeed");
     assert_eq!(
@@ -2091,12 +2042,12 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
     // Preflight first prepares the exact desired stack. Only the following
     // Updating step may decide that the failed resource is unchanged and
     // resume its saved controller with a fresh retry budget.
-    let result = alien_deployment::step(result.state, config.clone(), ClientConfig::Test, None)
+    let result = crate::support::step(result.state, config.clone(), ClientConfig::Test, None)
         .await
         .expect("retry preflight should succeed");
     assert_eq!(result.state.status, DeploymentStatus::Updating);
 
-    let result = alien_deployment::step(result.state, config.clone(), ClientConfig::Test, None)
+    let result = crate::support::step(result.state, config.clone(), ClientConfig::Test, None)
         .await
         .expect("unchanged failed resource should resume");
     let resumed_resource = result
@@ -2177,7 +2128,7 @@ async fn assert_failed_retry_transition(
         state.runtime_metadata = Some(RuntimeMetadata::default());
     }
 
-    let result = alien_deployment::step(state.clone(), config.clone(), ClientConfig::Test, None)
+    let result = crate::support::step(state.clone(), config.clone(), ClientConfig::Test, None)
         .await
         .expect("failed status without retry should remain terminal");
     assert_eq!(result.state.status, failed_status);
@@ -2187,7 +2138,7 @@ async fn assert_failed_retry_transition(
     );
 
     request_retry(&mut state);
-    let result = alien_deployment::step(state, config, ClientConfig::Test, None)
+    let result = crate::support::step(state, config, ClientConfig::Test, None)
         .await
         .expect("failed status with retry should transition");
     assert_eq!(result.state.status, retried_status);
@@ -2857,7 +2808,7 @@ async fn config_change_during_provisioning_is_applied_before_the_deployment_is_r
         if !deployed_values().is_empty() {
             break;
         }
-        state = alien_deployment::step(state, first.clone(), ClientConfig::Test, None)
+        state = crate::support::step(state, first.clone(), ClientConfig::Test, None)
             .await
             .expect("step should succeed")
             .state;
@@ -2935,7 +2886,7 @@ async fn provisioning_retry_replaces_a_failed_create_whose_config_changed() {
     // The retry runs with the variable gone.
     let fixed_config = create_test_config("hash_v2", false);
     request_retry(&mut state);
-    let state = alien_deployment::step(state, fixed_config.clone(), ClientConfig::Test, None)
+    let state = crate::support::step(state, fixed_config.clone(), ClientConfig::Test, None)
         .await
         .expect("the retry step should succeed")
         .state;
@@ -3009,7 +2960,7 @@ async fn running_retry_resumes_an_unchanged_setup_owned_failure_at_its_saved_ste
     let (mut state, config) = store_failed_mid_update(store_id).await;
 
     request_retry(&mut state);
-    let retried = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+    let retried = crate::support::step(state, config.clone(), ClientConfig::Test, None)
         .await
         .expect("the retry step should succeed")
         .state;
@@ -3050,7 +3001,7 @@ async fn running_retry_refuses_failures_whose_config_changed_and_names_them() {
     let before = state.stack_state.clone();
 
     request_retry(&mut state);
-    let refused = alien_deployment::step(state, config, ClientConfig::Test, None)
+    let refused = crate::support::step(state, config, ClientConfig::Test, None)
         .await
         .expect("the retry step should succeed")
         .state;
@@ -3120,7 +3071,7 @@ async fn update_retry_completes_a_replace_once_its_delete_is_allowed() {
 
     assert_eq!(alien_infra::allow_test_worker_deletes(identifier), 1);
     request_retry(&mut state);
-    let state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+    let state = crate::support::step(state, config.clone(), ClientConfig::Test, None)
         .await
         .expect("the retry step should succeed")
         .state;
@@ -3196,7 +3147,7 @@ async fn setup_retry_creates_a_failed_setup_owned_store_again_with_the_new_confi
     );
     state.target_release = Some(release_of("rel_v2", stack_v2));
     request_retry(&mut state);
-    let state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+    let state = crate::support::step(state, config.clone(), ClientConfig::Test, None)
         .await
         .expect("the retry step should succeed")
         .state;
@@ -3252,7 +3203,7 @@ async fn test_deleted_is_noop() {
     });
 
     // Call step on Deleted
-    let result = alien_deployment::step(state.clone(), config, ClientConfig::Test, None)
+    let result = crate::support::step(state.clone(), config, ClientConfig::Test, None)
         .await
         .expect("Step should succeed");
 
@@ -3503,7 +3454,7 @@ async fn a_frozen_gate_answer_is_fixed_for_the_deployment_lifetime() {
 
     // A conflicting answer on an update is refused, not applied.
     start_update(&mut state, release_of("rel_v2", stack.clone()));
-    let error = alien_deployment::step(
+    let error = crate::support::step(
         state.clone(),
         config_with_archive_enabled(false),
         ClientConfig::Test,
@@ -3749,7 +3700,7 @@ async fn an_update_introducing_a_gated_frozen_resource_refuses_instead_of_droppi
         protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
     };
 
-    let error = alien_deployment::step(
+    let error = crate::support::step(
         state,
         create_test_config("hash_v1", false),
         ClientConfig::Test,
@@ -4063,7 +4014,7 @@ async fn run_to_running_after_secrets_written(
         if state.status == DeploymentStatus::Running {
             return (state, in_progress_steps);
         }
-        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        state = crate::support::step(state, config.clone(), ClientConfig::Test, None)
             .await
             .expect("Step should not fail")
             .state;
@@ -4098,7 +4049,7 @@ async fn run_update_and_watch_worker(
         if state.status == DeploymentStatus::Running {
             return (state, worker_updated);
         }
-        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        state = crate::support::step(state, config.clone(), ClientConfig::Test, None)
             .await
             .expect("Step should not fail")
             .state;
@@ -4241,7 +4192,7 @@ async fn existing_running_deployment_without_deployer_vault_reports_setup_requir
         serde_json::to_value(&running.stack_state.as_ref().unwrap().resources["test-function"])
             .unwrap();
     for _ in 0..2 {
-        let result = alien_deployment::step(running, config.clone(), ClientConfig::Test, None)
+        let result = crate::support::step(running, config.clone(), ClientConfig::Test, None)
             .await
             .unwrap();
         running = result.state;
@@ -4310,7 +4261,7 @@ async fn test_stored_deployer_secret_keeps_legacy_delivery_without_a_native_vaul
         .set_secret("database-password", "customer-only-value")
         .await
         .unwrap();
-    let result = alien_deployment::step(running, config, ClientConfig::Test, None)
+    let result = crate::support::step(running, config, ClientConfig::Test, None)
         .await
         .unwrap();
 
@@ -4357,7 +4308,7 @@ async fn step_with_rebuilt_config(
         if until.contains(&state.status) {
             return state;
         }
-        state = alien_deployment::step(state, rebuilt_injected_config(), ClientConfig::Test, None)
+        state = crate::support::step(state, rebuilt_injected_config(), ClientConfig::Test, None)
             .await
             .expect("step should succeed")
             .state;
@@ -4459,7 +4410,7 @@ async fn deployer_secret_rewritten_mid_create_converges_after_one_update() {
         if !alien_infra::test_worker_configs_deployed(identifier).is_empty() {
             break;
         }
-        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        state = crate::support::step(state, config.clone(), ClientConfig::Test, None)
             .await
             .unwrap()
             .state;
@@ -4478,7 +4429,7 @@ async fn deployer_secret_rewritten_mid_create_converges_after_one_update() {
             "never reached Running: {:?}",
             state.status
         );
-        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        state = crate::support::step(state, config.clone(), ClientConfig::Test, None)
             .await
             .unwrap()
             .state;
@@ -4503,7 +4454,7 @@ async fn deployer_secret_rewritten_mid_create_converges_after_one_update() {
 
     // Running only refreshes: further steps change nothing.
     for _ in 0..5 {
-        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        state = crate::support::step(state, config.clone(), ClientConfig::Test, None)
             .await
             .unwrap()
             .state;
@@ -4527,7 +4478,7 @@ async fn fail_create_after_deployer_secret_rewrite(
         if worker_status(&state, worker_id) == Some(alien_core::ResourceStatus::Provisioning) {
             break;
         }
-        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        state = crate::support::step(state, config.clone(), ClientConfig::Test, None)
             .await
             .unwrap()
             .state;
@@ -4591,7 +4542,7 @@ async fn provisioning_retry_resumes_a_failed_create_with_deployer_only_drift() {
         {
             break;
         }
-        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        state = crate::support::step(state, config.clone(), ClientConfig::Test, None)
             .await
             .unwrap()
             .state;
@@ -4649,7 +4600,7 @@ async fn update_retry_resumes_a_failed_create_with_deployer_only_drift() {
         {
             break;
         }
-        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        state = crate::support::step(state, config.clone(), ClientConfig::Test, None)
             .await
             .unwrap()
             .state;
@@ -4781,7 +4732,7 @@ async fn an_update_waiting_for_a_setup_grant_finishes_when_setup_reruns() {
     assert_waiting_for_setup(&state);
 
     // Without setup nothing moves: the runtime does not retry it.
-    let idle = alien_deployment::step(state.clone(), config.clone(), ClientConfig::Test, None)
+    let idle = crate::support::step(state.clone(), config.clone(), ClientConfig::Test, None)
         .await
         .expect("the idle step should succeed")
         .state;
@@ -5027,7 +4978,7 @@ async fn changing_settings_does_not_grant_automatic_setup_to_an_existing_install
                 .build(),
         ),
     );
-    let error = alien_deployment::step(state.clone(), config, ClientConfig::Test, None)
+    let error = crate::support::step(state.clone(), config, ClientConfig::Test, None)
         .await
         .expect_err("Changing a setting must not authorize setup");
     assert_eq!(error.code, "PREFLIGHT_CHECKS_FAILED");
@@ -5054,7 +5005,7 @@ async fn changing_settings_does_not_grant_automatic_setup_to_an_existing_install
 }
 
 #[tokio::test]
-async fn manual_setup_preserves_existing_gate_and_creates_new_optional_resource() {
+async fn manual_setup_turns_on_a_declined_gate_and_creates_new_optional_resource() {
     let _vault = test_vault_env().await;
     let mut stack = Stack::new("manual-new-gate".into())
         .add(
@@ -5108,17 +5059,20 @@ async fn manual_setup_preserves_existing_gate_and_creates_new_optional_resource(
     let state = run_to_completion(state, config).await;
     assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
     let resources = &state.stack_state.as_ref().unwrap().resources;
-    assert!(!resources.contains_key("old-archive"));
-    assert_eq!(
-        resources.get("new-archive").unwrap().status,
-        alien_core::ResourceStatus::Running
-    );
+    // The explicit yes for the declined gate turns it on, like the new gate.
+    for id in ["old-archive", "new-archive"] {
+        assert_eq!(
+            resources.get(id).unwrap().status,
+            alien_core::ResourceStatus::Running,
+            "{id}"
+        );
+    }
     let answers = &state
         .runtime_metadata
         .as_ref()
         .unwrap()
         .persisted_gate_answers;
-    assert_eq!(answers.get("oldEnabled"), Some(&false));
+    assert_eq!(answers.get("oldEnabled"), Some(&true));
     assert_eq!(answers.get("newEnabled"), Some(&true));
 }
 
@@ -5205,7 +5159,7 @@ async fn automatic_setup_applies_a_superseding_release_before_promoting_it() {
             if state.status == superseded_during {
                 break;
             }
-            state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+            state = crate::support::step(state, config.clone(), ClientConfig::Test, None)
                 .await
                 .unwrap()
                 .state;
@@ -5245,7 +5199,7 @@ async fn automatic_azure_setup_rejects_missing_management_before_cloud_access() 
     let mut config = create_test_config("automatic-azure", false);
     config.setup_run = true;
     config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
-    let error = alien_deployment::step(
+    let error = crate::support::step(
         state,
         config,
         ClientConfig::Azure(Box::new(alien_azure_clients::AzureClientConfig::mock())),

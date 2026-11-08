@@ -1,4 +1,6 @@
 //! Declined setup keys must not leave grants in the boundary of the prepared deployment.
+mod support;
+
 use alien_core::{
     permissions::ManagementPermissions, ClientConfig, DeploymentConfig, DeploymentState,
     DeploymentStatus, EnvironmentVariablesSnapshot, Key, PermissionProfile, PermissionsConfig,
@@ -167,12 +169,22 @@ async fn declined_setup_key_removes_runtime_and_management_grants_before_boundar
     let declined = prepare(false, &RuntimeMetadata::default()).await;
     assert_key_grants(&declined, false);
 
-    // A later release input cannot reverse a recorded manual-setup decline.
-    // Run preparation twice to ensure derived identities do not restore the grant.
-    let repeated = prepare(true, &declined).await;
-    assert_key_grants(&repeated, false);
-    let repeated = prepare(true, &repeated).await;
-    assert_key_grants(&repeated, false);
+    // Setup run again with an explicit yes turns the declined key on.
+    let turned_on = prepare(true, &declined).await;
+    assert_key_grants(&turned_on, true);
+    // Asking for no after a yes is refused: it would delete the key.
+    let error = alien_deployment::prepare_direct_setup_update(
+        declared(),
+        &StackState::new(Platform::Aws),
+        &config(false),
+        &ClientConfig::Local {
+            state_directory: "/unused".into(),
+        },
+        &turned_on,
+    )
+    .await
+    .expect_err("a recorded yes cannot become a no");
+    assert_eq!(error.code, "FROZEN_GATE_ANSWER_CHANGED");
 }
 
 #[tokio::test]
@@ -211,7 +223,7 @@ async fn release_update_keeps_a_declined_key_out_of_the_pending_boundary() {
         retry_requested: false,
         protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
     };
-    let mut result = alien_deployment::step(
+    let mut result = crate::support::step(
         current,
         config(false),
         ClientConfig::Local {

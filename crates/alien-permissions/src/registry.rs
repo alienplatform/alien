@@ -193,6 +193,40 @@ pub fn permission_set_uses_aws_object_data(
         })
 }
 
+/// KMS actions that use a key's material or hand its use to someone else.
+const KMS_KEY_USE_ACTIONS: &[&str] = &[
+    "kms:decrypt",
+    "kms:encrypt",
+    "kms:generatedatakey",
+    "kms:generatedatakeywithoutplaintext",
+    "kms:generatedatakeypair",
+    "kms:generatedatakeypairwithoutplaintext",
+    "kms:reencryptfrom",
+    "kms:reencryptto",
+    "kms:creategrant",
+];
+
+/// Whether `permission_set` allows using a KMS key on AWS, matching IAM action patterns
+/// (`kms:*`, `kms:Decrypt`, `*`) case-insensitively the way IAM does. Decided by what the set
+/// grants, never by its name, so a custom set that allows `kms:Decrypt` counts like a built-in one.
+pub fn permission_set_uses_aws_key_data(
+    permission_set: &alien_core::permissions::PermissionSet,
+) -> bool {
+    permission_set
+        .platforms
+        .aws
+        .iter()
+        .flatten()
+        .filter(|entry| entry.effect.is_allow())
+        .flat_map(|entry| entry.grant.actions.iter().flatten())
+        .any(|pattern| {
+            let pattern = pattern.to_ascii_lowercase();
+            KMS_KEY_USE_ACTIONS
+                .iter()
+                .any(|action| iam_action_pattern_matches(pattern.as_bytes(), action.as_bytes()))
+        })
+}
+
 /// IAM action wildcard matching: `*` matches any run of characters, `?` any one character.
 fn iam_action_pattern_matches(pattern: &[u8], action: &[u8]) -> bool {
     match (pattern.first(), action.first()) {
@@ -988,6 +1022,50 @@ mod object_data_tests {
             assert!(
                 !permission_set_uses_aws_object_data(get_permission_set(id).unwrap()),
                 "{id}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod key_data_tests {
+    use super::*;
+
+    fn aws_set(actions: &[&str]) -> alien_core::permissions::PermissionSet {
+        serde_json::from_value(serde_json::json!({
+            "id": "custom/crypto", "description": "test",
+            "platforms": { "aws": [{
+                "grant": { "actions": actions },
+                "binding": { "stack": { "resources": ["*"] } }
+            }] }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn key_use_is_recognised_in_every_iam_form() {
+        for actions in [
+            &["kms:Decrypt"][..],
+            &["KMS:decrypt"],
+            &["kms:GenerateDataKey*"],
+            &["kms:ReEncrypt*"],
+            &["kms:*"],
+            &["*"],
+            &["kms:Encrypt"],
+        ] {
+            assert!(
+                permission_set_uses_aws_key_data(&aws_set(actions)),
+                "{actions:?}"
+            );
+        }
+        for actions in [
+            &["kms:DescribeKey", "kms:ListAliases"][..],
+            &["s3:*"],
+            &["kms:GetKeyPolicy"],
+        ] {
+            assert!(
+                !permission_set_uses_aws_key_data(&aws_set(actions)),
+                "{actions:?}"
             );
         }
     }

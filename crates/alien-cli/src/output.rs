@@ -233,6 +233,13 @@ fn prompt_io_context() -> ErrorData {
 }
 
 pub fn prompt_text(prompt: &str, default_value: Option<&str>) -> Result<String> {
+    Ok(prompt_line(prompt, default_value)?
+        .unwrap_or_else(|| parse_text_response("", default_value)))
+}
+
+/// Like `prompt_text`, but `None` when input ended (Ctrl-D) before an answer, so a prompt
+/// that asks again can stop.
+pub fn prompt_line(prompt: &str, default_value: Option<&str>) -> Result<Option<String>> {
     match default_value {
         Some(default_value) => {
             print!("{prompt} [{default_value}]: ");
@@ -252,7 +259,7 @@ pub fn prompt_text(prompt: &str, default_value: Option<&str>) -> Result<String> 
         })?;
 
     let mut input = String::new();
-    io::stdin()
+    let read = io::stdin()
         .read_line(&mut input)
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
@@ -260,8 +267,11 @@ pub fn prompt_text(prompt: &str, default_value: Option<&str>) -> Result<String> 
             file_path: "stdin".to_string(),
             reason: "Failed to read user input".to_string(),
         })?;
+    if read == 0 {
+        return Ok(None);
+    }
 
-    Ok(parse_text_response(&input, default_value))
+    Ok(Some(parse_text_response(&input, default_value)))
 }
 
 pub(crate) fn parse_confirm_response(input: &str, default_yes: bool) -> bool {

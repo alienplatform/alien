@@ -1,4 +1,6 @@
 //! Deployment lifecycle regression for a gate whose input is unavailable on the target.
+mod support;
+
 use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, Platform, ReleaseInfo,
     ResourceLifecycle, Stack, StackInputDefinition, Storage,
@@ -35,7 +37,7 @@ fn stack_with_bucket(lifecycle: ResourceLifecycle) -> Stack {
 
 async fn run(mut state: DeploymentState, config: &DeploymentConfig) -> DeploymentState {
     for _ in 0..30 {
-        state = alien_deployment::step(state, config.clone(), ClientConfig::Machines, None)
+        state = crate::support::step(state, config.clone(), ClientConfig::Machines, None)
             .await
             .expect("deployment step")
             .state;
@@ -191,7 +193,7 @@ async fn setup_update_refuses_scope_narrowing_for_installed_storage() {
                     retry_requested: false,
                     protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
                 };
-                let result = alien_deployment::step(
+                let result = crate::support::step(
                     current,
                     config(),
                     ClientConfig::Local {

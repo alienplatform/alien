@@ -764,6 +764,7 @@ async fn destroy_tracked_deployment(
             })
         })
     } else {
+        alien_deployment::set_ephemeral_secrets_digest_key();
         match alien_deployment::runner::run_step_loop(
             &mut current,
             &mut config,

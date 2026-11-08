@@ -3807,3 +3807,135 @@ async fn deleting_a_protocol_one_gcp_installation_keeps_setup_teardown_routing()
         Some(DeploymentStatus::TeardownRequired)
     );
 }
+
+/// An update that stopped because only setup can apply it is not retried by the runtime,
+/// which would stop again. The setup run it asked for claims it without a retry request,
+/// as that failure's retry. Other failures still need an explicit retry, and an error only
+/// counts when the setup request is in its `source` chain.
+#[tokio::test]
+async fn setup_run_claims_a_failure_that_asks_for_setup() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let waits = create_test_deployment(&store, &group_id, "waits", Platform::Aws).await;
+    let other = create_test_deployment(&store, &group_id, "other", Platform::Aws).await;
+    let in_context = create_test_deployment(&store, &group_id, "in-context", Platform::Aws).await;
+
+    let setup_required = serde_json::json!({
+        "code": "PREFLIGHT_CHECKS_FAILED",
+        "message": "Preflight checks failed",
+        "source": {
+            "code": "PREFLIGHT_CHECKS_FAILED",
+            "message": "Preflight checks failed",
+            "source": {
+                "code": "DEPLOYMENT_SETUP_REQUIRED",
+                "message": "Update the existing installation before retrying this deployment",
+            },
+        },
+    });
+    let other_failure = serde_json::json!({
+        "code": "PREFLIGHT_CHECKS_FAILED",
+        "source": {"code": "CLOUD_PLATFORM_ERROR"},
+    });
+    let only_in_context = serde_json::json!({
+        "code": "PREFLIGHT_CHECKS_FAILED",
+        "context": {"code": "DEPLOYMENT_SETUP_REQUIRED"},
+        "source": {"code": "CLOUD_PLATFORM_ERROR", "context": {"code": "DEPLOYMENT_SETUP_REQUIRED"}},
+    });
+    let conn = db.conn().lock().await;
+    for (id, error) in [
+        (&waits.id, &setup_required),
+        (&other.id, &other_failure),
+        (&in_context.id, &only_in_context),
+    ] {
+        conn.execute(
+            "UPDATE deployments SET status = 'update-failed', retry_requested = 0, error = ? WHERE id = ?",
+            [error.to_string(), id.clone()],
+        )
+        .await
+        .unwrap();
+    }
+    drop(conn);
+    let ids = vec![waits.id.clone(), other.id.clone(), in_context.id.clone()];
+    let setup_statuses = vec!["running".to_string(), "update-failed".to_string()];
+
+    let runtime = store
+        .acquire_with_reasons(
+            &test_subject(),
+            "runtime-session",
+            &DeploymentFilter {
+                deployment_ids: Some(ids.clone()),
+                acquire_mode: Some(DeploymentAcquireMode::Runtime),
+                ..DeploymentFilter::default()
+            },
+            10,
+        )
+        .await
+        .unwrap();
+    assert!(
+        runtime.deployments.is_empty(),
+        "the runtime must not retry an update that waits for setup"
+    );
+    assert!(runtime
+        .not_acquired
+        .iter()
+        .all(|item| item.reason == DeploymentAcquireUnavailableReason::StatusMismatch));
+
+    let setup = store
+        .acquire_with_reasons(
+            &test_subject(),
+            "setup-session",
+            &DeploymentFilter {
+                deployment_ids: Some(ids.clone()),
+                statuses: Some(setup_statuses.clone()),
+                acquire_mode: Some(DeploymentAcquireMode::SetupRun),
+                ..DeploymentFilter::default()
+            },
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(setup.deployments.len(), 1);
+    let claimed = &setup.deployments[0].deployment;
+    assert_eq!(claimed.id, waits.id);
+    assert_eq!(claimed.locked_by.as_deref(), Some("setup-session"));
+    assert!(
+        claimed.retry_requested,
+        "the setup run must re-run the failed update, as a retry does"
+    );
+    let reasons = setup
+        .not_acquired
+        .iter()
+        .map(|item| (item.deployment_id.as_str(), item.reason))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(reasons.len(), 2);
+    for id in [other.id.as_str(), in_context.id.as_str()] {
+        assert_eq!(
+            reasons.get(id),
+            Some(&DeploymentAcquireUnavailableReason::StatusMismatch),
+            "{id}"
+        );
+    }
+
+    // After an explicit retry, the setup run claims the other failure as before.
+    store
+        .set_retry_requested(&test_subject(), &other.id)
+        .await
+        .unwrap();
+    let retried = store
+        .acquire(
+            &test_subject(),
+            "setup-session-2",
+            &DeploymentFilter {
+                deployment_ids: Some(vec![other.id.clone()]),
+                statuses: Some(setup_statuses),
+                acquire_mode: Some(DeploymentAcquireMode::SetupRun),
+                ..DeploymentFilter::default()
+            },
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(retried.len(), 1);
+    assert!(retried[0].deployment.retry_requested);
+}

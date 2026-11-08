@@ -173,9 +173,12 @@ impl SecretManagerApi for SecretManagerClient {
             self.project_id, secret_name
         );
 
-        self.base
-            .execute_request(Method::POST, &path, None, Some(request), &secret_name)
-            .await
+        // The request body is the secret data.
+        alien_client_core::redact_request_body(
+            self.base
+                .execute_request(Method::POST, &path, None, Some(request), &secret_name)
+                .await,
+        )
     }
 
     /// Accesses a secret version and returns its data.
@@ -189,15 +192,18 @@ impl SecretManagerApi for SecretManagerClient {
             self.project_id, secret_version_name
         );
 
-        self.base
-            .execute_request(
-                Method::GET,
-                &path,
-                None,
-                Option::<()>::None,
-                &secret_version_name,
-            )
-            .await
+        // The success response is the secret data.
+        alien_client_core::redact_response_body(
+            self.base
+                .execute_request(
+                    Method::GET,
+                    &path,
+                    None,
+                    Option::<()>::None,
+                    &secret_version_name,
+                )
+                .await,
+        )
     }
 
     /// Gets a secret version's metadata (state, times), never its data.
