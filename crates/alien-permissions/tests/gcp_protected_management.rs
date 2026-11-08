@@ -409,6 +409,11 @@ fn protected_management_cannot_touch_signing_inputs_or_the_ledger() {
                 ("secretmanager.secrets.update", secret.clone(), SECRET),
                 ("secretmanager.secrets.setIamPolicy", secret.clone(), SECRET),
                 (
+                    "secretmanager.versions.access",
+                    format!("{secret}/versions/1"),
+                    VERSION,
+                ),
+                (
                     "secretmanager.versions.destroy",
                     format!("{secret}/versions/1"),
                     VERSION,

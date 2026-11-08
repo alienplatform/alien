@@ -322,3 +322,80 @@ fn a_symlink_in_the_module_is_refused() {
         error.message
     );
 }
+
+#[tokio::test]
+async fn a_forbidden_ledger_read_names_the_role_the_secret_and_the_grant() {
+    let ledger_name = names::gcp_ledger(PREFIX);
+    let path = format!("/v1/projects/acme-data/secrets/{ledger_name}/versions/latest:access");
+    let secret_manager = httpmock::MockServer::start_async().await;
+    let http = reqwest::Client::new();
+
+    // What Secret Manager answers a Viewer who may list the secret but not read a version.
+    let forbidden = secret_manager
+        .mock_async(|when, then| {
+            when.method(httpmock::Method::GET).path(path.as_str());
+            then.status(403).json_body(serde_json::json!({
+                "error": {
+                    "code": 403,
+                    "message": format!("Permission 'secretmanager.versions.access' denied for resource 'projects/acme-data/secrets/{ledger_name}/versions/latest' (or it may not exist)."),
+                    "status": "PERMISSION_DENIED",
+                }
+            }));
+        })
+        .await;
+    let error = gcp_secret_at(
+        &http,
+        &secret_manager.base_url(),
+        "token",
+        "acme-data",
+        &ledger_name,
+    )
+    .await
+    .unwrap_err();
+    forbidden.assert_async().await;
+    assert_eq!(error.code, "GCP_LEDGER_ACCESS_DENIED");
+    assert_eq!(
+        error.message,
+        "Your credentials can't read the install's ledger, the secret \
+         projects/acme-data/secrets/signed-acme-prod-state (Secret Manager answered 403). \
+         Reading it needs roles/secretmanager.secretAccessor on that one secret; Viewer \
+         roles don't include it. Ask the project's administrator to run:\n  \
+         gcloud secrets add-iam-policy-binding signed-acme-prod-state --project=acme-data \
+         --member=<principal> --role=roles/secretmanager.secretAccessor\n\
+         where <principal> is the identity you verify as, such as user:you@example.com or \
+         serviceAccount:auditor@acme-data.iam.gserviceaccount.com."
+    );
+    assert!(!error.message.contains("verification failed"));
+
+    // With the grant the same read answers the ledger.
+    let ledger = version(&ledger_name, "2026-11-02T09:00:00Z", "{}");
+    let granted = httpmock::MockServer::start_async().await;
+    granted
+        .mock_async(|when, then| {
+            when.method(httpmock::Method::GET).path(path.as_str());
+            then.status(200).json_body(ledger.clone());
+        })
+        .await;
+    let read = gcp_secret_at(
+        &http,
+        &granted.base_url(),
+        "token",
+        "acme-data",
+        &ledger_name,
+    )
+    .await
+    .unwrap();
+    assert_eq!(read, Some(b"{}".to_vec()));
+
+    // Any other refusal stays what it was.
+    let other = httpmock::MockServer::start_async().await;
+    other
+        .mock_async(|when, _| {
+            when.method(httpmock::Method::GET).path(path.as_str());
+        })
+        .await;
+    let error = gcp_secret_at(&http, &other.base_url(), "token", "acme-data", &ledger_name)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "VERIFY_FAILED");
+}

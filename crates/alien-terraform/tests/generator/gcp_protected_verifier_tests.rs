@@ -146,6 +146,19 @@ fn the_verifier_may_read_its_settings_ledger_and_the_images_it_deploys() {
             "secretmanager.versions.add"
         ]
     );
+
+    // `verify` reads that ledger with the auditor's own credentials, which Viewer roles can't do:
+    // the README says which role on which secret, with the line that grants it.
+    let readme = module
+        .iter()
+        .find_map(|(path, contents)| (path == "README.md").then_some(contents))
+        .expect("README.md");
+    assert!(
+        readme.contains(
+            "gcloud secrets add-iam-policy-binding signed-<resource_prefix>-state --project=<project> --member=<principal> --role=roles/secretmanager.secretAccessor"
+        ),
+        "{readme}"
+    );
 }
 
 /// Every permission a protected GCP module puts in a custom role is one GCP accepts there:

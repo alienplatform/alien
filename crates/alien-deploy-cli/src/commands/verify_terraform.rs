@@ -301,13 +301,13 @@ fn signed(
     }
 }
 
-/// GET `url` as JSON; `None` for 404.
-async fn get_json(
+/// GET `url`: the status and body.
+async fn fetch(
     http: &reqwest::Client,
     token: &str,
     url: &str,
     operation: &str,
-) -> Result<Option<Value>> {
+) -> Result<(reqwest::StatusCode, String)> {
     let response = http
         .get(url)
         .bearer_auth(token)
@@ -325,6 +325,11 @@ async fn get_json(
         .context(ErrorData::VerifyFailed {
             message: format!("{operation}: the response could not be read"),
         })?;
+    Ok((status, text))
+}
+
+/// The JSON of a response, `None` for 404; any other failure status is an error.
+fn json_body(status: reqwest::StatusCode, text: &str, operation: &str) -> Result<Option<Value>> {
     if status == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
@@ -334,12 +339,23 @@ async fn get_json(
             text.chars().take(500).collect::<String>()
         )));
     }
-    serde_json::from_str(&text)
+    serde_json::from_str(text)
         .map(Some)
         .into_alien_error()
         .context(ErrorData::VerifyFailed {
             message: format!("{operation}: the response is not JSON"),
         })
+}
+
+/// GET `url` as JSON; `None` for 404.
+async fn get_json(
+    http: &reqwest::Client,
+    token: &str,
+    url: &str,
+    operation: &str,
+) -> Result<Option<Value>> {
+    let (status, text) = fetch(http, token, url, operation).await?;
+    json_body(status, &text, operation)
 }
 
 /// The newest version of Parameter Manager parameter `name`, with when it
@@ -391,6 +407,8 @@ async fn gcp_parameter(
     Ok(Some((parameter_payload(name, &full)?, Some(created))))
 }
 
+const SECRET_MANAGER: &str = "https://secretmanager.googleapis.com";
+
 /// The newest version of Secret Manager secret `name`; `None` when the secret
 /// doesn't exist or has no version. A disabled or destroyed newest version
 /// fails, as it does in the verifier, rather than reading an older one.
@@ -400,12 +418,26 @@ async fn gcp_secret(
     project: &str,
     name: &str,
 ) -> Result<Option<Vec<u8>>> {
-    let url = format!(
-        "https://secretmanager.googleapis.com/v1/projects/{project}/secrets/{name}/versions/latest:access"
-    );
-    let Some(version) =
-        get_json(http, token, &url, &format!("secretmanager access {name}")).await?
-    else {
+    gcp_secret_at(http, SECRET_MANAGER, token, project, name).await
+}
+
+async fn gcp_secret_at(
+    http: &reqwest::Client,
+    base: &str,
+    token: &str,
+    project: &str,
+    name: &str,
+) -> Result<Option<Vec<u8>>> {
+    let url = format!("{base}/v1/projects/{project}/secrets/{name}/versions/latest:access");
+    let operation = format!("secretmanager access {name}");
+    let (status, text) = fetch(http, token, &url, &operation).await?;
+    if status == reqwest::StatusCode::FORBIDDEN {
+        return Err(AlienError::new(ErrorData::GcpLedgerAccessDenied {
+            project: project.to_string(),
+            secret: name.to_string(),
+        }));
+    }
+    let Some(version) = json_body(status, &text, &operation)? else {
         return Ok(None);
     };
     parameter_payload(name, &version).map(Some)

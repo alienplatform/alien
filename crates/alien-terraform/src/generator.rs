@@ -5594,6 +5594,11 @@ fn readme_md(
     } else {
         ""
     };
+    let verify_note = if protected && target == TerraformTarget::Gcp {
+        "## Verifying\n\nTo check this module against the vendor's signed release, run the deploy CLI's `verify --terraform <module-dir> --platform gcp --prefix <resource_prefix> --project <project>`. It reads the install's signing state with your own credentials. The ledger secret `signed-<resource_prefix>-state` needs `roles/secretmanager.secretAccessor` on that one secret, which Viewer roles don't include. Grant it to the identity that verifies:\n\n```bash\ngcloud secrets add-iam-policy-binding signed-<resource_prefix>-state --project=<project> --member=<principal> --role=roles/secretmanager.secretAccessor\n```\n\n"
+    } else {
+        ""
+    };
     let inputs = input_sections.join("\n\n");
     format!(
         "# Deployment setup - {display_name}\n\n\
@@ -5606,7 +5611,7 @@ Use your organization's normal backend and approval workflow. A typical local re
 ```bash\n{required_env}\nterraform init\nterraform validate\nterraform plan -out=tfplan\nterraform apply tfplan\n```\n{runtime_sandbox_note}\n\
 ## Registration\n\n\
 {registration_note}\n\
-## Outputs\n\n\
+{verify_note}## Outputs\n\n\
 - `deployment_management_config`: management endpoint and credential-boundary metadata.\n\
 - `deployment_stack_settings`: deployment settings JSON assembled from typed variables, package defaults, and advanced-setting overlays.\n\
 - `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.\n\
@@ -5619,6 +5624,7 @@ Use your organization's normal backend and approval workflow. A typical local re
         required_env = required_env,
         runtime_sandbox_note = runtime_sandbox_note,
         registration_note = registration_note,
+        verify_note = verify_note,
         kubernetes_operations = kubernetes_operations,
         azure_sandbox_note = azure_sandbox_note,
         azure_identity_note = azure_identity_note,

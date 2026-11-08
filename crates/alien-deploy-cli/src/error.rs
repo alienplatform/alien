@@ -144,6 +144,20 @@ pub enum ErrorData {
     )]
     VerifyFailed { message: String },
 
+    /// The caller may not read the GCP install's ledger secret.
+    #[error(
+        code = "GCP_LEDGER_ACCESS_DENIED",
+        message = "Your credentials can't read the install's ledger, the secret projects/{project}/secrets/{secret} (Secret Manager answered 403). Reading it needs roles/secretmanager.secretAccessor on that one secret; Viewer roles don't include it. Ask the project's administrator to run:\n  gcloud secrets add-iam-policy-binding {secret} --project={project} --member=<principal> --role=roles/secretmanager.secretAccessor\nwhere <principal> is the identity you verify as, such as user:you@example.com or serviceAccount:auditor@{project}.iam.gserviceaccount.com.",
+        retryable = "false",
+        internal = "false"
+    )]
+    GcpLedgerAccessDenied {
+        /// GCP project of the install
+        project: String,
+        /// Name of the ledger secret
+        secret: String,
+    },
+
     #[error(
         code = "GENERIC_ERROR",
         message = "{message}",
