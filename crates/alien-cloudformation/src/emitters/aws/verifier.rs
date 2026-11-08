@@ -14,7 +14,7 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, ComputeCluster, ErrorData, Network, NetworkSettings, Result,
-    SigningVerifier,
+    SigningVerifier, AWS_LOG_RETENTION_DAYS,
 };
 use alien_error::AlienError;
 use alien_permissions::generators::signing_limits;
@@ -22,6 +22,7 @@ use alien_permissions::generators::signing_limits;
 /// Logical IDs of the verifier's function and role.
 pub const VERIFIER_FUNCTION_ID: &str = "SigningVerifier";
 pub const VERIFIER_ROLE_ID: &str = "SigningVerifierRole";
+pub const VERIFIER_LOG_GROUP_ID: &str = "SigningVerifierLogGroup";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsVerifierEmitter;
@@ -95,10 +96,29 @@ impl CfEmitter for AwsVerifierEmitter {
         role.properties
             .insert("Tags".to_string(), setup_tags(&verifier_name));
 
+        // Lambda would otherwise create `/aws/lambda/<function name>` on the first call, outside
+        // the stack, and a stack delete would leave it behind.
+        let mut log_group = CfResource::new(
+            VERIFIER_LOG_GROUP_ID.to_string(),
+            "AWS::Logs::LogGroup".to_string(),
+        );
+        log_group.properties.insert(
+            "LogGroupName".to_string(),
+            CfExpression::sub(format!("/aws/lambda/{verifier_name}")),
+        );
+        log_group.properties.insert(
+            "RetentionInDays".to_string(),
+            CfExpression::Integer(AWS_LOG_RETENTION_DAYS.into()),
+        );
+        log_group
+            .properties
+            .insert("Tags".to_string(), setup_tags(&verifier_name));
+
         let mut function = CfResource::new(
             VERIFIER_FUNCTION_ID.to_string(),
             "AWS::Lambda::Function".to_string(),
         );
+        function.depends_on.push(VERIFIER_LOG_GROUP_ID.to_string());
         function.properties.insert(
             "FunctionName".to_string(),
             CfExpression::sub(&verifier_name),
@@ -150,7 +170,7 @@ impl CfEmitter for AwsVerifierEmitter {
         function
             .properties
             .insert("Tags".to_string(), setup_tags(&verifier_name));
-        Ok(vec![role, function])
+        Ok(vec![role, log_group, function])
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<CfExpression> {

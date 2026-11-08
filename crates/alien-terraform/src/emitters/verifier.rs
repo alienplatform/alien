@@ -16,6 +16,7 @@ use crate::{
 use alien_core::{
     import::EmitContext, AzureContainerAppsEnvironment, ComputeCluster, ErrorData, Network,
     NetworkSettings, Platform, RemoteStackManagement, Result, ServiceAccount, SigningVerifier,
+    AWS_LOG_RETENTION_DAYS,
 };
 use alien_error::AlienError;
 use alien_permissions::generators::signing_limits;
@@ -244,6 +245,23 @@ fn aws_verifier_blocks(
                 ),
             ],
         ),
+        // Lambda would otherwise create `/aws/lambda/<function name>` on the first call, outside
+        // the module, and a destroy would leave it behind.
+        resource_block(
+            "aws_cloudwatch_log_group",
+            "signing_verifier",
+            [
+                attr(
+                    "name",
+                    expr::template(format!("/aws/lambda/{verifier}")),
+                ),
+                attr(
+                    "retention_in_days",
+                    Expression::Number(hcl::Number::from(AWS_LOG_RETENTION_DAYS)),
+                ),
+                attr("tags", setup_tags()),
+            ],
+        ),
         resource_block(
             "aws_lambda_function",
             "signing_verifier",
@@ -289,10 +307,10 @@ fn aws_verifier_blocks(
                 attr("tags", setup_tags()),
                 attr(
                     "depends_on",
-                    Expression::Array(vec![expr::traversal([
-                        "aws_iam_role_policy",
-                        "signing_verifier",
-                    ])]),
+                    Expression::Array(vec![
+                        expr::traversal(["aws_iam_role_policy", "signing_verifier"]),
+                        expr::traversal(["aws_cloudwatch_log_group", "signing_verifier"]),
+                    ]),
                 ),
             ],
         ),

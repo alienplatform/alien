@@ -569,6 +569,88 @@ async fn the_verifier_runs_functions_in_the_subnets_setup_reports_for_the_networ
     }
 }
 
+/// Lambda creates `/aws/lambda/<function name>` on the first call, outside the stack, and a
+/// delete would leave it behind. Setup declares that group for the verifier, so deleting the
+/// stack or destroying the module removes it with the function.
+#[tokio::test]
+async fn the_verifier_s_log_group_belongs_to_the_stack() {
+    let rendered = render(FINGERPRINT).await;
+
+    let template: serde_yaml::Value =
+        serde_yaml::from_slice(&rendered["cloudformation"].bytes).expect("template is YAML");
+    let resources = template["Resources"].as_mapping().expect("resources");
+    let function = &template["Resources"]["SigningVerifier"];
+    let function_name = function["Properties"]["FunctionName"]["Fn::Sub"]
+        .as_str()
+        .expect("function name");
+    let groups: Vec<(&str, &serde_yaml::Value)> = resources
+        .iter()
+        .filter(|(_, resource)| resource["Type"].as_str() == Some("AWS::Logs::LogGroup"))
+        .map(|(id, resource)| (id.as_str().expect("logical id"), resource))
+        .filter(|(_, resource)| {
+            resource["Properties"]["LogGroupName"]["Fn::Sub"].as_str()
+                == Some(format!("/aws/lambda/{function_name}").as_str())
+        })
+        .collect();
+    assert_eq!(groups.len(), 1, "one group named for the verifier function");
+    let (group_id, group) = groups[0];
+    assert!(
+        group.get("DeletionPolicy").is_none() && group.get("UpdateReplacePolicy").is_none(),
+        "a stack delete removes the group"
+    );
+    assert_eq!(
+        function["DependsOn"],
+        serde_yaml::to_value([group_id]).unwrap(),
+        "the group exists before the function can run"
+    );
+
+    let files: std::collections::BTreeMap<String, String> =
+        serde_json::from_slice(&rendered["terraform-aws"].bytes)
+            .expect("a module is a JSON file map");
+    let body = hcl::parse(&files["verifier.tf"]).expect("verifier.tf parses");
+    let resource = |kind: &str, label: &str| {
+        body.blocks()
+            .find(|block| {
+                block.identifier() == "resource"
+                    && block.labels().first().map(|l| l.as_str()) == Some(kind)
+                    && block.labels().get(1).map(|l| l.as_str()) == Some(label)
+            })
+            .unwrap_or_else(|| panic!("no {kind}.{label} in verifier.tf"))
+    };
+    let attribute = |block: &hcl::Block, name: &str| {
+        let attr = block
+            .body()
+            .attributes()
+            .find(|attr| attr.key() == name)
+            .unwrap_or_else(|| panic!("no {name}"))
+            .clone();
+        hcl::to_string(&hcl::Body::builder().add_attribute(attr).build())
+            .expect("attribute formats")
+    };
+    let group = resource("aws_cloudwatch_log_group", "signing_verifier");
+    let function = resource("aws_lambda_function", "signing_verifier");
+    let function_name = attribute(function, "function_name");
+    let function_name = function_name
+        .split_once(" = ")
+        .expect("an assignment")
+        .1
+        .trim()
+        .trim_matches('"');
+    assert_eq!(
+        attribute(group, "name")
+            .split_once(" = ")
+            .expect("an assignment")
+            .1
+            .trim(),
+        format!("\"/aws/lambda/{function_name}\""),
+        "the group is the one Lambda would create for the function"
+    );
+    assert!(
+        attribute(function, "depends_on").contains("aws_cloudwatch_log_group.signing_verifier"),
+        "the group exists before the function can run"
+    );
+}
+
 /// A stack that only gives access to resources running elsewhere: its unprotected package
 /// creates no network and registers telemetry off, so the protected module doesn't either.
 #[tokio::test]
