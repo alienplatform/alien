@@ -10,8 +10,9 @@ use super::helpers::{
 };
 use alien_core::{
     Ai, ArtifactRegistry, Key, Kv, LifecycleRule, Network, NetworkSettings, PermissionProfile,
-    Queue, RemoteBindings, ResourceLifecycle, ResourceRef, Sandbox, SandboxCode, SandboxEgress,
-    SandboxLifecyclePolicy, ServiceAccount, Stack, StackSettings, Storage, Vault,
+    Queue, RemoteBindings, RemoteStackManagement, ResourceLifecycle, ResourceRef, Sandbox,
+    SandboxCode, SandboxEgress, SandboxLifecyclePolicy, ServiceAccount, Stack, StackSettings,
+    Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
 
@@ -70,6 +71,10 @@ fn aws_runtime_only_key_denies_every_principal_but_its_runtime_roles() {
             ServiceAccount::new("bystander-sa".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
         .build();
     let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
     let rendered = module
@@ -88,6 +93,14 @@ fn aws_runtime_only_key_denies_every_principal_but_its_runtime_roles() {
         "{policy}"
     );
     assert!(!policy.contains("bystander"), "{policy}");
+    // Management can create `<prefix>-x`, grant it kms:PutKeyPolicy and assume it,
+    // so administration is denied to every role under the prefix.
+    let admin_start = rendered
+        .find("DenyStackRoleKeyAdministration")
+        .expect("administration is denied to roles under the stack prefix");
+    let admin = &rendered[admin_start.saturating_sub(400)..admin_start + 600];
+    assert!(admin.contains("kms:PutKeyPolicy"), "{admin}");
+    assert!(admin.contains("role/${local.resource_prefix}-*"), "{admin}");
     assert_terraform_valid(&module, "aws_runtime_only_key");
 }
 

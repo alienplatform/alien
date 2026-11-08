@@ -159,6 +159,22 @@ fn aws_runtime_only_key_denies_every_principal_but_its_runtime_roles() {
     assert!(statements
         .iter()
         .any(|statement| statement["Sid"] == "DenyManagementKeyAdministration"));
+    // Management can create `<stack>-x`, grant it kms:PutKeyPolicy and assume it,
+    // so administration is denied to every role under the stack's name prefix.
+    let admin = statements
+        .iter()
+        .find(|statement| statement["Sid"] == "DenyStackRoleKeyAdministration")
+        .expect("stack-prefix administration deny");
+    assert_eq!(
+        admin["Condition"],
+        serde_json::json!({ "ArnLike": { "aws:PrincipalArn": {
+            "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*"
+        } } })
+    );
+    assert!(admin["Action"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("kms:PutKeyPolicy")));
 }
 
 #[test]

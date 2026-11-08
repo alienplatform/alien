@@ -173,6 +173,9 @@ fn key_policy(ctx: &EmitContext<'_>) -> Result<CfExpression> {
     // does. Building the ARN from the name keeps the key from depending on roles
     // whose policies may depend on the key.
     let mut runtime_role_arns = key_runtime_service_accounts(ctx.stack, ctx.resource_id)
+        .context(ErrorData::GenericError {
+            message: "Failed to work out which roles may use the Key".to_string(),
+        })?
         .into_iter()
         .map(|account_id| {
             serde_json::json!({
@@ -190,6 +193,9 @@ fn key_policy(ctx: &EmitContext<'_>) -> Result<CfExpression> {
     cf_from_json(aws_key_policy(
         serde_json::json!({ "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:root" }),
         management_role_arn,
+        serde_json::json!({
+            "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*"
+        }),
         key_has_native_service_use(ctx.stack, ctx.resource_id),
         runtime_role_arns,
     ))

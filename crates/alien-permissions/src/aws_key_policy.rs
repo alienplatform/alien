@@ -10,9 +10,17 @@
 //! `kms:Decrypt`, assume it and decrypt. A key that no AWS service uses
 //! therefore also gets an allowlist: use of the key is denied to every principal
 //! except the runtime roles that setup created for it.
+//!
+//! The same path works through key administration: a role created under the
+//! stack's name prefix can be granted `kms:PutKeyPolicy`, assumed, and used to
+//! rewrite this policy. The administration actions are therefore denied to every
+//! role under the stack's name prefix, with no exemption, because runtime roles
+//! never administer a key. Recovery goes through the account root and IAM
+//! principals outside that prefix, which the key policy still trusts.
 
-use crate::registry::permission_set_uses_aws_key_data;
+use crate::{registry::permission_set_uses_aws_key_data, ErrorData, Result};
 use alien_core::{Container, PermissionSetReference, Postgres, ServiceAccount, Stack, Storage};
+use alien_error::AlienError;
 use serde_json::{json, Map, Value};
 
 /// Administration actions the management role never needs on a setup-owned key.
@@ -25,6 +33,19 @@ const MANAGEMENT_DENIED_ADMIN_ACTIONS: [&str; 7] = [
     "kms:CreateAlias",
     "kms:UpdateAlias",
     "kms:CreateGrant",
+];
+
+/// Administration actions denied to every role under the stack's name prefix.
+/// Grants are left out: services such as EBS create them for the principal that
+/// attaches an encrypted volume, and a key with no native service use already
+/// denies `kms:CreateGrant` to everyone outside its runtime roles.
+const STACK_ROLE_DENIED_ADMIN_ACTIONS: [&str; 6] = [
+    "kms:PutKeyPolicy",
+    "kms:ScheduleKeyDeletion",
+    "kms:DisableKey",
+    "kms:DisableKeyRotation",
+    "kms:CreateAlias",
+    "kms:UpdateAlias",
 ];
 
 /// Actions that return plaintext, move ciphertext to another key, or hand key
@@ -52,8 +73,11 @@ const AVAILABILITY_PROBE_CONTEXT_VALUE: &str = "key-health";
 
 /// Builds the key policy document.
 ///
-/// `account_root_arn`, `management_role_arn` and `runtime_role_arns` are
-/// template values (a string or an intrinsic function object).
+/// `account_root_arn`, `management_role_arn`, `stack_role_arn_pattern` and
+/// `runtime_role_arns` are template values (a string or an intrinsic function
+/// object). `stack_role_arn_pattern` is an ARN pattern matching every IAM role
+/// whose name starts with the stack's name prefix, such as
+/// `arn:aws:iam::123456789012:role/my-stack-*`.
 ///
 /// `native_service_use` is true when a stack resource encrypts with the key
 /// through an AWS service (EBS, RDS, S3). Those services call KMS for the
@@ -69,6 +93,7 @@ const AVAILABILITY_PROBE_CONTEXT_VALUE: &str = "key-health";
 pub fn aws_key_policy(
     account_root_arn: Value,
     management_role_arn: Option<Value>,
+    stack_role_arn_pattern: Value,
     native_service_use: bool,
     runtime_role_arns: Vec<Value>,
 ) -> Value {
@@ -96,6 +121,14 @@ pub fn aws_key_policy(
             "Action": MANAGEMENT_DENIED_ADMIN_ACTIONS,
             "Resource": "*",
             "Condition": is_management(),
+        }));
+        statements.push(json!({
+            "Sid": "DenyStackRoleKeyAdministration",
+            "Effect": "Deny",
+            "Principal": { "AWS": "*" },
+            "Action": STACK_ROLE_DENIED_ADMIN_ACTIONS,
+            "Resource": "*",
+            "Condition": { "ArnLike": { "aws:PrincipalArn": stack_role_arn_pattern } },
         }));
         if !allowlist {
             let mut use_condition = is_management();
@@ -158,34 +191,50 @@ pub fn aws_key_policy(
 /// Ids of the service accounts whose runtime roles may use the key: those with
 /// any grant scoped to the key, or a stack-wide grant that allows KMS key use.
 /// Stack-wide grants are judged by the actions they allow, not by their names.
-pub fn key_runtime_service_accounts(stack: &Stack, key_id: &str) -> Vec<String> {
-    let reference_uses_keys = |reference: &PermissionSetReference| {
-        reference
+///
+/// A stack-wide grant that can't be resolved is an error. Treating it as "not a
+/// key grant" could drop the only runtime role from the allowlist and leave a
+/// policy that silently protects against the management role alone.
+pub fn key_runtime_service_accounts(stack: &Stack, key_id: &str) -> Result<Vec<String>> {
+    let reference_uses_keys = |reference: &PermissionSetReference| -> Result<bool> {
+        let set = reference
             .resolve(|name| crate::get_permission_set(name).cloned())
-            .is_some_and(|set| permission_set_uses_aws_key_data(&set))
-    };
-    stack
-        .resources()
-        .filter_map(|(_, entry)| entry.config.downcast_ref::<ServiceAccount>())
-        .filter(|account| {
-            let profile = stack
-                .permission_profiles()
-                .get(account.id.strip_suffix("-sa").unwrap_or(&account.id));
-            account.resource_permission_sets.contains_key(key_id)
-                || account
-                    .stack_permission_sets
-                    .iter()
-                    .any(permission_set_uses_aws_key_data)
-                || profile.is_some_and(|profile| {
-                    profile.0.get(key_id).is_some_and(|refs| !refs.is_empty())
-                        || profile
-                            .0
-                            .get("*")
-                            .is_some_and(|refs| refs.iter().any(reference_uses_keys))
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::InvalidPermissionSet {
+                    message: format!(
+                        "Permission set '{}' is not defined, so it can't be checked for KMS key use",
+                        reference.id()
+                    ),
                 })
-        })
-        .map(|account| account.id.clone())
-        .collect()
+            })?;
+        Ok(permission_set_uses_aws_key_data(&set))
+    };
+    let mut accounts = Vec::new();
+    for (_, entry) in stack.resources() {
+        let Some(account) = entry.config.downcast_ref::<ServiceAccount>() else {
+            continue;
+        };
+        let profile = stack
+            .permission_profiles()
+            .get(account.id.strip_suffix("-sa").unwrap_or(&account.id));
+        let mut uses_key = account.resource_permission_sets.contains_key(key_id)
+            || account
+                .stack_permission_sets
+                .iter()
+                .any(permission_set_uses_aws_key_data);
+        if let Some(profile) = profile {
+            uses_key |= profile.0.get(key_id).is_some_and(|refs| !refs.is_empty());
+            if let Some(refs) = profile.0.get("*") {
+                for reference in refs {
+                    uses_key |= reference_uses_keys(reference)?;
+                }
+            }
+        }
+        if uses_key {
+            accounts.push(account.id.clone());
+        }
+    }
+    Ok(accounts)
 }
 
 /// Whether a stack resource uses the key for native AWS service encryption.
@@ -224,6 +273,7 @@ mod tests {
         aws_key_policy(
             json!("root"),
             Some(json!("management")),
+            json!("stack-roles-*"),
             native_service_use,
             runtime.iter().map(|arn| json!(arn)).collect(),
         )
@@ -279,6 +329,64 @@ mod tests {
             );
         }
         assert!(statement(&policy, "DenyManagementKeyUse").is_none());
+    }
+
+    #[test]
+    fn roles_under_the_stack_prefix_cannot_administer_the_key() {
+        // The management role can create `<stack>-x`, grant it kms:PutKeyPolicy
+        // and assume it, so the deny has to match the prefix and not one ARN.
+        for (native, runtime) in [
+            (false, vec!["runtime"]),
+            (false, vec![]),
+            (true, vec!["runtime"]),
+        ] {
+            let policy = policy(native, &runtime);
+            let deny = statement(&policy, "DenyStackRoleKeyAdministration").unwrap();
+            assert_eq!(deny["Effect"], json!("Deny"));
+            assert_eq!(deny["Principal"], json!({ "AWS": "*" }));
+            assert_eq!(
+                deny["Condition"],
+                json!({ "ArnLike": { "aws:PrincipalArn": "stack-roles-*" } }),
+                "no StringNotEquals/ArnNotEquals exemption may sit next to the prefix match"
+            );
+            let actions = deny["Action"].as_array().unwrap();
+            for action in [
+                "kms:PutKeyPolicy",
+                "kms:ScheduleKeyDeletion",
+                "kms:DisableKey",
+                "kms:DisableKeyRotation",
+                "kms:CreateAlias",
+                "kms:UpdateAlias",
+            ] {
+                assert!(actions.contains(&json!(action)), "{action}");
+            }
+            // Runtime roles use the key; they never administer it.
+            for action in ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey*"] {
+                assert!(!actions.contains(&json!(action)), "{action}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_account_root_is_never_denied_administration() {
+        let policy = policy(false, &["runtime"]);
+        let root_allow = statement(&policy, "EnableAccountAdministration").unwrap();
+        assert_eq!(root_allow["Effect"], json!("Allow"));
+        assert_eq!(root_allow["Principal"], json!({ "AWS": "root" }));
+        assert_eq!(root_allow["Action"], json!("kms:*"));
+        // Every administration deny is conditioned on a role ARN match, so the
+        // root principal (which has no role ARN) can't be caught by it.
+        for sid in [
+            "DenyManagementKeyAdministration",
+            "DenyStackRoleKeyAdministration",
+        ] {
+            let deny = statement(&policy, sid).unwrap();
+            let condition = deny["Condition"].as_object().unwrap();
+            assert!(
+                condition.contains_key("ArnEquals") || condition.contains_key("ArnLike"),
+                "{sid}"
+            );
+        }
     }
 
     #[test]
@@ -350,7 +458,7 @@ mod tests {
             .build();
 
         assert_eq!(
-            key_runtime_service_accounts(&stack, "secrets"),
+            key_runtime_service_accounts(&stack, "secrets").unwrap(),
             vec!["manager-sa".to_string(), "wild-sa".to_string()]
         );
         assert!(!key_has_native_service_use(&stack, "secrets"));
@@ -407,8 +515,38 @@ mod tests {
             .build();
 
         assert_eq!(
-            key_runtime_service_accounts(&stack, "secrets"),
+            key_runtime_service_accounts(&stack, "secrets").unwrap(),
             vec!["named-sa".to_string(), "custom-sa".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_stack_wide_grant_that_cannot_be_resolved_is_an_error() {
+        let stack = Stack::new("stack".to_string())
+            .add(
+                Key::new("secrets".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ServiceAccount::new("manager-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .permissions(
+                alien_core::PermissionsConfig::new().with_profile(
+                    "manager",
+                    PermissionProfile::new()
+                        .global([PermissionSetReference::from_name("key/not-a-real-set")]),
+                ),
+            )
+            .build();
+
+        let error = key_runtime_service_accounts(&stack, "secrets")
+            .expect_err("an unknown grant must not silently drop the runtime role");
+        assert_eq!(error.code, "INVALID_PERMISSION_SET");
+        assert!(
+            error.message.contains("key/not-a-real-set"),
+            "{}",
+            error.message
         );
     }
 }
