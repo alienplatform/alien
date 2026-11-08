@@ -79,15 +79,18 @@ impl CloudKmsApi for CloudKmsClient {
         crypto_key_name: &str,
         request: EncryptRequest,
     ) -> Result<EncryptResponse> {
-        self.base
-            .execute_request(
-                Method::POST,
-                &format!("{crypto_key_name}:encrypt"),
-                None,
-                Some(request),
-                crypto_key_name,
-            )
-            .await
+        // The body carries the plaintext; redact it from any error.
+        alien_client_core::redact_request_body(
+            self.base
+                .execute_request(
+                    Method::POST,
+                    &format!("{crypto_key_name}:encrypt"),
+                    None,
+                    Some(request),
+                    crypto_key_name,
+                )
+                .await,
+        )
     }
 
     async fn decrypt(
