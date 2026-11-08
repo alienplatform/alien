@@ -26,6 +26,7 @@ pub mod keyvault;
 pub mod load_balancers;
 pub mod long_running_operation;
 pub mod managed_clusters;
+pub mod managed_redis;
 pub mod managed_identity;
 pub mod models;
 pub mod monitor;
