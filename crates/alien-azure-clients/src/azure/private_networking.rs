@@ -26,6 +26,12 @@ pub const POSTGRES_PRIVATE_DNS_ZONE: &str = "privatelink.postgres.database.azure
 /// when wiring a Private Endpoint to it.
 pub const POSTGRES_PRIVATE_LINK_GROUP_ID: &str = "postgresqlServer";
 
+/// The Private DNS zone Azure Managed Redis private endpoints resolve through.
+pub const REDIS_PRIVATE_DNS_ZONE: &str = "privatelink.redis.azure.net";
+
+/// The `groupIds` value that selects the Azure Managed Redis sub-resource.
+pub const REDIS_PRIVATE_LINK_GROUP_ID: &str = "redisEnterprise";
+
 // ─────────────────────────── Private Endpoint models ───────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

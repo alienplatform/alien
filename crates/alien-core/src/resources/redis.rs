@@ -119,6 +119,19 @@ pub const MEMORYSTORE_NODE_TYPES: &[(&str, f64)] = &[
     ("HIGHMEM_2XLARGE", 88.0),
 ];
 
+/// Azure Managed Redis Balanced SKUs in ascending order with their published memory in GB.
+/// B0 is left out: the pricing page says B0 and B1 may lack some features, and B0 is half the
+/// size of the smallest production tier. `NoCluster` caps a database at 25 GB, so B20 is the
+/// largest. Sizes are the published figures; the live check of `maxmemory` is recorded in the
+/// design notes.
+pub const AZURE_MANAGED_REDIS_SKUS: &[(&str, f64)] = &[
+    ("Balanced_B1", 1.0),
+    ("Balanced_B3", 3.0),
+    ("Balanced_B5", 6.0),
+    ("Balanced_B10", 12.0),
+    ("Balanced_B20", 24.0),
+];
+
 impl Redis {
     /// The resource type identifier for Redis.
     pub const RESOURCE_TYPE: ResourceType = ResourceType::from_static("redis");
@@ -185,6 +198,27 @@ impl Redis {
                         "{} bytes exceeds the largest Memorystore node ({})",
                         wanted,
                         MEMORYSTORE_NODE_TYPES[MEMORYSTORE_NODE_TYPES.len() - 1].0
+                    ),
+                })
+            })
+    }
+
+    /// The smallest Azure Managed Redis SKU whose memory fits the request, and that memory in
+    /// bytes. With no request the default is 1 GiB. Requests above the largest `NoCluster`
+    /// SKU are rejected, never capped.
+    pub fn azure_managed_redis_sku(&self) -> Result<(&'static str, u64)> {
+        let wanted = self.requested_memory_bytes()?.unwrap_or(1024_u64.pow(3));
+        AZURE_MANAGED_REDIS_SKUS
+            .iter()
+            .map(|(name, gb)| (*name, (gb * 1024_f64.powi(3)) as u64))
+            .find(|(_, usable)| *usable >= wanted)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::OperationNotSupported {
+                    operation: "Redis memory sizing".to_string(),
+                    reason: format!(
+                        "{} bytes exceeds the largest single-endpoint Azure Managed Redis SKU ({})",
+                        wanted,
+                        AZURE_MANAGED_REDIS_SKUS[AZURE_MANAGED_REDIS_SKUS.len() - 1].0
                     ),
                 })
             })
@@ -478,5 +512,26 @@ mod tests {
             "HIGHMEM_2XLARGE"
         );
         assert!(redis(Some("100Gi")).memorystore_node_type().is_err());
+    }
+
+    #[test]
+    fn azure_sku_picks_smallest_fit_and_rejects_above_the_nocluster_cap() {
+        let redis = |m: Option<&str>| match m {
+            Some(m) => Redis::new("r".into()).memory(m.into()).build(),
+            None => Redis::new("r".into()).build(),
+        };
+        assert_eq!(
+            redis(None).azure_managed_redis_sku().unwrap().0,
+            "Balanced_B1"
+        );
+        assert_eq!(
+            redis(Some("4Gi")).azure_managed_redis_sku().unwrap().0,
+            "Balanced_B5"
+        );
+        assert_eq!(
+            redis(Some("24Gi")).azure_managed_redis_sku().unwrap().0,
+            "Balanced_B20"
+        );
+        assert!(redis(Some("25Gi")).azure_managed_redis_sku().is_err());
     }
 }

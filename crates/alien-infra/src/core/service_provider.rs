@@ -43,6 +43,7 @@ use alien_azure_clients::{
     disks::{AzureManagedDisksClient, ManagedDisksApi},
     event_grid::{AzureEventGridClient, EventGridApi},
     flexible_server::{AzureFlexibleServerClient, FlexibleServerApi},
+    managed_redis::{AzureManagedRedisClient, ManagedRedisApi},
     keyvault::{
         AzureKeyVaultCertificatesClient, AzureKeyVaultKeysClient, AzureKeyVaultManagementClient,
         AzureKeyVaultSecretsClient, KeyVaultCertificatesApi, KeyVaultKeysApi,
@@ -296,6 +297,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn FlexibleServerApi>>;
+    fn get_azure_managed_redis_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn ManagedRedisApi>>;
     fn get_azure_snapshots_client(
         &self,
         config: &AzureClientConfig,
@@ -1276,6 +1281,16 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn FlexibleServerApi>> {
         Ok(Arc::new(AzureFlexibleServerClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(config.clone()),
+        )))
+    }
+
+    fn get_azure_managed_redis_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn ManagedRedisApi>> {
+        Ok(Arc::new(AzureManagedRedisClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
         )))
