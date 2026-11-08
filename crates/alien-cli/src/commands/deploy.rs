@@ -9,6 +9,10 @@
 mod setup_validation;
 
 use crate::commands::deployments::{parse_resource_prefix, MonitoringMode};
+use crate::{
+    commands::onboard::{fetch_active_release_stack_inputs, ActiveReleaseStackInputs},
+    secret_values::{seal_input_values, SecretValuesTarget},
+};
 
 use crate::commands::{
     create_initial_deployment, fetch_dev_deployment_live_state,
@@ -26,6 +30,7 @@ use alien_cli_common::{
 };
 use alien_core::{
     ClientConfig, ComputeSettings, DeploymentState, DeploymentStatus, NetworkSettings, Platform,
+    StackInputKind,
 };
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::manager_api_transport::{
@@ -211,6 +216,8 @@ struct ResolvedDeployArgs {
     compute_settings: Option<ComputeSettings>,
     domain_settings: Option<alien_core::DomainSettings>,
     input_values: HashMap<String, serde_json::Value>,
+    /// Inputs given as secrets (`--secret-input`, `secretInputs`).
+    secret_input_ids: Vec<String>,
     public_subdomain: Option<String>,
 }
 
@@ -410,6 +417,7 @@ fn resolve_deploy_args(args: &DeployArgs) -> Result<ResolvedDeployArgs> {
         compute_settings,
         domain_settings: config.as_ref().and_then(|config| config.domains.clone()),
         input_values,
+        secret_input_ids: secret_input_ids(config.as_ref(), &args.secret_input_values)?,
         public_subdomain: args.public_subdomain.clone(),
     })
 }
@@ -509,6 +517,55 @@ fn collect_raw_input_values(
     }
 
     Ok(values)
+}
+
+/// Ids of the inputs given as secrets.
+fn secret_input_ids(
+    config: Option<&DeployConfigFile>,
+    secret_input_values: &[String],
+) -> Result<Vec<String>> {
+    let mut ids: Vec<String> = config
+        .and_then(|config| config.secret_inputs.as_ref())
+        .map(|inputs| inputs.keys().cloned().collect())
+        .unwrap_or_default();
+    for input in secret_input_values {
+        ids.push(parse_stack_input_arg(input, "--secret-input")?.0);
+    }
+    Ok(ids)
+}
+
+/// Ids of the inputs to encrypt: those the release declares as secrets on this
+/// platform, plus any the caller marked as secret. A secret given with
+/// `--input` is still a secret.
+async fn secret_input_ids_for_release(
+    client: &alien_platform_api::Client,
+    workspace: Option<&str>,
+    project_id: &str,
+    channel: &str,
+    platform: &Platform,
+    marked_secret: &[String],
+) -> Result<Vec<String>> {
+    let release = fetch_active_release_stack_inputs(client, workspace, project_id, channel).await?;
+    Ok(secret_ids_on_platform(&release, platform, marked_secret))
+}
+
+fn secret_ids_on_platform(
+    release: &ActiveReleaseStackInputs,
+    platform: &Platform,
+    marked_secret: &[String],
+) -> Vec<String> {
+    let mut ids = marked_secret.to_vec();
+    for (release_platform, inputs) in &release.inputs_by_platform {
+        if release_platform == platform {
+            ids.extend(
+                inputs
+                    .iter()
+                    .filter(|input| input.kind == StackInputKind::Secret)
+                    .map(|input| input.id.clone()),
+            );
+        }
+    }
+    ids
 }
 
 pub(crate) fn parse_raw_stack_input_value(value: &str) -> serde_json::Value {
@@ -772,12 +829,35 @@ async fn create_self_deployment(
     )
     .await?;
 
+    // Secret values for a manager that encrypts them go to the manager first.
+    let session_client = create_platform_client(&session.token, &base_url)?;
+    let secret_ids = secret_input_ids_for_release(
+        &session_client,
+        None,
+        &project_id,
+        &args.channel,
+        &resolved_args.platform_enum,
+        &resolved_args.secret_input_ids,
+    )
+    .await?;
+    let input_values = seal_input_values(
+        &session_client,
+        None,
+        SecretValuesTarget::DeploymentGroup {
+            id: &deployment_group.id,
+            platforms: std::slice::from_ref(&resolved_args.platform),
+        },
+        &resolved_args.input_values,
+        &secret_ids,
+        false,
+    )
+    .await?;
     // Bind the preparation request to this exact channel even without inputs.
     set_first_party_deployment_inputs(
         &base_url,
         &session.token,
         &resolved_args.platform,
-        &resolved_args.input_values,
+        &input_values,
         &args.channel,
     )
     .await?;
@@ -1656,7 +1736,7 @@ async fn deploy_task_with_environment(
                         project_id,
                         ..
                     } => {
-                        supplied_group_token = Some((deployment_group_id, token.clone()));
+                        supplied_group_token = Some((deployment_group_id.clone(), token.clone()));
                         info!(
                             "   Using deployment group token for group '{}'",
                             deployment_group_name
@@ -1696,6 +1776,33 @@ async fn deploy_task_with_environment(
                             .await?;
                         }
 
+                        // Secret values for a manager that encrypts them go
+                        // to the manager first.
+                        let input_values = if ctx.is_platform() {
+                            let secret_ids = secret_input_ids_for_release(
+                                &sdk_client,
+                                Some(workspace_name.as_str()),
+                                &project_id,
+                                &args.channel,
+                                &resolved_args.platform_enum,
+                                &resolved_args.secret_input_ids,
+                            )
+                            .await?;
+                            seal_input_values(
+                                &sdk_client,
+                                Some(workspace_name.as_str()),
+                                SecretValuesTarget::DeploymentGroup {
+                                    id: &deployment_group_id,
+                                    platforms: std::slice::from_ref(&resolved_args.platform),
+                                },
+                                &resolved_args.input_values,
+                                &secret_ids,
+                                false,
+                            )
+                            .await?
+                        } else {
+                            resolved_args.input_values.clone()
+                        };
                         let response_json = if ctx.is_platform() {
                             let create_response = sdk_client
                             .create_deployment()
@@ -1757,7 +1864,7 @@ async fn deploy_task_with_environment(
                                 deployment_group_id: None,
                                 environment_info: None,
                                 input_values: to_sdk_stack_input_values(
-                                    &resolved_args.input_values,
+                                    &input_values,
                                 )?,
                                 public_subdomain: None,
                                 initial_desired_release: alien_platform_api::types::NewDeploymentRequestInitialDesiredRelease::Active,
@@ -3501,6 +3608,38 @@ async fn request_deployment_retry(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn inputs_the_release_declares_as_secrets_are_encrypted_even_when_passed_as_plain() {
+        let definition = |id: &str, kind: &str| -> alien_core::StackInputDefinition {
+            serde_json::from_value(serde_json::json!({
+                "id": id,
+                "kind": kind,
+                "providedBy": ["developer"],
+                "required": true,
+                "label": id,
+                "description": id,
+            }))
+            .expect("input definition")
+        };
+        let release = ActiveReleaseStackInputs {
+            supported_platforms: vec![Platform::Aws, Platform::Gcp],
+            inputs_by_platform: vec![
+                (
+                    Platform::Aws,
+                    vec![
+                        definition("dbPassword", "secret"),
+                        definition("region", "string"),
+                    ],
+                ),
+                (Platform::Gcp, vec![definition("gcpOnlySecret", "secret")]),
+            ],
+        };
+
+        let mut ids = secret_ids_on_platform(&release, &Platform::Aws, &["marked".to_string()]);
+        ids.sort();
+        assert_eq!(ids, ["dbPassword", "marked"]);
+    }
+
+    #[test]
     fn machines_join_token_response_preserves_capacity_requirements() {
         let response = serde_json::from_value(serde_json::json!({
             "joinToken": "hj_secret",
@@ -5044,6 +5183,7 @@ mod tests {
                 compute_settings: None,
                 domain_settings: None,
                 input_values: HashMap::new(),
+                secret_input_ids: Vec::new(),
                 public_subdomain: None,
             };
             let args = DeployArgs::try_parse_from([
@@ -5099,6 +5239,7 @@ machine = "m8i.2xlarge"
             compute_settings: config.compute,
             domain_settings: config.domains,
             input_values: HashMap::new(),
+            secret_input_ids: Vec::new(),
             public_subdomain: None,
         };
         let args =
@@ -5202,6 +5343,7 @@ max = 1
             compute_settings: None,
             domain_settings: None,
             input_values: values,
+            secret_input_ids: Vec::new(),
             public_subdomain: None,
         };
         let args = DeployArgs::try_parse_from(["deploy", "--name", "test", "--platform", "aws"])
@@ -5247,6 +5389,7 @@ max = 1
             compute_settings: None,
             domain_settings: None,
             input_values: HashMap::new(),
+            secret_input_ids: Vec::new(),
             public_subdomain: None,
         };
         let args =
@@ -5363,6 +5506,7 @@ max = 1
             compute_settings: None,
             domain_settings: None,
             input_values: HashMap::new(),
+            secret_input_ids: Vec::new(),
             public_subdomain: None,
         };
         let args = DeployArgs::try_parse_from([
