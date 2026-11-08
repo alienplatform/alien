@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest"
 import { Redis } from "../redis.js"
 
 describe("Redis", () => {
-  it("defaults to volatile-lru with persistence on and no HA", () => {
+  it("defaults to volatile-lru with persistence off and no HA", () => {
     const r = new Redis("cache").build()
     expect(r.config).toMatchObject({
       type: "redis",
       id: "cache",
       evictionPolicy: "volatile-lru",
-      persistence: true,
+      persistence: false,
       highAvailability: false,
     })
     expect(r.config).not.toHaveProperty("memory")
@@ -18,13 +18,13 @@ describe("Redis", () => {
     const r = new Redis("queue")
       .memory("4Gi")
       .evictionPolicy("noeviction")
-      .persistence(false)
+      .persistence()
       .highAvailability()
       .build()
     expect(r.config).toMatchObject({
       memory: "4Gi",
       evictionPolicy: "noeviction",
-      persistence: false,
+      persistence: true,
       highAvailability: true,
     })
   })

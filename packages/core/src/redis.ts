@@ -23,7 +23,7 @@ export { RedisSchema as RedisConfigSchema } from "./generated/index.js"
 export class Redis extends ResourceBuilder {
   private _config: Partial<RedisConfig> = {
     evictionPolicy: "volatile-lru",
-    persistence: true,
+    persistence: false,
     highAvailability: false,
   }
 
@@ -69,8 +69,9 @@ export class Redis extends ResourceBuilder {
   }
 
   /**
-   * Keeps data across a server restart or maintenance. Default `true`. Turn it off for a pure
-   * cache. What survives what differs per platform; see the Redis docs.
+   * Keeps data across a server restart or maintenance. Default `false` (a cache). On AWS, GCP
+   * and Azure it requires `highAvailability()`. What survives what differs per platform; see the
+   * Redis docs.
    * @param value Whether to persist data.
    * @returns The Redis builder instance.
    */

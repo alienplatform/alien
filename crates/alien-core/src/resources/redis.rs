@@ -76,11 +76,12 @@ pub struct Redis {
     #[builder(default)]
     #[serde(default)]
     pub eviction_policy: RedisEvictionPolicy,
-    /// Keep data across a server restart or maintenance. Default true. Turn it
-    /// off for a pure cache.
-    #[builder(default = true)]
-    #[serde(default = "default_true")]
-    #[cfg_attr(feature = "openapi", schema(default = default_true))]
+    /// Keep data across a server restart or maintenance. Default false (a
+    /// cache). On AWS, GCP and Azure this needs `high_availability`, because the
+    /// clouds only persist data from a replicated deployment. Local always
+    /// persists with an append-only file when this is on.
+    #[builder(default)]
+    #[serde(default)]
     pub persistence: bool,
     /// One replica in another zone with automatic failover. Default false.
     #[builder(default)]
@@ -90,10 +91,6 @@ pub struct Redis {
     /// creation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encryption_key: Option<ResourceRef>,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 impl Redis {
@@ -257,7 +254,7 @@ mod tests {
     fn builder_applies_defaults() {
         let redis = Redis::new("cache".to_string()).build();
         assert_eq!(redis.eviction_policy, RedisEvictionPolicy::VolatileLru);
-        assert!(redis.persistence);
+        assert!(!redis.persistence);
         assert!(!redis.high_availability);
         assert_eq!(redis.memory, None);
     }

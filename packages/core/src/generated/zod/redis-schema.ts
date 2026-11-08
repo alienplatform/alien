@@ -20,7 +20,7 @@ get "evictionPolicy"(){
 "highAvailability": z.optional(z.boolean().describe("One replica in another zone with automatic failover. Default false.")),
 "id": z.string(),
 "memory": z.string().describe("Memory available for data (e.g. \"512Mi\", \"4Gi\"). None = the smallest\nproduction tier. The smallest tier that fits is used; a request larger\nthan the biggest single-shard tier on the platform is rejected.").nullish(),
-"persistence": z.optional(z.boolean().default(true).describe("Keep data across a server restart or maintenance. Default true. Turn it\noff for a pure cache."))
+"persistence": z.optional(z.boolean().describe("Keep data across a server restart or maintenance. Default false (a\ncache). On AWS, GCP and Azure this needs `high_availability`, because the\nclouds only persist data from a replicated deployment. Local always\npersists with an append-only file when this is on."))
     }).describe("A managed, Redis-compatible in-memory store on a private network. The target\nplatform decides the backend (AWS ElastiCache for Valkey, GCP Memorystore for\nValkey, Azure Managed Redis, or a native Valkey process on Local). It is\nnever publicly reachable, and it is a single endpoint (not cluster mode), so\nplain clients and multi-key scripts work.")
 
 export type Redis = z.infer<typeof RedisSchema>
