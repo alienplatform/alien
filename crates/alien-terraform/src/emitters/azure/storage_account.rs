@@ -333,9 +333,20 @@ fn cors_limits(
         .into_iter()
         .chain(upload_local.map(|local| (local, &UPLOAD_RULE)))
         .collect();
+    // A gate can leave a rule with no origins, and then `cors_rule` emits no rule, so its
+    // fixed settings don't count. The read-only payload keeps its original expression.
     let counted: Vec<String> = rules
         .iter()
-        .map(|(local, settings)| format!("join(\",\", local.{local}), \"{}\"", settings.counted()))
+        .map(|(local, settings)| {
+            if upload_local.is_some() {
+                format!(
+                    "join(\",\", local.{local}), length(local.{local}) == 0 ? \"\" : \"{}\"",
+                    settings.counted()
+                )
+            } else {
+                format!("join(\",\", local.{local}), \"{}\"", settings.counted())
+            }
+        })
         .collect();
     let payload = format!("base64encode(join(\"\", [{}]))", counted.join(", "));
     let origins = match rules.as_slice() {

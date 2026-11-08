@@ -299,6 +299,70 @@ run "enabled" {{
     }
 }
 
+/// A disabled upload contributor emits no upload rule, so read origins may use the budget
+/// that rule would have taken.
+#[test]
+fn a_disabled_upload_rule_does_not_count_toward_the_account_budget() {
+    // 8 origins of 248 characters: the read rule counts 1991 + 46 = 2037 bytes.
+    let read: Vec<String> = (0..8)
+        .map(|i| format!("https://r{i}{}.example.test", "x".repeat(226)))
+        .collect();
+    let stack = Stack::new("uploads".to_string())
+        .inputs(vec![gate_input("uploads", "Uploads", "Enable uploads")])
+        .add(
+            AzureResourceGroup::new("default-resource-group".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            AzureStorageAccount::new("default-storage-account".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("reads".to_string())
+                .cors_allowed_origins(read)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_enabled_when(
+            Storage::new("uploads".to_string())
+                .cors_upload_origins(vec!["https://app.example.test".to_string()])
+                .build(),
+            ResourceLifecycle::Live,
+            "uploads",
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    assert_terraform_valid(&module, "disabled upload budget");
+    let mut files = linter_files(&module);
+    files.insert(
+        "tests/budget.tftest.hcl".to_string(),
+        r#"
+mock_provider "azurerm" {}
+variables {
+  name = "uploads"
+  token = "test-token"
+  azure_subscription_id = "00000000-0000-0000-0000-000000000000"
+  azure_resource_group_name = "example-rg"
+}
+run "upload_disabled" {
+  command = plan
+  variables { input_uploads = false }
+  assert {
+    condition = length(azurerm_storage_account.default_storage_account.blob_properties[0].cors_rule) == 1
+    error_message = "Only the read rule is emitted and it fits."
+  }
+}
+run "upload_enabled" {
+  command = plan
+  variables { input_uploads = true }
+  expect_failures = [azurerm_storage_account.default_storage_account]
+}
+"#
+        .to_string(),
+    );
+    test_utils::terraform_test(&files).assert_ok("disabled upload budget");
+}
+
 fn lifecycle_stack() -> Stack {
     Stack::new("lifecycle".to_string())
         .inputs(vec![gate_input("files", "Files", "Enable files")])
