@@ -215,6 +215,17 @@ fn only_if_absent(headers: &HeaderMap) -> Result<bool> {
     ))
 }
 
+/// Headers of a values PUT. Only documents the condition; the handler reads it from the raw headers.
+#[cfg(feature = "openapi")]
+#[derive(utoipa::IntoParams)]
+#[into_params(parameter_in = Header)]
+#[allow(dead_code)]
+struct PutValuesHeaders {
+    /// `*` writes only when the slot is empty
+    #[param(rename = "If-None-Match", nullable = false)]
+    if_none_match: Option<String>,
+}
+
 #[cfg_attr(feature = "openapi", utoipa::path(
     put,
     path = "/v1/values/{scope}",
@@ -223,7 +234,7 @@ fn only_if_absent(headers: &HeaderMap) -> Result<bool> {
     description = "Stores the values, replacing any held in the same slots. With the header `If-None-Match: *` the request must carry exactly one value, and it is written only when its slot is empty, atomically: of several concurrent conditional writes to one slot exactly one succeeds. A manager that serves values (`capabilities.values` = 1) honours this header.",
     params(
         ("scope" = String, Path, description = "dep:<deploymentId>"),
-        ("If-None-Match" = Option<String>, Header, description = "`*` writes only when the slot is empty")
+        PutValuesHeaders
     ),
     request_body = PutValuesRequest,
     responses(

@@ -2302,10 +2302,7 @@
             "description": "`*` writes only when the slot is empty",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],

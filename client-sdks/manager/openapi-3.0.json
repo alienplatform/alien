@@ -1944,8 +1944,7 @@
             "description": "`*` writes only when the slot is empty",
             "required": false,
             "schema": {
-              "type": "string",
-              "nullable": true
+              "type": "string"
             }
           }
         ],
