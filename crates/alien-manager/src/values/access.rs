@@ -39,7 +39,8 @@ impl ValueAccess {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValueGrant {
     pub access: ValueAccess,
-    /// `None` allows every slot in the scope.
+    /// `None` allows every slot in the scope. An authorizer that checks
+    /// slot-limited tokens gives that only to a migrate grant.
     pub slots: Option<Vec<ValueSlot>>,
 }
 

@@ -969,8 +969,9 @@ fn azure_management_gap(
     crate::providers::impersonation_credentials::azure_management_config_from_env(environment).err()
 }
 
-/// Loads the key that protects values kept in a cloud key-value store.
-async fn load_values_key(
+/// Loads the key that protects values kept in a cloud key-value store, with
+/// the credentials of the process's own environment.
+pub async fn load_values_key(
     binding: &alien_core::bindings::KeyBinding,
 ) -> crate::error::Result<Arc<dyn alien_bindings::traits::Key>> {
     use alien_bindings::{BindingsProvider, BindingsProviderApi};

@@ -429,6 +429,91 @@ mod tests {
         assert_eq!(got.value, CANARY);
     }
 
+    /// Passes every call to `inner` and records the TTL of each write.
+    #[derive(Debug)]
+    struct RecordingKv {
+        inner: Arc<dyn Kv>,
+        writes: std::sync::Mutex<Vec<(String, Option<Duration>)>>,
+    }
+
+    impl alien_bindings::traits::Binding for RecordingKv {}
+
+    #[async_trait::async_trait]
+    impl Kv for RecordingKv {
+        async fn get(
+            &self,
+            key: &str,
+        ) -> alien_bindings::error::Result<Option<alien_bindings::traits::KvEntry>> {
+            self.inner.get(key).await
+        }
+
+        async fn put(
+            &self,
+            key: &str,
+            value: Vec<u8>,
+            options: Option<PutOptions>,
+        ) -> alien_bindings::error::Result<bool> {
+            let ttl = options.as_ref().and_then(|options| options.ttl);
+            self.writes.lock().unwrap().push((key.to_string(), ttl));
+            self.inner.put(key, value, options).await
+        }
+
+        async fn delete(
+            &self,
+            key: &str,
+            if_version: Option<&str>,
+        ) -> alien_bindings::error::Result<bool> {
+            self.inner.delete(key, if_version).await
+        }
+
+        async fn exists(&self, key: &str) -> alien_bindings::error::Result<bool> {
+            self.inner.exists(key).await
+        }
+
+        async fn scan_prefix(
+            &self,
+            prefix: &str,
+            limit: Option<usize>,
+            cursor: Option<String>,
+        ) -> alien_bindings::error::Result<alien_bindings::traits::ScanResult> {
+            self.inner.scan_prefix(prefix, limit, cursor).await
+        }
+    }
+
+    /// DynamoDB deletes an item whose TTL attribute has passed. A value or its
+    /// wrapped data key written with a TTL would disappear without anyone
+    /// deleting it, so no write may carry one.
+    #[tokio::test]
+    async fn values_and_their_data_keys_are_written_without_a_ttl() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        let (_dir, inner) = local_kv().await;
+        let recording = Arc::new(RecordingKv {
+            inner,
+            writes: Default::default(),
+        });
+        let kv: Arc<dyn Kv> = recording.clone();
+        let (_key, backend) = sealed_backend(kv);
+        let store = ValueStore::new(Arc::new(backend));
+        let dep = scope("dep:dep_1");
+
+        store
+            .put(&dep, &slot("env:TOKEN"), ValueKind::Secret, CANARY.into())
+            .await
+            .unwrap();
+        store
+            .put(&dep, &slot("env:REGION"), ValueKind::Plain, "eu".into())
+            .await
+            .unwrap();
+
+        let writes = recording.writes.lock().unwrap().clone();
+        let keys: Vec<&str> = writes.iter().map(|(key, _)| key.as_str()).collect();
+        assert!(keys.iter().any(|key| key.starts_with("val:")), "{keys:?}");
+        assert!(keys.iter().any(|key| key.starts_with("valk:")), "{keys:?}");
+        for (key, ttl) in &writes {
+            assert_eq!(*ttl, None, "{key} was written with a TTL");
+        }
+    }
+
     #[tokio::test]
     async fn the_same_value_seals_differently_each_time() {
         let (_dir, kv) = local_kv().await;
