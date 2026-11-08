@@ -44,6 +44,7 @@ use alien_azure_clients::{
     event_grid::{AzureEventGridClient, EventGridApi},
     flexible_server::{AzureFlexibleServerClient, FlexibleServerApi},
     managed_redis::{AzureManagedRedisClient, ManagedRedisApi},
+    monitor::{AzureMonitorClient, MonitorApi},
     keyvault::{
         AzureKeyVaultCertificatesClient, AzureKeyVaultKeysClient, AzureKeyVaultManagementClient,
         AzureKeyVaultSecretsClient, KeyVaultCertificatesApi, KeyVaultKeysApi,
@@ -303,6 +304,7 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ManagedRedisApi>>;
+    fn get_azure_monitor_client(&self, config: &AzureClientConfig) -> Result<Arc<dyn MonitorApi>>;
     fn get_azure_snapshots_client(
         &self,
         config: &AzureClientConfig,
@@ -1300,6 +1302,13 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ManagedRedisApi>> {
         Ok(Arc::new(AzureManagedRedisClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(config.clone()),
+        )))
+    }
+
+    fn get_azure_monitor_client(&self, config: &AzureClientConfig) -> Result<Arc<dyn MonitorApi>> {
+        Ok(Arc::new(AzureMonitorClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
         )))
