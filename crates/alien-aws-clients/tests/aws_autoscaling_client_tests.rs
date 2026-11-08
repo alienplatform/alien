@@ -153,6 +153,7 @@ impl AutoScalingTestContext {
         let vpc_response = ec2_client
             .describe_vpcs(DescribeVpcsRequest::builder().build())
             .await
+            .map_err(|e| warn!("DescribeVpcs failed: {e:?}"))
             .ok()?;
 
         let default_vpc_id = vpc_response
