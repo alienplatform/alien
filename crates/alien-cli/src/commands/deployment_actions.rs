@@ -19,9 +19,7 @@ use serde_json::{Map, Value};
 use crate::error::{ErrorData, Result};
 use crate::interaction::ConfirmationMode;
 use crate::output::{print_json, prompt_confirm};
-use crate::secret_values::{
-    encrypt_with_manager, seal_environment_variables, SecretSlotValue, SecretValuesTarget,
-};
+use crate::secret_values::{seal_environment_variables, seal_input_values, SecretValuesTarget};
 use crate::ui::{command, dim_label, make_table, print_table, success_line};
 
 /// A requested change to one machine pool. Unset fields keep the pool's current value.
@@ -841,49 +839,36 @@ pub(crate) async fn set_inputs_task(
                 .collect()
         })
         .unwrap_or_default();
-    let mut values = input_values_to_save(&declared, &changes)?;
+    let values = input_values_to_save(&declared, &changes)?;
     let clear = changes.clear;
-    if current
+    let secret_ids: Vec<String> = current
+        .get("inputs")
+        .and_then(Value::as_array)
+        .map(|inputs| {
+            inputs
+                .iter()
+                .filter(|input| input.get("kind").and_then(Value::as_str) == Some("secret"))
+                .filter_map(|input| Some(input.get("id")?.as_str()?.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    // The platform decides whether the manager encrypts these values; what the
+    // earlier read said only turns a contradicting answer into an error.
+    let instance_serves = current
         .get("secretValuesEncryptedBy")
         .and_then(Value::as_str)
-        == Some("private-alien-instance")
-    {
-        let secret_ids: Vec<&str> = current
-            .get("inputs")
-            .and_then(Value::as_array)
-            .map(|inputs| {
-                inputs
-                    .iter()
-                    .filter(|input| input.get("kind").and_then(Value::as_str) == Some("secret"))
-                    .filter_map(|input| input.get("id")?.as_str())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let secret_values: Vec<SecretSlotValue> = values
-            .iter()
-            .filter(|(id, _)| secret_ids.contains(&id.as_str()))
-            .filter_map(|(id, value)| {
-                Some(SecretSlotValue {
-                    slot: format!("input:{id}"),
-                    value: value.as_str()?.to_string(),
-                })
-            })
-            .collect();
-        if let Some(sealed) = encrypt_with_manager(
-            client,
-            Some(workspace),
-            SecretValuesTarget::Deployment(deployment_id),
-            &secret_values,
-        )
-        .await?
-        {
-            for (id, value) in values.iter_mut() {
-                if let Some(ciphertext) = sealed.get(&format!("input:{id}")) {
-                    *value = Value::String(ciphertext.clone());
-                }
-            }
-        }
-    }
+        == Some("private-alien-instance");
+    let values: Map<String, Value> = seal_input_values(
+        client,
+        Some(workspace),
+        SecretValuesTarget::Deployment(deployment_id),
+        &values.into_iter().collect(),
+        &secret_ids,
+        instance_serves,
+    )
+    .await?
+    .into_iter()
+    .collect();
 
     let body: UpdateDeploymentInputsRequest = request_body(
         serde_json::json!({ "inputValues": values, "clearInputIds": clear }),

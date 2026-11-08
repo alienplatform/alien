@@ -207,7 +207,13 @@ async fn onboard_platform(mut args: OnboardArgs, ctx: ExecutionMode, name: Strin
     validate_setup_items(&args.setup_items, &available_setup.items)?;
     let includes_application = args.setup_items.contains(&SetupItem::Application);
     let release_inputs = if includes_application {
-        fetch_active_release_stack_inputs(&client, workspace.query.as_deref(), &project_id).await?
+        fetch_active_release_stack_inputs(
+            &client,
+            workspace.query.as_deref(),
+            &project_id,
+            "production",
+        )
+        .await?
     } else {
         ActiveReleaseStackInputs {
             supported_platforms: available_setup.supported_platforms,
@@ -463,9 +469,9 @@ async fn onboard_platform(mut args: OnboardArgs, ctx: ExecutionMode, name: Strin
     Ok(())
 }
 
-struct ActiveReleaseStackInputs {
-    supported_platforms: Vec<Platform>,
-    inputs_by_platform: Vec<(Platform, Vec<StackInputDefinition>)>,
+pub(crate) struct ActiveReleaseStackInputs {
+    pub(crate) supported_platforms: Vec<Platform>,
+    pub(crate) inputs_by_platform: Vec<(Platform, Vec<StackInputDefinition>)>,
 }
 
 #[cfg(feature = "platform")]
@@ -717,10 +723,11 @@ fn platform_to_setup_policy_platform(
 }
 
 #[cfg(feature = "platform")]
-async fn fetch_active_release_stack_inputs(
+pub(crate) async fn fetch_active_release_stack_inputs(
     client: &alien_platform_api::Client,
     workspace_query: Option<&str>,
     project_id: &str,
+    channel: &str,
 ) -> Result<ActiveReleaseStackInputs> {
     use alien_platform_api::SdkResultExt;
 
@@ -731,6 +738,7 @@ async fn fetch_active_release_stack_inputs(
 
     let releases = request
         .project(project_id)
+        .channel(channel)
         .limit(std::num::NonZeroU64::new(1).expect("1 is non-zero"))
         .send()
         .await
@@ -1051,7 +1059,8 @@ async fn sealed_stack_input_values(
         .and_then(serde_json::from_value)
         .into_alien_error()
         .context(conversion())?;
-    let sealed = seal_input_values(client, workspace, target, &raw, secret_input_ids).await?;
+    let sealed =
+        seal_input_values(client, workspace, target, &raw, secret_input_ids, false).await?;
     serde_json::to_value(sealed)
         .and_then(serde_json::from_value)
         .into_alien_error()

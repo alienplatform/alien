@@ -40,11 +40,24 @@ pub(crate) enum SecretValuesTarget<'a> {
     },
 }
 
+/// The platform's answer when the deployment's group has more than one
+/// manager that could encrypt its secret values.
+const NEED_ONE_MANAGER: &str = "SECRET_VALUES_NEED_ONE_PRIVATE_ALIEN_INSTANCE";
+
 /// One value to encrypt: its slot (`input:<id>`, `env:<name>`) and value.
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub(crate) struct SecretSlotValue {
     pub slot: String,
     pub value: String,
+}
+
+impl std::fmt::Debug for SecretSlotValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecretSlotValue")
+            .field("slot", &self.slot)
+            .field("value", &"<redacted>")
+            .finish()
+    }
 }
 
 #[derive(Deserialize)]
@@ -70,14 +83,48 @@ struct EncryptedValue {
     ciphertext: String,
 }
 
+/// Checks that the address the platform gave for the manager is one the CLI
+/// may send secret values to: an `https` URL with a host and no credentials.
+/// Plain `http` is accepted only when `allow_http` is set, which only tests do
+/// against a local mock server.
+fn parse_manager_url(manager_url: &str, allow_http: bool) -> Result<url::Url> {
+    let invalid = |message: String| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "managerUrl".to_string(),
+            message,
+        })
+    };
+    let parsed = url::Url::parse(manager_url)
+        .map_err(|_| invalid("The manager address is not a valid URL".to_string()))?;
+    let scheme_allowed = parsed.scheme() == "https" || (allow_http && parsed.scheme() == "http");
+    if !scheme_allowed {
+        return Err(invalid(format!(
+            "The manager address must use https, not {}; secret values are not sent over an unencrypted connection",
+            parsed.scheme()
+        )));
+    }
+    if parsed.host_str().is_none() || !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(invalid(
+            "The manager address must be a plain host with no credentials".to_string(),
+        ));
+    }
+    Ok(parsed)
+}
+
 /// Encrypts `values` with the deployment's manager. Returns the ciphertext per
 /// slot, or `None` when the platform encrypts this deployment's secret values
 /// itself.
+///
+/// `require_instance` is set when an earlier response in the same command
+/// already said a Private Alien Instance serves this deployment. The platform
+/// then has no business answering that it doesn't, so that answer is an error
+/// instead of a reason to send the values to the platform as they are.
 pub(crate) async fn encrypt_with_manager(
     client: &alien_platform_api::Client,
     workspace: Option<&str>,
     target: SecretValuesTarget<'_>,
     values: &[SecretSlotValue],
+    require_instance: bool,
 ) -> Result<Option<HashMap<String, String>>> {
     if values.is_empty() {
         return Ok(None);
@@ -140,7 +187,19 @@ pub(crate) async fn encrypt_with_manager(
     };
     let access = match access {
         Ok(access) => access,
-        Err(error) if error.code == NOT_SERVED_BY_MANAGER => return Ok(None),
+        Err(error) if error.code == NOT_SERVED_BY_MANAGER && !require_instance => return Ok(None),
+        Err(error) if error.code == NOT_SERVED_BY_MANAGER => {
+            return Err(error).context(ErrorData::ValidationError {
+                field: "secret values".to_string(),
+                message: "The platform reported that a Private Alien Instance serves this deployment, then said it does not. The secret values were not sent".to_string(),
+            })
+        }
+        Err(error) if error.code == NEED_ONE_MANAGER => {
+            return Err(error).context(ErrorData::ValidationError {
+                field: "secret values".to_string(),
+                message: "The deployment group has more than one Private Alien Instance. Run the command against a single deployment, or a group with one instance".to_string(),
+            })
+        }
         Err(error) => {
             return Err(error).context(ErrorData::ApiRequestFailed {
                 message: "getting access to the deployment's manager for secret values".to_string(),
@@ -156,11 +215,20 @@ pub(crate) async fn encrypt_with_manager(
             reason: "secret access response".to_string(),
         })?;
 
+    let manager_url = parse_manager_url(&access.manager_url, cfg!(test))?;
     let url = format!(
         "{}/v1/secret-values/encrypt",
-        access.manager_url.trim_end_matches('/')
+        manager_url.as_str().trim_end_matches('/')
     );
-    let response = http_client::client()?
+    // A redirect would carry the bearer token and the values to another host.
+    let manager_client = http_client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .into_alien_error()
+        .context(ErrorData::NetworkError {
+            message: "Failed to create HTTP client".to_string(),
+        })?;
+    let response = manager_client
         .post(&url)
         .bearer_auth(&access.access_token)
         .json(&EncryptRequest { values })
@@ -172,12 +240,8 @@ pub(crate) async fn encrypt_with_manager(
         })?;
     let status = response.status();
     if !status.is_success() {
-        // The body carries the manager's error, never a value.
-        let body = response.text().await.unwrap_or_default();
         return Err(AlienError::new(ErrorData::ApiRequestFailed {
-            message: format!(
-                "The deployment's manager refused the secret values: HTTP {status} {body}"
-            ),
+            message: format!("The deployment's manager refused the secret values: HTTP {status}"),
             url: Some(url),
         }));
     }
@@ -233,21 +297,32 @@ pub(crate) async fn seal_environment_variables(
             .and_then(serde_json::Value::as_str)
             .map(|name| format!("env:{name}"))
     };
-    let values: Vec<SecretSlotValue> = json
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|variable| {
-            variable.get("type").and_then(serde_json::Value::as_str) == Some("secret")
-        })
-        .filter_map(|variable| {
-            Some(SecretSlotValue {
-                slot: slot(variable)?,
-                value: variable.get("value")?.as_str()?.to_string(),
+    let mut values = Vec::new();
+    for variable in json.as_array().into_iter().flatten().filter(|variable| {
+        variable.get("type").and_then(serde_json::Value::as_str) == Some("secret")
+    }) {
+        let slot = slot(variable).ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "environment variables".to_string(),
+                message: "A secret variable has no name".to_string(),
             })
-        })
-        .collect();
-    let Some(sealed) = encrypt_with_manager(client, workspace, target, &values).await? else {
+        })?;
+        let value = variable
+            .get("value")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: slot.clone(),
+                    message: "A secret value must be a string".to_string(),
+                })
+            })?;
+        values.push(SecretSlotValue {
+            slot,
+            value: value.to_string(),
+        });
+    }
+    let Some(sealed) = encrypt_with_manager(client, workspace, target, &values, false).await?
+    else {
         return Ok(variables);
     };
     for variable in json.as_array_mut().into_iter().flatten() {
@@ -267,18 +342,27 @@ pub(crate) async fn seal_input_values(
     target: SecretValuesTarget<'_>,
     values: &HashMap<String, serde_json::Value>,
     secret_input_ids: &[String],
+    require_instance: bool,
 ) -> Result<HashMap<String, serde_json::Value>> {
-    let secret: Vec<SecretSlotValue> = values
+    let mut secret = Vec::new();
+    for (id, value) in values
         .iter()
         .filter(|(id, _)| secret_input_ids.contains(id))
-        .filter_map(|(id, value)| {
-            Some(SecretSlotValue {
-                slot: format!("input:{id}"),
-                value: value.as_str()?.to_string(),
+    {
+        let value = value.as_str().ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: format!("input:{id}"),
+                message: "A secret value must be a string".to_string(),
             })
-        })
-        .collect();
-    let Some(sealed) = encrypt_with_manager(client, workspace, target, &secret).await? else {
+        })?;
+        secret.push(SecretSlotValue {
+            slot: format!("input:{id}"),
+            value: value.to_string(),
+        });
+    }
+    let Some(sealed) =
+        encrypt_with_manager(client, workspace, target, &secret, require_instance).await?
+    else {
         return Ok(values.clone());
     };
     Ok(values
@@ -427,5 +511,191 @@ mod tests {
         .await
         .expect_err("a refused value must not fall back to plaintext");
         assert!(error.message.contains("503"), "{}", error.message);
+    }
+
+    fn access_mock(platform_server: &MockServer, manager_url: &str) {
+        let manager_url = manager_url.to_string();
+        platform_server.mock(|when, then| {
+            when.method(POST)
+                .path("/v1/deployments/dep_123456789012345678901234567a/secret-access");
+            then.status(200).json_body(serde_json::json!({
+                "managerUrl": manager_url,
+                "accessToken": "short-lived",
+                "expiresIn": 300,
+                "slots": ["env:API_TOKEN"]
+            }));
+        });
+    }
+
+    async fn seal(platform_server: &MockServer) -> Result<Vec<types::EnvironmentVariableConfig>> {
+        seal_environment_variables(
+            &platform(platform_server),
+            Some("acme"),
+            SecretValuesTarget::Deployment("dep_123456789012345678901234567a"),
+            variables(),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_group_with_several_instances_stops_the_command() {
+        let platform_server = MockServer::start_async().await;
+        platform_server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/deployments/dep_123456789012345678901234567a/secret-access");
+                then.status(409).json_body(serde_json::json!({
+                    "code": "SECRET_VALUES_NEED_ONE_PRIVATE_ALIEN_INSTANCE",
+                    "message": "More than one instance",
+                    "retryable": false,
+                    "internal": false
+                }));
+            })
+            .await;
+
+        let error = seal(&platform_server)
+            .await
+            .expect_err("several instances must not fall back to plaintext");
+        assert!(
+            error
+                .message
+                .contains("more than one Private Alien Instance"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[tokio::test]
+    async fn a_redirecting_manager_never_receives_the_values() {
+        let platform_server = MockServer::start_async().await;
+        let manager = MockServer::start_async().await;
+        let elsewhere = MockServer::start_async().await;
+        access_mock(&platform_server, &manager.base_url());
+        manager
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/secret-values/encrypt");
+                then.status(307)
+                    .header("location", format!("{}/steal", elsewhere.base_url()));
+            })
+            .await;
+        let stolen = elsewhere
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(200);
+            })
+            .await;
+
+        let error = seal(&platform_server)
+            .await
+            .expect_err("a redirect must stop the command");
+        assert!(error.message.contains("307"), "{}", error.message);
+        stolen.assert_hits_async(0).await;
+    }
+
+    #[tokio::test]
+    async fn a_manager_error_body_is_not_echoed() {
+        let platform_server = MockServer::start_async().await;
+        let manager = MockServer::start_async().await;
+        access_mock(&platform_server, &manager.base_url());
+        manager
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/secret-values/encrypt");
+                then.status(400).body("echo: canary-cli-secret");
+            })
+            .await;
+
+        let error = seal(&platform_server).await.expect_err("refused");
+        assert!(error.message.contains("400"), "{}", error.message);
+        assert!(
+            !format!("{error:?} {error}").contains("canary-cli-secret"),
+            "the manager's body must not reach the CLI's output"
+        );
+    }
+
+    #[test]
+    fn the_manager_address_must_be_a_plain_https_url() {
+        assert!(parse_manager_url("https://manager.example.com", false).is_ok());
+        for rejected in [
+            "http://manager.example.com",
+            "ftp://manager.example.com",
+            "https://user:pass@manager.example.com",
+            "https://",
+            "not a url",
+        ] {
+            let error = parse_manager_url(rejected, false)
+                .expect_err(&format!("{rejected} must be rejected"));
+            assert!(error.message.contains("manager"), "{}", error.message);
+        }
+        assert!(parse_manager_url("http://127.0.0.1:1234", true).is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_manager_address_without_https_is_refused_before_any_request() {
+        let platform_server = MockServer::start_async().await;
+        access_mock(&platform_server, "ftp://manager.example.com");
+        let error = seal(&platform_server).await.expect_err("scheme refused");
+        assert!(error.message.contains("https"), "{}", error.message);
+    }
+
+    #[tokio::test]
+    async fn a_secret_that_is_not_a_string_is_an_error() {
+        let platform_server = MockServer::start_async().await;
+        let values = HashMap::from([("token".to_string(), serde_json::json!(12345))]);
+        let error = seal_input_values(
+            &platform(&platform_server),
+            Some("acme"),
+            SecretValuesTarget::Deployment("dep_123456789012345678901234567a"),
+            &values,
+            &["token".to_string()],
+            false,
+        )
+        .await
+        .expect_err("a non-string secret must not be sent or dropped");
+        assert!(
+            error.message.contains("must be a string"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn debug_output_hides_the_value() {
+        let value = SecretSlotValue {
+            slot: "env:API_TOKEN".to_string(),
+            value: "canary-cli-secret".to_string(),
+        };
+        let debug = format!("{value:?}");
+        assert!(debug.contains("env:API_TOKEN"));
+        assert!(!debug.contains("canary-cli-secret"), "{debug}");
+    }
+
+    #[tokio::test]
+    async fn a_platform_that_contradicts_itself_stops_the_command() {
+        let platform_server = MockServer::start_async().await;
+        platform_server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/deployments/dep_123456789012345678901234567a/secret-access");
+                then.status(409).json_body(serde_json::json!({
+                    "code": "SECRET_VALUES_NOT_SERVED_BY_INSTANCE",
+                    "message": "Send its secret values to the Platform API.",
+                    "retryable": false,
+                    "internal": false
+                }));
+            })
+            .await;
+        let values = HashMap::from([("token".to_string(), serde_json::json!("canary-cli-secret"))]);
+
+        let error = seal_input_values(
+            &platform(&platform_server),
+            Some("acme"),
+            SecretValuesTarget::Deployment("dep_123456789012345678901234567a"),
+            &values,
+            &["token".to_string()],
+            true,
+        )
+        .await
+        .expect_err("a known instance deployment must not fall back to the platform");
+        assert!(error.message.contains("were not sent"), "{}", error.message);
     }
 }

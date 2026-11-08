@@ -9,7 +9,10 @@
 mod setup_validation;
 
 use crate::commands::deployments::{parse_resource_prefix, MonitoringMode};
-use crate::secret_values::{seal_input_values, SecretValuesTarget};
+use crate::{
+    commands::onboard::{fetch_active_release_stack_inputs, ActiveReleaseStackInputs},
+    secret_values::{seal_input_values, SecretValuesTarget},
+};
 
 use crate::commands::{
     create_initial_deployment, fetch_dev_deployment_live_state,
@@ -27,6 +30,7 @@ use alien_cli_common::{
 };
 use alien_core::{
     ClientConfig, ComputeSettings, DeploymentState, DeploymentStatus, NetworkSettings, Platform,
+    StackInputKind,
 };
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::manager_api_transport::{
@@ -530,6 +534,40 @@ fn secret_input_ids(
     Ok(ids)
 }
 
+/// Ids of the inputs to encrypt: those the release declares as secrets on this
+/// platform, plus any the caller marked as secret. A secret given with
+/// `--input` is still a secret.
+async fn secret_input_ids_for_release(
+    client: &alien_platform_api::Client,
+    workspace: Option<&str>,
+    project_id: &str,
+    channel: &str,
+    platform: &Platform,
+    marked_secret: &[String],
+) -> Result<Vec<String>> {
+    let release = fetch_active_release_stack_inputs(client, workspace, project_id, channel).await?;
+    Ok(secret_ids_on_platform(&release, platform, marked_secret))
+}
+
+fn secret_ids_on_platform(
+    release: &ActiveReleaseStackInputs,
+    platform: &Platform,
+    marked_secret: &[String],
+) -> Vec<String> {
+    let mut ids = marked_secret.to_vec();
+    for (release_platform, inputs) in &release.inputs_by_platform {
+        if release_platform == platform {
+            ids.extend(
+                inputs
+                    .iter()
+                    .filter(|input| input.kind == StackInputKind::Secret)
+                    .map(|input| input.id.clone()),
+            );
+        }
+    }
+    ids
+}
+
 pub(crate) fn parse_raw_stack_input_value(value: &str) -> serde_json::Value {
     match serde_json::from_str::<Vec<String>>(value) {
         Ok(values) => {
@@ -792,15 +830,26 @@ async fn create_self_deployment(
     .await?;
 
     // Secret values for a manager that encrypts them go to the manager first.
+    let session_client = create_platform_client(&session.token, &base_url)?;
+    let secret_ids = secret_input_ids_for_release(
+        &session_client,
+        None,
+        &project_id,
+        &args.channel,
+        &resolved_args.platform_enum,
+        &resolved_args.secret_input_ids,
+    )
+    .await?;
     let input_values = seal_input_values(
-        &create_platform_client(&session.token, &base_url)?,
+        &session_client,
         None,
         SecretValuesTarget::DeploymentGroup {
             id: &deployment_group.id,
             platforms: std::slice::from_ref(&resolved_args.platform),
         },
         &resolved_args.input_values,
-        &resolved_args.secret_input_ids,
+        &secret_ids,
+        false,
     )
     .await?;
     // Bind the preparation request to this exact channel even without inputs.
@@ -1730,6 +1779,15 @@ async fn deploy_task_with_environment(
                         // Secret values for a manager that encrypts them go
                         // to the manager first.
                         let input_values = if ctx.is_platform() {
+                            let secret_ids = secret_input_ids_for_release(
+                                &sdk_client,
+                                Some(workspace_name.as_str()),
+                                &project_id,
+                                &args.channel,
+                                &resolved_args.platform_enum,
+                                &resolved_args.secret_input_ids,
+                            )
+                            .await?;
                             seal_input_values(
                                 &sdk_client,
                                 Some(workspace_name.as_str()),
@@ -1738,7 +1796,8 @@ async fn deploy_task_with_environment(
                                     platforms: std::slice::from_ref(&resolved_args.platform),
                                 },
                                 &resolved_args.input_values,
-                                &resolved_args.secret_input_ids,
+                                &secret_ids,
+                                false,
                             )
                             .await?
                         } else {
@@ -3548,6 +3607,38 @@ async fn request_deployment_retry(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn inputs_the_release_declares_as_secrets_are_encrypted_even_when_passed_as_plain() {
+        let definition = |id: &str, kind: &str| -> alien_core::StackInputDefinition {
+            serde_json::from_value(serde_json::json!({
+                "id": id,
+                "kind": kind,
+                "providedBy": ["developer"],
+                "required": true,
+                "label": id,
+                "description": id,
+            }))
+            .expect("input definition")
+        };
+        let release = ActiveReleaseStackInputs {
+            supported_platforms: vec![Platform::Aws, Platform::Gcp],
+            inputs_by_platform: vec![
+                (
+                    Platform::Aws,
+                    vec![
+                        definition("dbPassword", "secret"),
+                        definition("region", "string"),
+                    ],
+                ),
+                (Platform::Gcp, vec![definition("gcpOnlySecret", "secret")]),
+            ],
+        };
+
+        let mut ids = secret_ids_on_platform(&release, &Platform::Aws, &["marked".to_string()]);
+        ids.sort();
+        assert_eq!(ids, ["dbPassword", "marked"]);
+    }
+
     #[test]
     fn machines_join_token_response_preserves_capacity_requirements() {
         let response = serde_json::from_value(serde_json::json!({
