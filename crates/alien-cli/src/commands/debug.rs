@@ -47,11 +47,15 @@ DEPLOYMENT can be a deployment ID (`dep_...`) or `<group>/<name>`.",
     alien debug acme/prod -- gcloud projects list
     alien debug acme/prod -- kubectl get pods
 
-    # Remote Operator (pull-mode Kubernetes) deployments require an approved
-    # access request covering the tool + namespace/scope you're debugging:
+    # Remote Operator (pull-mode Kubernetes) and push-mode AWS, GCP and Azure
+    # deployments require an approved access request covering the tool and
+    # the namespace or scope you're debugging:
     alien access-requests create --deployment acme/prod \\
       --debug-tool kubectl --debug-namespace braintrust --duration 30m
     alien debug acme/prod --access-request ar_123 -- kubectl get pods -n braintrust
+
+    # Or request access, wait for approval and run in one step:
+    alien debug acme/prod --request-access -- aws sts get-caller-identity
 
     # No `--` arg drops you into a local interactive shell with the env set:
     alien debug acme/prod
@@ -79,14 +83,15 @@ pub struct DebugArgs {
     pub cmd: Vec<String>,
 
     /// Access request id (`ar_...`) authorizing this debug session. Required for
-    /// Remote Operator (pull-mode Kubernetes) deployments, where debugging shares
-    /// the same approval flow as `alien operations invoke`. Create one with
+    /// Remote Operator (pull-mode Kubernetes) deployments and for push-mode AWS,
+    /// GCP and Azure deployments, where debugging shares the same approval flow
+    /// as `alien operations invoke`. Create one with
     /// `alien access-requests create --debug-tool <kubectl|aws|gcloud|az> ...`.
     #[arg(long = "access-request", conflicts_with = "request_access")]
     pub access_request: Option<String>,
 
     /// Shortcut: create a debug-tool access request for this deployment, wait for
-    /// customer approval, then start the session against it. Creates the same
+    /// it to be approved, then start the session against it. Creates the same
     /// access-request resource as `alien access-requests create --debug-tool ...`.
     #[arg(long = "request-access", conflicts_with = "access_request")]
     pub request_access: bool,
@@ -189,9 +194,8 @@ struct CreateDebugSessionRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     tty: Option<bool>,
     /// Access request id (`ar_...`) authorizing this session. Required by the
-    /// manager for pull-mode Kubernetes (Remote Operator) sessions; ignored
-    /// for push-mode cloud/Machines sessions, which aren't gated by access
-    /// requests in this round.
+    /// manager for pull-mode Kubernetes (Remote Operator) sessions and push-mode
+    /// AWS, GCP and Azure sessions; ignored for Machines sessions.
     #[serde(skip_serializing_if = "Option::is_none")]
     access_request_id: Option<String>,
 }
@@ -267,7 +271,7 @@ pub async fn debug_task(args: DebugArgs, ctx: ExecutionMode) -> Result<()> {
 }
 
 /// `--request-access` shortcut: create a debug-tool access request for
-/// `deployment_id`, wait for the customer to approve it in-cluster, and
+/// `deployment_id`, wait for it to be approved, and
 /// return its id. Creates the exact same access-request resource as `alien
 /// access-requests create --debug-tool ...` — this is sugar over that call
 /// plus a wait loop, not a separate approval path.
@@ -326,7 +330,7 @@ async fn request_debug_access_then_wait(
     // in --json mode stdout is reserved for exactly one JSON document (the
     // final result), so progress can't share it.
     eprintln!(
-        "Debug access requested: {}\nWaiting for the customer to approve it in-cluster...",
+        "Debug access requested: {}\nWaiting for it to be approved...",
         created.id
     );
 
@@ -1359,6 +1363,7 @@ async fn exec_with_session(
     }
 
     let region = extract_region_from_env(&env, session_kind.provider);
+    let tunnel_closed = _push_tunnel_guard.as_ref().and_then(|guard| guard.closed());
     let status = spawn_child(
         deployment_label,
         &session_kind,
@@ -1366,6 +1371,7 @@ async fn exec_with_session(
         &cred_dir,
         cmd,
         &env,
+        tunnel_closed,
     )
     .await?;
 
@@ -1500,6 +1506,7 @@ async fn spawn_child(
     cred_dir: &TempDir,
     cmd: &[String],
     env: &BTreeMap<String, String>,
+    tunnel_closed: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> Result<std::process::ExitStatus> {
     let (program, args): (String, Vec<String>) = if cmd.is_empty() {
         // No user command — drop into an interactive shell with a branded
@@ -1527,15 +1534,80 @@ async fn spawn_child(
             reason: "Failed to spawn debug command. Is it installed and on PATH?".to_string(),
         })?;
 
-    child
-        .wait()
-        .await
+    // The manager closes a push tunnel when its access request is revoked or
+    // expires; the command can't reach the cloud any more, so end it.
+    let waited = match tunnel_closed {
+        Some(mut closed) => {
+            tokio::select! {
+                status = child.wait() => status,
+                _ = closed.wait_for(|closed| *closed) => {
+                    eprintln!(
+                        "\nAccess ended: the manager closed this debug session \
+                         (its access request was revoked or expired)."
+                    );
+                    let descendants = match child.id() {
+                        Some(pid) => descendants_of(pid).await,
+                        None => Vec::new(),
+                    };
+                    let _ = child.kill().await;
+                    kill_processes(&descendants).await;
+                    child.wait().await
+                }
+            }
+        }
+        None => child.wait().await,
+    };
+    waited
         .into_alien_error()
         .context(ErrorData::LocalServiceFailed {
             service: program,
             reason: "Failed to wait for debug command".to_string(),
         })
 }
+
+/// Every process below `pid`, children before their parents. Killing a shell
+/// alone leaves the commands it is running alive, still holding the terminal.
+#[cfg(unix)]
+async fn descendants_of(pid: u32) -> Vec<u32> {
+    let mut found = Vec::new();
+    let mut parents = vec![pid];
+    while let Some(parent) = parents.pop() {
+        let Ok(output) = tokio::process::Command::new("pgrep")
+            .args(["-P", &parent.to_string()])
+            .output()
+            .await
+        else {
+            break;
+        };
+        for child in String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.trim().parse::<u32>().ok())
+        {
+            found.push(child);
+            parents.push(child);
+        }
+    }
+    found.reverse();
+    found
+}
+
+#[cfg(not(unix))]
+async fn descendants_of(_pid: u32) -> Vec<u32> {
+    Vec::new()
+}
+
+#[cfg(unix)]
+async fn kill_processes(pids: &[u32]) {
+    for pid in pids {
+        let _ = tokio::process::Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .output()
+            .await;
+    }
+}
+
+#[cfg(not(unix))]
+async fn kill_processes(_pids: &[u32]) {}
 
 /// Build the program + args for an interactive debug shell, optionally
 /// writing a per-shell rc file into `cred_dir` so the prompt makes it
@@ -1787,6 +1859,56 @@ mod tests {
             .await
             .expect("stdin EOF must not cancel the remote command");
         server.await.expect("server task should finish");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn closing_the_tunnel_ends_the_commands_the_shell_is_running() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let pid_file = dir.path().join("sleeper.pid");
+        let script = format!(
+            "sleep 300 & echo $! > {}; wait",
+            pid_file.to_str().expect("utf8 path")
+        );
+        let (closed_tx, closed_rx) = tokio::sync::watch::channel(false);
+        let cred_dir = tempfile::tempdir().expect("cred dir");
+        let session_kind = SessionKind {
+            mode: SessionMode::Push,
+            provider: None,
+        };
+        let command = args(&["sh", "-c", &script]);
+        let env = BTreeMap::new();
+        let run = spawn_child(
+            "acme/prod",
+            &session_kind,
+            None,
+            &cred_dir,
+            &command,
+            &env,
+            Some(closed_rx),
+        );
+        let close_once_running = async {
+            let sleeper_pid = loop {
+                if let Ok(text) = std::fs::read_to_string(&pid_file) {
+                    if let Ok(pid) = text.trim().parse::<u32>() {
+                        break pid;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            };
+            closed_tx.send(true).expect("receiver is alive");
+            sleeper_pid
+        };
+        let (exit, sleeper_pid) = tokio::join!(run, close_once_running);
+        exit.expect("child exit is reported");
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let alive = std::process::Command::new("kill")
+            .args(["-0", &sleeper_pid.to_string()])
+            .output()
+            .expect("kill runs")
+            .status
+            .success();
+        assert!(!alive, "the command the shell was running must end with it");
     }
 
     fn args(words: &[&str]) -> Vec<String> {

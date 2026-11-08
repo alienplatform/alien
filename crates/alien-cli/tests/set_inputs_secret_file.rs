@@ -4,7 +4,7 @@
 //! line breaks included, so a PEM certificate and key arrive intact.
 
 use httpmock::{
-    Method::{GET, PATCH},
+    Method::{GET, PATCH, POST},
     Mock, MockServer,
 };
 use serde_json::{json, Value};
@@ -136,6 +136,16 @@ fn mock_api(api: &MockServer) -> Mock<'_> {
         when.method(GET)
             .path(format!("/v1/deployments/{DEPLOYMENT_ID}/inputs"));
         then.status(200).json_body(inputs());
+    });
+    api.mock(|when, then| {
+        when.method(POST)
+            .path(format!("/v1/deployments/{DEPLOYMENT_ID}/secret-access"));
+        then.status(409).json_body(json!({
+            "code": "SECRET_VALUES_NOT_SERVED_BY_INSTANCE",
+            "message": "Send its secret values to the Platform API.",
+            "retryable": false,
+            "internal": false
+        }));
     });
     let save = api.mock(|when, then| {
         when.method(PATCH)

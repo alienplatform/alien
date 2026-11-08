@@ -1,11 +1,9 @@
-mod iam_policy;
-
 use alien_core::PermissionSet;
 use alien_permissions::{
     generators::{AwsIamStatement, AwsRuntimePermissionsGenerator},
+    iam_policy::{evaluate, Decision, Request},
     BindingTarget, PermissionContext,
 };
-use iam_policy::{evaluate, Decision, Request};
 use serde_json::{json, Value};
 
 // Compile fixtures through the real permission compiler, so these checks exercise

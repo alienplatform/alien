@@ -88,7 +88,7 @@ def check_splice(suite, audience, subject, proxy, origin, docker, prefix):
                     fields = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if fields.get("event") == "close" and fields.get("port") == 2222:
+                if fields.get("connectionEvent") == "close" and fields.get("port") == 2222:
                     records.append(fields)
             if records:
                 record = records[-1]

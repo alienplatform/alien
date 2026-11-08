@@ -489,7 +489,8 @@
             "autoscaling:UpdateAutoScalingGroup",
             "autoscaling:SetDesiredCapacity",
             "autoscaling:StartInstanceRefresh",
-            "autoscaling:TerminateInstanceInAutoScalingGroup"
+            "autoscaling:TerminateInstanceInAutoScalingGroup",
+            "autoscaling:SuspendProcesses"
           ]
         },
         "binding": {
@@ -568,7 +569,8 @@
           "actions": [
             "autoscaling:DeleteAutoScalingGroup",
             "autoscaling:SetDesiredCapacity",
-            "autoscaling:TerminateInstanceInAutoScalingGroup"
+            "autoscaling:TerminateInstanceInAutoScalingGroup",
+            "autoscaling:SuspendProcesses"
           ]
         },
         "binding": {

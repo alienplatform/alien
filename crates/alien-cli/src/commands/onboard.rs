@@ -1,6 +1,7 @@
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::output::{can_prompt, print_json, prompt_line, prompt_text};
+use crate::secret_values::{seal_environment_variables, seal_input_values, SecretValuesTarget};
 use crate::ui::{accent, command, contextual_heading, dim_label, success_line, FixedSteps};
 use alien_cli_common::SetupItem;
 use alien_core::{
@@ -206,7 +207,13 @@ async fn onboard_platform(mut args: OnboardArgs, ctx: ExecutionMode, name: Strin
     validate_setup_items(&args.setup_items, &available_setup.items)?;
     let includes_application = args.setup_items.contains(&SetupItem::Application);
     let release_inputs = if includes_application {
-        fetch_active_release_stack_inputs(&client, workspace.query.as_deref(), &project_id).await?
+        fetch_active_release_stack_inputs(
+            &client,
+            workspace.query.as_deref(),
+            &project_id,
+            "production",
+        )
+        .await?
     } else {
         ActiveReleaseStackInputs {
             supported_platforms: available_setup.supported_platforms,
@@ -234,6 +241,38 @@ async fn onboard_platform(mut args: OnboardArgs, ctx: ExecutionMode, name: Strin
         &selected_platforms,
         args.json,
     )?;
+    // Secret values for a manager that encrypts them go to the manager first;
+    // the setup link stores only its ciphertext.
+    let platform_names: Vec<String> = selected_platforms
+        .iter()
+        .map(|platform| platform.as_str().to_string())
+        .collect();
+    let secret_input_ids: Vec<String> = developer_inputs
+        .iter()
+        .filter(|input| input.kind == StackInputKind::Secret)
+        .map(|input| input.id.clone())
+        .collect();
+    let stack_input_values = sealed_stack_input_values(
+        &client,
+        workspace.query.as_deref(),
+        SecretValuesTarget::Project {
+            id_or_name: &project_id,
+            platforms: &platform_names,
+        },
+        stack_input_values,
+        &secret_input_ids,
+    )
+    .await?;
+    let setup_environment_variables = seal_environment_variables(
+        &client,
+        workspace.query.as_deref(),
+        SecretValuesTarget::Project {
+            id_or_name: &project_id,
+            platforms: &platform_names,
+        },
+        setup_environment_variables,
+    )
+    .await?;
     let public_subdomain = args
         .subdomain
         .as_deref()
@@ -430,9 +469,9 @@ async fn onboard_platform(mut args: OnboardArgs, ctx: ExecutionMode, name: Strin
     Ok(())
 }
 
-struct ActiveReleaseStackInputs {
-    supported_platforms: Vec<Platform>,
-    inputs_by_platform: Vec<(Platform, Vec<StackInputDefinition>)>,
+pub(crate) struct ActiveReleaseStackInputs {
+    pub(crate) supported_platforms: Vec<Platform>,
+    pub(crate) inputs_by_platform: Vec<(Platform, Vec<StackInputDefinition>)>,
 }
 
 #[cfg(feature = "platform")]
@@ -683,11 +722,11 @@ fn platform_to_setup_policy_platform(
     }
 }
 
-#[cfg(feature = "platform")]
-async fn fetch_active_release_stack_inputs(
+pub(crate) async fn fetch_active_release_stack_inputs(
     client: &alien_platform_api::Client,
     workspace_query: Option<&str>,
     project_id: &str,
+    channel: &str,
 ) -> Result<ActiveReleaseStackInputs> {
     use alien_platform_api::SdkResultExt;
 
@@ -698,6 +737,7 @@ async fn fetch_active_release_stack_inputs(
 
     let releases = request
         .project(project_id)
+        .channel(channel)
         .limit(std::num::NonZeroU64::new(1).expect("1 is non-zero"))
         .send()
         .await
@@ -1000,6 +1040,30 @@ fn stack_input_json_value(input: &StackInputDefinition, value: &str) -> Result<s
             field: input.id.clone(),
             message: format!("{} could not be encoded", input.label),
         })
+}
+
+/// [`seal_input_values`] for the typed input map of a setup link.
+async fn sealed_stack_input_values(
+    client: &alien_platform_api::Client,
+    workspace: Option<&str>,
+    target: SecretValuesTarget<'_>,
+    values: alien_platform_api::types::StackInputValuesRequest,
+    secret_input_ids: &[String],
+) -> Result<alien_platform_api::types::StackInputValuesRequest> {
+    let conversion = || ErrorData::JsonError {
+        operation: "convert".to_string(),
+        reason: "stack input values".to_string(),
+    };
+    let raw: std::collections::HashMap<String, serde_json::Value> = serde_json::to_value(&values)
+        .and_then(serde_json::from_value)
+        .into_alien_error()
+        .context(conversion())?;
+    let sealed =
+        seal_input_values(client, workspace, target, &raw, secret_input_ids, false).await?;
+    serde_json::to_value(sealed)
+        .and_then(serde_json::from_value)
+        .into_alien_error()
+        .context(conversion())
 }
 
 fn collect_stack_input_values(

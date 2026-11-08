@@ -1640,6 +1640,19 @@ async fn invalid_resource_prefix_returns_400() {
 }
 
 /// Build a Stack whose second storage is gated on a declared deployer boolean.
+/// Two stores behind one gate, as a release with a dependent pair of resources has it.
+fn stack_with_two_gated_stores() -> Stack {
+    let mut stack = stack_with_gated_storage("assets", "extras");
+    let replica = stack_with_gated_storage("assets", "extras-replica")
+        .resources
+        .remove("extras-replica")
+        .unwrap();
+    stack
+        .resources
+        .insert("extras-replica".to_string(), replica);
+    stack
+}
+
 fn stack_with_gated_storage(ungated_id: &str, gated_id: &str) -> Stack {
     Stack::new("imported".to_string())
         .inputs(vec![alien_core::StackInputDefinition::deployer_boolean(
@@ -2344,7 +2357,7 @@ async fn an_import_carrying_a_deployer_secret_value_is_refused() {
 /// The recorded answers must survive such a write — a decline especially,
 /// since nothing in the settled state can prove one after the fact.
 #[tokio::test]
-async fn a_state_write_back_without_the_answer_map_does_not_erase_the_record() {
+async fn a_write_back_without_the_answer_map_keeps_the_record_and_import_can_turn_it_on() {
     let fixture = make_fixture(Some(stack_with_gated_storage("assets", "extras"))).await;
 
     // The template omitted the gated store: a decline, recorded at import.
@@ -2514,19 +2527,369 @@ async fn a_state_write_back_without_the_answer_map_does_not_erase_the_record() {
         "an agent report without the map must not erase the recorded decline"
     );
 
-    // The record still enforces: delivering the store now flips the answer.
+    // Setup delivering the store now is an explicit yes: a recorded decline
+    // becomes a yes, and the new answer is what later updates are held to.
     let accepting = aws_two_store_import_request("acme-prod", "us-east-1", "assets", "extras");
     let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &accepting).await;
     assert_eq!(
         status,
-        StatusCode::BAD_REQUEST,
-        "a frozen gate is answered once; body = {json:#}"
+        StatusCode::OK,
+        "setup may turn a recorded decline into a yes; body = {json:#}"
     );
     assert_eq!(
-        json.get("code").and_then(|code| code.as_str()),
-        Some("FROZEN_GATE_ANSWER_CHANGED"),
-        "body = {json:#}"
+        read_persisted()
+            .await
+            .runtime_metadata
+            .as_ref()
+            .expect("runtime_metadata must be persisted")
+            .persisted_gate_answers
+            .get("extrasEnabled"),
+        Some(&true),
+        "the new answer is recorded"
     );
+}
+
+/// A declined-gate deployment, imported by setup and then stored as a direct setup deployment,
+/// as the reconcile route sees it.
+struct DeclinedGateDeployment {
+    fixture: Fixture,
+    deployment_id: String,
+    deployment_token: String,
+    persisted: alien_manager::traits::DeploymentRecord,
+    stack: Stack,
+}
+
+impl DeclinedGateDeployment {
+    async fn import() -> Self {
+        Self::import_stack(stack_with_gated_storage("assets", "extras")).await
+    }
+
+    async fn import_stack(stack: Stack) -> Self {
+        let fixture = make_fixture(Some(stack.clone())).await;
+        let declined = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &declined).await;
+        assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+        let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
+        let persisted = fixture
+            .deployment_store
+            .get_deployment(
+                &alien_manager::auth::Subject::system(),
+                &parsed.deployment_id,
+            )
+            .await
+            .unwrap()
+            .expect("deployment must persist");
+        let this = Self {
+            deployment_token: parsed.deployment_token.expect("deployment token"),
+            deployment_id: parsed.deployment_id,
+            persisted,
+            stack,
+            fixture,
+        };
+        assert_eq!(this.answer().await, Some(false));
+        this
+    }
+
+    async fn answer(&self) -> Option<bool> {
+        self.fixture
+            .deployment_store
+            .get_deployment(&alien_manager::auth::Subject::system(), &self.deployment_id)
+            .await
+            .unwrap()
+            .expect("deployment must persist")
+            .runtime_metadata
+            .expect("runtime_metadata must be persisted")
+            .persisted_gate_answers
+            .get("extrasEnabled")
+            .copied()
+    }
+
+    /// Store the deployment as a direct setup one and lock it for session `setup-run`.
+    async fn lock(&self, mode: alien_manager::traits::DeploymentAcquireMode) {
+        let mut stored_metadata = self.persisted.runtime_metadata.clone().unwrap();
+        stored_metadata.initial_setup_authority = alien_core::InitialSetupAuthority::DirectSetup;
+        self.fixture
+            .deployment_store
+            .reconcile(
+                &alien_manager::auth::Subject::system(),
+                ReconcileData {
+                    deployment_id: self.deployment_id.clone(),
+                    session: "setup-run".to_string(),
+                    execution_claim: None,
+                    state: self.state(
+                        DeploymentStatus::Running,
+                        stored_metadata,
+                        self.persisted.stack_state.clone(),
+                    ),
+                    update_heartbeat: false,
+                    suggested_delay_ms: None,
+                    heartbeats: vec![],
+                    observed_inventory_batches: vec![],
+                    capabilities: vec![],
+                    operator_version: None,
+                    operations_report: None,
+                },
+            )
+            .await
+            .expect("stored record becomes a direct setup deployment");
+        let acquired = self
+            .fixture
+            .deployment_store
+            .acquire(
+                &alien_manager::auth::Subject::system(),
+                "setup-run",
+                &alien_manager::traits::DeploymentFilter {
+                    deployment_ids: Some(vec![self.deployment_id.clone()]),
+                    statuses: Some(vec!["running".to_string()]),
+                    acquire_mode: Some(mode),
+                    ..Default::default()
+                },
+                1,
+            )
+            .await
+            .expect("the deployment is acquired");
+        assert_eq!(acquired.len(), 1, "the session holds the lock");
+    }
+
+    fn state(
+        &self,
+        status: DeploymentStatus,
+        metadata: RuntimeMetadata,
+        stack_state: Option<StackState>,
+    ) -> DeploymentState {
+        DeploymentState {
+            status,
+            platform: self.persisted.platform,
+            current_release: Some(ReleaseInfo {
+                release_id: self.fixture.release_id.clone(),
+                version: None,
+                description: None,
+                stack: self.stack.clone(),
+            }),
+            target_release: None,
+            stack_state,
+            error: None,
+            environment_info: self.persisted.environment_info.clone(),
+            runtime_metadata: Some(metadata),
+            retry_requested: false,
+            protocol_version: self.persisted.deployment_protocol_version,
+        }
+    }
+
+    /// Report the gate answered yes with direct setup authority. `listed` puts the gated stores
+    /// in the prepared stack; `delivered` names the stores the stack state shows as installed.
+    /// Returns the state the manager answers with.
+    async fn report(
+        &self,
+        token: &str,
+        status: DeploymentStatus,
+        listed: bool,
+        delivered: &[&str],
+    ) -> serde_json::Value {
+        let mut metadata = self.persisted.runtime_metadata.clone().unwrap();
+        metadata
+            .persisted_gate_answers
+            .insert("extrasEnabled".to_string(), true);
+        metadata.initial_setup_authority = alien_core::InitialSetupAuthority::DirectSetup;
+        if listed {
+            metadata.prepared_stack = Some(self.stack.clone());
+        }
+        let mut stack_state = self.persisted.stack_state.clone();
+        for id in delivered {
+            let state = stack_state.as_mut().unwrap();
+            let installed = state.resources["assets"].clone();
+            state.resources.insert(id.to_string(), installed);
+        }
+        let body = serde_json::json!({
+            "deploymentId": self.deployment_id,
+            "session": "setup-run",
+            "state": serde_json::to_value(self.state(status, metadata, stack_state)).unwrap(),
+        });
+        let (status, json) = post_sync(&self.fixture, token, "/v1/sync/reconcile", body).await;
+        assert_eq!(status, StatusCode::OK, "body = {json:#}");
+        json["current"].clone()
+    }
+}
+
+/// A report claiming a setup run through its own fields, for a stored record that is not in
+/// setup, saves nothing.
+#[tokio::test]
+async fn a_forged_setup_report_cannot_turn_a_recorded_decline_into_a_yes() {
+    let env = DeclinedGateDeployment::import().await;
+    assert_eq!(
+        env.persisted
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .initial_setup_authority,
+        alien_core::InitialSetupAuthority::ImportedHandoff
+    );
+    let token = env.fixture.dg_token.clone();
+    for (listed, delivered) in [(false, &[][..]), (true, &[][..]), (true, &["extras"][..])] {
+        env.report(&token, DeploymentStatus::InitialSetup, listed, delivered)
+            .await;
+        assert_eq!(env.answer().await, Some(false), "{listed} {delivered:?}");
+    }
+}
+
+/// Holding the lock in runtime mode and listing the gated store in the prepared stack is not
+/// a setup run: only a store the report shows as installed is.
+#[tokio::test]
+async fn a_runtime_lock_holder_cannot_turn_a_recorded_decline_into_a_yes() {
+    let env = DeclinedGateDeployment::import().await;
+    env.lock(alien_manager::traits::DeploymentAcquireMode::Runtime)
+        .await;
+    let token = env.fixture.dg_token.clone();
+    env.report(&token, DeploymentStatus::InitialSetup, true, &[])
+        .await;
+    assert_eq!(env.answer().await, Some(false));
+}
+
+/// The stored setup run's report saves the yes once the store is delivered, and not before.
+#[tokio::test]
+async fn a_setup_run_report_with_the_store_delivered_turns_a_recorded_decline_into_a_yes() {
+    let env = DeclinedGateDeployment::import().await;
+    env.lock(alien_manager::traits::DeploymentAcquireMode::SetupRun)
+        .await;
+    let token = env.fixture.dg_token.clone();
+
+    // The prepared stack lists the store but nothing is installed yet.
+    env.report(&token, DeploymentStatus::InitialSetup, true, &[])
+        .await;
+    assert_eq!(env.answer().await, Some(false));
+
+    // Delivered, but reported as a running deployment rather than a setup handoff.
+    env.report(&token, DeploymentStatus::Running, true, &["extras"])
+        .await;
+    assert_eq!(env.answer().await, Some(false));
+
+    // The deployment's own token cannot.
+    env.report(
+        &env.deployment_token.clone(),
+        DeploymentStatus::InitialSetup,
+        true,
+        &["extras"],
+    )
+    .await;
+    assert_eq!(env.answer().await, Some(false));
+
+    // The setup handoff with the store delivered is saved.
+    env.report(&token, DeploymentStatus::InitialSetup, true, &["extras"])
+        .await;
+    assert_eq!(env.answer().await, Some(true));
+}
+
+fn returned_answer(state: &serde_json::Value) -> Option<bool> {
+    state["runtimeMetadata"]["persistedGateAnswers"]["extrasEnabled"].as_bool()
+}
+
+/// Two stores behind one gate cannot both show as delivered at the first checkpoint. The
+/// stored answer waits for both, while the state handed back keeps the setup run's choice so
+/// it goes on creating the second store.
+#[tokio::test]
+async fn a_setup_yes_is_stored_when_the_last_gated_store_is_delivered() {
+    let env = DeclinedGateDeployment::import_stack(stack_with_two_gated_stores()).await;
+    env.lock(alien_manager::traits::DeploymentAcquireMode::SetupRun)
+        .await;
+    let token = env.fixture.dg_token.clone();
+
+    let first = env
+        .report(&token, DeploymentStatus::InitialSetup, true, &["extras"])
+        .await;
+    assert_eq!(env.answer().await, Some(false), "one of two is not enough");
+    assert_eq!(
+        returned_answer(&first),
+        Some(true),
+        "the run keeps its choice"
+    );
+
+    // What the runner sends next carries the returned choice; nothing in it counts as proof.
+    let second = env
+        .report(
+            &token,
+            DeploymentStatus::InitialSetup,
+            true,
+            &["extras", "extras-replica"],
+        )
+        .await;
+    assert_eq!(env.answer().await, Some(true));
+    assert_eq!(returned_answer(&second), Some(true));
+
+    // A later update asking for the same answer is held to the stored one without complaint.
+    let stored = env
+        .fixture
+        .deployment_store
+        .get_deployment(&alien_manager::auth::Subject::system(), &env.deployment_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .runtime_metadata
+        .unwrap()
+        .persisted_gate_answers;
+    alien_deployment::enforce_frozen_gate_fixity(alien_deployment::FrozenGateFixityCheck {
+        persisted: &stored,
+        stack: &env.stack,
+        still_frozen_gating: &alien_deployment::frozen_gating_inputs(&env.stack, Platform::Aws),
+        existing_resource_ids: &Default::default(),
+        input_values: &HashMap::from([("extrasEnabled".to_string(), serde_json::json!(true))]),
+    })
+    .expect("a later update asking for true is not a changed answer");
+}
+
+/// A partial delivery never stores the yes, whoever reports next.
+#[tokio::test]
+async fn a_partly_delivered_setup_yes_stays_declined_for_other_callers() {
+    let env = DeclinedGateDeployment::import_stack(stack_with_two_gated_stores()).await;
+    env.lock(alien_manager::traits::DeploymentAcquireMode::SetupRun)
+        .await;
+    let token = env.fixture.dg_token.clone();
+    env.report(&token, DeploymentStatus::InitialSetup, true, &["extras"])
+        .await;
+    assert_eq!(env.answer().await, Some(false));
+
+    // The deployment's own token reports everything delivered.
+    let own = env
+        .report(
+            &env.deployment_token.clone(),
+            DeploymentStatus::InitialSetup,
+            true,
+            &["extras", "extras-replica"],
+        )
+        .await;
+    assert_eq!(env.answer().await, Some(false));
+    assert_eq!(
+        returned_answer(&own),
+        Some(false),
+        "no choice is handed back"
+    );
+
+    // A caller without the lock does the same.
+    let other = {
+        let mut body_state = env.persisted.runtime_metadata.clone().unwrap();
+        body_state
+            .persisted_gate_answers
+            .insert("extrasEnabled".to_string(), true);
+        body_state.initial_setup_authority = alien_core::InitialSetupAuthority::DirectSetup;
+        let mut stack_state = env.persisted.stack_state.clone();
+        for id in ["extras", "extras-replica"] {
+            let state = stack_state.as_mut().unwrap();
+            let installed = state.resources["assets"].clone();
+            state.resources.insert(id.to_string(), installed);
+        }
+        serde_json::json!({
+            "deploymentId": env.deployment_id,
+            "session": "someone-else",
+            "state": serde_json::to_value(env.state(
+                DeploymentStatus::InitialSetup,
+                body_state,
+                stack_state,
+            )).unwrap(),
+        })
+    };
+    let (status, json) = post_sync(&env.fixture, &token, "/v1/sync/reconcile", other).await;
+    assert_eq!(status, StatusCode::OK, "body = {json:#}");
+    assert_eq!(env.answer().await, Some(false));
+    assert_eq!(returned_answer(&json["current"]), Some(false));
 }
 
 fn stack_with_storage_and_generated_secret(resource_id: &str) -> Stack {
