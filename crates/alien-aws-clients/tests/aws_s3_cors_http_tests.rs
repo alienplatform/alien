@@ -55,21 +55,85 @@ async fn read_cors_is_signed_checksummed_escaped_and_removable() {
         .await;
     let client = client(&server);
     client
-        .set_bucket_read_cors(
+        .set_bucket_cors(
             "test-bucket",
             &[
                 "https://app.example.com".into(),
                 "https://preview.example.com?a=1&b=2".into(),
             ],
+            &[],
         )
         .await
         .unwrap();
     client
-        .set_bucket_read_cors("test-bucket", &[])
+        .set_bucket_cors("test-bucket", &[], &[])
         .await
         .unwrap();
     put.assert_async().await;
     delete.assert_async().await;
+}
+
+#[tokio::test]
+async fn upload_cors_adds_a_signed_put_rule_after_the_read_rule() {
+    let read_and_upload = concat!(
+        "<CORSConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">",
+        "<CORSRule><AllowedOrigin>https://app.example.com</AllowedOrigin>",
+        "<AllowedMethod>GET</AllowedMethod><AllowedMethod>HEAD</AllowedMethod>",
+        "<AllowedHeader>*</AllowedHeader><ExposeHeader>ETag</ExposeHeader>",
+        "<ExposeHeader>Content-Range</ExposeHeader><ExposeHeader>Accept-Ranges</ExposeHeader>",
+        "<MaxAgeSeconds>3600</MaxAgeSeconds></CORSRule>",
+        "<CORSRule><AllowedOrigin>https://upload.example.com</AllowedOrigin>",
+        "<AllowedMethod>PUT</AllowedMethod><AllowedHeader>Content-Type</AllowedHeader>",
+        "<AllowedHeader>Content-MD5</AllowedHeader><AllowedHeader>x-amz-checksum-*</AllowedHeader>",
+        "<AllowedHeader>x-amz-sdk-checksum-algorithm</AllowedHeader>",
+        "<ExposeHeader>ETag</ExposeHeader><MaxAgeSeconds>3600</MaxAgeSeconds></CORSRule>",
+        "</CORSConfiguration>"
+    );
+    let upload_only = concat!(
+        "<CORSConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">",
+        "<CORSRule><AllowedOrigin>*</AllowedOrigin>",
+        "<AllowedMethod>PUT</AllowedMethod><AllowedHeader>Content-Type</AllowedHeader>",
+        "<AllowedHeader>Content-MD5</AllowedHeader><AllowedHeader>x-amz-checksum-*</AllowedHeader>",
+        "<AllowedHeader>x-amz-sdk-checksum-algorithm</AllowedHeader>",
+        "<ExposeHeader>ETag</ExposeHeader><MaxAgeSeconds>3600</MaxAgeSeconds></CORSRule>",
+        "</CORSConfiguration>"
+    );
+    let server = MockServer::start_async().await;
+    let mut mocks = Vec::new();
+    for body in [read_and_upload, upload_only] {
+        mocks.push(
+            server
+                .mock_async(|when, then| {
+                    when.method(PUT)
+                        .path("/test-bucket")
+                        .query_param("cors", "")
+                        .header_exists("authorization")
+                        .header(
+                            "content-md5",
+                            STANDARD.encode(md5::compute(body.as_bytes()).as_ref()),
+                        )
+                        .body(body);
+                    then.status(200);
+                })
+                .await,
+        );
+    }
+    let client = client(&server);
+    client
+        .set_bucket_cors(
+            "test-bucket",
+            &["https://app.example.com".into()],
+            &["https://upload.example.com".into()],
+        )
+        .await
+        .unwrap();
+    client
+        .set_bucket_cors("test-bucket", &[], &["*".into()])
+        .await
+        .unwrap();
+    for mock in mocks {
+        mock.assert_async().await;
+    }
 }
 
 #[tokio::test]
@@ -90,7 +154,7 @@ async fn cors_failures_are_single_attempt_and_not_success() {
                 })
                 .await;
             let error = client(&server)
-                .set_bucket_read_cors("test-bucket", &origins)
+                .set_bucket_cors("test-bucket", &origins, &[])
                 .await
                 .unwrap_err();
             match status {
@@ -112,8 +176,9 @@ async fn cors_failures_are_single_attempt_and_not_success() {
 
 /// The fixture owner creates and tags one disposable bucket and independently verifies
 /// browser responses after this call. It must erase the bucket on success and failure.
-/// The JSON fixture contains `bucket`, `config` (AwsClientConfig) and `origins`; keep it
-/// private because config contains credentials. An empty origins array clears CORS.
+/// The JSON fixture contains `bucket`, `config` (AwsClientConfig), `origins` and optionally
+/// `uploadOrigins`; keep it private because config contains credentials. Empty origin arrays
+/// clear CORS.
 /// `aws_s3_cors_live.py` supplies the fixture, verifies browser responses and cleans up;
 /// see `aws_s3_cors_live.md` for the complete command and credential boundary.
 #[tokio::test]
@@ -124,6 +189,8 @@ async fn apply_read_cors_to_owned_test_bucket() {
         bucket: String,
         config: AwsClientConfig,
         origins: Vec<String>,
+        #[serde(default, rename = "uploadOrigins")]
+        upload_origins: Vec<String>,
         #[serde(default, rename = "caBundleFile")]
         ca_bundle_file: Option<std::path::PathBuf>,
     }
@@ -152,7 +219,7 @@ async fn apply_read_cors_to_owned_test_bucket() {
     let tags = client.get_bucket_tagging(&fixture.bucket).await.unwrap();
     assert_eq!(tags.get("cors-test-bucket"), Some(&fixture.bucket));
     client
-        .set_bucket_read_cors(&fixture.bucket, &fixture.origins)
+        .set_bucket_cors(&fixture.bucket, &fixture.origins, &fixture.upload_origins)
         .await
         .unwrap();
 }

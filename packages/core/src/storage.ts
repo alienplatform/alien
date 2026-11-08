@@ -105,6 +105,20 @@ export class Storage extends ResourceBuilder {
   }
 
   /**
+   * Allows browser uploads from the listed origins through signed `PUT` URLs.
+   * Providers enable `PUT` with the headers their signed uploads send
+   * (such as `Content-Type`, `x-amz-checksum-*` and `x-ms-blob-type`) and expose `ETag`.
+   * Each origin is `*` or `scheme://host[:port]`; AWS also accepts one `*` wildcard,
+   * such as `https://*.example.com`.
+   * @param origins Allowed browser origins.
+   * @returns The Storage builder instance.
+   */
+  public corsUploadOrigins(origins: string[]): this {
+    this._config.corsUploadOrigins = origins
+    return this
+  }
+
+  /**
    * Delivers matching object creation events into a Queue in the same stack.
    * Prefix and suffix are literal and case sensitive. Rules on one Storage must not
    * overlap (no key may match two of them); delivery is at least once. Storage and Queue

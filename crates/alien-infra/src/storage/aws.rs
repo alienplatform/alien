@@ -18,12 +18,12 @@ use alien_aws_clients::s3::{
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    standard_resource_tags, AwsS3StorageHeartbeatData, HeartbeatBackend,
-    HeartbeatCollectionIssue, HeartbeatCollectionIssueReason, HeartbeatIssueSeverity,
-    ObservedHealth, Platform,
+    standard_resource_tags, AwsS3StorageHeartbeatData, HeartbeatBackend, HeartbeatCollectionIssue,
+    HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus, Storage, StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
-    AWS_ABORT_INCOMPLETE_UPLOAD_DAYS, AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID, AWS_LIFECYCLE_RULE_LIMIT,
+    AWS_ABORT_INCOMPLETE_UPLOAD_DAYS, AWS_ABORT_INCOMPLETE_UPLOAD_RULE_ID,
+    AWS_LIFECYCLE_RULE_LIMIT,
 };
 use alien_error::{Context, IntoAlienError};
 use alien_macros::controller;
@@ -366,8 +366,8 @@ pub struct AwsStorageController {
     /// region or another account.
     #[serde(default)]
     pub(crate) ownership_verified: bool,
-    /// S3 acknowledged the browser-read CORS operation. Old checkpoints and imports
-    /// do not prove that an unchanged declaration was applied.
+    /// S3 acknowledged the browser CORS operation (read and signed-upload rules). Old
+    /// checkpoints and imports do not prove that an unchanged declaration was applied.
     #[serde(default)]
     pub(crate) read_cors_applied: bool,
     /// Records notification ownership across rule removal and interrupted updates.
@@ -671,8 +671,8 @@ impl AwsStorageController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Storage>()?;
-        if !config.cors_allowed_origins.is_empty() {
-            self.apply_read_cors(ctx).await?;
+        if config.has_cors() {
+            self.apply_cors(ctx).await?;
         }
         Ok(HandlerAction::Continue {
             state: ApplyingResourcePermissions,
@@ -872,7 +872,7 @@ impl AwsStorageController {
         self.notifications_managed |=
             !config.notifications.is_empty() || !prev_config.notifications.is_empty();
 
-        if config.cors_allowed_origins != prev_config.cors_allowed_origins {
+        if cors_changed(&config, &prev_config) {
             self.require_cors_authority(ctx)?;
         }
 
@@ -1084,12 +1084,9 @@ impl AwsStorageController {
             .get(&config.id)
             .and_then(|resource| resource.previous_config.as_ref())
             .is_none()
-            || config.cors_allowed_origins
-                != ctx
-                    .previous_resource_config::<Storage>()?
-                    .cors_allowed_origins;
+            || cors_changed(&config, ctx.previous_resource_config::<Storage>()?);
         if changed {
-            self.apply_read_cors(ctx).await?;
+            self.apply_cors(ctx).await?;
         }
         Ok(HandlerAction::Continue {
             state: UpdatingResourcePermissions,
@@ -1653,7 +1650,7 @@ impl AwsStorageController {
         Ok(())
     }
 
-    async fn apply_read_cors(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+    async fn apply_cors(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
         self.require_cors_authority(ctx)?;
         let config = ctx.desired_resource_config::<Storage>()?;
         let bucket = self.bucket_name.as_deref().ok_or_else(|| {
@@ -1663,9 +1660,9 @@ impl AwsStorageController {
             })
         })?;
         ctx.service_provider.get_aws_s3_client(ctx.get_aws_config()?).await?
-            .set_bucket_read_cors(bucket, &config.cors_allowed_origins).await
+            .set_bucket_cors(bucket, &config.cors_allowed_origins, &config.cors_upload_origins).await
             .context(ErrorData::CloudPlatformError {
-                resource_id: Some(config.id.clone()), message: format!("Failed to configure browser-read CORS for bucket '{bucket}'; a setup update is needed to grant s3:PutBucketCORS before changing CORS"),
+                resource_id: Some(config.id.clone()), message: format!("Failed to configure browser CORS for bucket '{bucket}'; a setup update is needed to grant s3:PutBucketCORS before changing CORS"),
             })?;
         self.read_cors_applied = true;
         Ok(())
@@ -1686,6 +1683,12 @@ impl AwsStorageController {
             _internal_stay_count: None,
         }
     }
+}
+
+/// Whether the browser CORS declaration (read or signed-upload origins) changed.
+fn cors_changed(config: &Storage, previous: &Storage) -> bool {
+    config.cors_allowed_origins != previous.cors_allowed_origins
+        || config.cors_upload_origins != previous.cors_upload_origins
 }
 
 #[cfg(test)]
@@ -1716,9 +1719,8 @@ mod tests {
         DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, HeartbeatCollectionIssue,
         HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, InitialSetupAuthority,
         LifecycleRule as AlienLifecycleRule, Platform, Resource, ResourceHeartbeatData,
-        ResourceLifecycle, ResourceStatus, StorageHeartbeatData,
-        Stack, StackResourceState, StackSettings, StackState, Storage, StorageOutputs,
-        AWS_LIFECYCLE_RULE_LIMIT,
+        ResourceLifecycle, ResourceStatus, Stack, StackResourceState, StackSettings, StackState,
+        Storage, StorageHeartbeatData, StorageOutputs, AWS_LIFECYCLE_RULE_LIMIT,
     };
     use alien_error::AlienError;
     use httpmock::{Method::PUT, MockServer};
@@ -2583,16 +2585,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upload_origins_alone_configure_cors_and_only_their_changes_reapply_it() {
+        let account = Arc::new(Mutex::new(None));
+        let calls = Arc::new(Mutex::new(Vec::<(Vec<String>, Vec<String>)>::new()));
+        let mut client = fake_s3(account.clone(), Fault::None);
+        let observed = calls.clone();
+        client
+            .expect_set_bucket_cors()
+            .times(2)
+            .returning(move |bucket, origins, uploads| {
+                assert_eq!(bucket, "test-uploads");
+                observed
+                    .lock()
+                    .unwrap()
+                    .push((origins.to_vec(), uploads.to_vec()));
+                Ok(())
+            });
+        let mut storage = Storage::new("uploads".into())
+            .cors_upload_origins(vec!["https://one.example".into()])
+            .build();
+        let mut run = SingleControllerExecutor::builder()
+            .resource(storage.clone())
+            .controller(AwsStorageController::default())
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(Arc::new(client)))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(run.status(), ResourceStatus::Running);
+        storage.cors_upload_origins = vec!["https://two.example".into()];
+        run.update(storage.clone()).unwrap();
+        run.run_until_terminal().await.unwrap();
+        run.update(storage).unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(run.status(), ResourceStatus::Running);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [
+                (vec![], vec!["https://one.example".to_string()]),
+                (vec![], vec!["https://two.example".to_string()]),
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn cors_create_replace_clear_and_delete_preserve_bucket_identity() {
         let account = Arc::new(Mutex::new(None));
         let cors = Arc::new(Mutex::new(Vec::<String>::new()));
         let mut client = fake_s3(account.clone(), Fault::None);
         let observed = cors.clone();
         client
-            .expect_set_bucket_read_cors()
+            .expect_set_bucket_cors()
             .times(3)
-            .returning(move |bucket, origins| {
+            .returning(move |bucket, origins, uploads| {
                 assert_eq!(bucket, "test-cors");
+                assert!(uploads.is_empty());
                 *observed.lock().unwrap() = origins.to_vec();
                 Ok(())
             });
@@ -2696,9 +2745,9 @@ mod tests {
             .build();
         let mut client = MockS3Api::new();
         client
-            .expect_set_bucket_read_cors()
+            .expect_set_bucket_cors()
             .times(1)
-            .returning(|bucket, _| {
+            .returning(|bucket, _, _| {
                 Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
                     resource_type: "Bucket".into(),
                     resource_name: bucket.into(),
@@ -2740,10 +2789,11 @@ mod tests {
         let observed = cors.clone();
         let first = Arc::new(Mutex::new(true));
         client
-            .expect_set_bucket_read_cors()
+            .expect_set_bucket_cors()
             .times(2)
-            .returning(move |bucket, origins| {
+            .returning(move |bucket, origins, uploads| {
                 assert_eq!(bucket, "test-cors");
+                assert!(uploads.is_empty());
                 *observed.lock().unwrap() = origins.to_vec();
                 if std::mem::take(&mut *first.lock().unwrap()) {
                     return Err(lost_response());
@@ -3615,7 +3665,9 @@ mod tests {
             .expect_err("the app's rules were not written");
 
         assert!(
-            error.to_string().contains("Failed to configure lifecycle rules"),
+            error
+                .to_string()
+                .contains("Failed to configure lifecycle rules"),
             "{error}"
         );
     }

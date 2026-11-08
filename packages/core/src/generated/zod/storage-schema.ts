@@ -13,6 +13,7 @@ import { StorageNotificationSchema } from "./storage-notification-schema.js";
  */
 export const StorageSchema = z.object({
     "corsAllowedOrigins": z.optional(z.array(z.string()).describe("Browser origins allowed to read objects through signed URLs.\n\nWhen non-empty, providers configure CORS for `GET` and `HEAD` requests.\nAn origin of `*` is appropriate for private buckets whose signed URLs\nare bearer credentials and do not use browser cookies.\nDefault: `[]` (CORS disabled).")),
+"corsUploadOrigins": z.optional(z.array(z.string()).describe("Browser origins allowed to upload objects through signed URLs.\n\nWhen non-empty, providers also configure CORS for `PUT` requests from these origins,\nallow the request headers signed uploads send (the content type, checksums, and on\nAzure `x-ms-blob-type`), and expose `ETag`. Each origin is `*` or an exact origin such\nas `https://app.example.com`, which every provider supports the same way.\nOmitted when empty to preserve existing serialized configurations and setup digests.")),
 get "encryptionKey"(){
                 return z.union([ResourceRefSchema, z.null()]).optional()
               },

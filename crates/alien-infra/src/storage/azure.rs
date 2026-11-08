@@ -8,6 +8,7 @@ use crate::{
 use alien_azure_clients::authorization::Scope;
 use alien_azure_clients::azure::models::blob::{
     BlobContainer, BlobServiceProperties, ContainerProperties, ContainerPropertiesPublicAccess,
+    CorsRules,
 };
 use alien_azure_clients::azure::models::storage::{ManagementPolicyRule, StorageAccount};
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -15,7 +16,8 @@ use alien_core::{
     bindings::StorageBinding, AzureBlobStorageHeartbeatData, HeartbeatBackend,
     InitialSetupAuthority, ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat,
     ResourceHeartbeatData, ResourceLifecycle, ResourceOutputs, ResourceStatus, Storage,
-    StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
+    StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs, AZURE_SIGNED_UPLOAD_HEADERS,
+    SIGNED_UPLOAD_EXPOSED_HEADERS,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -46,6 +48,31 @@ fn azure_permission_scope_and_context(
     let permission_context =
         ResourcePermissionsHelper::build_azure_permission_context(ctx, container_name)?;
     Ok((resource_scope, permission_context))
+}
+
+/// Whether the account's CORS lets a browser on `origin` PUT a blob with a signed URL.
+fn allows_signed_upload(cors: Option<&CorsRules>, origin: &str) -> bool {
+    cors.is_some_and(|cors| {
+        cors.cors_rules.iter().any(|rule| {
+            rule.allowed_origins
+                .iter()
+                .any(|allowed| allowed == origin || allowed == "*")
+                && rule
+                    .allowed_methods
+                    .iter()
+                    .any(|allowed| allowed.to_string() == "PUT")
+                && AZURE_SIGNED_UPLOAD_HEADERS.iter().all(|header| {
+                    rule.allowed_headers
+                        .iter()
+                        .any(|allowed| allowed == "*" || allowed.eq_ignore_ascii_case(header))
+                })
+                && SIGNED_UPLOAD_EXPOSED_HEADERS.iter().all(|header| {
+                    rule.exposed_headers
+                        .iter()
+                        .any(|allowed| allowed == "*" || allowed.eq_ignore_ascii_case(header))
+                })
+        })
+    })
 }
 
 async fn verify_shared_settings(
@@ -84,7 +111,7 @@ async fn verify_shared_settings(
             return Err(setup_required("public blob access"));
         }
     }
-    if config.versioning || !config.cors_allowed_origins.is_empty() {
+    if config.versioning || config.has_cors() {
         let actual = client
             .get_blob_service_properties(&group, &account)
             .await
@@ -123,6 +150,13 @@ async fn verify_shared_settings(
             if !confirmed {
                 return Err(setup_required(
                     "the declared CORS origins, methods and response headers",
+                ));
+            }
+        }
+        for origin in &config.cors_upload_origins {
+            if !allows_signed_upload(properties.cors.as_ref(), origin) {
+                return Err(setup_required(
+                    "signed browser uploads from the declared origins",
                 ));
             }
         }
@@ -1039,7 +1073,7 @@ mod tests {
     };
 
     use alien_azure_clients::models::blob::{
-        BlobContainer, ContainerProperties, ContainerPropertiesPublicAccess,
+        BlobContainer, ContainerProperties, ContainerPropertiesPublicAccess, CorsRules,
     };
     use alien_azure_clients::{
         authorization::{AuthorizationApi, MockAuthorizationApi},
@@ -2177,6 +2211,53 @@ mod tests {
         }
     }
 
+    #[test]
+    fn signed_upload_needs_a_put_rule_with_the_upload_headers_for_the_origin() {
+        let rules = |rule: serde_json::Value| -> CorsRules {
+            serde_json::from_value(serde_json::json!({ "corsRules": [rule] })).unwrap()
+        };
+        let upload = serde_json::json!({
+            "allowedOrigins": ["https://app.example.com"],
+            "allowedMethods": ["PUT"],
+            "allowedHeaders": ["Content-Type", "Content-MD5", "x-ms-blob-type", "x-ms-blob-content-type"],
+            "exposedHeaders": ["ETag"],
+            "maxAgeInSeconds": 3600
+        });
+        let origin = "https://app.example.com";
+        assert!(super::allows_signed_upload(
+            Some(&rules(upload.clone())),
+            origin
+        ));
+        assert!(!super::allows_signed_upload(None, origin));
+        assert!(!super::allows_signed_upload(
+            Some(&rules(upload.clone())),
+            "https://other.example.com"
+        ));
+
+        let mut wildcard = upload.clone();
+        wildcard["allowedOrigins"] = serde_json::json!(["*"]);
+        wildcard["allowedHeaders"] = serde_json::json!(["*"]);
+        assert!(super::allows_signed_upload(Some(&rules(wildcard)), origin));
+
+        let mut read_only = upload.clone();
+        read_only["allowedMethods"] = serde_json::json!(["GET", "HEAD"]);
+        assert!(!super::allows_signed_upload(
+            Some(&rules(read_only)),
+            origin
+        ));
+
+        let mut no_blob_type = upload.clone();
+        no_blob_type["allowedHeaders"] = serde_json::json!(["Content-Type", "Content-MD5"]);
+        assert!(!super::allows_signed_upload(
+            Some(&rules(no_blob_type)),
+            origin
+        ));
+
+        let mut no_etag = upload;
+        no_etag["exposedHeaders"] = serde_json::json!(["Content-Range"]);
+        assert!(!super::allows_signed_upload(Some(&rules(no_etag)), origin));
+    }
+
     #[tokio::test]
     async fn shared_settings_refusal_survives_create_update_and_legacy_ready_checkpoints() {
         for phase in 0..3 {
@@ -2188,6 +2269,7 @@ mod tests {
                 "wrong-expiry",
                 "missing-head",
                 "missing-etag",
+                "upload",
             ] {
                 let mut storage = basic_storage();
                 let mut service = serde_json::json!({"properties":{
@@ -2209,6 +2291,10 @@ mod tests {
                 }]}}});
                 match kind {
                     "versioning" => storage.versioning = true,
+                    // The account only has the read rule, so it can't take signed uploads.
+                    "upload" => {
+                        storage.cors_upload_origins = vec!["https://example.com".into()];
+                    }
                     "cors" | "missing-head" | "missing-etag" => {
                         storage.cors_allowed_origins = vec!["https://example.com".into()];
                         match kind {

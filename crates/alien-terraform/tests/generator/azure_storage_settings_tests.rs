@@ -189,6 +189,116 @@ run "enabled" {{
     }
 }
 
+/// Upload origins add a second account rule, gated like the read rule, and share its
+/// 2 KiB budget.
+#[test]
+fn signed_upload_cors_adds_a_gated_put_rule_within_the_account_budget() {
+    for (case, read, upload, valid) in [
+        (
+            "read_and_upload",
+            vec!["https://app.example.test".to_string()],
+            vec!["https://app.example.test".to_string()],
+            true,
+        ),
+        (
+            "upload_only",
+            vec![],
+            vec!["https://app.example.test".to_string()],
+            true,
+        ),
+        (
+            // Each rule alone fits in 2 KiB; together they don't.
+            "shared_budget",
+            (0..5)
+                .map(|i| format!("https://r{i}{}.example.test", "x".repeat(210)))
+                .collect(),
+            (0..5)
+                .map(|i| format!("https://u{i}{}.example.test", "x".repeat(210)))
+                .collect(),
+            false,
+        ),
+        (
+            "long_upload_origin",
+            vec![],
+            vec![format!("https://{}.example.test", "x".repeat(256))],
+            false,
+        ),
+    ] {
+        let stack = Stack::new("uploads".to_string())
+            .inputs(vec![gate_input("files", "Files", "Enable files")])
+            .add(
+                AzureResourceGroup::new("default-resource-group".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                AzureStorageAccount::new("default-storage-account".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add_enabled_when(
+                Storage::new("files".to_string())
+                    .cors_allowed_origins(read.clone())
+                    .cors_upload_origins(upload)
+                    .build(),
+                ResourceLifecycle::Live,
+                "files",
+            )
+            .build();
+        let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+        if valid {
+            assert_terraform_valid(&module, case);
+        }
+        let mut files = linter_files(&module);
+        let rules = if read.is_empty() { 1 } else { 2 };
+        let enabled = if valid {
+            format!(
+                r#"
+  assert {{
+    condition = length(azurerm_storage_account.default_storage_account.blob_properties[0].cors_rule) == {rules}
+    error_message = "Each declared kind of browser access gets one account rule."
+  }}
+  assert {{
+    condition = length([for rule in azurerm_storage_account.default_storage_account.blob_properties[0].cors_rule : rule if rule.allowed_methods == tolist(["PUT"]) && rule.allowed_origins == tolist(["https://app.example.test"]) && rule.allowed_headers == tolist(["Content-Type", "Content-MD5", "x-ms-blob-type", "x-ms-blob-content-type"]) && rule.exposed_headers == tolist(["ETag"]) && rule.max_age_in_seconds == 3600]) == 1
+    error_message = "Signed uploads need PUT with the headers SAS uploads send, and ETag exposed."
+  }}
+  assert {{
+    condition = alltrue([for rule in azurerm_storage_account.default_storage_account.blob_properties[0].cors_rule : rule.allowed_methods == tolist(["PUT"]) || toset(rule.allowed_methods) == toset(["GET", "HEAD"])])
+    error_message = "The read rule must not allow writes."
+  }}"#
+            )
+        } else {
+            "expect_failures = [azurerm_storage_account.default_storage_account]".to_string()
+        };
+        files.insert(
+            "tests/uploads.tftest.hcl".to_string(),
+            format!(
+                r#"
+mock_provider "azurerm" {{}}
+variables {{
+  name = "uploads"
+  token = "test-token"
+  azure_subscription_id = "00000000-0000-0000-0000-000000000000"
+  azure_resource_group_name = "example-rg"
+}}
+run "disabled" {{
+  command = plan
+  variables {{ input_files = false }}
+  assert {{
+    condition = length(azurerm_storage_account.default_storage_account.blob_properties[0].cors_rule) == 0
+    error_message = "A disabled contributor must not configure account CORS."
+  }}
+}}
+run "enabled" {{
+  command = plan
+  variables {{ input_files = true }}
+  {enabled}
+}}
+"#
+            ),
+        );
+        test_utils::terraform_test(&files).assert_ok(format!("signed upload CORS: {case}"));
+    }
+}
+
 fn lifecycle_stack() -> Stack {
     Stack::new("lifecycle".to_string())
         .inputs(vec![gate_input("files", "Files", "Enable files")])
