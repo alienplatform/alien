@@ -1,0 +1,91 @@
+{
+  "id": "redis/data-access",
+  "description": "Allows a workload to read the connection credential and connect to Redis",
+  // A single `data-access` set instead of data-read/data-write: the data plane is gated by the
+  // server password over TCP, not IAM, so the only cloud grant a workload needs is reading that
+  // credential. Management-plane sets never read it. Grows an IAM-auth equivalent if token
+  // refresh lands in client libraries.
+  "platforms": {
+    "aws": [
+      {
+        // Bound to the stack tag, which every create path has set on the connection secret since
+        // it first existed, so a workload of stack `app` cannot read `app-prod`'s password.
+        "label": "read-connection-secret",
+        "description": "Read this stack's tagged AUTH-token secret.",
+        "grant": {
+          "actions": ["secretsmanager:GetSecretValue"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}"
+              }
+            }
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "label": "read-connection-secret",
+        "description": "Read the generated auth-token secret version.",
+        "grant": {
+          "permissions": ["secretmanager.versions.access", "secretmanager.secrets.get"]
+        },
+        // Secret-value reads are sensitive content: condition them to the stack/resource
+        // secret prefix (mirrors `vault/data-read`) so the workload can read only its own
+        // connection secret, never every secret in the project.
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "StackRedisSecretRead",
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "ResourceRedisSecretRead",
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+            }
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        // Azure Managed Redis hands out its access key through `listKeys`, so the workload
+        // needs exactly that action on its one database. The management identity never gets it.
+        "label": "list-database-access-keys",
+        "description": "Read the access key of this Redis database.",
+        "grant": {
+          "actions": ["Microsoft.Cache/redisEnterprise/databases/listKeys/action"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Cache/redisEnterprise/${resourceName}/databases/default"
+          }
+        }
+      }
+    ]
+  }
+}

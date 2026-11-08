@@ -1,0 +1,122 @@
+name: Release Valkey
+
+# Builds valkey-server once per target and publishes it to Alien's release host, so the local
+# Redis manager can run it without Docker. Valkey is BSD-licensed, so redistribution is fine.
+#
+# Published layout (served through CloudFront at releases.alien.dev):
+#   valkey/v<ver>/<os>-<arch>/valkey-server.tar.gz        the `valkey-server` file at the top level
+#   valkey/v<ver>/<os>-<arch>/valkey-server.tar.gz.sha256 its SHA-256
+# After a publish, copy the printed checksums into PINNED_SHA256 in
+# crates/alien-local/src/redis_manager.rs. The manager refuses a target with no pin.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build only; skip the S3 upload"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write # OIDC for the alien-releases-upload role
+
+env:
+  # Keep this in lockstep with VALKEY_VERSION in crates/alien-local/src/redis_manager.rs.
+  VALKEY_VERSION: "9.0.0"
+
+jobs:
+  build-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          # Build on the oldest glibc baseline we support, not the runner's.
+          - { arch: x86_64, runner: depot-ubuntu-24.04-16, image: "debian:12.4@sha256:79becb70a6247d277b59c09ca340bbe0349af6aacb5afa90ec349528b53ce2c9" }
+          - { arch: aarch64, runner: depot-ubuntu-24.04-arm-16, image: "debian:12.4@sha256:79becb70a6247d277b59c09ca340bbe0349af6aacb5afa90ec349528b53ce2c9" }
+    runs-on: ${{ matrix.target.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Fetch Valkey source
+        run: |
+          curl -fsSL -o valkey.tar.gz "https://github.com/valkey-io/valkey/archive/refs/tags/${VALKEY_VERSION}.tar.gz"
+          mkdir -p src out && tar -xzf valkey.tar.gz -C src --strip-components=1
+
+      - name: Build and smoke-test
+        run: |
+          docker run --rm -i --env VALKEY_VERSION --volume "$PWD:$PWD" --workdir "$PWD" \
+            "${{ matrix.target.image }}" sh -s <<'CONTAINER'
+          set -eu
+          apt-get -o Acquire::Retries=5 update
+          apt-get -o Acquire::Retries=5 install -y --no-install-recommends build-essential
+          make -C src -j"$(nproc)" BUILD_TLS=no
+          sh .github/scripts/check-valkey.sh src/src/valkey-server src/src/valkey-cli
+          cp src/src/valkey-server out/
+          CONTAINER
+          tar -czf out/valkey-server.tar.gz -C out valkey-server
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: valkey-linux-${{ matrix.target.arch }}
+          retention-days: 1
+          path: out/valkey-server.tar.gz
+
+  build-darwin:
+    runs-on: depot-macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build and smoke-test
+        run: |
+          curl -fsSL -o valkey.tar.gz "https://github.com/valkey-io/valkey/archive/refs/tags/${VALKEY_VERSION}.tar.gz"
+          mkdir -p src out && tar -xzf valkey.tar.gz -C src --strip-components=1
+          make -C src -j"$(sysctl -n hw.ncpu)" BUILD_TLS=no
+          sh .github/scripts/check-valkey.sh src/src/valkey-server src/src/valkey-cli
+          cp src/src/valkey-server out/
+          tar -czf out/valkey-server.tar.gz -C out valkey-server
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: valkey-darwin-aarch64
+          retention-days: 1
+          path: out/valkey-server.tar.gz
+
+  upload:
+    needs: [build-linux, build-darwin]
+    if: ${{ !inputs.dry_run }}
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: valkey-*
+          path: ./artifacts
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::216938125589:role/alien-releases-upload
+          aws-region: us-east-1
+
+      - name: Upload to S3 (versioned) and print checksums
+        run: |
+          # Artifact names are valkey-<os>-<arch>; the manager's target is <os>-<arch>.
+          for dir in ./artifacts/valkey-*; do
+            target=${dir#./artifacts/valkey-}
+            src="$dir/valkey-server.tar.gz"
+            sha=$(sha256sum "$src" | cut -d' ' -f1)
+            echo "$sha" > "$src.sha256"
+            echo "PINNED_SHA256: (\"$target\", \"$sha\")"
+            aws s3 cp "$src" "s3://alien-releases-prod/valkey/v${VALKEY_VERSION}/${target}/valkey-server.tar.gz"
+            aws s3 cp "$src.sha256" "s3://alien-releases-prod/valkey/v${VALKEY_VERSION}/${target}/valkey-server.tar.gz.sha256"
+          done
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ vars.RELEASES_CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/valkey/*"
