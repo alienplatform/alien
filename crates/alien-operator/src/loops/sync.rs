@@ -493,8 +493,12 @@ async fn sync_with_manager(
     {
         sanitize_identity_config(&mut target.config, manager_url, audience)?;
     }
+    // Only a claimed target is replayed. A manager that grants no claim sends
+    // its target on every sync until the deployment reports it; replaying the
+    // stored copy would apply a settled release again on every sync.
     let mut durable_target = sync_response.target.clone().or_else(|| {
-        (sync_response.execution_claim == durable_execution.claim)
+        (sync_response.execution_claim.is_some()
+            && sync_response.execution_claim == durable_execution.claim)
             .then(|| durable_execution.target.clone())
             .flatten()
     });
@@ -2392,6 +2396,104 @@ mod tests {
             .unwrap();
         let later = requests.lock().unwrap().last().cloned().unwrap();
         assert!(later.get("installedConfigMissing").is_none(), "{later}");
+
+        server.abort();
+        std::env::remove_var("TEST_VAULT_DATA_DIR");
+    }
+
+    /// A manager that grants no execution claim sends a target while the release
+    /// still has to be applied, and nothing once it ran. The Operator must apply
+    /// that target once. It used to replay the target it stored from the last
+    /// sync on every later sync, so a settled deployment went from Running to
+    /// UpdatePending and back every sync interval.
+    #[tokio::test]
+    async fn a_target_without_a_claim_is_applied_once() {
+        async fn serve(State(response): State<Arc<Mutex<Value>>>) -> Json<Value> {
+            Json(response.lock().unwrap().clone())
+        }
+
+        let vault_dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_VAULT_DATA_DIR", vault_dir.path());
+        let response = Arc::new(Mutex::new(json!({})));
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/v1/sync", post(serve))
+            .with_state(response.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let data_dir = tempfile::tempdir().unwrap();
+        let directory = data_dir.path().to_str().unwrap();
+        let db = OperatorDb::new(directory, TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_unclaimed").await.unwrap();
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Test)
+                .data_dir(directory)
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .sync(SyncConfig {
+                    url: format!("http://{address}").parse().unwrap(),
+                    token: String::new(),
+                })
+                .build(),
+            db: Arc::new(db),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+        let url = format!("http://{address}");
+        let release = ReleaseInfo {
+            release_id: Some("rel_unclaimed".to_string()),
+            version: Some("1.0.0".to_string()),
+            description: None,
+            stack: Stack::new("unclaimed".to_string())
+                .add(
+                    alien_core::Storage::new("files".to_string()).build(),
+                    alien_core::ResourceLifecycle::Frozen,
+                )
+                .build(),
+        };
+        let config = alien_core::DeploymentConfig::builder()
+            .stack_settings(Default::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(Default::default())
+            .build();
+
+        *response.lock().unwrap() = json!({
+            "target": { "releaseInfo": release, "config": config },
+        });
+        assert!(sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap());
+        run_deployment_until_idle(&state).await;
+        let applied = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(applied.status, DeploymentStatus::Running);
+        assert!(applied.target_release.is_none());
+
+        // The manager has nothing more to send. Each later sync must leave the
+        // settled deployment alone.
+        *response.lock().unwrap() = json!({});
+        for _ in 0..3 {
+            let received_update = sync_with_manager(&state, &client, &url, false, None)
+                .await
+                .unwrap();
+            let settled = state.db.get_deployment_state().await.unwrap().unwrap();
+            assert_eq!(settled.status, DeploymentStatus::Running);
+            assert!(settled.target_release.is_none());
+            assert!(!received_update, "the stored target was replayed");
+            run_deployment_until_idle(&state).await;
+        }
 
         server.abort();
         std::env::remove_var("TEST_VAULT_DATA_DIR");
