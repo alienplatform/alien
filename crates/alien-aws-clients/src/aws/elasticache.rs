@@ -43,6 +43,8 @@ pub trait ElastiCacheApi: Send + Sync + std::fmt::Debug {
     async fn modify_replication_group(&self, request: ModifyReplicationGroupRequest) -> Result<()>;
     async fn delete_replication_group(&self, id: &str) -> Result<()>;
     async fn describe_replication_groups(&self, id: &str) -> Result<Vec<ReplicationGroup>>;
+    /// Tags on a resource, used to prove a same-named group is ours.
+    async fn list_tags_for_resource(&self, arn: &str) -> Result<HashMap<String, String>>;
 }
 
 // ─────────────────────────── request types ───────────────────────────
@@ -95,9 +97,11 @@ impl std::fmt::Debug for CreateReplicationGroupRequest {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct ModifyReplicationGroupRequest {
     pub id: String,
+    /// Replaces the AUTH token (strategy SET, applied immediately); never logged.
+    pub auth_token: Option<String>,
     pub node_type: Option<String>,
     pub snapshot_retention_days: Option<u16>,
     pub multi_az: Option<bool>,
@@ -106,6 +110,16 @@ pub struct ModifyReplicationGroupRequest {
 }
 
 // ─────────────────────────── response types (XML) ───────────────────────────
+
+impl std::fmt::Debug for ModifyReplicationGroupRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModifyReplicationGroupRequest")
+            .field("id", &self.id)
+            .field("node_type", &self.node_type)
+            .field("auth_token", &self.auth_token.as_ref().map(|_| "<redacted>"))
+            .finish_non_exhaustive()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -233,6 +247,28 @@ struct ReplicationGroupList {
 }
 
 #[derive(Debug, Deserialize)]
+struct ListTagsEnvelope {
+    #[serde(rename = "ListTagsForResourceResult")]
+    result: ListTagsResult,
+}
+#[derive(Debug, Deserialize)]
+struct ListTagsResult {
+    #[serde(rename = "TagList", default)]
+    tags: TagList,
+}
+#[derive(Debug, Default, Deserialize)]
+struct TagList {
+    #[serde(rename = "Tag", default)]
+    members: Vec<TagEntry>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct TagEntry {
+    key: String,
+    value: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct DescribeCacheParametersEnvelope {
     #[serde(rename = "DescribeCacheParametersResult")]
     result: DescribeCacheParametersResult,
@@ -334,6 +370,10 @@ fn modify_replication_group_form(r: &ModifyReplicationGroupRequest) -> HashMap<S
     }
     if let Some(v) = &r.engine_version {
         form.insert("EngineVersion".into(), v.clone());
+    }
+    if let Some(v) = &r.auth_token {
+        form.insert("AuthToken".into(), v.clone());
+        form.insert("AuthTokenUpdateStrategy".into(), "SET".into());
     }
     form
 }
@@ -609,6 +649,19 @@ impl ElastiCacheApi for ElastiCacheClient {
             .await?;
         Ok(envelope.result.groups.members)
     }
+
+    async fn list_tags_for_resource(&self, arn: &str) -> Result<HashMap<String, String>> {
+        let mut form = base_form("ListTagsForResource");
+        form.insert("ResourceName".into(), arn.to_string());
+        let envelope: ListTagsEnvelope = self.send_form(form, "ListTagsForResource", arn).await?;
+        Ok(envelope
+            .result
+            .tags
+            .members
+            .into_iter()
+            .map(|t| (t.key, t.value))
+            .collect())
+    }
 }
 
 #[cfg(test)]
@@ -733,5 +786,109 @@ mod tests {
             mapped,
             Some(ErrorData::RemoteResourceConflict { .. })
         ));
+    }
+
+    #[test]
+    fn modify_with_a_token_sets_it_immediately() {
+        let form = modify_replication_group_form(&ModifyReplicationGroupRequest {
+            id: "g".into(),
+            auth_token: Some("fresh".into()),
+            ..Default::default()
+        });
+        assert_eq!(form["AuthToken"], "fresh");
+        assert_eq!(form["AuthTokenUpdateStrategy"], "SET");
+        let plain = modify_replication_group_form(&ModifyReplicationGroupRequest {
+            id: "g".into(),
+            ..Default::default()
+        });
+        assert!(!plain.contains_key("AuthToken"));
+        assert!(!plain.contains_key("AuthTokenUpdateStrategy"));
+    }
+
+    fn mock_client(server: &httpmock::MockServer) -> ElastiCacheClient {
+        use crate::ServiceOverrides;
+        use alien_core::{AwsClientConfig, AwsCredentials};
+        let config = AwsClientConfig {
+            account_id: "123456789012".to_string(),
+            region: "us-east-2".to_string(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "test-access-key".to_string(),
+                secret_access_key: "test-secret-key".to_string(),
+                session_token: None,
+            },
+            service_overrides: Some(ServiceOverrides {
+                endpoints: HashMap::from([("elasticache".to_string(), server.base_url())]),
+            }),
+        };
+        ElastiCacheClient::new(
+            reqwest::Client::new(),
+            AwsCredentialProvider::from_config_sync(config),
+        )
+    }
+
+    const SECRET: &str = "s3cr3t-token-do-not-leak-0123456789";
+
+    /// A failed call that carried a token must not leave the token anywhere in the error,
+    /// including its serialized form (that is what reaches durable state).
+    #[tokio::test]
+    async fn failed_create_and_modify_errors_never_contain_the_token() {
+        let server = httpmock::MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).body_contains(SECRET);
+                then.status(400).body(
+                    "<ErrorResponse><Error><Type>Sender</Type><Code>ReplicationGroupAlreadyExists</Code>\
+                     <Message>already exists</Message></Error><RequestId>r</RequestId></ErrorResponse>",
+                );
+            })
+            .await;
+        let client = mock_client(&server);
+
+        let mut create = request();
+        create.auth_token = SECRET.into();
+        let err = client.create_replication_group(create).await.unwrap_err();
+        assert!(
+            err.error.as_ref().is_some_and(|e| matches!(
+                e,
+                ErrorData::RemoteResourceConflict { .. }
+            )),
+            "{err:?}"
+        );
+        let all = format!("{err:?} {}", serde_json::to_string(&err).unwrap());
+        assert!(!all.contains(SECRET), "create error leaked the token: {all}");
+
+        let err = client
+            .modify_replication_group(ModifyReplicationGroupRequest {
+                id: "app-cache".into(),
+                auth_token: Some(SECRET.into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        let all = format!("{err:?} {}", serde_json::to_string(&err).unwrap());
+        assert!(!all.contains(SECRET), "modify error leaked the token: {all}");
+    }
+
+    #[tokio::test]
+    async fn list_tags_parses_the_tag_list() {
+        let server = httpmock::MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .body_contains("Action=ListTagsForResource");
+                then.status(200).body(
+                    "<ListTagsForResourceResponse><ListTagsForResourceResult><TagList>\
+                     <Tag><Key>alien:stack</Key><Value>s1</Value></Tag>\
+                     <Tag><Key>Name</Key><Value>x</Value></Tag>\
+                     </TagList></ListTagsForResourceResult></ListTagsForResourceResponse>",
+                );
+            })
+            .await;
+        let tags = mock_client(&server)
+            .list_tags_for_resource("arn:aws:elasticache:us-east-2:1:replicationgroup:g")
+            .await
+            .unwrap();
+        assert_eq!(tags["alien:stack"], "s1");
+        assert_eq!(tags.len(), 2);
     }
 }
