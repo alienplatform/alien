@@ -208,6 +208,7 @@ sea-query = { version = "0.32", features = ["with-chrono", "with-json", "with-uu
 sec = "1"
 serde = "1.0.219"
 serde_json = "1.0.140"
+serde_path_to_error = "0.1"
 serde_yaml = "0.9"
 snapbox = "0.6"
 tar = "0.4"

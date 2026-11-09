@@ -9,6 +9,16 @@
 //! copy of these rules. The `alien.toml` differential tests resolve the same stacks through
 //! both and require identical JSON, which keeps the two copies from drifting.
 
+mod inputs;
+mod operations;
+mod pool;
+mod types;
+
+pub use inputs::*;
+pub use operations::*;
+pub use pool::*;
+pub use types::*;
+
 use crate::error::{ErrorData, Result};
 use crate::instance_catalog::Architecture;
 use crate::{
@@ -17,6 +27,7 @@ use crate::{
     StackInputKind, StackInputValidation,
 };
 use alien_error::AlienError;
+use serde::{Deserialize, Serialize};
 
 const GIB: u64 = 1024 * 1024 * 1024;
 
@@ -128,7 +139,9 @@ pub fn stop_grace_period_seconds(field: &str, seconds: u64) -> Result<u32> {
 }
 
 /// A CPU amount written as a number of cores (`2`, `0.5`) or a quantity string (`"500m"`).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(untagged)]
 pub enum CpuAmount {
     /// Whole cores.
     Integer(i64),
@@ -209,7 +222,9 @@ impl DaemonRuntime {
 }
 
 /// A machine count: one exact number, or a range a deployment chooses from.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(untagged)]
 pub enum ComputeChoice {
     /// Every deployment uses this number.
     Exactly(u32),
@@ -255,14 +270,19 @@ pub enum PoolScale {
 }
 
 /// The extra empty data disk each machine must provide.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(untagged)]
 pub enum DataDiskSize {
     /// One size for every deployment, for example `"1Ti"`.
     Fixed(String),
     /// Sizes a deployment chooses from. A `min` of `"0Gi"` lets a deployment go without one.
     Range {
+        /// Smallest size a deployment may choose.
         min: String,
+        /// Size used when a deployment does not choose.
         default: String,
+        /// Largest size a deployment may choose.
         max: String,
     },
 }
@@ -435,12 +455,19 @@ pub fn input_validation(
 }
 
 /// A stack input value as written: a default, or a numeric constraint.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(untagged)]
 pub enum InputValue {
+    /// Text.
     String(String),
+    /// A whole number.
     Integer(i64),
+    /// A number with a fractional part.
     Float(f64),
+    /// A flag.
     Boolean(bool),
+    /// A list of text values.
     StringList(Vec<String>),
 }
 
