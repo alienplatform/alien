@@ -2567,6 +2567,61 @@ mod tests {
             .unwrap());
     }
 
+    /// An enrolled Operator holds a session credential it must not give to
+    /// workloads, so the manager is the one that hands the deployment token to
+    /// a receiver built before capability files. A marked receiver gets none.
+    #[tokio::test]
+    async fn the_pull_target_carries_the_deployment_token_only_for_unmarked_receivers() {
+        let manager = TokenEnrollment::new().await;
+        manager
+            .run_release_with_receivers(&[("old-api", false), ("new-api", true)])
+            .await;
+        let release_id = manager
+            .stored
+            .lock()
+            .unwrap()
+            .current_release_id
+            .clone()
+            .expect("release");
+        let release = manager
+            .state
+            .release_store
+            .get_release(&crate::auth::Subject::system(), &release_id)
+            .await
+            .unwrap()
+            .expect("stored release");
+        let mut deployment = manager.stored.lock().unwrap().clone();
+        deployment.deployment_token = Some(TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN.to_string());
+
+        // The Operator asked with its own capability, not the deployment token.
+        let target = super::build_pull_target(
+            &manager.state,
+            &deployment,
+            release,
+            None,
+            Some(manager.operator_capability()),
+            true,
+        )
+        .await
+        .unwrap_or_else(|_| panic!("pull target"));
+
+        let tokens: Vec<_> = target
+            .config
+            .environment_variables
+            .variables
+            .iter()
+            .filter(|variable| variable.name == alien_core::ENV_ALIEN_COMMANDS_TOKEN)
+            .map(|variable| (variable.target_resources.clone(), variable.value.as_str()))
+            .collect();
+        assert_eq!(
+            tokens,
+            vec![(
+                Some(vec!["old-api".to_string()]),
+                TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN
+            )]
+        );
+    }
+
     /// The next release has only marked receivers. The first sync that
     /// reports the pull Secret then revokes the token the earlier rollout held.
     #[tokio::test]
@@ -5123,7 +5178,8 @@ pub(crate) async fn build_pull_target(
     .await
     .map_err(|e| e.into_response())?;
 
-    let env_vars = match crate::loops::deployment::resolve_input_environment(&stack, deployment) {
+    let mut env_vars = match crate::loops::deployment::resolve_input_environment(&stack, deployment)
+    {
         Ok(variables) => variables,
         Err(error) => {
             return Err(ErrorData::bad_request(format!(
@@ -5133,6 +5189,25 @@ pub(crate) async fn build_pull_target(
             .into_response())
         }
     };
+    // A command receiver built before capability files cannot read the
+    // capability file, so it starts only with `ALIEN_COMMANDS_TOKEN`. An
+    // enrolled Operator holds a short-lived session credential that must not
+    // reach workloads, so the manager supplies the deployment token to those
+    // receivers and to no one else. `command_receivers_need_token` keeps the
+    // token valid while any of them exists.
+    if let Some(token) = stored_record.deployment_token.as_deref() {
+        env_vars.extend(
+            stack
+                .command_receivers_without_capability_file()
+                .into_iter()
+                .map(|resource_id| EnvironmentVariable {
+                    name: alien_core::ENV_ALIEN_COMMANDS_TOKEN.to_string(),
+                    value: token.to_string(),
+                    var_type: alien_core::EnvironmentVariableType::Secret,
+                    target_resources: Some(vec![resource_id]),
+                }),
+        );
+    }
 
     // Records loaded for sync always carry stack settings; in a
     // handler, answer with a 500 rather than panic-dropping the

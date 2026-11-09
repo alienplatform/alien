@@ -881,6 +881,17 @@ pub(super) async fn enrich_config(
                 // sync token. The Worker runtime keeps it out of the application
                 // child environment; Container/Daemon receivers necessarily read it.
                 if let Some(stack) = stack {
+                    // After enrollment the Operator's token is a session
+                    // credential that must not reach a workload. A config saved
+                    // before enrollment has no runtime identity audience and
+                    // lands here; wait for the manager's settings instead.
+                    if !stack.command_targets().is_empty()
+                        && db.read_daily_identity().await?.is_some()
+                    {
+                        return Err(AlienError::new(ErrorData::ConfigurationError {
+                            message: "The deployment settings were saved before the Operator enrolled; waiting for the manager's current settings".into(),
+                        }));
+                    }
                     vars.extend(
                         stack
                             .worker_command_push_env_vars(Some(&sync_config.token))
@@ -1771,6 +1782,58 @@ mod tests {
             })
             .map(|var| var.value.as_str())
             .collect()
+    }
+
+    /// A deployment config saved before enrollment has no runtime identity
+    /// audience. The enrolled Operator's token is a session credential, so it
+    /// must wait for the manager's settings, not hand that token to a receiver.
+    #[tokio::test]
+    async fn enrolled_operator_does_not_give_its_session_token_to_a_receiver() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = OperatorDb::new(temp_dir.path().to_str().unwrap(), encryption_key)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_k8s").await.unwrap();
+        db.write_daily_identity(&crate::daily_identity::DailyIdentityState {
+            manager_url: "https://manager.example.com".into(),
+            audience: "https://manager.example.com".into(),
+            deployment_id: "dep_k8s".into(),
+            current: "ax_day_v1_fixture".into(),
+            pending: None,
+            pending_started_at: None,
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
+            enrolled_code_hash: None,
+            pending_enrollment: None,
+        })
+        .await
+        .unwrap();
+        let operator_config = OperatorConfig::builder()
+            .platform(Platform::Kubernetes)
+            .agent_name("k8s-runner")
+            .maybe_sync(Some(SyncConfig {
+                url: "https://manager.example.com".parse().unwrap(),
+                token: "ax_session_not_for_workloads".to_string(),
+            }))
+            .encryption_key(encryption_key)
+            .build();
+        let stack = alien_core::Stack::new("old-receiver".to_string())
+            .add(
+                receiver_container("old-api", false),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+
+        // No `runtime_identity_audience`: the config predates enrollment.
+        let result = enrich_config(
+            test_deployment_config(),
+            &operator_config,
+            Platform::Kubernetes,
+            &db,
+            Some(&stack),
+        )
+        .await;
+        assert!(result.is_err(), "the session token reached a receiver");
     }
 
     #[tokio::test]
