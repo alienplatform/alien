@@ -68,7 +68,6 @@ hyper-util = { version = "0.1", features = ["full"] }
 icu_locale_core = { version = "2", default-features = false, features = ["alloc", "zerovec"] }
 icu_normalizer = { version = "2", default-features = false, features = ["compiled_data", "utf16_iter", "utf8_iter"] }
 icu_provider = { version = "2", default-features = false, features = ["alloc", "baked"] }
-idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
 inout = { version = "0.1", default-features = false, features = ["block-padding"] }
 insta = { version = "1", features = ["json", "yaml"] }
@@ -113,7 +112,7 @@ rustls = { version = "0.23", default-features = false, features = ["logging", "p
 rustls-pemfile = { version = "2" }
 rustls-pki-types = { version = "1", features = ["std"] }
 rustls-webpki = { version = "0.103", default-features = false, features = ["aws-lc-rs", "ring", "std"] }
-schemars = { version = "0.8", features = ["chrono", "indexmap", "indexmap2", "uuid1"] }
+schemars = { version = "0.8", features = ["chrono", "indexmap2", "uuid1"] }
 semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1", features = ["alloc", "rc"] }
@@ -219,7 +218,6 @@ hyper-util = { version = "0.1", features = ["full"] }
 icu_locale_core = { version = "2", default-features = false, features = ["alloc", "zerovec"] }
 icu_normalizer = { version = "2", default-features = false, features = ["compiled_data", "utf16_iter", "utf8_iter"] }
 icu_provider = { version = "2", default-features = false, features = ["alloc", "baked"] }
-idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
 inout = { version = "0.1", default-features = false, features = ["block-padding"] }
 insta = { version = "1", features = ["json", "yaml"] }
@@ -264,7 +262,7 @@ rustls = { version = "0.23", default-features = false, features = ["logging", "p
 rustls-pemfile = { version = "2" }
 rustls-pki-types = { version = "1", features = ["std"] }
 rustls-webpki = { version = "0.103", default-features = false, features = ["aws-lc-rs", "ring", "std"] }
-schemars = { version = "0.8", features = ["chrono", "indexmap", "indexmap2", "uuid1"] }
+schemars = { version = "0.8", features = ["chrono", "indexmap2", "uuid1"] }
 semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1", features = ["alloc", "rc"] }

@@ -27,7 +27,6 @@ regex = { workspace = true, optional = true }
 json5 = { version = "0.4", optional = true }
 sha2 = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["v5"], optional = true }
-workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [build-dependencies]
 json5 = "0.4"
